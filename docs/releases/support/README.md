@@ -80,7 +80,7 @@ When local `.docs/` artifacts exist, they must exactly match the tracked release
 1. Start from `docs/releases/support/TEMPLATE.md` when preparing a release.
 2. Write or review the tracked `docs/releases/vX.Y.Z*.md` release note before
    treating local debug artifacts as canonical.
-3. Use `scripts/bootstrap_release_local_artifacts.sh` to regenerate local
+3. Use `scripts/release/bootstrap_release_local_artifacts.sh` to regenerate local
    `.docs/` release debug and trace artifacts from tracked release docs before
    strict local doc-governance checks.
 4. Run the repository docs checks before shipping release-doc changes.
@@ -89,7 +89,7 @@ Canonical public repository links in release docs and issue templates must point
 
 - `https://github.com/eastreams/loong`
 
-This is enforced by `scripts/check-docs.sh`.
+This is enforced by `scripts/checks/check-docs.sh`.
 
 ## Strictness Modes
 

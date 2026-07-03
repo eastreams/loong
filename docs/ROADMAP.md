@@ -386,7 +386,7 @@ Focus: ship a low-friction daily-usable daemon entry for non-developers.
 - `chat` command as baseline CLI channel
 - `doctor` repair loop with `--fix` and machine-readable output
 - ask-first first-run handoff from onboarding and doctor with concrete next-step guidance
-- release-first install flow with checksum-verified prebuilt binaries and explicit source fallback (`scripts/install.sh`, `scripts/install.ps1`)
+- release-first install flow with checksum-verified prebuilt binaries and explicit source fallback (`scripts/install/install.sh`, `scripts/install/install.ps1`)
 - public product specs for installation, onboarding, one-shot ask, doctor, browser automation, tool surface, channel setup, prompt and personality, memory profiles, and shell completion
 
 ### Runtime And Delivery Baseline

@@ -88,14 +88,14 @@
 Linux 或 macOS：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/eastreams/loong/dev/scripts/install.sh | bash -s -- --onboard
+curl -fsSL https://raw.githubusercontent.com/eastreams/loong/dev/scripts/install/install.sh | bash -s -- --onboard
 ```
 
 Windows PowerShell：
 
 ```powershell
 $script = Join-Path $env:TEMP "loong-install.ps1"
-Invoke-WebRequest https://raw.githubusercontent.com/eastreams/loong/dev/scripts/install.ps1 -OutFile $script
+Invoke-WebRequest https://raw.githubusercontent.com/eastreams/loong/dev/scripts/install/install.ps1 -OutFile $script
 pwsh $script -Onboard
 ```
 
@@ -128,7 +128,7 @@ source "$HOME/.cargo/env"
 构建并安装：
 
 ```bash
-bash scripts/install.sh --source --onboard
+bash scripts/install/install.sh --source --onboard
 ```
 
 ```bash

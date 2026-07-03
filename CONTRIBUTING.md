@@ -92,9 +92,9 @@ Use Track A for:
 Required checks:
 
 ```bash
-./scripts/cargo-local-toolchain.sh fmt --all -- --check
-./scripts/cargo-local-toolchain.sh clippy --workspace --all-targets --all-features -- -D warnings
-./scripts/cargo-local-toolchain.sh test --workspace --all-features
+./scripts/dev/cargo-local-toolchain.sh fmt --all -- --check
+./scripts/dev/cargo-local-toolchain.sh clippy --workspace --all-targets --all-features -- -D warnings
+./scripts/dev/cargo-local-toolchain.sh test --workspace --all-features
 ```
 
 The helper script resolves the concrete `rustc` / `rustdoc` binaries from the
@@ -142,12 +142,12 @@ If `task` or its transitive dependencies are unavailable locally, run at least
 CI parity plus architecture/dep-graph checks directly:
 
 ```bash
-./scripts/cargo-local-toolchain.sh fmt --all -- --check
-./scripts/cargo-local-toolchain.sh clippy --workspace --all-targets --all-features -- -D warnings
-./scripts/cargo-local-toolchain.sh test --workspace
-./scripts/cargo-local-toolchain.sh test --workspace --all-features
-scripts/check_architecture_boundaries.sh
-scripts/check_dep_graph.sh
+./scripts/dev/cargo-local-toolchain.sh fmt --all -- --check
+./scripts/dev/cargo-local-toolchain.sh clippy --workspace --all-targets --all-features -- -D warnings
+./scripts/dev/cargo-local-toolchain.sh test --workspace
+./scripts/dev/cargo-local-toolchain.sh test --workspace --all-features
+scripts/checks/check_architecture_boundaries.sh
+scripts/checks/check_dep_graph.sh
 ```
 
 ### Track B: Higher-risk changes
@@ -300,19 +300,19 @@ for the shorter public contributor docs entrypoint.
 
 ```bash
 # All tests
-./scripts/cargo-local-toolchain.sh test --workspace
+./scripts/dev/cargo-local-toolchain.sh test --workspace
 
 # Just the mvp crate
-./scripts/cargo-local-toolchain.sh test -p loong-app
+./scripts/dev/cargo-local-toolchain.sh test -p loong-app
 
 # Just kernel tests
-./scripts/cargo-local-toolchain.sh test -p loong-kernel
+./scripts/dev/cargo-local-toolchain.sh test -p loong-kernel
 
 # With all features (CI gate)
-./scripts/cargo-local-toolchain.sh test --workspace --all-features
+./scripts/dev/cargo-local-toolchain.sh test --workspace --all-features
 
 # Cargo-deny with a repo-local writable advisory DB/cache
-./scripts/cargo-deny-local.sh check advisories bans licenses sources
+./scripts/checks/cargo-deny-local.sh check advisories bans licenses sources
 ```
 
 ### Recipe: Add a Provider

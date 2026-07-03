@@ -90,8 +90,8 @@ LOONG_WASM_CACHE_CAPACITY=64 loong benchmark-wasm-cache \
 Convenience scripts:
 
 ```bash
-./scripts/benchmark_programmatic_pressure.sh
-./scripts/benchmark_wasm_cache.sh
+./scripts/bench/benchmark_programmatic_pressure.sh
+./scripts/bench/benchmark_wasm_cache.sh
 ```
 
 ## Plugin Examples

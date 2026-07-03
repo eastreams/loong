@@ -21,15 +21,15 @@
 /crates/daemon/src/audit_cli.rs @eastreams/harness @eastreams/sec-ops
 /crates/kernel/src/audit.rs @eastreams/harness @eastreams/sec-ops
 /crates/kernel/src/harness.rs @eastreams/harness
-/scripts/architecture_budget_lib.sh @eastreams/harness
+/scripts/checks/architecture_budget_lib.sh @eastreams/harness
 /scripts/check*.sh @eastreams/harness
-/scripts/pre-commit @eastreams/harness
-/scripts/stress_daemon_tests.sh @eastreams/harness
-/scripts/sync_github_labels.py @eastreams/harness
-/scripts/test_*.sh @eastreams/harness
-/scripts/test_workflow_change_router.mjs @eastreams/harness
-/scripts/test_workflow_change_router.sh @eastreams/harness @eastreams/sec-ops
-/scripts/workflow_change_router.mjs @eastreams/harness @eastreams/sec-ops
+/scripts/hooks/pre-commit @eastreams/harness
+/scripts/dev/stress_daemon_tests.sh @eastreams/harness
+/scripts/github/sync_github_labels.py @eastreams/harness
+/scripts/test/test_*.sh @eastreams/harness
+/scripts/test/test_workflow_change_router.mjs @eastreams/harness
+/scripts/test/test_workflow_change_router.sh @eastreams/harness @eastreams/sec-ops
+/scripts/ci/workflow_change_router.mjs @eastreams/harness @eastreams/sec-ops
 /skills/update-harness.skill @eastreams/harness
 /docs/design-docs/harness-engineering.md @eastreams/doc-ops @eastreams/harness
 
@@ -49,24 +49,24 @@
 /crates/daemon/tests/integration/memory_context_benchmark_cli.rs @eastreams/efficiency-engineering
 /examples/benchmarks/** @eastreams/efficiency-engineering
 /scripts/benchmark_*.sh @eastreams/efficiency-engineering
-/scripts/lint_programmatic_pressure_baseline.sh @eastreams/efficiency-engineering
-/scripts/update_programmatic_pressure_schema_baseline.sh @eastreams/efficiency-engineering
+/scripts/bench/lint_programmatic_pressure_baseline.sh @eastreams/efficiency-engineering
+/scripts/bench/update_programmatic_pressure_schema_baseline.sh @eastreams/efficiency-engineering
 /docs/product-specs/memory-profiles.md @eastreams/doc-ops @eastreams/ux @eastreams/efficiency-engineering
 
 # Release management: release pipeline, artifacts, and install surfaces
 /.github/workflows/enforce-main-to-release.yml @eastreams/harness @eastreams/release-managers
 /.github/workflows/release.yml @eastreams/harness @eastreams/release-managers
 /CHANGELOG.md @eastreams/doc-ops @eastreams/release-managers
-/scripts/bootstrap_release_local_artifacts.sh @eastreams/harness @eastreams/release-managers
-/scripts/install.ps1 @eastreams/release-managers @eastreams/ux
-/scripts/install.sh @eastreams/release-managers @eastreams/ux
-/scripts/release_artifact_lib.sh @eastreams/harness @eastreams/release-managers
-/scripts/test_bootstrap_release_local_artifacts.sh @eastreams/harness @eastreams/release-managers
-/scripts/test_ci_workflow_change_routing.sh @eastreams/harness
-/scripts/test_install_sh.sh @eastreams/release-managers @eastreams/ux
-/scripts/test_release_artifact_lib.sh @eastreams/harness @eastreams/release-managers
-/scripts/test_release_workflow_hardening.sh @eastreams/harness @eastreams/release-managers
-/scripts/test_scan_workflow_hardening.sh @eastreams/harness @eastreams/sec-ops
+/scripts/release/bootstrap_release_local_artifacts.sh @eastreams/harness @eastreams/release-managers
+/scripts/install/install.ps1 @eastreams/release-managers @eastreams/ux
+/scripts/install/install.sh @eastreams/release-managers @eastreams/ux
+/scripts/release/release_artifact_lib.sh @eastreams/harness @eastreams/release-managers
+/scripts/test/test_bootstrap_release_local_artifacts.sh @eastreams/harness @eastreams/release-managers
+/scripts/test/test_ci_workflow_change_routing.sh @eastreams/harness
+/scripts/test/test_install_sh.sh @eastreams/release-managers @eastreams/ux
+/scripts/test/test_release_artifact_lib.sh @eastreams/harness @eastreams/release-managers
+/scripts/test/test_release_workflow_hardening.sh @eastreams/harness @eastreams/release-managers
+/scripts/test/test_scan_workflow_hardening.sh @eastreams/harness @eastreams/sec-ops
 /docs/releases/** @eastreams/doc-ops @eastreams/release-managers
 /docs/product-specs/installation.md @eastreams/doc-ops @eastreams/ux @eastreams/release-managers
 

@@ -87,7 +87,7 @@ The workspace clippy configuration mechanically prevents agent-generated anti-pa
 ### Dependency DAG as Constraint
 
 The 13-crate DAG prevents circular dependencies and implementation leakage.
-Enforced by `scripts/check_dep_graph.sh` and, when the optional `task` CLI is
+Enforced by `scripts/checks/check_dep_graph.sh` and, when the optional `task` CLI is
 installed, `task check:architecture`.
 
 ### Testing as Downstream Backpressure
@@ -96,7 +96,7 @@ installed, `task check:architecture`.
 
 ### Pre-Commit Hook as Gate
 
-`scripts/pre-commit` runs CI-parity cargo checks before every commit.
+`scripts/hooks/pre-commit` runs CI-parity cargo checks before every commit.
 
 ---
 

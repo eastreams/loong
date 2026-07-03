@@ -39,7 +39,7 @@ These must hold at every commit on every branch:
 4. `cargo test --workspace --all-features` passes (test count evolves with the codebase; CI is the source of truth)
 
 Enforced by: CI (`.github/workflows/ci.yml`, surfaced through the aggregate `build` check). The
-optional `scripts/pre-commit` hook mirrors these cargo gates locally.
+optional `scripts/hooks/pre-commit` hook mirrors these cargo gates locally.
 
 ## Feedback Lanes
 
@@ -68,15 +68,15 @@ optional `scripts/pre-commit` hook mirrors these cargo gates locally.
 
 1. **Wasm trap behavior is platform-aware by default** — on macOS, `signals_based_traps` is disabled to avoid trap-handler abort instability under parallel bridge tests.
 2. **Runtime override is explicit** — set `LOONG_WASM_SIGNALS_BASED_TRAPS=true|false` to force trap behavior for diagnostics/experiments.
-3. **Daemon stress helper is scriptable** — run `./scripts/stress_daemon_tests.sh 10 default,2,1` for manual repeated daemon test validation across thread modes.
+3. **Daemon stress helper is scriptable** — run `./scripts/dev/stress_daemon_tests.sh 10 default,2,1` for manual repeated daemon test validation across thread modes.
 4. **Trap-mode matrix is available when needed** — set `LOONG_STRESS_WASM_TRAPS_MODES=auto,false,true` to sweep daemon tests across trap behavior modes during targeted investigation.
 
 ## Architecture Stability Guardrails
 
-1. **Complexity budgets are machine-checkable** — run `./scripts/check_architecture_boundaries.sh` directly, or `task check:architecture` when the optional `task` CLI wrapper is installed, to inspect module line/function budgets for architecture hotspots (`spec_runtime`, `spec_execution`, `provider/mod`, `memory/mod`, `acp/manager`, `acp/acpx`, `channel/registry`, `config/channels`, `chat`, `channel/mod`, `conversation/turn_coordinator`, `tools/mod`, `daemon/lib`, `daemon/onboard_cli`). The checker classifies each hotspot by `foundation`, `structural_size`, and `operational_density` pressure so reviews can distinguish large-surface drift from runtime-density risk.
+1. **Complexity budgets are machine-checkable** — run `./scripts/checks/check_architecture_boundaries.sh` directly, or `task check:architecture` when the optional `task` CLI wrapper is installed, to inspect module line/function budgets for architecture hotspots (`spec_runtime`, `spec_execution`, `provider/mod`, `memory/mod`, `acp/manager`, `acp/acpx`, `channel/registry`, `config/channels`, `chat`, `channel/mod`, `conversation/turn_coordinator`, `tools/mod`, `daemon/lib`, `daemon/onboard_cli`). The checker classifies each hotspot by `foundation`, `structural_size`, and `operational_density` pressure so reviews can distinguish large-surface drift from runtime-density risk.
 2. **Memory operation literals are boundary-guarded** — memory core operation strings (`append_turn`, `window`, `clear_session`) must remain centralized in `crates/app/src/memory/*` and never spread into callsites.
-3. **`spec` stays detached from `app`** — the architecture guardrails treat any direct `loong-app` dependency in `crates/spec/Cargo.toml` as a boundary regression, and `./scripts/check_dep_graph.sh` must stay green.
-4. **Strict enforcement is the blocking gate** — use `LOONG_ARCH_STRICT=true ./scripts/check_architecture_boundaries.sh` directly, or `task check:architecture:strict` when the optional `task` CLI wrapper is installed, to make architecture budget violations fail non-zero. This check is part of `task verify`, `task verify:full`, and CI.
+3. **`spec` stays detached from `app`** — the architecture guardrails treat any direct `loong-app` dependency in `crates/spec/Cargo.toml` as a boundary regression, and `./scripts/checks/check_dep_graph.sh` must stay green.
+4. **Strict enforcement is the blocking gate** — use `LOONG_ARCH_STRICT=true ./scripts/checks/check_architecture_boundaries.sh` directly, or `task check:architecture:strict` when the optional `task` CLI wrapper is installed, to make architecture budget violations fail non-zero. This check is part of `task verify`, `task verify:full`, and CI.
 5. **Workspace DAG truth is manifest-driven** — treat the 13-member `[workspace].members` list in `Cargo.toml` and `cargo metadata --no-deps` as the source of truth for crate count and direct edges. `ARCHITECTURE.md`, `AGENTS.md`, and `CLAUDE.md` should mirror that manifest-backed DAG instead of preserving older conceptual counts.
 
 ## Kernel Invariants

@@ -12,14 +12,14 @@ These are the golden principles for anyone — agent or human — working in thi
 
 5. **13-crate DAG, no cycles** — keep dependency direction strictly acyclic across the full workspace: `loong-core` stays below `loong-runtime` and `loong-plugin-sdk`; `contracts -> kernel`; `protocol` remains an independent foundation crate; `bridge-runtime -> {contracts, kernel, protocol}`; `app -> {contracts, kernel}`; `spec -> {contracts, kernel, protocol, bridge-runtime}`; `bench -> {kernel, spec}`; `daemon` stays the delivery layer over the lower crates. There are currently no tracked dependency-graph deviations. Dependency direction is non-negotiable. See [Layered Kernel Design](layered-kernel-design.md).
 
-6. **Tests are the contract** — if a behavior isn't tested, it doesn't exist. All CI-parity tests pass at every commit, enforced by CI and checked locally by `scripts/pre-commit` when installed.
+6. **Tests are the contract** — if a behavior isn't tested, it doesn't exist. All CI-parity tests pass at every commit, enforced by CI and checked locally by `scripts/hooks/pre-commit` when installed.
 
 7. **Boring technology preferred** — choose well-understood, composable dependencies that agents can reason about from repo context alone. Reimplement small utilities rather than pulling in opaque upstream packages.
 
 8. **Repository is the system of record** — design decisions, plans, and architectural context live in `docs/`, not in chat threads or people's heads. If it's not in the repo, it doesn't exist for agents.
 
-9. **Enforce mechanically, not manually** — prefer linters, CI gates, and pre-commit hooks over code review comments. Encode taste into tooling. See `scripts/pre-commit`.
+9. **Enforce mechanically, not manually** — prefer linters, CI gates, and pre-commit hooks over code review comments. Encode taste into tooling. See `scripts/hooks/pre-commit`.
 
 10. **YAGNI ruthlessly** — don't design for hypothetical future requirements. The minimum complexity for the current task is the right amount. Three similar lines of code is better than a premature abstraction.
 
-11. **Control complexity growth with explicit budgets** — large hotspots should have line/function budget checks and boundary assertions (`scripts/check_architecture_boundaries.sh`) so architecture drift is surfaced early in local verification and can be promoted into CI once the checks are stable.
+11. **Control complexity growth with explicit budgets** — large hotspots should have line/function budget checks and boundary assertions (`scripts/checks/check_architecture_boundaries.sh`) so architecture drift is surfaced early in local verification and can be promoted into CI once the checks are stable.

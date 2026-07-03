@@ -59,7 +59,7 @@ jobs:
         run: cargo test --workspace --all-features --locked
 
       - name: Bootstrap local release artifacts
-        run: scripts/bootstrap_release_local_artifacts.sh
+        run: scripts/release/bootstrap_release_local_artifacts.sh
 
       - name: Strict docs governance
         shell: bash
@@ -67,7 +67,7 @@ jobs:
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          LOONG_RELEASE_DOCS_STRICT=1 scripts/check-docs.sh
+          LOONG_RELEASE_DOCS_STRICT=1 scripts/checks/check-docs.sh
           grep -F "## [${RELEASE_TAG#v}]" CHANGELOG.md > /dev/null
           release_doc="docs/releases/${RELEASE_TAG}.md"
           test -f "$release_doc"
@@ -77,10 +77,10 @@ jobs:
         run: cargo doc --workspace --no-deps
 
       - name: Dependency graph contract
-        run: chmod +x ./scripts/check_dep_graph.sh && ./scripts/check_dep_graph.sh
+        run: chmod +x ./scripts/checks/check_dep_graph.sh && ./scripts/checks/check_dep_graph.sh
 
       - name: Strict architecture contract
-        run: chmod +x ./scripts/check_architecture_boundaries.sh && LOONG_ARCH_STRICT=true ./scripts/check_architecture_boundaries.sh
+        run: chmod +x ./scripts/checks/check_architecture_boundaries.sh && LOONG_ARCH_STRICT=true ./scripts/checks/check_architecture_boundaries.sh
 
   build-binaries:
     name: Build ${{ matrix.target }} on ${{ matrix.os }}
@@ -246,10 +246,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          . ./scripts/release_artifact_lib.sh
+          . ./scripts/release/release_artifact_lib.sh
           max_glibc="$(release_gnu_glibc_floor_for_target "${{ matrix.target }}")"
-          chmod +x ./scripts/check_glibc_floor.sh
-          ./scripts/check_glibc_floor.sh "target/${{ matrix.target }}/release/${{ env.BIN_NAME }}" "$max_glibc"
+          chmod +x ./scripts/checks/check_glibc_floor.sh
+          ./scripts/checks/check_glibc_floor.sh "target/${{ matrix.target }}/release/${{ env.BIN_NAME }}" "$max_glibc"
 
       - name: Upload packaged artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -278,8 +278,8 @@ jobs:
 
       - name: Stage installer scripts
         run: |
-          cp scripts/install.sh dist/install.sh
-          cp scripts/install.ps1 dist/install.ps1
+          cp scripts/install/install.sh dist/install.sh
+          cp scripts/install/install.ps1 dist/install.ps1
 
       - name: Generate SHA256 manifest
         shell: bash
@@ -287,7 +287,7 @@ jobs:
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          . ./scripts/release_artifact_lib.sh
+          . ./scripts/release/release_artifact_lib.sh
           manifest_name="$(release_archive_manifest_name "${RELEASE_TAG}")"
           (
             cd dist
