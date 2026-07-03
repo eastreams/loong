@@ -90,7 +90,8 @@ make_fixture_repo() {
   local fixture
   fixture="$(mktemp -d)"
   mkdir -p \
-    "$fixture/scripts" \
+    "$fixture/scripts/checks" \
+    "$fixture/scripts/release" \
     "$fixture/docs/design-docs" \
     "$fixture/docs/releases" \
     "$fixture/docs/releases/support" \
@@ -200,7 +201,8 @@ make_prerelease_fixture_repo() {
   local fixture
   fixture="$(mktemp -d)"
   mkdir -p \
-    "$fixture/scripts" \
+    "$fixture/scripts/checks" \
+    "$fixture/scripts/release" \
     "$fixture/docs/design-docs" \
     "$fixture/docs/releases" \
     "$fixture/docs/releases/support" \
