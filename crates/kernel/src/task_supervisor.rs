@@ -1,7 +1,6 @@
 use crate::{
     contracts::{CapabilityToken, TaskIntent},
     kernel::{KernelDispatch, LoongKernel},
-    policy::PolicyEngine,
 };
 use loong_contracts::{Fault, TaskState};
 
@@ -32,9 +31,9 @@ impl TaskSupervisor {
     }
 
     /// Execute the task through the kernel, tracking state transitions.
-    pub async fn execute<P: PolicyEngine>(
+    pub async fn execute(
         &mut self,
-        kernel: &LoongKernel<P>,
+        kernel: &LoongKernel,
         pack_id: &str,
         token: &CapabilityToken,
     ) -> Result<KernelDispatch, Fault> {

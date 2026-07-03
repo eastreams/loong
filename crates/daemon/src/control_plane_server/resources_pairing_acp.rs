@@ -5,7 +5,7 @@ pub(super) async fn pairing_list(
     State(state): State<ControlPlaneHttpState>,
     Query(query): Query<PairingListQuery>,
 ) -> Response {
-    if let Err(response) = authorize_control_plane_request(&state, "pairing/list", &headers) {
+    if let Err(response) = authorize_control_plane_request(&state, "pairing/list", &headers).await {
         return *response;
     }
     let status = match query.status.as_deref() {
@@ -37,7 +37,9 @@ pub(super) async fn pairing_resolve(
     State(state): State<ControlPlaneHttpState>,
     Json(request): Json<ControlPlanePairingResolveRequest>,
 ) -> Response {
-    if let Err(response) = authorize_control_plane_request(&state, "pairing/resolve", &headers) {
+    if let Err(response) =
+        authorize_control_plane_request(&state, "pairing/resolve", &headers).await
+    {
         return *response;
     }
     match state
@@ -85,7 +87,8 @@ pub(super) async fn acp_session_list(
     }
     #[cfg(feature = "memory-sqlite")]
     {
-        if let Err(response) = authorize_control_plane_request(&state, "acp/session/list", &headers)
+        if let Err(response) =
+            authorize_control_plane_request(&state, "acp/session/list", &headers).await
         {
             return *response;
         }
@@ -127,7 +130,8 @@ pub(super) async fn acp_session_read(
     }
     #[cfg(feature = "memory-sqlite")]
     {
-        if let Err(response) = authorize_control_plane_request(&state, "acp/session/read", &headers)
+        if let Err(response) =
+            authorize_control_plane_request(&state, "acp/session/read", &headers).await
         {
             return *response;
         }

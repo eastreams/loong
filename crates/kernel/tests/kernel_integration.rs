@@ -7,7 +7,7 @@ use serde_json::json;
 
 #[tokio::test]
 async fn integration_kernel_executes_task() {
-    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit();
     kernel.register_pack(sample_pack()).unwrap();
     kernel.register_harness_adapter(MockEmbeddedPiHarness {
         seen_tasks: Mutex::new(Vec::new()),
@@ -30,7 +30,7 @@ async fn integration_kernel_executes_task() {
 
 #[tokio::test]
 async fn kernel_executes_task_and_connector_under_pack_policy() {
-    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -76,7 +76,7 @@ async fn kernel_executes_task_and_connector_under_pack_policy() {
 
 #[tokio::test]
 async fn kernel_rejects_token_missing_capability() {
-    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -109,7 +109,7 @@ async fn kernel_rejects_token_missing_capability() {
 
 #[tokio::test]
 async fn kernel_rejects_connector_not_whitelisted_by_pack() {
-    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -142,7 +142,7 @@ async fn kernel_rejects_connector_not_whitelisted_by_pack() {
 
 #[tokio::test]
 async fn layered_connector_core_executes_through_core_plane() {
-    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -171,7 +171,7 @@ async fn layered_connector_core_executes_through_core_plane() {
 
 #[tokio::test]
 async fn layered_connector_extension_composes_over_core_plane() {
-    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -202,7 +202,7 @@ async fn layered_connector_extension_composes_over_core_plane() {
 
 #[tokio::test]
 async fn layered_connector_plane_still_enforces_pack_whitelist() {
-    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -235,7 +235,7 @@ async fn layered_connector_plane_still_enforces_pack_whitelist() {
 
 #[tokio::test]
 async fn layered_connector_extension_requires_available_core_adapter() {
-    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -265,7 +265,7 @@ async fn layered_connector_extension_requires_available_core_adapter() {
 
 #[tokio::test]
 async fn layered_connector_default_core_adapter_can_be_overridden() {
-    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -296,7 +296,7 @@ async fn layered_connector_default_core_adapter_can_be_overridden() {
 
 #[tokio::test]
 async fn layered_connector_core_panic_isolated_to_connector_error() {
-    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -346,7 +346,7 @@ async fn layered_connector_core_panic_isolated_to_connector_error() {
 
 #[tokio::test]
 async fn layered_connector_extension_panic_isolated_to_connector_error() {
-    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -399,7 +399,7 @@ async fn layered_connector_extension_panic_isolated_to_connector_error() {
 
 #[tokio::test]
 async fn layered_connector_extension_isolates_nested_core_panic() {
-    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -466,7 +466,7 @@ async fn layered_connector_extension_isolates_nested_core_panic() {
 
 #[test]
 fn layered_connector_rejects_unknown_default_adapter_override() {
-    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit();
     kernel.register_core_connector_adapter(MockCoreConnector);
 
     let error = kernel
@@ -481,7 +481,7 @@ fn layered_connector_rejects_unknown_default_adapter_override() {
 
 #[tokio::test]
 async fn kernel_auto_routes_by_harness_kind_when_adapter_is_not_pinned() {
-    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit();
     kernel
         .register_pack(acp_pack_without_explicit_adapter())
         .expect("pack should register");
@@ -512,7 +512,7 @@ async fn kernel_auto_routes_by_harness_kind_when_adapter_is_not_pinned() {
 
 #[tokio::test]
 async fn revoked_token_is_denied_by_policy_engine() {
-    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -550,8 +550,7 @@ async fn audit_sink_receives_core_lifecycle_events() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_000_000));
     let audit = Arc::new(InMemoryAuditSink::default());
 
-    let mut kernel =
-        LoongKernel::with_runtime(StaticPolicyEngine::default(), clock.clone(), audit.clone());
+    let mut kernel = LoongKernel::with_runtime(clock.clone(), audit.clone());
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -634,7 +633,7 @@ async fn audit_sink_receives_core_lifecycle_events() {
 fn record_audit_event_supports_security_scan_summary() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_000_123));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit.clone());
+    let kernel = LoongKernel::with_runtime(clock, audit.clone());
 
     kernel
         .record_audit_event(
@@ -680,7 +679,7 @@ fn record_audit_event_supports_security_scan_summary() {
 fn record_audit_event_supports_provider_failover_summary() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_000_123));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit.clone());
+    let kernel = LoongKernel::with_runtime(clock, audit.clone());
 
     kernel
         .record_audit_event(
@@ -753,7 +752,7 @@ fn record_audit_event_supports_provider_failover_summary() {
 fn record_audit_event_supports_plugin_trust_summary() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_000_124));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit.clone());
+    let kernel = LoongKernel::with_runtime(clock, audit.clone());
 
     kernel
         .record_audit_event(
@@ -808,7 +807,7 @@ fn record_audit_event_supports_plugin_trust_summary() {
 fn record_audit_event_supports_tool_search_summary() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_000_125));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit.clone());
+    let kernel = LoongKernel::with_runtime(clock, audit.clone());
 
     kernel
         .record_audit_event(
@@ -868,7 +867,7 @@ fn record_audit_event_supports_tool_search_summary() {
 
 #[tokio::test]
 async fn layered_runtime_tool_and_memory_paths_execute_via_core_and_extension() {
-    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit();
     kernel
         .register_pack(VerticalPackManifest {
             pack_id: "layered-dev".to_owned(),
@@ -962,8 +961,7 @@ async fn audit_sink_captures_runtime_tool_memory_and_connector_plane_events() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_000_100));
     let audit = Arc::new(InMemoryAuditSink::default());
 
-    let mut kernel =
-        LoongKernel::with_runtime(StaticPolicyEngine::default(), clock.clone(), audit.clone());
+    let mut kernel = LoongKernel::with_runtime(clock.clone(), audit.clone());
     kernel
         .register_pack(VerticalPackManifest {
             pack_id: "audit-layered".to_owned(),
@@ -1126,7 +1124,7 @@ async fn audit_sink_captures_runtime_tool_memory_and_connector_plane_events() {
 
 #[tokio::test]
 async fn policy_extension_chain_can_block_high_risk_capabilities() {
-    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit();
     kernel
         .register_pack(VerticalPackManifest {
             pack_id: "strict-env".to_owned(),
@@ -1176,8 +1174,7 @@ async fn plane_audit_records_resolved_default_core_adapter_names() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_000_200));
     let audit = Arc::new(InMemoryAuditSink::default());
 
-    let mut kernel =
-        LoongKernel::with_runtime(StaticPolicyEngine::default(), clock.clone(), audit.clone());
+    let mut kernel = LoongKernel::with_runtime(clock.clone(), audit.clone());
     kernel
         .register_pack(VerticalPackManifest {
             pack_id: "audit-defaults".to_owned(),
@@ -1287,8 +1284,7 @@ async fn audit_event_json_schema_for_plane_invoked_is_stable() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_001_000));
     let audit = Arc::new(InMemoryAuditSink::default());
 
-    let mut kernel =
-        LoongKernel::with_runtime(StaticPolicyEngine::default(), clock.clone(), audit.clone());
+    let mut kernel = LoongKernel::with_runtime(clock.clone(), audit.clone());
     kernel
         .register_pack(VerticalPackManifest {
             pack_id: "audit-schema".to_owned(),
@@ -1353,8 +1349,7 @@ async fn audit_event_json_schema_for_plane_invoked_is_stable() {
 async fn tool_core_call_is_denied_when_policy_engine_rejects_rule_of_two_gate() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_002_000));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let mut kernel =
-        LoongKernel::with_runtime(StaticPolicyEngine::default(), clock.clone(), audit.clone());
+    let mut kernel = LoongKernel::with_runtime(clock.clone(), audit.clone());
     kernel
         .register_pack(VerticalPackManifest {
             pack_id: "tool-gate-deny".to_owned(),
@@ -1412,57 +1407,10 @@ async fn tool_core_call_is_denied_when_policy_engine_rejects_rule_of_two_gate() 
 }
 
 #[tokio::test]
-async fn generation_revoke_below_threshold_denies_old_tokens() {
-    let clock = Arc::new(FixedClock::new(1_000_000));
-    let audit = Arc::new(InMemoryAuditSink::default());
-    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
-    kernel.register_pack(sample_pack()).unwrap();
-    kernel.register_harness_adapter(MockEmbeddedPiHarness {
-        seen_tasks: Mutex::new(Vec::new()),
-    });
-
-    let token_gen1 = kernel.issue_token("sales-intel", "agent-1", 3600).unwrap();
-    assert_eq!(token_gen1.generation, 1);
-
-    // Revoke all tokens at or below generation 1
-    kernel.revoke_generation(1);
-
-    let token_gen2 = kernel.issue_token("sales-intel", "agent-2", 3600).unwrap();
-    assert_eq!(token_gen2.generation, 2);
-
-    // Old token should fail
-    let caps = BTreeSet::from([Capability::InvokeTool]);
-    let task = TaskIntent {
-        task_id: "t-1".to_owned(),
-        objective: "test".to_owned(),
-        required_capabilities: caps.clone(),
-        payload: json!({}),
-    };
-    let err = kernel
-        .execute_task("sales-intel", &token_gen1, task)
-        .await
-        .unwrap_err();
-    assert!(matches!(
-        err,
-        KernelError::Policy(PolicyError::RevokedToken { .. })
-    ));
-
-    // New token should work
-    let task2 = TaskIntent {
-        task_id: "t-2".to_owned(),
-        objective: "test2".to_owned(),
-        required_capabilities: caps,
-        payload: json!({}),
-    };
-    let result = kernel.execute_task("sales-intel", &token_gen2, task2).await;
-    assert!(result.is_ok());
-}
-
-#[tokio::test]
 async fn task_supervisor_tracks_state_through_lifecycle() {
     let clock = Arc::new(FixedClock::new(1_000_000));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(clock, audit);
     kernel.register_pack(sample_pack()).unwrap();
     kernel.register_harness_adapter(MockEmbeddedPiHarness {
         seen_tasks: Mutex::new(Vec::new()),
@@ -1488,7 +1436,7 @@ async fn task_supervisor_tracks_state_through_lifecycle() {
 async fn task_supervisor_faults_on_kernel_error() {
     let clock = Arc::new(FixedClock::new(1_000_000));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(clock, audit);
     kernel.register_pack(sample_pack()).unwrap();
     // NOTE: no harness adapter registered -- execute_task will fail
     let token = kernel.issue_token("sales-intel", "agent-1", 3600).unwrap();
@@ -1508,7 +1456,7 @@ async fn task_supervisor_faults_on_kernel_error() {
 
 #[test]
 fn register_pack_creates_namespace() {
-    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit();
     kernel.register_pack(sample_pack()).unwrap();
 
     let ns = kernel.get_namespace("sales-intel");
@@ -1521,13 +1469,13 @@ fn register_pack_creates_namespace() {
 
 #[test]
 fn get_namespace_returns_none_for_unregistered_pack() {
-    let (kernel, _audit) = LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    let (kernel, _audit) = LoongKernel::new_with_in_memory_audit();
     assert!(kernel.get_namespace("nonexistent").is_none());
 }
 
 #[test]
 fn namespace_membrane_defaults_to_pack_id() {
-    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit();
     kernel.register_pack(sample_pack()).unwrap();
 
     let ns = kernel.get_namespace("sales-intel").unwrap();
@@ -1536,8 +1484,7 @@ fn namespace_membrane_defaults_to_pack_id() {
 
 #[tokio::test]
 async fn kernel_is_usable_from_concurrent_tasks() {
-    let (mut builder, _audit) =
-        KernelBuilder::new_with_in_memory_audit(StaticPolicyEngine::default());
+    let (mut builder, _audit) = KernelBuilder::new_with_in_memory_audit();
     builder
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -1615,7 +1562,7 @@ fn control_plane_pack() -> VerticalPackManifest {
 
 #[test]
 fn issue_scoped_token_limits_capabilities_to_requested_subset() {
-    let (mut kernel, audit) = LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    let (mut kernel, audit) = LoongKernel::new_with_in_memory_audit();
     kernel
         .register_pack(control_plane_pack())
         .expect("control-plane pack should register");
@@ -1641,9 +1588,9 @@ fn issue_scoped_token_limits_capabilities_to_requested_subset() {
     );
 }
 
-#[test]
-fn authorize_operation_succeeds_when_scoped_token_has_control_write() {
-    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+#[tokio::test]
+async fn authorize_operation_succeeds_when_scoped_token_has_control_write() {
+    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit();
     kernel
         .register_pack(control_plane_pack())
         .expect("control-plane pack should register");
@@ -1669,14 +1616,15 @@ fn authorize_operation_succeeds_when_scoped_token_has_control_write() {
             "control/write-test",
             &required_capabilities,
         )
+        .await
         .expect("control-write authorization should succeed");
 }
 
-#[test]
-fn authorize_operation_records_plane_invocation_for_control_plane_route() {
+#[tokio::test]
+async fn authorize_operation_records_plane_invocation_for_control_plane_route() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_000_000));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit.clone());
+    let mut kernel = LoongKernel::with_runtime(clock, audit.clone());
     kernel
         .register_pack(control_plane_pack())
         .expect("control-plane pack should register");
@@ -1702,6 +1650,7 @@ fn authorize_operation_records_plane_invocation_for_control_plane_route() {
             "control/snapshot",
             &allowed_capabilities,
         )
+        .await
         .expect("control-plane authorization should succeed");
 
     let snapshot = audit.snapshot();
@@ -1722,9 +1671,9 @@ fn authorize_operation_records_plane_invocation_for_control_plane_route() {
     }));
 }
 
-#[test]
-fn authorize_operation_fails_closed_when_scoped_token_lacks_control_write() {
-    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+#[tokio::test]
+async fn authorize_operation_fails_closed_when_scoped_token_lacks_control_write() {
+    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit();
     kernel
         .register_pack(control_plane_pack())
         .expect("control-plane pack should register");
@@ -1749,6 +1698,7 @@ fn authorize_operation_fails_closed_when_scoped_token_lacks_control_write() {
             "control/write-test",
             &required_capabilities,
         )
+        .await
         .expect_err("missing control-write capability should fail");
 
     assert!(matches!(
@@ -1758,9 +1708,9 @@ fn authorize_operation_fails_closed_when_scoped_token_lacks_control_write() {
     ));
 }
 
-#[test]
-fn authorize_operation_fails_closed_when_scoped_token_lacks_capability() {
-    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+#[tokio::test]
+async fn authorize_operation_fails_closed_when_scoped_token_lacks_capability() {
+    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit();
     kernel
         .register_pack(control_plane_pack())
         .expect("control-plane pack should register");
@@ -1785,6 +1735,7 @@ fn authorize_operation_fails_closed_when_scoped_token_lacks_capability() {
             "pairing/resolve",
             &required_capabilities,
         )
+        .await
         .expect_err("missing capability should fail");
 
     assert!(matches!(

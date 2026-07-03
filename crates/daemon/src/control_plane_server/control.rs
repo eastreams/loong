@@ -42,7 +42,9 @@ pub(super) async fn control_snapshot(
     headers: HeaderMap,
     State(state): State<ControlPlaneHttpState>,
 ) -> Response {
-    if let Err(response) = authorize_control_plane_request(&state, "control/snapshot", &headers) {
+    if let Err(response) =
+        authorize_control_plane_request(&state, "control/snapshot", &headers).await
+    {
         return *response;
     }
     match current_snapshot(&state).await {
@@ -56,7 +58,8 @@ pub(super) async fn control_events(
     State(state): State<ControlPlaneHttpState>,
     Query(query): Query<EventQuery>,
 ) -> Response {
-    if let Err(response) = authorize_control_plane_request(&state, "control/events", &headers) {
+    if let Err(response) = authorize_control_plane_request(&state, "control/events", &headers).await
+    {
         return *response;
     }
     let limit = query.limit.unwrap_or(CONTROL_PLANE_DEFAULT_EVENT_LIMIT);
@@ -78,7 +81,9 @@ pub(super) async fn control_subscribe(
     State(state): State<ControlPlaneHttpState>,
     Query(query): Query<SubscribeQuery>,
 ) -> Response {
-    if let Err(response) = authorize_control_plane_request(&state, "control/subscribe", &headers) {
+    if let Err(response) =
+        authorize_control_plane_request(&state, "control/subscribe", &headers).await
+    {
         return *response;
     }
     let after_seq = query.after_seq.unwrap_or(0);
@@ -98,7 +103,7 @@ pub(super) async fn control_ping(
     headers: HeaderMap,
     State(state): State<ControlPlaneHttpState>,
 ) -> Response {
-    if let Err(response) = authorize_control_plane_request(&state, "control/ping", &headers) {
+    if let Err(response) = authorize_control_plane_request(&state, "control/ping", &headers).await {
         return *response;
     }
     match current_snapshot(&state).await {

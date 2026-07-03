@@ -6,8 +6,7 @@ use async_trait::async_trait;
 use kernel::{
     AuditSink, Capability, CapabilityToken, ConnectorCommand, ExecutionRoute, HarnessAdapter,
     HarnessError, HarnessKind, HarnessOutcome, HarnessRequest, InMemoryAuditSink, LoongKernel,
-    PolicyEngine, StaticPolicyEngine, SystemClock, TaskIntent, TaskState, TaskSupervisor,
-    VerticalPackManifest,
+    SystemClock, TaskIntent, TaskState, TaskSupervisor, VerticalPackManifest,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -28,8 +27,8 @@ pub struct DaemonTaskExecution {
 /// This helper intentionally returns a structured execution record even when
 /// dispatch fails so CLI/API surfaces can report the supervisor's terminal
 /// state instead of collapsing everything into a plain transport error.
-pub(crate) async fn execute_daemon_task_with_supervisor<P: PolicyEngine>(
-    kernel: &LoongKernel<P>,
+pub(crate) async fn execute_daemon_task_with_supervisor(
+    kernel: &LoongKernel,
     pack_id: &str,
     token: &CapabilityToken,
     intent: TaskIntent,
@@ -371,11 +370,11 @@ impl HarnessAdapter for EmbeddedAgentHarness {
 /// This starts from the spec/kernel bootstrap defaults and then registers the
 /// embedded agent harness so daemon task intents can route back into the shared
 /// `AgentRuntime` pipeline without spawning an external process.
-fn build_daemon_runtime_kernel() -> LoongKernel<StaticPolicyEngine> {
+fn build_daemon_runtime_kernel() -> LoongKernel {
     let audit_sink = Arc::new(InMemoryAuditSink::default());
     let audit_sink = audit_sink as Arc<dyn AuditSink>;
     let clock = Arc::new(SystemClock) as Arc<dyn kernel::Clock>;
-    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit_sink);
+    let mut kernel = LoongKernel::with_runtime(clock, audit_sink);
     let pack = daemon_runtime_pack_manifest();
     let register_pack_result = kernel.register_pack(pack);
     register_pack_result.expect("daemon runtime pack should register");
@@ -649,7 +648,30 @@ mod tests {
     #[tokio::test]
     async fn shared_daemon_turn_executor_preserves_propagated_provider_errors() {
         let resolved_path = std::env::temp_dir().join("loong-daemon-turn-propagate.toml");
-        let config = loong_app::config::LoongConfig::default();
+        let mut config = loong_app::config::LoongConfig::default();
+        config.memory.sqlite_path = std::env::temp_dir()
+            .join("loong-daemon-turn-propagate.sqlite3")
+            .display()
+            .to_string();
+        config.audit.mode = loong_app::config::AuditMode::InMemory;
+        let sqlite_path = config.memory.resolved_sqlite_path();
+        #[cfg(feature = "memory-sqlite")]
+        {
+            let memory_config = loong_app::session::store::SessionStoreConfig {
+                sqlite_path: Some(sqlite_path.clone()),
+                runtime_config: None,
+            };
+            let repo = loong_app::session::repository::SessionRepository::new(&memory_config)
+                .expect("provider propagation session repository");
+            repo.ensure_session(loong_app::session::repository::NewSessionRecord {
+                session_id: "turn-propagate".to_owned(),
+                kind: loong_app::session::repository::SessionKind::Root,
+                parent_session_id: None,
+                label: Some("turn-propagate".to_owned()),
+                state: loong_app::session::repository::SessionState::Ready,
+            })
+            .expect("seed provider propagation session");
+        }
         loong_app::config::write(
             Some(resolved_path.to_string_lossy().as_ref()),
             &config,
@@ -691,5 +713,6 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(resolved_path);
+        let _ = std::fs::remove_file(sqlite_path);
     }
 }

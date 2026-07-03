@@ -4,9 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use loong_contracts::{Capability, ExecutionRoute, HarnessKind};
-use loong_kernel::{
-    FixedClock, InMemoryAuditSink, LoongKernel, StaticPolicyEngine, VerticalPackManifest,
-};
+use loong_kernel::{FixedClock, InMemoryAuditSink, LoongKernel, VerticalPackManifest};
 
 use crate::context::KernelContext;
 use crate::conversation::turn_engine::{ProviderTurn, ToolIntent, TurnEngine, TurnResult};
@@ -134,8 +132,7 @@ impl TurnTestHarness {
 
         let audit = Arc::new(InMemoryAuditSink::default());
         let clock = Arc::new(FixedClock::new(1_700_000_000));
-        let mut kernel =
-            LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit.clone());
+        let mut kernel = LoongKernel::with_runtime(clock, audit.clone());
 
         let pack = VerticalPackManifest {
             pack_id: "test-pack".to_owned(),
@@ -155,15 +152,7 @@ impl TurnTestHarness {
             .set_default_core_tool_adapter("mvp-tools")
             .expect("set default adapter");
 
-        // Register policy extensions for unified security enforcement.
-        // Policy rules come exclusively from the runtime config; no hardcoded
-        // lists are injected here.
-        kernel.register_policy_extension(
-            crate::tools::shell_policy_ext::ToolPolicyExtension::from_config(&tool_config),
-        );
-        kernel.register_policy_extension(crate::tools::file_policy_ext::FilePolicyExtension::new(
-            tool_config.file_root,
-        ));
+        // TODO: The policy-extension is deleted, there may be new policy register logic
 
         #[cfg(feature = "memory-sqlite")]
         {

@@ -13,10 +13,9 @@ use kernel::{
     PluginAbsorbReport, PluginActivationPlan, PluginActivationStatus, PluginBootstrapExecutor,
     PluginCompatibility, PluginCompatibilityShimSupport, PluginScanReport, PluginScanner,
     PluginSetup, PluginSetupReadinessContext, PluginSlotClaim, PluginTranslationReport,
-    PluginTranslator, ProvisionPlan, RuntimeCoreRequest, RuntimeExtensionRequest,
-    StaticPolicyEngine, SystemClock, TaskIntent, TaskSupervisor, ToolCoreRequest,
-    ToolExtensionRequest, plugin_bridge_is_high_risk_auto_apply,
-    plugin_provenance_summary_for_descriptor,
+    PluginTranslator, ProvisionPlan, RuntimeCoreRequest, RuntimeExtensionRequest, SystemClock,
+    TaskIntent, TaskSupervisor, ToolCoreRequest, ToolExtensionRequest,
+    plugin_bridge_is_high_risk_auto_apply, plugin_provenance_summary_for_descriptor,
 };
 use serde_json::{Value, json};
 
@@ -875,7 +874,7 @@ struct SecurityScanDelta {
 }
 
 async fn execute_spec_operation(
-    kernel: &LoongKernel<StaticPolicyEngine>,
+    kernel: &LoongKernel,
     pack_id: &str,
     token: &kernel::CapabilityToken,
     integration_catalog: &IntegrationCatalog,

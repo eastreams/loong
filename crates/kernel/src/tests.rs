@@ -1,3 +1,5 @@
+//! This module should be split into small test modules, so no more non-universal tests should be added.
+
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
@@ -19,7 +21,6 @@ use crate::clock::FixedClock;
 use crate::contracts::{Capability, HarnessOutcome, TaskIntent};
 use crate::errors::{AuditError, KernelError, PolicyError};
 use crate::kernel::LoongKernel;
-use crate::policy::{PolicyEngine, StaticPolicyEngine};
 use crate::task_supervisor::TaskSupervisor;
 use crate::{ExecutionPlane, PlaneTier};
 use crate::{Fault, TaskState};
@@ -316,7 +317,7 @@ fn fanout_audit_sink_records_to_all_children() {
 
 #[test]
 fn explicit_in_memory_kernel_constructor_records_token_audit_events() {
-    let (mut kernel, audit) = LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    let (mut kernel, audit) = LoongKernel::new_with_in_memory_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -332,7 +333,7 @@ fn explicit_in_memory_kernel_constructor_records_token_audit_events() {
 
 #[test]
 fn explicit_no_audit_kernel_constructor_keeps_side_effect_free_fixture_path() {
-    let mut kernel = LoongKernel::new_without_audit(StaticPolicyEngine::default());
+    let mut kernel = LoongKernel::new_without_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -444,18 +445,6 @@ fn pack_validation_rejects_invalid_semver() {
     assert!(matches!(error, crate::PackError::InvalidVersion(_)));
 }
 
-#[test]
-fn token_generation_increments_on_each_issue() {
-    let engine = StaticPolicyEngine::default();
-    let pack = sample_pack();
-    let t1 = engine.issue_token(&pack, "a1", 1_000_000, 3600).unwrap();
-    let t2 = engine.issue_token(&pack, "a2", 1_000_000, 3600).unwrap();
-    let t3 = engine.issue_token(&pack, "a3", 1_000_000, 3600).unwrap();
-    assert_eq!(t1.generation, 1);
-    assert_eq!(t2.generation, 2);
-    assert_eq!(t3.generation, 3);
-}
-
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
 
@@ -468,7 +457,7 @@ proptest! {
         let required_capabilities = capability_set_from_mask(required_mask);
 
         let (mut kernel, _audit) =
-            LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+            LoongKernel::new_with_in_memory_audit();
         let mut pack = sample_pack();
         pack.granted_capabilities = pack_capabilities.clone();
         kernel
@@ -675,7 +664,7 @@ fn task_supervisor_rejects_execute_after_completion() {
 fn record_tool_call_denial_audits_extension_denied_errors() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_004_000));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit.clone());
+    let mut kernel = LoongKernel::with_runtime(clock, audit.clone());
     let pack = sample_pack();
     kernel
         .register_pack(pack.clone())

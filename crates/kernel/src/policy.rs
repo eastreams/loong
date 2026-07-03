@@ -1,192 +1,351 @@
 use std::{
+    borrow::Cow,
     collections::BTreeSet,
     sync::{
-        Mutex,
+        Arc,
         atomic::{AtomicU64, Ordering},
     },
 };
 
-// Re-export data types from contracts
-pub use loong_contracts::{PolicyContext, PolicyDecision, PolicyRequest};
+use async_trait::async_trait;
+use loong_contracts::{
+    Capability, CapabilityToken, ExecutionPlane, GrantId, PlaneTier, PolicyDecision, PolicyEntry,
+    PolicyGrant, PolicyOutcome, VerticalPackManifest,
+};
+use loong_core::{
+    error::AuthorizationError,
+    policy::action::Action,
+    policy::{
+        context::{PolicyContext, PolicyContextFactory},
+        engine::PolicyEngine,
+        policy::PolicyAny,
+    },
+};
 
-use crate::{contracts::CapabilityToken, errors::PolicyError, pack::VerticalPackManifest};
+use crate::{
+    errors::PolicyError,
+    policy_ext::{PolicyExtension, PolicyExtensionChain, PolicyExtensionContext},
+};
 
-pub trait PolicyEngine: Send + Sync {
-    fn issue_token(
-        &self,
-        pack: &VerticalPackManifest,
-        agent_id: &str,
-        now_epoch_s: u64,
-        ttl_s: u64,
-    ) -> Result<CapabilityToken, PolicyError>;
+const DEFAULT_DENY_REASON: &str = "No matching policy.";
 
-    fn authorize(
-        &self,
-        token: &CapabilityToken,
-        runtime_pack_id: &str,
-        now_epoch_s: u64,
-        required: &std::collections::BTreeSet<crate::contracts::Capability>,
-    ) -> Result<(), PolicyError>;
+pub struct KernelPolicyContext<'a> {
+    pub pack: &'a VerticalPackManifest,
+    pub token: &'a CapabilityToken,
+    pub now_epoch_s: u64,
+    pub request_parameters: Option<&'a serde_json::Value>,
+}
 
-    fn revoke_token(&self, token_id: &str) -> Result<(), PolicyError>;
-
-    fn revoke_generation(&self, _below: u64) {
-        // Default no-op
-    }
-
-    fn check_tool_call(&self, _request: &PolicyRequest) -> PolicyDecision {
-        PolicyDecision::Allow
+impl PolicyContext for KernelPolicyContext<'_> {
+    fn capabilities(&self) -> BTreeSet<Capability> {
+        self.token.allowed_capabilities.clone()
     }
 }
 
-#[derive(Debug, Default)]
-pub struct StaticPolicyEngine {
-    token_seq: AtomicU64,
-    revoked_tokens: Mutex<BTreeSet<String>>,
-    generation: AtomicU64,
-    revoked_below_generation: AtomicU64,
+#[derive(Debug, Default, Clone, Copy)]
+pub struct KernelPolicyContextFactory;
+
+impl PolicyContextFactory for KernelPolicyContextFactory {
+    type Context<'a> = KernelPolicyContext<'a>;
 }
 
-impl StaticPolicyEngine {
-    fn next_token_id(&self) -> String {
-        let seq = self.token_seq.fetch_add(1, Ordering::Relaxed) + 1;
-        format!("tok-{seq:016x}")
-    }
+pub struct LegacyKernelAction {
+    plane: ExecutionPlane,
+    tier: PlaneTier,
+    operation: String,
+    required_capabilities: BTreeSet<Capability>,
+}
 
-    /// Revoke all tokens with generation <= `below`.
-    ///
-    /// Note: tokens issued concurrently during this call may land in the
-    /// revoked range. This is acceptable for StaticPolicyEngine (test/dev).
-    /// A production engine should use a lock or AcqRel ordering.
-    pub fn revoke_generation(&self, below: u64) {
-        self.revoked_below_generation
-            .fetch_max(below, Ordering::Relaxed);
-        // Fast-forward generation so newly issued tokens won't be immediately revoked.
-        self.generation.fetch_max(below, Ordering::Relaxed);
-    }
-
-    pub fn current_generation(&self) -> u64 {
-        self.generation.load(Ordering::Relaxed)
+impl LegacyKernelAction {
+    pub fn new(
+        plane: ExecutionPlane,
+        tier: PlaneTier,
+        operation: impl Into<String>,
+        required_capabilities: BTreeSet<Capability>,
+    ) -> Self {
+        Self {
+            plane,
+            tier,
+            operation: operation.into(),
+            required_capabilities,
+        }
     }
 }
 
-impl PolicyEngine for StaticPolicyEngine {
-    fn issue_token(
+impl Action for LegacyKernelAction {
+    fn kind(&self) -> &'static str {
+        "action.legacy"
+    }
+
+    fn execution_plane(&self) -> ExecutionPlane {
+        self.plane
+    }
+
+    fn plane_tier(&self) -> PlaneTier {
+        self.tier
+    }
+
+    fn operation(&self) -> Cow<'static, str> {
+        self.operation.clone().into()
+    }
+
+    fn required_capabilities(&self) -> BTreeSet<Capability> {
+        self.required_capabilities.clone()
+    }
+}
+
+// TODO: This is the temporary Policy Pipeline, other
+// policies' support will be added later.
+pub struct PolicyPipeline {
+    policies: Vec<Arc<dyn PolicyAny<KernelPolicyContextFactory>>>,
+    policy_extensions: PolicyExtensionChain,
+    grant_seq: AtomicU64,
+}
+
+impl Default for PolicyPipeline {
+    fn default() -> Self {
+        Self::new().with_policy(AllowPolicy)
+    }
+}
+
+impl PolicyPipeline {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            policies: Vec::new(),
+            policy_extensions: PolicyExtensionChain::new(),
+            grant_seq: AtomicU64::new(0),
+        }
+    }
+
+    #[must_use]
+    pub fn with_policy<P>(mut self, policy: P) -> Self
+    where
+        P: PolicyAny<KernelPolicyContextFactory> + 'static,
+    {
+        self.push_policy(policy);
+        self
+    }
+
+    pub fn push_policy<P>(&mut self, policy: P)
+    where
+        P: PolicyAny<KernelPolicyContextFactory> + 'static,
+    {
+        self.policies.push(Arc::new(policy));
+    }
+
+    pub fn register_policy_extension<E: PolicyExtension + 'static>(&mut self, extension: E) {
+        self.policy_extensions.register(extension);
+    }
+
+    pub async fn authorize_kernel_action<A: Action>(
         &self,
-        pack: &VerticalPackManifest,
-        agent_id: &str,
-        now_epoch_s: u64,
-        ttl_s: u64,
-    ) -> Result<CapabilityToken, PolicyError> {
-        let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
-        Ok(CapabilityToken {
-            token_id: self.next_token_id(),
-            pack_id: pack.pack_id.clone(),
-            agent_id: agent_id.to_owned(),
-            allowed_capabilities: pack.granted_capabilities.clone(),
-            issued_at_epoch_s: now_epoch_s,
-            expires_at_epoch_s: now_epoch_s.saturating_add(ttl_s),
-            generation,
+        ctx: &KernelPolicyContext<'_>,
+        action: A,
+    ) -> Result<(), PolicyError> {
+        let required_capabilities = action.required_capabilities();
+        self.grant(ctx, action).await.map_err(policy_engine_error)?;
+
+        self.policy_extensions.authorize(&PolicyExtensionContext {
+            pack: ctx.pack,
+            token: ctx.token,
+            now_epoch_s: ctx.now_epoch_s,
+            required_capabilities: &required_capabilities,
+            request_parameters: ctx.request_parameters,
         })
     }
 
-    fn authorize(
+    fn next_grant_id_sync(&self) -> GrantId {
+        let seq = self.grant_seq.fetch_add(1, Ordering::Relaxed) + 1;
+        GrantId(seq)
+    }
+}
+
+fn policy_engine_error(error: AuthorizationError) -> PolicyError {
+    PolicyError::ExtensionDenied {
+        extension: "policy-engine".to_owned(),
+        reason: error.to_string(),
+    }
+}
+
+#[async_trait]
+impl PolicyEngine for PolicyPipeline {
+    type Factory = KernelPolicyContextFactory;
+
+    async fn decide<A: Action>(
         &self,
-        token: &CapabilityToken,
-        runtime_pack_id: &str,
-        now_epoch_s: u64,
-        required: &std::collections::BTreeSet<crate::contracts::Capability>,
-    ) -> Result<(), PolicyError> {
-        if self
-            .revoked_tokens
-            .lock()
-            .map_err(|_err| PolicyError::RevokedToken {
-                token_id: token.token_id.clone(),
-            })?
-            .contains(&token.token_id)
-        {
-            return Err(PolicyError::RevokedToken {
-                token_id: token.token_id.clone(),
-            });
-        }
+        ctx: &<Self::Factory as PolicyContextFactory>::Context<'_>,
+        action: &A,
+    ) -> PolicyOutcome {
+        let mut allow: Option<(PolicyEntry, Cow<'static, str>)> = None;
 
-        let threshold = self.revoked_below_generation.load(Ordering::Relaxed);
-        if token.generation > 0 && token.generation <= threshold {
-            return Err(PolicyError::RevokedToken {
-                token_id: token.token_id.clone(),
-            });
-        }
+        for (index, policy) in self.policies.iter().enumerate() {
+            let grant = policy.grant(ctx, action).await;
+            let source = PolicyEntry {
+                policy_name: policy.name().into(),
+                policy_id: index as u64,
+            };
 
-        if token.pack_id != runtime_pack_id {
-            return Err(PolicyError::PackMismatch {
-                token_pack_id: token.pack_id.clone(),
-                runtime_pack_id: runtime_pack_id.to_owned(),
-            });
-        }
-
-        if now_epoch_s > token.expires_at_epoch_s {
-            return Err(PolicyError::ExpiredToken {
-                token_id: token.token_id.clone(),
-                expires_at_epoch_s: token.expires_at_epoch_s,
-            });
-        }
-
-        for capability in required {
-            if !token.allowed_capabilities.contains(capability) {
-                return Err(PolicyError::MissingCapability {
-                    token_id: token.token_id.clone(),
-                    capability: *capability,
-                });
+            match grant.decision {
+                PolicyDecision::Allow => {
+                    allow = Some((source, grant.reason));
+                }
+                PolicyDecision::Deny => {
+                    return PolicyOutcome::Deny {
+                        grant_source: Some(source),
+                        reason: grant.reason,
+                    };
+                }
+                PolicyDecision::Abstain => {}
             }
         }
 
-        Ok(())
+        match allow {
+            Some((source, reason)) => PolicyOutcome::Allow { source, reason },
+            None => PolicyOutcome::Deny {
+                grant_source: None,
+                reason: DEFAULT_DENY_REASON.into(),
+            },
+        }
     }
 
-    fn revoke_token(&self, token_id: &str) -> Result<(), PolicyError> {
-        let mut revoked = self
-            .revoked_tokens
-            .lock()
-            .map_err(|_err| PolicyError::RevokedToken {
-                token_id: token_id.to_owned(),
-            })?;
-        revoked.insert(token_id.to_owned());
-        Ok(())
+    async fn next_grant_id(&self) -> GrantId {
+        self.next_grant_id_sync()
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct AllowPolicy;
+
+#[async_trait]
+impl PolicyAny<KernelPolicyContextFactory> for AllowPolicy {
+    fn name(&self) -> &'static str {
+        "allow"
     }
 
-    fn revoke_generation(&self, below: u64) {
-        self.revoke_generation(below);
-    }
-
-    // Deprecated: Tool policy is now enforced via PolicyExtensionChain.
-    fn check_tool_call(&self, _request: &PolicyRequest) -> PolicyDecision {
-        PolicyDecision::Allow
+    async fn grant(&self, _ctx: &KernelPolicyContext<'_>, _action: &dyn Action) -> PolicyGrant {
+        PolicyGrant {
+            decision: PolicyDecision::Allow,
+            predicate: None,
+            reason: "allowed by allow policy".into(),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-
-    use serde_json::json;
-
     use super::*;
 
-    fn policy_request(tool_name: &str, parameters: serde_json::Value) -> PolicyRequest {
-        PolicyRequest {
-            tool_name: tool_name.to_owned(),
-            parameters,
-            pack_id: "test-pack".to_owned(),
-            agent_id: "test-agent".to_owned(),
-            capabilities_used: BTreeSet::new(),
-            context: PolicyContext::default(),
+    struct DenyNetworkExtension;
+
+    impl PolicyExtension for DenyNetworkExtension {
+        fn name(&self) -> &str {
+            "deny-network"
+        }
+
+        fn authorize_extension(
+            &self,
+            context: &PolicyExtensionContext<'_>,
+        ) -> Result<(), PolicyError> {
+            if context
+                .required_capabilities
+                .contains(&Capability::NetworkEgress)
+            {
+                return Err(PolicyError::ExtensionDenied {
+                    extension: self.name().to_owned(),
+                    reason: "network egress denied by test extension".to_owned(),
+                });
+            }
+            Ok(())
         }
     }
 
-    #[test]
-    fn deprecated_check_tool_call_always_allows() {
-        let engine = StaticPolicyEngine::default();
-        let request = policy_request("shell.exec", json!({"command": "rm", "args": ["-rf", "/"]}));
-        assert_eq!(engine.check_tool_call(&request), PolicyDecision::Allow);
+    fn pack() -> VerticalPackManifest {
+        VerticalPackManifest {
+            pack_id: "pack".to_owned(),
+            domain: "test".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: loong_contracts::ExecutionRoute {
+                harness_kind: loong_contracts::HarnessKind::EmbeddedPi,
+                adapter: None,
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
+            metadata: Default::default(),
+        }
+    }
+
+    fn token() -> CapabilityToken {
+        CapabilityToken {
+            token_id: "tok".to_owned(),
+            pack_id: "pack".to_owned(),
+            agent_id: "agent".to_owned(),
+            allowed_capabilities: BTreeSet::from([Capability::InvokeTool]),
+            issued_at_epoch_s: 1,
+            expires_at_epoch_s: 10,
+            generation: 1,
+        }
+    }
+
+    #[tokio::test]
+    async fn policy_pipeline_grants_actions_allowed_by_registered_policy() {
+        let engine = PolicyPipeline::new().with_policy(AllowPolicy);
+        let pack = pack();
+        let token = token();
+        let ctx = KernelPolicyContext {
+            pack: &pack,
+            token: &token,
+            now_epoch_s: 1,
+            request_parameters: None,
+        };
+        let action = LegacyKernelAction::new(
+            ExecutionPlane::Tool,
+            PlaneTier::Core,
+            "tool",
+            BTreeSet::from([Capability::InvokeTool]),
+        );
+
+        let grant = engine
+            .grant(&ctx, action)
+            .await
+            .expect("allow policy should grant action");
+
+        assert_eq!(grant.id.0, 1);
+        let _info = grant.info;
+        assert_eq!(grant.granted.into_action().operation(), "tool");
+    }
+
+    #[tokio::test]
+    async fn policy_pipeline_runs_registered_policy_extensions() {
+        let mut engine = PolicyPipeline::default();
+        engine.register_policy_extension(DenyNetworkExtension);
+        let pack = pack();
+        let mut token = token();
+        token.allowed_capabilities.insert(Capability::NetworkEgress);
+        let ctx = KernelPolicyContext {
+            pack: &pack,
+            token: &token,
+            now_epoch_s: 1,
+            request_parameters: None,
+        };
+        let action = LegacyKernelAction::new(
+            ExecutionPlane::Runtime,
+            PlaneTier::Core,
+            "fetch",
+            BTreeSet::from([Capability::NetworkEgress]),
+        );
+
+        let error = engine
+            .authorize_kernel_action(&ctx, action)
+            .await
+            .expect_err("registered policy extension should deny the action");
+
+        assert_eq!(
+            error,
+            PolicyError::ExtensionDenied {
+                extension: "deny-network".to_owned(),
+                reason: "network egress denied by test extension".to_owned(),
+            }
+        );
     }
 }

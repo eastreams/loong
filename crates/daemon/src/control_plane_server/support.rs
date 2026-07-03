@@ -3,7 +3,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::atomic::AtomicU64;
 
 use kernel::{
-    CapabilityToken, ExecutionPlane, InMemoryAuditSink, LoongKernel, PlaneTier, StaticPolicyEngine,
+    CapabilityToken, ExecutionPlane, InMemoryAuditSink, LoongKernel, PlaneTier,
     VerticalPackManifest,
 };
 
@@ -27,7 +27,7 @@ pub(super) fn default_loopback_exposure_policy() -> ControlPlaneExposurePolicy {
 }
 
 pub(super) struct ControlPlaneKernelAuthority {
-    kernel: LoongKernel<StaticPolicyEngine>,
+    kernel: LoongKernel,
     _audit: Arc<InMemoryAuditSink>,
     token_bindings: std::sync::RwLock<std::collections::BTreeMap<String, CapabilityToken>>,
 }
@@ -87,8 +87,7 @@ pub(super) struct ControlPlaneTurnEventForwarder {
 
 impl ControlPlaneKernelAuthority {
     pub(super) fn new() -> Result<Self, String> {
-        let kernel_with_audit =
-            LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+        let kernel_with_audit = LoongKernel::new_with_in_memory_audit();
         let mut kernel = kernel_with_audit.0;
         let audit = kernel_with_audit.1;
         let pack = control_plane_pack();
@@ -120,23 +119,26 @@ impl ControlPlaneKernelAuthority {
         Ok(())
     }
 
-    pub(super) fn authorize(
+    pub(super) async fn authorize(
         &self,
         connection_token: &str,
         operation: &str,
         capabilities: &std::collections::BTreeSet<Capability>,
     ) -> Result<(), String> {
-        let token_bindings = self
-            .token_bindings
-            .read()
-            .unwrap_or_else(|error| error.into_inner());
-        let token = token_bindings
-            .get(connection_token)
-            .ok_or_else(|| "missing control-plane kernel token binding".to_owned())?;
+        let token = {
+            let token_bindings = self
+                .token_bindings
+                .read()
+                .unwrap_or_else(|error| error.into_inner());
+            token_bindings
+                .get(connection_token)
+                .cloned()
+                .ok_or_else(|| "missing control-plane kernel token binding".to_owned())?
+        };
         self.kernel
             .authorize_operation(
                 CONTROL_PLANE_PACK_ID,
-                token,
+                &token,
                 ExecutionPlane::Runtime,
                 PlaneTier::Core,
                 CONTROL_PLANE_PRIMARY_ADAPTER,
@@ -144,6 +146,7 @@ impl ControlPlaneKernelAuthority {
                 operation,
                 capabilities,
             )
+            .await
             .map_err(|error| format!("control-plane kernel authorization failed: {error}"))
     }
 

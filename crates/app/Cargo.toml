@@ -56,6 +56,7 @@ test-support = []
 
 [dependencies]
 loong-contracts = { package = "loong-contracts", version = "0.1.2-alpha.1", path = "../contracts" }
+loong-core = { package = "loong-core", version = "0.1.2-alpha.1", path = "../loong-core" }
 loong-kernel = { package = "loong-kernel", version = "0.1.2-alpha.1", path = "../kernel" }
 bytes = "1"
 async-trait.workspace = true

@@ -1,8 +1,22 @@
-use std::path::PathBuf;
+use std::{borrow::Cow, path::PathBuf};
 
+use loong_contracts::{Capability, PolicyEntry};
 use thiserror::Error;
 
 use crate::TaskLifecycle;
+
+#[derive(Debug, Error)]
+pub enum AuthorizationError {
+    #[error("missing capability: {0:?}")]
+    MissingCapability(Capability),
+    #[error("authorization denied: {grant_source:?} {reason:?}")]
+    Denied {
+        grant_source: Option<PolicyEntry>,
+        reason: Cow<'static, str>,
+    },
+    #[error("IO error: {0:?}")]
+    Io(std::io::Error),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum CoreModelError {
@@ -25,4 +39,34 @@ pub enum CoreModelError {
     SessionParallelChildTaskBudgetExceeded { session_id: String, limit: usize },
     #[error("task {task_id} exceeded max_child_tasks limit {limit}")]
     TaskChildBudgetExceeded { task_id: String, limit: usize },
+}
+
+#[derive(Debug)]
+pub enum ExecutionError {
+    Authorization(AuthorizationError),
+    Capability(CapabilityError),
+    Other(Cow<'static, str>),
+}
+
+#[derive(Debug)]
+pub enum CapabilityError {
+    GrantMismatch,
+    Denied,
+    Io(std::io::Error),
+}
+
+#[derive(Debug)]
+pub enum ToolError {
+    UnknownTool(String),
+    DuplicateTool(String),
+    InvalidSpec,
+    InvalidInput(InputError),
+    Authorization(AuthorizationError),
+    Execution(ExecutionError),
+}
+
+#[derive(Debug)]
+pub enum InputError {
+    MissingField(&'static str),
+    InvalidField(&'static str),
 }

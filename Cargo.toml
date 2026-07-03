@@ -13,6 +13,7 @@ members = [
   "crates/loong-app-protocol",
   "crates/loong-cli",
   "crates/loong-plugin-sdk",
+  # "crates/access"
 ]
 resolver = "2"
 
