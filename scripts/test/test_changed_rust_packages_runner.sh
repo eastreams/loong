@@ -30,7 +30,7 @@ make_fixture_repo() {
   local selected_packages_json="$2"
   local daemon_targets="$3"
 
-  mkdir -p "$fixture_root/scripts" "$fixture_root/stub"
+  mkdir -p "$fixture_root/scripts/ci" "$fixture_root/scripts/dev" "$fixture_root/stub"
   cp "$SCRIPT_SOURCE" "$fixture_root/scripts/ci/test_changed_rust_packages.sh"
   cp "$DAEMON_RUNNER_SOURCE" "$fixture_root/scripts/ci/run_selected_daemon_tests.sh"
   chmod +x "$fixture_root/scripts/ci/test_changed_rust_packages.sh"

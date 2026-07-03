@@ -112,7 +112,7 @@ run_batch_compile_and_execution_test() {
   invocation_log="$tmp_dir/invocations.log"
   build_dir="$tmp_dir/build"
   output_file="$tmp_dir/output.txt"
-  mkdir -p "$fixture_root/scripts" "$stub_dir"
+  mkdir -p "$fixture_root/scripts/ci" "$fixture_root/scripts/dev" "$stub_dir"
 
   cp "$SCRIPT_SOURCE" "$fixture_root/scripts/ci/run_selected_daemon_tests.sh"
   chmod +x "$fixture_root/scripts/ci/run_selected_daemon_tests.sh"

@@ -26,7 +26,7 @@ assert_not_contains() {
 
 make_fixture_repo() {
   local fixture_root="$1"
-  mkdir -p "$fixture_root/scripts" "$fixture_root/stub"
+  mkdir -p "$fixture_root/scripts/ci" "$fixture_root/stub"
   cp "$SCRIPT_SOURCE" "$fixture_root/scripts/ci/run_changed_rust_ci_job.sh"
   chmod +x "$fixture_root/scripts/ci/run_changed_rust_ci_job.sh"
 
