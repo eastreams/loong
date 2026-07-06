@@ -7,7 +7,7 @@ use crate::{
     error::{AuthorizationError, ExecutionError},
     policy::{
         action::{Action, ActionExecutor},
-        context::{PolicyContext, PolicyContextFactory},
+        context::PolicyContext,
         grant::{ActionGrant, ActionGrantInfo, Granted},
     },
 };
@@ -18,16 +18,12 @@ use crate::{
 /// report into a [`Granted`] token and turns deny reports into structured
 /// authorization errors without inventing policy reasons.
 #[async_trait]
-pub trait PolicyEngine {
+pub trait PolicyEngine: Sync {
     /// contains PolicyContext
-    type Factory: PolicyContextFactory;
+    type Cx<'a>: PolicyContext;
 
     /// Evaluate a borrowed action without consuming it.
-    async fn decide<A: Action>(
-        &self,
-        ctx: &<Self::Factory as PolicyContextFactory>::Context<'_>,
-        action: &A,
-    ) -> PolicyOutcome;
+    async fn decide<A: Action>(&self, ctx: &Self::Cx<'_>, action: &A) -> PolicyOutcome;
 
     /// Allocate the next grant id for an allowed action.
     async fn next_grant_id(&self) -> GrantId;
@@ -36,7 +32,7 @@ pub trait PolicyEngine {
     /// consumed by an executor.
     async fn grant<A: Action>(
         &self,
-        ctx: &<Self::Factory as PolicyContextFactory>::Context<'_>,
+        ctx: &Self::Cx<'_>,
         action: A,
     ) -> Result<ActionGrant<A>, AuthorizationError> {
         let outcome = self.decide(ctx, &action).await;
@@ -64,13 +60,6 @@ impl PolicyContext for () {
     fn capabilities(&self) -> BTreeSet<Capability> {
         BTreeSet::new()
     }
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct MockPolicyContextFactory;
-
-impl PolicyContextFactory for MockPolicyContextFactory {
-    type Context<'a> = ();
 }
 
 #[async_trait]

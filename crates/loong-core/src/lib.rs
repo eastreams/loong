@@ -5,6 +5,7 @@ mod budget;
 pub mod error;
 mod event;
 mod execution;
+pub mod kernel;
 mod lifecycle;
 pub mod policy;
 mod session;

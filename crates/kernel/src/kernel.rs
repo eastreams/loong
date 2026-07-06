@@ -7,7 +7,11 @@ use std::{
     },
 };
 
+use async_trait::async_trait;
+use loong_core::policy::engine::HasPolicyEngine;
+
 use crate::{
+    access::AccessCx,
     audit::{
         AuditEvent, AuditEventKind, AuditSink, ExecutionPlane, InMemoryAuditSink, NoopAuditSink,
         PlaneTier,
@@ -143,6 +147,12 @@ impl LoongKernel {
             audit,
             event_seq: AtomicU64::new(0),
         }
+    }
+
+    #[inline(always)]
+    #[must_use]
+    pub fn access<'a>(&'a self, policy_context: KernelPolicyContext<'a>) -> AccessCx<'a, Self> {
+        AccessCx::new(self, policy_context)
     }
 
     pub fn register_pack(&mut self, pack: VerticalPackManifest) -> Result<(), KernelError> {
@@ -1108,6 +1118,12 @@ impl LoongKernel {
 }
 
 impl Kernel {
+    #[inline(always)]
+    #[must_use]
+    pub fn access<'a>(&'a self, policy_context: KernelPolicyContext<'a>) -> AccessCx<'a, Self> {
+        AccessCx::new(self, policy_context)
+    }
+
     pub fn get_namespace(&self, pack_id: &str) -> Option<&loong_contracts::Namespace> {
         self.inner.get_namespace(pack_id)
     }
@@ -1268,5 +1284,29 @@ impl Deref for Kernel {
 
     fn deref(&self) -> &Self::Target {
         &self.inner
+    }
+}
+
+#[async_trait]
+impl HasPolicyEngine for LoongKernel {
+    type PolicyEngine<'a>
+        = PolicyPipeline
+    where
+        Self: 'a;
+
+    fn policy_engine(&self) -> &Self::PolicyEngine<'_> {
+        &self.policy
+    }
+}
+
+#[async_trait]
+impl HasPolicyEngine for Kernel {
+    type PolicyEngine<'a>
+        = PolicyPipeline
+    where
+        Self: 'a;
+
+    fn policy_engine(&self) -> &Self::PolicyEngine<'_> {
+        &self.inner.policy
     }
 }

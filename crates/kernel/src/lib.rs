@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod access;
 pub mod architecture;
 pub mod audit;
 pub mod awareness;
@@ -22,6 +23,7 @@ pub mod runtime;
 pub mod task_supervisor;
 pub mod tool;
 
+pub use access::AccessCx;
 pub use architecture::{
     ArchitectureBoundaryPolicy, ArchitectureGuardReport, ArchitecturePathDecision,
     ArchitecturePathReport,
@@ -55,6 +57,7 @@ pub use integration::{
     ProviderConfig, ProviderTemplate, ProvisionAction, ProvisionPlan,
 };
 pub use kernel::{ConnectorDispatch, Kernel, KernelBuilder, KernelDispatch, LoongKernel};
+pub use loong_access::{CanonicalPath, FsAccess, FsAction, FsReadAction, HasFsAccess};
 pub use loong_plugin_sdk::PluginChannelBridgeContract as CanonicalPluginChannelBridgeContract;
 pub use memory::{
     CoreMemoryAdapter, MemoryCoreOutcome, MemoryCoreRequest, MemoryExtensionAdapter,

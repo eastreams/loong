@@ -15,11 +15,7 @@ use loong_contracts::{
 use loong_core::{
     error::AuthorizationError,
     policy::action::Action,
-    policy::{
-        context::{PolicyContext, PolicyContextFactory},
-        engine::PolicyEngine,
-        policy::PolicyAny,
-    },
+    policy::{context::PolicyContext, engine::PolicyEngine, policy::PolicyAny},
 };
 
 use crate::{
@@ -40,13 +36,6 @@ impl PolicyContext for KernelPolicyContext<'_> {
     fn capabilities(&self) -> BTreeSet<Capability> {
         self.token.allowed_capabilities.clone()
     }
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct KernelPolicyContextFactory;
-
-impl PolicyContextFactory for KernelPolicyContextFactory {
-    type Context<'a> = KernelPolicyContext<'a>;
 }
 
 pub struct LegacyKernelAction {
@@ -97,7 +86,7 @@ impl Action for LegacyKernelAction {
 // TODO: This is the temporary Policy Pipeline, other
 // policies' support will be added later.
 pub struct PolicyPipeline {
-    policies: Vec<Arc<dyn PolicyAny<KernelPolicyContextFactory>>>,
+    policies: Vec<Arc<dyn PolicyAny<Self>>>,
     policy_extensions: PolicyExtensionChain,
     grant_seq: AtomicU64,
 }
@@ -121,7 +110,7 @@ impl PolicyPipeline {
     #[must_use]
     pub fn with_policy<P>(mut self, policy: P) -> Self
     where
-        P: PolicyAny<KernelPolicyContextFactory> + 'static,
+        P: PolicyAny<Self> + 'static,
     {
         self.push_policy(policy);
         self
@@ -129,7 +118,7 @@ impl PolicyPipeline {
 
     pub fn push_policy<P>(&mut self, policy: P)
     where
-        P: PolicyAny<KernelPolicyContextFactory> + 'static,
+        P: PolicyAny<Self> + 'static,
     {
         self.policies.push(Arc::new(policy));
     }
@@ -170,13 +159,9 @@ fn policy_engine_error(error: AuthorizationError) -> PolicyError {
 
 #[async_trait]
 impl PolicyEngine for PolicyPipeline {
-    type Factory = KernelPolicyContextFactory;
+    type Cx<'a> = KernelPolicyContext<'a>;
 
-    async fn decide<A: Action>(
-        &self,
-        ctx: &<Self::Factory as PolicyContextFactory>::Context<'_>,
-        action: &A,
-    ) -> PolicyOutcome {
+    async fn decide<A: Action>(&self, ctx: &Self::Cx<'_>, action: &A) -> PolicyOutcome {
         let mut allow: Option<(PolicyEntry, Cow<'static, str>)> = None;
 
         for (index, policy) in self.policies.iter().enumerate() {
@@ -218,12 +203,12 @@ impl PolicyEngine for PolicyPipeline {
 pub struct AllowPolicy;
 
 #[async_trait]
-impl PolicyAny<KernelPolicyContextFactory> for AllowPolicy {
+impl<P: PolicyEngine> PolicyAny<P> for AllowPolicy {
     fn name(&self) -> &'static str {
         "allow"
     }
 
-    async fn grant(&self, _ctx: &KernelPolicyContext<'_>, _action: &dyn Action) -> PolicyGrant {
+    async fn grant(&self, _ctx: &P::Cx<'_>, _action: &dyn Action) -> PolicyGrant {
         PolicyGrant {
             decision: PolicyDecision::Allow,
             predicate: None,
