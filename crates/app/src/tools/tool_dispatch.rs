@@ -390,6 +390,8 @@ pub(crate) fn execute_discoverable_tool_core_with_config(
 ) -> Result<ToolCoreOutcome, String> {
     let request = normalize_shell_request_for_execution(request);
     let tool_name = request.tool_name.clone();
+    // TODO(access-migration): This preflight remains for legacy side-effect
+    // tools. Access-backed tools must not add new policy checks here.
     direct_policy_preflight::run(&request, config)?;
     let timeout_seconds = config.tool_execution.timeout_for_tool(&tool_name);
 
@@ -477,7 +479,7 @@ fn dispatch_tool_request(
         "shell.exec" => shell::execute_shell_tool_with_config(request, config),
         #[cfg(feature = "tool-shell")]
         "bash.exec" => bash::execute_bash_tool_with_config(request, config),
-        "read" => file::execute_file_read_tool_with_config(request, config),
+        "read" => Err("read requires kernel access context".to_owned()),
         "write" => file::execute_file_write_tool_with_config(request, config),
         "edit" => file::execute_file_edit_tool_with_config(request, config),
         "glob.search" => file::execute_glob_search_tool_with_config(request, config),

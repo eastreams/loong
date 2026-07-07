@@ -133,29 +133,6 @@ fn select_file_read_content(
     Ok(selection)
 }
 
-pub(super) fn execute_file_read_tool_with_config(
-    request: ToolCoreRequest,
-    config: &super::runtime_config::ToolRuntimeConfig,
-) -> Result<ToolCoreOutcome, String> {
-    #[cfg(not(feature = "tool-file"))]
-    {
-        let _ = (request, config);
-        return Err("file tool is disabled in this build (enable feature `tool-file`)".to_owned());
-    }
-
-    #[cfg(feature = "tool-file")]
-    {
-        // Migrated file reads require `ToolCoreContext`; otherwise app code
-        // would have to perform the protected read itself.
-        let _ = config;
-        let parsed = parse_file_read_request(&request)?;
-        Err(format!(
-            "{} requires kernel access context",
-            super::user_visible_tool_name(parsed.tool_name.as_str())
-        ))
-    }
-}
-
 /// Execute `read`/`file.read` in path mode.
 ///
 /// This helper intentionally contains no filesystem read. It parses the
@@ -182,22 +159,17 @@ pub(super) async fn execute_file_read_tool_with_context(
             .fs()
             .read_file(parsed.target.as_str())
             .await
-            .map_err(map_fs_access_error)?;
+            .map_err(|error| {
+                let rendered = error.to_string();
+                if loong_kernel::access::fs_read_error_is_policy_denial(&error) {
+                    format!("policy_denied: {rendered}")
+                } else {
+                    rendered
+                }
+            })?;
 
         file_read_outcome(parsed, output.path, output.bytes)
     }
-}
-
-#[cfg(feature = "tool-file")]
-fn map_fs_access_error(error: impl std::fmt::Display) -> String {
-    let rendered = error.to_string();
-    if rendered.contains("escapes allowed filesystem root")
-        || rendered.contains("missing capability")
-        || rendered.contains("authorization denied")
-    {
-        return format!("policy_denied: {rendered}");
-    }
-    rendered
 }
 
 #[cfg(feature = "tool-file")]

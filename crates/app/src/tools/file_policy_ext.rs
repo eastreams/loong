@@ -336,6 +336,9 @@ impl PolicyExtension for FilePolicyExtension {
     }
 
     fn authorize_extension(&self, context: &PolicyExtensionContext<'_>) -> Result<(), PolicyError> {
+        // TODO(access-migration): This extension is legacy coverage for
+        // write/edit/config.import. Do not reintroduce read checks here; read
+        // path mode is governed by loong_access::fs.
         let Some(params) = context.request_parameters else {
             return Ok(());
         };

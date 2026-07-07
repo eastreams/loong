@@ -103,10 +103,14 @@ fn execute_direct_read_tool_core_with_config(
     };
 
     match read_route {
-        DirectReadRoute::Path => file::execute_file_read_tool_with_config(direct_request, config),
+        DirectReadRoute::Path => Err("read requires kernel access context".to_owned()),
+        // TODO(access-migration): Move direct read query mode behind access so
+        // search file reads are governed by the same Action/Policy path.
         DirectReadRoute::Query => {
             file::execute_content_search_tool_with_config(direct_request, config)
         }
+        // TODO(access-migration): Move direct read pattern mode behind access
+        // before declaring the whole read surface migrated.
         DirectReadRoute::Pattern => {
             file::execute_glob_search_tool_with_config(direct_request, config)
         }
@@ -136,14 +140,16 @@ async fn execute_direct_read_tool_core_with_context(
     };
 
     match read_route {
-        // Only path reads have migrated to access. Query and pattern routes are
-        // separate tools and keep their existing implementations for now.
         DirectReadRoute::Path => {
             file::execute_file_read_tool_with_context(direct_request, config, ctx).await
         }
+        // TODO(access-migration): Query search still uses the legacy file tool
+        // implementation; only path reads have moved to access in this pass.
         DirectReadRoute::Query => {
             file::execute_content_search_tool_with_config(direct_request, config)
         }
+        // TODO(access-migration): Glob search still uses the legacy file tool
+        // implementation; move it before widening the migrated read surface.
         DirectReadRoute::Pattern => {
             file::execute_glob_search_tool_with_config(direct_request, config)
         }

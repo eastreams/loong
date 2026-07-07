@@ -340,9 +340,11 @@ fn tool_without_timeout_config_completes_normally() {
     let config = test_tool_runtime_config(root);
 
     let request = ToolCoreRequest {
-        tool_name: "read".to_owned(),
+        tool_name: "glob.search".to_owned(),
         payload: json!({
-            "path": "README.md"
+            "pattern": "README.md",
+            "root": ".",
+            "max_results": 10
         }),
     };
 
@@ -392,9 +394,11 @@ async fn framework_timeout_supports_async_core_tool_calls() {
 
     let adapter = KernelToolAdapter::with_config(config.into_inner());
     let request = ToolCoreRequest {
-        tool_name: "read".to_owned(),
+        tool_name: "glob.search".to_owned(),
         payload: json!({
-            "path": "README.md"
+            "pattern": "README.md",
+            "root": ".",
+            "max_results": 10
         }),
     };
 

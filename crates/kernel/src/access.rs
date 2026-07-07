@@ -1,4 +1,7 @@
-use loong_access::fs::access::FsAccess;
+use loong_access::fs::{
+    access::{FsAccess, FsAccessError},
+    error::FsActionError,
+};
 use loong_core::kernel::Kernel;
 
 /// Kernel-defined access facade.
@@ -37,6 +40,15 @@ where
     pub fn fs(self) -> FsAccess<'a, K> {
         FsAccess::new(self.kernel, self.policy_context)
     }
+}
+
+#[must_use]
+pub fn fs_read_error_is_policy_denial(error: &FsAccessError) -> bool {
+    matches!(
+        error,
+        FsAccessError::Authorization(_)
+            | FsAccessError::Action(FsActionError::PathEscapesAllowedRoot { .. })
+    )
 }
 
 #[cfg(test)]

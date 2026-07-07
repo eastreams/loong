@@ -20,8 +20,11 @@ pub(super) fn run(
     }
 
     let visible_tool_name = super::user_visible_tool_name(tool_name);
-    // `read`/`file.read` is access-backed now. Keep this legacy preflight only
-    // for tools that have not moved their file side effects behind access.
+    // `read`/`file.read` path mode is access-backed now. Keep this legacy
+    // preflight only for tools that have not moved their file side effects
+    // behind access.
+    // TODO(access-migration): Delete this file branch after write/edit and
+    // config.import move to typed Action/Policy access paths.
     let is_file_tool =
         matches!(visible_tool_name.as_str(), "write" | "edit") || tool_name == "config.import";
     if is_file_tool {

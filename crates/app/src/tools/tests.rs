@@ -1975,13 +1975,13 @@ fn direct_read_glob_alias_executes_glob_search_with_pattern_rewrite() {
 }
 
 #[test]
-fn direct_read_path_mode_executes_after_dropping_incidental_search_fields() {
+fn direct_read_path_mode_requires_kernel_context_after_dropping_incidental_search_fields() {
     let root = unique_temp_dir("loong-direct-read-path-priority");
     std::fs::create_dir_all(&root).expect("create read-priority root");
     std::fs::write(root.join("CLAUDE.md"), "claude guidance").expect("write CLAUDE fixture");
     let config = test_tool_runtime_config(&root).into_inner();
 
-    let outcome = execute_tool_core_with_config(
+    let error = execute_tool_core_with_config(
         ToolCoreRequest {
             tool_name: "read".to_owned(),
             payload: json!({
@@ -1996,10 +1996,9 @@ fn direct_read_path_mode_executes_after_dropping_incidental_search_fields() {
         },
         &config,
     )
-    .expect("path-priority direct read should execute");
+    .expect_err("path-priority direct read requires kernel context");
 
-    assert_eq!(outcome.payload["tool_name"], "read");
-    assert_eq!(outcome.payload["content"], "claude guidance");
+    assert_eq!(error, "read requires kernel access context");
 }
 
 #[test]
