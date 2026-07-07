@@ -145,6 +145,8 @@ pub(super) fn execute_file_read_tool_with_config(
 
     #[cfg(feature = "tool-file")]
     {
+        // Migrated file reads require `ToolCoreContext`; otherwise app code
+        // would have to perform the protected read itself.
         let _ = config;
         let parsed = parse_file_read_request(&request)?;
         Err(format!(
@@ -154,6 +156,11 @@ pub(super) fn execute_file_read_tool_with_config(
     }
 }
 
+/// Execute `read`/`file.read` in path mode.
+///
+/// This helper intentionally contains no filesystem read. It parses the
+/// payload, computes the fs view, calls access, then formats the legacy JSON
+/// response from the returned bytes.
 pub(super) async fn execute_file_read_tool_with_context(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,

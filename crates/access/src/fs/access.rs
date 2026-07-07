@@ -5,12 +5,22 @@ use thiserror::Error;
 
 use super::{action::FsReadAction, error::FsActionError, path::CanonicalPath};
 
+/// Context required by filesystem access.
+///
+/// Implement this on the kernel-defined invocation context, not on each action.
+/// Relative paths resolve from `fs_resolution_root`; absolute paths must stay
+/// inside one of `fs_allowed_roots`.
 pub trait FsAccessContext {
     fn fs_resolution_root(&self) -> &Path;
 
     fn fs_allowed_roots(&self) -> &[PathBuf];
 }
 
+/// Filesystem access facade.
+///
+/// This module is the side-effect boundary for fs reads. Callers provide a raw
+/// path; `FsAccess` resolves it, builds the typed action, asks policy for a
+/// grant, consumes that grant, and only then reads from disk.
 pub struct FsAccess<'a, K>
 where
     K: Kernel,
@@ -38,6 +48,7 @@ where
     K: Kernel,
     K::Cx<'a>: FsAccessContext,
 {
+    /// Read a file after path resolution and typed policy grant.
     pub async fn read_file(self, path: impl AsRef<Path>) -> Result<FsReadOutput, FsAccessError> {
         let path = CanonicalPath::resolve(
             path,
@@ -62,6 +73,10 @@ where
     }
 }
 
+/// Bytes returned by a governed fs read.
+///
+/// `path` is the canonical path actually read, suitable for response metadata
+/// and audit output.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FsReadOutput {
     pub path: PathBuf,

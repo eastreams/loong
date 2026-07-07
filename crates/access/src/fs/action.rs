@@ -5,6 +5,11 @@ use loong_core::policy::action::Action;
 
 use super::path::CanonicalPath;
 
+/// Typed action for reading one canonical filesystem path.
+///
+/// The action declares the required capability and audit resource. It does not
+/// carry workspace roots; roots belong to the invocation context and path
+/// resolver.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FsReadAction {
     path: CanonicalPath,
@@ -40,6 +45,10 @@ impl Action for FsReadAction {
     }
 }
 
+/// Filesystem action family.
+///
+/// Keep variants here thin wrappers around typed actions so policies can
+/// register either for a concrete action or for the family as needed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FsAction {
     Read(FsReadAction),

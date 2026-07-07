@@ -5,10 +5,16 @@ use std::{
 
 use super::error::FsActionError;
 
+/// Canonical filesystem path accepted by fs actions.
+///
+/// Construction is the policy-relevant path check: it resolves relative paths
+/// from the invocation root, canonicalizes existing ancestors, and rejects
+/// escapes from the allowed roots, including symlink escapes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CanonicalPath(PathBuf);
 
 impl CanonicalPath {
+    /// Resolve a user path into a path that is safe for an fs action.
     pub fn resolve(
         path: impl AsRef<Path>,
         resolution_root: impl AsRef<Path>,

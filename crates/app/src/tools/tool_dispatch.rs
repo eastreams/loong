@@ -146,6 +146,11 @@ pub(crate) fn execute_tool_core_with_config_and_observability(
     result
 }
 
+/// Dispatch a core tool call while preserving the kernel context.
+///
+/// New access-backed direct tools should enter through this function. It keeps
+/// payload normalization and runtime narrowing in app code, then forwards the
+/// context to the concrete helper that will call `ctx.access()`.
 pub(crate) async fn execute_tool_core_with_config_and_context(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,

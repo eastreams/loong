@@ -19,7 +19,7 @@ use crate::{
 /// authorization errors without inventing policy reasons.
 #[async_trait]
 pub trait PolicyEngine: Sync {
-    /// contains PolicyContext
+    /// Invocation context used by policy and access actions.
     type Cx<'a>: PolicyContext;
 
     /// Evaluate a borrowed action without consuming it.
@@ -29,7 +29,10 @@ pub trait PolicyEngine: Sync {
     async fn next_grant_id(&self) -> GrantId;
 
     /// Authorize `action` and return grant metadata plus a token that can be
-    /// consumed by an executor.
+    /// consumed by access code.
+    ///
+    /// The capability gate is deliberately built in here so policies only run
+    /// after the caller already has every capability declared by the action.
     async fn grant<A: Action>(
         &self,
         ctx: &Self::Cx<'_>,

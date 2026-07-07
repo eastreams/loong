@@ -72,6 +72,9 @@ impl CoreToolAdapter for KernelToolAdapter {
         request: ToolCoreRequest,
         ctx: ToolCoreContext<'_>,
     ) -> Result<ToolCoreOutcome, ToolPlaneError> {
+        // Migrated tools need the kernel context so protected side effects can
+        // run through access modules. The context-free entry point remains only
+        // for tools that have not moved yet.
         match &self.config {
             Some(config) => {
                 super::tool_dispatch::execute_tool_core_with_config_and_context(

@@ -664,6 +664,13 @@ impl Kernel {
         Ok(outcome)
     }
 
+    /// Execute one core tool call through the kernel-owned tool plane.
+    ///
+    /// This is the entry point to read first when tracing tool execution. The
+    /// kernel authorizes the caller for the requested tool, then hands a
+    /// [`ToolCoreContext`] to the adapter. Access-backed tools must use that
+    /// context to reach `ctx.access().fs().read_file(...)`; the adapter should
+    /// not perform the protected side effect itself.
     pub async fn execute_tool_core(
         &self,
         pack_id: &str,

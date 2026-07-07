@@ -31,6 +31,11 @@ use crate::{
 
 const DEFAULT_DENY_REASON: &str = "No matching policy.";
 
+/// Unified policy/action context assembled by the kernel for one invocation.
+///
+/// Add global execution facts here when they are shared by tools, policies, and
+/// access actions. Do not put action-owned data here, and do not make actions
+/// carry runtime roots just because one policy needs them.
 pub struct KernelPolicyContext<'a> {
     pub pack: &'a VerticalPackManifest,
     pub token: &'a CapabilityToken,
@@ -64,6 +69,10 @@ impl<'a> KernelPolicyContext<'a> {
         }
     }
 
+    /// Add the filesystem view required by fs access and fs policies.
+    ///
+    /// The resolution root answers "where do relative paths start"; allowed
+    /// roots answer "which absolute locations may this invocation touch".
     #[must_use]
     pub fn with_fs_root_view(
         mut self,
@@ -135,6 +144,12 @@ impl Action for LegacyKernelAction {
     }
 }
 
+/// Kernel policy engine.
+///
+/// Evaluation order is fixed: all `PolicyAny` entries run first, then policies
+/// registered for the concrete action type. A deny returns immediately; allows
+/// are recorded but do not short-circuit; no allow means default deny. The
+/// returned [`PolicyReport`] is the audit trail for that decision.
 pub struct PolicyPipeline {
     any_policies: Vec<RegisteredAnyPolicy>,
     typed_policies: anymap::Map<dyn anymap::any::Any + Send + Sync>,
@@ -161,6 +176,10 @@ impl PolicyPipeline {
         }
     }
 
+    /// Register a policy for exactly one action type.
+    ///
+    /// Use this when the policy needs typed action data, such as a canonical fs
+    /// path. Policies registered here will not see other action types.
     #[must_use]
     pub fn with_policy<A, P>(mut self, policy: P) -> Self
     where
@@ -171,6 +190,7 @@ impl PolicyPipeline {
         self
     }
 
+    /// Add a typed policy to an existing pipeline.
     pub fn push_policy<A, P>(&mut self, policy: P)
     where
         A: Action + 'static,
@@ -187,6 +207,10 @@ impl PolicyPipeline {
         });
     }
 
+    /// Register a policy that can inspect every action.
+    ///
+    /// Use this for broad gates. Keep action-specific checks in `with_policy`
+    /// so unrelated actions do not share unnecessary context requirements.
     #[must_use]
     pub fn with_any_policy<P>(mut self, policy: P) -> Self
     where
@@ -196,6 +220,7 @@ impl PolicyPipeline {
         self
     }
 
+    /// Add a broad policy to an existing pipeline.
     pub fn push_any_policy<P>(&mut self, policy: P)
     where
         P: PolicyAny<Self> + 'static,
@@ -211,6 +236,10 @@ impl PolicyPipeline {
         self.policy_extensions.register(extension);
     }
 
+    /// Authorize legacy kernel operations that still use policy extensions.
+    ///
+    /// New access-backed side effects should prefer `PolicyEngine::grant` on a
+    /// typed action and consume the resulting grant inside the access module.
     pub async fn authorize_kernel_action<A: Action>(
         &self,
         ctx: &KernelPolicyContext<'_>,

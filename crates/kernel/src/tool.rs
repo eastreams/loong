@@ -11,6 +11,11 @@ pub use loong_contracts::{
 use crate::errors::ToolPlaneError;
 use crate::{AccessCx, Kernel, KernelPolicyContext};
 
+/// Kernel-owned context passed into core tool adapters.
+///
+/// The context carries the same policy view used by the kernel authorization
+/// step. A migrated tool should enrich this context with its own view data,
+/// then call `access()` instead of reaching for policy engines or I/O directly.
 pub struct ToolCoreContext<'a> {
     kernel: &'a Kernel,
     policy_context: KernelPolicyContext<'a>,
@@ -25,6 +30,11 @@ impl<'a> ToolCoreContext<'a> {
         }
     }
 
+    /// Attach the filesystem view used by `loong_access::fs`.
+    ///
+    /// `fs_resolution_root` decides how relative paths are resolved.
+    /// `fs_allowed_roots` preserves the runtime file-root plus workspace-root
+    /// contract: absolute paths may pass when they stay inside any allowed root.
     #[must_use]
     pub fn with_fs_root_view(
         mut self,
@@ -37,6 +47,10 @@ impl<'a> ToolCoreContext<'a> {
         self
     }
 
+    /// Enter the kernel-defined access facade.
+    ///
+    /// This consumes the context so access receives the complete policy view for
+    /// the action it is about to build and grant.
     #[must_use]
     pub fn access(self) -> AccessCx<'a, Kernel> {
         self.kernel.access(self.policy_context)
@@ -74,6 +88,11 @@ pub trait CoreToolAdapter: Send + Sync {
         request: ToolCoreRequest,
     ) -> Result<ToolCoreOutcome, ToolPlaneError>;
 
+    /// Context-aware execution for tools that have moved side effects behind
+    /// `loong_access`.
+    ///
+    /// The default keeps old adapters working. New access-backed tools should
+    /// override this method and route through the supplied [`ToolCoreContext`].
     async fn execute_core_tool_with_context(
         &self,
         request: ToolCoreRequest,
@@ -161,6 +180,10 @@ impl ToolPlane {
         return adapter.execute_core_tool(request).await;
     }
 
+    /// Execute a core tool while preserving the kernel policy context.
+    ///
+    /// This is the path used by `Kernel::execute_tool_core`; keep new governed
+    /// tool work on this path so adapters can call access facades.
     pub async fn execute_core_with_context(
         &self,
         core_name: Option<&str>,

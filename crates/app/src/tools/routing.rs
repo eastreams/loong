@@ -136,6 +136,8 @@ async fn execute_direct_read_tool_core_with_context(
     };
 
     match read_route {
+        // Only path reads have migrated to access. Query and pattern routes are
+        // separate tools and keep their existing implementations for now.
         DirectReadRoute::Path => {
             file::execute_file_read_tool_with_context(direct_request, config, ctx).await
         }
