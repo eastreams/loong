@@ -147,8 +147,8 @@ impl Action for LegacyKernelAction {
 /// Kernel policy engine.
 ///
 /// Evaluation order is fixed: all `PolicyAny` entries run first, then policies
-/// registered for the concrete action type. A deny returns immediately; allows
-/// are recorded but do not short-circuit; no allow means default deny. The
+/// registered for the concrete action type. Allow and deny both return
+/// immediately; abstain continues; all abstain means default deny. The
 /// returned [`PolicyReport`] is the audit trail for that decision.
 pub struct PolicyPipeline {
     any_policies: Vec<RegisteredAnyPolicy>,
@@ -297,6 +297,9 @@ impl<A: Action> Default for TypedPolicyEntries<A> {
     }
 }
 
+// Legacy bridge for `authorize_kernel_action`, whose caller still expects the
+// old extension-oriented `PolicyError` surface. New access-backed side effects
+// should keep typed grant errors and convert them at the caller boundary.
 fn policy_engine_error(error: impl Into<AuthorizationError>) -> PolicyError {
     let error = error.into();
     PolicyError::ExtensionDenied {
@@ -311,7 +314,6 @@ impl PolicyEngine for PolicyPipeline {
 
     async fn decide<A: Action + 'static>(&self, ctx: &Self::Cx<'_>, action: &A) -> PolicyReport {
         let mut evaluations = Vec::new();
-        let mut allow: Option<(PolicyEntry, Cow<'static, str>)> = None;
 
         for registered in &self.any_policies {
             let grant = registered.policy.grant(ctx, action).await;
@@ -322,7 +324,19 @@ impl PolicyEngine for PolicyPipeline {
 
             match grant.decision {
                 PolicyDecision::Allow => {
-                    allow = Some((source.clone(), grant.reason.clone()));
+                    let outcome = PolicyOutcome::Allow {
+                        source: source.clone(),
+                        reason: grant.reason.clone(),
+                    };
+                    evaluations.push(PolicyEvaluation {
+                        source,
+                        policy_stage: "any",
+                        grant,
+                    });
+                    return PolicyReport {
+                        evaluations,
+                        outcome,
+                    };
                 }
                 PolicyDecision::Deny => {
                     let outcome = PolicyOutcome::Deny {
@@ -359,7 +373,19 @@ impl PolicyEngine for PolicyPipeline {
 
                 match grant.decision {
                     PolicyDecision::Allow => {
-                        allow = Some((source.clone(), grant.reason.clone()));
+                        let outcome = PolicyOutcome::Allow {
+                            source: source.clone(),
+                            reason: grant.reason.clone(),
+                        };
+                        evaluations.push(PolicyEvaluation {
+                            source,
+                            policy_stage: "action",
+                            grant,
+                        });
+                        return PolicyReport {
+                            evaluations,
+                            outcome,
+                        };
                     }
                     PolicyDecision::Deny => {
                         let outcome = PolicyOutcome::Deny {
@@ -387,12 +413,9 @@ impl PolicyEngine for PolicyPipeline {
             }
         }
 
-        let outcome = match allow {
-            Some((source, reason)) => PolicyOutcome::Allow { source, reason },
-            None => PolicyOutcome::Deny {
-                grant_source: None,
-                reason: DEFAULT_DENY_REASON.into(),
-            },
+        let outcome = PolicyOutcome::Deny {
+            grant_source: None,
+            reason: DEFAULT_DENY_REASON.into(),
         };
 
         PolicyReport {
@@ -653,9 +676,9 @@ mod tests {
     async fn policy_pipeline_report_preserves_any_and_action_evaluation_stages() {
         let engine = PolicyPipeline::new()
             .with_any_policy(StaticAnyPolicy {
-                name: "any-allow",
-                decision: PolicyDecision::Allow,
-                reason: "any allowed",
+                name: "any-abstain",
+                decision: PolicyDecision::Abstain,
+                reason: "no opinion",
             })
             .with_policy::<LegacyKernelAction, _>(StaticTypedPolicy {
                 name: "typed-allow",
@@ -760,7 +783,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn policy_pipeline_typed_deny_overrides_earlier_any_allow() {
+    async fn policy_pipeline_allow_short_circuits_before_later_typed_deny() {
         let engine = PolicyPipeline::new()
             .with_any_policy(StaticAnyPolicy {
                 name: "any-allow",
@@ -784,24 +807,13 @@ mod tests {
         );
         let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
 
-        let error = engine
-            .grant(&ctx, action)
-            .await
-            .expect_err("typed deny should override any allow");
+        let report = engine.decide(&ctx, &action).await;
 
+        assert_eq!(report.evaluations.len(), 1);
+        assert_eq!(report.evaluations[0].policy_stage, "any");
         assert!(matches!(
-            error,
-            PolicyGrantError::Denied { ref report, .. }
-                if report.evaluations.len() == 2
-                    && report.evaluations[0].policy_stage == "any"
-                    && report.evaluations[1].policy_stage == "action"
-                    && matches!(
-                        report.outcome,
-                        PolicyOutcome::Deny {
-                            grant_source: Some(ref source),
-                            ..
-                        } if source.policy_name == "typed-deny"
-                    )
+            report.outcome,
+            PolicyOutcome::Allow { ref source, .. } if source.policy_name == "any-allow"
         ));
     }
 
