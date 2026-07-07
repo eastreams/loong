@@ -14,7 +14,7 @@ use loong_core::policy::{
 };
 
 use super::AccessCx;
-use crate::{HasFsAccess, LoongKernel};
+use crate::{HasFsAccess, Kernel};
 
 #[derive(Debug, Clone)]
 struct TestPolicyContext {
@@ -90,8 +90,8 @@ fn loong_kernel_exposes_access_types_and_fs_surface_for_workspace_kernels() {
     fn assert_access_exported<T>() {}
     fn assert_has_fs_access<'a, T: HasFsAccess<'a, TestKernel>>() {}
 
-    assert_has_policy_engine::<LoongKernel>();
-    assert_access_exported::<AccessCx<'static, LoongKernel>>();
+    assert_has_policy_engine::<Kernel>();
+    assert_access_exported::<AccessCx<'static, Kernel>>();
 
     assert_access_exported::<AccessCx<'static, TestKernel>>();
     assert_has_fs_access::<AccessCx<'static, TestKernel>>();

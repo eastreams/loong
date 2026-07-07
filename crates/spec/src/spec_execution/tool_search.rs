@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use kernel::{
-    AuditEventKind, IntegrationCatalog, LoongKernel, PluginActivationCandidate,
+    AuditEventKind, IntegrationCatalog, Kernel, PluginActivationCandidate,
     PluginActivationInventoryEntry, PluginActivationPlan, PluginBridgeKind, PluginCompatibility,
     PluginCompatibilityMode, PluginCompatibilityShim, PluginContractDialect,
     PluginDiagnosticFinding, PluginScanReport, PluginSetupReadinessContext, PluginSlotClaim,
@@ -163,7 +163,7 @@ fn build_tool_search_operation_headline(
 }
 
 pub(super) fn emit_tool_search_audit_event(
-    kernel: &LoongKernel,
+    kernel: &Kernel,
     pack_id: &str,
     agent_id: &str,
     summary: &ToolSearchOperationSummary,

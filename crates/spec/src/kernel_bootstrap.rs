@@ -2,9 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use kernel::{
-    AuditSink, Capability, Clock, ExecutionRoute, HarnessKind, InMemoryAuditSink,
-    Kernel as FrozenKernel, KernelBuilder as RuntimeKernelBuilder, LoongKernel, SystemClock,
-    VerticalPackManifest,
+    AuditSink, Capability, Clock, ExecutionRoute, HarnessKind, InMemoryAuditSink, Kernel,
+    SystemClock, VerticalPackManifest,
 };
 
 use crate::DEFAULT_PACK_ID;
@@ -21,7 +20,7 @@ pub(crate) fn default_in_memory_audit_sink() -> Arc<InMemoryAuditSink> {
     Arc::new(InMemoryAuditSink::default())
 }
 
-/// Builder for constructing a fully configured `LoongKernel`.
+/// Builder for constructing a fully configured `Kernel`.
 ///
 /// By default the builder uses `SystemClock` and the spec layer's named
 /// in-memory audit helper. Override either with the corresponding setter before
@@ -67,8 +66,8 @@ impl KernelBuilder {
 
     /// Build and return a fully configured kernel with all builtin adapters
     /// and the default pack manifest registered.
-    pub fn build(self) -> LoongKernel {
-        configured_builder(
+    pub fn build(self) -> Kernel {
+        configured_kernel(
             self.clock,
             self.audit,
             self.native_tool_executor,
@@ -83,81 +82,13 @@ impl Default for KernelBuilder {
     }
 }
 
-/// Additive bootstrap entrypoint that exposes the new builder/runtime split
-/// without breaking the legacy `KernelBuilder` API.
-///
-/// The returned runtime handle dereferences to the legacy kernel surface so
-/// helper code typed against `&LoongKernel` can continue to work while
-/// callers migrate toward the explicit `Kernel` name.
-pub struct BootstrapBuilder {
+fn configured_kernel(
     clock: Option<Arc<dyn Clock>>,
     audit: Option<Arc<dyn AuditSink>>,
     native_tool_executor: Option<crate::NativeToolExecutor>,
     register_default_embedded_harness: bool,
-}
-
-impl BootstrapBuilder {
-    pub fn new() -> Self {
-        Self {
-            clock: None,
-            audit: None,
-            native_tool_executor: None,
-            register_default_embedded_harness: true,
-        }
-    }
-
-    pub fn clock(mut self, clock: Arc<dyn Clock>) -> Self {
-        self.clock = Some(clock);
-        self
-    }
-
-    pub fn audit(mut self, audit: Arc<dyn AuditSink>) -> Self {
-        self.audit = Some(audit);
-        self
-    }
-
-    pub fn native_tool_executor(mut self, executor: crate::NativeToolExecutor) -> Self {
-        self.native_tool_executor = Some(executor);
-        self
-    }
-
-    pub fn without_default_embedded_harness(mut self) -> Self {
-        self.register_default_embedded_harness = false;
-        self
-    }
-
-    pub fn build(self) -> FrozenKernel {
-        self.into_builder().build()
-    }
-
-    /// Return the additive migration builder surface.
-    ///
-    /// This remains a compatibility alias over `LoongKernel`, so it keeps
-    /// the legacy executable API while also supporting `.build()` into
-    /// `Kernel`.
-    pub fn into_builder(self) -> RuntimeKernelBuilder {
-        configured_builder(
-            self.clock,
-            self.audit,
-            self.native_tool_executor,
-            self.register_default_embedded_harness,
-        )
-    }
-}
-
-impl Default for BootstrapBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-fn configured_builder(
-    clock: Option<Arc<dyn Clock>>,
-    audit: Option<Arc<dyn AuditSink>>,
-    native_tool_executor: Option<crate::NativeToolExecutor>,
-    register_default_embedded_harness: bool,
-) -> RuntimeKernelBuilder {
-    configured_builder_with_default_audit(
+) -> Kernel {
+    configured_kernel_with_default_audit(
         clock,
         audit,
         native_tool_executor,
@@ -166,29 +97,29 @@ fn configured_builder(
     .0
 }
 
-fn configured_builder_with_default_audit(
+fn configured_kernel_with_default_audit(
     clock: Option<Arc<dyn Clock>>,
     audit: Option<Arc<dyn AuditSink>>,
     native_tool_executor: Option<crate::NativeToolExecutor>,
     register_default_embedded_harness: bool,
-) -> (RuntimeKernelBuilder, Option<Arc<InMemoryAuditSink>>) {
+) -> (Kernel, Option<Arc<InMemoryAuditSink>>) {
     let (mut kernel, fallback_audit) = match (clock, audit) {
-        (Some(clock), Some(audit)) => (RuntimeKernelBuilder::with_runtime(clock, audit), None),
+        (Some(clock), Some(audit)) => (Kernel::with_runtime(clock, audit), None),
         (Some(clock), None) => {
             let audit = default_in_memory_audit_sink();
             (
-                RuntimeKernelBuilder::with_runtime(clock, audit.clone() as Arc<dyn AuditSink>),
+                Kernel::with_runtime(clock, audit.clone() as Arc<dyn AuditSink>),
                 Some(audit),
             )
         }
         (None, Some(audit)) => (
-            RuntimeKernelBuilder::with_runtime(Arc::new(SystemClock) as Arc<dyn Clock>, audit),
+            Kernel::with_runtime(Arc::new(SystemClock) as Arc<dyn Clock>, audit),
             None,
         ),
         (None, None) => {
             let audit = default_in_memory_audit_sink();
             (
-                RuntimeKernelBuilder::with_runtime(
+                Kernel::with_runtime(
                     Arc::new(SystemClock) as Arc<dyn Clock>,
                     audit.clone() as Arc<dyn AuditSink>,
                 ),
@@ -208,7 +139,7 @@ fn configured_builder_with_default_audit(
 }
 
 fn register_builtin_adapters(
-    kernel: &mut RuntimeKernelBuilder,
+    kernel: &mut Kernel,
     native_tool_executor: Option<crate::NativeToolExecutor>,
     register_default_embedded_harness: bool,
 ) {
@@ -269,7 +200,7 @@ pub fn default_pack_manifest() -> VerticalPackManifest {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kernel::{AuditEventKind, FixedClock, LoongKernel};
+    use kernel::{AuditEventKind, FixedClock, Kernel};
 
     #[test]
     fn builder_default_creates_kernel() {
@@ -295,7 +226,7 @@ mod tests {
 
     #[test]
     fn builder_default_fallback_records_token_audit_events() {
-        let (kernel, audit) = configured_builder_with_default_audit(None, None, None, true);
+        let (kernel, audit) = configured_kernel_with_default_audit(None, None, None, true);
         let audit =
             audit.expect("default builder should surface the fallback in-memory audit sink");
 
@@ -315,7 +246,7 @@ mod tests {
     #[test]
     fn builder_clock_only_fallback_records_token_audit_events() {
         let clock = Arc::new(FixedClock::new(1_700_000_000));
-        let (kernel, audit) = configured_builder_with_default_audit(Some(clock), None, None, true);
+        let (kernel, audit) = configured_kernel_with_default_audit(Some(clock), None, None, true);
         let audit =
             audit.expect("clock-only builder should surface the fallback in-memory audit sink");
 
@@ -333,9 +264,9 @@ mod tests {
     }
 
     #[test]
-    fn into_builder_allows_extra_registration_before_freeze() {
-        let mut builder = BootstrapBuilder::default().into_builder();
-        builder
+    fn kernel_builder_allows_extra_registration_after_build() {
+        let mut kernel = KernelBuilder::default().build();
+        kernel
             .register_pack(VerticalPackManifest {
                 pack_id: "extra-pack".to_owned(),
                 domain: "engineering".to_owned(),
@@ -350,7 +281,6 @@ mod tests {
             })
             .expect("extra pack should register");
 
-        let kernel = builder.build();
         let token = kernel
             .issue_token("extra-pack", "test-agent", 60)
             .expect("token issue should succeed for extra pack");
@@ -358,14 +288,14 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_builder_runtime_derefs_to_legacy_kernel_helpers() {
-        fn issue_default_pack_token(kernel: &LoongKernel) -> kernel::CapabilityToken {
+    fn kernel_builder_runtime_works_with_kernel_helpers() {
+        fn issue_default_pack_token(kernel: &Kernel) -> kernel::CapabilityToken {
             kernel
                 .issue_token(DEFAULT_PACK_ID, "test-agent", 60)
-                .expect("token issue should succeed via legacy helper signature")
+                .expect("token issue should succeed via Kernel helper signature")
         }
 
-        let kernel = BootstrapBuilder::default().build();
+        let kernel = KernelBuilder::default().build();
         let token = issue_default_pack_token(&kernel);
         assert!(!token.token_id.is_empty());
     }
@@ -397,7 +327,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bootstrap_builder_can_skip_default_embedded_harness_and_register_explicit_one() {
+    async fn kernel_builder_can_skip_default_embedded_harness_and_register_explicit_one() {
         struct MarkerHarness;
 
         #[async_trait::async_trait]
@@ -425,11 +355,10 @@ mod tests {
             }
         }
 
-        let mut builder = BootstrapBuilder::default()
+        let mut kernel = KernelBuilder::default()
             .without_default_embedded_harness()
-            .into_builder();
-        builder.register_harness_adapter(MarkerHarness);
-        let kernel = builder.build();
+            .build();
+        kernel.register_harness_adapter(MarkerHarness);
         let token = kernel
             .issue_token(DEFAULT_PACK_ID, "test-agent", 60)
             .expect("token issue should succeed");

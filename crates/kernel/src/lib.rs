@@ -56,7 +56,7 @@ pub use integration::{
     AutoProvisionAgent, AutoProvisionRequest, ChannelConfig, IntegrationCatalog, IntegrationHotfix,
     ProviderConfig, ProviderTemplate, ProvisionAction, ProvisionPlan,
 };
-pub use kernel::{ConnectorDispatch, Kernel, KernelBuilder, KernelDispatch, LoongKernel};
+pub use kernel::{ConnectorDispatch, Kernel, KernelDispatch};
 pub use loong_access::{CanonicalPath, FsAccess, FsAction, FsReadAction, HasFsAccess};
 pub use loong_plugin_sdk::PluginChannelBridgeContract as CanonicalPluginChannelBridgeContract;
 pub use memory::{

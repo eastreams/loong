@@ -3,8 +3,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::atomic::AtomicU64;
 
 use kernel::{
-    CapabilityToken, ExecutionPlane, InMemoryAuditSink, LoongKernel, PlaneTier,
-    VerticalPackManifest,
+    CapabilityToken, ExecutionPlane, InMemoryAuditSink, Kernel, PlaneTier, VerticalPackManifest,
 };
 
 #[derive(Debug, Clone)]
@@ -27,7 +26,7 @@ pub(super) fn default_loopback_exposure_policy() -> ControlPlaneExposurePolicy {
 }
 
 pub(super) struct ControlPlaneKernelAuthority {
-    kernel: LoongKernel,
+    kernel: Kernel,
     _audit: Arc<InMemoryAuditSink>,
     token_bindings: std::sync::RwLock<std::collections::BTreeMap<String, CapabilityToken>>,
 }
@@ -87,7 +86,7 @@ pub(super) struct ControlPlaneTurnEventForwarder {
 
 impl ControlPlaneKernelAuthority {
     pub(super) fn new() -> Result<Self, String> {
-        let kernel_with_audit = LoongKernel::new_with_in_memory_audit();
+        let kernel_with_audit = Kernel::new_with_in_memory_audit();
         let mut kernel = kernel_with_audit.0;
         let audit = kernel_with_audit.1;
         let pack = control_plane_pack();

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use kernel::{
     AuditSink, Capability, CapabilityToken, ConnectorCommand, ExecutionRoute, HarnessAdapter,
-    HarnessError, HarnessKind, HarnessOutcome, HarnessRequest, InMemoryAuditSink, LoongKernel,
+    HarnessError, HarnessKind, HarnessOutcome, HarnessRequest, InMemoryAuditSink, Kernel,
     SystemClock, TaskIntent, TaskState, TaskSupervisor, VerticalPackManifest,
 };
 use serde::{Deserialize, Serialize};
@@ -28,7 +28,7 @@ pub struct DaemonTaskExecution {
 /// dispatch fails so CLI/API surfaces can report the supervisor's terminal
 /// state instead of collapsing everything into a plain transport error.
 pub(crate) async fn execute_daemon_task_with_supervisor(
-    kernel: &LoongKernel,
+    kernel: &Kernel,
     pack_id: &str,
     token: &CapabilityToken,
     intent: TaskIntent,
@@ -370,11 +370,11 @@ impl HarnessAdapter for EmbeddedAgentHarness {
 /// This starts from the spec/kernel bootstrap defaults and then registers the
 /// embedded agent harness so daemon task intents can route back into the shared
 /// `AgentRuntime` pipeline without spawning an external process.
-fn build_daemon_runtime_kernel() -> LoongKernel {
+fn build_daemon_runtime_kernel() -> Kernel {
     let audit_sink = Arc::new(InMemoryAuditSink::default());
     let audit_sink = audit_sink as Arc<dyn AuditSink>;
     let clock = Arc::new(SystemClock) as Arc<dyn kernel::Clock>;
-    let mut kernel = LoongKernel::with_runtime(clock, audit_sink);
+    let mut kernel = Kernel::with_runtime(clock, audit_sink);
     let pack = daemon_runtime_pack_manifest();
     let register_pack_result = kernel.register_pack(pack);
     register_pack_result.expect("daemon runtime pack should register");

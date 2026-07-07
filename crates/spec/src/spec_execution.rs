@@ -9,7 +9,7 @@ use kernel::{
     ArchitectureBoundaryPolicy, ArchitectureGuardReport, AuditEventKind, AutoProvisionAgent,
     AutoProvisionRequest, BootstrapPolicy, BootstrapReport, BootstrapTaskStatus, Clock,
     CodebaseAwarenessConfig, CodebaseAwarenessEngine, CodebaseAwarenessSnapshot, ConnectorCommand,
-    InMemoryAuditSink, IntegrationCatalog, LoongKernel, MemoryCoreRequest, MemoryExtensionRequest,
+    InMemoryAuditSink, IntegrationCatalog, Kernel, MemoryCoreRequest, MemoryExtensionRequest,
     PluginAbsorbReport, PluginActivationPlan, PluginActivationStatus, PluginBootstrapExecutor,
     PluginCompatibility, PluginCompatibilityShimSupport, PluginScanReport, PluginScanner,
     PluginSetup, PluginSetupReadinessContext, PluginSlotClaim, PluginTranslationReport,
@@ -874,7 +874,7 @@ struct SecurityScanDelta {
 }
 
 async fn execute_spec_operation(
-    kernel: &LoongKernel,
+    kernel: &Kernel,
     pack_id: &str,
     token: &kernel::CapabilityToken,
     integration_catalog: &IntegrationCatalog,

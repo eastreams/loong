@@ -4,7 +4,7 @@ use std::sync::Arc;
 use loong_contracts::CapabilityToken;
 use loong_kernel::{
     AuditSink, Capability, Clock, ExecutionRoute, FanoutAuditSink, HarnessKind, InMemoryAuditSink,
-    JsonlAuditSink, LoongKernel, SystemClock, VerticalPackManifest,
+    JsonlAuditSink, Kernel, SystemClock, VerticalPackManifest,
 };
 
 use crate::config::{AuditMode, LoongConfig};
@@ -24,7 +24,7 @@ pub const DEFAULT_TOKEN_TTL_S: u64 = 86400;
 /// to avoid data divergence.
 #[derive(Clone)]
 pub struct KernelContext {
-    pub kernel: Arc<LoongKernel>,
+    pub kernel: Arc<Kernel>,
     pub token: CapabilityToken,
 }
 
@@ -114,7 +114,7 @@ fn bootstrap_kernel_context_with_audit_sink(
     audit_sink: Arc<dyn AuditSink>,
     config: &LoongConfig,
 ) -> Result<KernelContext, String> {
-    let mut kernel = LoongKernel::with_runtime(Arc::new(SystemClock) as Arc<dyn Clock>, audit_sink);
+    let mut kernel = Kernel::with_runtime(Arc::new(SystemClock) as Arc<dyn Clock>, audit_sink);
 
     let pack = VerticalPackManifest {
         pack_id: EMBEDDED_RUNTIME_PACK_ID.to_owned(),

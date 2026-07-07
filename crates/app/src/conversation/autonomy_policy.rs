@@ -333,7 +333,7 @@ mod tests {
     use crate::config::AutonomyProfile;
     use crate::tools::runtime_config::AutonomyPolicySnapshot;
     use loong_contracts::{Capability, ExecutionRoute, HarnessKind};
-    use loong_kernel::{FixedClock, InMemoryAuditSink, LoongKernel, VerticalPackManifest};
+    use loong_kernel::{FixedClock, InMemoryAuditSink, Kernel, VerticalPackManifest};
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Arc;
 
@@ -471,7 +471,7 @@ mod tests {
         HOLDER.get_or_init(|| {
             let audit = Arc::new(InMemoryAuditSink::default());
             let clock = Arc::new(FixedClock::new(1_700_000_000));
-            let mut kernel = LoongKernel::with_runtime(clock, audit);
+            let mut kernel = Kernel::with_runtime(clock, audit);
             let pack = VerticalPackManifest {
                 pack_id: "autonomy-policy-test-pack".to_owned(),
                 domain: "testing".to_owned(),

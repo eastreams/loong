@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use loong_contracts::{Capability, ExecutionRoute, HarnessKind};
-use loong_kernel::{FixedClock, InMemoryAuditSink, LoongKernel, VerticalPackManifest};
+use loong_kernel::{FixedClock, InMemoryAuditSink, Kernel, VerticalPackManifest};
 
 use crate::context::KernelContext;
 use crate::conversation::turn_engine::{ProviderTurn, ToolIntent, TurnEngine, TurnResult};
@@ -132,7 +132,7 @@ impl TurnTestHarness {
 
         let audit = Arc::new(InMemoryAuditSink::default());
         let clock = Arc::new(FixedClock::new(1_700_000_000));
-        let mut kernel = LoongKernel::with_runtime(clock, audit.clone());
+        let mut kernel = Kernel::with_runtime(clock, audit.clone());
 
         let pack = VerticalPackManifest {
             pack_id: "test-pack".to_owned(),

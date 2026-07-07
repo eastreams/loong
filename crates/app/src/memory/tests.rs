@@ -100,9 +100,9 @@ async fn mvp_memory_adapter_routes_through_kernel() {
     use std::collections::{BTreeMap, BTreeSet};
 
     use loong_contracts::Capability;
-    use loong_kernel::{ExecutionRoute, HarnessKind, LoongKernel, VerticalPackManifest};
+    use loong_kernel::{ExecutionRoute, HarnessKind, Kernel, VerticalPackManifest};
 
-    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit();
+    let (mut kernel, _audit) = Kernel::new_with_in_memory_audit();
 
     kernel.register_core_memory_adapter(KernelMemoryAdapter::new());
     kernel
