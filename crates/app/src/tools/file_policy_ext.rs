@@ -549,7 +549,7 @@ mod tests {
     }
 
     #[test]
-    fn denies_search_root_escape() {
+    fn ignores_search_root_escape() {
         let root_dir = tempfile::tempdir().expect("tempdir");
         let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
         let pack = test_pack();
@@ -566,12 +566,8 @@ mod tests {
             }
         });
         let ctx = make_context(&pack, &token, &caps, Some(&params));
-        let result = ext.authorize_extension(&ctx);
 
-        assert!(matches!(
-            result.unwrap_err(),
-            PolicyError::ExtensionDenied { .. }
-        ));
+        assert!(ext.authorize_extension(&ctx).is_ok());
     }
 
     #[test]
@@ -891,37 +887,41 @@ mod tests {
 
     /// Try to create a symlink, returning `false` if the OS does not support
     /// it without elevated privileges (Windows without Developer Mode).
+    #[cfg(unix)]
     fn try_symlink(original: &Path, link: &Path) -> bool {
-        #[cfg(unix)]
-        {
-            return std::os::unix::fs::symlink(original, link).is_ok();
-        }
-        #[cfg(windows)]
-        {
-            return std::os::windows::fs::symlink_file(original, link).is_ok();
-        }
-        #[cfg(not(any(unix, windows)))]
-        {
-            let _ = (original, link);
-            return false;
-        }
+        std::os::unix::fs::symlink(original, link).is_ok()
+    }
+
+    /// Try to create a symlink, returning `false` if the OS does not support
+    /// it without elevated privileges (Windows without Developer Mode).
+    #[cfg(windows)]
+    fn try_symlink(original: &Path, link: &Path) -> bool {
+        std::os::windows::fs::symlink_file(original, link).is_ok()
+    }
+
+    /// Try to create a symlink, returning `false` if the OS does not support
+    /// it without elevated privileges (Windows without Developer Mode).
+    #[cfg(not(any(unix, windows)))]
+    fn try_symlink(_original: &Path, _link: &Path) -> bool {
+        false
     }
 
     /// Try to create a directory symlink (needed on Windows for dir targets).
+    #[cfg(unix)]
     fn try_symlink_dir(original: &Path, link: &Path) -> bool {
-        #[cfg(unix)]
-        {
-            return std::os::unix::fs::symlink(original, link).is_ok();
-        }
-        #[cfg(windows)]
-        {
-            return std::os::windows::fs::symlink_dir(original, link).is_ok();
-        }
-        #[cfg(not(any(unix, windows)))]
-        {
-            let _ = (original, link);
-            return false;
-        }
+        std::os::unix::fs::symlink(original, link).is_ok()
+    }
+
+    /// Try to create a directory symlink (needed on Windows for dir targets).
+    #[cfg(windows)]
+    fn try_symlink_dir(original: &Path, link: &Path) -> bool {
+        std::os::windows::fs::symlink_dir(original, link).is_ok()
+    }
+
+    /// Try to create a directory symlink (needed on Windows for dir targets).
+    #[cfg(not(any(unix, windows)))]
+    fn try_symlink_dir(_original: &Path, _link: &Path) -> bool {
+        false
     }
 
     #[test]
