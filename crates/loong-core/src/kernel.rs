@@ -7,6 +7,6 @@ pub trait Kernel: Sync {
     where
         Self: 'b;
 
-    // TODO: move methods here
+    // TODO: move methods here, add audit
     fn policy_engine(&self) -> &Self::PolicyEngine<'_>;
 }
