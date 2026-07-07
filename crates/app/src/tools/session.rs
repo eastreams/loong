@@ -397,9 +397,6 @@ use self::projections::*;
 pub(crate) use self::projections::load_session_workflow_record;
 
 #[cfg(test)]
-mod session_tool_tests;
-
-#[cfg(test)]
 pub fn execute_session_tool_with_config(
     request: ToolCoreRequest,
     current_session_id: &str,
@@ -2605,3 +2602,7 @@ fn optional_payload_session_tool_runtime_narrowing(
     let runtime_narrowing = normalize_session_tool_runtime_narrowing(runtime_narrowing);
     Ok(Some(runtime_narrowing))
 }
+
+#[cfg(test)]
+#[path = "session/session_tool_tests.rs"]
+mod tests_session_tool;

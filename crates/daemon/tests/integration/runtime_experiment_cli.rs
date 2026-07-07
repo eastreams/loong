@@ -13,6 +13,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+const TEST_RENDER_WIDTH: usize = 240;
+
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -762,7 +764,10 @@ fn runtime_experiment_show_text_surfaces_decision_fields_first() {
     let config_path = write_runtime_experiment_config(&root);
     let (_, finished) = finish_runtime_experiment(&root, &config_path);
 
-    let rendered = loong_daemon::runtime_experiment_cli::render_runtime_experiment_text(&finished);
+    let rendered = loong_daemon::runtime_experiment_cli::render_runtime_experiment_text_with_width(
+        &finished,
+        TEST_RENDER_WIDTH,
+    );
     assert!(
         rendered
             .lines()
@@ -817,7 +822,10 @@ fn runtime_experiment_compare_record_only_surfaces_decision_summary() {
     assert!(report.snapshot_delta.is_none());
 
     let rendered =
-        loong_daemon::runtime_experiment_cli::render_runtime_experiment_compare_text(&report);
+        loong_daemon::runtime_experiment_cli::render_runtime_experiment_compare_text_with_width(
+            &report,
+            TEST_RENDER_WIDTH,
+        );
     assert!(rendered.contains("compare_mode=record_only"));
     assert!(rendered.contains("evaluation_summary=task success improved"));
 
@@ -876,7 +884,10 @@ fn runtime_experiment_compare_with_snapshot_delta_reports_changed_runtime_surfac
     );
 
     let rendered =
-        loong_daemon::runtime_experiment_cli::render_runtime_experiment_compare_text(&report);
+        loong_daemon::runtime_experiment_cli::render_runtime_experiment_compare_text_with_width(
+            &report,
+            TEST_RENDER_WIDTH,
+        );
     assert!(rendered.contains("compare_mode=snapshot_delta"));
     assert!(rendered.contains("provider_active_profile=deepseek-lab -> openai-main"));
     assert!(rendered.contains("provider_active_model=deepseek-chat -> gpt-4.1-mini"));
@@ -924,7 +935,10 @@ fn runtime_experiment_compare_with_recorded_snapshots_reports_changed_runtime_su
     );
 
     let rendered =
-        loong_daemon::runtime_experiment_cli::render_runtime_experiment_compare_text(&report);
+        loong_daemon::runtime_experiment_cli::render_runtime_experiment_compare_text_with_width(
+            &report,
+            TEST_RENDER_WIDTH,
+        );
     assert!(rendered.contains("compare_mode=snapshot_delta"));
 
     fs::remove_dir_all(&root).ok();
@@ -1054,7 +1068,10 @@ fn runtime_experiment_compare_reports_channel_taxonomy_deltas() {
     );
 
     let rendered =
-        loong_daemon::runtime_experiment_cli::render_runtime_experiment_compare_text(&report);
+        loong_daemon::runtime_experiment_cli::render_runtime_experiment_compare_text_with_width(
+            &report,
+            TEST_RENDER_WIDTH,
+        );
     assert!(rendered.contains("enabled_runtime_backed_channel_ids"));
     assert!(rendered.contains("enabled_plugin_backed_channel_ids"));
     assert!(rendered.contains("enabled_outbound_only_channel_ids"));

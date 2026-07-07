@@ -171,11 +171,14 @@ fn bootstrap_kernel_context_with_audit_sink(
         .map_err(|e| format!("set default tool adapter failed: {e}"))?;
 
     // Register policy extensions for unified security enforcement.
-    let tool_policy_rt =
-        crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
-    kernel.register_policy_extension(
-        crate::tools::shell_policy_ext::ToolPolicyExtension::from_config(&tool_policy_rt),
-    );
+    #[cfg(feature = "tool-shell")]
+    {
+        let tool_policy_rt =
+            crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
+        kernel.register_policy_extension(
+            crate::tools::shell_policy_ext::ToolPolicyExtension::from_config(&tool_policy_rt),
+        );
+    }
     kernel.register_policy_extension(crate::tools::file_policy_ext::FilePolicyExtension::new(
         file_root,
     ));

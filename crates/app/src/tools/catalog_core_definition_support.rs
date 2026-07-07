@@ -164,6 +164,7 @@ pub(super) fn direct_edit_definition(descriptor: &ToolDescriptor) -> Value {
     })
 }
 
+#[cfg(feature = "tool-shell")]
 pub(super) fn direct_bash_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",

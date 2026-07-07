@@ -2,7 +2,7 @@ use serde_json::json;
 
 use super::{
     SessionsCommandExecution, build_session_heal_plan, render_session_heal_plan_lines,
-    render_session_inspection_lines, render_sessions_cli_text,
+    render_session_inspection_lines, render_sessions_cli_text_with_width,
 };
 
 #[test]
@@ -297,7 +297,7 @@ fn render_sessions_path_text_includes_head_and_nodes() {
         }),
     };
 
-    let rendered = render_sessions_cli_text(&execution).expect("rendered path");
+    let rendered = render_sessions_cli_text_with_width(&execution, 240).expect("rendered path");
 
     assert!(rendered.contains("path for `root-session` head `thread/alpha` (2)"));
     assert!(rendered.contains("session-turn:root-session:1"));
@@ -322,7 +322,7 @@ fn render_sessions_tree_mutation_text_includes_artifact_summary() {
         }),
     };
 
-    let rendered = render_sessions_cli_text(&execution).expect("rendered mutation");
+    let rendered = render_sessions_cli_text_with_width(&execution, 240).expect("rendered mutation");
 
     assert!(rendered.contains("branch-summary for `root-session`"));
     assert!(rendered.contains("kind=branch_summary"));

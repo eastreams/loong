@@ -64,6 +64,7 @@ pub(crate) async fn execute_daemon_turn_gateway_request(
     observer: Option<loong_app::conversation::ConversationTurnObserverHandle>,
     provider_error_mode: loong_app::conversation::ProviderErrorMode,
 ) -> CliResult<loong_app::agent_runtime::AgentTurnResult> {
+    ensure_daemon_turn_session_record(turn_service.config(), request.address.session_id.as_str())?;
     request.observer = observer;
     request.provider_error_mode = provider_error_mode;
     loong_app::turn_gateway::execute_projected_turn_gateway_request(
@@ -73,6 +74,43 @@ pub(crate) async fn execute_daemon_turn_gateway_request(
         None,
     )
     .await
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn ensure_daemon_turn_session_record(
+    config: &loong_app::config::LoongConfig,
+    session_id: &str,
+) -> CliResult<()> {
+    let session_id = session_id.trim();
+    // Gateway/control-plane callers may provide a brand-new explicit session id.
+    // The app layer now validates sessions against SQLite, so daemon entrypoints
+    // seed a root record here instead of forcing first-turn API callers to
+    // create one through a separate session-management path.
+    if session_id.is_empty() || session_id == loong_app::session::LATEST_SESSION_SELECTOR {
+        return Ok(());
+    }
+
+    let store_config =
+        loong_app::session::store::SessionStoreConfig::from_memory_config_without_env_overrides(
+            &config.memory,
+        );
+    let repo = loong_app::session::repository::SessionRepository::new(&store_config)?;
+    repo.ensure_session(loong_app::session::repository::NewSessionRecord {
+        session_id: session_id.to_owned(),
+        kind: loong_app::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some(session_id.to_owned()),
+        state: loong_app::session::repository::SessionState::Ready,
+    })?;
+    Ok(())
+}
+
+#[cfg(not(feature = "memory-sqlite"))]
+fn ensure_daemon_turn_session_record(
+    _config: &loong_app::config::LoongConfig,
+    _session_id: &str,
+) -> CliResult<()> {
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -203,6 +241,7 @@ pub(crate) async fn execute_explicit_acp_turn_gateway_request(
     event_sink: Option<&dyn loong_app::acp::AcpTurnEventSink>,
     mut request: loong_app::turn_gateway::TurnGatewayRequest,
 ) -> CliResult<loong_app::agent_runtime::AgentTurnResult> {
+    ensure_daemon_turn_session_record(&config, request.address.session_id.as_str())?;
     let execution = loong_app::turn_gateway::TurnGatewayExecution {
         resolved_path,
         config,
@@ -649,7 +688,13 @@ mod tests {
     #[tokio::test]
     async fn shared_daemon_turn_executor_preserves_propagated_provider_errors() {
         let resolved_path = std::env::temp_dir().join("loong-daemon-turn-propagate.toml");
-        let config = loong_app::config::LoongConfig::default();
+        let mut config = loong_app::config::LoongConfig::default();
+        config.memory.sqlite_path = std::env::temp_dir()
+            .join("loong-daemon-turn-propagate.sqlite3")
+            .display()
+            .to_string();
+        let sqlite_path = config.memory.resolved_sqlite_path();
+        let _ = std::fs::remove_file(&sqlite_path);
         loong_app::config::write(
             Some(resolved_path.to_string_lossy().as_ref()),
             &config,
@@ -690,6 +735,7 @@ mod tests {
             "expected propagated provider configuration failure, got: {error}"
         );
 
+        let _ = std::fs::remove_file(sqlite_path);
         let _ = std::fs::remove_file(resolved_path);
     }
 }

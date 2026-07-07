@@ -417,10 +417,13 @@ fn tool_catalog_entries_expose_concurrency_class() {
         |guidance| guidance.contains("whole-file") || guidance.contains("file creation")
     ));
 
-    let bash_exec = find_tool_catalog_entry("bash.exec").expect("bash.exec catalog entry");
-    assert_eq!(bash_exec.scheduling_class, ToolSchedulingClass::SerialOnly);
-    assert_eq!(bash_exec.concurrency_class, ToolConcurrencyClass::Mutating);
-    assert_eq!(bash_exec.surface_id, Some("bash"));
+    #[cfg(feature = "tool-shell")]
+    {
+        let bash_exec = find_tool_catalog_entry("bash.exec").expect("bash.exec catalog entry");
+        assert_eq!(bash_exec.scheduling_class, ToolSchedulingClass::SerialOnly);
+        assert_eq!(bash_exec.concurrency_class, ToolConcurrencyClass::Mutating);
+        assert_eq!(bash_exec.surface_id, Some("bash"));
+    }
 }
 
 #[test]
@@ -431,12 +434,14 @@ fn tool_catalog_resolve_preserves_canonical_provider_and_alias_lookup() {
     let provider_name = catalog.resolve("file_read").expect("provider lookup");
     let write_alias = catalog.resolve("file_write").expect("write alias");
     let edit_alias = catalog.resolve("file_edit").expect("edit alias");
+    #[cfg(feature = "tool-shell")]
     let alias = catalog.resolve("shell").expect("alias lookup");
 
     assert_eq!(canonical.name, "read");
     assert_eq!(provider_name.name, "read");
     assert_eq!(write_alias.name, "write");
     assert_eq!(edit_alias.name, "edit");
+    #[cfg(feature = "tool-shell")]
     assert_eq!(alias.name, "shell.exec");
     assert!(catalog.resolve("tool_search").is_none());
     assert!(catalog.resolve("tool_invoke").is_none());
@@ -668,6 +673,7 @@ fn autonomy_capability_action_classifies_representative_tool_families() {
     let expectations = [
         ("file.read", CapabilityActionClass::ExecuteExisting),
         ("file.edit", CapabilityActionClass::ExecuteExisting),
+        #[cfg(feature = "tool-shell")]
         ("shell.exec", CapabilityActionClass::ExecuteExisting),
         ("config.import", CapabilityActionClass::ExecuteExisting),
         ("provider.switch", CapabilityActionClass::RuntimeSwitch),
@@ -721,8 +727,12 @@ fn autonomy_capability_action_catalog_entries_expose_serializable_metadata() {
         serde_json::to_value(delegate_async).expect("serialize delegate_async catalog entry");
     let read = find_tool_catalog_entry("file.read").expect("file.read catalog entry");
     let read_value = serde_json::to_value(read).expect("serialize file.read catalog entry");
-    let bash = find_tool_catalog_entry("bash.exec").expect("bash.exec catalog entry");
-    let bash_value = serde_json::to_value(bash).expect("serialize bash.exec catalog entry");
+    #[cfg(feature = "tool-shell")]
+    {
+        let bash = find_tool_catalog_entry("bash.exec").expect("bash.exec catalog entry");
+        let bash_value = serde_json::to_value(bash).expect("serialize bash.exec catalog entry");
+        assert_eq!(bash_value["concurrency_class"], "mutating");
+    }
 
     assert_eq!(
         delegate_async.capability_action_class,
@@ -734,7 +744,6 @@ fn autonomy_capability_action_catalog_entries_expose_serializable_metadata() {
     );
     assert_eq!(delegate_async_value["concurrency_class"], "mutating");
     assert_eq!(read_value["concurrency_class"], "read_only");
-    assert_eq!(bash_value["concurrency_class"], "mutating");
 }
 
 #[test]

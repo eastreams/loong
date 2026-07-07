@@ -72,14 +72,21 @@ fn capability_snapshot_is_deterministic() {
     assert!(snapshot.contains("- read:"));
     assert!(snapshot.contains("- write:"));
     assert!(snapshot.contains("- edit:"));
+    #[cfg(feature = "tool-shell")]
     assert!(snapshot.contains("- bash:"));
+    #[cfg(not(feature = "tool-shell"))]
+    assert!(!snapshot.contains("- bash:"));
     assert!(snapshot.contains("Available tools:"));
     assert!(snapshot.contains("Guidelines:"));
+    #[cfg(feature = "tool-shell")]
     assert!(snapshot.contains("Use read for filesystem inspection before shelling out."));
     assert!(snapshot.contains(
             "Use `offset` and `limit` to page through large files instead of reading everything at once."
         ));
+    #[cfg(feature = "tool-shell")]
     assert!(snapshot.contains("Use bash for normal command-line work."));
+    #[cfg(not(feature = "tool-shell"))]
+    assert!(!snapshot.contains("Use bash for normal command-line work."));
     assert!(!snapshot.contains("shell.exec"));
     assert!(!snapshot.contains("file.read"));
 
@@ -583,7 +590,10 @@ fn provider_tool_definitions_are_stable_and_cover_direct_surface() {
 fn provider_exposed_tool_gate_covers_direct_and_gateway_tools() {
     assert!(is_provider_exposed_tool_name("read"));
     assert!(is_provider_exposed_tool_name("write"));
+    #[cfg(feature = "tool-shell")]
     assert!(is_provider_exposed_tool_name("bash"));
+    #[cfg(not(feature = "tool-shell"))]
+    assert!(!is_provider_exposed_tool_name("bash"));
     assert!(is_provider_exposed_tool_name("edit"));
     assert!(is_provider_exposed_tool_name("browse"));
     assert!(is_provider_exposed_tool_name("file.read"));
@@ -932,8 +942,11 @@ fn canonical_tool_name_maps_known_aliases() {
     assert_eq!(canonical_tool_name("browser_click"), "browser.click");
     assert_eq!(canonical_tool_name("browse.click"), "browser.click");
     assert_eq!(canonical_tool_name("file_edit"), "edit");
-    assert_eq!(canonical_tool_name("shell_exec"), "shell.exec");
-    assert_eq!(canonical_tool_name("shell"), "shell.exec");
+    #[cfg(feature = "tool-shell")]
+    {
+        assert_eq!(canonical_tool_name("shell_exec"), "shell.exec");
+        assert_eq!(canonical_tool_name("shell"), "shell.exec");
+    }
     assert_eq!(canonical_tool_name("web_fetch"), "web.fetch");
     assert_eq!(canonical_tool_name("feishu_whoami"), "feishu.whoami");
     assert_eq!(
@@ -3000,9 +3013,18 @@ fn is_known_tool_name_accepts_canonical_and_alias_forms() {
     assert!(is_known_tool_name("browser_extract"));
     assert!(is_known_tool_name("browser.click"));
     assert!(is_known_tool_name("browser_click"));
-    assert!(is_known_tool_name("shell.exec"));
-    assert!(is_known_tool_name("shell_exec"));
-    assert!(is_known_tool_name("shell"));
+    #[cfg(feature = "tool-shell")]
+    {
+        assert!(is_known_tool_name("shell.exec"));
+        assert!(is_known_tool_name("shell_exec"));
+        assert!(is_known_tool_name("shell"));
+    }
+    #[cfg(not(feature = "tool-shell"))]
+    {
+        assert!(!is_known_tool_name("shell.exec"));
+        assert!(!is_known_tool_name("shell_exec"));
+        assert!(!is_known_tool_name("shell"));
+    }
     #[cfg(feature = "tool-http")]
     {
         assert!(is_known_tool_name(HTTP_REQUEST_TOOL_NAME));
@@ -3088,23 +3110,32 @@ fn provider_tool_definitions_with_config_keeps_direct_surface_when_feishu_runtim
         integration: crate::config::FeishuIntegrationConfig::default(),
     });
 
-    let defs = provider_tool_definitions_with_config(Some(&config));
-    let names = defs
-        .iter()
-        .filter_map(|item| item.get("function"))
-        .filter_map(|function| function.get("name"))
-        .filter_map(Value::as_str)
-        .collect::<Vec<_>>();
+    let collect_provider_names = |defs: &[Value]| {
+        defs.iter()
+            .filter_map(|item| item.get("function"))
+            .filter_map(|function| function.get("name"))
+            .filter_map(Value::as_str)
+            .map(ToOwned::to_owned)
+            .collect::<BTreeSet<_>>()
+    };
+    let baseline_defs =
+        provider_tool_definitions_with_config(Some(&runtime_config::ToolRuntimeConfig::default()));
+    let baseline_names = collect_provider_names(&baseline_defs);
 
-    assert!(names.contains(&"bash"));
-    assert!(names.contains(&"browse"));
-    assert!(names.contains(&"edit"));
-    assert!(names.contains(&"read"));
-    assert!(names.contains(&"web"));
-    assert!(names.contains(&"write"));
-    assert!(!names.contains(&"tool_invoke"));
-    assert!(!names.contains(&"tool_search"));
-    assert_eq!(names.len(), 6);
+    let defs = provider_tool_definitions_with_config(Some(&config));
+    let names = collect_provider_names(&defs);
+
+    assert!(names.contains("browse"));
+    assert!(names.contains("edit"));
+    assert!(names.contains("read"));
+    assert!(names.contains("web"));
+    assert!(names.contains("write"));
+    assert!(!names.contains("tool_invoke"));
+    assert!(!names.contains("tool_search"));
+    // Feishu tools are discoverable, not additional provider-visible direct
+    // functions; configuring the runtime must leave the direct surface equal
+    // to the baseline for this build's enabled features.
+    assert_eq!(names, baseline_names);
 }
 
 #[cfg(feature = "feishu-integration")]
@@ -11965,6 +11996,7 @@ fn provider_switch_tool_updates_target_config_and_reports_active_profile() {
     .expect("write provider config");
 
     let runtime_config = runtime_config::ToolRuntimeConfig {
+        #[cfg(feature = "tool-shell")]
         shell_allow: BTreeSet::new(),
         file_root: Some(root.clone()),
         config_path: Some(config_path.clone()),
@@ -12046,6 +12078,7 @@ fn provider_switch_tool_accepts_unique_model_selector() {
     .expect("write provider config");
 
     let runtime_config = runtime_config::ToolRuntimeConfig {
+        #[cfg(feature = "tool-shell")]
         shell_allow: BTreeSet::new(),
         file_root: Some(root.clone()),
         config_path: Some(config_path.clone()),
@@ -12113,6 +12146,7 @@ fn provider_switch_without_selector_reports_current_provider_state() {
     .expect("write provider config");
 
     let runtime_config = runtime_config::ToolRuntimeConfig {
+        #[cfg(feature = "tool-shell")]
         shell_allow: BTreeSet::new(),
         file_root: Some(root.clone()),
         config_path: Some(config_path.clone()),

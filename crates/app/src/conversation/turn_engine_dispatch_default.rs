@@ -1,4 +1,6 @@
 use async_trait::async_trait;
+#[cfg(feature = "tool-shell")]
+use serde_json::Value;
 
 use super::*;
 
@@ -516,6 +518,7 @@ impl DefaultAppToolDispatcher {
     }
 
     #[cfg(feature = "memory-sqlite")]
+    #[cfg(feature = "tool-shell")]
     fn governed_shell_tool_preflight(
         &self,
         session_context: &SessionContext,
@@ -665,7 +668,7 @@ impl DefaultAppToolDispatcher {
         &self,
         session_context: &SessionContext,
         intent: &ToolIntent,
-        request: &ToolCoreRequest,
+        _request: &ToolCoreRequest,
         descriptor: &crate::tools::ToolDescriptor,
         binding: ConversationRuntimeBinding<'_>,
     ) -> Result<GovernedToolPreflight, String> {
@@ -674,11 +677,12 @@ impl DefaultAppToolDispatcher {
             return Ok(GovernedToolPreflight::Allowed);
         }
 
+        #[cfg(feature = "tool-shell")]
         if descriptor.name == crate::tools::SHELL_EXEC_TOOL_NAME {
             return self.governed_shell_tool_preflight(
                 session_context,
                 intent,
-                request,
+                _request,
                 descriptor,
                 binding,
             );
@@ -1018,6 +1022,7 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
                 GovernedToolPreflight::NeedsApproval(requirement) => {
                     Ok(ToolExecutionPreflight::NeedsApproval(requirement))
                 }
+                #[cfg(feature = "tool-shell")]
                 GovernedToolPreflight::AllowedWithTrustedInternalContext(internal_context) => {
                     let mut request = request;
                     let payload = request.payload.as_object_mut().ok_or_else(|| {

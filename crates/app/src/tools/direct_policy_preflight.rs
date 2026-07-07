@@ -2,6 +2,7 @@ use loong_contracts::ToolCoreRequest;
 
 use super::file_policy_ext;
 use super::runtime_config;
+#[cfg(feature = "tool-shell")]
 use super::shell_policy_ext;
 
 pub(super) fn run(
@@ -15,6 +16,7 @@ pub(super) fn run(
 
     let tool_name = super::canonical_tool_name(request.tool_name.as_str());
 
+    #[cfg(feature = "tool-shell")]
     if tool_name == "shell.exec" {
         return shell_policy_ext::authorize_direct_shell_payload(payload, config);
     }
@@ -31,6 +33,7 @@ pub(super) fn run(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "tool-shell")]
     use std::collections::BTreeSet;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -40,6 +43,7 @@ mod tests {
 
     use super::run;
     use super::runtime_config;
+    #[cfg(feature = "tool-shell")]
     use super::shell_policy_ext::ShellPolicyDefault;
 
     fn unique_temp_dir(prefix: &str) -> PathBuf {
@@ -54,6 +58,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "tool-shell")]
     fn run_reuses_shared_shell_policy_default_deny() {
         let config = runtime_config::ToolRuntimeConfig {
             shell_allow: BTreeSet::new(),

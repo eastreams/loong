@@ -264,7 +264,9 @@ pub use loong_spec::programmatic::{
 pub use observability::{debug_variant_name, init_otel, init_tracing, summarize_error};
 use personalize_presentation::{PERSONALIZE_COMMAND_ABOUT, PERSONALIZE_COMMAND_LONG_ABOUT};
 use runtime_snapshot_compaction_hygiene::collect_runtime_snapshot_compaction_hygiene_state;
-pub use runtime_snapshot_render::render_runtime_snapshot_text;
+pub use runtime_snapshot_render::{
+    render_runtime_snapshot_text, render_runtime_snapshot_text_with_width,
+};
 pub(crate) use runtime_snapshot_render::{
     runtime_snapshot_acp_json, runtime_snapshot_context_engine_json,
     runtime_snapshot_memory_system_json, runtime_snapshot_provider_json,
@@ -333,7 +335,24 @@ pub(crate) fn render_operator_shell_surface(
     body_lines: Vec<String>,
     footer_lines: Vec<String>,
 ) -> String {
-    let width = mvp::presentation::detect_render_width();
+    render_operator_shell_surface_with_width(
+        title,
+        subtitle,
+        intro_lines,
+        body_lines,
+        footer_lines,
+        mvp::presentation::detect_render_width(),
+    )
+}
+
+pub(crate) fn render_operator_shell_surface_with_width(
+    title: &str,
+    subtitle: &str,
+    intro_lines: Vec<String>,
+    body_lines: Vec<String>,
+    footer_lines: Vec<String>,
+    render_width: usize,
+) -> String {
     let mut sections = Vec::new();
     if !body_lines.is_empty() {
         sections.push(mvp::tui_surface::TuiSectionSpec::Narrative {
@@ -351,7 +370,7 @@ pub(crate) fn render_operator_shell_surface(
         choices: Vec::new(),
         footer_lines,
     };
-    mvp::tui_surface::render_tui_screen_spec_ratatui(&screen, width, false).join("\n")
+    mvp::tui_surface::render_tui_screen_spec_ratatui(&screen, render_width, false).join("\n")
 }
 
 pub(crate) fn render_operator_shell_surface_from_body(
@@ -365,6 +384,22 @@ pub(crate) fn render_operator_shell_surface_from_body(
         Vec::new(),
         body.lines().map(str::to_owned).collect(),
         Vec::new(),
+    )
+}
+
+pub(crate) fn render_operator_shell_surface_from_body_with_width(
+    title: &str,
+    subtitle: &str,
+    body: String,
+    render_width: usize,
+) -> String {
+    render_operator_shell_surface_with_width(
+        title,
+        subtitle,
+        Vec::new(),
+        body.lines().map(str::to_owned).collect(),
+        Vec::new(),
+        render_width,
     )
 }
 

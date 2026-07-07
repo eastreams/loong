@@ -1,10 +1,14 @@
-use crate::config::{GovernedToolApprovalMode, LoongConfig};
+#[cfg(feature = "tool-shell")]
+use crate::config::GovernedToolApprovalMode;
+use crate::config::LoongConfig;
 
 use super::runtime_config::SkillsRuntimePolicy;
 use super::runtime_config::{ToolRuntimeConfig, WebFetchRuntimePolicy};
+#[cfg(feature = "tool-shell")]
 use super::shell_policy_ext::ShellPolicyDefault;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(feature = "tool-shell")]
 pub struct ShellExecutionSecurityPosture {
     pub default_mode: ShellPolicyDefault,
     pub allow_count: usize,
@@ -54,6 +58,7 @@ pub struct SkillsSecurityPostureProbeFailure {
     pub error: String,
 }
 
+#[cfg(feature = "tool-shell")]
 pub fn shell_execution_security_posture(
     config: &LoongConfig,
     runtime: &ToolRuntimeConfig,

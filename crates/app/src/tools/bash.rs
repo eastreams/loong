@@ -2,9 +2,6 @@ pub mod ast;
 pub mod governance;
 pub mod rules;
 
-#[cfg(test)]
-mod exec_tests;
-
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -85,24 +82,67 @@ fn resolve_bash_command(candidate: PathBuf) -> PathBuf {
     which::which(candidate.as_path()).unwrap_or(candidate)
 }
 
+#[derive(Debug, Clone)]
+struct BashExecInput<'a> {
+    command: &'a str,
+    cwd: PathBuf,
+    timeout_ms: u64,
+}
+
+struct BashRuntimePreflight<'a> {
+    runtime_command: &'a Path,
+    login_shell: bool,
+}
+
 pub(super) fn execute_bash_tool_with_config(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    let payload = request
-        .payload
+    let input = parse_bash_exec_input(&request.payload, config)?;
+    let runtime = preflight_bash_runtime(config, input.command)?;
+    let output = run_bash_exec(&input, &runtime, config)?;
+
+    Ok(process_exec::build_process_tool_outcome(
+        request.tool_name.as_str(),
+        input.command,
+        None,
+        input.cwd.as_path(),
+        output,
+    ))
+}
+
+fn parse_bash_exec_input<'a>(
+    payload: &'a Value,
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<BashExecInput<'a>, String> {
+    let payload = payload
         .as_object()
         .ok_or_else(|| "bash.exec payload must be an object".to_owned())?;
     reject_unknown_bash_exec_fields(payload)?;
-    let command = payload
+    let command = parse_bash_command(payload)?;
+    let cwd = parse_bash_cwd(payload, config)?;
+    let timeout_ms = parse_bash_timeout_ms(payload)?;
+
+    Ok(BashExecInput {
+        command,
+        cwd,
+        timeout_ms,
+    })
+}
+
+fn parse_bash_command(payload: &serde_json::Map<String, Value>) -> Result<&str, String> {
+    payload
         .get("command")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| "bash.exec requires payload.command".to_owned())?;
-    let cwd = parse_bash_cwd(payload, config)?;
-    let timeout_ms = parse_bash_timeout_ms(payload)?;
+        .ok_or_else(|| "bash.exec requires payload.command".to_owned())
+}
 
+fn preflight_bash_runtime<'a>(
+    config: &'a super::runtime_config::ToolRuntimeConfig,
+    command: &str,
+) -> Result<BashRuntimePreflight<'a>, String> {
     if !config.bash_exec.is_runtime_ready() {
         return Err("bash unavailable".to_owned());
     }
@@ -130,32 +170,36 @@ pub(super) fn execute_bash_tool_with_config(
         .command
         .as_deref()
         .ok_or_else(|| "bash unavailable".to_owned())?;
-    let args = bash_exec_args(command, runtime.login_shell);
+
+    Ok(BashRuntimePreflight {
+        runtime_command,
+        login_shell: runtime.login_shell,
+    })
+}
+
+fn run_bash_exec(
+    input: &BashExecInput<'_>,
+    runtime: &BashRuntimePreflight<'_>,
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<process_exec::ProcessExecOutcome, String> {
+    let args = bash_exec_args(input.command, runtime.login_shell);
     let resolved_invocation = crate::process_launch::resolve_command_invocation(
-        runtime_command.to_string_lossy().as_ref(),
+        runtime.runtime_command.to_string_lossy().as_ref(),
         args.iter().map(String::as_str),
     );
     let runtime_event_sink = current_tool_runtime_event_sink();
-    let output = process_exec::run_tool_async(
+    process_exec::run_tool_async(
         process_exec::run_process_with_timeout_with_sink(
             resolved_invocation.program.as_os_str(),
             resolved_invocation.args.as_slice(),
-            cwd.as_path(),
-            timeout_ms,
+            input.cwd.as_path(),
+            input.timeout_ms,
             "bash command",
             runtime_event_sink.clone(),
             config.file_root.as_deref(),
         ),
         "bash tool",
-    )??;
-
-    Ok(process_exec::build_process_tool_outcome(
-        request.tool_name.as_str(),
-        command,
-        None,
-        cwd.as_path(),
-        output,
-    ))
+    )?
 }
 
 fn reject_unknown_bash_exec_fields(payload: &serde_json::Map<String, Value>) -> Result<(), String> {
@@ -502,3 +546,7 @@ mod tests {
         assert_eq!(timeout_ms, 1_000);
     }
 }
+
+#[cfg(test)]
+#[path = "bash/exec_tests.rs"]
+mod tests_exec;

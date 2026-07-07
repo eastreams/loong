@@ -158,6 +158,7 @@ impl TurnTestHarness {
         // Register policy extensions for unified security enforcement.
         // Policy rules come exclusively from the runtime config; no hardcoded
         // lists are injected here.
+        #[cfg(feature = "tool-shell")]
         kernel.register_policy_extension(
             crate::tools::shell_policy_ext::ToolPolicyExtension::from_config(&tool_config),
         );

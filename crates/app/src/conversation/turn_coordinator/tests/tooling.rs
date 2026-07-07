@@ -63,6 +63,7 @@ fn build_provider_turn_tool_terminal_events_prefers_trace_outcomes_over_generic_
     assert_eq!(events[1].detail.as_deref(), Some("second tool failed"));
 }
 
+#[cfg(feature = "tool-shell")]
 #[test]
 fn build_provider_turn_tool_terminal_events_attach_visible_shell_request_summary() {
     let turn = ProviderTurn {
@@ -100,6 +101,7 @@ fn build_provider_turn_tool_terminal_events_attach_visible_shell_request_summary
     );
 }
 
+#[cfg(feature = "tool-shell")]
 #[test]
 fn summarize_failed_provider_lane_tool_request_preserves_multi_intent_context_without_trace() {
     let turn = ProviderTurn {

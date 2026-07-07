@@ -22,10 +22,11 @@ use metadata_support::{
 };
 #[path = "catalog_core_definition_support.rs"]
 mod core_definition_support;
+#[cfg(feature = "tool-shell")]
+use core_definition_support::direct_bash_definition;
 use core_definition_support::{
-    direct_bash_definition, direct_browser_definition, direct_edit_definition,
-    direct_memory_definition, direct_read_definition, direct_web_definition,
-    direct_write_definition,
+    direct_browser_definition, direct_edit_definition, direct_memory_definition,
+    direct_read_definition, direct_web_definition, direct_write_definition,
 };
 #[path = "catalog_browser_definition_support.rs"]
 mod browser_definition_support;
@@ -39,10 +40,12 @@ use skills_definition_support::{config_import_definition, provider_switch_defini
 mod io_definition_support;
 #[cfg(feature = "tool-websearch")]
 use io_definition_support::web_search_definition;
+#[cfg(feature = "tool-shell")]
+use io_definition_support::{bash_exec_definition, shell_exec_definition};
 use io_definition_support::{
-    bash_exec_definition, content_search_definition, glob_search_definition,
-    http_request_definition, memory_get_definition, memory_retrieve_definition,
-    memory_search_definition, shell_exec_definition, web_fetch_definition,
+    content_search_definition, glob_search_definition, http_request_definition,
+    memory_get_definition, memory_retrieve_definition, memory_search_definition,
+    web_fetch_definition,
 };
 #[path = "catalog_session_definition_support.rs"]
 mod session_definition_support;
@@ -639,7 +642,6 @@ fn declared_concurrency_class(tool_name: &str) -> ToolConcurrencyClass {
         | "web.search" => Some(ToolConcurrencyClass::ReadOnly),
         "write"
         | "edit"
-        | "bash"
         | "browse"
         | "config.import"
         | "provider.switch"
@@ -661,10 +663,10 @@ fn declared_concurrency_class(tool_name: &str) -> ToolConcurrencyClass {
         | "http.request"
         | "file.write"
         | "file.edit"
-        | "shell.exec"
-        | "bash.exec"
         | "browser.click"
         | "browser.open" => Some(ToolConcurrencyClass::Mutating),
+        #[cfg(feature = "tool-shell")]
+        "bash" | "shell.exec" | "bash.exec" => Some(ToolConcurrencyClass::Mutating),
         _ => None,
     };
 
@@ -2033,7 +2035,7 @@ pub fn delegate_child_tool_view_for_config(config: &ToolConfig) -> ToolView {
     )
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[allow(dead_code)]
 pub fn delegate_child_tool_view_for_runtime_config(
     config: &ToolConfig,
     runtime_config: &ToolRuntimeConfig,
@@ -2054,7 +2056,7 @@ pub fn delegate_child_tool_view_for_config_with_delegate(
     )
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[allow(dead_code)]
 pub fn delegate_child_tool_view_for_runtime_config_with_delegate(
     config: &ToolConfig,
     runtime_config: &ToolRuntimeConfig,
@@ -2111,6 +2113,8 @@ fn build_delegate_child_tool_view(
     let catalog = tool_catalog();
     let mut names = Vec::new();
     let allowlist = BTreeSet::<&str>::from_iter(child_tool_allowlist.iter().map(String::as_str));
+    #[cfg(not(feature = "tool-shell"))]
+    let _ = allow_shell_in_child;
 
     for descriptor in catalog.descriptors().iter().filter(|descriptor| {
         descriptor.execution_kind == ToolExecutionKind::Core

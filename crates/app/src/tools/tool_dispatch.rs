@@ -74,6 +74,7 @@ pub(crate) fn execute_tool_core_with_config_and_observability(
             tool_name: canonical_name.clone(),
             payload,
         };
+        #[cfg(feature = "tool-shell")]
         let request = normalize_shell_request_for_execution(request);
         let effective_config = trusted_runtime_narrowing_from_payload(&request.payload)?;
         let effective_config = effective_config.map(|narrowing| config.narrowed(&narrowing));
@@ -245,6 +246,7 @@ pub(crate) fn execute_discoverable_tool_core_with_config(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
+    #[cfg(feature = "tool-shell")]
     let request = normalize_shell_request_for_execution(request);
     let tool_name = request.tool_name.clone();
     direct_policy_preflight::run(&request, config)?;
@@ -331,6 +333,7 @@ fn dispatch_tool_request(
         }
         #[cfg(feature = "tool-http")]
         "http.request" => http_request::execute_http_request_tool_with_config(request, config),
+        #[cfg(feature = "tool-shell")]
         "shell.exec" => shell::execute_shell_tool_with_config(request, config),
         #[cfg(feature = "tool-shell")]
         "bash.exec" => bash::execute_bash_tool_with_config(request, config),

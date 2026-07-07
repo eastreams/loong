@@ -85,7 +85,7 @@ pub use reply::{
 };
 #[cfg(test)]
 pub use reply::{ToolDrivenReplyKernel, compose_assistant_reply};
-#[cfg(test)]
+#[cfg(all(test, feature = "tool-shell"))]
 pub(crate) use request::summarize_failed_provider_lane_tool_request;
 pub(crate) use request::{
     effective_followup_visible_tool_name, summarize_provider_lane_tool_request,

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
+#[cfg(feature = "tool-shell")]
 use serde_json::Value;
 
 use crate::config::{LoongConfig, ToolConfig};
@@ -151,6 +152,7 @@ impl DefaultAppToolDispatcher {
 
 pub(super) enum GovernedToolPreflight {
     Allowed,
+    #[cfg(feature = "tool-shell")]
     AllowedWithTrustedInternalContext(Value),
     NeedsApproval(ApprovalRequirement),
 }

@@ -342,6 +342,7 @@ fn extract_provider_turn_supports_responses_function_calls_with_array_followup_m
     assert_eq!(turn.tool_intents[0].args_json, json!({"path": "README.md"}));
 }
 
+#[cfg(feature = "tool-shell")]
 #[test]
 fn extract_provider_turn_parses_inline_shell_function_block() {
     let body = serde_json::json!({
@@ -379,6 +380,7 @@ fn extract_provider_turn_parses_inline_shell_function_block() {
     );
 }
 
+#[cfg(feature = "tool-shell")]
 #[test]
 fn extract_provider_turn_parses_invoke_blocks_with_quoted_gt_in_arguments() {
     let body = serde_json::json!({
@@ -779,6 +781,7 @@ fn extract_provider_turn_does_not_execute_tab_indented_code_block_examples() {
     );
 }
 
+#[cfg(feature = "tool-shell")]
 #[test]
 fn extract_provider_turn_parses_indented_inline_function_when_not_code_block() {
     let body = serde_json::json!({
@@ -796,6 +799,7 @@ fn extract_provider_turn_parses_indented_inline_function_when_not_code_block() {
     assert_eq!(turn.tool_intents[0].args_json, json!({"command": "ls"}));
 }
 
+#[cfg(feature = "tool-shell")]
 #[test]
 fn extract_provider_turn_parses_tab_indented_inline_function_when_not_code_block() {
     let body = serde_json::json!({
@@ -813,6 +817,7 @@ fn extract_provider_turn_parses_tab_indented_inline_function_when_not_code_block
     assert_eq!(turn.tool_intents[0].args_json, json!({"command": "ls"}));
 }
 
+#[cfg(feature = "tool-shell")]
 #[test]
 fn extract_provider_turn_recovers_inline_parameter_json_types() {
     let body = serde_json::json!({
@@ -836,6 +841,7 @@ fn extract_provider_turn_recovers_inline_parameter_json_types() {
     );
 }
 
+#[cfg(feature = "tool-shell")]
 #[test]
 fn extract_provider_turn_preserves_string_typed_inline_parameters() {
     let body = serde_json::json!({

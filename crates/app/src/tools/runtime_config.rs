@@ -5,6 +5,7 @@ use std::sync::OnceLock;
 
 #[cfg(feature = "tool-shell")]
 use super::bash;
+#[cfg(feature = "tool-shell")]
 use super::shell_policy_ext::ShellPolicyDefault;
 
 use crate::config::{AutonomyProfile, LoongConfig};
@@ -117,6 +118,7 @@ impl BashExecRuntimePolicy {
     }
 }
 
+#[cfg(feature = "tool-shell")]
 #[allow(clippy::print_stderr)]
 fn emit_runtime_warning(warning: &str) {
     eprintln!("warning: {warning}");
@@ -447,8 +449,11 @@ pub struct ToolRuntimeConfig {
     pub workspace_root: Option<PathBuf>,
     pub memory_sqlite_path: Option<PathBuf>,
     pub selected_memory_system_id: String,
+    #[cfg(feature = "tool-shell")]
     pub shell_allow: BTreeSet<String>,
+    #[cfg(feature = "tool-shell")]
     pub shell_deny: BTreeSet<String>,
+    #[cfg(feature = "tool-shell")]
     pub shell_default_mode: ShellPolicyDefault,
     pub config_path: Option<PathBuf>,
     pub sessions_enabled: bool,
@@ -475,11 +480,14 @@ impl Default for ToolRuntimeConfig {
             workspace_root: None,
             memory_sqlite_path: None,
             selected_memory_system_id: crate::memory::DEFAULT_MEMORY_SYSTEM_ID.to_owned(),
+            #[cfg(feature = "tool-shell")]
             shell_allow: crate::config::DEFAULT_SHELL_ALLOW
                 .iter()
                 .map(|s| (*s).to_owned())
                 .collect(),
+            #[cfg(feature = "tool-shell")]
             shell_deny: BTreeSet::new(),
+            #[cfg(feature = "tool-shell")]
             shell_default_mode: ShellPolicyDefault::Allow,
             config_path: None,
             sessions_enabled: true,
@@ -554,12 +562,14 @@ impl ToolRuntimeConfig {
         let selected_memory_system_id = memory_system_selection.id;
         let web_fetch_allowed_domains = config.tools.web.normalized_allowed_domains();
         let web_fetch_enforce_allowed_domains = !web_fetch_allowed_domains.is_empty();
+        #[cfg(feature = "tool-shell")]
         let shell_allow: BTreeSet<String> = config
             .tools
             .shell_allow
             .iter()
             .map(|value| value.to_ascii_lowercase())
             .collect();
+        #[cfg(feature = "tool-shell")]
         let shell_deny: BTreeSet<String> = config
             .tools
             .shell_deny
@@ -577,8 +587,11 @@ impl ToolRuntimeConfig {
             workspace_root,
             memory_sqlite_path: Some(config.memory.resolved_sqlite_path()),
             selected_memory_system_id,
+            #[cfg(feature = "tool-shell")]
             shell_allow,
+            #[cfg(feature = "tool-shell")]
             shell_deny,
+            #[cfg(feature = "tool-shell")]
             shell_default_mode: ShellPolicyDefault::parse(&config.tools.shell_default_mode),
             config_path: config_path.map(Path::to_path_buf),
             sessions_enabled: config.tools.sessions.enabled,
@@ -665,10 +678,13 @@ impl ToolRuntimeConfig {
         let selected_memory_system_id = crate::memory::registered_memory_system_id_from_env()
             .unwrap_or_else(|| crate::memory::DEFAULT_MEMORY_SYSTEM_ID.to_owned());
         let config_path = std::env::var("LOONG_CONFIG_PATH").ok().map(PathBuf::from);
+
+        #[cfg(feature = "tool-shell")]
         let shell_allow: BTreeSet<String> = crate::config::DEFAULT_SHELL_ALLOW
             .iter()
             .map(|value| (*value).to_owned())
             .collect();
+        #[cfg(feature = "tool-shell")]
         let shell_deny = BTreeSet::new();
         let sessions_enabled = parse_env_bool("LOONG_TOOL_SESSIONS_ENABLED").unwrap_or(true);
         let sessions_allow_mutation =
@@ -744,8 +760,11 @@ impl ToolRuntimeConfig {
             workspace_root,
             memory_sqlite_path,
             selected_memory_system_id,
+            #[cfg(feature = "tool-shell")]
             shell_allow,
+            #[cfg(feature = "tool-shell")]
             shell_deny,
+            #[cfg(feature = "tool-shell")]
             shell_default_mode: ShellPolicyDefault::Allow,
             config_path,
             sessions_enabled,
@@ -1601,6 +1620,7 @@ mod tests {
     /// Deny starts empty so users are not forced to carry
     /// any hardcoded restriction they did not opt into.
     #[test]
+    #[cfg(feature = "tool-shell")]
     fn default_deny_is_empty() {
         let config = ToolRuntimeConfig::default();
         assert!(config.shell_deny.is_empty());
@@ -1609,6 +1629,7 @@ mod tests {
     /// Explicit config injection overrides defaults — verifies that
     /// non-default values survive construction without env-var leakage.
     #[test]
+    #[cfg(feature = "tool-shell")]
     fn explicit_config_injection_overrides_defaults() {
         let config = ToolRuntimeConfig {
             sessions_enabled: false,
@@ -1856,6 +1877,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "tool-shell")]
     fn from_env_defaults_to_empty_allowlist() {
         let mut env = ScopedEnv::new();
         clear_tool_runtime_env(&mut env);
@@ -2751,4 +2773,4 @@ mod tests {
 
 #[cfg(test)]
 #[path = "runtime_config_delegate_prompt_tests.rs"]
-mod delegate_prompt_tests;
+mod tests_delegate_prompt;

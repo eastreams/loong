@@ -38,6 +38,99 @@ struct FileReadSelection {
 }
 
 #[cfg(feature = "tool-file")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileReadInput<'a> {
+    target: &'a str,
+    max_bytes: usize,
+    offset: Option<usize>,
+    limit: Option<usize>,
+}
+
+#[cfg(feature = "tool-file")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileReadOutput {
+    resolved: PathBuf,
+    bytes_read: usize,
+    selection: FileReadSelection,
+}
+
+#[cfg(feature = "tool-file")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileWriteInput<'a> {
+    target: &'a str,
+    content: &'a str,
+    create_dirs: bool,
+    overwrite: bool,
+}
+
+#[cfg(feature = "tool-file")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileWriteOutput {
+    resolved: PathBuf,
+    bytes_written: usize,
+}
+
+#[cfg(feature = "tool-file")]
+fn file_tool_payload_object<'a>(
+    payload: &'a Value,
+    tool_name: &str,
+) -> Result<&'a serde_json::Map<String, Value>, String> {
+    payload
+        .as_object()
+        .ok_or_else(|| format!("{tool_name} payload must be an object"))
+}
+
+#[cfg(feature = "tool-file")]
+fn required_file_path_field<'a>(
+    payload: &'a serde_json::Map<String, Value>,
+    tool_name: &str,
+) -> Result<&'a str, String> {
+    optional_trimmed_string_field(payload.get("path"))
+        .ok_or_else(|| format!("{tool_name} requires payload.path"))
+}
+
+#[cfg(feature = "tool-file")]
+fn required_file_edit_path_field<'a>(
+    payload: &'a serde_json::Map<String, Value>,
+    tool_name: &str,
+) -> Result<&'a str, String> {
+    optional_trimmed_string_field(payload.get("path"))
+        .ok_or_else(|| format!("{tool_name} requires payload.path (string)"))
+}
+
+#[cfg(feature = "tool-file")]
+fn required_file_content_field<'a>(
+    payload: &'a serde_json::Map<String, Value>,
+    tool_name: &str,
+) -> Result<&'a str, String> {
+    payload
+        .get("content")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{tool_name} requires payload.content"))
+}
+
+#[cfg(feature = "tool-file")]
+fn optional_file_read_max_bytes(payload: &serde_json::Map<String, Value>) -> usize {
+    payload
+        .get("max_bytes")
+        .and_then(Value::as_u64)
+        .unwrap_or(1_048_576)
+        .min(8 * 1_048_576) as usize
+}
+
+#[cfg(feature = "tool-file")]
+fn ensure_resolved_file_target(resolved: &Path) -> Result<(), String> {
+    if resolved.is_dir() {
+        return Err(format!(
+            "path '{}' is a directory, not a file",
+            resolved.display()
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "tool-file")]
 fn optional_positive_usize_field(
     payload: &serde_json::Map<String, Value>,
     field_name: &str,
@@ -122,6 +215,89 @@ fn select_file_read_content(
     Ok(selection)
 }
 
+#[cfg(feature = "tool-file")]
+fn parse_file_read_input<'a>(
+    payload: &'a serde_json::Map<String, Value>,
+    tool_name: &str,
+) -> Result<FileReadInput<'a>, String> {
+    let target = required_file_path_field(payload, tool_name)?;
+    let max_bytes = optional_file_read_max_bytes(payload);
+    let offset = optional_positive_usize_field(payload, "offset", tool_name)?;
+    let limit = optional_positive_usize_field(payload, "limit", tool_name)?;
+
+    Ok(FileReadInput {
+        target,
+        max_bytes,
+        offset,
+        limit,
+    })
+}
+
+#[cfg(feature = "tool-file")]
+fn run_file_read(
+    input: FileReadInput<'_>,
+    config: &super::runtime_config::ToolRuntimeConfig,
+    tool_name: &str,
+) -> Result<FileReadOutput, String> {
+    let resolved = resolve_safe_file_path_with_config(input.target, config)?;
+    ensure_resolved_file_target(&resolved)?;
+    let bytes = fs::read(&resolved)
+        .map_err(|error| format!("failed to read file {}: {error}", resolved.display()))?;
+    let bytes_read = bytes.len();
+    let file_text = String::from_utf8_lossy(&bytes).to_string();
+    let selection = select_file_read_content(
+        file_text.as_str(),
+        input.max_bytes,
+        input.offset,
+        input.limit,
+        tool_name,
+    )?;
+
+    Ok(FileReadOutput {
+        resolved,
+        bytes_read,
+        selection,
+    })
+}
+
+#[cfg(feature = "tool-file")]
+fn build_file_read_outcome(
+    requested_tool_name: String,
+    tool_name: &str,
+    output: FileReadOutput,
+) -> Result<ToolCoreOutcome, String> {
+    let mut response_payload = json!({
+        "adapter": "core-tools",
+        "tool_name": requested_tool_name,
+        "path": output.resolved.display().to_string(),
+        "bytes": output.bytes_read,
+        "truncated": output.selection.truncated,
+        "content": output.selection.content,
+    });
+    let Some(response_object) = response_payload.as_object_mut() else {
+        return Err(format!(
+            "{tool_name} internal response payload must be an object"
+        ));
+    };
+    if let Some(line_start) = output.selection.line_start {
+        response_object.insert("line_start".to_owned(), json!(line_start));
+    }
+    if let Some(line_end) = output.selection.line_end {
+        response_object.insert("line_end".to_owned(), json!(line_end));
+    }
+    if let Some(total_lines) = output.selection.total_lines {
+        response_object.insert("total_lines".to_owned(), json!(total_lines));
+    }
+    if let Some(next_offset) = output.selection.next_offset {
+        response_object.insert("next_offset".to_owned(), json!(next_offset));
+    }
+
+    Ok(ToolCoreOutcome {
+        status: "ok".to_owned(),
+        payload: response_payload,
+    })
+}
+
 pub(super) fn execute_file_read_tool_with_config(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
@@ -134,74 +310,112 @@ pub(super) fn execute_file_read_tool_with_config(
 
     #[cfg(feature = "tool-file")]
     {
-        let tool_name = super::user_visible_tool_name(request.tool_name.as_str());
-        let payload = request
-            .payload
-            .as_object()
-            .ok_or_else(|| format!("{tool_name} payload must be an object"))?;
-        let target = payload
-            .get("path")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| format!("{tool_name} requires payload.path"))?;
+        let ToolCoreRequest { tool_name, payload } = request;
+        let user_visible_tool_name = super::user_visible_tool_name(tool_name.as_str());
+        let payload = file_tool_payload_object(&payload, user_visible_tool_name.as_str())?;
+        let input = parse_file_read_input(payload, user_visible_tool_name.as_str())?;
+        let output = run_file_read(input, config, user_visible_tool_name.as_str())?;
+        build_file_read_outcome(tool_name, user_visible_tool_name.as_str(), output)
+    }
+}
 
-        let max_bytes = payload
-            .get("max_bytes")
-            .and_then(Value::as_u64)
-            .unwrap_or(1_048_576)
-            .min(8 * 1_048_576) as usize;
-        let offset = optional_positive_usize_field(payload, "offset", tool_name.as_str())?;
-        let limit = optional_positive_usize_field(payload, "limit", tool_name.as_str())?;
+#[cfg(feature = "tool-file")]
+fn parse_file_write_input<'a>(
+    payload: &'a serde_json::Map<String, Value>,
+    tool_name: &str,
+) -> Result<FileWriteInput<'a>, String> {
+    let target = required_file_path_field(payload, tool_name)?;
+    let content = required_file_content_field(payload, tool_name)?;
+    let create_dirs = payload
+        .get("create_dirs")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let overwrite = payload
+        .get("overwrite")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
-        let resolved = resolve_safe_file_path_with_config(target, config)?;
-        if resolved.is_dir() {
-            return Err(format!(
-                "path '{}' is a directory, not a file",
-                resolved.display()
-            ));
-        }
-        let bytes = fs::read(&resolved)
-            .map_err(|error| format!("failed to read file {}: {error}", resolved.display()))?;
-        let file_text = String::from_utf8_lossy(&bytes).to_string();
-        let selection = select_file_read_content(
-            file_text.as_str(),
-            max_bytes,
-            offset,
-            limit,
-            tool_name.as_str(),
-        )?;
+    Ok(FileWriteInput {
+        target,
+        content,
+        create_dirs,
+        overwrite,
+    })
+}
 
-        let mut response_payload = json!({
+#[cfg(feature = "tool-file")]
+fn run_file_write(
+    input: FileWriteInput<'_>,
+    config: &super::runtime_config::ToolRuntimeConfig,
+    tool_name: &str,
+) -> Result<FileWriteOutput, String> {
+    let resolved = resolve_safe_file_path_with_config(input.target, config)?;
+    ensure_resolved_file_target(&resolved)?;
+    if input.create_dirs
+        && let Some(parent) = resolved.parent()
+    {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "failed to create parent directory {}: {error}",
+                parent.display()
+            )
+        })?;
+    }
+    let path_is_symlink = symlink_metadata_is_symlink(&resolved);
+    if path_is_symlink {
+        return Err(format!(
+            "policy_denied: {tool_name} refuses to open symlink {}",
+            resolved.display()
+        ));
+    }
+
+    let existed_before_write = resolved.exists();
+    let before_content = if existed_before_write {
+        Some(
+            fs::read_to_string(&resolved)
+                .map_err(|error| format!("failed to read file {}: {error}", resolved.display()))?,
+        )
+    } else {
+        None
+    };
+
+    if input.overwrite {
+        write_file_atomically(&resolved, input.content)?;
+    } else {
+        write_new_file_without_overwrite(&resolved, input.content, tool_name)?;
+    }
+
+    let change_kind = if existed_before_write {
+        ToolFileChangeKind::Overwrite
+    } else {
+        ToolFileChangeKind::Create
+    };
+    emit_file_change_preview(
+        resolved.as_path(),
+        change_kind,
+        before_content.as_deref(),
+        input.content,
+    );
+
+    Ok(FileWriteOutput {
+        resolved,
+        bytes_written: input.content.len(),
+    })
+}
+
+#[cfg(feature = "tool-file")]
+fn build_file_write_outcome(
+    requested_tool_name: String,
+    output: FileWriteOutput,
+) -> ToolCoreOutcome {
+    ToolCoreOutcome {
+        status: "ok".to_owned(),
+        payload: json!({
             "adapter": "core-tools",
-            "tool_name": request.tool_name,
-            "path": resolved.display().to_string(),
-            "bytes": bytes.len(),
-            "truncated": selection.truncated,
-            "content": selection.content,
-        });
-        let Some(response_object) = response_payload.as_object_mut() else {
-            return Err(format!(
-                "{tool_name} internal response payload must be an object"
-            ));
-        };
-        if let Some(line_start) = selection.line_start {
-            response_object.insert("line_start".to_owned(), json!(line_start));
-        }
-        if let Some(line_end) = selection.line_end {
-            response_object.insert("line_end".to_owned(), json!(line_end));
-        }
-        if let Some(total_lines) = selection.total_lines {
-            response_object.insert("total_lines".to_owned(), json!(total_lines));
-        }
-        if let Some(next_offset) = selection.next_offset {
-            response_object.insert("next_offset".to_owned(), json!(next_offset));
-        }
-
-        Ok(ToolCoreOutcome {
-            status: "ok".to_owned(),
-            payload: response_payload,
-        })
+            "tool_name": requested_tool_name,
+            "path": output.resolved.display().to_string(),
+            "bytes_written": output.bytes_written,
+        }),
     }
 }
 
@@ -217,90 +431,12 @@ pub(super) fn execute_file_write_tool_with_config(
 
     #[cfg(feature = "tool-file")]
     {
-        let tool_name = super::user_visible_tool_name(request.tool_name.as_str());
-        let payload = request
-            .payload
-            .as_object()
-            .ok_or_else(|| format!("{tool_name} payload must be an object"))?;
-        let target = payload
-            .get("path")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| format!("{tool_name} requires payload.path"))?;
-        let content = payload
-            .get("content")
-            .and_then(Value::as_str)
-            .ok_or_else(|| format!("{tool_name} requires payload.content"))?;
-        let create_dirs = payload
-            .get("create_dirs")
-            .and_then(Value::as_bool)
-            .unwrap_or(true);
-        let overwrite = payload
-            .get("overwrite")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-
-        let resolved = resolve_safe_file_path_with_config(target, config)?;
-        if resolved.is_dir() {
-            return Err(format!(
-                "path '{}' is a directory, not a file",
-                resolved.display()
-            ));
-        }
-        if create_dirs && let Some(parent) = resolved.parent() {
-            fs::create_dir_all(parent).map_err(|error| {
-                format!(
-                    "failed to create parent directory {}: {error}",
-                    parent.display()
-                )
-            })?;
-        }
-        let path_is_symlink = symlink_metadata_is_symlink(&resolved);
-        if path_is_symlink {
-            return Err(format!(
-                "policy_denied: {tool_name} refuses to open symlink {}",
-                resolved.display()
-            ));
-        }
-
-        let existed_before_write = resolved.exists();
-        let before_content =
-            if existed_before_write {
-                Some(fs::read_to_string(&resolved).map_err(|error| {
-                    format!("failed to read file {}: {error}", resolved.display())
-                })?)
-            } else {
-                None
-            };
-
-        if overwrite {
-            write_file_atomically(&resolved, content)?;
-        } else {
-            write_new_file_without_overwrite(&resolved, content, tool_name.as_str())?;
-        }
-
-        let change_kind = if existed_before_write {
-            ToolFileChangeKind::Overwrite
-        } else {
-            ToolFileChangeKind::Create
-        };
-        emit_file_change_preview(
-            resolved.as_path(),
-            change_kind,
-            before_content.as_deref(),
-            content,
-        );
-
-        Ok(ToolCoreOutcome {
-            status: "ok".to_owned(),
-            payload: json!({
-                "adapter": "core-tools",
-                "tool_name": request.tool_name,
-                "path": resolved.display().to_string(),
-                "bytes_written": content.len(),
-            }),
-        })
+        let ToolCoreRequest { tool_name, payload } = request;
+        let user_visible_tool_name = super::user_visible_tool_name(tool_name.as_str());
+        let payload = file_tool_payload_object(&payload, user_visible_tool_name.as_str())?;
+        let input = parse_file_write_input(payload, user_visible_tool_name.as_str())?;
+        let output = run_file_write(input, config, user_visible_tool_name.as_str())?;
+        Ok(build_file_write_outcome(tool_name, output))
     }
 }
 
@@ -363,8 +499,24 @@ struct ExactTextEditBlock {
 }
 
 #[cfg(feature = "tool-file")]
+#[derive(Debug)]
 enum FileEditRequest {
     ExactBlocks(Vec<ExactTextEditBlock>),
+}
+
+#[cfg(feature = "tool-file")]
+#[derive(Debug)]
+struct FileEditInput<'a> {
+    path: &'a str,
+    edit_request: FileEditRequest,
+}
+
+#[cfg(feature = "tool-file")]
+struct FileEditOutput {
+    resolved: PathBuf,
+    replacements_made: usize,
+    bytes_written: usize,
+    edit_blocks_applied: Option<usize>,
 }
 
 #[cfg(feature = "tool-file")]
@@ -508,6 +660,84 @@ fn apply_exact_edit_blocks(
     Ok((updated, located_blocks.len()))
 }
 
+#[cfg(feature = "tool-file")]
+fn parse_file_edit_input<'a>(
+    payload: &'a serde_json::Map<String, Value>,
+    tool_name: &str,
+) -> Result<FileEditInput<'a>, String> {
+    let path = required_file_edit_path_field(payload, tool_name)?;
+    let edit_request = parse_file_edit_request(payload, tool_name)?;
+
+    Ok(FileEditInput { path, edit_request })
+}
+
+#[cfg(feature = "tool-file")]
+fn run_file_edit(
+    input: FileEditInput<'_>,
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<FileEditOutput, String> {
+    let resolved = resolve_safe_file_path_with_config(input.path, config)?;
+    let content = fs::read_to_string(&resolved)
+        .map_err(|e| format!("failed to read {}: {e}", resolved.display()))?;
+
+    let (updated, replacements_made) = match &input.edit_request {
+        FileEditRequest::ExactBlocks(blocks) => apply_exact_edit_blocks(content.as_str(), blocks),
+    }?;
+
+    fs::write(&resolved, updated.as_bytes())
+        .map_err(|e| format!("failed to write {}: {e}", resolved.display()))?;
+    emit_file_change_preview(
+        resolved.as_path(),
+        ToolFileChangeKind::Edit,
+        Some(content.as_str()),
+        updated.as_str(),
+    );
+
+    let edit_blocks_applied = match &input.edit_request {
+        FileEditRequest::ExactBlocks(blocks) => Some(blocks.len()),
+    };
+
+    Ok(FileEditOutput {
+        resolved,
+        replacements_made,
+        bytes_written: updated.len(),
+        edit_blocks_applied,
+    })
+}
+
+#[cfg(feature = "tool-file")]
+fn build_file_edit_outcome(requested_tool_name: String, output: FileEditOutput) -> ToolCoreOutcome {
+    let mut response_payload = json!({
+        "adapter": "core-tools",
+        "tool_name": requested_tool_name,
+        "path": output.resolved.display().to_string(),
+        "replacements_made": output.replacements_made,
+        "bytes_written": output.bytes_written,
+    });
+    if let Some(response_object) = response_payload.as_object_mut() {
+        if let Some(edit_blocks_applied) = output.edit_blocks_applied {
+            response_object.insert("edit_blocks_applied".to_owned(), json!(edit_blocks_applied));
+        }
+        response_object.insert(
+            "continuation".to_owned(),
+            json!({
+                "state": "verify_file_change",
+                "is_terminal": false,
+                "recommended_tool": "read",
+                "recommended_payload": {
+                    "path": output.resolved.display().to_string()
+                },
+                "note": "If the user still depends on the updated file contents, verify the file before finalizing."
+            }),
+        );
+    }
+
+    ToolCoreOutcome {
+        status: "ok".to_owned(),
+        payload: response_payload,
+    }
+}
+
 pub(super) fn execute_file_edit_tool_with_config(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
@@ -519,72 +749,12 @@ pub(super) fn execute_file_edit_tool_with_config(
     }
     #[cfg(feature = "tool-file")]
     {
-        let tool_name = super::user_visible_tool_name(request.tool_name.as_str());
-        let payload = request
-            .payload
-            .as_object()
-            .ok_or_else(|| format!("{tool_name} payload must be an object"))?;
-
-        let path = payload
-            .get("path")
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| format!("{tool_name} requires payload.path (string)"))?;
-        let edit_request = parse_file_edit_request(payload, tool_name.as_str())?;
-
-        let resolved = resolve_safe_file_path_with_config(path, config)?;
-        let content = fs::read_to_string(&resolved)
-            .map_err(|e| format!("failed to read {}: {e}", resolved.display()))?;
-
-        let (updated, replacements_made) = match &edit_request {
-            FileEditRequest::ExactBlocks(blocks) => {
-                apply_exact_edit_blocks(content.as_str(), blocks)
-            }
-        }?;
-
-        fs::write(&resolved, updated.as_bytes())
-            .map_err(|e| format!("failed to write {}: {e}", resolved.display()))?;
-        emit_file_change_preview(
-            resolved.as_path(),
-            ToolFileChangeKind::Edit,
-            Some(content.as_str()),
-            updated.as_str(),
-        );
-
-        let edit_blocks_applied = match &edit_request {
-            FileEditRequest::ExactBlocks(blocks) => Some(blocks.len()),
-        };
-        let mut response_payload = json!({
-            "adapter": "core-tools",
-            "tool_name": request.tool_name,
-            "path": resolved.display().to_string(),
-            "replacements_made": replacements_made,
-            "bytes_written": updated.len(),
-        });
-        if let Some(response_object) = response_payload.as_object_mut() {
-            if let Some(edit_blocks_applied) = edit_blocks_applied {
-                response_object
-                    .insert("edit_blocks_applied".to_owned(), json!(edit_blocks_applied));
-            }
-            response_object.insert(
-                "continuation".to_owned(),
-                json!({
-                    "state": "verify_file_change",
-                    "is_terminal": false,
-                    "recommended_tool": "read",
-                    "recommended_payload": {
-                        "path": resolved.display().to_string()
-                    },
-                    "note": "If the user still depends on the updated file contents, verify the file before finalizing."
-                }),
-            );
-        }
-
-        Ok(ToolCoreOutcome {
-            status: "ok".to_owned(),
-            payload: response_payload,
-        })
+        let ToolCoreRequest { tool_name, payload } = request;
+        let user_visible_tool_name = super::user_visible_tool_name(tool_name.as_str());
+        let payload = file_tool_payload_object(&payload, user_visible_tool_name.as_str())?;
+        let input = parse_file_edit_input(payload, user_visible_tool_name.as_str())?;
+        let output = run_file_edit(input, config)?;
+        Ok(build_file_edit_outcome(tool_name, output))
     }
 }
 
@@ -1602,6 +1772,7 @@ pub(super) fn resolve_safe_file_path_with_config(
     resolve_path_within_allowed_roots(&allowed_roots, &primary_root, &normalized)
 }
 
+#[allow(dead_code)]
 pub(super) fn resolve_safe_directory_path_with_config(
     raw: &str,
     config: &super::runtime_config::ToolRuntimeConfig,
@@ -1791,6 +1962,47 @@ mod tests {
             .unwrap_or_default()
             .as_nanos();
         std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+    }
+
+    #[test]
+    fn read_rejects_non_object_payload() {
+        let error = file_tool_payload_object(&json!("not an object"), "read")
+            .expect_err("non-object payload should fail");
+
+        assert_eq!(error, "read payload must be an object");
+    }
+
+    #[test]
+    fn read_rejects_missing_path() {
+        let payload = json!({});
+        let payload = payload.as_object().expect("object payload");
+        let error =
+            parse_file_read_input(payload, "read").expect_err("missing path should be rejected");
+
+        assert_eq!(error, "read requires payload.path");
+    }
+
+    #[test]
+    fn write_rejects_missing_content() {
+        let payload = json!({"path": "note.txt"});
+        let payload = payload.as_object().expect("object payload");
+        let error = parse_file_write_input(payload, "write")
+            .expect_err("missing content should be rejected");
+
+        assert_eq!(error, "write requires payload.content");
+    }
+
+    #[test]
+    fn edit_rejects_empty_edits() {
+        let payload = json!({"path": "note.txt", "edits": []});
+        let payload = payload.as_object().expect("object payload");
+        let error =
+            parse_file_edit_input(payload, "edit").expect_err("empty edits should be rejected");
+
+        assert_eq!(
+            error,
+            "edit payload.edits must contain at least one edit block"
+        );
     }
 
     #[cfg(unix)]
@@ -2221,7 +2433,7 @@ mod tests {
     }
 
     #[test]
-    fn file_edit_no_match_errors() {
+    fn file_edit_rejects_missing_old_text_match() {
         let base = unique_temp_dir("loong-file-edit-nomatch");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
@@ -2241,7 +2453,7 @@ mod tests {
     }
 
     #[test]
-    fn file_edit_multiple_match_errors() {
+    fn file_edit_rejects_non_unique_old_text_match() {
         let base = unique_temp_dir("loong-file-edit-multi");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
@@ -2399,7 +2611,7 @@ mod tests {
     }
 
     #[test]
-    fn file_edit_empty_old_string_errors() {
+    fn file_edit_rejects_empty_old_text() {
         let base = unique_temp_dir("loong-file-edit-empty");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");

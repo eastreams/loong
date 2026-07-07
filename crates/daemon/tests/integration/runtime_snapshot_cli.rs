@@ -15,6 +15,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+const TEST_RENDER_WIDTH: usize = 240;
+
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -591,7 +593,7 @@ fn runtime_snapshot_text_highlights_experiment_relevant_sections() {
         config_path.to_str().expect("config path should be utf-8"),
     ))
     .expect("collect runtime snapshot");
-    let rendered = render_runtime_snapshot_text(&snapshot);
+    let rendered = render_runtime_snapshot_text_with_width(&snapshot, TEST_RENDER_WIDTH);
 
     assert!(
         rendered

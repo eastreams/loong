@@ -1271,6 +1271,16 @@ fn persist_runtime_experiment_artifact(
 }
 
 pub fn render_runtime_experiment_text(artifact: &RuntimeExperimentArtifactDocument) -> String {
+    render_runtime_experiment_text_with_width(
+        artifact,
+        crate::mvp::presentation::detect_render_width(),
+    )
+}
+
+pub fn render_runtime_experiment_text_with_width(
+    artifact: &RuntimeExperimentArtifactDocument,
+    render_width: usize,
+) -> String {
     let body = [
         format!("run_id={}", artifact.run_id),
         format!("experiment_id={}", artifact.experiment_id),
@@ -1313,10 +1323,20 @@ pub fn render_runtime_experiment_text(artifact: &RuntimeExperimentArtifactDocume
         ),
     ]
     .join("\n");
-    wrap_runtime_experiment_surface("experiment run", body)
+    wrap_runtime_experiment_surface_with_width("experiment run", body, render_width)
 }
 
 pub fn render_runtime_experiment_compare_text(report: &RuntimeExperimentCompareReport) -> String {
+    render_runtime_experiment_compare_text_with_width(
+        report,
+        crate::mvp::presentation::detect_render_width(),
+    )
+}
+
+pub fn render_runtime_experiment_compare_text_with_width(
+    report: &RuntimeExperimentCompareReport,
+    render_width: usize,
+) -> String {
     let mut lines = vec![
         format!("run_id={}", report.run_id),
         format!("experiment_id={}", report.experiment_id),
@@ -1442,7 +1462,7 @@ pub fn render_runtime_experiment_compare_text(report: &RuntimeExperimentCompareR
         }
     }
 
-    wrap_runtime_experiment_surface("experiment compare", lines.join("\n"))
+    wrap_runtime_experiment_surface_with_width("experiment compare", lines.join("\n"), render_width)
 }
 
 fn render_runtime_experiment_restore_text(execution: &RuntimeExperimentRestoreExecution) -> String {
@@ -1457,7 +1477,24 @@ fn render_runtime_experiment_restore_text(execution: &RuntimeExperimentRestoreEx
 }
 
 fn wrap_runtime_experiment_surface(title: &str, body: String) -> String {
-    crate::render_operator_shell_surface_from_body(title, "runtime experiment", body)
+    wrap_runtime_experiment_surface_with_width(
+        title,
+        body,
+        crate::mvp::presentation::detect_render_width(),
+    )
+}
+
+fn wrap_runtime_experiment_surface_with_width(
+    title: &str,
+    body: String,
+    render_width: usize,
+) -> String {
+    crate::render_operator_shell_surface_from_body_with_width(
+        title,
+        "runtime experiment",
+        body,
+        render_width,
+    )
 }
 
 fn render_evaluation_summary(evaluation: Option<&RuntimeExperimentEvaluation>) -> String {

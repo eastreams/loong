@@ -1481,6 +1481,7 @@ fn tool_failure_followup_tail_renders_max_bytes_retry_guidance_for_web() {
     assert!(user_prompt.contains("\"max_bytes\": 32768"));
 }
 
+#[cfg(feature = "tool-shell")]
 #[test]
 fn tool_failure_followup_tail_uses_failure_reason_when_shell_summary_redacts_args_type() {
     let payload = ToolDrivenFollowupPayload::ToolFailure {
@@ -2308,6 +2309,7 @@ fn reduce_followup_payload_for_model_borrows_unmodified_tool_results() {
     assert_eq!(reduced.as_ptr(), tool_result.as_ptr());
 }
 
+#[cfg(feature = "tool-shell")]
 #[test]
 fn summarize_failed_provider_lane_tool_request_preserves_multi_intent_context_without_trace() {
     let turn = ProviderTurn {

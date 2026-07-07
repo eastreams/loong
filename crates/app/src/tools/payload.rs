@@ -64,14 +64,14 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn required_string_returns_trimmed_value() {
+    fn payload_required_string_returns_trimmed_value() {
         let payload = json!({"name": "  hello  "});
         let result = required_payload_string(&payload, "name", "test tool");
         assert_eq!(result.unwrap(), "hello");
     }
 
     #[test]
-    fn required_string_rejects_missing_field() {
+    fn payload_required_string_rejects_missing_field() {
         let payload = json!({});
         let error = required_payload_string(&payload, "name", "test tool").unwrap_err();
         assert!(error.contains("test tool"), "error: {error}");
@@ -79,94 +79,94 @@ mod tests {
     }
 
     #[test]
-    fn required_string_rejects_empty_string() {
+    fn payload_required_string_rejects_empty_string() {
         let payload = json!({"name": "   "});
         let error = required_payload_string(&payload, "name", "test tool").unwrap_err();
         assert!(error.contains("payload.name"), "error: {error}");
     }
 
     #[test]
-    fn required_string_rejects_non_string() {
+    fn payload_required_string_rejects_non_string() {
         let payload = json!({"name": 42});
         let error = required_payload_string(&payload, "name", "test tool").unwrap_err();
         assert!(error.contains("payload.name"), "error: {error}");
     }
 
     #[test]
-    fn optional_string_returns_trimmed_value() {
+    fn payload_optional_string_returns_trimmed_value() {
         let payload = json!({"tag": "  rust  "});
         assert_eq!(optional_payload_string(&payload, "tag").unwrap(), "rust");
     }
 
     #[test]
-    fn optional_string_returns_none_for_missing() {
+    fn payload_optional_string_returns_none_for_missing_field() {
         let payload = json!({});
         assert!(optional_payload_string(&payload, "tag").is_none());
     }
 
     #[test]
-    fn optional_string_returns_none_for_empty() {
+    fn payload_optional_string_returns_none_for_empty_string() {
         let payload = json!({"tag": "  "});
         assert!(optional_payload_string(&payload, "tag").is_none());
     }
 
     #[test]
-    fn optional_limit_returns_clamped_value() {
+    fn payload_optional_limit_returns_clamped_value() {
         let payload = json!({"limit": 50});
         assert_eq!(optional_payload_limit(&payload, "limit", 10, 20), 20);
     }
 
     #[test]
-    fn optional_limit_returns_default_for_missing() {
+    fn payload_optional_limit_returns_default_for_missing_field() {
         let payload = json!({});
         assert_eq!(optional_payload_limit(&payload, "limit", 10, 20), 10);
     }
 
     #[test]
-    fn optional_limit_clamps_to_minimum_one() {
+    fn payload_optional_limit_clamps_to_minimum_one() {
         let payload = json!({"limit": 0});
         assert_eq!(optional_payload_limit(&payload, "limit", 10, 20), 1);
     }
 
     #[test]
-    fn optional_limit_returns_value_in_normal_range() {
+    fn payload_optional_limit_returns_value_in_normal_range() {
         let payload = json!({"limit": 5});
         assert_eq!(optional_payload_limit(&payload, "limit", 10, 20), 5);
     }
 
     #[test]
-    fn optional_limit_returns_default_for_negative() {
+    fn payload_optional_limit_returns_default_for_negative_number() {
         let payload = json!({"limit": -3});
         assert_eq!(optional_payload_limit(&payload, "limit", 10, 20), 10);
     }
 
     #[test]
-    fn optional_offset_returns_default_for_missing() {
+    fn payload_optional_offset_returns_default_for_missing_field() {
         let payload = json!({});
         assert_eq!(optional_payload_offset(&payload, "offset", 0), 0);
     }
 
     #[test]
-    fn optional_offset_returns_value_in_normal_range() {
+    fn payload_optional_offset_returns_value_in_normal_range() {
         let payload = json!({"offset": 7});
         assert_eq!(optional_payload_offset(&payload, "offset", 0), 7);
     }
 
     #[test]
-    fn optional_offset_returns_default_for_non_numeric() {
+    fn payload_optional_offset_returns_default_for_non_numeric_value() {
         let payload = json!({"offset": "bad"});
         let offset = optional_payload_offset(&payload, "offset", 0);
         assert_eq!(offset, 0);
     }
 
     #[test]
-    fn optional_offset_returns_default_for_negative() {
+    fn payload_optional_offset_returns_default_for_negative_number() {
         let payload = json!({"offset": -2});
         assert_eq!(optional_payload_offset(&payload, "offset", 0), 0);
     }
 
     #[test]
-    fn optional_string_returns_none_for_non_string() {
+    fn payload_optional_string_returns_none_for_non_string_value() {
         let payload = json!({"tag": 42});
         assert!(optional_payload_string(&payload, "tag").is_none());
     }

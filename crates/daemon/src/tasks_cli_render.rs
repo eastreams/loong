@@ -5,6 +5,13 @@ use serde_json::Value;
 use super::{TasksCommandExecution, unknown_task_status_payload};
 
 pub fn render_tasks_cli_text(execution: &TasksCommandExecution) -> CliResult<String> {
+    render_tasks_cli_text_with_width(execution, mvp::presentation::detect_render_width())
+}
+
+pub fn render_tasks_cli_text_with_width(
+    execution: &TasksCommandExecution,
+    render_width: usize,
+) -> CliResult<String> {
     let command = execution
         .payload
         .get("command")
@@ -12,12 +19,12 @@ pub fn render_tasks_cli_text(execution: &TasksCommandExecution) -> CliResult<Str
         .ok_or_else(|| "tasks CLI payload missing command".to_owned())?;
 
     match command {
-        "create" => render_tasks_create_text(&execution.payload),
-        "list" => render_tasks_list_text(&execution.payload),
-        "status" => render_tasks_status_text(&execution.payload),
-        "events" => render_tasks_events_text(&execution.payload),
-        "wait" => render_tasks_wait_text(&execution.payload),
-        "cancel" | "recover" => render_tasks_mutation_text(&execution.payload),
+        "create" => render_tasks_create_text(&execution.payload, render_width),
+        "list" => render_tasks_list_text(&execution.payload, render_width),
+        "status" => render_tasks_status_text(&execution.payload, render_width),
+        "events" => render_tasks_events_text(&execution.payload, render_width),
+        "wait" => render_tasks_wait_text(&execution.payload, render_width),
+        "cancel" | "recover" => render_tasks_mutation_text(&execution.payload, render_width),
         other => Err(format!("unknown tasks CLI render command `{other}`")),
     }
 }
@@ -304,7 +311,7 @@ pub fn render_task_detail_lines(task: &Value) -> CliResult<Vec<String>> {
     Ok(lines)
 }
 
-fn render_tasks_create_text(payload: &Value) -> CliResult<String> {
+fn render_tasks_create_text(payload: &Value, render_width: usize) -> CliResult<String> {
     let task = payload
         .get("task")
         .ok_or_else(|| "tasks create payload missing task".to_owned())?;
@@ -358,10 +365,11 @@ fn render_tasks_create_text(payload: &Value) -> CliResult<String> {
         vec![
             "Use the next-step commands to inspect, wait on, or cancel the queued task.".to_owned(),
         ],
+        render_width,
     ))
 }
 
-fn render_tasks_list_text(payload: &Value) -> CliResult<String> {
+fn render_tasks_list_text(payload: &Value, render_width: usize) -> CliResult<String> {
     let tasks = payload
         .get("tasks")
         .and_then(Value::as_array)
@@ -394,6 +402,7 @@ fn render_tasks_list_text(payload: &Value) -> CliResult<String> {
                 "Use `tasks create` to queue a new background delegate from the current session."
                     .to_owned(),
             ],
+            render_width,
         ));
     }
     for task in tasks {
@@ -408,10 +417,11 @@ fn render_tasks_list_text(payload: &Value) -> CliResult<String> {
             "Use `tasks status <id>` for one task or `tasks wait <id>` to follow it incrementally."
                 .to_owned(),
         ],
+        render_width,
     ))
 }
 
-fn render_tasks_status_text(payload: &Value) -> CliResult<String> {
+fn render_tasks_status_text(payload: &Value, render_width: usize) -> CliResult<String> {
     let task = payload
         .get("task")
         .ok_or_else(|| "tasks status payload missing task".to_owned())?;
@@ -424,10 +434,11 @@ fn render_tasks_status_text(payload: &Value) -> CliResult<String> {
             "Use `tasks events <id>` or `tasks wait <id>` to keep inspecting the task lifecycle."
                 .to_owned(),
         ],
+        render_width,
     ))
 }
 
-fn render_tasks_events_text(payload: &Value) -> CliResult<String> {
+fn render_tasks_events_text(payload: &Value, render_width: usize) -> CliResult<String> {
     let task_id = payload
         .get("task_id")
         .and_then(Value::as_str)
@@ -467,10 +478,11 @@ fn render_tasks_events_text(payload: &Value) -> CliResult<String> {
         Vec::new(),
         vec![("events", lines)],
         vec!["Use `tasks wait <id>` to continue following this task.".to_owned()],
+        render_width,
     ))
 }
 
-fn render_tasks_wait_text(payload: &Value) -> CliResult<String> {
+fn render_tasks_wait_text(payload: &Value, render_width: usize) -> CliResult<String> {
     let wait_status = payload
         .get("wait_status")
         .and_then(Value::as_str)
@@ -511,10 +523,11 @@ fn render_tasks_wait_text(payload: &Value) -> CliResult<String> {
         Vec::new(),
         vec![("result", lines)],
         vec!["Re-run `tasks wait` with the returned cursor when you need more updates.".to_owned()],
+        render_width,
     ))
 }
 
-fn render_tasks_mutation_text(payload: &Value) -> CliResult<String> {
+fn render_tasks_mutation_text(payload: &Value, render_width: usize) -> CliResult<String> {
     let command = payload
         .get("command")
         .and_then(Value::as_str)
@@ -558,6 +571,7 @@ fn render_tasks_mutation_text(payload: &Value) -> CliResult<String> {
         Vec::new(),
         vec![("action result", lines)],
         vec!["Use `tasks status <id>` to verify the task state after the action.".to_owned()],
+        render_width,
     ))
 }
 
@@ -567,6 +581,7 @@ fn render_tasks_surface(
     intro_lines: Vec<String>,
     sections: Vec<(&str, Vec<String>)>,
     footer_lines: Vec<String>,
+    render_width: usize,
 ) -> String {
     let sections = sections
         .into_iter()
@@ -587,12 +602,7 @@ fn render_tasks_surface(
         choices: Vec::new(),
         footer_lines,
     };
-    mvp::tui_surface::render_tui_screen_spec_ratatui(
-        &screen,
-        mvp::presentation::detect_render_width(),
-        false,
-    )
-    .join("\n")
+    mvp::tui_surface::render_tui_screen_spec_ratatui(&screen, render_width, false).join("\n")
 }
 
 fn append_task_lookup_error_line(payload: &Value, lines: &mut Vec<String>) {

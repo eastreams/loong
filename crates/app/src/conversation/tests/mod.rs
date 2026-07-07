@@ -1169,7 +1169,7 @@ fn spawn_telegram_send_server_once() -> (
     std::sync::mpsc::Receiver<String>,
     std::thread::JoinHandle<()>,
 ) {
-    use std::io::{Read, Write};
+    use std::io::{ErrorKind, Read, Write};
     use std::net::TcpListener;
 
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind telegram stub");
@@ -1177,12 +1177,60 @@ fn spawn_telegram_send_server_once() -> (
     let (request_tx, request_rx) = std::sync::mpsc::channel();
     let server = std::thread::spawn(move || {
         if let Ok((mut stream, _)) = listener.accept() {
-            let mut request_buf = [0_u8; 8192];
-            let read = stream
-                .read(&mut request_buf)
-                .expect("read telegram request");
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(1)))
+                .expect("set telegram read timeout");
+            let mut request_bytes = Vec::new();
+            let mut request_buf = [0_u8; 4096];
+            let mut expected_len = None;
+
+            // A single read can observe only headers when reqwest writes the
+            // request in multiple chunks. Capture through Content-Length so the
+            // assertions below validate the Telegram JSON body, not timing.
+            loop {
+                match stream.read(&mut request_buf) {
+                    Ok(0) => break,
+                    Ok(read) => {
+                        request_bytes.extend_from_slice(&request_buf[..read]);
+
+                        if expected_len.is_none()
+                            && let Some(headers_end) = request_bytes
+                                .windows(4)
+                                .position(|window| window == b"\r\n\r\n")
+                        {
+                            let headers_end = headers_end + 4;
+                            let headers = String::from_utf8_lossy(&request_bytes[..headers_end]);
+                            let content_length = headers
+                                .lines()
+                                .find_map(|line| {
+                                    let (name, value) = line.split_once(':')?;
+                                    if !name.eq_ignore_ascii_case("content-length") {
+                                        return None;
+                                    }
+                                    value.trim().parse::<usize>().ok()
+                                })
+                                .unwrap_or(0);
+                            expected_len = Some(headers_end + content_length);
+                        }
+
+                        if let Some(expected_len) = expected_len
+                            && request_bytes.len() >= expected_len
+                        {
+                            break;
+                        }
+                    }
+                    Err(error)
+                        if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut)
+                            && !request_bytes.is_empty() =>
+                    {
+                        break;
+                    }
+                    Err(error) => panic!("read telegram request: {error}"),
+                }
+            }
+
             request_tx
-                .send(String::from_utf8_lossy(&request_buf[..read]).into_owned())
+                .send(String::from_utf8_lossy(&request_bytes).into_owned())
                 .expect("send telegram request capture");
             let body = serde_json::to_string(&json!({
                 "ok": true,
@@ -2562,7 +2610,13 @@ fn default_runtime_tool_view_intersects_root_session_with_persisted_tool_policy(
         .expect("root tool view");
 
     assert!(root_view.contains("read"));
+    // Persisted policy records can name shell aliases from all-feature runs or
+    // older configs; the effective runtime view must still honor build-time
+    // tool availability.
+    #[cfg(feature = "tool-shell")]
     assert!(root_view.contains("bash"));
+    #[cfg(not(feature = "tool-shell"))]
+    assert!(!root_view.contains("bash"));
     assert!(root_view.contains("session_status"));
     assert!(!root_view.contains("web.fetch"));
 }
@@ -11714,8 +11768,9 @@ fn turn_engine_known_tool_validates_to_execution_required() {
     }
 }
 
+#[cfg(feature = "memory-sqlite")]
 #[test]
-fn turn_engine_denies_known_tool_outside_restricted_view() {
+fn turn_engine_denies_known_session_tool_outside_restricted_view() {
     use crate::conversation::turn_engine::{
         ProviderTurn, ToolIntent, TurnEngine, TurnFailureKind, TurnResult,
     };
@@ -11724,8 +11779,8 @@ fn turn_engine_denies_known_tool_outside_restricted_view() {
     let turn = ProviderTurn {
         assistant_text: "".to_owned(),
         tool_intents: vec![ToolIntent {
-            tool_name: "shell.exec".to_owned(),
-            args_json: serde_json::json!({"command": "echo", "args": ["hidden"]}),
+            tool_name: "sessions_list".to_owned(),
+            args_json: serde_json::json!({}),
             source: "provider_tool_call".to_owned(),
             session_id: "delegate-child".to_owned(),
             turn_id: "t1".to_owned(),
@@ -11748,8 +11803,8 @@ fn turn_engine_denies_known_tool_outside_restricted_view() {
                 "failure={failure:?}"
             );
             assert!(
-                !failure.reason.contains("shell.exec"),
-                "provider denial should not leak hidden tool names: {failure:?}"
+                !failure.reason.contains("sessions_list"),
+                "provider denial should not leak hidden session tool names: {failure:?}"
             );
         }
         other @ TurnResult::FinalText(_)
