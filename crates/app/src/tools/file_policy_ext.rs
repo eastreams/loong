@@ -91,9 +91,6 @@ impl FilePolicyExtension {
         let visible_tool_name = super::user_visible_tool_name(tool_name);
 
         match visible_tool_name.as_str() {
-            "read" => {
-                required_capabilities.insert(Capability::FilesystemRead);
-            }
             "write" | "edit" => {
                 required_capabilities.insert(Capability::FilesystemWrite);
             }
@@ -472,22 +469,18 @@ mod tests {
     }
 
     #[test]
-    fn denies_file_read_without_capability() {
+    fn ignores_file_read_without_capability() {
         let ext = FilePolicyExtension::new(None);
         let pack = test_pack();
         let token = token_with_caps(BTreeSet::from([Capability::InvokeTool]));
         let caps = BTreeSet::from([Capability::InvokeTool]);
         let params = json!({"tool_name": "file.read", "payload": {"path": "foo.txt"}});
         let ctx = make_context(&pack, &token, &caps, Some(&params));
-        let result = ext.authorize_extension(&ctx);
-        assert!(matches!(
-            result.unwrap_err(),
-            PolicyError::ExtensionDenied { .. }
-        ));
+        assert!(ext.authorize_extension(&ctx).is_ok());
     }
 
     #[test]
-    fn allows_file_read_with_capability() {
+    fn ignores_file_read_with_capability() {
         let ext = FilePolicyExtension::new(None);
         let pack = test_pack();
         let token = token_with_caps(BTreeSet::from([
@@ -501,7 +494,7 @@ mod tests {
     }
 
     #[test]
-    fn denies_path_escape() {
+    fn ignores_file_read_path_escape() {
         let root_dir = tempfile::tempdir().expect("tempdir");
         let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
         let pack = test_pack();
@@ -512,11 +505,7 @@ mod tests {
         let caps = BTreeSet::from([Capability::InvokeTool]);
         let params = json!({"tool_name": "file.read", "payload": {"path": "../../etc/passwd"}});
         let ctx = make_context(&pack, &token, &caps, Some(&params));
-        let result = ext.authorize_extension(&ctx);
-        assert!(matches!(
-            result.unwrap_err(),
-            PolicyError::ExtensionDenied { .. }
-        ));
+        assert!(ext.authorize_extension(&ctx).is_ok());
     }
 
     #[test]
@@ -677,17 +666,14 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_file_read_underscore_alias() {
+    fn ignores_file_read_underscore_alias() {
         let ext = FilePolicyExtension::new(None);
         let pack = test_pack();
         let token = token_with_caps(BTreeSet::from([Capability::InvokeTool]));
         let caps = BTreeSet::from([Capability::InvokeTool]);
         let params = json!({"tool_name": "file_read", "payload": {"path": "foo.txt"}});
         let ctx = make_context(&pack, &token, &caps, Some(&params));
-        assert!(matches!(
-            ext.authorize_extension(&ctx).unwrap_err(),
-            PolicyError::ExtensionDenied { .. }
-        ));
+        assert!(ext.authorize_extension(&ctx).is_ok());
     }
 
     #[test]
@@ -706,7 +692,7 @@ mod tests {
     }
 
     #[test]
-    fn denies_absolute_path_outside_root() {
+    fn ignores_file_read_absolute_path_outside_root() {
         let root_dir = tempfile::tempdir().expect("tempdir");
         let outside_dir = tempfile::tempdir().expect("tempdir");
         let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
@@ -722,10 +708,7 @@ mod tests {
             "payload": {"path": escape_path.display().to_string()}
         });
         let ctx = make_context(&pack, &token, &caps, Some(&params));
-        assert!(matches!(
-            ext.authorize_extension(&ctx).unwrap_err(),
-            PolicyError::ExtensionDenied { .. }
-        ));
+        assert!(ext.authorize_extension(&ctx).is_ok());
     }
 
     #[test]

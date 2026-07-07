@@ -20,8 +20,8 @@ pub(super) fn run(
     }
 
     let visible_tool_name = super::user_visible_tool_name(tool_name);
-    let is_file_tool = matches!(visible_tool_name.as_str(), "read" | "write" | "edit")
-        || tool_name == "config.import";
+    let is_file_tool =
+        matches!(visible_tool_name.as_str(), "write" | "edit") || tool_name == "config.import";
     if is_file_tool {
         return file_policy_ext::authorize_direct_file_payload(tool_name, payload, config);
     }
@@ -104,6 +104,24 @@ mod tests {
             error.contains("escapes file root"),
             "expected shared file policy denial, got: {error}"
         );
+    }
+
+    #[test]
+    fn run_does_not_apply_file_policy_preflight_to_migrated_read() {
+        let root = unique_temp_dir("direct-policy-preflight-read");
+        let config = runtime_config::ToolRuntimeConfig {
+            file_root: Some(root),
+            ..runtime_config::ToolRuntimeConfig::default()
+        };
+
+        let request = ToolCoreRequest {
+            tool_name: "read".to_owned(),
+            payload: json!({
+                "path": "../outside.txt"
+            }),
+        };
+
+        assert!(run(&request, &config).is_ok());
     }
 
     #[test]

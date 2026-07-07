@@ -10,6 +10,7 @@ use super::runtime_events::{
     ToolFileChangeKind, ToolFileChangePreview, ToolRuntimeEvent, current_tool_runtime_event_sink,
 };
 use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loong_kernel::ToolCoreContext;
 #[cfg(feature = "tool-file")]
 use regex::{Regex, RegexBuilder};
 #[cfg(feature = "tool-file")]
@@ -35,6 +36,16 @@ struct FileReadSelection {
     line_end: Option<usize>,
     total_lines: Option<usize>,
     next_offset: Option<usize>,
+}
+
+#[cfg(feature = "tool-file")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileReadRequest {
+    tool_name: String,
+    target: String,
+    max_bytes: usize,
+    offset: Option<usize>,
+    limit: Option<usize>,
 }
 
 #[cfg(feature = "tool-file")]
@@ -134,75 +145,147 @@ pub(super) fn execute_file_read_tool_with_config(
 
     #[cfg(feature = "tool-file")]
     {
-        let tool_name = super::user_visible_tool_name(request.tool_name.as_str());
-        let payload = request
-            .payload
-            .as_object()
-            .ok_or_else(|| format!("{tool_name} payload must be an object"))?;
-        let target = payload
-            .get("path")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| format!("{tool_name} requires payload.path"))?;
-
-        let max_bytes = payload
-            .get("max_bytes")
-            .and_then(Value::as_u64)
-            .unwrap_or(1_048_576)
-            .min(8 * 1_048_576) as usize;
-        let offset = optional_positive_usize_field(payload, "offset", tool_name.as_str())?;
-        let limit = optional_positive_usize_field(payload, "limit", tool_name.as_str())?;
-
-        let resolved = resolve_safe_file_path_with_config(target, config)?;
-        if resolved.is_dir() {
-            return Err(format!(
-                "path '{}' is a directory, not a file",
-                resolved.display()
-            ));
-        }
-        let bytes = fs::read(&resolved)
-            .map_err(|error| format!("failed to read file {}: {error}", resolved.display()))?;
-        let file_text = String::from_utf8_lossy(&bytes).to_string();
-        let selection = select_file_read_content(
-            file_text.as_str(),
-            max_bytes,
-            offset,
-            limit,
-            tool_name.as_str(),
-        )?;
-
-        let mut response_payload = json!({
-            "adapter": "core-tools",
-            "tool_name": request.tool_name,
-            "path": resolved.display().to_string(),
-            "bytes": bytes.len(),
-            "truncated": selection.truncated,
-            "content": selection.content,
-        });
-        let Some(response_object) = response_payload.as_object_mut() else {
-            return Err(format!(
-                "{tool_name} internal response payload must be an object"
-            ));
-        };
-        if let Some(line_start) = selection.line_start {
-            response_object.insert("line_start".to_owned(), json!(line_start));
-        }
-        if let Some(line_end) = selection.line_end {
-            response_object.insert("line_end".to_owned(), json!(line_end));
-        }
-        if let Some(total_lines) = selection.total_lines {
-            response_object.insert("total_lines".to_owned(), json!(total_lines));
-        }
-        if let Some(next_offset) = selection.next_offset {
-            response_object.insert("next_offset".to_owned(), json!(next_offset));
-        }
-
-        Ok(ToolCoreOutcome {
-            status: "ok".to_owned(),
-            payload: response_payload,
-        })
+        let _ = config;
+        let parsed = parse_file_read_request(&request)?;
+        Err(format!(
+            "{} requires kernel access context",
+            super::user_visible_tool_name(parsed.tool_name.as_str())
+        ))
     }
+}
+
+pub(super) async fn execute_file_read_tool_with_context(
+    request: ToolCoreRequest,
+    config: &super::runtime_config::ToolRuntimeConfig,
+    ctx: ToolCoreContext<'_>,
+) -> Result<ToolCoreOutcome, String> {
+    #[cfg(not(feature = "tool-file"))]
+    {
+        let _ = (request, config, ctx);
+        return Err("file tool is disabled in this build (enable feature `tool-file`)".to_owned());
+    }
+
+    #[cfg(feature = "tool-file")]
+    {
+        let parsed = parse_file_read_request(&request)?;
+        let (resolution_root, allowed_roots) = fs_access_root_view(config)?;
+        let output = ctx
+            .with_fs_root_view(resolution_root, allowed_roots)
+            .access()
+            .fs()
+            .read_file(parsed.target.as_str())
+            .await
+            .map_err(map_fs_access_error)?;
+
+        file_read_outcome(parsed, output.path, output.bytes)
+    }
+}
+
+#[cfg(feature = "tool-file")]
+fn map_fs_access_error(error: impl std::fmt::Display) -> String {
+    let rendered = error.to_string();
+    if rendered.contains("escapes allowed filesystem root")
+        || rendered.contains("missing capability")
+        || rendered.contains("authorization denied")
+    {
+        return format!("policy_denied: {rendered}");
+    }
+    rendered
+}
+
+#[cfg(feature = "tool-file")]
+fn parse_file_read_request(request: &ToolCoreRequest) -> Result<FileReadRequest, String> {
+    let tool_name = super::user_visible_tool_name(request.tool_name.as_str());
+    let payload = request
+        .payload
+        .as_object()
+        .ok_or_else(|| format!("{tool_name} payload must be an object"))?;
+    let target = payload
+        .get("path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("{tool_name} requires payload.path"))?
+        .to_owned();
+
+    let max_bytes = payload
+        .get("max_bytes")
+        .and_then(Value::as_u64)
+        .unwrap_or(1_048_576)
+        .min(8 * 1_048_576) as usize;
+    let offset = optional_positive_usize_field(payload, "offset", tool_name.as_str())?;
+    let limit = optional_positive_usize_field(payload, "limit", tool_name.as_str())?;
+
+    Ok(FileReadRequest {
+        tool_name: request.tool_name.clone(),
+        target,
+        max_bytes,
+        offset,
+        limit,
+    })
+}
+
+#[cfg(feature = "tool-file")]
+fn file_read_outcome(
+    request: FileReadRequest,
+    resolved: PathBuf,
+    bytes: Vec<u8>,
+) -> Result<ToolCoreOutcome, String> {
+    let visible_tool_name = super::user_visible_tool_name(request.tool_name.as_str());
+    let file_text = String::from_utf8_lossy(&bytes).to_string();
+    let selection = select_file_read_content(
+        file_text.as_str(),
+        request.max_bytes,
+        request.offset,
+        request.limit,
+        visible_tool_name.as_str(),
+    )?;
+
+    let mut response_payload = json!({
+        "adapter": "core-tools",
+        "tool_name": request.tool_name,
+        "path": resolved.display().to_string(),
+        "bytes": bytes.len(),
+        "truncated": selection.truncated,
+        "content": selection.content,
+    });
+    let Some(response_object) = response_payload.as_object_mut() else {
+        return Err(format!(
+            "{visible_tool_name} internal response payload must be an object"
+        ));
+    };
+    if let Some(line_start) = selection.line_start {
+        response_object.insert("line_start".to_owned(), json!(line_start));
+    }
+    if let Some(line_end) = selection.line_end {
+        response_object.insert("line_end".to_owned(), json!(line_end));
+    }
+    if let Some(total_lines) = selection.total_lines {
+        response_object.insert("total_lines".to_owned(), json!(total_lines));
+    }
+    if let Some(next_offset) = selection.next_offset {
+        response_object.insert("next_offset".to_owned(), json!(next_offset));
+    }
+
+    Ok(ToolCoreOutcome {
+        status: "ok".to_owned(),
+        payload: response_payload,
+    })
+}
+
+#[cfg(feature = "tool-file")]
+fn fs_access_root_view(
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<(PathBuf, Vec<PathBuf>), String> {
+    let allowed_roots = collect_allowed_roots(config)?;
+    let Some(primary_root) = allowed_roots.first().cloned() else {
+        return Err("filesystem access requires at least one allowed root".to_owned());
+    };
+    let resolution_root = config
+        .path_resolution_root()
+        .map(Path::to_path_buf)
+        .unwrap_or(primary_root);
+    Ok((resolution_root, allowed_roots))
 }
 
 pub(super) fn execute_file_write_tool_with_config(
@@ -1747,10 +1830,16 @@ fn split_existing_ancestor(path: &Path) -> Result<(PathBuf, Vec<OsString>), Stri
 
 #[cfg(all(test, feature = "tool-file"))]
 mod tests {
+    use std::collections::BTreeSet;
     use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use loong_contracts::ToolCoreRequest;
+    use loong_contracts::{
+        Capability, ExecutionPlane, ExecutionRoute, HarnessKind, PlaneTier, ToolCoreRequest,
+    };
+    use loong_kernel::{
+        Kernel, KernelPolicyContext, NoopAuditSink, SystemClock, VerticalPackManifest,
+    };
     use serde_json::json;
 
     use super::*;
@@ -1793,6 +1882,49 @@ mod tests {
         std::env::temp_dir().join(format!("{prefix}-{nanos}"))
     }
 
+    fn test_pack() -> VerticalPackManifest {
+        VerticalPackManifest {
+            pack_id: "test-pack".to_owned(),
+            domain: "test".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: None,
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([
+                Capability::InvokeTool,
+                Capability::FilesystemRead,
+                Capability::FilesystemWrite,
+            ]),
+            metadata: Default::default(),
+        }
+    }
+
+    async fn execute_file_read_with_test_context(
+        request: ToolCoreRequest,
+        config: &ToolRuntimeConfig,
+    ) -> Result<ToolCoreOutcome, String> {
+        let mut kernel = Kernel::with_runtime(Arc::new(SystemClock), Arc::new(NoopAuditSink));
+        let pack = test_pack();
+        kernel
+            .register_pack(pack.clone())
+            .map_err(|error| format!("register pack failed: {error}"))?;
+        let token = kernel
+            .issue_token("test-pack", "test-agent", 60)
+            .map_err(|error| format!("issue token failed: {error}"))?;
+        let policy_context = KernelPolicyContext::new(
+            &pack,
+            &token,
+            1,
+            ExecutionPlane::Tool,
+            PlaneTier::Core,
+            None,
+        );
+        let ctx = ToolCoreContext::new(&kernel, policy_context);
+        execute_file_read_tool_with_context(request, config, ctx).await
+    }
+
     #[cfg(unix)]
     #[test]
     fn resolve_safe_file_path_rejects_symlink_escape_on_read() {
@@ -1819,8 +1951,8 @@ mod tests {
         let _ = fs::remove_dir_all(base);
     }
 
-    #[test]
-    fn file_read_supports_line_window_pagination() {
+    #[tokio::test]
+    async fn file_read_supports_line_window_pagination() {
         let base = unique_temp_dir("loongclaw-file-read-window");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
@@ -1839,7 +1971,8 @@ mod tests {
             }),
         };
 
-        let outcome = execute_file_read_tool_with_config(request, &config)
+        let outcome = execute_file_read_with_test_context(request, &config)
+            .await
             .expect("file.read window should succeed");
 
         assert_eq!(outcome.payload["content"], json!("beta\ngamma"));
@@ -1851,8 +1984,8 @@ mod tests {
         let _ = fs::remove_dir_all(base);
     }
 
-    #[test]
-    fn file_read_rejects_line_offset_beyond_end_of_file() {
+    #[tokio::test]
+    async fn file_read_rejects_line_offset_beyond_end_of_file() {
         let base = unique_temp_dir("loongclaw-file-read-window-bounds");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
@@ -1870,7 +2003,8 @@ mod tests {
             }),
         };
 
-        let error = execute_file_read_tool_with_config(request, &config)
+        let error = execute_file_read_with_test_context(request, &config)
+            .await
             .expect_err("out-of-bounds file.read window should fail");
 
         assert!(error.contains("offset 3 is beyond end of file (2 lines total)"));

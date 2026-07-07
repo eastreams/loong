@@ -1,4 +1,5 @@
 use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loong_kernel::ToolCoreContext;
 use serde_json::Value;
 
 use super::{
@@ -68,6 +69,18 @@ pub(super) fn execute_direct_tool_core_with_config(
     execute_discoverable_tool_core_with_config(routed_request, config)
 }
 
+pub(super) async fn execute_direct_tool_core_with_context(
+    request: ToolCoreRequest,
+    config: &runtime_config::ToolRuntimeConfig,
+    ctx: ToolCoreContext<'_>,
+) -> Result<ToolCoreOutcome, String> {
+    if request.tool_name == "read" {
+        return execute_direct_read_tool_core_with_context(request, config, ctx).await;
+    }
+
+    execute_direct_tool_core_with_config(request, config)
+}
+
 fn execute_direct_read_tool_core_with_config(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
@@ -91,6 +104,41 @@ fn execute_direct_read_tool_core_with_config(
 
     match read_route {
         DirectReadRoute::Path => file::execute_file_read_tool_with_config(direct_request, config),
+        DirectReadRoute::Query => {
+            file::execute_content_search_tool_with_config(direct_request, config)
+        }
+        DirectReadRoute::Pattern => {
+            file::execute_glob_search_tool_with_config(direct_request, config)
+        }
+    }
+}
+
+async fn execute_direct_read_tool_core_with_context(
+    request: ToolCoreRequest,
+    config: &runtime_config::ToolRuntimeConfig,
+    ctx: ToolCoreContext<'_>,
+) -> Result<ToolCoreOutcome, String> {
+    let runtime_view = runtime_tool_view_for_runtime_config(config);
+    if !runtime_view.contains("read") {
+        let unavailable_hint = unavailable_runtime_hint("read", &runtime_view);
+        return Err(format!(
+            "tool_surface_unavailable: `read` cannot route to `read` in this runtime{}",
+            unavailable_hint
+        ));
+    }
+
+    let read_route = classify_direct_read_route(&request.payload)?;
+    let mut payload = request.payload;
+    normalize_direct_read_payload_for_route(read_route, &mut payload);
+    let direct_request = ToolCoreRequest {
+        tool_name: "read".to_owned(),
+        payload,
+    };
+
+    match read_route {
+        DirectReadRoute::Path => {
+            file::execute_file_read_tool_with_context(direct_request, config, ctx).await
+        }
         DirectReadRoute::Query => {
             file::execute_content_search_tool_with_config(direct_request, config)
         }

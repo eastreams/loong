@@ -1,7 +1,9 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loong_contracts::{Capability, ExecutionRoute, HarnessKind, ToolCoreOutcome, ToolCoreRequest};
+use loong_kernel::{Kernel, NoopAuditSink, SystemClock, VerticalPackManifest};
 use serde_json::json;
 
 use super::*;
@@ -23,20 +25,51 @@ fn test_tool_runtime_config(root: PathBuf) -> runtime_config::ToolRuntimeConfig 
     }
 }
 
-fn execute_tool_core_with_test_context(
+async fn execute_tool_core_with_test_context(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    if payload_uses_reserved_internal_tool_context(&request.payload) {
-        with_trusted_internal_tool_payload(|| super::execute_tool_core_with_config(request, config))
-    } else {
-        super::execute_tool_core_with_config(request, config)
-    }
+    let trusted_internal_payload = payload_uses_reserved_internal_tool_context(&request.payload);
+    let mut kernel = Kernel::with_runtime(Arc::new(SystemClock), Arc::new(NoopAuditSink));
+    let pack = VerticalPackManifest {
+        pack_id: "test-pack".to_owned(),
+        domain: "test".to_owned(),
+        version: "0.1.0".to_owned(),
+        default_route: ExecutionRoute {
+            harness_kind: HarnessKind::EmbeddedPi,
+            adapter: None,
+        },
+        allowed_connectors: BTreeSet::new(),
+        granted_capabilities: BTreeSet::from([
+            Capability::InvokeTool,
+            Capability::FilesystemRead,
+            Capability::FilesystemWrite,
+        ]),
+        metadata: Default::default(),
+    };
+    kernel
+        .register_pack(pack)
+        .map_err(|error| format!("kernel pack registration failed: {error}"))?;
+    kernel.register_core_tool_adapter(KernelToolAdapter::with_config(config.clone()));
+    kernel
+        .set_default_core_tool_adapter("mvp-tools")
+        .map_err(|error| format!("set default tool adapter failed: {error}"))?;
+    let token = kernel
+        .issue_token("test-pack", "test-agent", 60)
+        .map_err(|error| format!("kernel token issue failed: {error}"))?;
+    let kernel_ctx = crate::KernelContext {
+        kernel: Arc::new(kernel),
+        token,
+    };
+
+    execute_kernel_tool_request(&kernel_ctx, request, trusted_internal_payload)
+        .await
+        .map_err(|error| format!("{error}"))
 }
 
 #[cfg(feature = "tool-file")]
-#[test]
-fn file_read_uses_runtime_workspace_root_from_runtime_config() {
+#[tokio::test]
+async fn file_read_uses_runtime_workspace_root_from_runtime_config() {
     let outer_root = std::env::temp_dir().join(format!(
         "loongclaw-file-read-runtime-workspace-root-outer-{}",
         std::process::id()
@@ -64,6 +97,7 @@ fn file_read_uses_runtime_workspace_root_from_runtime_config() {
         },
         &config,
     )
+    .await
     .expect("runtime workspace root should be used for default resolution");
 
     assert_eq!(outcome.status, "ok");
@@ -75,8 +109,8 @@ fn file_read_uses_runtime_workspace_root_from_runtime_config() {
 }
 
 #[cfg(feature = "tool-file")]
-#[test]
-fn file_read_relative_resolution_uses_workspace_root_without_shrinking_file_root_access() {
+#[tokio::test]
+async fn file_read_relative_resolution_uses_workspace_root_without_shrinking_file_root_access() {
     let outer_root = std::env::temp_dir().join(format!(
         "loong-file-read-relative-resolution-outer-{}",
         std::process::id()
@@ -98,6 +132,7 @@ fn file_read_relative_resolution_uses_workspace_root_without_shrinking_file_root
         },
         &config,
     )
+    .await
     .expect("relative path should resolve from workspace root");
     assert_eq!(relative_outcome.payload["content"], "inner");
 
@@ -110,6 +145,7 @@ fn file_read_relative_resolution_uses_workspace_root_without_shrinking_file_root
         },
         &config,
     )
+    .await
     .expect("absolute path inside file_root should still be allowed");
     assert_eq!(absolute_outcome.payload["content"], "outer");
 
@@ -117,8 +153,8 @@ fn file_read_relative_resolution_uses_workspace_root_without_shrinking_file_root
 }
 
 #[cfg(feature = "tool-file")]
-#[test]
-fn file_read_uses_workspace_root_from_trusted_internal_payload() {
+#[tokio::test]
+async fn file_read_uses_workspace_root_from_trusted_internal_payload() {
     let outer_root = std::env::temp_dir().join(format!(
         "loong-file-read-workspace-root-outer-{}",
         std::process::id()
@@ -145,6 +181,7 @@ fn file_read_uses_workspace_root_from_trusted_internal_payload() {
         },
         &config,
     )
+    .await
     .expect("trusted workspace root override should succeed");
 
     assert_eq!(outcome.status, "ok");
@@ -158,8 +195,8 @@ fn file_read_uses_workspace_root_from_trusted_internal_payload() {
 }
 
 #[cfg(feature = "tool-file")]
-#[test]
-fn file_read_rejects_relative_workspace_root_from_trusted_internal_payload() {
+#[tokio::test]
+async fn file_read_rejects_relative_workspace_root_from_trusted_internal_payload() {
     let outer_root = std::env::temp_dir().join(format!(
         "loong-file-read-relative-workspace-root-outer-{}",
         std::process::id()
@@ -180,6 +217,7 @@ fn file_read_rejects_relative_workspace_root_from_trusted_internal_payload() {
         },
         &config,
     )
+    .await
     .expect_err("relative workspace root override should be rejected");
 
     assert!(

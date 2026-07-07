@@ -7,9 +7,13 @@ use loong_contracts::{Capability, ExecutionRoute, HarnessKind};
 use loong_kernel::{FixedClock, InMemoryAuditSink, Kernel, VerticalPackManifest};
 
 use crate::context::KernelContext;
-use crate::conversation::turn_engine::{ProviderTurn, ToolIntent, TurnEngine, TurnResult};
+use crate::conversation::{
+    ConversationRuntimeBinding, DefaultAppToolDispatcher, ProviderTurn, SessionContext, ToolIntent,
+    TurnEngine, TurnResult,
+};
+use crate::session::store::SessionStoreConfig;
 use crate::tools::KernelToolAdapter;
-use crate::tools::runtime_config::ToolRuntimeConfig;
+use crate::tools::{ToolView, runtime_config::ToolRuntimeConfig};
 
 fn env_lock() -> &'static Mutex<()> {
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -96,6 +100,8 @@ pub struct TurnTestHarness {
     pub kernel_ctx: KernelContext,
     pub audit: Arc<InMemoryAuditSink>,
     pub temp_dir: PathBuf,
+    memory_config: SessionStoreConfig,
+    tool_view: ToolView,
 }
 
 impl TurnTestHarness {
@@ -129,6 +135,8 @@ impl TurnTestHarness {
             config_path: Some(temp_dir.join("loong.toml")),
             ..tool_config_override
         };
+        let memory_config = SessionStoreConfig::for_sqlite_path(temp_dir.join("memory.sqlite3"));
+        let tool_view = crate::tools::runtime_tool_view_for_runtime_config(&tool_config);
 
         let audit = Arc::new(InMemoryAuditSink::default());
         let clock = Arc::new(FixedClock::new(1_700_000_000));
@@ -156,9 +164,8 @@ impl TurnTestHarness {
 
         #[cfg(feature = "memory-sqlite")]
         {
-            use crate::memory::runtime_config::MemoryRuntimeConfig;
             let memory_config =
-                MemoryRuntimeConfig::for_sqlite_path(temp_dir.join("memory.sqlite3"));
+                crate::memory::runtime_config::MemoryRuntimeConfig::from(&memory_config);
             kernel.register_core_memory_adapter(crate::memory::KernelMemoryAdapter::with_config(
                 memory_config,
             ));
@@ -181,13 +188,29 @@ impl TurnTestHarness {
             kernel_ctx: ctx,
             audit,
             temp_dir,
+            memory_config,
+            tool_view,
         }
     }
 
     /// Execute a provider turn through the full TurnEngine path.
     #[allow(dead_code)]
     pub async fn execute(&self, turn: &ProviderTurn) -> TurnResult {
-        self.engine.execute_turn(turn, &self.kernel_ctx).await
+        let session_context =
+            SessionContext::root_with_tool_view("test-session", self.tool_view.clone());
+        let dispatcher = DefaultAppToolDispatcher::new(
+            self.memory_config.clone(),
+            crate::config::ToolConfig::default(),
+        );
+        self.engine
+            .execute_turn_in_context(
+                turn,
+                &session_context,
+                &dispatcher,
+                ConversationRuntimeBinding::kernel(&self.kernel_ctx),
+                None,
+            )
+            .await
     }
 }
 
