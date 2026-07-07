@@ -13,7 +13,7 @@ use loong_core::{
     kernel::Kernel,
     policy::{
         action::Action,
-        context::{PolicyContext, WorkspacePolicyContext},
+        context::{ActionContext, PolicyContext, WorkspacePolicyContext},
         engine::PolicyEngine,
     },
 };
@@ -44,6 +44,16 @@ impl PolicyContext for FsAccessPolicyContext {
 impl WorkspacePolicyContext for FsAccessPolicyContext {
     fn workspace_root(&self) -> &Path {
         &self.workspace_root
+    }
+}
+
+impl ActionContext for FsAccessPolicyContext {
+    fn execution_plane(&self) -> loong_contracts::ExecutionPlane {
+        loong_contracts::ExecutionPlane::Tool
+    }
+
+    fn plane_tier(&self) -> loong_contracts::PlaneTier {
+        loong_contracts::PlaneTier::Core
     }
 }
 
@@ -78,13 +88,10 @@ struct FsAccessTestKernel {
 
 #[async_trait]
 impl Kernel for FsAccessTestKernel {
-    type PolicyEngine<'a>
-        = FsAccessPolicyEngine
-    where
-        Self: 'a;
     type Cx<'a> = FsAccessPolicyContext;
+    type PolicyEngine = FsAccessPolicyEngine;
 
-    fn policy_engine(&self) -> &Self::PolicyEngine<'_> {
+    fn policy_engine(&self) -> &Self::PolicyEngine {
         &self.policy
     }
 }
@@ -136,6 +143,7 @@ fn fs_read_action_uses_canonical_path() {
     let action = FsReadAction::new(path);
 
     assert_eq!(action.path(), Path::new("/workspace/notes/todo.md"));
+    assert_eq!(action.operation(), Cow::Borrowed("read_file"));
     assert_eq!(
         action.required_capabilities(),
         BTreeSet::from([Capability::FilesystemRead])
@@ -158,6 +166,10 @@ fn fs_action_wraps_read_action() {
 
     assert_eq!(action.kind(), "fs.read");
     assert_eq!(action.operation(), Cow::Borrowed("read_file"));
+    assert_eq!(
+        action.required_capabilities(),
+        BTreeSet::from([Capability::FilesystemRead])
+    );
 }
 
 #[cfg(unix)]

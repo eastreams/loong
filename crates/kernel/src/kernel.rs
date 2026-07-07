@@ -1014,11 +1014,13 @@ impl Kernel {
             return Err(KernelError::Policy(policy_error));
         }
 
-        let action = LegacyKernelAction::new(plane, tier, operation, required_capabilities.clone());
+        let action = LegacyKernelAction::new(operation, required_capabilities.clone());
         let policy_context = KernelPolicyContext {
             pack,
             token,
             now_epoch_s,
+            plane,
+            tier,
             request_parameters,
         };
         if let Err(policy_error) = self
@@ -1104,12 +1106,9 @@ impl Kernel {
 
 impl loong_core::kernel::Kernel for Kernel {
     type Cx<'a> = KernelPolicyContext<'a>;
-    type PolicyEngine<'a>
-        = PolicyPipeline
-    where
-        Self: 'a;
+    type PolicyEngine = PolicyPipeline;
 
-    fn policy_engine(&self) -> &Self::PolicyEngine<'_> {
+    fn policy_engine(&self) -> &Self::PolicyEngine {
         &self.policy
     }
 }

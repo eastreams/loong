@@ -11,7 +11,7 @@ use loong_core::{
     kernel::Kernel as CoreKernel,
     policy::{
         action::Action,
-        context::{PolicyContext, WorkspacePolicyContext},
+        context::{ActionContext, PolicyContext, WorkspacePolicyContext},
         engine::PolicyEngine,
     },
 };
@@ -46,6 +46,16 @@ impl WorkspacePolicyContext for AccessCxPolicyContext {
     }
 }
 
+impl ActionContext for AccessCxPolicyContext {
+    fn execution_plane(&self) -> loong_contracts::ExecutionPlane {
+        loong_contracts::ExecutionPlane::Tool
+    }
+
+    fn plane_tier(&self) -> loong_contracts::PlaneTier {
+        loong_contracts::PlaneTier::Core
+    }
+}
+
 #[derive(Default)]
 struct AccessCxPolicyEngine {
     next_grant_id: AtomicU64,
@@ -77,13 +87,10 @@ struct AccessCxTestKernel {
 
 #[async_trait]
 impl CoreKernel for AccessCxTestKernel {
-    type PolicyEngine<'a>
-        = AccessCxPolicyEngine
-    where
-        Self: 'a;
     type Cx<'a> = AccessCxPolicyContext;
+    type PolicyEngine = AccessCxPolicyEngine;
 
-    fn policy_engine(&self) -> &Self::PolicyEngine<'_> {
+    fn policy_engine(&self) -> &Self::PolicyEngine {
         &self.policy
     }
 }

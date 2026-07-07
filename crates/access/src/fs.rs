@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use loong_contracts::{Capability, ExecutionPlane};
+use loong_contracts::Capability;
 use loong_core::{
     error::AuthorizationError,
     kernel::Kernel,
@@ -133,10 +133,6 @@ impl Action for FsReadAction {
         Some(self.path.as_path().display().to_string().into())
     }
 
-    fn execution_plane(&self) -> ExecutionPlane {
-        ExecutionPlane::Tool
-    }
-
     fn required_capabilities(&self) -> BTreeSet<Capability> {
         BTreeSet::from([Capability::FilesystemRead])
     }
@@ -170,12 +166,6 @@ impl Action for FsAction {
     fn audit_resource(&self) -> Option<Cow<'static, str>> {
         match self {
             Self::Read(action) => action.audit_resource(),
-        }
-    }
-
-    fn execution_plane(&self) -> ExecutionPlane {
-        match self {
-            Self::Read(action) => action.execution_plane(),
         }
     }
 

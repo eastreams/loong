@@ -15,7 +15,11 @@ use loong_contracts::{
 use loong_core::{
     error::AuthorizationError,
     policy::action::Action,
-    policy::{context::PolicyContext, engine::PolicyEngine, policy::PolicyAny},
+    policy::{
+        context::{ActionContext, PolicyContext},
+        engine::PolicyEngine,
+        policy::PolicyAny,
+    },
 };
 
 use crate::{
@@ -29,6 +33,8 @@ pub struct KernelPolicyContext<'a> {
     pub pack: &'a VerticalPackManifest,
     pub token: &'a CapabilityToken,
     pub now_epoch_s: u64,
+    pub plane: ExecutionPlane,
+    pub tier: PlaneTier,
     pub request_parameters: Option<&'a serde_json::Value>,
 }
 
@@ -38,23 +44,24 @@ impl PolicyContext for KernelPolicyContext<'_> {
     }
 }
 
+impl ActionContext for KernelPolicyContext<'_> {
+    fn execution_plane(&self) -> ExecutionPlane {
+        self.plane
+    }
+
+    fn plane_tier(&self) -> PlaneTier {
+        self.tier
+    }
+}
+
 pub struct LegacyKernelAction {
-    plane: ExecutionPlane,
-    tier: PlaneTier,
     operation: String,
     required_capabilities: BTreeSet<Capability>,
 }
 
 impl LegacyKernelAction {
-    pub fn new(
-        plane: ExecutionPlane,
-        tier: PlaneTier,
-        operation: impl Into<String>,
-        required_capabilities: BTreeSet<Capability>,
-    ) -> Self {
+    pub fn new(operation: impl Into<String>, required_capabilities: BTreeSet<Capability>) -> Self {
         Self {
-            plane,
-            tier,
             operation: operation.into(),
             required_capabilities,
         }
@@ -64,14 +71,6 @@ impl LegacyKernelAction {
 impl Action for LegacyKernelAction {
     fn kind(&self) -> &'static str {
         "action.legacy"
-    }
-
-    fn execution_plane(&self) -> ExecutionPlane {
-        self.plane
-    }
-
-    fn plane_tier(&self) -> PlaneTier {
-        self.tier
     }
 
     fn operation(&self) -> Cow<'static, str> {
@@ -277,18 +276,16 @@ mod tests {
         let engine = PolicyPipeline::new().with_policy(AllowPolicy);
         let pack = pack();
         let token = token();
+        let required_capabilities = BTreeSet::from([Capability::InvokeTool]);
         let ctx = KernelPolicyContext {
             pack: &pack,
             token: &token,
             now_epoch_s: 1,
+            plane: ExecutionPlane::Tool,
+            tier: PlaneTier::Core,
             request_parameters: None,
         };
-        let action = LegacyKernelAction::new(
-            ExecutionPlane::Tool,
-            PlaneTier::Core,
-            "tool",
-            BTreeSet::from([Capability::InvokeTool]),
-        );
+        let action = LegacyKernelAction::new("tool", required_capabilities);
 
         let grant = engine
             .grant(&ctx, action)
@@ -307,18 +304,16 @@ mod tests {
         let pack = pack();
         let mut token = token();
         token.allowed_capabilities.insert(Capability::NetworkEgress);
+        let required_capabilities = BTreeSet::from([Capability::NetworkEgress]);
         let ctx = KernelPolicyContext {
             pack: &pack,
             token: &token,
             now_epoch_s: 1,
+            plane: ExecutionPlane::Runtime,
+            tier: PlaneTier::Core,
             request_parameters: None,
         };
-        let action = LegacyKernelAction::new(
-            ExecutionPlane::Runtime,
-            PlaneTier::Core,
-            "fetch",
-            BTreeSet::from([Capability::NetworkEgress]),
-        );
+        let action = LegacyKernelAction::new("fetch", required_capabilities);
 
         let error = engine
             .authorize_kernel_action(&ctx, action)

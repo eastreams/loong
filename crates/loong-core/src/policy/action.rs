@@ -1,6 +1,6 @@
 use std::{any::Any, borrow::Cow, collections::BTreeSet};
 
-use loong_contracts::{Capability, ExecutionPlane, PlaneTier};
+use loong_contracts::Capability;
 
 /// A typed, policy-facing unit of side-effect intent.
 ///
@@ -19,14 +19,6 @@ pub trait Action: Any + Send + Sync + 'static {
         None
     }
 
-    /// Coarse runtime lane for existing audit and dispatch taxonomy.
-    fn execution_plane(&self) -> ExecutionPlane;
-
-    /// Core-vs-extension tier within the coarse execution plane.
-    fn plane_tier(&self) -> PlaneTier {
-        PlaneTier::Core
-    }
-
-    /// Capabilities required before this action may be granted.
+    /// Capabilities this action requires before it may execute.
     fn required_capabilities(&self) -> BTreeSet<Capability>;
 }
