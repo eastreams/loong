@@ -9,21 +9,24 @@ use std::{
 
 use async_trait::async_trait;
 use loong_contracts::{Capability, GrantId, PolicyEntry, PolicyOutcome};
-use loong_core::policy::{
-    action::Action,
-    context::{PolicyContext, WorkspacePolicyContext},
-    engine::{HasPolicyEngine, PolicyEngine},
+use loong_core::{
+    kernel::Kernel,
+    policy::{
+        action::Action,
+        context::{PolicyContext, WorkspacePolicyContext},
+        engine::PolicyEngine,
+    },
 };
 
 use super::{CanonicalPath, FsAccess, FsAction, FsActionError, FsReadAction, HasFsAccess};
 
 #[derive(Debug, Clone)]
-struct TestPolicyContext {
+struct FsAccessPolicyContext {
     workspace_root: PathBuf,
     capabilities: BTreeSet<Capability>,
 }
 
-impl TestPolicyContext {
+impl FsAccessPolicyContext {
     fn new(workspace_root: impl Into<PathBuf>) -> Self {
         Self {
             workspace_root: workspace_root.into(),
@@ -32,26 +35,26 @@ impl TestPolicyContext {
     }
 }
 
-impl PolicyContext for TestPolicyContext {
+impl PolicyContext for FsAccessPolicyContext {
     fn capabilities(&self) -> BTreeSet<Capability> {
         self.capabilities.clone()
     }
 }
 
-impl WorkspacePolicyContext for TestPolicyContext {
+impl WorkspacePolicyContext for FsAccessPolicyContext {
     fn workspace_root(&self) -> &Path {
         &self.workspace_root
     }
 }
 
 #[derive(Default)]
-struct AllowAllPolicyEngine {
+struct FsAccessPolicyEngine {
     next_grant_id: AtomicU64,
 }
 
 #[async_trait]
-impl PolicyEngine for AllowAllPolicyEngine {
-    type Cx<'a> = TestPolicyContext;
+impl PolicyEngine for FsAccessPolicyEngine {
+    type Cx<'a> = FsAccessPolicyContext;
 
     async fn decide<A: Action>(&self, _ctx: &Self::Cx<'_>, _action: &A) -> PolicyOutcome {
         PolicyOutcome::Allow {
@@ -69,50 +72,51 @@ impl PolicyEngine for AllowAllPolicyEngine {
 }
 
 #[derive(Default)]
-struct TestKernel {
-    policy: AllowAllPolicyEngine,
+struct FsAccessTestKernel {
+    policy: FsAccessPolicyEngine,
 }
 
 #[async_trait]
-impl HasPolicyEngine for TestKernel {
+impl Kernel for FsAccessTestKernel {
     type PolicyEngine<'a>
-        = AllowAllPolicyEngine
+        = FsAccessPolicyEngine
     where
         Self: 'a;
+    type Cx<'a> = FsAccessPolicyContext;
 
     fn policy_engine(&self) -> &Self::PolicyEngine<'_> {
         &self.policy
     }
 }
 
-struct TestToolCx<'a> {
-    kernel: &'a TestKernel,
-    policy_context: TestPolicyContext,
+struct FsAccessToolCx<'a> {
+    kernel: &'a FsAccessTestKernel,
+    policy_context: FsAccessPolicyContext,
 }
 
-struct TestAccessCx<'a> {
-    kernel: &'a TestKernel,
-    policy_context: TestPolicyContext,
+struct FsAccessTestCx<'a> {
+    kernel: &'a FsAccessTestKernel,
+    policy_context: FsAccessPolicyContext,
 }
 
-impl<'a> TestToolCx<'a> {
-    fn new(kernel: &'a TestKernel, workspace_root: impl Into<PathBuf>) -> Self {
+impl<'a> FsAccessToolCx<'a> {
+    fn new(kernel: &'a FsAccessTestKernel, workspace_root: impl Into<PathBuf>) -> Self {
         Self {
             kernel,
-            policy_context: TestPolicyContext::new(workspace_root),
+            policy_context: FsAccessPolicyContext::new(workspace_root),
         }
     }
 
-    fn access(&self) -> TestAccessCx<'a> {
-        TestAccessCx {
+    fn access(&self) -> FsAccessTestCx<'a> {
+        FsAccessTestCx {
             kernel: self.kernel,
             policy_context: self.policy_context.clone(),
         }
     }
 }
 
-impl<'a> HasFsAccess<'a, TestKernel> for TestAccessCx<'a> {
-    fn fs(self) -> FsAccess<'a, TestKernel> {
+impl<'a> HasFsAccess<'a, FsAccessTestKernel> for FsAccessTestCx<'a> {
+    fn fs(self) -> FsAccess<'a, FsAccessTestKernel> {
         FsAccess::new(self.kernel, self.policy_context)
     }
 }
@@ -179,8 +183,8 @@ fn canonical_path_rejects_symlink_escape() {
 
 #[tokio::test]
 async fn tool_context_like_chain_grants_read_file_via_access_then_fs() {
-    let kernel = TestKernel::default();
-    let ctx = TestToolCx::new(&kernel, "/workspace");
+    let kernel = FsAccessTestKernel::default();
+    let ctx = FsAccessToolCx::new(&kernel, "/workspace");
 
     let grant = ctx
         .access()

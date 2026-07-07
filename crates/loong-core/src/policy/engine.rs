@@ -4,11 +4,11 @@ use async_trait::async_trait;
 use loong_contracts::{Capability, GrantId, PolicyOutcome};
 
 use crate::{
-    error::{AuthorizationError, ExecutionError},
+    error::AuthorizationError,
     policy::{
-        action::{Action, ActionExecutor},
+        action::Action,
         context::PolicyContext,
-        grant::{ActionGrant, ActionGrantInfo, Granted},
+        grant::{ActionGrant, ActionGrantInfo},
     },
 };
 
@@ -59,27 +59,5 @@ pub trait PolicyEngine: Sync {
 impl PolicyContext for () {
     fn capabilities(&self) -> BTreeSet<Capability> {
         BTreeSet::new()
-    }
-}
-
-#[async_trait]
-pub trait HasPolicyEngine: Sync {
-    type PolicyEngine<'a>: PolicyEngine
-    where
-        Self: 'a;
-
-    fn policy_engine(&self) -> &Self::PolicyEngine<'_>;
-
-    async fn execute_granted<A, E>(
-        &self,
-        granted: Granted<A>,
-        executor: &E,
-    ) -> Result<E::Output, ExecutionError>
-    where
-        Self: Sized,
-        A: Action,
-        E: ActionExecutor<A> + ?Sized,
-    {
-        granted.execute_with(executor).await
     }
 }

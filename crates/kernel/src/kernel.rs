@@ -6,9 +6,6 @@ use std::{
     },
 };
 
-use async_trait::async_trait;
-use loong_core::policy::engine::HasPolicyEngine;
-
 use crate::{
     access::AccessCx,
     audit::{
@@ -1105,8 +1102,8 @@ impl Kernel {
     }
 }
 
-#[async_trait]
-impl HasPolicyEngine for Kernel {
+impl loong_core::kernel::Kernel for Kernel {
+    type Cx<'a> = KernelPolicyContext<'a>;
     type PolicyEngine<'a>
         = PolicyPipeline
     where

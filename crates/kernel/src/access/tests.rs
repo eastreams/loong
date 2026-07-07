@@ -7,22 +7,25 @@ use std::{
 
 use async_trait::async_trait;
 use loong_contracts::{Capability, GrantId, PolicyEntry, PolicyOutcome};
-use loong_core::policy::{
-    action::Action,
-    context::{PolicyContext, WorkspacePolicyContext},
-    engine::{HasPolicyEngine, PolicyEngine},
+use loong_core::{
+    kernel::Kernel as CoreKernel,
+    policy::{
+        action::Action,
+        context::{PolicyContext, WorkspacePolicyContext},
+        engine::PolicyEngine,
+    },
 };
 
 use super::AccessCx;
-use crate::{HasFsAccess, Kernel};
+use crate::{HasFsAccess, Kernel as RuntimeKernel};
 
 #[derive(Debug, Clone)]
-struct TestPolicyContext {
+struct AccessCxPolicyContext {
     workspace_root: PathBuf,
     capabilities: BTreeSet<Capability>,
 }
 
-impl TestPolicyContext {
+impl AccessCxPolicyContext {
     fn new(workspace_root: impl Into<PathBuf>) -> Self {
         Self {
             workspace_root: workspace_root.into(),
@@ -31,26 +34,26 @@ impl TestPolicyContext {
     }
 }
 
-impl PolicyContext for TestPolicyContext {
+impl PolicyContext for AccessCxPolicyContext {
     fn capabilities(&self) -> BTreeSet<Capability> {
         self.capabilities.clone()
     }
 }
 
-impl WorkspacePolicyContext for TestPolicyContext {
+impl WorkspacePolicyContext for AccessCxPolicyContext {
     fn workspace_root(&self) -> &Path {
         &self.workspace_root
     }
 }
 
 #[derive(Default)]
-struct AllowAllPolicyEngine {
+struct AccessCxPolicyEngine {
     next_grant_id: AtomicU64,
 }
 
 #[async_trait]
-impl PolicyEngine for AllowAllPolicyEngine {
-    type Cx<'a> = TestPolicyContext;
+impl PolicyEngine for AccessCxPolicyEngine {
+    type Cx<'a> = AccessCxPolicyContext;
 
     async fn decide<A: Action>(&self, _ctx: &Self::Cx<'_>, _action: &A) -> PolicyOutcome {
         PolicyOutcome::Allow {
@@ -68,16 +71,17 @@ impl PolicyEngine for AllowAllPolicyEngine {
 }
 
 #[derive(Default)]
-struct TestKernel {
-    policy: AllowAllPolicyEngine,
+struct AccessCxTestKernel {
+    policy: AccessCxPolicyEngine,
 }
 
 #[async_trait]
-impl HasPolicyEngine for TestKernel {
+impl CoreKernel for AccessCxTestKernel {
     type PolicyEngine<'a>
-        = AllowAllPolicyEngine
+        = AccessCxPolicyEngine
     where
         Self: 'a;
+    type Cx<'a> = AccessCxPolicyContext;
 
     fn policy_engine(&self) -> &Self::PolicyEngine<'_> {
         &self.policy
@@ -86,21 +90,19 @@ impl HasPolicyEngine for TestKernel {
 
 #[test]
 fn loong_kernel_exposes_access_types_and_fs_surface_for_workspace_kernels() {
-    fn assert_has_policy_engine<T: HasPolicyEngine>() {}
     fn assert_access_exported<T>() {}
-    fn assert_has_fs_access<'a, T: HasFsAccess<'a, TestKernel>>() {}
+    fn assert_has_fs_access<'a, T: HasFsAccess<'a, AccessCxTestKernel>>() {}
 
-    assert_has_policy_engine::<Kernel>();
-    assert_access_exported::<AccessCx<'static, Kernel>>();
+    assert_access_exported::<AccessCx<'static, RuntimeKernel>>();
 
-    assert_access_exported::<AccessCx<'static, TestKernel>>();
-    assert_has_fs_access::<AccessCx<'static, TestKernel>>();
+    assert_access_exported::<AccessCx<'static, AccessCxTestKernel>>();
+    assert_has_fs_access::<AccessCx<'static, AccessCxTestKernel>>();
 }
 
 #[tokio::test]
 async fn access_context_preserves_workspace_policy_context_for_fs_access() {
-    let kernel = TestKernel::default();
-    let access = AccessCx::new(&kernel, TestPolicyContext::new("/workspace"));
+    let kernel = AccessCxTestKernel::default();
+    let access = AccessCx::new(&kernel, AccessCxPolicyContext::new("/workspace"));
 
     let grant = access
         .fs()

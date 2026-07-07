@@ -1,24 +1,21 @@
 use loong_access::{FsAccess, HasFsAccess};
-use loong_core::policy::engine::{HasPolicyEngine, PolicyEngine};
+use loong_core::kernel::Kernel;
 
 pub struct AccessCx<'a, K>
 where
-    K: HasPolicyEngine,
+    K: Kernel,
 {
     kernel: &'a K,
-    policy_context: <K::PolicyEngine<'a> as PolicyEngine>::Cx<'a>,
+    policy_context: K::Cx<'a>,
 }
 
 impl<'a, K> AccessCx<'a, K>
 where
-    K: HasPolicyEngine,
+    K: Kernel,
 {
     #[inline(always)]
     #[must_use]
-    pub fn new(
-        kernel: &'a K,
-        policy_context: <K::PolicyEngine<'a> as PolicyEngine>::Cx<'a>,
-    ) -> Self {
+    pub fn new(kernel: &'a K, policy_context: K::Cx<'a>) -> Self {
         Self {
             kernel,
             policy_context,
@@ -28,7 +25,7 @@ where
 
 impl<'a, K> HasFsAccess<'a, K> for AccessCx<'a, K>
 where
-    K: HasPolicyEngine,
+    K: Kernel,
 {
     fn fs(self) -> FsAccess<'a, K> {
         FsAccess::new(self.kernel, self.policy_context)

@@ -1,9 +1,6 @@
 use std::{any::Any, borrow::Cow, collections::BTreeSet};
 
-use async_trait::async_trait;
 use loong_contracts::{Capability, ExecutionPlane, PlaneTier};
-
-use crate::{error::ExecutionError, policy::grant::Granted};
 
 /// A typed, policy-facing unit of side-effect intent.
 ///
@@ -32,18 +29,4 @@ pub trait Action: Any + Send + Sync + 'static {
 
     /// Capabilities required before this action may be granted.
     fn required_capabilities(&self) -> BTreeSet<Capability>;
-}
-
-impl dyn Action + '_ {
-    pub fn downcast_ref<A: Action>(&self) -> Option<&A> {
-        (self as &dyn Any).downcast_ref::<A>()
-    }
-}
-
-/// Executor for a granted domain action.
-#[async_trait]
-pub trait ActionExecutor<A: Action>: Send + Sync {
-    type Output;
-
-    async fn execute(&self, granted: Granted<A>) -> Result<Self::Output, ExecutionError>;
 }
