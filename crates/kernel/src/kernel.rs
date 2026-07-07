@@ -86,6 +86,11 @@ impl Kernel {
     /// Safe convenience constructor for callers that do not need to customize
     /// runtime components. This defaults to in-memory audit rather than silent
     /// audit dropping.
+    ///
+    /// This constructs a bare kernel runtime. It does not register builtin
+    /// adapters or the default pack; maintainers looking for the standard
+    /// product/spec bootstrap path should start at `loong_spec::KernelBuilder`
+    /// in `crates/spec/src/kernel_bootstrap.rs`.
     #[must_use]
     pub fn new() -> Self {
         Self::new_with_in_memory_audit().0

@@ -12,12 +12,12 @@ tool 的副作用执行只能经由 kernel 持有和组装的 access facade：
 tool-facing caller
   -> ToolCx::access(...)
   -> AccessCx<'_, K>
-  -> HasXAccess::x(...)
-  -> XAccess<'_, K>
-      -> Action::new(...)
+  -> HasFsAccess::fs(...)
+  -> FsAccess<'_, K>::read_file(...)
+      -> CanonicalPath::resolve(...)
+      -> FsReadAction::new(CanonicalPath)
       -> PolicyEngine::grant(...)
-      -> Granted<Action>
-      -> kernel-selected Backend impl::execute(Granted<Action>)
+      -> ActionGrant<FsReadAction>
 ```
 
 `Access`、`Action`、`Policy` 是治理语义，可以由 kernel 间接暴露给其它层。
@@ -26,7 +26,7 @@ tool-facing caller
 associated type 固定，而不是运行时 registry 式切换。tools/app/runtime 不把 backend
 作为直接依赖面。
 
-这样 tools/app/runtime 只能通过 `ToolCx -> AccessCx -> XAccess` 表达意图，不能绕过
+这样 tools/app/runtime 只能通过 `ToolCx -> AccessCx -> domain Access` 表达意图，不能绕过
 policy 直接调用 backend，也不能自己拼出授权链。各类 policy/domain context 只作为
 kernel 内部实现细节存在，不暴露给 tool-facing API。
 
@@ -58,9 +58,10 @@ kernel 内部实现细节存在，不暴露给 tool-facing API。
 一个构造 `AccessCx` 的入口。`AccessCx` 是 kernel-owned access construction context，
 内部持有 `&K` 和本次调用已经构造好的统一 `policy_context`。
 
-`HasXAccess` 应该是 `AccessCx` 的 trait，表示这个 access context 能 extract 出某个
-domain access，例如 `FsAccess`。tool 代码只要求自己的 tool context 能给出
-`AccessCx`，以及这个 `AccessCx` 能 extract 出需要的 access。tool 不应该看见
+domain access trait 应该实现在 `AccessCx` 上，表示这个 access context 能给出某个
+domain access。当前 fs-read slice 的具体形状是 `HasFsAccess::fs(self) -> FsAccess`。
+tool 代码只要求自己的 tool context 能给出
+`AccessCx`，以及这个 `AccessCx` 能给出需要的 access。tool 不应该看见
 `policy_context`、`WorkspacePolicyContext`、backend handle，或 kernel concrete
 fields。
 
@@ -68,11 +69,11 @@ fields。
 无论最终是 `ToolCx::access_cx()` 直接委托 kernel，还是 `ToolCx` 持有已构造好的
 access context，都应该只有一条受控构造路径。
 
-`XAccess` 方法负责：
+domain access 方法负责：
 
 1. 把调用方输入验证/规范化成 concrete action；
 2. 调用 policy grant；
-3. 通过 `K` 取得 backend，并把 `Granted<ConcreteAction>` 交给 backend trait。
+3. 返回 `ActionGrant<ConcreteAction>`，让后续执行边界只处理已授权 action。
 
 示意结构：
 
@@ -89,7 +90,7 @@ where
     K: HasPolicyEngine,
 {
     kernel: &'a K,
-    policy_context: PolicyContextFor<'a, K>,
+    policy_context: <K::PolicyEngine<'a> as PolicyEngine>::Cx<'a>,
 }
 
 pub trait HasFsAccess<'a, K>
@@ -97,20 +98,16 @@ where
     K: HasPolicyEngine,
 {
     #[inline(always)]
-    fn fs(&'a self) -> FsAccess<'a, K>;
+    fn fs(self) -> FsAccess<'a, K>;
 }
 
 impl<'a, K> HasFsAccess<'a, K> for AccessCx<'a, K>
 where
-    K: HasPolicyEngine + HasFsBackend,
-    PolicyContextFor<'a, K>: WorkspacePolicyContext,
+    K: HasPolicyEngine,
 {
     #[inline(always)]
-    fn fs(&'a self) -> FsAccess<'a, K> {
-        FsAccess {
-            kernel: self.kernel,
-            policy_context: &self.policy_context,
-        }
+    fn fs(self) -> FsAccess<'a, K> {
+        FsAccess::new(self.kernel, self.policy_context)
     }
 }
 
@@ -119,30 +116,34 @@ where
     K: HasPolicyEngine,
 {
     kernel: &'a K,
-    policy_context: &'a PolicyContextFor<'a, K>,
+    policy_context: <K::PolicyEngine<'a> as PolicyEngine>::Cx<'a>,
 }
 
 impl<'a, K> FsAccess<'a, K>
 where
-    K: HasPolicyEngine + HasFsBackend,
-    PolicyContextFor<'a, K>: WorkspacePolicyContext,
+    K: HasPolicyEngine,
+    <K::PolicyEngine<'a> as PolicyEngine>::Cx<'a>: WorkspacePolicyContext,
 {
-    pub async fn read(&self, path: FsPath) -> Result<FsReadOutput, FsError> {
-        let action = FsReadAction::new(path, self.policy_context)?;
+    pub async fn read_file(
+        self,
+        path: impl AsRef<Path>,
+    ) -> Result<ActionGrant<FsReadAction>, FsAccessError> {
+        let path = CanonicalPath::resolve(path, self.policy_context.workspace_root())?;
+        let action = FsReadAction::new(path);
         let grant = self
             .kernel
             .policy_engine()
-            .grant(self.policy_context, action)
+            .grant(&self.policy_context, action)
             .await?;
 
-        self.kernel.fs_backend().read(grant.granted).await
+        Ok(grant)
     }
 }
 ```
 
 这里不需要 `HasPolicyContext`，也不需要工具直接接触 context。`AccessCx` 携带
-`policy_context` 字段；`FsAccess` 从 `AccessCx` extract 出来并私有持有
-`policy_context` 引用。该 context 类型由
+`policy_context` 字段；`FsAccess` 从 `AccessCx` 构造出来并私有持有
+`policy_context`。该 context 类型由
 `HasPolicyEngine::PolicyEngine<'a>::Factory` 推导，并额外实现 domain 需要的
 `WorkspacePolicyContext`。
 
@@ -209,7 +210,7 @@ where
 这些薄构造和 extract 方法可以加 `#[inline(always)]`，包括：
 
 - `ToolCx::access_cx()`
-- `HasXAccess::x_access()`
+- `HasFsAccess::fs()`
 - `WorkspacePolicyContext` 这类 context view getter
 
 不要把 `#[inline(always)]` 扩散到 `Policy::grant`、backend side effect、或 async
@@ -269,7 +270,7 @@ kernel
 app / tools / runtime surfaces
   - 接收 ToolCx
   - 通过 ToolCx 构造 AccessCx
-  - 通过 HasXAccess 从 AccessCx extract 出 domain access
+  - 通过 domain access trait 从 AccessCx 构造 domain access
   - 通过 domain access methods 表达意图
   - 不直接依赖 backend trait 或 concrete backend types
   - 不直接依赖 kernel concrete type 或 policy/domain context
@@ -331,7 +332,7 @@ grant。
 - concrete backend impl candidate；
 - target action type。
 - access context candidate, usually `AccessCx<'a, K>`。
-- domain access extractor candidate, usually `HasXAccess for AccessCx`。
+- domain access trait candidate, for example `HasFsAccess for AccessCx`。
 - whether current `ExecutionPlane` metadata belongs to action, access context,
   invocation route, or audit routing.
 
@@ -361,50 +362,43 @@ grant。
 
 filesystem 工具最容易验证 policy 和 side effect 边界，适合作为第一刀。
 
-目标类型：
+当前已落地的 fs-read slice 目标类型：
 
 - `FsAccess`
 - `FsReadAction`
-- `FsWriteAction`
-- kernel-owned `FsBackend` trait
-- 编译期互斥的 `LocalFsBackend` / sandboxed filesystem impl / test mock backend
+- `FsAction`
+- `CanonicalPath`
+- `HasFsAccess`
 - unified policy context
 - `WorkspacePolicyContext` trait on policy context
-- `AllowWorkspaceFsPolicy` implementing `Policy<F, FsAction>`
 
 `FsAccess` 应写成 kernel-generic struct：
 
 ```rust
 pub struct AccessCx<'a, K> {
     kernel: &'a K,
-    policy_context: PolicyContextFor<'a, K>,
+    policy_context: <K::PolicyEngine<'a> as PolicyEngine>::Cx<'a>,
 }
 
 pub trait HasFsAccess<'a, K> {
     #[inline(always)]
-    fn fs_access(&'a self) -> FsAccess<'a, K>;
+    fn fs(self) -> FsAccess<'a, K>;
 }
 
 pub struct FsAccess<'a, K> {
     kernel: &'a K,
-    policy_context: &'a PolicyContextFor<'a, K>,
+    policy_context: <K::PolicyEngine<'a> as PolicyEngine>::Cx<'a>,
 }
 ```
 
-`ToolCx` 应只暴露构造 `AccessCx` 的入口；`K` 通过 trait bounds 提供 policy engine
-和 backend；context 类型从 `K::PolicyEngine<'_>::Factory` 推导并作为 `AccessCx`
+`ToolCx` 应只暴露构造 `AccessCx` 的入口；`K` 通过 trait bounds 提供 policy engine；
+context 类型从 `K::PolicyEngine<'_>::Factory` 推导并作为 `AccessCx`
 字段保存：
 
 ```rust
 trait WorkspacePolicyContext {
     #[inline(always)]
     fn workspace_root(&self) -> &Path;
-}
-
-trait HasFsBackend {
-    type FsBackend: FsBackend;
-
-    fn fs_backend(&self) -> &Self::FsBackend;
 }
 
 #[async_trait]
@@ -428,14 +422,16 @@ where
 ```text
 file tool request
   -> ToolCx::access_cx(...)
-  -> AccessCx<'_, K>::fs_access(...)
-  -> FsAccess<'_, K>::read(...)
-  -> FsReadAction::new(...)
+  -> AccessCx<'_, K>::fs(...)
+  -> FsAccess<'_, K>::read_file(...)
+  -> CanonicalPath::resolve(path, ctx.workspace_root())
+  -> FsReadAction::new(CanonicalPath)
   -> policy.grant(ctx, action)
-  -> FsBackend::read(Granted<FsReadAction>)
+  -> ActionGrant<FsReadAction>
 ```
 
-完成后，file tool 不再直接执行 filesystem side effect。
+完成后，file tool 不再直接拼 authorization 链；真正的 filesystem side effect
+边界仍应在后续 backend 迁移中继续收敛到 `Granted<FsReadAction>`。
 
 ### 4. 把 domain checks 从 ad hoc JSON parsing 挪到 typed action
 
@@ -444,7 +440,8 @@ context。
 
 例子：
 
-- path normalization：进入 `FsReadAction::new` 或其前置 normalization；
+- path normalization：进入 `CanonicalPath::resolve`；`FsReadAction::new` 只接收
+  已解析的 `CanonicalPath`；
 - shell command risk：作为 structured action data 进入 grant 前；
 - URL normalization：进入 network/http action construction；
 - browser session/link validation：进入 parent-to-child action construction。
@@ -514,10 +511,11 @@ git diff --check
 
 - tool-facing code 不能 name、construct 或 invoke backend trait / concrete backend。
 - tool-facing code 不能直接 name 或使用 kernel concrete type、policy context、
-  domain context trait；只能经由 `ToolCx -> AccessCx -> HasXAccess -> XAccess`。
+  domain context trait；只能经由 `ToolCx -> AccessCx -> domain Access`。
 - 所有 side-effecting backend trait methods 都接受 `Granted<ConcreteAction>`。
-- `HasXAccess` 是 `AccessCx` 的 trait，表示能 extract 出 `XAccess`。
-- `XAccess` 是 `XAccess<'a, K>` 这类 kernel-generic facade，不直接持有 backend。
+- domain access trait 实现在 `AccessCx` 上，例如当前 fs-read slice 的
+  `HasFsAccess::fs(self) -> FsAccess<'a, K>`。
+- domain access 是 `FsAccess<'a, K>` 这类 kernel-generic facade，不直接持有 backend。
 - backend impl 通过 kernel associated type / generic parameter 编译期 N 选一。
 - `Granted<A>` 仍不可被 `loong-core` 外部伪造。
 - `AccessCx` construction 由 kernel/tool context boundary 控制，只有一条受控构造路径。

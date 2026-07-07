@@ -22,6 +22,11 @@ pub(crate) fn default_in_memory_audit_sink() -> Arc<InMemoryAuditSink> {
 
 /// Builder for constructing a fully configured `Kernel`.
 ///
+/// This is the default bootstrap surface referenced from `kernel::Kernel`
+/// constructors when maintainers need to find where builtin kernel
+/// registrations happen. `build()` creates the runtime kernel, calls
+/// `register_builtin_adapters(...)`, then registers `default_pack_manifest()`.
+///
 /// By default the builder uses `SystemClock` and the spec layer's named
 /// in-memory audit helper. Override either with the corresponding setter before
 /// calling `build()`.
@@ -143,6 +148,9 @@ fn register_builtin_adapters(
     native_tool_executor: Option<crate::NativeToolExecutor>,
     register_default_embedded_harness: bool,
 ) {
+    // Keep the default kernel registration list centralized behind
+    // `KernelBuilder::build()`. Bare `kernel::Kernel` constructors
+    // intentionally do not know about these spec/product defaults.
     if register_default_embedded_harness {
         kernel.register_harness_adapter(EmbeddedPiHarness {
             seen: Mutex::new(Vec::new()),

@@ -226,7 +226,7 @@ Provider runtime binding:
 - 10 event kinds with atomic sequencing
 - Production app runtimes default to durable JSONL retention via `[audit].mode = "fanout"`
 - Default journal path: `~/.loong/audit/events.jsonl`
-- `LoongKernel::new()` and spec/test/demo helpers may still opt into explicit in-memory audit seams when side-effect-free snapshot reporting is required
+- `Kernel::new()` and spec/test/demo helpers may still opt into explicit in-memory audit seams when side-effect-free snapshot reporting is required
 - Explicit no-audit behavior remains opt-in only and should stay reserved for narrow fixture seams
 - No HMAC chain for tamper evidence (TD-007)
 

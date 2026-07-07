@@ -82,7 +82,7 @@ optional `scripts/pre-commit` hook mirrors these cargo gates locally.
 ## Kernel Invariants
 
 1. **Token authorization is fail-closed** — if the policy engine cannot determine authorization (e.g., mutex poisoned), the operation is denied.
-2. **Audit events are never silently dropped** — kernel sinks fail closed on write errors instead of silently downgrading. Production app bootstraps default to `FanoutAuditSink` backed by `~/.loong/audit/events.jsonl`, `LoongKernel::new()` defaults to `InMemoryAuditSink`, and spec/test/demo helpers may intentionally use explicit in-memory audit seams for side-effect-free reporting. `NoopAuditSink` remains reserved for callers that explicitly opt into `new_without_audit(...)` or wire a noop sink themselves.
+2. **Audit events are never silently dropped** — kernel sinks fail closed on write errors instead of silently downgrading. Production app bootstraps default to `FanoutAuditSink` backed by `~/.loong/audit/events.jsonl`, `Kernel::new()` defaults to `InMemoryAuditSink`, and spec/test/demo helpers may intentionally use explicit in-memory audit seams for side-effect-free reporting. `NoopAuditSink` remains reserved for callers that explicitly opt into `new_without_audit(...)` or wire a noop sink themselves.
 3. **Pack registration is idempotent-safe** — duplicate pack IDs return `DuplicatePack` error, never silently overwrite.
 4. **Generation-based revocation is monotonic** — the revocation threshold only increases, never decreases.
 5. **TaskState transitions are irreversible from terminal states** — `Completed` and `Faulted` states cannot transition.
