@@ -9,6 +9,39 @@ pub use loong_contracts::{
 };
 
 use crate::errors::ToolPlaneError;
+use crate::{AccessCx, Kernel, KernelPolicyContext};
+
+pub struct ToolCoreContext<'a> {
+    kernel: &'a Kernel,
+    policy_context: KernelPolicyContext<'a>,
+}
+
+impl<'a> ToolCoreContext<'a> {
+    #[must_use]
+    pub fn new(kernel: &'a Kernel, policy_context: KernelPolicyContext<'a>) -> Self {
+        Self {
+            kernel,
+            policy_context,
+        }
+    }
+
+    #[must_use]
+    pub fn with_fs_root_view(
+        mut self,
+        fs_resolution_root: std::path::PathBuf,
+        fs_allowed_roots: Vec<std::path::PathBuf>,
+    ) -> Self {
+        self.policy_context = self
+            .policy_context
+            .with_fs_root_view(fs_resolution_root, fs_allowed_roots);
+        self
+    }
+
+    #[must_use]
+    pub fn access(self) -> AccessCx<'a, Kernel> {
+        self.kernel.access(self.policy_context)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -40,6 +73,14 @@ pub trait CoreToolAdapter: Send + Sync {
         &self,
         request: ToolCoreRequest,
     ) -> Result<ToolCoreOutcome, ToolPlaneError>;
+
+    async fn execute_core_tool_with_context(
+        &self,
+        request: ToolCoreRequest,
+        _ctx: ToolCoreContext<'_>,
+    ) -> Result<ToolCoreOutcome, ToolPlaneError> {
+        self.execute_core_tool(request).await
+    }
 }
 
 #[async_trait]
@@ -118,6 +159,31 @@ impl ToolPlane {
             .clone();
 
         return adapter.execute_core_tool(request).await;
+    }
+
+    pub async fn execute_core_with_context(
+        &self,
+        core_name: Option<&str>,
+        request: ToolCoreRequest,
+        ctx: ToolCoreContext<'_>,
+    ) -> Result<ToolCoreOutcome, ToolPlaneError> {
+        let resolved_name = if let Some(name) = core_name {
+            name
+        } else {
+            self.default_core_adapter
+                .as_deref()
+                .ok_or(ToolPlaneError::NoDefaultCoreAdapter)?
+        };
+
+        let adapter = self
+            .core_adapters
+            .get(resolved_name)
+            .ok_or(ToolPlaneError::CoreAdapterNotFound(
+                resolved_name.to_owned(),
+            ))?
+            .clone();
+
+        adapter.execute_core_tool_with_context(request, ctx).await
     }
 
     pub async fn execute_extension(

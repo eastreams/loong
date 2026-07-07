@@ -26,6 +26,7 @@ repository = "https://github.com/eastreams/loong"
 homepage = "https://github.com/eastreams/loong"
 
 [workspace.dependencies]
+anymap = "0.12.1"
 async-trait = "0.1"
 clap = { version = "4.5", features = ["derive"] }
 dialoguer = { version = "0.12", features = ["fuzzy-select"] }

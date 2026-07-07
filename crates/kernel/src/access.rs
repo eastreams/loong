@@ -21,6 +21,12 @@ where
             policy_context,
         }
     }
+
+    #[inline(always)]
+    #[must_use]
+    pub fn fs(self) -> FsAccess<'a, K> {
+        FsAccess::new(self.kernel, self.policy_context)
+    }
 }
 
 impl<'a, K> HasFsAccess<'a, K> for AccessCx<'a, K>
@@ -28,7 +34,7 @@ where
     K: Kernel,
 {
     fn fs(self) -> FsAccess<'a, K> {
-        FsAccess::new(self.kernel, self.policy_context)
+        self.fs()
     }
 }
 

@@ -19,6 +19,7 @@ pub use artifact::{
 pub use budget::{ChildBudgetPolicy, RetentionBudget, SessionBudgetOverlay, TaskBudget};
 pub use error::AuthorizationError;
 pub use error::CoreModelError;
+pub use error::PolicyGrantError;
 pub use event::{SessionEvent, TaskEvent};
 pub use execution::{CancellationPolicy, Subtask, TaskExecutionMode, Turn, TurnStatus};
 pub use lifecycle::TaskLifecycle;

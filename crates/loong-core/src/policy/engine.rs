@@ -1,10 +1,10 @@
 use std::collections::BTreeSet;
 
 use async_trait::async_trait;
-use loong_contracts::{Capability, GrantId, PolicyOutcome};
+use loong_contracts::{Capability, GrantId, PolicyOutcome, PolicyReport};
 
 use crate::{
-    error::AuthorizationError,
+    error::PolicyGrantError,
     policy::{
         action::Action,
         context::PolicyContext,
@@ -23,7 +23,7 @@ pub trait PolicyEngine: Sync {
     type Cx<'a>: PolicyContext;
 
     /// Evaluate a borrowed action without consuming it.
-    async fn decide<A: Action>(&self, ctx: &Self::Cx<'_>, action: &A) -> PolicyOutcome;
+    async fn decide<A: Action + 'static>(&self, ctx: &Self::Cx<'_>, action: &A) -> PolicyReport;
 
     /// Allocate the next grant id for an allowed action.
     async fn next_grant_id(&self) -> GrantId;
@@ -34,9 +34,19 @@ pub trait PolicyEngine: Sync {
         &self,
         ctx: &Self::Cx<'_>,
         action: A,
-    ) -> Result<ActionGrant<A>, AuthorizationError> {
-        let outcome = self.decide(ctx, &action).await;
-        match outcome {
+    ) -> Result<ActionGrant<A>, PolicyGrantError>
+    where
+        A: 'static,
+    {
+        let granted_capabilities = ctx.capabilities();
+        for capability in action.required_capabilities() {
+            if !granted_capabilities.contains(&capability) {
+                return Err(PolicyGrantError::MissingCapability { capability });
+            }
+        }
+
+        let report = self.decide(ctx, &action).await;
+        match report.outcome.clone() {
             PolicyOutcome::Allow {
                 source: _,
                 reason: _,
@@ -46,12 +56,9 @@ pub trait PolicyEngine: Sync {
                 action,
             )),
             PolicyOutcome::Deny {
-                grant_source,
+                grant_source: _,
                 reason,
-            } => Err(AuthorizationError::Denied {
-                grant_source,
-                reason,
-            }),
+            } => Err(PolicyGrantError::Denied { report, reason }),
         }
     }
 }

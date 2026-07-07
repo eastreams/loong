@@ -6,30 +6,33 @@ use std::{
 };
 
 use async_trait::async_trait;
-use loong_contracts::{Capability, GrantId, PolicyEntry, PolicyOutcome};
+use loong_contracts::{Capability, GrantId, PolicyEntry, PolicyOutcome, PolicyReport};
 use loong_core::{
     kernel::Kernel as CoreKernel,
     policy::{
         action::Action,
-        context::{ActionContext, PolicyContext, WorkspacePolicyContext},
+        context::{ActionContext, PolicyContext},
         engine::PolicyEngine,
     },
 };
 
 use super::AccessCx;
 use crate::Kernel as RuntimeKernel;
-use loong_access::fs::access::HasFsAccess;
+use loong_access::fs::access::{FsAccessContext, HasFsAccess};
 
 #[derive(Debug, Clone)]
 struct AccessCxPolicyContext {
-    workspace_root: PathBuf,
+    resolution_root: PathBuf,
+    allowed_roots: Vec<PathBuf>,
     capabilities: BTreeSet<Capability>,
 }
 
 impl AccessCxPolicyContext {
     fn new(workspace_root: impl Into<PathBuf>) -> Self {
+        let workspace_root = workspace_root.into();
         Self {
-            workspace_root: workspace_root.into(),
+            resolution_root: workspace_root.clone(),
+            allowed_roots: vec![workspace_root],
             capabilities: BTreeSet::from([Capability::FilesystemRead]),
         }
     }
@@ -41,9 +44,13 @@ impl PolicyContext for AccessCxPolicyContext {
     }
 }
 
-impl WorkspacePolicyContext for AccessCxPolicyContext {
-    fn workspace_root(&self) -> &Path {
-        &self.workspace_root
+impl FsAccessContext for AccessCxPolicyContext {
+    fn fs_resolution_root(&self) -> &Path {
+        &self.resolution_root
+    }
+
+    fn fs_allowed_roots(&self) -> &[PathBuf] {
+        &self.allowed_roots
     }
 }
 
@@ -66,13 +73,16 @@ struct AccessCxPolicyEngine {
 impl PolicyEngine for AccessCxPolicyEngine {
     type Cx<'a> = AccessCxPolicyContext;
 
-    async fn decide<A: Action>(&self, _ctx: &Self::Cx<'_>, _action: &A) -> PolicyOutcome {
-        PolicyOutcome::Allow {
-            source: PolicyEntry {
-                policy_name: Cow::Borrowed("allow-all"),
-                policy_id: 1,
+    async fn decide<A: Action + 'static>(&self, _ctx: &Self::Cx<'_>, _action: &A) -> PolicyReport {
+        PolicyReport {
+            evaluations: Vec::new(),
+            outcome: PolicyOutcome::Allow {
+                source: PolicyEntry {
+                    policy_name: Cow::Borrowed("allow-all"),
+                    policy_id: 1,
+                },
+                reason: Cow::Borrowed("allowed"),
             },
-            reason: Cow::Borrowed("allowed"),
         }
     }
 
@@ -110,17 +120,30 @@ fn loong_kernel_exposes_access_types_and_fs_surface_for_workspace_kernels() {
 #[tokio::test]
 async fn access_context_preserves_workspace_policy_context_for_fs_access() {
     let kernel = AccessCxTestKernel::default();
-    let access = AccessCx::new(&kernel, AccessCxPolicyContext::new("/workspace"));
+    let base = tempfile_dir("loong-kernel-access-context");
+    let workspace_root = base.join("workspace");
+    std::fs::create_dir_all(workspace_root.join("notes")).expect("create notes dir");
+    std::fs::write(workspace_root.join("notes/todo.md"), "hello").expect("write note");
+    let access = AccessCx::new(&kernel, AccessCxPolicyContext::new(&workspace_root));
 
-    let grant = access
+    let output = access
         .fs()
         .read_file("notes/todo.md")
         .await
-        .expect("grant should succeed");
+        .expect("read should succeed");
 
-    assert_eq!(grant.id, GrantId(1));
-    assert_eq!(
-        grant.granted.into_action().path(),
-        Path::new("/workspace/notes/todo.md")
-    );
+    let expected_path =
+        std::fs::canonicalize(workspace_root.join("notes/todo.md")).expect("canonicalize note");
+    assert_eq!(output.path, expected_path);
+    assert_eq!(output.bytes, b"hello");
+
+    std::fs::remove_dir_all(base).ok();
+}
+
+fn tempfile_dir(prefix: &str) -> PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    std::env::temp_dir().join(format!("{prefix}-{nanos}"))
 }

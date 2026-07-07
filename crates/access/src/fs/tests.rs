@@ -8,18 +8,18 @@ use std::{
 };
 
 use async_trait::async_trait;
-use loong_contracts::{Capability, GrantId, PolicyEntry, PolicyOutcome};
+use loong_contracts::{Capability, GrantId, PolicyEntry, PolicyOutcome, PolicyReport};
 use loong_core::{
     kernel::Kernel,
     policy::{
         action::Action,
-        context::{ActionContext, PolicyContext, WorkspacePolicyContext},
+        context::{ActionContext, PolicyContext},
         engine::PolicyEngine,
     },
 };
 
 use super::{
-    access::{FsAccess, HasFsAccess},
+    access::{FsAccess, FsAccessContext, FsAccessError, HasFsAccess},
     action::{FsAction, FsReadAction},
     error::FsActionError,
     path::CanonicalPath,
@@ -27,14 +27,17 @@ use super::{
 
 #[derive(Debug, Clone)]
 struct FsAccessPolicyContext {
-    workspace_root: PathBuf,
+    resolution_root: PathBuf,
+    allowed_roots: Vec<PathBuf>,
     capabilities: BTreeSet<Capability>,
 }
 
 impl FsAccessPolicyContext {
-    fn new(workspace_root: impl Into<PathBuf>) -> Self {
+    fn new(root: impl Into<PathBuf>) -> Self {
+        let root = root.into();
         Self {
-            workspace_root: workspace_root.into(),
+            resolution_root: root.clone(),
+            allowed_roots: vec![root],
             capabilities: BTreeSet::from([Capability::FilesystemRead]),
         }
     }
@@ -46,9 +49,13 @@ impl PolicyContext for FsAccessPolicyContext {
     }
 }
 
-impl WorkspacePolicyContext for FsAccessPolicyContext {
-    fn workspace_root(&self) -> &Path {
-        &self.workspace_root
+impl FsAccessContext for FsAccessPolicyContext {
+    fn fs_resolution_root(&self) -> &Path {
+        &self.resolution_root
+    }
+
+    fn fs_allowed_roots(&self) -> &[PathBuf] {
+        &self.allowed_roots
     }
 }
 
@@ -62,22 +69,44 @@ impl ActionContext for FsAccessPolicyContext {
     }
 }
 
-#[derive(Default)]
 struct FsAccessPolicyEngine {
     next_grant_id: AtomicU64,
+    allow: bool,
+}
+
+impl Default for FsAccessPolicyEngine {
+    fn default() -> Self {
+        Self {
+            next_grant_id: AtomicU64::new(0),
+            allow: true,
+        }
+    }
 }
 
 #[async_trait]
 impl PolicyEngine for FsAccessPolicyEngine {
     type Cx<'a> = FsAccessPolicyContext;
 
-    async fn decide<A: Action>(&self, _ctx: &Self::Cx<'_>, _action: &A) -> PolicyOutcome {
-        PolicyOutcome::Allow {
-            source: PolicyEntry {
-                policy_name: Cow::Borrowed("allow-all"),
-                policy_id: 1,
+    async fn decide<A: Action + 'static>(&self, _ctx: &Self::Cx<'_>, _action: &A) -> PolicyReport {
+        if self.allow {
+            return PolicyReport {
+                evaluations: Vec::new(),
+                outcome: PolicyOutcome::Allow {
+                    source: PolicyEntry {
+                        policy_name: Cow::Borrowed("allow-all"),
+                        policy_id: 1,
+                    },
+                    reason: Cow::Borrowed("allowed"),
+                },
+            };
+        }
+
+        PolicyReport {
+            evaluations: Vec::new(),
+            outcome: PolicyOutcome::Deny {
+                grant_source: None,
+                reason: Cow::Borrowed("denied by test policy"),
             },
-            reason: Cow::Borrowed("allowed"),
         }
     }
 
@@ -89,6 +118,17 @@ impl PolicyEngine for FsAccessPolicyEngine {
 #[derive(Default)]
 struct FsAccessTestKernel {
     policy: FsAccessPolicyEngine,
+}
+
+impl FsAccessTestKernel {
+    fn denying() -> Self {
+        Self {
+            policy: FsAccessPolicyEngine {
+                next_grant_id: AtomicU64::new(0),
+                allow: false,
+            },
+        }
+    }
 }
 
 #[async_trait]
@@ -135,16 +175,26 @@ impl<'a> HasFsAccess<'a, FsAccessTestKernel> for FsAccessTestCx<'a> {
 
 #[test]
 fn canonical_path_resolves_relative_path_inside_workspace() {
-    let path = CanonicalPath::resolve("docs/../notes/todo.md", Path::new("/workspace"))
-        .expect("path inside workspace should normalize");
+    let workspace_root = PathBuf::from("/workspace");
+    let path = CanonicalPath::resolve(
+        "docs/../notes/todo.md",
+        &workspace_root,
+        std::slice::from_ref(&workspace_root),
+    )
+    .expect("path inside workspace should normalize");
 
     assert_eq!(path.as_path(), Path::new("/workspace/notes/todo.md"));
 }
 
 #[test]
 fn fs_read_action_uses_canonical_path() {
-    let path = CanonicalPath::resolve("docs/../notes/todo.md", Path::new("/workspace"))
-        .expect("path inside workspace should normalize");
+    let workspace_root = PathBuf::from("/workspace");
+    let path = CanonicalPath::resolve(
+        "docs/../notes/todo.md",
+        &workspace_root,
+        std::slice::from_ref(&workspace_root),
+    )
+    .expect("path inside workspace should normalize");
     let action = FsReadAction::new(path);
 
     assert_eq!(action.path(), Path::new("/workspace/notes/todo.md"));
@@ -157,16 +207,25 @@ fn fs_read_action_uses_canonical_path() {
 
 #[test]
 fn canonical_path_rejects_workspace_escape() {
-    let error = CanonicalPath::resolve("../secrets.txt", Path::new("/workspace"))
-        .expect_err("path escape should be denied");
+    let workspace_root = PathBuf::from("/workspace");
+    let error = CanonicalPath::resolve(
+        "../secrets.txt",
+        &workspace_root,
+        std::slice::from_ref(&workspace_root),
+    )
+    .expect_err("path escape should be denied");
 
-    assert!(matches!(error, FsActionError::PathEscapesWorkspace { .. }));
+    assert!(matches!(
+        error,
+        FsActionError::PathEscapesAllowedRoot { .. }
+    ));
 }
 
 #[test]
 fn fs_action_wraps_read_action() {
-    let path =
-        CanonicalPath::resolve("notes.md", Path::new("/workspace")).expect("path inside workspace");
+    let workspace_root = PathBuf::from("/workspace");
+    let path = CanonicalPath::resolve("notes.md", &workspace_root, &[workspace_root.clone()])
+        .expect("path inside workspace");
     let action = FsAction::read_file(path);
 
     assert_eq!(action.kind(), "fs.read");
@@ -192,27 +251,61 @@ fn canonical_path_rejects_symlink_escape() {
     let symlink_path = workspace_root.join("secret-link");
     create_symlink(&outside_file, &symlink_path).expect("create symlink");
 
-    let error = CanonicalPath::resolve("secret-link", &workspace_root)
-        .expect_err("symlink escape should be denied");
+    let error = CanonicalPath::resolve(
+        "secret-link",
+        &workspace_root,
+        std::slice::from_ref(&workspace_root),
+    )
+    .expect_err("symlink escape should be denied");
 
-    assert!(matches!(error, FsActionError::PathEscapesWorkspace { .. }));
+    assert!(matches!(
+        error,
+        FsActionError::PathEscapesAllowedRoot { .. }
+    ));
 }
 
 #[tokio::test]
 async fn tool_context_like_chain_grants_read_file_via_access_then_fs() {
     let kernel = FsAccessTestKernel::default();
-    let ctx = FsAccessToolCx::new(&kernel, "/workspace");
+    let base = unique_temp_dir("loong-access-fs-read-output");
+    let workspace_root = base.join("workspace");
+    fs::create_dir_all(workspace_root.join("notes")).expect("create notes dir");
+    fs::write(workspace_root.join("notes/todo.md"), "hello").expect("write note");
+    let ctx = FsAccessToolCx::new(&kernel, &workspace_root);
 
-    let grant = ctx
+    let output = ctx
         .access()
         .fs()
         .read_file("notes/todo.md")
         .await
         .expect("grant should succeed");
 
-    let granted = grant.granted.into_action();
-    assert_eq!(grant.id, GrantId(1));
-    assert_eq!(granted.path(), Path::new("/workspace/notes/todo.md"));
+    let expected_path =
+        dunce::canonicalize(workspace_root.join("notes/todo.md")).expect("canonical note path");
+    assert_eq!(output.path, expected_path);
+    assert_eq!(output.bytes, b"hello");
+
+    fs::remove_dir_all(base).ok();
+}
+
+#[tokio::test]
+async fn fs_access_denies_before_reading_file() {
+    let kernel = FsAccessTestKernel::denying();
+    let base = unique_temp_dir("loong-access-fs-deny-before-read");
+    let workspace_root = base.join("workspace");
+    fs::create_dir_all(&workspace_root).expect("create workspace root");
+    let ctx = FsAccessToolCx::new(&kernel, &workspace_root);
+
+    let error = ctx
+        .access()
+        .fs()
+        .read_file("missing.txt")
+        .await
+        .expect_err("policy denial should happen before file read");
+
+    assert!(matches!(error, FsAccessError::Authorization(_)));
+
+    fs::remove_dir_all(base).ok();
 }
 
 #[cfg(unix)]

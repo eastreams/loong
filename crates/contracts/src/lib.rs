@@ -22,7 +22,8 @@ mod work_types;
 mod workflow_types;
 
 pub use action_grant::{
-    GrantId, PolicyDecision, PolicyEntry, PolicyEvaluation, PolicyGrant, PolicyOutcome,
+    GrantId, PolicyDecision, PolicyEntry, PolicyEvaluation, PolicyGrant, PolicyId, PolicyOutcome,
+    PolicyReport,
 };
 pub use audit_types::{AuditEvent, AuditEventKind, ExecutionPlane, PlaneTier};
 pub use child_process_env::{

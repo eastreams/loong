@@ -31,7 +31,7 @@ use crate::{
         RuntimeExtensionOutcome, RuntimeExtensionRequest, RuntimePlane,
     },
     tool::{
-        CoreToolAdapter, ToolCoreOutcome, ToolCoreRequest, ToolExtensionAdapter,
+        CoreToolAdapter, ToolCoreContext, ToolCoreOutcome, ToolCoreRequest, ToolExtensionAdapter,
         ToolExtensionOutcome, ToolExtensionRequest, ToolPlane,
     },
 };
@@ -697,9 +697,20 @@ impl Kernel {
             })
             .unwrap_or_else(|| "default".to_owned());
         let tool_name = request.tool_name.clone();
+        let tool_context = ToolCoreContext::new(
+            self,
+            KernelPolicyContext::new(
+                pack,
+                token,
+                now,
+                ExecutionPlane::Tool,
+                PlaneTier::Core,
+                Some(&tool_policy_params),
+            ),
+        );
         let outcome = self
             .tool_plane
-            .execute_core(core_name, request)
+            .execute_core_with_context(core_name, request, tool_context)
             .await
             .map_err(KernelError::from)?;
 
@@ -1015,14 +1026,8 @@ impl Kernel {
         }
 
         let action = LegacyKernelAction::new(operation, required_capabilities.clone());
-        let policy_context = KernelPolicyContext {
-            pack,
-            token,
-            now_epoch_s,
-            plane,
-            tier,
-            request_parameters,
-        };
+        let policy_context =
+            KernelPolicyContext::new(pack, token, now_epoch_s, plane, tier, request_parameters);
         if let Err(policy_error) = self
             .policy
             .authorize_kernel_action(&policy_context, action)

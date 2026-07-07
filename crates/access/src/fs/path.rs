@@ -1,5 +1,3 @@
-//! A helper module. Should be somewhere else maybe.
-
 use std::{
     ffi::OsString,
     path::{Path, PathBuf},
@@ -13,20 +11,30 @@ pub struct CanonicalPath(PathBuf);
 impl CanonicalPath {
     pub fn resolve(
         path: impl AsRef<Path>,
-        workspace_root: impl AsRef<Path>,
+        resolution_root: impl AsRef<Path>,
+        allowed_roots: &[PathBuf],
     ) -> Result<Self, FsActionError> {
         let raw = path.as_ref();
         if raw.as_os_str().is_empty() {
             return Err(FsActionError::EmptyPath);
         }
 
-        let workspace_root = canonicalize_or_fallback(workspace_root.as_ref())?;
+        let allowed_roots = allowed_roots
+            .iter()
+            .map(|root| canonicalize_or_fallback(root.as_path()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let Some(primary_root) = allowed_roots.first() else {
+            return Err(FsActionError::MissingAllowedRoot);
+        };
+
+        let resolution_root = canonicalize_or_fallback(resolution_root.as_ref())?;
         let combined = if raw.is_absolute() {
             raw.to_path_buf()
         } else {
-            workspace_root.join(raw)
+            resolution_root.join(raw)
         };
-        let path = resolve_path_within_workspace(combined.as_path(), &workspace_root)?;
+        let path =
+            resolve_path_within_allowed_roots(combined.as_path(), &allowed_roots, primary_root)?;
         Ok(Self(path))
     }
 
@@ -47,30 +55,33 @@ impl AsRef<Path> for CanonicalPath {
     }
 }
 
-fn resolve_path_within_workspace(
+fn resolve_path_within_allowed_roots(
     path: &Path,
-    workspace_root: &Path,
+    allowed_roots: &[PathBuf],
+    primary_root: &Path,
 ) -> Result<PathBuf, FsActionError> {
     let normalized = normalize_without_fs(path);
 
-    if !workspace_root.exists() {
-        ensure_path_within_workspace(&normalized, workspace_root)?;
+    if allowed_roots
+        .iter()
+        .any(|allowed_root| !allowed_root.exists() && normalized.starts_with(allowed_root))
+    {
         return Ok(normalized);
     }
 
     if normalized.exists() {
         let canonical = canonicalize_existing_path(&normalized)?;
-        ensure_path_within_workspace(&canonical, workspace_root)?;
+        ensure_path_within_allowed_roots(&canonical, allowed_roots, primary_root)?;
         return Ok(canonical);
     }
 
     let (ancestor, suffix) = split_existing_ancestor(&normalized)?;
     let mut resolved = canonicalize_existing_path(&ancestor)?;
-    ensure_path_within_workspace(&resolved, workspace_root)?;
+    ensure_path_within_allowed_roots(&resolved, allowed_roots, primary_root)?;
     for component in suffix {
         resolved.push(component);
     }
-    ensure_path_within_workspace(&resolved, workspace_root)?;
+    ensure_path_within_allowed_roots(&resolved, allowed_roots, primary_root)?;
     Ok(resolved)
 }
 
@@ -90,15 +101,22 @@ fn canonicalize_existing_path(path: &Path) -> Result<PathBuf, FsActionError> {
     Ok(dunce::simplified(&canonical).to_path_buf())
 }
 
-fn ensure_path_within_workspace(path: &Path, workspace_root: &Path) -> Result<(), FsActionError> {
+fn ensure_path_within_allowed_roots(
+    path: &Path,
+    allowed_roots: &[PathBuf],
+    primary_root: &Path,
+) -> Result<(), FsActionError> {
     let normalized = dunce::simplified(path);
-    if normalized.starts_with(workspace_root) {
+    if allowed_roots
+        .iter()
+        .any(|allowed_root| normalized.starts_with(allowed_root))
+    {
         return Ok(());
     }
 
-    Err(FsActionError::PathEscapesWorkspace {
+    Err(FsActionError::PathEscapesAllowedRoot {
         path: normalized.to_path_buf(),
-        workspace_root: workspace_root.to_path_buf(),
+        allowed_root: primary_root.to_path_buf(),
     })
 }
 

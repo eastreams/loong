@@ -55,3 +55,10 @@ pub enum PolicyOutcome {
         reason: Cow<'static, str>,
     },
 }
+
+/// Complete report for one action authorization attempt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PolicyReport {
+    pub evaluations: Vec<PolicyEvaluation>,
+    pub outcome: PolicyOutcome,
+}

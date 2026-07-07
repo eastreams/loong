@@ -1,6 +1,7 @@
 use std::{
     borrow::Cow,
     collections::BTreeSet,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -8,9 +9,10 @@ use std::{
 };
 
 use async_trait::async_trait;
+use loong_access::fs::access::FsAccessContext;
 use loong_contracts::{
     Capability, CapabilityToken, ExecutionPlane, GrantId, PlaneTier, PolicyDecision, PolicyEntry,
-    PolicyGrant, PolicyOutcome, VerticalPackManifest,
+    PolicyEvaluation, PolicyGrant, PolicyId, PolicyOutcome, PolicyReport, VerticalPackManifest,
 };
 use loong_core::{
     error::AuthorizationError,
@@ -18,7 +20,7 @@ use loong_core::{
     policy::{
         context::{ActionContext, PolicyContext},
         engine::PolicyEngine,
-        policy::PolicyAny,
+        policy::{Policy, PolicyAny},
     },
 };
 
@@ -36,6 +38,42 @@ pub struct KernelPolicyContext<'a> {
     pub plane: ExecutionPlane,
     pub tier: PlaneTier,
     pub request_parameters: Option<&'a serde_json::Value>,
+    pub fs_resolution_root: PathBuf,
+    pub fs_allowed_roots: Vec<PathBuf>,
+}
+
+impl<'a> KernelPolicyContext<'a> {
+    #[must_use]
+    pub fn new(
+        pack: &'a VerticalPackManifest,
+        token: &'a CapabilityToken,
+        now_epoch_s: u64,
+        plane: ExecutionPlane,
+        tier: PlaneTier,
+        request_parameters: Option<&'a serde_json::Value>,
+    ) -> Self {
+        Self {
+            pack,
+            token,
+            now_epoch_s,
+            plane,
+            tier,
+            request_parameters,
+            fs_resolution_root: default_fs_resolution_root(),
+            fs_allowed_roots: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn with_fs_root_view(
+        mut self,
+        fs_resolution_root: PathBuf,
+        fs_allowed_roots: Vec<PathBuf>,
+    ) -> Self {
+        self.fs_resolution_root = fs_resolution_root;
+        self.fs_allowed_roots = fs_allowed_roots;
+        self
+    }
 }
 
 impl PolicyContext for KernelPolicyContext<'_> {
@@ -54,6 +92,21 @@ impl ActionContext for KernelPolicyContext<'_> {
     }
 }
 
+impl FsAccessContext for KernelPolicyContext<'_> {
+    fn fs_resolution_root(&self) -> &Path {
+        self.fs_resolution_root.as_path()
+    }
+
+    fn fs_allowed_roots(&self) -> &[PathBuf] {
+        self.fs_allowed_roots.as_slice()
+    }
+}
+
+fn default_fs_resolution_root() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+#[derive(Debug)]
 pub struct LegacyKernelAction {
     operation: String,
     required_capabilities: BTreeSet<Capability>,
@@ -82,17 +135,17 @@ impl Action for LegacyKernelAction {
     }
 }
 
-// TODO: This is the temporary Policy Pipeline, other
-// policies' support will be added later.
 pub struct PolicyPipeline {
-    policies: Vec<Arc<dyn PolicyAny<Self>>>,
+    any_policies: Vec<RegisteredAnyPolicy>,
+    typed_policies: anymap::Map<dyn anymap::any::Any + Send + Sync>,
     policy_extensions: PolicyExtensionChain,
+    next_policy_id: PolicyId,
     grant_seq: AtomicU64,
 }
 
 impl Default for PolicyPipeline {
     fn default() -> Self {
-        Self::new().with_policy(AllowPolicy)
+        Self::new().with_any_policy(AllowPolicy)
     }
 }
 
@@ -100,26 +153,58 @@ impl PolicyPipeline {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            policies: Vec::new(),
+            any_policies: Vec::new(),
+            typed_policies: anymap::Map::new(),
             policy_extensions: PolicyExtensionChain::new(),
+            next_policy_id: 0,
             grant_seq: AtomicU64::new(0),
         }
     }
 
     #[must_use]
-    pub fn with_policy<P>(mut self, policy: P) -> Self
+    pub fn with_policy<A, P>(mut self, policy: P) -> Self
     where
-        P: PolicyAny<Self> + 'static,
+        A: Action + 'static,
+        P: Policy<Self, A> + 'static,
     {
-        self.push_policy(policy);
+        self.push_policy::<A, P>(policy);
         self
     }
 
-    pub fn push_policy<P>(&mut self, policy: P)
+    pub fn push_policy<A, P>(&mut self, policy: P)
+    where
+        A: Action + 'static,
+        P: Policy<Self, A> + 'static,
+    {
+        let id = self.allocate_policy_id();
+        let entries = self
+            .typed_policies
+            .entry::<TypedPolicyEntries<A>>()
+            .or_insert_with(TypedPolicyEntries::default);
+        entries.policies.push(RegisteredPolicy {
+            id,
+            policy: Arc::new(policy),
+        });
+    }
+
+    #[must_use]
+    pub fn with_any_policy<P>(mut self, policy: P) -> Self
     where
         P: PolicyAny<Self> + 'static,
     {
-        self.policies.push(Arc::new(policy));
+        self.push_any_policy(policy);
+        self
+    }
+
+    pub fn push_any_policy<P>(&mut self, policy: P)
+    where
+        P: PolicyAny<Self> + 'static,
+    {
+        let id = self.allocate_policy_id();
+        self.any_policies.push(RegisteredAnyPolicy {
+            id,
+            policy: Arc::new(policy),
+        });
     }
 
     pub fn register_policy_extension<E: PolicyExtension + 'static>(&mut self, extension: E) {
@@ -132,7 +217,10 @@ impl PolicyPipeline {
         action: A,
     ) -> Result<(), PolicyError> {
         let required_capabilities = action.required_capabilities();
-        self.grant(ctx, action).await.map_err(policy_engine_error)?;
+        self.grant(ctx, action)
+            .await
+            .map_err(AuthorizationError::from)
+            .map_err(policy_engine_error)?;
 
         self.policy_extensions.authorize(&PolicyExtensionContext {
             pack: ctx.pack,
@@ -143,9 +231,37 @@ impl PolicyPipeline {
         })
     }
 
+    fn allocate_policy_id(&mut self) -> PolicyId {
+        let id = self.next_policy_id;
+        self.next_policy_id = self.next_policy_id.saturating_add(1);
+        id
+    }
+
     fn next_grant_id_sync(&self) -> GrantId {
         let seq = self.grant_seq.fetch_add(1, Ordering::Relaxed) + 1;
         GrantId(seq)
+    }
+}
+
+struct RegisteredAnyPolicy {
+    id: PolicyId,
+    policy: Arc<dyn PolicyAny<PolicyPipeline>>,
+}
+
+struct RegisteredPolicy<A: Action> {
+    id: PolicyId,
+    policy: Arc<dyn Policy<PolicyPipeline, A>>,
+}
+
+struct TypedPolicyEntries<A: Action> {
+    policies: Vec<RegisteredPolicy<A>>,
+}
+
+impl<A: Action> Default for TypedPolicyEntries<A> {
+    fn default() -> Self {
+        Self {
+            policies: Vec::new(),
+        }
     }
 }
 
@@ -160,36 +276,95 @@ fn policy_engine_error(error: AuthorizationError) -> PolicyError {
 impl PolicyEngine for PolicyPipeline {
     type Cx<'a> = KernelPolicyContext<'a>;
 
-    async fn decide<A: Action>(&self, ctx: &Self::Cx<'_>, action: &A) -> PolicyOutcome {
+    async fn decide<A: Action + 'static>(&self, ctx: &Self::Cx<'_>, action: &A) -> PolicyReport {
+        let mut evaluations = Vec::new();
         let mut allow: Option<(PolicyEntry, Cow<'static, str>)> = None;
 
-        for (index, policy) in self.policies.iter().enumerate() {
-            let grant = policy.grant(ctx, action).await;
+        for registered in &self.any_policies {
+            let grant = registered.policy.grant(ctx, action).await;
             let source = PolicyEntry {
-                policy_name: policy.name().into(),
-                policy_id: index as u64,
+                policy_name: registered.policy.name().into(),
+                policy_id: registered.id,
             };
 
             match grant.decision {
                 PolicyDecision::Allow => {
-                    allow = Some((source, grant.reason));
+                    allow = Some((source.clone(), grant.reason.clone()));
                 }
                 PolicyDecision::Deny => {
-                    return PolicyOutcome::Deny {
-                        grant_source: Some(source),
-                        reason: grant.reason,
+                    let outcome = PolicyOutcome::Deny {
+                        grant_source: Some(source.clone()),
+                        reason: grant.reason.clone(),
+                    };
+                    evaluations.push(PolicyEvaluation {
+                        source,
+                        policy_stage: "any",
+                        grant,
+                    });
+                    return PolicyReport {
+                        evaluations,
+                        outcome,
                     };
                 }
                 PolicyDecision::Abstain => {}
             }
+
+            evaluations.push(PolicyEvaluation {
+                source,
+                policy_stage: "any",
+                grant,
+            });
         }
 
-        match allow {
+        if let Some(entries) = self.typed_policies.get::<TypedPolicyEntries<A>>() {
+            for registered in &entries.policies {
+                let grant = registered.policy.grant(ctx, action).await;
+                let source = PolicyEntry {
+                    policy_name: registered.policy.name(),
+                    policy_id: registered.id,
+                };
+
+                match grant.decision {
+                    PolicyDecision::Allow => {
+                        allow = Some((source.clone(), grant.reason.clone()));
+                    }
+                    PolicyDecision::Deny => {
+                        let outcome = PolicyOutcome::Deny {
+                            grant_source: Some(source.clone()),
+                            reason: grant.reason.clone(),
+                        };
+                        evaluations.push(PolicyEvaluation {
+                            source,
+                            policy_stage: "action",
+                            grant,
+                        });
+                        return PolicyReport {
+                            evaluations,
+                            outcome,
+                        };
+                    }
+                    PolicyDecision::Abstain => {}
+                }
+
+                evaluations.push(PolicyEvaluation {
+                    source,
+                    policy_stage: "action",
+                    grant,
+                });
+            }
+        }
+
+        let outcome = match allow {
             Some((source, reason)) => PolicyOutcome::Allow { source, reason },
             None => PolicyOutcome::Deny {
                 grant_source: None,
                 reason: DEFAULT_DENY_REASON.into(),
             },
+        };
+
+        PolicyReport {
+            evaluations,
+            outcome,
         }
     }
 
@@ -219,6 +394,7 @@ impl<P: PolicyEngine> PolicyAny<P> for AllowPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use loong_core::PolicyGrantError;
 
     struct DenyNetworkExtension;
 
@@ -241,6 +417,89 @@ mod tests {
                 });
             }
             Ok(())
+        }
+    }
+
+    #[derive(Clone)]
+    struct StaticAnyPolicy {
+        name: &'static str,
+        decision: PolicyDecision,
+        reason: &'static str,
+    }
+
+    #[async_trait]
+    impl<P: PolicyEngine> PolicyAny<P> for StaticAnyPolicy {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+
+        async fn grant(&self, _ctx: &P::Cx<'_>, _action: &dyn Action) -> PolicyGrant {
+            PolicyGrant {
+                decision: self.decision.clone(),
+                predicate: None,
+                reason: Cow::Borrowed(self.reason),
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    struct StaticTypedPolicy {
+        name: &'static str,
+        decision: PolicyDecision,
+        reason: &'static str,
+    }
+
+    #[async_trait]
+    impl<A> Policy<PolicyPipeline, A> for StaticTypedPolicy
+    where
+        A: Action + Send + Sync,
+    {
+        fn name(&self) -> Cow<'static, str> {
+            Cow::Borrowed(self.name)
+        }
+
+        async fn grant(&self, _ctx: &KernelPolicyContext<'_>, _action: &A) -> PolicyGrant {
+            PolicyGrant {
+                decision: self.decision.clone(),
+                predicate: None,
+                reason: Cow::Borrowed(self.reason),
+            }
+        }
+    }
+
+    struct CountingAnyPolicy {
+        calls: Arc<AtomicU64>,
+    }
+
+    #[async_trait]
+    impl<P: PolicyEngine> PolicyAny<P> for CountingAnyPolicy {
+        fn name(&self) -> &'static str {
+            "counting-any"
+        }
+
+        async fn grant(&self, _ctx: &P::Cx<'_>, _action: &dyn Action) -> PolicyGrant {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            PolicyGrant {
+                decision: PolicyDecision::Allow,
+                predicate: None,
+                reason: Cow::Borrowed("counted"),
+            }
+        }
+    }
+
+    struct TypedOnlyAction;
+
+    impl Action for TypedOnlyAction {
+        fn kind(&self) -> &'static str {
+            "test.typed_only"
+        }
+
+        fn operation(&self) -> Cow<'static, str> {
+            Cow::Borrowed("typed_only")
+        }
+
+        fn required_capabilities(&self) -> BTreeSet<Capability> {
+            BTreeSet::from([Capability::InvokeTool])
         }
     }
 
@@ -273,18 +532,18 @@ mod tests {
 
     #[tokio::test]
     async fn policy_pipeline_grants_actions_allowed_by_registered_policy() {
-        let engine = PolicyPipeline::new().with_policy(AllowPolicy);
+        let engine = PolicyPipeline::new().with_any_policy(AllowPolicy);
         let pack = pack();
         let token = token();
         let required_capabilities = BTreeSet::from([Capability::InvokeTool]);
-        let ctx = KernelPolicyContext {
-            pack: &pack,
-            token: &token,
-            now_epoch_s: 1,
-            plane: ExecutionPlane::Tool,
-            tier: PlaneTier::Core,
-            request_parameters: None,
-        };
+        let ctx = KernelPolicyContext::new(
+            &pack,
+            &token,
+            1,
+            ExecutionPlane::Tool,
+            PlaneTier::Core,
+            None,
+        );
         let action = LegacyKernelAction::new("tool", required_capabilities);
 
         let grant = engine
@@ -305,14 +564,14 @@ mod tests {
         let mut token = token();
         token.allowed_capabilities.insert(Capability::NetworkEgress);
         let required_capabilities = BTreeSet::from([Capability::NetworkEgress]);
-        let ctx = KernelPolicyContext {
-            pack: &pack,
-            token: &token,
-            now_epoch_s: 1,
-            plane: ExecutionPlane::Runtime,
-            tier: PlaneTier::Core,
-            request_parameters: None,
-        };
+        let ctx = KernelPolicyContext::new(
+            &pack,
+            &token,
+            1,
+            ExecutionPlane::Runtime,
+            PlaneTier::Core,
+            None,
+        );
         let action = LegacyKernelAction::new("fetch", required_capabilities);
 
         let error = engine
@@ -327,5 +586,252 @@ mod tests {
                 reason: "network egress denied by test extension".to_owned(),
             }
         );
+    }
+
+    #[tokio::test]
+    async fn policy_pipeline_grant_denies_action_missing_required_capability() {
+        let engine = PolicyPipeline::default();
+        let pack = pack();
+        let token = token();
+        let ctx = KernelPolicyContext::new(
+            &pack,
+            &token,
+            1,
+            ExecutionPlane::Tool,
+            PlaneTier::Core,
+            None,
+        );
+        let action = LegacyKernelAction::new("read", BTreeSet::from([Capability::FilesystemRead]));
+
+        let error = engine
+            .grant(&ctx, action)
+            .await
+            .expect_err("typed action grant should require token capabilities");
+
+        assert!(matches!(
+            error,
+            PolicyGrantError::MissingCapability {
+                capability: Capability::FilesystemRead
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn policy_pipeline_report_preserves_any_and_action_evaluation_stages() {
+        let engine = PolicyPipeline::new()
+            .with_any_policy(StaticAnyPolicy {
+                name: "any-allow",
+                decision: PolicyDecision::Allow,
+                reason: "any allowed",
+            })
+            .with_policy::<LegacyKernelAction, _>(StaticTypedPolicy {
+                name: "typed-allow",
+                decision: PolicyDecision::Allow,
+                reason: "typed allowed",
+            });
+        let pack = pack();
+        let token = token();
+        let ctx = KernelPolicyContext::new(
+            &pack,
+            &token,
+            1,
+            ExecutionPlane::Tool,
+            PlaneTier::Core,
+            None,
+        );
+        let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+
+        let report = engine.decide(&ctx, &action).await;
+
+        assert_eq!(report.evaluations.len(), 2);
+        assert_eq!(report.evaluations[0].policy_stage, "any");
+        assert_eq!(report.evaluations[1].policy_stage, "action");
+        assert!(matches!(
+            report.outcome,
+            PolicyOutcome::Allow { ref source, .. } if source.policy_name == "typed-allow"
+        ));
+    }
+
+    #[tokio::test]
+    async fn policy_pipeline_typed_policy_only_matches_registered_action_type() {
+        let engine = PolicyPipeline::new().with_policy::<TypedOnlyAction, _>(StaticTypedPolicy {
+            name: "typed-only",
+            decision: PolicyDecision::Allow,
+            reason: "typed only allowed",
+        });
+        let pack = pack();
+        let token = token();
+        let ctx = KernelPolicyContext::new(
+            &pack,
+            &token,
+            1,
+            ExecutionPlane::Tool,
+            PlaneTier::Core,
+            None,
+        );
+        let legacy_action =
+            LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+
+        let legacy_report = engine.decide(&ctx, &legacy_action).await;
+        let typed_report = engine.decide(&ctx, &TypedOnlyAction).await;
+
+        assert!(legacy_report.evaluations.is_empty());
+        assert!(matches!(
+            legacy_report.outcome,
+            PolicyOutcome::Deny {
+                grant_source: None,
+                ..
+            }
+        ));
+        assert_eq!(typed_report.evaluations.len(), 1);
+        assert_eq!(typed_report.evaluations[0].policy_stage, "action");
+    }
+
+    #[tokio::test]
+    async fn policy_pipeline_any_deny_prevents_typed_allow() {
+        let engine = PolicyPipeline::new()
+            .with_any_policy(StaticAnyPolicy {
+                name: "any-deny",
+                decision: PolicyDecision::Deny,
+                reason: "any denied",
+            })
+            .with_policy::<LegacyKernelAction, _>(StaticTypedPolicy {
+                name: "typed-allow",
+                decision: PolicyDecision::Allow,
+                reason: "typed allowed",
+            });
+        let pack = pack();
+        let token = token();
+        let ctx = KernelPolicyContext::new(
+            &pack,
+            &token,
+            1,
+            ExecutionPlane::Tool,
+            PlaneTier::Core,
+            None,
+        );
+        let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+
+        let error = engine
+            .grant(&ctx, action)
+            .await
+            .expect_err("any deny should stop before typed allow");
+
+        assert!(matches!(
+            error,
+            PolicyGrantError::Denied { ref report, .. }
+                if report.evaluations.len() == 1
+                    && report.evaluations[0].policy_stage == "any"
+                    && matches!(report.outcome, PolicyOutcome::Deny { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn policy_pipeline_typed_deny_overrides_earlier_any_allow() {
+        let engine = PolicyPipeline::new()
+            .with_any_policy(StaticAnyPolicy {
+                name: "any-allow",
+                decision: PolicyDecision::Allow,
+                reason: "any allowed",
+            })
+            .with_policy::<LegacyKernelAction, _>(StaticTypedPolicy {
+                name: "typed-deny",
+                decision: PolicyDecision::Deny,
+                reason: "typed denied",
+            });
+        let pack = pack();
+        let token = token();
+        let ctx = KernelPolicyContext::new(
+            &pack,
+            &token,
+            1,
+            ExecutionPlane::Tool,
+            PlaneTier::Core,
+            None,
+        );
+        let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+
+        let error = engine
+            .grant(&ctx, action)
+            .await
+            .expect_err("typed deny should override any allow");
+
+        assert!(matches!(
+            error,
+            PolicyGrantError::Denied { ref report, .. }
+                if report.evaluations.len() == 2
+                    && report.evaluations[0].policy_stage == "any"
+                    && report.evaluations[1].policy_stage == "action"
+                    && matches!(
+                        report.outcome,
+                        PolicyOutcome::Deny {
+                            grant_source: Some(ref source),
+                            ..
+                        } if source.policy_name == "typed-deny"
+                    )
+        ));
+    }
+
+    #[tokio::test]
+    async fn policy_pipeline_all_abstain_defaults_to_deny() {
+        let engine = PolicyPipeline::new().with_any_policy(StaticAnyPolicy {
+            name: "any-abstain",
+            decision: PolicyDecision::Abstain,
+            reason: "no opinion",
+        });
+        let pack = pack();
+        let token = token();
+        let ctx = KernelPolicyContext::new(
+            &pack,
+            &token,
+            1,
+            ExecutionPlane::Tool,
+            PlaneTier::Core,
+            None,
+        );
+        let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+
+        let report = engine.decide(&ctx, &action).await;
+
+        assert_eq!(report.evaluations.len(), 1);
+        assert!(matches!(
+            report.outcome,
+            PolicyOutcome::Deny {
+                grant_source: None,
+                ref reason,
+            } if reason == DEFAULT_DENY_REASON
+        ));
+    }
+
+    #[tokio::test]
+    async fn policy_pipeline_missing_required_capability_denies_before_policy_execution() {
+        let calls = Arc::new(AtomicU64::new(0));
+        let engine = PolicyPipeline::new().with_any_policy(CountingAnyPolicy {
+            calls: calls.clone(),
+        });
+        let pack = pack();
+        let token = token();
+        let ctx = KernelPolicyContext::new(
+            &pack,
+            &token,
+            1,
+            ExecutionPlane::Tool,
+            PlaneTier::Core,
+            None,
+        );
+        let action = LegacyKernelAction::new("read", BTreeSet::from([Capability::FilesystemRead]));
+
+        let error = engine
+            .grant(&ctx, action)
+            .await
+            .expect_err("capability gate should run before policies");
+
+        assert!(matches!(
+            error,
+            PolicyGrantError::MissingCapability {
+                capability: Capability::FilesystemRead
+            }
+        ));
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
     }
 }

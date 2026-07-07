@@ -4,6 +4,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum FsActionError {
+    #[error("filesystem access requires at least one allowed root")]
+    MissingAllowedRoot,
     #[error("filesystem path must not be empty")]
     EmptyPath,
     #[error("failed to canonicalize filesystem path {path}: {source}", path = .path.display())]
@@ -15,12 +17,12 @@ pub enum FsActionError {
     #[error("cannot resolve existing ancestor for filesystem path {path}", path = .path.display())]
     MissingExistingAncestor { path: PathBuf },
     #[error(
-        "filesystem path {path} escapes workspace root {workspace_root}",
+        "filesystem path {path} escapes allowed filesystem root {allowed_root}",
         path = .path.display(),
-        workspace_root = .workspace_root.display()
+        allowed_root = .allowed_root.display()
     )]
-    PathEscapesWorkspace {
+    PathEscapesAllowedRoot {
         path: PathBuf,
-        workspace_root: PathBuf,
+        allowed_root: PathBuf,
     },
 }
