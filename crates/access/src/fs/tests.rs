@@ -224,8 +224,12 @@ fn canonical_path_rejects_workspace_escape() {
 #[test]
 fn fs_action_wraps_read_action() {
     let workspace_root = PathBuf::from("/workspace");
-    let path = CanonicalPath::resolve("notes.md", &workspace_root, &[workspace_root.clone()])
-        .expect("path inside workspace");
+    let path = CanonicalPath::resolve(
+        "notes.md",
+        &workspace_root,
+        std::slice::from_ref(&workspace_root),
+    )
+    .expect("path inside workspace");
     let action = FsAction::read_file(path);
 
     assert_eq!(action.kind(), "fs.read");

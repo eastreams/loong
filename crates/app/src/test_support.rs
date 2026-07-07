@@ -155,7 +155,7 @@ impl TurnTestHarness {
             metadata: BTreeMap::new(),
         };
         kernel.register_pack(pack).expect("register pack");
-        kernel.register_core_tool_adapter(KernelToolAdapter::with_config(tool_config.clone()));
+        kernel.register_core_tool_adapter(KernelToolAdapter::with_config(tool_config));
         kernel
             .set_default_core_tool_adapter("mvp-tools")
             .expect("set default adapter");
