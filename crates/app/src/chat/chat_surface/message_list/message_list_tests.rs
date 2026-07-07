@@ -1535,6 +1535,12 @@ fn read_tool_request_json_parser_accepts_windows_escaped_paths() {
 }
 
 #[test]
+fn embedded_tool_json_parser_rejects_invalid_ranges_and_malformed_json() {
+    assert!(super::parse_embedded_json_value("args: } before {").is_none());
+    assert!(super::parse_embedded_json_value("args: {\"path\":").is_none());
+}
+
+#[test]
 fn read_tool_text_activity_renders_path_and_excerpt_card() {
     let mut list = MessageList::new();
     list.add_assistant_message(

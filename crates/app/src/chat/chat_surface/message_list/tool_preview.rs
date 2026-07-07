@@ -243,12 +243,7 @@ fn extract_tool_string_value(line: &str, keys: &[&str]) -> Option<String> {
 }
 
 fn extract_tool_string_value_from_json(line: &str, keys: &[&str]) -> Option<String> {
-    let start = line.find('{')?;
-    let end = line.rfind('}')?;
-    if end <= start {
-        return None;
-    }
-    let value = serde_json::from_str::<Value>(&line[start..=end]).ok()?;
+    let value = parse_embedded_json_value(line)?;
     first_string_field_recursive(&value, keys, 0)
 }
 
@@ -294,13 +289,17 @@ fn extract_glob_tool_summary(lines: &[String]) -> Option<String> {
 }
 
 fn extract_tool_command_from_json(line: &str) -> Option<String> {
+    let value = parse_embedded_json_value(line)?;
+    first_string_field_recursive(&value, &["cmd", "command", "script"], 0)
+}
+
+fn parse_embedded_json_value(line: &str) -> Option<Value> {
     let start = line.find('{')?;
     let end = line.rfind('}')?;
     if end <= start {
         return None;
     }
-    let value = serde_json::from_str::<Value>(&line[start..=end]).ok()?;
-    first_string_field_recursive(&value, &["cmd", "command", "script"], 0)
+    serde_json::from_str::<Value>(&line[start..=end]).ok()
 }
 
 fn first_string_field_recursive(value: &Value, keys: &[&str], depth: usize) -> Option<String> {
@@ -431,12 +430,7 @@ fn extract_read_tool_request(line: &str) -> Option<ReadToolRequest> {
 }
 
 fn extract_read_tool_request_from_json(line: &str) -> Option<ReadToolRequest> {
-    let start = line.find('{')?;
-    let end = line.rfind('}')?;
-    if end <= start {
-        return None;
-    }
-    let value = serde_json::from_str::<Value>(&line[start..=end]).ok()?;
+    let value = parse_embedded_json_value(line)?;
     let path = first_path_field(&value)?;
     Some(ReadToolRequest {
         path,
@@ -602,12 +596,7 @@ fn extract_tool_path(line: &str) -> Option<String> {
 }
 
 fn extract_tool_path_from_json(line: &str) -> Option<String> {
-    let start = line.find('{')?;
-    let end = line.rfind('}')?;
-    if end <= start {
-        return None;
-    }
-    let value = serde_json::from_str::<Value>(&line[start..=end]).ok()?;
+    let value = parse_embedded_json_value(line)?;
     first_path_field(&value)
 }
 
@@ -742,4 +731,3 @@ fn hex_value(byte: u8) -> Option<u8> {
         _ => None,
     }
 }
-
