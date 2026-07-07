@@ -15,11 +15,12 @@ pub trait Policy<P: PolicyEngine, A: Action>: Send + Sync {
     /// Stable policy name used in grant metadata.
     fn name(&self) -> Cow<'static, str>;
 
-    /// Evaluate whether this policy allows, denies, or abstains from `action`.
+    /// Evaluate whether this policy decides authorization or controls pipeline
+    /// flow for `action`.
     async fn grant(&self, ctx: &P::Cx<'_>, action: &A) -> PolicyGrant;
 }
 
-/// Untyped policy that evaluate all action kinds
+/// Untyped policy that can evaluate every action kind in a pipeline subchain.
 #[async_trait]
 pub trait PolicyAny<P: PolicyEngine>: Send + Sync {
     fn name(&self) -> &'static str;

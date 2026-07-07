@@ -6,12 +6,24 @@ pub struct GrantId(pub u64);
 
 pub type PolicyId = u64;
 
-/// Policy decision for a single action policy evaluation.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Decision returned by one policy evaluation.
+///
+/// `Allow` and `Deny` are terminal decisions for the whole pipeline.
+/// `Continue` and `Advance` are control-flow decisions: `Continue` evaluates
+/// the next policy in the current subchain, while `Advance` skips the rest of
+/// the current subchain and moves to the next one. Advancing from the final
+/// subchain leaves the pipeline without a terminal decision, so the caller's
+/// default-deny behavior applies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PolicyDecision {
+    /// Stop the whole pipeline and authorize the action.
     Allow,
+    /// Stop the whole pipeline and reject the action.
     Deny,
-    Abstain,
+    /// Keep evaluating policies in the current subchain.
+    Continue,
+    /// Stop the current subchain and evaluate the next subchain.
+    Advance,
 }
 
 /// Result returned by one single action policy.
@@ -31,6 +43,9 @@ pub struct PolicyGrant {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PolicyEvaluation {
     pub source: PolicyEntry,
+    /// Pipeline subchain that produced this evaluation.
+    ///
+    /// Current kernel stages are `pre`, `action`, and `fallback`.
     pub policy_stage: &'static str,
     pub grant: PolicyGrant,
 }

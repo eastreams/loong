@@ -146,13 +146,22 @@ impl Action for LegacyKernelAction {
 
 /// Kernel policy engine.
 ///
-/// Evaluation order is fixed: all `PolicyAny` entries run first, then policies
-/// registered for the concrete action type. Allow and deny both return
-/// immediately; abstain continues; all abstain means default deny. The
-/// returned [`PolicyReport`] is the audit trail for that decision.
+/// Evaluation order is fixed across three subchains:
+///
+/// 1. `pre`: broad [`PolicyAny`] gates that run before action-specific policy.
+/// 2. `action`: policies registered for the concrete action type.
+/// 3. `fallback`: broad [`PolicyAny`] policy used after typed policy.
+///
+/// [`PolicyDecision::Allow`] and [`PolicyDecision::Deny`] stop the whole
+/// pipeline. [`PolicyDecision::Continue`] evaluates the next policy in the
+/// current subchain. [`PolicyDecision::Advance`] skips the rest of the current
+/// subchain and moves to the next one. If no terminal decision is produced,
+/// the pipeline returns default deny. The returned [`PolicyReport`] records the
+/// evaluated policy chain.
 pub struct PolicyPipeline {
-    any_policies: Vec<RegisteredAnyPolicy>,
+    pre_policies: Vec<RegisteredAnyPolicy>,
     typed_policies: anymap::Map<dyn anymap::any::Any + Send + Sync>,
+    fallback_policies: Vec<RegisteredAnyPolicy>,
     policy_extensions: PolicyExtensionChain,
     next_policy_id: PolicyId,
     grant_seq: AtomicU64,
@@ -160,7 +169,7 @@ pub struct PolicyPipeline {
 
 impl Default for PolicyPipeline {
     fn default() -> Self {
-        Self::new().with_any_policy(AllowPolicy)
+        Self::new().with_fallback_policy(AllowPolicy)
     }
 }
 
@@ -168,8 +177,9 @@ impl PolicyPipeline {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            any_policies: Vec::new(),
+            pre_policies: Vec::new(),
             typed_policies: anymap::Map::new(),
+            fallback_policies: Vec::new(),
             policy_extensions: PolicyExtensionChain::new(),
             next_policy_id: 0,
             grant_seq: AtomicU64::new(0),
@@ -207,26 +217,52 @@ impl PolicyPipeline {
         });
     }
 
-    /// Register a policy that can inspect every action.
+    /// Register a broad gate before typed action policy.
     ///
-    /// Use this for broad gates. Keep action-specific checks in `with_policy`
-    /// so unrelated actions do not share unnecessary context requirements.
+    /// Use this for policy that should be able to stop an action before typed
+    /// policy runs. Keep action-specific checks in `with_policy` so unrelated
+    /// actions do not share unnecessary context requirements.
     #[must_use]
-    pub fn with_any_policy<P>(mut self, policy: P) -> Self
+    pub fn with_pre_policy<P>(mut self, policy: P) -> Self
     where
         P: PolicyAny<Self> + 'static,
     {
-        self.push_any_policy(policy);
+        self.push_pre_policy(policy);
         self
     }
 
-    /// Add a broad policy to an existing pipeline.
-    pub fn push_any_policy<P>(&mut self, policy: P)
+    /// Add a broad gate before typed action policy.
+    pub fn push_pre_policy<P>(&mut self, policy: P)
     where
         P: PolicyAny<Self> + 'static,
     {
         let id = self.allocate_policy_id();
-        self.any_policies.push(RegisteredAnyPolicy {
+        self.pre_policies.push(RegisteredAnyPolicy {
+            id,
+            policy: Arc::new(policy),
+        });
+    }
+
+    /// Register broad policy after typed action policy.
+    ///
+    /// The default allow policy belongs here: typed policies must get a chance
+    /// to deny before the compatibility fallback grants legacy actions.
+    #[must_use]
+    pub fn with_fallback_policy<P>(mut self, policy: P) -> Self
+    where
+        P: PolicyAny<Self> + 'static,
+    {
+        self.push_fallback_policy(policy);
+        self
+    }
+
+    /// Add broad policy after typed action policy.
+    pub fn push_fallback_policy<P>(&mut self, policy: P)
+    where
+        P: PolicyAny<Self> + 'static,
+    {
+        let id = self.allocate_policy_id();
+        self.fallback_policies.push(RegisteredAnyPolicy {
             id,
             policy: Arc::new(policy),
         });
@@ -315,24 +351,27 @@ impl PolicyEngine for PolicyPipeline {
     async fn decide<A: Action + 'static>(&self, ctx: &Self::Cx<'_>, action: &A) -> PolicyReport {
         let mut evaluations = Vec::new();
 
-        for registered in &self.any_policies {
+        for registered in &self.pre_policies {
             let grant = registered.policy.grant(ctx, action).await;
             let source = PolicyEntry {
                 policy_name: registered.policy.name().into(),
                 policy_id: registered.id,
             };
+            let decision = grant.decision;
+            let reason = grant.reason.clone();
+            let outcome_source = source.clone();
+            evaluations.push(PolicyEvaluation {
+                source,
+                policy_stage: "pre",
+                grant,
+            });
 
-            match grant.decision {
+            match decision {
                 PolicyDecision::Allow => {
                     let outcome = PolicyOutcome::Allow {
-                        source: source.clone(),
-                        reason: grant.reason.clone(),
+                        source: outcome_source,
+                        reason,
                     };
-                    evaluations.push(PolicyEvaluation {
-                        source,
-                        policy_stage: "any",
-                        grant,
-                    });
                     return PolicyReport {
                         evaluations,
                         outcome,
@@ -340,27 +379,17 @@ impl PolicyEngine for PolicyPipeline {
                 }
                 PolicyDecision::Deny => {
                     let outcome = PolicyOutcome::Deny {
-                        grant_source: Some(source.clone()),
-                        reason: grant.reason.clone(),
+                        grant_source: Some(outcome_source),
+                        reason,
                     };
-                    evaluations.push(PolicyEvaluation {
-                        source,
-                        policy_stage: "any",
-                        grant,
-                    });
                     return PolicyReport {
                         evaluations,
                         outcome,
                     };
                 }
-                PolicyDecision::Abstain => {}
+                PolicyDecision::Continue => {}
+                PolicyDecision::Advance => break,
             }
-
-            evaluations.push(PolicyEvaluation {
-                source,
-                policy_stage: "any",
-                grant,
-            });
         }
 
         if let Some(entries) = self.typed_policies.get::<TypedPolicyEntries<A>>() {
@@ -370,18 +399,21 @@ impl PolicyEngine for PolicyPipeline {
                     policy_name: registered.policy.name(),
                     policy_id: registered.id,
                 };
+                let decision = grant.decision;
+                let reason = grant.reason.clone();
+                let outcome_source = source.clone();
+                evaluations.push(PolicyEvaluation {
+                    source,
+                    policy_stage: "action",
+                    grant,
+                });
 
-                match grant.decision {
+                match decision {
                     PolicyDecision::Allow => {
                         let outcome = PolicyOutcome::Allow {
-                            source: source.clone(),
-                            reason: grant.reason.clone(),
+                            source: outcome_source,
+                            reason,
                         };
-                        evaluations.push(PolicyEvaluation {
-                            source,
-                            policy_stage: "action",
-                            grant,
-                        });
                         return PolicyReport {
                             evaluations,
                             outcome,
@@ -389,27 +421,58 @@ impl PolicyEngine for PolicyPipeline {
                     }
                     PolicyDecision::Deny => {
                         let outcome = PolicyOutcome::Deny {
-                            grant_source: Some(source.clone()),
-                            reason: grant.reason.clone(),
+                            grant_source: Some(outcome_source),
+                            reason,
                         };
-                        evaluations.push(PolicyEvaluation {
-                            source,
-                            policy_stage: "action",
-                            grant,
-                        });
                         return PolicyReport {
                             evaluations,
                             outcome,
                         };
                     }
-                    PolicyDecision::Abstain => {}
+                    PolicyDecision::Continue => {}
+                    PolicyDecision::Advance => break,
                 }
+            }
+        }
 
-                evaluations.push(PolicyEvaluation {
-                    source,
-                    policy_stage: "action",
-                    grant,
-                });
+        for registered in &self.fallback_policies {
+            let grant = registered.policy.grant(ctx, action).await;
+            let source = PolicyEntry {
+                policy_name: registered.policy.name().into(),
+                policy_id: registered.id,
+            };
+            let decision = grant.decision;
+            let reason = grant.reason.clone();
+            let outcome_source = source.clone();
+            evaluations.push(PolicyEvaluation {
+                source,
+                policy_stage: "fallback",
+                grant,
+            });
+
+            match decision {
+                PolicyDecision::Allow => {
+                    let outcome = PolicyOutcome::Allow {
+                        source: outcome_source,
+                        reason,
+                    };
+                    return PolicyReport {
+                        evaluations,
+                        outcome,
+                    };
+                }
+                PolicyDecision::Deny => {
+                    let outcome = PolicyOutcome::Deny {
+                        grant_source: Some(outcome_source),
+                        reason,
+                    };
+                    return PolicyReport {
+                        evaluations,
+                        outcome,
+                    };
+                }
+                PolicyDecision::Continue => {}
+                PolicyDecision::Advance => break,
             }
         }
 
@@ -491,7 +554,7 @@ mod tests {
 
         async fn grant(&self, _ctx: &P::Cx<'_>, _action: &dyn Action) -> PolicyGrant {
             PolicyGrant {
-                decision: self.decision.clone(),
+                decision: self.decision,
                 predicate: None,
                 reason: Cow::Borrowed(self.reason),
             }
@@ -516,7 +579,7 @@ mod tests {
 
         async fn grant(&self, _ctx: &KernelPolicyContext<'_>, _action: &A) -> PolicyGrant {
             PolicyGrant {
-                decision: self.decision.clone(),
+                decision: self.decision,
                 predicate: None,
                 reason: Cow::Borrowed(self.reason),
             }
@@ -588,7 +651,7 @@ mod tests {
 
     #[tokio::test]
     async fn policy_pipeline_grants_actions_allowed_by_registered_policy() {
-        let engine = PolicyPipeline::new().with_any_policy(AllowPolicy);
+        let engine = PolicyPipeline::new().with_fallback_policy(AllowPolicy);
         let pack = pack();
         let token = token();
         let required_capabilities = BTreeSet::from([Capability::InvokeTool]);
@@ -673,11 +736,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn policy_pipeline_report_preserves_any_and_action_evaluation_stages() {
+    async fn policy_pipeline_report_preserves_pre_and_action_evaluation_stages() {
         let engine = PolicyPipeline::new()
-            .with_any_policy(StaticAnyPolicy {
-                name: "any-abstain",
-                decision: PolicyDecision::Abstain,
+            .with_pre_policy(StaticAnyPolicy {
+                name: "pre-continue",
+                decision: PolicyDecision::Continue,
                 reason: "no opinion",
             })
             .with_policy::<LegacyKernelAction, _>(StaticTypedPolicy {
@@ -700,7 +763,7 @@ mod tests {
         let report = engine.decide(&ctx, &action).await;
 
         assert_eq!(report.evaluations.len(), 2);
-        assert_eq!(report.evaluations[0].policy_stage, "any");
+        assert_eq!(report.evaluations[0].policy_stage, "pre");
         assert_eq!(report.evaluations[1].policy_stage, "action");
         assert!(matches!(
             report.outcome,
@@ -744,12 +807,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn policy_pipeline_any_deny_prevents_typed_allow() {
+    async fn policy_pipeline_pre_deny_prevents_typed_allow() {
         let engine = PolicyPipeline::new()
-            .with_any_policy(StaticAnyPolicy {
-                name: "any-deny",
+            .with_pre_policy(StaticAnyPolicy {
+                name: "pre-deny",
                 decision: PolicyDecision::Deny,
-                reason: "any denied",
+                reason: "pre denied",
             })
             .with_policy::<LegacyKernelAction, _>(StaticTypedPolicy {
                 name: "typed-allow",
@@ -771,13 +834,13 @@ mod tests {
         let error = engine
             .grant(&ctx, action)
             .await
-            .expect_err("any deny should stop before typed allow");
+            .expect_err("pre deny should stop before typed allow");
 
         assert!(matches!(
             error,
             PolicyGrantError::Denied { ref report, .. }
                 if report.evaluations.len() == 1
-                    && report.evaluations[0].policy_stage == "any"
+                    && report.evaluations[0].policy_stage == "pre"
                     && matches!(report.outcome, PolicyOutcome::Deny { .. })
         ));
     }
@@ -785,10 +848,10 @@ mod tests {
     #[tokio::test]
     async fn policy_pipeline_allow_short_circuits_before_later_typed_deny() {
         let engine = PolicyPipeline::new()
-            .with_any_policy(StaticAnyPolicy {
-                name: "any-allow",
+            .with_pre_policy(StaticAnyPolicy {
+                name: "pre-allow",
                 decision: PolicyDecision::Allow,
-                reason: "any allowed",
+                reason: "pre allowed",
             })
             .with_policy::<LegacyKernelAction, _>(StaticTypedPolicy {
                 name: "typed-deny",
@@ -810,18 +873,157 @@ mod tests {
         let report = engine.decide(&ctx, &action).await;
 
         assert_eq!(report.evaluations.len(), 1);
-        assert_eq!(report.evaluations[0].policy_stage, "any");
+        assert_eq!(report.evaluations[0].policy_stage, "pre");
         assert!(matches!(
             report.outcome,
-            PolicyOutcome::Allow { ref source, .. } if source.policy_name == "any-allow"
+            PolicyOutcome::Allow { ref source, .. } if source.policy_name == "pre-allow"
         ));
     }
 
     #[tokio::test]
-    async fn policy_pipeline_all_abstain_defaults_to_deny() {
-        let engine = PolicyPipeline::new().with_any_policy(StaticAnyPolicy {
-            name: "any-abstain",
-            decision: PolicyDecision::Abstain,
+    async fn policy_pipeline_typed_deny_prevents_fallback_allow() {
+        let engine = PolicyPipeline::new()
+            .with_policy::<LegacyKernelAction, _>(StaticTypedPolicy {
+                name: "typed-deny",
+                decision: PolicyDecision::Deny,
+                reason: "typed denied",
+            })
+            .with_fallback_policy(AllowPolicy);
+        let pack = pack();
+        let token = token();
+        let ctx = KernelPolicyContext::new(
+            &pack,
+            &token,
+            1,
+            ExecutionPlane::Tool,
+            PlaneTier::Core,
+            None,
+        );
+        let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+
+        let report = engine.decide(&ctx, &action).await;
+
+        assert_eq!(report.evaluations.len(), 1);
+        assert_eq!(report.evaluations[0].policy_stage, "action");
+        assert!(matches!(
+            report.outcome,
+            PolicyOutcome::Deny {
+                grant_source: Some(ref source),
+                ..
+            } if source.policy_name == "typed-deny"
+        ));
+    }
+
+    #[tokio::test]
+    async fn policy_pipeline_typed_allow_prevents_fallback_deny() {
+        let engine = PolicyPipeline::new()
+            .with_policy::<LegacyKernelAction, _>(StaticTypedPolicy {
+                name: "typed-allow",
+                decision: PolicyDecision::Allow,
+                reason: "typed allowed",
+            })
+            .with_fallback_policy(StaticAnyPolicy {
+                name: "fallback-deny",
+                decision: PolicyDecision::Deny,
+                reason: "fallback denied",
+            });
+        let pack = pack();
+        let token = token();
+        let ctx = KernelPolicyContext::new(
+            &pack,
+            &token,
+            1,
+            ExecutionPlane::Tool,
+            PlaneTier::Core,
+            None,
+        );
+        let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+
+        let report = engine.decide(&ctx, &action).await;
+
+        assert_eq!(report.evaluations.len(), 1);
+        assert_eq!(report.evaluations[0].policy_stage, "action");
+        assert!(matches!(
+            report.outcome,
+            PolicyOutcome::Allow { ref source, .. } if source.policy_name == "typed-allow"
+        ));
+    }
+
+    #[tokio::test]
+    async fn policy_pipeline_advance_skips_rest_of_current_subchain() {
+        let engine = PolicyPipeline::new()
+            .with_pre_policy(StaticAnyPolicy {
+                name: "pre-advance",
+                decision: PolicyDecision::Advance,
+                reason: "advance to typed policy",
+            })
+            .with_pre_policy(StaticAnyPolicy {
+                name: "pre-deny",
+                decision: PolicyDecision::Deny,
+                reason: "should be skipped",
+            })
+            .with_policy::<LegacyKernelAction, _>(StaticTypedPolicy {
+                name: "typed-allow",
+                decision: PolicyDecision::Allow,
+                reason: "typed allowed",
+            });
+        let pack = pack();
+        let token = token();
+        let ctx = KernelPolicyContext::new(
+            &pack,
+            &token,
+            1,
+            ExecutionPlane::Tool,
+            PlaneTier::Core,
+            None,
+        );
+        let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+
+        let report = engine.decide(&ctx, &action).await;
+
+        assert_eq!(report.evaluations.len(), 2);
+        assert_eq!(report.evaluations[0].source.policy_name, "pre-advance");
+        assert_eq!(report.evaluations[1].source.policy_name, "typed-allow");
+        assert!(matches!(report.outcome, PolicyOutcome::Allow { .. }));
+    }
+
+    #[tokio::test]
+    async fn policy_pipeline_fallback_advance_defaults_to_deny() {
+        let engine = PolicyPipeline::new().with_fallback_policy(StaticAnyPolicy {
+            name: "fallback-advance",
+            decision: PolicyDecision::Advance,
+            reason: "no next chain",
+        });
+        let pack = pack();
+        let token = token();
+        let ctx = KernelPolicyContext::new(
+            &pack,
+            &token,
+            1,
+            ExecutionPlane::Tool,
+            PlaneTier::Core,
+            None,
+        );
+        let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+
+        let report = engine.decide(&ctx, &action).await;
+
+        assert_eq!(report.evaluations.len(), 1);
+        assert_eq!(report.evaluations[0].policy_stage, "fallback");
+        assert!(matches!(
+            report.outcome,
+            PolicyOutcome::Deny {
+                grant_source: None,
+                ref reason,
+            } if reason == DEFAULT_DENY_REASON
+        ));
+    }
+
+    #[tokio::test]
+    async fn policy_pipeline_all_continue_defaults_to_deny() {
+        let engine = PolicyPipeline::new().with_pre_policy(StaticAnyPolicy {
+            name: "pre-continue",
+            decision: PolicyDecision::Continue,
             reason: "no opinion",
         });
         let pack = pack();
@@ -851,7 +1053,7 @@ mod tests {
     #[tokio::test]
     async fn policy_pipeline_missing_required_capability_denies_before_policy_execution() {
         let calls = Arc::new(AtomicU64::new(0));
-        let engine = PolicyPipeline::new().with_any_policy(CountingAnyPolicy {
+        let engine = PolicyPipeline::new().with_pre_policy(CountingAnyPolicy {
             calls: calls.clone(),
         });
         let pack = pack();
