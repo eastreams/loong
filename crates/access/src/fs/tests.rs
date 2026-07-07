@@ -18,7 +18,12 @@ use loong_core::{
     },
 };
 
-use super::{CanonicalPath, FsAccess, FsAction, FsActionError, FsReadAction, HasFsAccess};
+use super::{
+    access::{FsAccess, HasFsAccess},
+    action::{FsAction, FsReadAction},
+    error::FsActionError,
+    path::CanonicalPath,
+};
 
 #[derive(Debug, Clone)]
 struct FsAccessPolicyContext {

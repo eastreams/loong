@@ -17,7 +17,8 @@ use loong_core::{
 };
 
 use super::AccessCx;
-use crate::{HasFsAccess, Kernel as RuntimeKernel};
+use crate::Kernel as RuntimeKernel;
+use loong_access::fs::access::HasFsAccess;
 
 #[derive(Debug, Clone)]
 struct AccessCxPolicyContext {

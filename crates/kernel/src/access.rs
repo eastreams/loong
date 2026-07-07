@@ -1,4 +1,4 @@
-use loong_access::{FsAccess, HasFsAccess};
+use loong_access::fs::access::{FsAccess, HasFsAccess};
 use loong_core::kernel::Kernel;
 
 pub struct AccessCx<'a, K>

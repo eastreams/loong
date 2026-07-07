@@ -57,7 +57,6 @@ pub use integration::{
     ProviderConfig, ProviderTemplate, ProvisionAction, ProvisionPlan,
 };
 pub use kernel::{ConnectorDispatch, Kernel, KernelDispatch};
-pub use loong_access::{CanonicalPath, FsAccess, FsAction, FsReadAction, HasFsAccess};
 pub use loong_plugin_sdk::PluginChannelBridgeContract as CanonicalPluginChannelBridgeContract;
 pub use memory::{
     CoreMemoryAdapter, MemoryCoreOutcome, MemoryCoreRequest, MemoryExtensionAdapter,
