@@ -671,6 +671,7 @@ impl Kernel {
         request: ToolCoreRequest,
     ) -> Result<ToolCoreOutcome, KernelError> {
         let pack = self.get_pack(pack_id)?;
+        // TODO: remove this legacy policy style params
         let tool_policy_params = serde_json::json!({
             "tool_name": &request.tool_name,
             "payload": &request.payload,
