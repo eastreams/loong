@@ -271,11 +271,17 @@ impl PolicyPipeline {
 
 struct RegisteredAnyPolicy {
     id: PolicyId,
+    // TODO(policy-registration-metadata): Carry registration metadata here,
+    // such as registered_at, registration_order, and source. Keep this in sync
+    // with typed entries so PolicyReport can explain how each policy entered
+    // the pipeline, not only what it decided.
     policy: Arc<dyn PolicyAny<PolicyPipeline>>,
 }
 
 struct RegisteredPolicy<A: Action> {
     id: PolicyId,
+    // TODO(policy-registration-metadata): Mirror RegisteredAnyPolicy metadata
+    // when typed policy registration records registered_at/source data.
     policy: Arc<dyn Policy<PolicyPipeline, A>>,
 }
 
