@@ -593,20 +593,19 @@ fn rewrite_runtime_capability_schema(candidate_path: &Path, surface: &str, purpo
     .expect("persist runtime capability artifact");
 }
 
+#[cfg(unix)]
 fn try_symlink_dir(original: &Path, link: &Path) -> bool {
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(original, link).is_ok()
-    }
-    #[cfg(windows)]
-    {
-        std::os::windows::fs::symlink_dir(original, link).is_ok()
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = (original, link);
-        false
-    }
+    std::os::unix::fs::symlink(original, link).is_ok()
+}
+
+#[cfg(windows)]
+fn try_symlink_dir(original: &Path, link: &Path) -> bool {
+    std::os::windows::fs::symlink_dir(original, link).is_ok()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn try_symlink_dir(_original: &Path, _link: &Path) -> bool {
+    false
 }
 
 #[test]
