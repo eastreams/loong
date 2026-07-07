@@ -19,7 +19,7 @@ use loong_core::{
 };
 
 use super::{
-    access::{FsAccess, FsAccessContext, FsAccessError, HasFsAccess},
+    access::{FsAccess, FsAccessContext, FsAccessError},
     action::{FsAction, FsReadAction},
     error::FsActionError,
     path::CanonicalPath,
@@ -167,7 +167,7 @@ impl<'a> FsAccessToolCx<'a> {
     }
 }
 
-impl<'a> HasFsAccess<'a, FsAccessTestKernel> for FsAccessTestCx<'a> {
+impl<'a> FsAccessTestCx<'a> {
     fn fs(self) -> FsAccess<'a, FsAccessTestKernel> {
         FsAccess::new(self.kernel, self.policy_context)
     }

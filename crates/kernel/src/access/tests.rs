@@ -18,7 +18,7 @@ use loong_core::{
 
 use super::AccessCx;
 use crate::Kernel as RuntimeKernel;
-use loong_access::fs::access::{FsAccessContext, HasFsAccess};
+use loong_access::fs::access::FsAccessContext;
 
 #[derive(Debug, Clone)]
 struct AccessCxPolicyContext {
@@ -109,12 +109,9 @@ impl CoreKernel for AccessCxTestKernel {
 #[test]
 fn loong_kernel_exposes_access_types_and_fs_surface_for_workspace_kernels() {
     fn assert_access_exported<T>() {}
-    fn assert_has_fs_access<'a, T: HasFsAccess<'a, AccessCxTestKernel>>() {}
 
     assert_access_exported::<AccessCx<'static, RuntimeKernel>>();
-
     assert_access_exported::<AccessCx<'static, AccessCxTestKernel>>();
-    assert_has_fs_access::<AccessCx<'static, AccessCxTestKernel>>();
 }
 
 #[tokio::test]

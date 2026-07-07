@@ -11,13 +11,6 @@ pub trait FsAccessContext {
     fn fs_allowed_roots(&self) -> &[PathBuf];
 }
 
-pub trait HasFsAccess<'a, K>: Sized
-where
-    K: Kernel,
-{
-    fn fs(self) -> FsAccess<'a, K>;
-}
-
 pub struct FsAccess<'a, K>
 where
     K: Kernel,

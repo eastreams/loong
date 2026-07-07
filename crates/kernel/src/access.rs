@@ -1,4 +1,4 @@
-use loong_access::fs::access::{FsAccess, HasFsAccess};
+use loong_access::fs::access::FsAccess;
 use loong_core::kernel::Kernel;
 
 pub struct AccessCx<'a, K>
@@ -26,15 +26,6 @@ where
     #[must_use]
     pub fn fs(self) -> FsAccess<'a, K> {
         FsAccess::new(self.kernel, self.policy_context)
-    }
-}
-
-impl<'a, K> HasFsAccess<'a, K> for AccessCx<'a, K>
-where
-    K: Kernel,
-{
-    fn fs(self) -> FsAccess<'a, K> {
-        self.fs()
     }
 }
 
