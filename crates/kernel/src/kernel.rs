@@ -189,9 +189,8 @@ impl Kernel {
     }
 
     pub fn set_default_core_connector_adapter(&mut self, name: &str) -> Result<(), KernelError> {
-        self.connector_plane
-            .set_default_core_adapter(name)
-            .map_err(KernelError::from)
+        self.connector_plane.set_default_core_adapter(name)?;
+        Ok(())
     }
 
     pub fn register_core_runtime_adapter<A: CoreRuntimeAdapter + 'static>(&mut self, adapter: A) {
@@ -206,9 +205,8 @@ impl Kernel {
     }
 
     pub fn set_default_core_runtime_adapter(&mut self, name: &str) -> Result<(), KernelError> {
-        self.runtime_plane
-            .set_default_core_adapter(name)
-            .map_err(KernelError::from)
+        self.runtime_plane.set_default_core_adapter(name)?;
+        Ok(())
     }
 
     pub fn register_core_tool_adapter<A: CoreToolAdapter + 'static>(&mut self, adapter: A) {
@@ -223,9 +221,8 @@ impl Kernel {
     }
 
     pub fn set_default_core_tool_adapter(&mut self, name: &str) -> Result<(), KernelError> {
-        self.tool_plane
-            .set_default_core_adapter(name)
-            .map_err(KernelError::from)
+        self.tool_plane.set_default_core_adapter(name)?;
+        Ok(())
     }
 
     pub fn register_core_memory_adapter<A: CoreMemoryAdapter + 'static>(&mut self, adapter: A) {
@@ -240,9 +237,8 @@ impl Kernel {
     }
 
     pub fn set_default_core_memory_adapter(&mut self, name: &str) -> Result<(), KernelError> {
-        self.memory_plane
-            .set_default_core_adapter(name)
-            .map_err(KernelError::from)
+        self.memory_plane.set_default_core_adapter(name)?;
+        Ok(())
     }
 
     pub fn issue_token(
@@ -592,11 +588,7 @@ impl Kernel {
             })
             .unwrap_or_else(|| "default".to_owned());
         let action = request.action.clone();
-        let outcome = self
-            .runtime_plane
-            .execute_core(core_name, request)
-            .await
-            .map_err(KernelError::from)?;
+        let outcome = self.runtime_plane.execute_core(core_name, request).await?;
 
         self.record_plane_invocation(PlaneInvocationRecord {
             timestamp_epoch_s: now,
@@ -646,8 +638,7 @@ impl Kernel {
         let outcome = self
             .runtime_plane
             .execute_extension(extension_name, core_name, request)
-            .await
-            .map_err(KernelError::from)?;
+            .await?;
 
         self.record_plane_invocation(PlaneInvocationRecord {
             timestamp_epoch_s: now,
@@ -718,8 +709,7 @@ impl Kernel {
         let outcome = self
             .tool_plane
             .execute_core_with_context(core_name, request, tool_context)
-            .await
-            .map_err(KernelError::from)?;
+            .await?;
 
         self.record_plane_invocation(PlaneInvocationRecord {
             timestamp_epoch_s: now,
@@ -773,8 +763,7 @@ impl Kernel {
         let outcome = self
             .tool_plane
             .execute_extension(extension_name, core_name, request)
-            .await
-            .map_err(KernelError::from)?;
+            .await?;
 
         self.record_plane_invocation(PlaneInvocationRecord {
             timestamp_epoch_s: now,
@@ -820,11 +809,7 @@ impl Kernel {
             })
             .unwrap_or_else(|| "default".to_owned());
         let operation = request.operation.clone();
-        let outcome = self
-            .memory_plane
-            .execute_core(core_name, request)
-            .await
-            .map_err(KernelError::from)?;
+        let outcome = self.memory_plane.execute_core(core_name, request).await?;
 
         self.record_plane_invocation(PlaneInvocationRecord {
             timestamp_epoch_s: now,
@@ -874,8 +859,7 @@ impl Kernel {
         let outcome = self
             .memory_plane
             .execute_extension(extension_name, core_name, request)
-            .await
-            .map_err(KernelError::from)?;
+            .await?;
 
         self.record_plane_invocation(PlaneInvocationRecord {
             timestamp_epoch_s: now,

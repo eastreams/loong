@@ -21,6 +21,7 @@ use reqwest::header::{
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use thiserror::Error;
 
 use crate::CliResult;
 use crate::config::{ProviderAuthScheme, ProviderConfig, ProviderKind, active_cli_command_name};
@@ -76,10 +77,18 @@ impl BedrockService {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub(super) enum RequestExecutionError {
-    Transport(TransportError),
+    #[error(transparent)]
+    Transport(#[from] TransportError),
+    #[error("request setup failed: {0}")]
     Setup(String),
+}
+
+impl From<reqwest::Error> for RequestExecutionError {
+    fn from(error: reqwest::Error) -> Self {
+        Self::Transport(error.into())
+    }
 }
 
 #[derive(Clone)]
@@ -612,11 +621,8 @@ pub(super) async fn execute_request(
             .map_err(RequestExecutionError::Setup)?;
     }
 
-    client
-        .execute(request)
-        .await
-        .map_err(TransportError::from)
-        .map_err(RequestExecutionError::Transport)
+    let response = client.execute(request).await?;
+    Ok(response)
 }
 
 pub(super) async fn decode_response_body(response: reqwest::Response) -> CliResult<Value> {

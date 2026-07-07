@@ -246,10 +246,7 @@ impl PolicyPipeline {
         action: A,
     ) -> Result<(), PolicyError> {
         let required_capabilities = action.required_capabilities();
-        self.grant(ctx, action)
-            .await
-            .map_err(AuthorizationError::from)
-            .map_err(policy_engine_error)?;
+        self.grant(ctx, action).await.map_err(policy_engine_error)?;
 
         self.policy_extensions.authorize(&PolicyExtensionContext {
             pack: ctx.pack,
@@ -294,7 +291,8 @@ impl<A: Action> Default for TypedPolicyEntries<A> {
     }
 }
 
-fn policy_engine_error(error: AuthorizationError) -> PolicyError {
+fn policy_engine_error(error: impl Into<AuthorizationError>) -> PolicyError {
+    let error = error.into();
     PolicyError::ExtensionDenied {
         extension: "policy-engine".to_owned(),
         reason: error.to_string(),
