@@ -1,287 +1,567 @@
 # Tool Access / Action / Policy / Backend 临时计划
 
-这是临时设计计划，不并入 `docs/`。目标是把当前关于
-`loong-core::policy`、tools、access facade、action 派生和 backend 可见性的
-讨论整理成后续实现可执行的边界说明。
+这是临时设计计划，不并入 `docs/`。本文按后续讨论后的形状更新：
 
-## 核心思想
+- concrete unified context 由 app 定义；
+- kernel 通过 context type factory 泛型连接 policy/access/tool；
+- policy 绑定 context factory，不通过 `PolicyEngine` 间接拿 `Cx`；
+- `PolicyEngine` 内不再定义或持有 factory / `Cx` associated type；
+- migrated side effect 只能从 access 进入；
+- backend 若后续存在，也只能是 access/kernel 内部执行边界；不要求统一 trait，
+  但执行入口必须消费 `Granted<ConcreteAction>`，不能暴露给 tool。
 
-tool 的副作用执行只能经由 kernel 持有和组装的 access facade：
+## 已确认原则
+
+- 敢于破坏性改动，不为已迁移路径保留 alias、proxy、compatibility shim 或
+  root re-export 来拖延收口。
+- 各部件尽力减少耦合：contracts 放稳定数据，core 放行为 trait，kernel 放治理
+  流程，access 放 domain side-effect boundary，app 放 concrete context/config/policy
+  wiring。
+- migrated tool 的副作用 only access can do。tool/helper/adapter/kernel policy 都不
+  直接执行 migrated side effect。
+- tool helper 只做 payload parsing、runtime narrowing、调用 access、格式化响应。
+  它不拼授权链，不读全局 config 来决定 policy，不直接接触 backend。
+- concrete unified context 由 app 定义。kernel 不固定 app context 字段，只通过
+  `ContextFactory` type factory 连接 policy/access/tool。泛型传染是有意的：它强制
+  调用点和测试通过 trait 约束获取 context 能力，而不是偷用 concrete context 字段。
+- `ContextFactory` 是 type-level factory，只有 GAT，没有 `create` / `build`
+  method。context 构造发生在 app/runtime 边界，不发生在 core trait 里。
+- `Policy` / `PolicyAny` 绑定 `ContextFactory`；`PolicyEngine` 不拥有 factory，
+  也不定义 `type Cx` / `type Context`。
+- `Policy` 和 `PolicyAny` API 应保持一致，例如 `name() -> Cow<'static, str>`。
+- 业务 policy 不依赖 app concrete context；它应为任意满足所需 view trait 的
+  `C::Cx<'_>` 实现。后续代码注释要明确这点，避免 policy 偷偷绑定
+  `AppExecutionContext`。
+- 需要额外信息时，用小 view trait 表达使用点需求，例如 `FsAccessContext`、
+  `ExecutionView`、`ToolInvocationView`。不要定义一个大 deps struct，也不要为每个
+  domain 在 kernel 上加 getter。
+- `required_capabilities` 是 `Action` 的属性；运行时 root、tool config、workspace
+  view 不是 action 字段。
+- `CanonicalPath` 负责 path normalization、allowed roots、`..` 和 symlink escape。
+  `FsReadAction` 不持有 workspace root / file root。
+- `PolicyPipeline` 是 ordered pipeline。`Allow` / `Deny` 终止整个 pipeline，
+  `Continue` 继续当前 subchain，`Advance` 跳到下个 subchain；无 terminal decision
+  时 default deny。这里主要靠注释讲清控制流语义，不额外引入 wrapper 层。
+- config-driven policy 的入口在 app 组装处：app 读取并规范化 config，把需要的配置
+  显式构造成 policy，再注册进 pipeline。access 不读取 app config，tool helper 不在
+  access 前执行 config-backed policy 分支。
+- deny 路径保持结构化。`PolicyReport` 应沿 error path 传到 response 边界，避免
+  字符串匹配或 `is_policy_denial()` 这类猜测 helper 成为长期方案。
+- 如果后续引入 backend，backend method 接受 `Granted<ConcreteAction>`；backend
+  可以是 concrete backend 的方法或普通函数，不强制统一 trait。backend 选择通过
+  kernel 泛型 / associated type 编译期固定，不做 runtime registry。
+- 测试跟随对应模块放置，例如 fs access 测试放在 `fs/tests.rs` 这类局部位置；
+  不新增无归属的大型跨模块测试文件。
+- 注释只服务边界理解：要标出 config -> policy、kernel registration、legacy
+  fallback 的所有权位置；还要说明 policy 不依赖 app concrete context、完整
+  `ToolRuntimeConfig` 不能成为跨层 ABI、pipeline terminal/advance 语义。不写空泛
+  叙述。
+
+## 核心模型
+
+工具侧只表达意图，副作用必须经由 access：
 
 ```text
-tool-facing caller
-  -> ToolCx::access(...)
+tool adapter
+  -> ToolCoreContext::access()
   -> AccessCx<'_, K>
-  -> HasFsAccess::fs(...)
-  -> FsAccess<'_, K>::read_file(...)
-      -> CanonicalPath::resolve(...)
+  -> AccessCx::fs()
+  -> FsAccess<'_, K>::read_file(path)
+      -> CanonicalPath::resolve(path, ctx fs view)
       -> FsReadAction::new(CanonicalPath)
-      -> PolicyEngine::grant(...)
+      -> PolicyPipeline<C>::grant(ctx, FsReadAction)
       -> ActionGrant<FsReadAction>
+      -> consume Granted<FsReadAction>
+      -> side effect
 ```
 
-`Access`、`Action`、`Policy` 是治理语义，可以由 kernel 间接暴露给其它层。
-`Backend` 层应拆成 backend trait 和 concrete backend impl：trait 是 kernel-owned
-的执行接口，impl 是几种互斥的具体实现之一。backend 选择应通过编译期泛型 /
-associated type 固定，而不是运行时 registry 式切换。tools/app/runtime 不把 backend
-作为直接依赖面。
+`Access`、`Action`、`Policy` 是治理语义。tool/app 不直接拼授权链，不直接
+读取 policy context 字段，也不直接接触 backend handle。
 
-这样 tools/app/runtime 只能通过 `ToolCx -> AccessCx -> domain Access` 表达意图，不能绕过
-policy 直接调用 backend，也不能自己拼出授权链。各类 policy/domain context 只作为
-kernel 内部实现细节存在，不暴露给 tool-facing API。
+## 分层边界
 
-## 当前 policy 基础
+### `loong-contracts`
 
-`loong-core::policy` 已经有主要 building blocks：
+只放稳定数据 contract，不放 domain view，不放 app context，不放执行逻辑。
 
-- `Action`：policy-facing 的副作用意图。
-- `PolicyEngine::grant`：授权 action，返回 `ActionGrant<A>`。
-- `Granted<A>`：构造函数在 core 内部，不可被外部伪造。
-- `Granted<A>::into_action()`：把已授权 action 移交给执行边界。
+适合放在 contracts 的内容：
 
-当前仍有旧模型残留：
+- `Capability` / `CapabilityToken`
+- `ExecutionPlane` / `PlaneTier`
+- `PolicyDecision`
+- `PolicyGrant`
+- `PolicyEntry`
+- `PolicyEvaluation`
+- `PolicyOutcome`
+- `PolicyReport`
+- `GrantId` / `PolicyId`
+- tool/runtime/memory request/outcome 数据结构
 
-- `ActionExecutor`
-- `Granted::execute_with`
-- `HasPolicyEngine::execute_granted`
+不放：
 
-目标模型不是再加一层 executor wrapper，而是让 backend/store 方法直接消费
-`Granted<ConcreteAction>`，并在内部调用 `into_action()`。
+- `ContextFactory`
+- `PolicyContext`
+- `Policy`
+- `PolicyAny`
+- `PolicyEngine`
+- `FsAccessContext`
+- workspace root / file root / tool config 视图
 
-## 边界规则
+这些是行为 trait 或 domain/app view，属于 `loong-core`、`loong-access` 或 app。
 
-### ToolCx, AccessCx, and Access
+### `loong-core`
 
-`Access` 是 facade，不是 backend。
-
-工具侧拿到的不是 kernel，也不是 domain context，而是 `ToolCx`。`ToolCx` 最多暴露
-一个构造 `AccessCx` 的入口。`AccessCx` 是 kernel-owned access construction context，
-内部持有 `&K` 和本次调用已经构造好的统一 `policy_context`。
-
-domain access trait 应该实现在 `AccessCx` 上，表示这个 access context 能给出某个
-domain access。当前 fs-read slice 的具体形状是 `HasFsAccess::fs(self) -> FsAccess`。
-tool 代码只要求自己的 tool context 能给出
-`AccessCx`，以及这个 `AccessCx` 能给出需要的 access。tool 不应该看见
-`policy_context`、`WorkspacePolicyContext`、backend handle，或 kernel concrete
-fields。
-
-`AccessCx` 的构造是否应该直接 port 到 kernel 现有生成 context 的方法还需要确认。
-无论最终是 `ToolCx::access_cx()` 直接委托 kernel，还是 `ToolCx` 持有已构造好的
-access context，都应该只有一条受控构造路径。
-
-domain access 方法负责：
-
-1. 把调用方输入验证/规范化成 concrete action；
-2. 调用 policy grant；
-3. 返回 `ActionGrant<ConcreteAction>`，让后续执行边界只处理已授权 action。
-
-示意结构：
+放跨 kernel/access/policy 共用的行为 contract：
 
 ```rust
-pub trait ToolCx {
-    type Kernel: HasPolicyEngine;
-
-    #[inline(always)]
-    fn access(&self) -> AccessCx<'_, Self::Kernel>;
-}
-
-pub struct AccessCx<'a, K>
-where
-    K: HasPolicyEngine,
-{
-    kernel: &'a K,
-    policy_context: <K::PolicyEngine<'a> as PolicyEngine>::Cx<'a>,
-}
-
-pub trait HasFsAccess<'a, K>
-where
-    K: HasPolicyEngine,
-{
-    #[inline(always)]
-    fn fs(self) -> FsAccess<'a, K>;
-}
-
-impl<'a, K> HasFsAccess<'a, K> for AccessCx<'a, K>
-where
-    K: HasPolicyEngine,
-{
-    #[inline(always)]
-    fn fs(self) -> FsAccess<'a, K> {
-        FsAccess::new(self.kernel, self.policy_context)
-    }
-}
-
-pub struct FsAccess<'a, K>
-where
-    K: HasPolicyEngine,
-{
-    kernel: &'a K,
-    policy_context: <K::PolicyEngine<'a> as PolicyEngine>::Cx<'a>,
-}
-
-impl<'a, K> FsAccess<'a, K>
-where
-    K: HasPolicyEngine,
-    <K::PolicyEngine<'a> as PolicyEngine>::Cx<'a>: WorkspacePolicyContext,
-{
-    pub async fn read_file(
-        self,
-        path: impl AsRef<Path>,
-    ) -> Result<ActionGrant<FsReadAction>, FsAccessError> {
-        let path = CanonicalPath::resolve(path, self.policy_context.workspace_root())?;
-        let action = FsReadAction::new(path);
-        let grant = self
-            .kernel
-            .policy_engine()
-            .grant(&self.policy_context, action)
-            .await?;
-
-        Ok(grant)
-    }
+/// Type-level factory for the execution context used by policy/access/tool code.
+///
+/// This trait maps a borrow lifetime to the concrete context type. It does not
+/// construct context values; app/runtime code owns value construction.
+pub trait ContextFactory {
+    type Cx<'a>: PolicyContext
+    where
+        Self: 'a;
 }
 ```
 
-这里不需要 `HasPolicyContext`，也不需要工具直接接触 context。`AccessCx` 携带
-`policy_context` 字段；`FsAccess` 从 `AccessCx` 构造出来并私有持有
-`policy_context`。该 context 类型由
-`HasPolicyEngine::PolicyEngine<'a>::Factory` 推导，并额外实现 domain 需要的
-`WorkspacePolicyContext`。
+这个 factory 是 type-level factory，只有 GAT，没有 `create` / `build` method。
+具体 context 的构造由 app/runtime 边界负责，kernel 不通过 factory method
+构造 app context。
 
-`FsAccess` 的泛型参数是 kernel，不是 backend。backend 类型通过 kernel 的
-associated type 决定。policy context 是统一的，domain-specific view 通过 trait
-on context 提取。由于 `Action` 是 `'static`，action 构造函数只能用提取出的 view
-做校验和派生 owned action data，不能把 borrowed context view 存进 action。
-
-### Action
-
-`Action` 是 policy 和 audit 能看见的 typed intent。
-
-action 构造函数只做 shape validation / normalization，不执行副作用。action
-应该携带 policy、audit、backend 执行所需的结构化信息，避免 backend 再解析原始
-tool JSON。
-
-当前 `Action` trait 上还有 `execution_plane()` / `plane_tier()`。这个设计需要重新
-评估：如果 `ExecutionPlane` 是 kernel dispatch/audit 的外层路由信息，它可能不该是
-每个 action 自己声明的方法，而应由 `AccessCx` / invocation route / kernel plane
-在授权和审计时提供。迁移计划里不要把 `ExecutionPlane` 继续属于 `Action` 当作既定
-结论。
-
-### Policy
-
-Policy 是唯一能 mint `Granted<Action>` 的位置。
-
-policy 输入是 typed action 和 policy context；允许时返回不可伪造 grant，拒绝
-时给出结构化、可审计的 denial。
-
-context 不应按 domain 拆成 `fs_policy_context()`、`browser_policy_context()` 这类
-kernel 方法。kernel 提供一个统一 context；各 domain 定义 trait on context 来表达
-自己需要的 view/capability：
-
-```rust
-trait WorkspacePolicyContext {
-    #[inline(always)]
-    fn workspace_root(&self) -> &Path;
-}
-```
-
-policy impl 也应依赖 `PolicyContextFactory` 和 HRTB，而不是依赖某个 concrete
-context：
+Policy 直接绑定到 context factory：
 
 ```rust
 #[async_trait]
-impl<F> Policy<F, FsAction> for AllowWorkspaceFsPolicy
+pub trait Policy<C: ContextFactory, A: Action>: Send + Sync {
+    fn name(&self) -> Cow<'static, str>;
+
+    async fn grant(&self, ctx: &C::Cx<'_>, action: &A) -> PolicyGrant;
+}
+
+#[async_trait]
+pub trait PolicyAny<C: ContextFactory>: Send + Sync {
+    fn name(&self) -> Cow<'static, str>;
+
+    async fn grant(&self, ctx: &C::Cx<'_>, action: &dyn Action) -> PolicyGrant;
+}
+```
+
+业务 policy 的 impl 应继续保持 context-generic，只约束它实际需要的 view：
+
+```rust
+#[async_trait]
+impl<C> Policy<C, FsReadAction> for FsReadFilenameDenyPolicy
 where
-    F: PolicyContextFactory,
-    for<'a> F::Context<'a>: WorkspacePolicyContext,
+    C: ContextFactory,
+    for<'a> C::Cx<'a>: FsReadPolicyView,
 {
     fn name(&self) -> Cow<'static, str> {
-        "allow_workspace_fs".into()
+        "fs_read_filename_deny".into()
     }
 
-    async fn grant(&self, ctx: &F::Context<'_>, action: &FsAction) -> PolicyGrant {
-        // use WorkspacePolicyContext methods on ctx
+    async fn grant(&self, ctx: &C::Cx<'_>, action: &FsReadAction) -> PolicyGrant {
+        // uses FsReadPolicyView, not AppExecutionContext fields
     }
 }
 ```
 
-这样新增 domain 时扩展的是 context 能力，而不是让 kernel trait surface 不断增长。
-这些 context trait 是 policy/access 内部约束，不是 tool-facing API。
+实现处应加简短注释说明：policy 不能依赖 app concrete context；需要的输入通过
+policy 构造参数或小 view trait 表达。
 
-这些薄构造和 extract 方法可以加 `#[inline(always)]`，包括：
-
-- `ToolCx::access_cx()`
-- `HasFsAccess::fs()`
-- `WorkspacePolicyContext` 这类 context view getter
-
-不要把 `#[inline(always)]` 扩散到 `Policy::grant`、backend side effect、或 async
-主执行逻辑上；它只用于消除 access/context glue 的边界成本。
-
-### Backend
-
-`Backend` 层是唯一真正执行副作用的地方，但它不应该只是一个 concrete type。
-
-每个 side-effecting domain 应定义一个 kernel-owned backend trait。trait 方法直接
-接受 `Granted<ConcreteAction>`，这样 kernel 泛型可以通过 associated type 选择某个
-具体实现：
+`PolicyEngine` 只作为执行器 trait，被 context factory 参数化；它不定义
+`type Cx`，也不定义 `type Context`：
 
 ```rust
 #[async_trait]
-trait FsBackend: Send + Sync {
-    async fn read(&self, granted: Granted<FsReadAction>) -> Result<FsReadOutput, FsError>;
-}
+pub trait PolicyEngine<C: ContextFactory>: Sync {
+    async fn decide<A: Action + 'static>(
+        &self,
+        ctx: &C::Cx<'_>,
+        action: &A,
+    ) -> PolicyReport;
 
-struct LocalFsBackend;
+    async fn next_grant_id(&self) -> GrantId;
 
-#[async_trait]
-impl FsBackend for LocalFsBackend {
-    async fn read(&self, granted: Granted<FsReadAction>) -> Result<FsReadOutput, FsError> {
-        let action = granted.into_action();
-        // filesystem read side effect happens here
+    async fn grant<A: Action>(
+        &self,
+        ctx: &C::Cx<'_>,
+        action: A,
+    ) -> Result<ActionGrant<A>, PolicyGrantError>
+    where
+        A: 'static,
+    {
+        // capability gate, decide, then mint ActionGrant
     }
 }
 ```
 
-concrete backend impl 是编译期 N 选一的互斥实现，例如 local fs backend、
-sandboxed fs backend、mock backend、remote backend。选择点在 kernel 类型 /
-builder 类型 / test support 类型上，通过 generic parameter 或 associated type 固定，
-不是在每次 tool call 上动态选择。
+`PolicyContext` 是最小 root view，主要服务 capability gate。`ActionContext`
+不应该再作为 unified context 的根约束；当前代码里的 `execution_plane()` /
+`plane_tier()` 是 invocation/global execution fact，后续应拆成更准确的小 view
+trait，例如 `ExecutionView`，只在真正需要的 policy/access 处约束。
 
-backend trait 是否 `pub(crate)` 或更公开，取决于 concrete impl 是否需要跨 crate
-提供；但即使 trait 需要公开，tool-facing API 也不应暴露 concrete backend handle，
-也不应让 tools 直接调用 backend trait 方法。tools 仍然只通过 access facade 表达
-意图。
+### `loong-kernel`
 
-## 依赖结构
+kernel 固定治理流程，不固定 app context 字段。
 
-目标 crate 关系：
+目标形状：
 
-```text
-loong-core
-  - policy traits and grant token
-  - Action, PolicyEngine, Granted
+```rust
+pub struct Kernel<C: ContextFactory> {
+    policy: PolicyPipeline<C>,
+    // packs, tokens, planes, adapters, audit, clock ...
+}
 
-kernel
-  - 组装 AccessCx<'_, K>
-  - 组装统一 policy context
-  - 通过 associated type / generic parameter 固定 backend impl
-  - 持有互斥选择后的 concrete backend
-  - 把 access 调用路由到 typed policy grant
+pub struct PolicyPipeline<C: ContextFactory> {
+    pre_policies: Vec<RegisteredAnyPolicy<C>>,
+    typed_policies: AnyMap<... RegisteredPolicy<C, A> ...>,
+    fallback_policies: Vec<RegisteredAnyPolicy<C>>,
+    // legacy extensions only while unmigrated tools remain
+}
 
-app / tools / runtime surfaces
-  - 接收 ToolCx
-  - 通过 ToolCx 构造 AccessCx
-  - 通过 domain access trait 从 AccessCx 构造 domain access
-  - 通过 domain access methods 表达意图
-  - 不直接依赖 backend trait 或 concrete backend types
-  - 不直接依赖 kernel concrete type 或 policy/domain context
+impl<C: ContextFactory> PolicyEngine<C> for PolicyPipeline<C> {
+    // pre -> action -> fallback
+}
 ```
 
-如果 backend impl 为了文件组织或平台差异需要拆分，也要保持同一个调用规则：
-kernel 类型选择一个 backend impl；tool-facing code 不能直接构造或调用 backend。
+`PolicyPipeline` 的语义固定：
 
-## 从父授权构造子 action
+- `pre` stage：broad gates，先于 typed action policy；
+- `action` stage：按 concrete action type 注册；
+- `fallback` stage：兼容旧 action 的 broad policy；
+- `Allow` / `Deny` 终止整个 pipeline；
+- `Continue` 继续当前 subchain；
+- `Advance` 跳到下一个 subchain；
+- 没有 terminal decision 时 default deny；
+- `PolicyReport` 记录完整 evaluations 和 outcome。
 
-某些操作是更大授权范围内的细化动作。此时子 action 的 `new` 应直接接收
+`Kernel<C>` 是把 policy engine、tool context、access facade 统一到同一个
+`C::Cx<'a>` 的地方。它不应该有 `fs_policy_context()` / `browser_policy_context()`
+这类 domain getter。
+
+### `loong-access`
+
+access crate 定义 side-effect domain 的治理入口和 action。
+
+以 fs 为例：
+
+- `FsAccess`
+- `FsReadAction`
+- `FsAction`
+- `CanonicalPath`
+- `FsReadOutput`
+- `FsAccessContext`
+
+`FsAccessContext` 是 fs domain view trait，放在 `loong-access::fs`：
+
+```rust
+pub trait FsAccessContext {
+    fn fs_resolution_root(&self) -> &Path;
+
+    fn fs_allowed_roots(&self) -> &[PathBuf];
+}
+```
+
+`CanonicalPath` 负责 path normalization、relative resolution、allowed roots、
+`..` escape、symlink escape。`FsReadAction` 不携带 workspace root / file root；
+root 是 context/policy 的需求，不是 action 自身字段。
+
+`FsAccess::read_file` 的目标顺序固定：
+
+```text
+resolve path
+  -> build FsReadAction
+  -> policy grant
+  -> consume Granted<FsReadAction>
+  -> read file
+```
+
+当前实现里 file read side effect 发生在 `loong_access::fs` 内，这是已接受的
+vertical slice。后续如果引入 backend，也必须由 access/kernel 内部调用，并消费
+`Granted<ConcreteAction>`；backend 可以是 concrete method 或函数，不必抽统一
+trait。tool 仍然不能接触 backend。
+
+### `loong-app`
+
+app 定义 concrete unified context 和业务 policy。
+
+目标形状：
+
+```rust
+pub struct AppContextFactory;
+
+impl ContextFactory for AppContextFactory {
+    type Cx<'a> = AppExecutionContext<'a>;
+}
+
+pub struct AppExecutionContext<'a> {
+    // kernel-known invocation facts
+    pub pack: &'a VerticalPackManifest,
+    pub token: &'a CapabilityToken,
+    pub now_epoch_s: u64,
+    pub plane: ExecutionPlane,
+    pub tier: PlaneTier,
+    pub request_parameters: Option<&'a serde_json::Value>,
+
+    // app-known execution facts
+    pub workspace_root: &'a Path,
+    pub file_root: Option<&'a Path>,
+    pub fs_allowed_roots: &'a [PathBuf],
+    pub tool_name: Option<&'a str>,
+}
+```
+
+字段只是示意；关键是 concrete context 由 app 拥有。它按需实现小 view trait：
+
+```rust
+impl PolicyContext for AppExecutionContext<'_> { ... }
+impl FsAccessContext for AppExecutionContext<'_> { ... }
+impl ExecutionView for AppExecutionContext<'_> { ... }
+impl ToolInvocationView for AppExecutionContext<'_> { ... }
+```
+
+tool adapter 只做：
+
+- payload parsing；
+- runtime narrowing / root view 选择；
+- 调用 `ctx.access().fs().read_file(&path)`；
+- 格式化 legacy response。
+
+tool helper 不执行 migrated read side effect。
+
+#### Config -> Policy 路径
+
+配置属于 app 层输入；policy 可以依赖配置，但这个依赖必须由 app 在组装时显式表达。
+access 和 tool helper 都不应该直接读取全局配置来决定 policy。
+
+当前 `deny_read_filenames` 路径是：
+
+```text
+loong.toml / LoongConfig
+  -> ToolConfig.fs.deny_read_filenames
+  -> ToolRuntimeConfig::from_loong_config(...)
+  -> ToolRuntimeConfig.fs.deny_read_filenames
+  -> app::context::policy_pipeline_for_tool_runtime_config(...)
+  -> PolicyPipeline::push_fs_read_filename_deny_policy(...)
+  -> FsReadFilenameDenyPolicy
+  -> typed Policy<FsReadAction>
+```
+
+这个方向是对的：app 把 config 投影成 runtime config，再用 runtime config 构造并
+注册 policy。tool 只拿到已经组装好的 kernel/pipeline/context，不自己根据 config
+决定授权。
+
+后续 config-driven policy 都应遵循同一路径：
+
+```text
+app config
+  -> normalized runtime config
+  -> app-owned policy pipeline construction
+  -> typed/broad policy registration
+  -> access/action grant time evaluation
+```
+
+不要把 config 读取放进 `loong-access`；不要让 access 方法接收 config；不要让
+tool helper 在调用 access 前执行 config-backed policy 分支。需要配置的 policy
+应该把配置作为自己的显式构造参数、字段或小 view trait 依赖；policy impl 仍然要
+对任意满足这些 trait 的 context 生效，而不是绑定 app concrete context。
+
+## 当前执行状态
+
+### 已完成
+
+- `loong-access` 已创建，依赖 `loong-core` 和 `loong-contracts`。
+- `loong-access` 当前只被 `loong-kernel` 依赖，app 不直接依赖 access。
+- `FsReadAction` / `FsAction` / `CanonicalPath` / `FsAccess::read_file` 已落地。
+- `file.read` / `read` path mode 已迁移到：
+  `ToolCoreContext::access().fs().read_file(...)`。
+- migrated read 已退出 `direct_policy_preflight` 的 file 分支。
+- `FilePolicyExtension` 不再覆盖 read，暂时只服务未迁移的 file surfaces。
+- `PolicyPipeline` 已有 typed registry、pre/action/fallback stages、`PolicyReport`。
+- `PolicyDecision` 已是 `Allow` / `Deny` / `Continue` / `Advance`。
+- `deny_read_filenames` 已作为 typed `FsReadAction` policy 接入。
+- `deny_read_filenames` 已有 config -> runtime config -> policy pipeline ->
+  typed policy registration 路径。
+
+### 仍是过渡形状
+
+- concrete kernel 仍固定 `KernelPolicyContext<'a>`。
+- `ToolCoreContext::with_fs_root_view(...)` 仍在临时拼 fs view。
+- `PolicyEngine` 仍有 `type Cx<'a>`。
+- `Policy` / `PolicyAny` 仍通过 `PolicyEngine` 获取 `Cx`。
+- `ActionContext` 仍是 `loong_core::kernel::Kernel::Cx` 的根约束。
+- `WorkspacePolicyContext` 基本是旧模型残留。
+- `fs_read_error_is_policy_denial` 仍是临时 deny 分类 helper。
+
+### 尚未完成
+
+- `ContextFactory` type factory 尚未落地。
+- `Kernel<C>` 泛型化尚未落地。
+- `PolicyPipeline<C>` 泛型化尚未落地。
+- app-defined `AppExecutionContext<'a>` 尚未落地。
+- backend execution boundary / `Granted<ConcreteAction>` handoff 尚未落地。
+- HTTP / shell / browser / memory 等 tool family 尚未迁移。
+- child action constructor pattern 尚未落地。
+- `PolicyReport` 尚未贯穿 access/tool error 到 Agent-facing response。
+
+## 实现计划
+
+### 1. 收敛 context type factory
+
+在 `loong-core` 增加只有 GAT 的 `ContextFactory`：
+
+```rust
+pub trait ContextFactory {
+    type Cx<'a>: PolicyContext
+    where
+        Self: 'a;
+}
+```
+
+同时重新评估并清理：
+
+- `ActionContext` 作为 root bound 的用法；
+- `WorkspacePolicyContext`；
+- 当前 `KernelPolicyContext` 字段和职责。
+
+不要给 `ContextFactory` 加 `create` / `build` method。app 自己构造 concrete
+context，factory 只提供类型族。
+
+### 2. 改 Policy / PolicyAny / PolicyEngine 泛型
+
+目标：
+
+```rust
+Policy<C, A>
+PolicyAny<C>
+PolicyEngine<C>
+PolicyPipeline<C>
+```
+
+禁止：
+
+```rust
+Policy<P: PolicyEngine, A>
+PolicyEngine { type Cx<'a>; }
+PolicyEngine { type Context; }
+```
+
+`PolicyEngine` 不拥有 factory，只被 `C: ContextFactory` 参数化。
+
+### 3. 泛型化 kernel 和 tool context
+
+把 concrete kernel 迁到：
+
+```rust
+pub struct Kernel<C: ContextFactory> {
+    policy: PolicyPipeline<C>,
+    // ...
+}
+```
+
+`ToolCoreContext` 携带同一个 `C::Cx<'a>`：
+
+```rust
+pub struct ToolCoreContext<'a, C: ContextFactory> {
+    kernel: &'a Kernel<C>,
+    context: C::Cx<'a>,
+}
+```
+
+`AccessCx` 继续是 kernel ref + unified context。工具调用保持类似：
+
+```rust
+ctx.access().fs().read_file(&path).await
+```
+
+### 4. App 落地 concrete unified context
+
+在 app 定义：
+
+- `AppContextFactory`
+- `AppExecutionContext<'a>`
+- 需要的小 view trait impls
+
+把当前 `KernelPolicyContext::with_fs_root_view(...)` 的信息移到 app context 构造处。
+fs root view 不应由 action 持有，也不应由 access helper 临时塞入 kernel context。
+
+### 5. 固化 Config -> Policy 组装边界
+
+保留并推广当前 `deny_read_filenames` 的方向：
+
+- config parsing 只产出 config 数据；
+- runtime config 做 normalization / narrowing；
+- app context/bootstrap 根据 runtime config 构造并注册 policies；
+- kernel pipeline 只接收已构造好的 policy；
+- access/tool helper 不反向读取 app config 来决定授权。
+
+在引入 `AppContextFactory` 后，config 仍不进入 `ContextFactory` trait 本身。
+factory 只提供 context type family；policy pipeline construction 可以读取 normalized
+runtime config 来构造 policy。
+
+### 6. 清理 legacy policy/context 形状
+
+删除或替换：
+
+- `KernelPolicyContext`，或至少降为 app/test-only context；
+- `ActionContext` root bound；
+- `WorkspacePolicyContext`；
+- `Policy<PolicyPipeline, A>` 这种 engine-bound policy impl；
+- `ToolCoreContext::with_fs_root_view(...)`。
+
+保持破坏性改动优先，不为已迁移路径保留 alias / compatibility shim。
+
+### 7. 优化 deny/report 路径
+
+把 policy denial 作为结构化 authorization error 贯穿：
+
+```text
+PolicyReport
+  -> PolicyGrantError
+  -> FsAccessError
+  -> ToolPlaneError / ToolCoreOutcome
+  -> Agent-facing response
+```
+
+目标是删除 `fs_read_error_is_policy_denial()` 这类猜测 helper。Agent-facing
+提示应能说明：
+
+- 哪个 policy 拒绝；
+- 拒绝对象是什么；
+- 是否应该换路径、请求授权，或停止重试。
+
+测试重点仍放在 `file.read` deny：无读取副作用、错误码稳定、legacy preflight
+不参与。
+
+### 8. Backend / execution boundary 后续再做
+
+当前 fs read side effect 在 `loong_access::fs` 内，这是可接受的 vertical slice。
+如果后续引入 backend 层，规则是：
+
+- backend/function 执行入口接受 `Granted<ConcreteAction>`；
+- access 消费 policy grant 并调用 backend；
+- concrete backend 通过 kernel 泛型 / associated type 编译期固定；
+- tool-facing API 不暴露 backend handle/function 或 concrete backend。
+
+不要把 backend registry 作为运行时工具选择面。
+
+### 9. 迁移剩余 tool families
+
+在 context/policy 泛型收口后，再迁移：
+
+1. write/edit/config.import；
+2. shell/bash execution；
+3. HTTP/web request；
+4. browser session operations；
+5. memory/session durable state changes；
+6. hidden specialized tools。
+
+每个迁移完成后，tool helper 只能解析 payload、调用 access、格式化响应。
+
+### 10. Child action constructor pattern
+
+凡是 child action 语义上需要 parent authorization，constructor 接收
 `Granted<SuperAction>`：
 
 ```rust
@@ -291,7 +571,7 @@ impl BrowserClickAction {
         link_id: LinkId,
     ) -> Result<Self, BrowserActionError> {
         let session = granted.into_action();
-        // validate link_id under the authorized browser session scope
+        // validate link_id under authorized session scope
         Ok(Self {
             session_id: session.session_id,
             link_id,
@@ -300,204 +580,58 @@ impl BrowserClickAction {
 }
 ```
 
-这比外部 `TryFrom<Granted<SuperAction>>` helper 更强：API 本身表达了“没有父授权
-就不能构造子 action”。
-
-由于 `Granted<A>` 被消费，这个模式默认是线性的。如果某个领域需要在一个已授权
-scope 内重复派生多个操作，应显式设计 granted lease/session，而不是随意 clone
-grant。
+如果某个 domain 需要在一个授权 scope 内多次派生操作，应显式设计 lease/session，
+不要 clone grant。
 
 ## 禁止形态
 
-- tool 解析 JSON 后不生成 typed action 和 policy grant 就直接执行副作用。
-- tool-facing API 暴露 kernel、domain policy context、backend trait object 或
-  concrete backend type。
-- backend trait 方法接受 ungranted action。
-- `execute_granted` 之类 helper 成为主执行抽象。
-- 语义上依赖父授权的 child action 可以从 ungranted parent action 构造。
-- 为每个 domain 在 kernel 上增加 `fs_policy_context()` 这类 context getter。
-- 未经重新评估就继续把 `ExecutionPlane` 固定为 `Action` 的职责。
+- tool 直接执行 migrated side effect。
+- tool 直接 name、construct 或 invoke backend handle/function / concrete backend。
+- tool-facing API 暴露 policy context、domain view trait、backend handle。
+- `Policy` 通过 `PolicyEngine` 获取 `Cx`。
+- `PolicyEngine` 定义 `type Cx` / `type Context`。
+- `ContextFactory` 带 create/build method。
+- policy impl 依赖 `AppExecutionContext` 这类 app concrete context，而不是依赖小
+  view trait。
+- 为每个 domain 在 kernel 上增加 `fs_policy_context()` 这类 getter。
+- action 持有 workspace root / file root 这类 invocation context。
+- backend/function 执行入口接受 ungranted action。
+- 为已迁移路径保留 alias/helper compatibility layer。
+- access/tool helper 直接读取 app config 来决定 policy。
+- 把整个 `ToolRuntimeConfig` 暴露成跨层逃逸口，让 policy/access 依赖 app config
+  的 concrete shape。
 
-## 实现计划
+## 验收标准
 
-### 1. 盘点当前 mixed paths
+- `ContextFactory` 只有 GAT。
+- `Policy<C, A>` / `PolicyAny<C>` / `PolicyEngine<C>` / `PolicyPipeline<C>` 使用同一个
+  `C: ContextFactory`。
+- `PolicyEngine` 内没有 factory 或 `Cx` associated type。
+- concrete app context 由 app 定义并实现所需 view traits。
+- 业务 policy 为任意满足所需 view trait 的 `C::Cx<'_>` 实现，不绑定
+  `AppExecutionContext`。
+- kernel 只通过泛型连接统一 context，不固定 app context 字段。
+- `file.read` 继续只通过 `ctx.access().fs().read_file(...)` 执行读取。
+- migrated side effect 不经过 direct preflight / `FilePolicyExtension`。
+- config-driven policy 经由 app config -> normalized runtime config ->
+  app-owned policy construction -> policy registration 进入 pipeline。
+- `Granted<A>` 仍不可被 `loong-core` 外部伪造。
+- policy deny 有结构化 report，最终可生成稳定、可行动的 Agent-facing response。
 
-列出所有会执行副作用的 provider-visible / hidden tool，并记录：
-
-- 当前 JSON request type；
-- required capabilities；
-- policy extension checks；
-- 副作用实际位置；
-- backend trait candidate；
-- concrete backend impl candidate；
-- target action type。
-- access context candidate, usually `AccessCx<'a, K>`。
-- domain access trait candidate, for example `HasFsAccess for AccessCx`。
-- whether current `ExecutionPlane` metadata belongs to action, access context,
-  invocation route, or audit routing.
-
-重点文件：
-
-- `crates/app/src/tools/tool_identity.rs`
-- `crates/kernel/src/kernel.rs`
-- `crates/app/src/tools/file.rs`
-- `crates/app/src/tools/shell.rs`
-- `crates/app/src/tools/http_request.rs`
-- `crates/app/src/tools/browser.rs`
-
-### 2. 收敛 core policy API
-
-保留 `Granted<A>::into_action()` 作为主 handoff。
-
-当 call site 不再需要旧 executor seam 后，移除或弃用：
-
-- `ActionExecutor`
-- `Granted::execute_with`
-- `HasPolicyEngine::execute_granted`
-
-替代方案不是新 wrapper，而是 backend trait 方法直接消费
-`Granted<ConcreteAction>`。
-
-### 3. 先做 filesystem vertical slice
-
-filesystem 工具最容易验证 policy 和 side effect 边界，适合作为第一刀。
-
-当前已落地的 fs-read slice 目标类型：
-
-- `FsAccess`
-- `FsReadAction`
-- `FsAction`
-- `CanonicalPath`
-- `HasFsAccess`
-- unified policy context
-- `WorkspacePolicyContext` trait on policy context
-
-`FsAccess` 应写成 kernel-generic struct：
-
-```rust
-pub struct AccessCx<'a, K> {
-    kernel: &'a K,
-    policy_context: <K::PolicyEngine<'a> as PolicyEngine>::Cx<'a>,
-}
-
-pub trait HasFsAccess<'a, K> {
-    #[inline(always)]
-    fn fs(self) -> FsAccess<'a, K>;
-}
-
-pub struct FsAccess<'a, K> {
-    kernel: &'a K,
-    policy_context: <K::PolicyEngine<'a> as PolicyEngine>::Cx<'a>,
-}
-```
-
-`ToolCx` 应只暴露构造 `AccessCx` 的入口；`K` 通过 trait bounds 提供 policy engine；
-context 类型从 `K::PolicyEngine<'_>::Factory` 推导并作为 `AccessCx`
-字段保存：
-
-```rust
-trait WorkspacePolicyContext {
-    #[inline(always)]
-    fn workspace_root(&self) -> &Path;
-}
-
-#[async_trait]
-impl<F> Policy<F, FsAction> for AllowWorkspaceFsPolicy
-where
-    F: PolicyContextFactory,
-    for<'a> F::Context<'a>: WorkspacePolicyContext,
-{
-    fn name(&self) -> Cow<'static, str> {
-        "allow_workspace_fs".into()
-    }
-
-    async fn grant(&self, ctx: &F::Context<'_>, action: &FsAction) -> PolicyGrant {
-        // authorize FsAction using WorkspacePolicyContext methods on ctx
-    }
-}
-```
-
-目标流：
-
-```text
-file tool request
-  -> ToolCx::access_cx(...)
-  -> AccessCx<'_, K>::fs(...)
-  -> FsAccess<'_, K>::read_file(...)
-  -> CanonicalPath::resolve(path, ctx.workspace_root())
-  -> FsReadAction::new(CanonicalPath)
-  -> policy.grant(ctx, action)
-  -> ActionGrant<FsReadAction>
-```
-
-完成后，file tool 不再直接拼 authorization 链；真正的 filesystem side effect
-边界仍应在后续 backend 迁移中继续收敛到 `Granted<FsReadAction>`。
-
-### 4. 把 domain checks 从 ad hoc JSON parsing 挪到 typed action
-
-capability inference 可以保留粗粒度，但操作级验证应进入 typed action 和 policy
-context。
-
-例子：
-
-- path normalization：进入 `CanonicalPath::resolve`；`FsReadAction::new` 只接收
-  已解析的 `CanonicalPath`；
-- shell command risk：作为 structured action data 进入 grant 前；
-- URL normalization：进入 network/http action construction；
-- browser session/link validation：进入 parent-to-child action construction。
-
-### 5. 落地 child action constructor pattern
-
-browser 操作适合作为主要验证场景：
-
-```text
-BrowserSessionAction
-  -> Granted<BrowserSessionAction>
-  -> BrowserClickAction::new(granted_session, link_id)
-  -> policy.grant(ctx, click_action)
-  -> BrowserBackend::click(Granted<BrowserClickAction>)
-```
-
-关键规则：凡是 child action 语义上需要 parent authorization，`new` 就接收
-`Granted<SuperAction>`。
-
-### 6. 迁移剩余 tool families
-
-filesystem slice 编译和测试通过后，按风险和复杂度迁移：
-
-1. HTTP/web request tools；
-2. shell/bash execution；
-3. browser session operations；
-4. memory/session durable state changes；
-5. hidden specialized tools。
-
-每个迁移完成后，应留下一个清晰的 backend trait method，且该函数接受
-`Granted<ConcreteAction>`。具体 impl 是编译期互斥选择，但 side-effect contract
-不变。
-
-### 7. 清理 legacy execution seams
-
-所有副作用领域都改为 direct granted-action backend trait methods 后，清理旧
-executor 兼容层和相关 docs/tests。
-
-搜索并处理：
-
-- `ActionExecutor`
-- `execute_with`
-- `execute_granted`
-- app/tool code 对 backend trait 或 concrete backend 的直接访问
-- 接受 ungranted action 的 side-effect function
-
-### 8. 验证
+## 验证
 
 使用本机 `cargo`，不要用会自动安装 toolchain 的 repo helper。
 
-最低验证：
+针对 context/policy 重构的最低验证：
 
 ```bash
 cargo fmt --all -- --check
-cargo check --workspace --all-features
-cargo test --workspace --all-features
+cargo check -p loong-core -p loong-access -p loong-kernel -p loong-app -p loong
+cargo test -p loong-access
+cargo test -p loong-kernel policy
+cargo test -p loong-kernel access
+cargo test -p loong-app file_read
+cargo test -p loong-app workspace_root_tests
 git diff --check
 ```
 
@@ -506,27 +640,3 @@ git diff --check
 ```bash
 ./scripts/check_architecture_boundaries.sh
 ```
-
-## 后续：优化 Deny 路径的 Agent 提示
-
-把 policy deny 保留为结构化 authorization error，不在 access/app 侧靠字符串或
-`is_policy_denial()` 之类 helper 猜测。`PolicyReport` 应沿 grant/access/tool error
-路径传到 kernel tool response 边界，由那里统一生成 Agent-facing 提示：说明被哪个
-policy 拒绝、拒绝对象是什么、是否应该换路径/请求授权/停止重试。测试重点放在
-`file.read` deny：无读取副作用、错误码稳定、提示可行动，且 legacy preflight 不参与。
-
-## 验收标准
-
-- tool-facing code 不能 name、construct 或 invoke backend trait / concrete backend。
-- tool-facing code 不能直接 name 或使用 kernel concrete type、policy context、
-  domain context trait；只能经由 `ToolCx -> AccessCx -> domain Access`。
-- 所有 side-effecting backend trait methods 都接受 `Granted<ConcreteAction>`。
-- domain access trait 实现在 `AccessCx` 上，例如当前 fs-read slice 的
-  `HasFsAccess::fs(self) -> FsAccess<'a, K>`。
-- domain access 是 `FsAccess<'a, K>` 这类 kernel-generic facade，不直接持有 backend。
-- backend impl 通过 kernel associated type / generic parameter 编译期 N 选一。
-- `Granted<A>` 仍不可被 `loong-core` 外部伪造。
-- `AccessCx` construction 由 kernel/tool context boundary 控制，只有一条受控构造路径。
-- 依赖父授权的 child action constructor 接收 `Granted<SuperAction>`。
-- `ExecutionPlane` 的归属重新评估后再迁移，不默认保留在 `Action` 上。
-- 除非明确批准 breaking change，否则保留现有 public root re-exports。
