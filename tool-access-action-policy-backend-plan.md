@@ -507,6 +507,14 @@ git diff --check
 ./scripts/check_architecture_boundaries.sh
 ```
 
+## 后续：优化 Deny 路径的 Agent 提示
+
+把 policy deny 保留为结构化 authorization error，不在 access/app 侧靠字符串或
+`is_policy_denial()` 之类 helper 猜测。`PolicyReport` 应沿 grant/access/tool error
+路径传到 kernel tool response 边界，由那里统一生成 Agent-facing 提示：说明被哪个
+policy 拒绝、拒绝对象是什么、是否应该换路径/请求授权/停止重试。测试重点放在
+`file.read` deny：无读取副作用、错误码稳定、提示可行动，且 legacy preflight 不参与。
+
 ## 验收标准
 
 - tool-facing code 不能 name、construct 或 invoke backend trait / concrete backend。
