@@ -115,7 +115,7 @@ Production code MUST NOT appear after an embedded Rust test module.
 
 Tests MUST NOT read from or write to the developer's real home directory. Tests
 that need Loong state MUST set `LOONG_HOME` to an isolated temporary directory or
-use `./scripts/cargo-local-toolchain.sh test`, which provides an isolated default
+use `./scripts/dev/cargo-local-toolchain.sh test`, which provides an isolated default
 test home.
 
 ### TEST-10: Live Network Tests Are Isolated

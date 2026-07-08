@@ -101,7 +101,7 @@ Rust 测试模块必须由 `#[cfg(test)]` guard 保护。
 ### TEST-9：测试禁止使用真实用户状态
 
 测试禁止读取或写入开发者真实 home 目录。需要 Loong 状态的测试必须将 `LOONG_HOME` 设置为
-隔离的临时目录，或使用 `./scripts/cargo-local-toolchain.sh test`，该脚本会提供隔离的默认测试
+隔离的临时目录，或使用 `./scripts/dev/cargo-local-toolchain.sh test`，该脚本会提供隔离的默认测试
 home。
 
 ### TEST-10：真实网络测试必须隔离

@@ -41,7 +41,7 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
-            const modulePath = `${process.env.GITHUB_WORKSPACE}/scripts/workflow_change_router.mjs`;
+            const modulePath = `${process.env.GITHUB_WORKSPACE}/scripts/ci/workflow_change_router.mjs`;
             const moduleUrl = `file://${modulePath}`;
             const routerModule = await import(moduleUrl);
             const runtime = { core, github, context };

@@ -9,7 +9,7 @@ on:
       - 'release/**'
     paths:
       - '.github/workflows/**'
-      - 'scripts/lint_programmatic_pressure_baseline.sh'
+      - 'scripts/bench/lint_programmatic_pressure_baseline.sh'
       - 'examples/benchmarks/**'
       - 'crates/daemon/**'
       - 'crates/spec/**'
@@ -23,7 +23,7 @@ on:
       - 'release/**'
     paths:
       - '.github/workflows/**'
-      - 'scripts/lint_programmatic_pressure_baseline.sh'
+      - 'scripts/bench/lint_programmatic_pressure_baseline.sh'
       - 'examples/benchmarks/**'
       - 'crates/daemon/**'
       - 'crates/spec/**'
@@ -51,4 +51,4 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
 
       - name: Lint benchmark baseline
-        run: ./scripts/lint_programmatic_pressure_baseline.sh
+        run: ./scripts/bench/lint_programmatic_pressure_baseline.sh

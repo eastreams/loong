@@ -28,10 +28,10 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
 
       - name: Run programmatic pressure benchmark
-        run: ./scripts/benchmark_programmatic_pressure.sh
+        run: ./scripts/bench/benchmark_programmatic_pressure.sh
 
       - name: Run wasm cache benchmark
-        run: ./scripts/benchmark_wasm_cache.sh
+        run: ./scripts/bench/benchmark_wasm_cache.sh
 
       - name: Upload benchmark report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

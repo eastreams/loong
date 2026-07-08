@@ -45,8 +45,8 @@
       "description": "Daemon binary, CLI entrypoints, and install flow.",
       "paths": [
         "crates/daemon/**",
-        "scripts/install.sh",
-        "scripts/install.ps1"
+        "scripts/install/install.sh",
+        "scripts/install/install.ps1"
       ]
     },
     {
@@ -164,13 +164,13 @@
         ".github/labeler.yml",
         ".github/label_taxonomy.json",
         "Taskfile.yml",
-        "scripts/architecture_budget_lib.sh",
-        "scripts/bootstrap_release_local_artifacts.sh",
+        "scripts/checks/architecture_budget_lib.sh",
+        "scripts/release/bootstrap_release_local_artifacts.sh",
         "scripts/check*.sh",
         "scripts/lint_*.sh",
-        "scripts/release_artifact_lib.sh",
-        "scripts/sync_github_labels.py",
-        "scripts/test_*.sh"
+        "scripts/release/release_artifact_lib.sh",
+        "scripts/github/sync_github_labels.py",
+        "scripts/test/test_*.sh"
       ]
     }
   ],

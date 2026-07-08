@@ -50,11 +50,11 @@ product entrypoint is still the `loong` binary in `crates/daemon`.
 If `task` is unavailable, run the underlying `cargo` and `scripts/*` commands
 directly.
 
-- Format check: `./scripts/cargo-local-toolchain.sh fmt --all -- --check`
-- Strict lint: `./scripts/cargo-local-toolchain.sh clippy --workspace --all-targets --all-features -- -D warnings`
-- Architecture check: `./scripts/check_architecture_boundaries.sh` or `task check:architecture`
+- Format check: `./scripts/dev/cargo-local-toolchain.sh fmt --all -- --check`
+- Strict lint: `./scripts/dev/cargo-local-toolchain.sh clippy --workspace --all-targets --all-features -- -D warnings`
+- Architecture check: `./scripts/checks/check_architecture_boundaries.sh` or `task check:architecture`
 - Convention check: `task check:conventions` (optional wrapper; requires Go + convention-engineering skill)
-- Test all features: `./scripts/cargo-local-toolchain.sh test --workspace --all-features`
+- Test all features: `./scripts/dev/cargo-local-toolchain.sh test --workspace --all-features`
 - Canonical verify: `task verify` (optional wrapper around repo verification steps)
 - Extended verify: `task verify:full` (optional wrapper around the extended local gate)
 
@@ -73,20 +73,20 @@ directly.
 ## 5. Verification Gates
 
 CI enforces:
-- `./scripts/cargo-local-toolchain.sh fmt --all -- --check`
-- `./scripts/cargo-local-toolchain.sh clippy --workspace --all-targets --all-features -- -D warnings`
-- `./scripts/cargo-local-toolchain.sh test --workspace`
-- `./scripts/cargo-local-toolchain.sh test --workspace --all-features`
+- `./scripts/dev/cargo-local-toolchain.sh fmt --all -- --check`
+- `./scripts/dev/cargo-local-toolchain.sh clippy --workspace --all-targets --all-features -- -D warnings`
+- `./scripts/dev/cargo-local-toolchain.sh test --workspace`
+- `./scripts/dev/cargo-local-toolchain.sh test --workspace --all-features`
 
 ## 6. Pre-Commit Hook
 
 ```bash
-cp scripts/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+cp scripts/hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
 ```
 
 Runs CI-parity cargo checks before each commit.
 Use `task verify` when the `task` CLI is installed. Otherwise run the
-underlying `scripts/cargo-local-toolchain.sh` and `scripts/*` verification
+underlying `scripts/dev/cargo-local-toolchain.sh` and `scripts/*` verification
 commands directly.
 
 ## 7. Where to Look Next
