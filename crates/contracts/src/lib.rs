@@ -46,8 +46,6 @@ pub use memory_types::{
 };
 pub use namespace::Namespace;
 pub use pack::VerticalPackManifest;
-#[allow(deprecated)]
-pub use policy_types::{PolicyContext, PolicyRequest};
 pub use runtime_types::{
     RuntimeCoreOutcome, RuntimeCoreRequest, RuntimeExtensionOutcome, RuntimeExtensionRequest,
     RuntimeTier,
