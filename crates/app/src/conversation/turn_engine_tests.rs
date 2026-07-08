@@ -439,6 +439,15 @@ impl AppToolDispatcher for AfterExecutionSequenceRecordingDispatcher {
         request: ToolCoreRequest,
         _binding: ConversationRuntimeBinding<'_>,
     ) -> Result<ToolCoreOutcome, String> {
+        if request
+            .payload
+            .get("deny")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            return Err("app_tool_denied: denied by test policy".to_owned());
+        }
+
         let delay_ms = match request.tool_name.as_str() {
             "sessions_list" => 25,
             "session_status" => 10,
@@ -1453,6 +1462,153 @@ async fn parallel_execution_records_trace_items_in_intent_order() {
 
     assert_eq!(intent_outcome_ids, expected_ids);
     assert_eq!(outcome_record_ids, expected_ids);
+}
+
+#[tokio::test]
+async fn parallel_execution_keeps_successful_tool_results_when_one_tool_is_denied() {
+    let turn = ProviderTurn {
+        assistant_text: "observing partial policy denial".to_owned(),
+        tool_intents: vec![
+            provider_app_tool_intent(
+                "sessions_list",
+                json!({}),
+                "session-observed-partial-denial",
+                "turn-observed-partial-denial",
+                "call-partial-denial-success",
+            ),
+            provider_app_tool_intent(
+                "sessions_list",
+                json!({"deny": true}),
+                "session-observed-partial-denial",
+                "turn-observed-partial-denial",
+                "call-partial-denial-denied",
+            ),
+        ],
+        raw_meta: json!({}),
+    };
+    let session_context =
+        SessionContext::root_with_tool_view("session-observed-partial-denial", runtime_tool_view());
+    let dispatcher = AfterExecutionSequenceRecordingDispatcher {
+        after_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+    };
+    let engine = TurnEngine::with_parallel_tool_execution(8, 512, true, 2);
+
+    let (result, trace) = engine
+        .execute_turn_in_context_with_trace(
+            &turn,
+            &session_context,
+            &dispatcher,
+            ConversationRuntimeBinding::direct(),
+            None,
+            None,
+        )
+        .await;
+
+    let TurnResult::FinalText(text) = result else {
+        panic!("expected per-tool denial result lines, got {result:?}");
+    };
+    assert!(text.contains("call-partial-denial-success"), "{text}");
+    assert!(text.contains("call-partial-denial-denied"), "{text}");
+    assert!(text.contains("denied by test policy"), "{text}");
+
+    let trace = trace.expect("trace should exist");
+    assert_eq!(trace.intent_outcomes.len(), 2);
+    assert_eq!(
+        trace.intent_outcomes[0].status,
+        ToolBatchExecutionIntentStatus::Completed
+    );
+    assert_eq!(
+        trace.intent_outcomes[1].status,
+        ToolBatchExecutionIntentStatus::Denied
+    );
+}
+
+#[tokio::test]
+async fn sequential_execution_continues_after_single_tool_denial() {
+    let turn = ProviderTurn {
+        assistant_text: "observing sequential policy denial".to_owned(),
+        tool_intents: vec![
+            provider_app_tool_intent(
+                "sessions_list",
+                json!({}),
+                "session-observed-sequential-denial",
+                "turn-observed-sequential-denial",
+                "call-sequential-denial-success-before",
+            ),
+            provider_app_tool_intent(
+                "sessions_list",
+                json!({"deny": true}),
+                "session-observed-sequential-denial",
+                "turn-observed-sequential-denial",
+                "call-sequential-denial-denied",
+            ),
+            provider_app_tool_intent(
+                "sessions_list",
+                json!({}),
+                "session-observed-sequential-denial",
+                "turn-observed-sequential-denial",
+                "call-sequential-denial-success-after",
+            ),
+        ],
+        raw_meta: json!({}),
+    };
+    let session_context = SessionContext::root_with_tool_view(
+        "session-observed-sequential-denial",
+        runtime_tool_view(),
+    );
+    let after_calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let dispatcher = AfterExecutionSequenceRecordingDispatcher {
+        after_calls: std::sync::Arc::clone(&after_calls),
+    };
+    let engine = TurnEngine::with_parallel_tool_execution(8, 512, false, 1);
+
+    let (result, trace) = engine
+        .execute_turn_in_context_with_trace(
+            &turn,
+            &session_context,
+            &dispatcher,
+            ConversationRuntimeBinding::direct(),
+            None,
+            None,
+        )
+        .await;
+
+    let TurnResult::FinalText(text) = result else {
+        panic!("expected per-tool denial result lines, got {result:?}");
+    };
+    assert!(
+        text.contains("call-sequential-denial-success-before"),
+        "{text}"
+    );
+    assert!(text.contains("call-sequential-denial-denied"), "{text}");
+    assert!(
+        text.contains("call-sequential-denial-success-after"),
+        "{text}"
+    );
+
+    let after_calls = after_calls.lock().expect("after call lock").clone();
+    assert_eq!(
+        after_calls,
+        vec![
+            ("call-sequential-denial-success-before".to_owned(), 0),
+            ("call-sequential-denial-success-after".to_owned(), 2),
+        ]
+    );
+
+    let trace = trace.expect("trace should exist");
+    let statuses = trace
+        .intent_outcomes
+        .iter()
+        .map(|intent_outcome| intent_outcome.status)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        statuses,
+        vec![
+            ToolBatchExecutionIntentStatus::Completed,
+            ToolBatchExecutionIntentStatus::Denied,
+            ToolBatchExecutionIntentStatus::Completed,
+        ]
+    );
 }
 
 #[tokio::test]

@@ -248,11 +248,11 @@ impl TurnEngine {
         app_dispatcher: &D,
         binding: ConversationRuntimeBinding<'_>,
         observer: Option<&ConversationTurnObserverHandle>,
-    ) -> Result<ToolCoreOutcome, TurnResult> {
+    ) -> PreparedToolExecutionOutcome {
         match prepared_intent.execution_kind {
             ToolExecutionKind::Core => {
                 let Some(kernel_ctx) = binding.kernel_context() else {
-                    return Err(TurnResult::policy_denied(
+                    return PreparedToolExecutionOutcome::Interrupted(TurnResult::policy_denied(
                         "no_kernel_context",
                         "no_kernel_context",
                     ));
@@ -274,15 +274,26 @@ impl TurnEngine {
                     None => execution.await,
                 };
 
-                outcome.map_err(turn_result_from_tool_execution_failure)
+                match outcome {
+                    Ok(outcome) => PreparedToolExecutionOutcome::Completed(outcome),
+                    Err(failure) if failure.kind == TurnFailureKind::PolicyDenied => {
+                        PreparedToolExecutionOutcome::Denied(failure)
+                    }
+                    Err(failure) => PreparedToolExecutionOutcome::Interrupted(
+                        turn_result_from_tool_execution_failure(failure),
+                    ),
+                }
             }
             ToolExecutionKind::App => match app_dispatcher
                 .execute_app_tool(session_context, prepared_intent.request.clone(), binding)
                 .await
             {
-                Ok(outcome) => Ok(outcome),
+                Ok(outcome) => PreparedToolExecutionOutcome::Completed(outcome),
                 Err(reason) if reason.starts_with("tool_not_visible:") => {
-                    Err(TurnResult::policy_denied("tool_not_visible", reason))
+                    PreparedToolExecutionOutcome::Denied(TurnFailure::policy_denied(
+                        "tool_not_visible",
+                        reason,
+                    ))
                 }
                 Err(reason)
                     if reason.starts_with("tool_not_found:")
@@ -293,19 +304,24 @@ impl TurnEngine {
                         prepared_intent.intent.source.as_str(),
                     );
                     let failure = TurnFailure::policy_denied("tool_not_found", policy_reason);
-                    Err(TurnResult::ToolDenied(failure))
+                    PreparedToolExecutionOutcome::Denied(failure)
                 }
                 Err(reason) if reason.starts_with("app_tool_disabled:") => {
-                    Err(TurnResult::policy_denied("app_tool_disabled", reason))
+                    PreparedToolExecutionOutcome::Denied(TurnFailure::policy_denied(
+                        "app_tool_disabled",
+                        reason,
+                    ))
                 }
                 Err(reason) if reason.starts_with("app_tool_denied:") => {
                     let human_reason = render_app_tool_denied_reason(reason.as_str());
-                    Err(TurnResult::policy_denied("app_tool_denied", human_reason))
+                    PreparedToolExecutionOutcome::Denied(TurnFailure::policy_denied(
+                        "app_tool_denied",
+                        human_reason,
+                    ))
                 }
-                Err(reason) => Err(TurnResult::non_retryable_tool_error(
-                    "app_tool_execution_failed",
-                    reason,
-                )),
+                Err(reason) => PreparedToolExecutionOutcome::Interrupted(
+                    TurnResult::non_retryable_tool_error("app_tool_execution_failed", reason),
+                ),
             },
         }
     }
@@ -370,7 +386,7 @@ mod execution_tests {
             )
             .await;
 
-        let Err(TurnResult::ToolDenied(failure)) = result else {
+        let PreparedToolExecutionOutcome::Denied(failure) = result else {
             panic!("expected tool denial");
         };
         assert_eq!(failure.code, "tool_not_found");

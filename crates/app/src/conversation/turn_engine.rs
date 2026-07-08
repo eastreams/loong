@@ -73,20 +73,22 @@ pub use dispatcher::{
     AppToolDispatcher, DefaultAppToolDispatcher, NoopAppToolDispatcher, ToolExecutionPreflight,
 };
 use execute::session_context_from_turn;
-pub(crate) use outcome::KernelFailureClass;
 pub use outcome::{
     ApprovalRequirement, ApprovalRequirementKind, ToolPreflightOutcome, ToolResultEnvelope,
     ToolResultPayloadSemantics, TurnFailure, TurnFailureKind, TurnResult, TurnValidation,
 };
+pub(crate) use outcome::{KernelFailureClass, PreparedToolExecutionOutcome};
 #[cfg(test)]
 use payload::augment_tool_payload_for_kernel;
 pub(crate) use payload::render_kernel_error_reason;
 use prepare::{PreparedToolIntent, PreparedToolIntentFailure, ToolIntentPreparationHarness};
 pub(crate) use result::{
-    build_failure_tool_outcome_trace_record, build_success_tool_outcome_trace_record,
-    build_tool_decision_trace_record, build_tool_intent_completed_trace,
+    build_denied_tool_outcome_trace_record, build_failure_tool_outcome_trace_record,
+    build_success_tool_outcome_trace_record, build_tool_decision_trace_record,
+    build_tool_intent_completed_trace, build_tool_intent_denied_trace,
     build_tool_intent_failure_trace, effective_denied_tool_name, effective_result_tool_name,
-    format_tool_result_line_with_limit, turn_result_from_tool_execution_failure,
+    format_tool_denied_result_line_with_limit, format_tool_result_line_with_limit,
+    turn_result_from_tool_execution_failure,
 };
 pub(crate) use support::classify_kernel_error;
 use support::{

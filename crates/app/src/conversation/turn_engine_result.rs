@@ -39,6 +39,22 @@ pub(crate) fn format_tool_result_line_with_limit(
     format!("[{}] {encoded}", outcome.status)
 }
 
+pub(crate) fn format_tool_denied_result_line_with_limit(
+    intent: &ToolIntent,
+    failure: &TurnFailure,
+    payload_summary_limit_chars: usize,
+) -> String {
+    let outcome = ToolCoreOutcome {
+        status: "error".to_owned(),
+        payload: json!({
+            "code": failure.code,
+            "reason": failure.reason,
+            "retryable": failure.retryable,
+        }),
+    };
+    format_tool_result_line_with_limit(intent, &outcome, payload_summary_limit_chars)
+}
+
 pub(crate) fn build_tool_result_envelope(
     intent: &ToolIntent,
     outcome: &ToolCoreOutcome,
@@ -268,7 +284,22 @@ pub(crate) fn build_failure_tool_outcome_trace_record(
     intent: &ToolIntent,
     turn_result: &TurnResult,
 ) -> Option<ToolOutcomeTraceRecord> {
-    let failure = turn_result.failure()?;
+    turn_result
+        .failure()
+        .map(|failure| build_tool_failure_outcome_trace_record(intent, failure))
+}
+
+pub(crate) fn build_denied_tool_outcome_trace_record(
+    intent: &ToolIntent,
+    failure: &TurnFailure,
+) -> ToolOutcomeTraceRecord {
+    build_tool_failure_outcome_trace_record(intent, failure)
+}
+
+fn build_tool_failure_outcome_trace_record(
+    intent: &ToolIntent,
+    failure: &TurnFailure,
+) -> ToolOutcomeTraceRecord {
     let tool_name = effective_result_tool_name(intent);
     let outcome = ToolOutcomeTelemetry {
         tool_name,
@@ -278,11 +309,11 @@ pub(crate) fn build_failure_tool_outcome_trace_record(
         human_reason: Some(failure.reason.clone()),
         audit_event_id: None,
     };
-    Some(ToolOutcomeTraceRecord {
+    ToolOutcomeTraceRecord {
         turn_id: intent.turn_id.clone(),
         tool_call_id: intent.tool_call_id.clone(),
         outcome,
-    })
+    }
 }
 
 pub(crate) fn build_tool_intent_completed_trace(
@@ -337,12 +368,7 @@ pub(crate) fn build_tool_intent_failure_trace(
             status: ToolBatchExecutionIntentStatus::NeedsApproval,
             detail: Some(requirement.reason.clone()),
         }),
-        TurnResult::ToolDenied(failure) => Some(ToolBatchExecutionIntentTrace {
-            tool_call_id: intent.tool_call_id.clone(),
-            tool_name,
-            status: ToolBatchExecutionIntentStatus::Denied,
-            detail: Some(failure.reason.clone()),
-        }),
+        TurnResult::ToolDenied(failure) => Some(build_tool_intent_denied_trace(intent, failure)),
         TurnResult::ToolError(failure) | TurnResult::ProviderError(failure) => {
             Some(ToolBatchExecutionIntentTrace {
                 tool_call_id: intent.tool_call_id.clone(),
@@ -354,6 +380,18 @@ pub(crate) fn build_tool_intent_failure_trace(
         TurnResult::FinalText(_) | TurnResult::StreamingText(_) | TurnResult::StreamingDone(_) => {
             None
         }
+    }
+}
+
+pub(crate) fn build_tool_intent_denied_trace(
+    intent: &ToolIntent,
+    failure: &TurnFailure,
+) -> ToolBatchExecutionIntentTrace {
+    ToolBatchExecutionIntentTrace {
+        tool_call_id: intent.tool_call_id.clone(),
+        tool_name: effective_result_tool_name(intent),
+        status: ToolBatchExecutionIntentStatus::Denied,
+        detail: Some(failure.reason.clone()),
     }
 }
 

@@ -6,11 +6,13 @@ use futures_util::stream::{self, StreamExt};
 
 use super::prepare::PreparedToolIntent;
 use super::{
-    AppToolDispatcher, ConversationRuntimeBinding, ConversationTurnObserverHandle, SessionContext,
-    ToolBatchExecutionIntentTrace, ToolBatchExecutionMode, ToolBatchExecutionSegmentTrace,
-    ToolBatchExecutionTrace, ToolOutcomeTraceRecord, TurnEngine, TurnResult,
+    AppToolDispatcher, ConversationRuntimeBinding, ConversationTurnObserverHandle,
+    PreparedToolExecutionOutcome, SessionContext, ToolBatchExecutionIntentTrace,
+    ToolBatchExecutionMode, ToolBatchExecutionSegmentTrace, ToolBatchExecutionTrace,
+    ToolOutcomeTraceRecord, TurnEngine, TurnResult, build_denied_tool_outcome_trace_record,
     build_failure_tool_outcome_trace_record, build_success_tool_outcome_trace_record,
-    build_tool_intent_completed_trace, build_tool_intent_failure_trace, elapsed_ms_u64,
+    build_tool_intent_completed_trace, build_tool_intent_denied_trace,
+    build_tool_intent_failure_trace, elapsed_ms_u64, format_tool_denied_result_line_with_limit,
     format_tool_result_line_with_limit, observe_peak_in_flight,
 };
 use crate::tools::ToolSchedulingClass;
@@ -204,8 +206,29 @@ impl<'a> ToolBatchHarness<'a> {
                     )
                     .await
                 {
-                    Ok(outcome) => outcome,
-                    Err(turn_result) => {
+                    PreparedToolExecutionOutcome::Completed(outcome) => outcome,
+                    PreparedToolExecutionOutcome::Denied(failure) => {
+                        let outcome_record = build_denied_tool_outcome_trace_record(
+                            &prepared_intent.intent,
+                            &failure,
+                        );
+                        outcome_records.push(outcome_record);
+
+                        let intent_outcome =
+                            build_tool_intent_denied_trace(&prepared_intent.intent, &failure);
+                        intent_outcomes.push(intent_outcome);
+
+                        let payload_summary_limit_chars =
+                            self.engine.tool_result_payload_summary_limit_chars;
+                        let output = format_tool_denied_result_line_with_limit(
+                            &prepared_intent.intent,
+                            &failure,
+                            payload_summary_limit_chars,
+                        );
+                        outputs.push(output);
+                        continue;
+                    }
+                    PreparedToolExecutionOutcome::Interrupted(turn_result) => {
                         let outcome_record = build_failure_tool_outcome_trace_record(
                             &prepared_intent.intent,
                             &turn_result,
@@ -305,7 +328,7 @@ impl<'a> ToolBatchHarness<'a> {
                         )
                         .await
                     {
-                        Ok(outcome) => {
+                        PreparedToolExecutionOutcome::Completed(outcome) => {
                             app_dispatcher
                                 .after_tool_execution(
                                     session_context,
@@ -333,7 +356,22 @@ impl<'a> ToolBatchHarness<'a> {
 
                             Ok((output, intent_outcome, outcome_record))
                         }
-                        Err(turn_result) => {
+                        PreparedToolExecutionOutcome::Denied(failure) => {
+                            let output = format_tool_denied_result_line_with_limit(
+                                &prepared_intent.intent,
+                                &failure,
+                                payload_summary_limit_chars,
+                            );
+                            let intent_outcome =
+                                build_tool_intent_denied_trace(&prepared_intent.intent, &failure);
+                            let outcome_record = build_denied_tool_outcome_trace_record(
+                                &prepared_intent.intent,
+                                &failure,
+                            );
+
+                            Ok((output, intent_outcome, outcome_record))
+                        }
+                        PreparedToolExecutionOutcome::Interrupted(turn_result) => {
                             let intent_outcome = build_tool_intent_failure_trace(
                                 &prepared_intent.intent,
                                 &turn_result,

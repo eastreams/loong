@@ -1,6 +1,7 @@
 use std::fmt;
 use std::ops::Deref;
 
+use loong_contracts::ToolCoreOutcome;
 use serde::{Deserialize, Serialize};
 
 use super::ToolDecisionTelemetry;
@@ -179,6 +180,13 @@ pub enum TurnResult {
     ToolDenied(TurnFailure),
     ToolError(TurnFailure),
     ProviderError(TurnFailure),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum PreparedToolExecutionOutcome {
+    Completed(ToolCoreOutcome),
+    Denied(TurnFailure),
+    Interrupted(TurnResult),
 }
 
 impl TurnResult {
