@@ -7,7 +7,7 @@ use serde_json::json;
 
 #[tokio::test]
 async fn integration_kernel_executes_task() {
-    let (mut kernel, _audit) = Kernel::new_with_in_memory_audit();
+    let (mut kernel, _audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
     kernel.register_pack(sample_pack()).unwrap();
     kernel.register_harness_adapter(MockEmbeddedPiHarness {
         seen_tasks: Mutex::new(Vec::new()),
@@ -22,7 +22,12 @@ async fn integration_kernel_executes_task() {
         payload: json!({}),
     };
     let dispatch = kernel
-        .execute_task("sales-intel", &token, task)
+        .execute_task(
+            "sales-intel",
+            &token,
+            task,
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+        )
         .await
         .unwrap();
     assert_eq!(dispatch.outcome.status, "ok");
@@ -30,7 +35,7 @@ async fn integration_kernel_executes_task() {
 
 #[tokio::test]
 async fn kernel_executes_task_and_connector_under_pack_policy() {
-    let (mut kernel, _audit) = Kernel::new_with_in_memory_audit();
+    let (mut kernel, _audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -51,7 +56,12 @@ async fn kernel_executes_task_and_connector_under_pack_policy() {
     };
 
     let dispatch = kernel
-        .execute_task("sales-intel", &token, task)
+        .execute_task(
+            "sales-intel",
+            &token,
+            task,
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+        )
         .await
         .expect("task should dispatch");
 
@@ -66,7 +76,13 @@ async fn kernel_executes_task_and_connector_under_pack_policy() {
     };
 
     let connector_dispatch = kernel
-        .execute_connector_core("sales-intel", &token, None, connector_command)
+        .execute_connector_core(
+            "sales-intel",
+            &token,
+            None,
+            connector_command,
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+        )
         .await
         .expect("connector dispatch should succeed");
 
@@ -76,7 +92,7 @@ async fn kernel_executes_task_and_connector_under_pack_policy() {
 
 #[tokio::test]
 async fn kernel_rejects_token_missing_capability() {
-    let (mut kernel, _audit) = Kernel::new_with_in_memory_audit();
+    let (mut kernel, _audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -97,7 +113,12 @@ async fn kernel_rejects_token_missing_capability() {
     };
 
     let error = kernel
-        .execute_task("sales-intel", &token, task)
+        .execute_task(
+            "sales-intel",
+            &token,
+            task,
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+        )
         .await
         .expect_err("missing capability should fail");
 
@@ -109,7 +130,7 @@ async fn kernel_rejects_token_missing_capability() {
 
 #[tokio::test]
 async fn kernel_rejects_connector_not_whitelisted_by_pack() {
-    let (mut kernel, _audit) = Kernel::new_with_in_memory_audit();
+    let (mut kernel, _audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -127,7 +148,13 @@ async fn kernel_rejects_connector_not_whitelisted_by_pack() {
     };
 
     let error = kernel
-        .execute_connector_core("sales-intel", &token, None, command)
+        .execute_connector_core(
+            "sales-intel",
+            &token,
+            None,
+            command,
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+        )
         .await
         .expect_err("non-whitelisted connector must fail");
 
@@ -142,7 +169,7 @@ async fn kernel_rejects_connector_not_whitelisted_by_pack() {
 
 #[tokio::test]
 async fn layered_connector_core_executes_through_core_plane() {
-    let (mut kernel, _audit) = Kernel::new_with_in_memory_audit();
+    let (mut kernel, _audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -160,7 +187,13 @@ async fn layered_connector_core_executes_through_core_plane() {
     };
 
     let dispatch = kernel
-        .execute_connector_core("sales-intel", &token, None, command)
+        .execute_connector_core(
+            "sales-intel",
+            &token,
+            None,
+            command,
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+        )
         .await
         .expect("core connector plane should execute");
 
@@ -171,7 +204,7 @@ async fn layered_connector_core_executes_through_core_plane() {
 
 #[tokio::test]
 async fn layered_connector_extension_composes_over_core_plane() {
-    let (mut kernel, _audit) = Kernel::new_with_in_memory_audit();
+    let (mut kernel, _audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -190,7 +223,14 @@ async fn layered_connector_extension_composes_over_core_plane() {
     };
 
     let dispatch = kernel
-        .execute_connector_extension("sales-intel", &token, "shielded-bridge", None, command)
+        .execute_connector_extension(
+            "sales-intel",
+            &token,
+            "shielded-bridge",
+            None,
+            command,
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+        )
         .await
         .expect("extension connector plane should execute");
 
@@ -202,7 +242,7 @@ async fn layered_connector_extension_composes_over_core_plane() {
 
 #[tokio::test]
 async fn layered_connector_plane_still_enforces_pack_whitelist() {
-    let (mut kernel, _audit) = Kernel::new_with_in_memory_audit();
+    let (mut kernel, _audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -220,7 +260,13 @@ async fn layered_connector_plane_still_enforces_pack_whitelist() {
     };
 
     let error = kernel
-        .execute_connector_core("sales-intel", &token, None, command)
+        .execute_connector_core(
+            "sales-intel",
+            &token,
+            None,
+            command,
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+        )
         .await
         .expect_err("connector outside whitelist should be denied");
 
@@ -235,7 +281,7 @@ async fn layered_connector_plane_still_enforces_pack_whitelist() {
 
 #[tokio::test]
 async fn layered_connector_extension_requires_available_core_adapter() {
-    let (mut kernel, _audit) = Kernel::new_with_in_memory_audit();
+    let (mut kernel, _audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -253,7 +299,14 @@ async fn layered_connector_extension_requires_available_core_adapter() {
     };
 
     let error = kernel
-        .execute_connector_extension("sales-intel", &token, "shielded-bridge", None, command)
+        .execute_connector_extension(
+            "sales-intel",
+            &token,
+            "shielded-bridge",
+            None,
+            command,
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+        )
         .await
         .expect_err("extension path must fail without core adapter");
 
@@ -265,7 +318,7 @@ async fn layered_connector_extension_requires_available_core_adapter() {
 
 #[tokio::test]
 async fn layered_connector_default_core_adapter_can_be_overridden() {
-    let (mut kernel, _audit) = Kernel::new_with_in_memory_audit();
+    let (mut kernel, _audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -287,7 +340,13 @@ async fn layered_connector_default_core_adapter_can_be_overridden() {
     };
 
     let dispatch = kernel
-        .execute_connector_core("sales-intel", &token, None, command)
+        .execute_connector_core(
+            "sales-intel",
+            &token,
+            None,
+            command,
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+        )
         .await
         .expect("core connector plane should execute");
 
@@ -296,7 +355,7 @@ async fn layered_connector_default_core_adapter_can_be_overridden() {
 
 #[tokio::test]
 async fn layered_connector_core_panic_isolated_to_connector_error() {
-    let (mut kernel, _audit) = Kernel::new_with_in_memory_audit();
+    let (mut kernel, _audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -315,7 +374,13 @@ async fn layered_connector_core_panic_isolated_to_connector_error() {
     };
 
     let error = kernel
-        .execute_connector_core("sales-intel", &token, None, failing_command)
+        .execute_connector_core(
+            "sales-intel",
+            &token,
+            None,
+            failing_command,
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+        )
         .await
         .expect_err("panicking core adapter should be isolated");
 
@@ -337,7 +402,13 @@ async fn layered_connector_core_panic_isolated_to_connector_error() {
     };
 
     let dispatch = kernel
-        .execute_connector_core("sales-intel", &token, None, recovery_command)
+        .execute_connector_core(
+            "sales-intel",
+            &token,
+            None,
+            recovery_command,
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+        )
         .await
         .expect("kernel should continue serving connector work");
 
@@ -346,7 +417,7 @@ async fn layered_connector_core_panic_isolated_to_connector_error() {
 
 #[tokio::test]
 async fn layered_connector_extension_panic_isolated_to_connector_error() {
-    let (mut kernel, _audit) = Kernel::new_with_in_memory_audit();
+    let (mut kernel, _audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -371,6 +442,7 @@ async fn layered_connector_extension_panic_isolated_to_connector_error() {
             "panic-extension",
             None,
             failing_command,
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
         )
         .await
         .expect_err("panicking extension adapter should be isolated");
@@ -390,7 +462,13 @@ async fn layered_connector_extension_panic_isolated_to_connector_error() {
     };
 
     let dispatch = kernel
-        .execute_connector_core("sales-intel", &token, None, recovery_command)
+        .execute_connector_core(
+            "sales-intel",
+            &token,
+            None,
+            recovery_command,
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+        )
         .await
         .expect("kernel should continue after extension panic");
 
@@ -399,7 +477,7 @@ async fn layered_connector_extension_panic_isolated_to_connector_error() {
 
 #[tokio::test]
 async fn layered_connector_extension_isolates_nested_core_panic() {
-    let (mut kernel, _audit) = Kernel::new_with_in_memory_audit();
+    let (mut kernel, _audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -425,6 +503,7 @@ async fn layered_connector_extension_isolates_nested_core_panic() {
             "shielded-bridge",
             None,
             failing_command,
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
         )
         .await
         .expect_err("nested core panic should be isolated");
@@ -453,6 +532,7 @@ async fn layered_connector_extension_isolates_nested_core_panic() {
             "shielded-bridge",
             None,
             recovery_command,
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
         )
         .await
         .expect("extension path should recover after nested core panic");
@@ -466,7 +546,7 @@ async fn layered_connector_extension_isolates_nested_core_panic() {
 
 #[test]
 fn layered_connector_rejects_unknown_default_adapter_override() {
-    let (mut kernel, _audit) = Kernel::new_with_in_memory_audit();
+    let (mut kernel, _audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
     kernel.register_core_connector_adapter(MockCoreConnector);
 
     let error = kernel
@@ -481,7 +561,7 @@ fn layered_connector_rejects_unknown_default_adapter_override() {
 
 #[tokio::test]
 async fn kernel_auto_routes_by_harness_kind_when_adapter_is_not_pinned() {
-    let (mut kernel, _audit) = Kernel::new_with_in_memory_audit();
+    let (mut kernel, _audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
     kernel
         .register_pack(acp_pack_without_explicit_adapter())
         .expect("pack should register");
@@ -502,7 +582,12 @@ async fn kernel_auto_routes_by_harness_kind_when_adapter_is_not_pinned() {
     };
 
     let dispatch = kernel
-        .execute_task("code-review", &token, task)
+        .execute_task(
+            "code-review",
+            &token,
+            task,
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+        )
         .await
         .expect("dispatch should succeed");
 
@@ -512,7 +597,7 @@ async fn kernel_auto_routes_by_harness_kind_when_adapter_is_not_pinned() {
 
 #[tokio::test]
 async fn revoked_token_is_denied_by_policy_engine() {
-    let (mut kernel, _audit) = Kernel::new_with_in_memory_audit();
+    let (mut kernel, _audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -535,7 +620,12 @@ async fn revoked_token_is_denied_by_policy_engine() {
     };
 
     let error = kernel
-        .execute_task("sales-intel", &token, task)
+        .execute_task(
+            "sales-intel",
+            &token,
+            task,
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+        )
         .await
         .expect_err("revoked token should fail");
 
@@ -550,7 +640,7 @@ async fn audit_sink_receives_core_lifecycle_events() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_000_000));
     let audit = Arc::new(InMemoryAuditSink::default());
 
-    let mut kernel = Kernel::with_runtime(clock.clone(), audit.clone());
+    let mut kernel = Kernel::<TestContextFactory>::with_runtime(clock.clone(), audit.clone());
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -570,7 +660,12 @@ async fn audit_sink_receives_core_lifecycle_events() {
         payload: json!({}),
     };
     kernel
-        .execute_task("sales-intel", &token, task)
+        .execute_task(
+            "sales-intel",
+            &token,
+            task,
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+        )
         .await
         .expect("task should dispatch");
 
@@ -585,6 +680,7 @@ async fn audit_sink_receives_core_lifecycle_events() {
                 required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
                 payload: json!({"ok": true}),
             },
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
         )
         .await
         .expect("connector call should succeed");
@@ -633,7 +729,7 @@ async fn audit_sink_receives_core_lifecycle_events() {
 fn record_audit_event_supports_security_scan_summary() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_000_123));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let kernel = Kernel::with_runtime(clock, audit.clone());
+    let kernel = Kernel::<TestContextFactory>::with_runtime(clock, audit.clone());
 
     kernel
         .record_audit_event(
@@ -679,7 +775,7 @@ fn record_audit_event_supports_security_scan_summary() {
 fn record_audit_event_supports_provider_failover_summary() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_000_123));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let kernel = Kernel::with_runtime(clock, audit.clone());
+    let kernel = Kernel::<TestContextFactory>::with_runtime(clock, audit.clone());
 
     kernel
         .record_audit_event(
@@ -752,7 +848,7 @@ fn record_audit_event_supports_provider_failover_summary() {
 fn record_audit_event_supports_plugin_trust_summary() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_000_124));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let kernel = Kernel::with_runtime(clock, audit.clone());
+    let kernel = Kernel::<TestContextFactory>::with_runtime(clock, audit.clone());
 
     kernel
         .record_audit_event(
@@ -807,7 +903,7 @@ fn record_audit_event_supports_plugin_trust_summary() {
 fn record_audit_event_supports_tool_search_summary() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_000_125));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let kernel = Kernel::with_runtime(clock, audit.clone());
+    let kernel = Kernel::<TestContextFactory>::with_runtime(clock, audit.clone());
 
     kernel
         .record_audit_event(
@@ -867,7 +963,7 @@ fn record_audit_event_supports_tool_search_summary() {
 
 #[tokio::test]
 async fn layered_runtime_tool_and_memory_paths_execute_via_core_and_extension() {
-    let (mut kernel, _audit) = Kernel::new_with_in_memory_audit();
+    let (mut kernel, _audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
     kernel
         .register_pack(VerticalPackManifest {
             pack_id: "layered-dev".to_owned(),
@@ -913,6 +1009,7 @@ async fn layered_runtime_tool_and_memory_paths_execute_via_core_and_extension() 
                 action: "start-session".to_owned(),
                 payload: json!({"session": "s-1"}),
             },
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
         )
         .await
         .expect("runtime extension should execute");
@@ -931,6 +1028,7 @@ async fn layered_runtime_tool_and_memory_paths_execute_via_core_and_extension() 
                 extension_action: "aggregate".to_owned(),
                 payload: json!({"metric": "revenue"}),
             },
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
         )
         .await
         .expect("tool extension should execute");
@@ -949,6 +1047,7 @@ async fn layered_runtime_tool_and_memory_paths_execute_via_core_and_extension() 
                 operation: "semantic_search".to_owned(),
                 payload: json!({"query": "top customer"}),
             },
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
         )
         .await
         .expect("memory extension should execute");
@@ -961,7 +1060,7 @@ async fn audit_sink_captures_runtime_tool_memory_and_connector_plane_events() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_000_100));
     let audit = Arc::new(InMemoryAuditSink::default());
 
-    let mut kernel = Kernel::with_runtime(clock.clone(), audit.clone());
+    let mut kernel = Kernel::<TestContextFactory>::with_runtime(clock.clone(), audit.clone());
     kernel
         .register_pack(VerticalPackManifest {
             pack_id: "audit-layered".to_owned(),
@@ -1008,6 +1107,7 @@ async fn audit_sink_captures_runtime_tool_memory_and_connector_plane_events() {
                 required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
                 payload: json!({}),
             },
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
         )
         .await
         .expect("connector core should execute");
@@ -1023,6 +1123,7 @@ async fn audit_sink_captures_runtime_tool_memory_and_connector_plane_events() {
                 required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
                 payload: json!({}),
             },
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
         )
         .await
         .expect("connector extension should execute");
@@ -1037,6 +1138,7 @@ async fn audit_sink_captures_runtime_tool_memory_and_connector_plane_events() {
                 action: "start".to_owned(),
                 payload: json!({}),
             },
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
         )
         .await
         .expect("runtime extension should execute");
@@ -1051,6 +1153,7 @@ async fn audit_sink_captures_runtime_tool_memory_and_connector_plane_events() {
                 extension_action: "aggregate".to_owned(),
                 payload: json!({}),
             },
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
         )
         .await
         .expect("tool extension should execute");
@@ -1065,6 +1168,7 @@ async fn audit_sink_captures_runtime_tool_memory_and_connector_plane_events() {
                 operation: "semantic_search".to_owned(),
                 payload: json!({}),
             },
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
         )
         .await
         .expect("memory extension should execute");
@@ -1124,7 +1228,7 @@ async fn audit_sink_captures_runtime_tool_memory_and_connector_plane_events() {
 
 #[tokio::test]
 async fn policy_extension_chain_can_block_high_risk_capabilities() {
-    let (mut kernel, _audit) = Kernel::new_with_in_memory_audit();
+    let (mut kernel, _audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
     kernel
         .register_pack(VerticalPackManifest {
             pack_id: "strict-env".to_owned(),
@@ -1159,7 +1263,12 @@ async fn policy_extension_chain_can_block_high_risk_capabilities() {
     };
 
     let error = kernel
-        .execute_task("strict-env", &token, risky_task)
+        .execute_task(
+            "strict-env",
+            &token,
+            risky_task,
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+        )
         .await
         .expect_err("policy extension should block network egress");
 
@@ -1174,7 +1283,7 @@ async fn plane_audit_records_resolved_default_core_adapter_names() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_000_200));
     let audit = Arc::new(InMemoryAuditSink::default());
 
-    let mut kernel = Kernel::with_runtime(clock.clone(), audit.clone());
+    let mut kernel = Kernel::<TestContextFactory>::with_runtime(clock.clone(), audit.clone());
     kernel
         .register_pack(VerticalPackManifest {
             pack_id: "audit-defaults".to_owned(),
@@ -1224,6 +1333,7 @@ async fn plane_audit_records_resolved_default_core_adapter_names() {
                 required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
                 payload: json!({}),
             },
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
         )
         .await
         .expect("connector extension should execute");
@@ -1238,6 +1348,7 @@ async fn plane_audit_records_resolved_default_core_adapter_names() {
                 action: "boot".to_owned(),
                 payload: json!({}),
             },
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
         )
         .await
         .expect("runtime core should execute");
@@ -1284,7 +1395,7 @@ async fn audit_event_json_schema_for_plane_invoked_is_stable() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_001_000));
     let audit = Arc::new(InMemoryAuditSink::default());
 
-    let mut kernel = Kernel::with_runtime(clock.clone(), audit.clone());
+    let mut kernel = Kernel::<TestContextFactory>::with_runtime(clock.clone(), audit.clone());
     kernel
         .register_pack(VerticalPackManifest {
             pack_id: "audit-schema".to_owned(),
@@ -1315,6 +1426,7 @@ async fn audit_event_json_schema_for_plane_invoked_is_stable() {
                 action: "boot".to_owned(),
                 payload: json!({"mode": "safe"}),
             },
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
         )
         .await
         .expect("runtime core should execute");
@@ -1349,7 +1461,7 @@ async fn audit_event_json_schema_for_plane_invoked_is_stable() {
 async fn tool_core_call_is_denied_when_policy_engine_rejects_rule_of_two_gate() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_002_000));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let mut kernel = Kernel::with_runtime(clock.clone(), audit.clone());
+    let mut kernel = Kernel::<TestContextFactory>::with_runtime(clock.clone(), audit.clone());
     kernel
         .register_pack(VerticalPackManifest {
             pack_id: "tool-gate-deny".to_owned(),
@@ -1374,6 +1486,14 @@ async fn tool_core_call_is_denied_when_policy_engine_rejects_rule_of_two_gate() 
         .issue_token("tool-gate-deny", "agent-deny", 120)
         .expect("token should issue");
     let required = BTreeSet::from([Capability::InvokeTool]);
+    let request = ToolCoreRequest {
+        tool_name: "shell.exec".to_owned(),
+        payload: json!({"command": "ls"}),
+    };
+    let tool_policy_params = json!({
+        "tool_name": &request.tool_name,
+        "payload": &request.payload,
+    });
 
     let error = kernel
         .execute_tool_core(
@@ -1381,10 +1501,9 @@ async fn tool_core_call_is_denied_when_policy_engine_rejects_rule_of_two_gate() 
             &token,
             &required,
             None,
-            ToolCoreRequest {
-                tool_name: "shell.exec".to_owned(),
-                payload: json!({"command": "ls"}),
-            },
+            request,
+            TestPolicyContext::from_token(&token, kernel.now_epoch_s())
+                .with_request_parameters(tool_policy_params),
         )
         .await
         .expect_err("tool call should be denied by policy");
@@ -1410,7 +1529,7 @@ async fn tool_core_call_is_denied_when_policy_engine_rejects_rule_of_two_gate() 
 async fn task_supervisor_tracks_state_through_lifecycle() {
     let clock = Arc::new(FixedClock::new(1_000_000));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let mut kernel = Kernel::with_runtime(clock, audit);
+    let mut kernel = Kernel::<TestContextFactory>::with_runtime(clock, audit);
     kernel.register_pack(sample_pack()).unwrap();
     kernel.register_harness_adapter(MockEmbeddedPiHarness {
         seen_tasks: Mutex::new(Vec::new()),
@@ -1427,7 +1546,14 @@ async fn task_supervisor_tracks_state_through_lifecycle() {
     let mut supervisor = TaskSupervisor::new(intent);
     assert!(supervisor.is_runnable());
 
-    let result = supervisor.execute(&kernel, "sales-intel", &token).await;
+    let result = supervisor
+        .execute(
+            &kernel,
+            "sales-intel",
+            &token,
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+        )
+        .await;
     assert!(result.is_ok());
     assert!(matches!(supervisor.state(), TaskState::Completed(_)));
 }
@@ -1436,7 +1562,7 @@ async fn task_supervisor_tracks_state_through_lifecycle() {
 async fn task_supervisor_faults_on_kernel_error() {
     let clock = Arc::new(FixedClock::new(1_000_000));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let mut kernel = Kernel::with_runtime(clock, audit);
+    let mut kernel = Kernel::<TestContextFactory>::with_runtime(clock, audit);
     kernel.register_pack(sample_pack()).unwrap();
     // NOTE: no harness adapter registered -- execute_task will fail
     let token = kernel.issue_token("sales-intel", "agent-1", 3600).unwrap();
@@ -1449,14 +1575,21 @@ async fn task_supervisor_faults_on_kernel_error() {
     };
 
     let mut supervisor = TaskSupervisor::new(intent);
-    let result = supervisor.execute(&kernel, "sales-intel", &token).await;
+    let result = supervisor
+        .execute(
+            &kernel,
+            "sales-intel",
+            &token,
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+        )
+        .await;
     assert!(result.is_err());
     assert!(matches!(supervisor.state(), TaskState::Faulted(_)));
 }
 
 #[test]
 fn register_pack_creates_namespace() {
-    let (mut kernel, _audit) = Kernel::new_with_in_memory_audit();
+    let (mut kernel, _audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
     kernel.register_pack(sample_pack()).unwrap();
 
     let ns = kernel.get_namespace("sales-intel");
@@ -1469,13 +1602,13 @@ fn register_pack_creates_namespace() {
 
 #[test]
 fn get_namespace_returns_none_for_unregistered_pack() {
-    let (kernel, _audit) = Kernel::new_with_in_memory_audit();
+    let (kernel, _audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
     assert!(kernel.get_namespace("nonexistent").is_none());
 }
 
 #[test]
 fn namespace_membrane_defaults_to_pack_id() {
-    let (mut kernel, _audit) = Kernel::new_with_in_memory_audit();
+    let (mut kernel, _audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
     kernel.register_pack(sample_pack()).unwrap();
 
     let ns = kernel.get_namespace("sales-intel").unwrap();
@@ -1484,7 +1617,7 @@ fn namespace_membrane_defaults_to_pack_id() {
 
 #[tokio::test]
 async fn kernel_is_usable_from_concurrent_tasks() {
-    let (mut kernel, _audit) = Kernel::new_with_in_memory_audit();
+    let (mut kernel, _audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -1514,6 +1647,7 @@ async fn kernel_is_usable_from_concurrent_tasks() {
                         required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
                         payload: json!({"id": format!("concurrent-{i}")}),
                     },
+                    &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
                 )
                 .await
         }));
@@ -1562,7 +1696,7 @@ fn control_plane_pack() -> VerticalPackManifest {
 
 #[test]
 fn issue_scoped_token_limits_capabilities_to_requested_subset() {
-    let (mut kernel, audit) = Kernel::new_with_in_memory_audit();
+    let (mut kernel, audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
     kernel
         .register_pack(control_plane_pack())
         .expect("control-plane pack should register");
@@ -1590,7 +1724,7 @@ fn issue_scoped_token_limits_capabilities_to_requested_subset() {
 
 #[tokio::test]
 async fn authorize_operation_succeeds_when_scoped_token_has_control_write() {
-    let (mut kernel, _audit) = Kernel::new_with_in_memory_audit();
+    let (mut kernel, _audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
     kernel
         .register_pack(control_plane_pack())
         .expect("control-plane pack should register");
@@ -1615,6 +1749,7 @@ async fn authorize_operation_succeeds_when_scoped_token_has_control_write() {
             None,
             "control/write-test",
             &required_capabilities,
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
         )
         .await
         .expect("control-write authorization should succeed");
@@ -1624,7 +1759,7 @@ async fn authorize_operation_succeeds_when_scoped_token_has_control_write() {
 async fn authorize_operation_records_plane_invocation_for_control_plane_route() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_000_000));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let mut kernel = Kernel::with_runtime(clock, audit.clone());
+    let mut kernel = Kernel::<TestContextFactory>::with_runtime(clock, audit.clone());
     kernel
         .register_pack(control_plane_pack())
         .expect("control-plane pack should register");
@@ -1649,6 +1784,7 @@ async fn authorize_operation_records_plane_invocation_for_control_plane_route() 
             None,
             "control/snapshot",
             &allowed_capabilities,
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
         )
         .await
         .expect("control-plane authorization should succeed");
@@ -1673,7 +1809,7 @@ async fn authorize_operation_records_plane_invocation_for_control_plane_route() 
 
 #[tokio::test]
 async fn authorize_operation_fails_closed_when_scoped_token_lacks_control_write() {
-    let (mut kernel, _audit) = Kernel::new_with_in_memory_audit();
+    let (mut kernel, _audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
     kernel
         .register_pack(control_plane_pack())
         .expect("control-plane pack should register");
@@ -1697,6 +1833,7 @@ async fn authorize_operation_fails_closed_when_scoped_token_lacks_control_write(
             None,
             "control/write-test",
             &required_capabilities,
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
         )
         .await
         .expect_err("missing control-write capability should fail");
@@ -1710,7 +1847,7 @@ async fn authorize_operation_fails_closed_when_scoped_token_lacks_control_write(
 
 #[tokio::test]
 async fn authorize_operation_fails_closed_when_scoped_token_lacks_capability() {
-    let (mut kernel, _audit) = Kernel::new_with_in_memory_audit();
+    let (mut kernel, _audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
     kernel
         .register_pack(control_plane_pack())
         .expect("control-plane pack should register");
@@ -1734,6 +1871,7 @@ async fn authorize_operation_fails_closed_when_scoped_token_lacks_capability() {
             None,
             "pairing/resolve",
             &required_capabilities,
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
         )
         .await
         .expect_err("missing capability should fail");

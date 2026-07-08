@@ -30,19 +30,20 @@ fn build_provider_failover_test_kernel_context(
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_321));
     let mut kernel = Kernel::with_runtime(clock, audit.clone());
+    let pack = Arc::new(VerticalPackManifest {
+        pack_id: "provider-test-pack".to_owned(),
+        domain: "provider-test".to_owned(),
+        version: "0.1.0".to_owned(),
+        default_route: ExecutionRoute {
+            harness_kind: HarnessKind::EmbeddedPi,
+            adapter: None,
+        },
+        allowed_connectors: BTreeSet::new(),
+        granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
+        metadata: BTreeMap::new(),
+    });
     kernel
-        .register_pack(VerticalPackManifest {
-            pack_id: "provider-test-pack".to_owned(),
-            domain: "provider-test".to_owned(),
-            version: "0.1.0".to_owned(),
-            default_route: ExecutionRoute {
-                harness_kind: HarnessKind::EmbeddedPi,
-                adapter: None,
-            },
-            allowed_connectors: BTreeSet::new(),
-            granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
-            metadata: BTreeMap::new(),
-        })
+        .register_pack((*pack).clone())
         .expect("register test pack");
     let token = kernel
         .issue_token("provider-test-pack", agent_id, 3_600)
@@ -50,7 +51,9 @@ fn build_provider_failover_test_kernel_context(
     (
         KernelContext {
             kernel: Arc::new(kernel),
+            pack,
             token,
+            tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
         },
         audit,
     )
@@ -1649,9 +1652,7 @@ async fn opencode_zen_claude_route_skips_oauth_only_profiles_before_request_disp
     let addr = listener.local_addr().expect("local addr");
     let server = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("accept local provider request");
-        let mut request_buf = [0_u8; 8192];
-        let len = stream.read(&mut request_buf).expect("read request");
-        let request = String::from_utf8_lossy(&request_buf[..len]).to_string();
+        let request = read_http_request_from_stream(&mut stream);
 
         let body = r#"{"content":[{"type":"text","text":"claude route ok"}]}"#;
         let response = format!(
@@ -1690,9 +1691,78 @@ async fn opencode_zen_claude_route_skips_oauth_only_profiles_before_request_disp
 
     let request = server.join().expect("join local provider server");
     assert!(request.starts_with("POST /messages "));
-    assert!(request.contains("x-api-key: opencode-api-key"));
-    assert!(request.contains("anthropic-version: 2023-06-01"));
-    assert!(!request.contains("authorization: Bearer oauth-token"));
+    assert!(
+        http_request_contains_header(&request, "x-api-key", "opencode-api-key"),
+        "request should include opencode api key header, got: {request}"
+    );
+    assert!(
+        http_request_contains_header(&request, "anthropic-version", "2023-06-01"),
+        "request should include anthropic-version header, got: {request}"
+    );
+    assert!(
+        !http_request_contains_header(&request, "authorization", "Bearer oauth-token"),
+        "request should skip oauth-only profile, got: {request}"
+    );
+}
+
+fn read_http_request_from_stream(stream: &mut std::net::TcpStream) -> String {
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+        .expect("set request read timeout");
+    let mut bytes = Vec::new();
+    let mut chunk = [0_u8; 4096];
+    let header_end = loop {
+        let read = stream.read(&mut chunk).expect("read request chunk");
+        if read == 0 {
+            break find_http_header_end(&bytes).unwrap_or(bytes.len());
+        }
+        bytes.extend_from_slice(&chunk[..read]);
+        if let Some(header_end) = find_http_header_end(&bytes) {
+            break header_end;
+        }
+    };
+
+    let content_length = find_http_header_end(&bytes)
+        .map(|end| http_content_length(&bytes[..end]))
+        .unwrap_or_default();
+    let body_start = header_end.saturating_add(4).min(bytes.len());
+    let target_len = body_start.saturating_add(content_length);
+    while bytes.len() < target_len {
+        let read = stream.read(&mut chunk).expect("read request body chunk");
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..read]);
+    }
+
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+fn find_http_header_end(bytes: &[u8]) -> Option<usize> {
+    bytes.windows(4).position(|window| window == b"\r\n\r\n")
+}
+
+fn http_content_length(headers: &[u8]) -> usize {
+    let headers = String::from_utf8_lossy(headers);
+    headers
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            if name.trim().eq_ignore_ascii_case("content-length") {
+                return value.trim().parse::<usize>().ok();
+            }
+            None
+        })
+        .unwrap_or_default()
+}
+
+fn http_request_contains_header(request: &str, expected_name: &str, expected_value: &str) -> bool {
+    request.lines().any(|line| {
+        let Some((name, value)) = line.split_once(':') else {
+            return false;
+        };
+        name.trim().eq_ignore_ascii_case(expected_name) && value.trim() == expected_value
+    })
 }
 
 #[cfg(any(feature = "tool-file", feature = "tool-shell"))]

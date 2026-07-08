@@ -60,7 +60,7 @@ fn test_kernel_context_with_memory(
     let audit = Arc::new(InMemoryAuditSink::default());
     let mut kernel = Kernel::with_runtime(clock, audit);
 
-    let pack = VerticalPackManifest {
+    let pack = Arc::new(VerticalPackManifest {
         pack_id: "test-pack-memory".to_owned(),
         domain: "testing".to_owned(),
         version: "0.1.0".to_owned(),
@@ -71,10 +71,10 @@ fn test_kernel_context_with_memory(
         allowed_connectors: BTreeSet::new(),
         granted_capabilities: BTreeSet::from([Capability::MemoryRead, Capability::MemoryWrite]),
         metadata: BTreeMap::new(),
-    };
+    });
 
     kernel
-        .register_pack(pack)
+        .register_pack((*pack).clone())
         .expect("register memory test pack");
 
     let adapter = crate::session::store::session_memory_adapter(memory_config);
@@ -90,7 +90,9 @@ fn test_kernel_context_with_memory(
 
     crate::KernelContext {
         kernel: Arc::new(kernel),
+        pack,
         token,
+        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
     }
 }
 
@@ -310,7 +312,9 @@ fn build_kernel_context_with_window_outcome(
 
     let ctx = crate::KernelContext {
         kernel: Arc::new(kernel),
-        token,
+        token: token.clone(),
+        pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
+        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
     };
     (ctx, invocations)
 }

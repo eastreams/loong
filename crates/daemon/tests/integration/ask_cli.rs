@@ -2195,6 +2195,7 @@ fn ask_cli_continues_after_glob_path_listing_instead_of_returning_permission_req
         config.tools.file_root = Some(fixture.root_path().display().to_string());
     });
 
+    fixture.create_root_session("fresh-glob-followup-session");
     provider_server.arm();
     let output = fixture.run_process(
         &[
@@ -2319,6 +2320,7 @@ fn ask_cli_repairs_pseudo_done_glob_path_listing_reply_before_finishing() {
         config.tools.file_root = Some(fixture.root_path().display().to_string());
     });
 
+    fixture.create_root_session("fresh-glob-pseudo-done-followup-session");
     provider_server.arm();
     let output = fixture.run_process(
         &[
@@ -2392,6 +2394,7 @@ fn ask_cli_recovers_same_line_tool_request_wrapper_after_leading_preface() {
         config.tools.file_root = Some(fixture.root_path().display().to_string());
     });
 
+    fixture.create_root_session("same-line-tool-request-preface-session");
     provider_server.arm();
     let output = fixture.run_process(
         &[
@@ -2492,6 +2495,7 @@ fn ask_cli_continues_after_same_line_textual_tool_preface_permission_reply() {
         config.tools.file_root = Some(fixture.root_path().display().to_string());
     });
 
+    fixture.create_root_session("same-line-preface-followup-session");
     provider_server.arm();
     let output = fixture.run_process(
         &[
@@ -2580,6 +2584,7 @@ fn ask_cli_continues_after_second_same_line_textual_tool_request_reply() {
         config.tools.file_root = Some(fixture.root_path().display().to_string());
     });
 
+    fixture.create_root_session("second-same-line-preface-followup-session");
     provider_server.arm();
     let output = fixture.run_process(
         &[
@@ -2663,6 +2668,7 @@ fn ask_cli_recovers_tool_request_array_wrapper_and_hides_markup() {
         config.tools.file_root = Some(fixture.root_path().display().to_string());
     });
 
+    fixture.create_root_session("tool-request-array-wrapper-session");
     provider_server.arm();
     let output = fixture.run_process(
         &[
@@ -2772,6 +2778,7 @@ fn ask_cli_executes_large_recovered_tool_request_batch_without_legacy_step_limit
         config.tools.file_root = Some(fixture.root_path().display().to_string());
     });
 
+    fixture.create_root_session("large-tool-request-array-batch-session");
     provider_server.arm();
     let output = fixture.run_process(
         &[
@@ -2850,6 +2857,7 @@ fn ask_cli_strips_textual_tool_wrapper_when_structured_tool_call_is_also_present
         config.tools.file_root = Some(fixture.root_path().display().to_string());
     });
 
+    fixture.create_root_session("structured-plus-textual-wrapper-session");
     provider_server.arm();
     let output = fixture.run_process(
         &[

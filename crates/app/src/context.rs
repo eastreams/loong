@@ -1,11 +1,17 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::future::Future;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::thread;
 
-use loong_contracts::CapabilityToken;
+use loong_contracts::{CapabilityToken, ExecutionPlane, PlaneTier};
+use loong_core::policy::context::{ContextFactory, FsAccessContext, PolicyContext};
 use loong_kernel::{
     AuditSink, Capability, Clock, ExecutionRoute, FanoutAuditSink, HarnessKind, InMemoryAuditSink,
-    JsonlAuditSink, Kernel, PolicyPipeline, SystemClock, VerticalPackManifest,
+    JsonlAuditSink, Kernel, KernelInvocationContext, NoopAuditSink, PolicyPipeline, SystemClock,
+    VerticalPackManifest,
 };
+use serde_json::Value;
 
 use crate::config::{AuditMode, LoongConfig};
 
@@ -24,8 +30,10 @@ pub const DEFAULT_TOKEN_TTL_S: u64 = 86400;
 /// to avoid data divergence.
 #[derive(Clone)]
 pub struct KernelContext {
-    pub kernel: Arc<Kernel>,
+    pub kernel: Arc<Kernel<AppContextFactory>>,
+    pub pack: Arc<VerticalPackManifest>,
     pub token: CapabilityToken,
+    pub tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig,
 }
 
 impl KernelContext {
@@ -35,6 +43,289 @@ impl KernelContext {
 
     pub fn agent_id(&self) -> &str {
         &self.token.agent_id
+    }
+
+    pub(crate) fn execution_context<'a>(
+        &'a self,
+        plane: ExecutionPlane,
+        tier: PlaneTier,
+        request_parameters: Option<&'a Value>,
+        tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
+    ) -> Result<AppExecutionContext<'a>, String> {
+        AppExecutionContext::new(
+            self.pack.as_ref(),
+            &self.token,
+            self.kernel.now_epoch_s(),
+            plane,
+            tier,
+            request_parameters,
+            tool_runtime_config,
+        )
+    }
+
+    pub(crate) fn memory_core_context(&self) -> Result<AppExecutionContext<'_>, String> {
+        self.execution_context(
+            ExecutionPlane::Memory,
+            PlaneTier::Core,
+            None,
+            &self.tool_runtime_config,
+        )
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn pack_manifest_from_token(token: &CapabilityToken) -> VerticalPackManifest {
+    VerticalPackManifest {
+        pack_id: token.pack_id.clone(),
+        domain: "app-context".to_owned(),
+        version: "0.1.0".to_owned(),
+        default_route: ExecutionRoute {
+            harness_kind: HarnessKind::EmbeddedPi,
+            adapter: None,
+        },
+        allowed_connectors: BTreeSet::new(),
+        granted_capabilities: token.allowed_capabilities.clone(),
+        metadata: BTreeMap::new(),
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AppContextFactory;
+
+impl ContextFactory for AppContextFactory {
+    type Cx<'a> = AppExecutionContext<'a>;
+}
+
+pub struct AppExecutionContext<'a> {
+    pack: &'a VerticalPackManifest,
+    token: &'a CapabilityToken,
+    now_epoch_s: u64,
+    plane: ExecutionPlane,
+    tier: PlaneTier,
+    request_parameters: Option<&'a Value>,
+    fs_resolution_root: PathBuf,
+    fs_allowed_roots: Vec<PathBuf>,
+}
+
+impl<'a> AppExecutionContext<'a> {
+    #[must_use]
+    pub fn plane(&self) -> ExecutionPlane {
+        self.plane
+    }
+
+    #[must_use]
+    pub fn tier(&self) -> PlaneTier {
+        self.tier
+    }
+
+    pub(crate) fn new(
+        pack: &'a VerticalPackManifest,
+        token: &'a CapabilityToken,
+        now_epoch_s: u64,
+        plane: ExecutionPlane,
+        tier: PlaneTier,
+        request_parameters: Option<&'a Value>,
+        tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
+    ) -> Result<Self, String> {
+        let (fs_resolution_root, fs_allowed_roots) = fs_access_root_view(tool_runtime_config)?;
+        Ok(Self {
+            pack,
+            token,
+            now_epoch_s,
+            plane,
+            tier,
+            request_parameters,
+            fs_resolution_root,
+            fs_allowed_roots,
+        })
+    }
+}
+
+impl PolicyContext for AppExecutionContext<'_> {
+    fn capabilities(&self) -> BTreeSet<Capability> {
+        self.token.allowed_capabilities.clone()
+    }
+}
+
+impl KernelInvocationContext for AppExecutionContext<'_> {
+    fn pack(&self) -> &VerticalPackManifest {
+        self.pack
+    }
+
+    fn token(&self) -> &CapabilityToken {
+        self.token
+    }
+
+    fn now_epoch_s(&self) -> u64 {
+        self.now_epoch_s
+    }
+
+    fn request_parameters(&self) -> Option<&Value> {
+        self.request_parameters
+    }
+}
+
+impl FsAccessContext for AppExecutionContext<'_> {
+    fn fs_resolution_root(&self) -> &Path {
+        self.fs_resolution_root.as_path()
+    }
+
+    fn fs_allowed_roots(&self) -> &[PathBuf] {
+        self.fs_allowed_roots.as_slice()
+    }
+}
+
+fn fs_access_root_view(
+    config: &crate::tools::runtime_config::ToolRuntimeConfig,
+) -> Result<(PathBuf, Vec<PathBuf>), String> {
+    let allowed_roots = collect_allowed_roots(config)?;
+    let Some(primary_root) = allowed_roots.first().cloned() else {
+        return Err("filesystem access requires at least one allowed root".to_owned());
+    };
+    let resolution_root = config
+        .path_resolution_root()
+        .map(Path::to_path_buf)
+        .unwrap_or(primary_root);
+    Ok((resolution_root, allowed_roots))
+}
+
+fn collect_allowed_roots(
+    config: &crate::tools::runtime_config::ToolRuntimeConfig,
+) -> Result<Vec<PathBuf>, String> {
+    let mut raw_roots = Vec::new();
+
+    if let Some(file_root) = config.file_root.as_ref() {
+        raw_roots.push(file_root.clone());
+    }
+
+    if let Some(workspace_root) = config.workspace_root.as_ref() {
+        let workspace_root_is_new = raw_roots.iter().all(|root| root != workspace_root);
+        if workspace_root_is_new {
+            raw_roots.push(workspace_root.clone());
+        }
+    }
+
+    if raw_roots.is_empty() {
+        raw_roots.push(std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    }
+
+    raw_roots
+        .into_iter()
+        .map(canonicalize_or_fallback)
+        .collect::<Result<Vec<_>, _>>()
+}
+
+fn canonicalize_or_fallback(path: PathBuf) -> Result<PathBuf, String> {
+    if path.exists() {
+        let canonical = dunce::canonicalize(&path)
+            .map_err(|error| format!("failed to canonicalize {}: {error}", path.display()))?;
+        return Ok(dunce::simplified(&canonical).to_path_buf());
+    }
+    Ok(crate::tools::normalize_without_fs(&path))
+}
+
+pub(crate) fn read_file_with_access_for_runtime_config(
+    path: impl AsRef<Path>,
+    config: &crate::tools::runtime_config::ToolRuntimeConfig,
+) -> Result<(PathBuf, Vec<u8>), String> {
+    let path = path.as_ref().to_path_buf();
+    let config = config.clone();
+
+    block_on_context_future(
+        async move {
+            let kernel = Kernel::with_policy_runtime(
+                policy_pipeline_for_tool_runtime_config(&config),
+                Arc::new(SystemClock) as Arc<dyn Clock>,
+                Arc::new(NoopAuditSink),
+            );
+            let now_epoch_s = kernel.now_epoch_s();
+            let pack = runtime_file_read_pack_manifest();
+            let token = runtime_file_read_token(now_epoch_s);
+            let policy_context = AppExecutionContext::new(
+                &pack,
+                &token,
+                now_epoch_s,
+                ExecutionPlane::Tool,
+                PlaneTier::Core,
+                None,
+                &config,
+            )?;
+            let output = kernel
+                .access(policy_context)
+                .fs()
+                .read_file(path)
+                .await
+                .map_err(|error| {
+                    let rendered = error.to_string();
+                    if loong_kernel::access::fs_read_error_is_policy_denial(&error) {
+                        format!("policy_denied: {rendered}")
+                    } else {
+                        rendered
+                    }
+                })?;
+            Ok((output.path, output.bytes))
+        },
+        "access-backed file read",
+    )
+}
+
+fn runtime_file_read_pack_manifest() -> VerticalPackManifest {
+    VerticalPackManifest {
+        pack_id: EMBEDDED_RUNTIME_PACK_ID.to_owned(),
+        domain: "app-runtime-context".to_owned(),
+        version: "0.1.0".to_owned(),
+        default_route: ExecutionRoute {
+            harness_kind: HarnessKind::EmbeddedPi,
+            adapter: None,
+        },
+        allowed_connectors: BTreeSet::new(),
+        granted_capabilities: BTreeSet::from([Capability::FilesystemRead]),
+        metadata: BTreeMap::new(),
+    }
+}
+
+fn runtime_file_read_token(now_epoch_s: u64) -> CapabilityToken {
+    CapabilityToken {
+        token_id: "runtime-file-read".to_owned(),
+        pack_id: EMBEDDED_RUNTIME_PACK_ID.to_owned(),
+        agent_id: "runtime-context".to_owned(),
+        allowed_capabilities: BTreeSet::from([Capability::FilesystemRead]),
+        issued_at_epoch_s: now_epoch_s,
+        expires_at_epoch_s: now_epoch_s,
+        generation: 0,
+    }
+}
+
+fn block_on_context_future<F, T>(future: F, label: &str) -> Result<T, String>
+where
+    F: Future<Output = Result<T, String>> + Send,
+    T: Send,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(|| handle.block_on(future))
+        }
+        Ok(_) => thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .map_err(|error| {
+                            format!("failed to create tokio runtime for {label}: {error}")
+                        })?;
+                    runtime.block_on(future)
+                })
+                .join()
+                .map_err(|_panic| format!("{label} worker thread panicked"))?
+        }),
+        Err(_) => {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|error| format!("failed to create tokio runtime for {label}: {error}"))?;
+            runtime.block_on(future)
+        }
     }
 }
 
@@ -142,9 +433,10 @@ fn bootstrap_kernel_context_with_audit_sink(
         ]),
         metadata: BTreeMap::new(),
     };
+    let pack = Arc::new(pack);
 
     kernel
-        .register_pack(pack)
+        .register_pack((*pack).clone())
         .map_err(|e| format!("kernel pack registration failed: {e}"))?;
 
     #[cfg(feature = "memory-sqlite")]
@@ -163,7 +455,7 @@ fn bootstrap_kernel_context_with_audit_sink(
 
     kernel.register_core_tool_adapter(
         crate::tools::KernelToolAdapter::with_config_and_observability(
-            tool_rt,
+            tool_rt.clone(),
             config.observability.clone(),
         ),
     );
@@ -185,14 +477,16 @@ fn bootstrap_kernel_context_with_audit_sink(
 
     Ok(KernelContext {
         kernel: Arc::new(kernel),
+        pack,
         token,
+        tool_runtime_config: tool_rt,
     })
 }
 
 pub(crate) fn policy_pipeline_for_tool_runtime_config(
     config: &crate::tools::runtime_config::ToolRuntimeConfig,
-) -> PolicyPipeline {
-    let mut policy = PolicyPipeline::default();
+) -> PolicyPipeline<AppContextFactory> {
+    let mut policy = PolicyPipeline::<AppContextFactory>::default();
     policy.push_fs_read_filename_deny_policy(config.fs.deny_read_filenames.clone());
     policy
 }
@@ -328,9 +622,19 @@ mod tests {
             .expect("bootstrap with config should succeed");
         let request = crate::memory::build_read_context_request("kernel-bootstrap-env-session");
         let caps = BTreeSet::from([Capability::MemoryRead]);
+        let policy_context = context
+            .memory_core_context()
+            .expect("build memory policy context");
         let outcome = context
             .kernel
-            .execute_memory_core(context.pack_id(), &context.token, &caps, None, request)
+            .execute_memory_core(
+                context.pack_id(),
+                &context.token,
+                &caps,
+                None,
+                request,
+                &policy_context,
+            )
             .await
             .expect("read context via kernel");
         let entries = outcome

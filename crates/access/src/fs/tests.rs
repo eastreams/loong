@@ -13,13 +13,13 @@ use loong_core::{
     kernel::Kernel,
     policy::{
         action::Action,
-        context::{ContextFactory, PolicyContext},
+        context::{ContextFactory, FsAccessContext, PolicyContext},
         engine::PolicyEngine,
     },
 };
 
 use super::{
-    access::{FsAccess, FsAccessContext, FsAccessError, read_granted_file},
+    access::{FsAccess, FsAccessError, read_granted_file},
     action::{FsAction, FsReadAction},
     error::FsActionError,
     path::CanonicalPath,

@@ -706,6 +706,7 @@ async fn execute_spec_internal(
 
     let (operation_kind, outcome) = match execute_spec_operation(
         &kernel,
+        &pack,
         &pack.pack_id,
         &token,
         &integration_catalog,
@@ -874,7 +875,8 @@ struct SecurityScanDelta {
 }
 
 async fn execute_spec_operation(
-    kernel: &Kernel,
+    kernel: &Kernel<crate::context::SpecContextFactory>,
+    pack: &kernel::VerticalPackManifest,
     pack_id: &str,
     token: &kernel::CapabilityToken,
     integration_catalog: &IntegrationCatalog,
@@ -892,13 +894,17 @@ async fn execute_spec_operation(
             required_capabilities,
             payload,
         } => {
+            let policy_context =
+                crate::context::SpecExecutionContext::new(pack, token, kernel.now_epoch_s(), None);
             let mut supervisor = TaskSupervisor::new(TaskIntent {
                 task_id: task_id.clone(),
                 objective: objective.clone(),
                 required_capabilities: required_capabilities.clone(),
                 payload: payload.clone(),
             });
-            let dispatch_result = supervisor.execute(kernel, pack_id, token).await;
+            let dispatch_result = supervisor
+                .execute(kernel, pack_id, token, &policy_context)
+                .await;
             let outcome = match dispatch_result {
                 Ok(dispatch) => json!({
                     "route": dispatch.adapter_route,
@@ -924,6 +930,8 @@ async fn execute_spec_operation(
             required_capabilities,
             payload,
         } => {
+            let policy_context =
+                crate::context::SpecExecutionContext::new(pack, token, kernel.now_epoch_s(), None);
             let dispatch = kernel
                 .execute_connector_core(
                     pack_id,
@@ -935,6 +943,7 @@ async fn execute_spec_operation(
                         required_capabilities: required_capabilities.clone(),
                         payload: payload.clone(),
                     },
+                    &policy_context,
                 )
                 .await
                 .map_err(|error| format!("legacy connector execution from spec failed: {error}"))?;
@@ -953,6 +962,8 @@ async fn execute_spec_operation(
             payload,
             core,
         } => {
+            let policy_context =
+                crate::context::SpecExecutionContext::new(pack, token, kernel.now_epoch_s(), None);
             let dispatch = kernel
                 .execute_connector_core(
                     pack_id,
@@ -964,6 +975,7 @@ async fn execute_spec_operation(
                         required_capabilities: required_capabilities.clone(),
                         payload: payload.clone(),
                     },
+                    &policy_context,
                 )
                 .await
                 .map_err(|error| format!("core connector execution from spec failed: {error}"))?;
@@ -983,6 +995,8 @@ async fn execute_spec_operation(
             extension,
             core,
         } => {
+            let policy_context =
+                crate::context::SpecExecutionContext::new(pack, token, kernel.now_epoch_s(), None);
             let dispatch = kernel
                 .execute_connector_extension(
                     pack_id,
@@ -995,6 +1009,7 @@ async fn execute_spec_operation(
                         required_capabilities: required_capabilities.clone(),
                         payload: payload.clone(),
                     },
+                    &policy_context,
                 )
                 .await
                 .map_err(|error| {
@@ -1014,6 +1029,8 @@ async fn execute_spec_operation(
             payload,
             core,
         } => {
+            let policy_context =
+                crate::context::SpecExecutionContext::new(pack, token, kernel.now_epoch_s(), None);
             let outcome = kernel
                 .execute_runtime_core(
                     pack_id,
@@ -1024,6 +1041,7 @@ async fn execute_spec_operation(
                         action: action.clone(),
                         payload: payload.clone(),
                     },
+                    &policy_context,
                 )
                 .await
                 .map_err(|error| format!("runtime core execution from spec failed: {error}"))?;
@@ -1036,6 +1054,8 @@ async fn execute_spec_operation(
             extension,
             core,
         } => {
+            let policy_context =
+                crate::context::SpecExecutionContext::new(pack, token, kernel.now_epoch_s(), None);
             let outcome = kernel
                 .execute_runtime_extension(
                     pack_id,
@@ -1047,6 +1067,7 @@ async fn execute_spec_operation(
                         action: action.clone(),
                         payload: payload.clone(),
                     },
+                    &policy_context,
                 )
                 .await
                 .map_err(|error| {
@@ -1060,6 +1081,16 @@ async fn execute_spec_operation(
             payload,
             core,
         } => {
+            let tool_policy_params = json!({
+                "tool_name": tool_name,
+                "payload": payload,
+            });
+            let policy_context = crate::context::SpecExecutionContext::new(
+                pack,
+                token,
+                kernel.now_epoch_s(),
+                Some(&tool_policy_params),
+            );
             let outcome = kernel
                 .execute_tool_core(
                     pack_id,
@@ -1070,6 +1101,7 @@ async fn execute_spec_operation(
                         tool_name: tool_name.clone(),
                         payload: payload.clone(),
                     },
+                    policy_context,
                 )
                 .await
                 .map_err(|error| format!("tool core execution from spec failed: {error}"))?;
@@ -1082,6 +1114,16 @@ async fn execute_spec_operation(
             extension,
             core,
         } => {
+            let tool_policy_params = json!({
+                "tool_name": extension_action,
+                "payload": payload,
+            });
+            let policy_context = crate::context::SpecExecutionContext::new(
+                pack,
+                token,
+                kernel.now_epoch_s(),
+                Some(&tool_policy_params),
+            );
             let outcome = kernel
                 .execute_tool_extension(
                     pack_id,
@@ -1093,6 +1135,7 @@ async fn execute_spec_operation(
                         extension_action: extension_action.clone(),
                         payload: payload.clone(),
                     },
+                    &policy_context,
                 )
                 .await
                 .map_err(|error| format!("tool extension execution from spec failed: {error}"))?;
@@ -1104,6 +1147,8 @@ async fn execute_spec_operation(
             payload,
             core,
         } => {
+            let policy_context =
+                crate::context::SpecExecutionContext::new(pack, token, kernel.now_epoch_s(), None);
             let outcome = kernel
                 .execute_memory_core(
                     pack_id,
@@ -1114,6 +1159,7 @@ async fn execute_spec_operation(
                         operation: operation.clone(),
                         payload: payload.clone(),
                     },
+                    &policy_context,
                 )
                 .await
                 .map_err(|error| format!("memory core execution from spec failed: {error}"))?;
@@ -1126,6 +1172,8 @@ async fn execute_spec_operation(
             extension,
             core,
         } => {
+            let policy_context =
+                crate::context::SpecExecutionContext::new(pack, token, kernel.now_epoch_s(), None);
             let outcome = kernel
                 .execute_memory_extension(
                     pack_id,
@@ -1137,6 +1185,7 @@ async fn execute_spec_operation(
                         operation: operation.clone(),
                         payload: payload.clone(),
                     },
+                    &policy_context,
                 )
                 .await
                 .map_err(|error| format!("memory extension execution from spec failed: {error}"))?;
@@ -1272,6 +1321,7 @@ async fn execute_spec_operation(
         } => {
             let outcome = execute_programmatic_tool_call(
                 kernel,
+                pack,
                 pack_id,
                 token,
                 caller,

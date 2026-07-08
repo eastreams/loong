@@ -372,7 +372,9 @@ async fn run_wecom_serve_session(
     ping_timer.tick().await;
     let provider_ctx = Arc::new(KernelContext {
         kernel: kernel_ctx.kernel.clone(),
+        pack: kernel_ctx.pack.clone(),
         token: kernel_ctx.token.clone(),
+        tool_runtime_config: kernel_ctx.tool_runtime_config.clone(),
     });
     let access_policy = build_wecom_access_policy(resolved);
 

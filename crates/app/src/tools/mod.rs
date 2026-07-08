@@ -360,8 +360,6 @@ pub(crate) fn resolve_installable_skill_id(root: &Path) -> Result<String, String
 /// All requests are dispatched via `kernel.execute_tool_core` which
 /// enforces the derived capability set for the effective tool request, runs
 /// policy extensions, and records audit events.
-/// `kernel.execute_tool_core` which enforces the derived capability set
-/// for the effective tool request and records audit events.
 pub async fn execute_tool(
     request: ToolCoreRequest,
     kernel_ctx: &KernelContext,
@@ -384,18 +382,44 @@ pub(crate) async fn execute_kernel_tool_request(
     trusted_internal_payload: bool,
 ) -> Result<ToolCoreOutcome, loong_kernel::KernelError> {
     let caps = required_capabilities_for_request(&request);
+    let execute = async {
+        let effective_config = tool_dispatch::effective_tool_runtime_config_for_payload(
+            &request.payload,
+            &ctx.tool_runtime_config,
+        )
+        .map_err(|error| {
+            loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(error))
+        })?;
+        let tool_policy_params = json!({
+            "tool_name": &request.tool_name,
+            "payload": &request.payload,
+        });
+        let policy_context = ctx
+            .execution_context(
+                loong_contracts::ExecutionPlane::Tool,
+                loong_contracts::PlaneTier::Core,
+                Some(&tool_policy_params),
+                &effective_config,
+            )
+            .map_err(|error| {
+                loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(error))
+            })?;
+        ctx.kernel
+            .execute_tool_core(
+                ctx.pack_id(),
+                &ctx.token,
+                &caps,
+                None,
+                request,
+                policy_context,
+            )
+            .await
+    };
     if trusted_internal_payload {
-        return with_trusted_internal_tool_payload_async(async move {
-            ctx.kernel
-                .execute_tool_core(ctx.pack_id(), &ctx.token, &caps, None, request)
-                .await
-        })
-        .await;
+        return with_trusted_internal_tool_payload_async(execute).await;
     }
 
-    ctx.kernel
-        .execute_tool_core(ctx.pack_id(), &ctx.token, &caps, None, request)
-        .await
+    execute.await
 }
 
 pub fn execute_tool_core(request: ToolCoreRequest) -> Result<ToolCoreOutcome, String> {

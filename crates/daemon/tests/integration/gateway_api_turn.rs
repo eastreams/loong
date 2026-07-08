@@ -191,6 +191,24 @@ fn gateway_turn_loaded_config_fixture(
     }
 }
 
+fn ensure_gateway_root_session(sqlite_path: &Path, session_id: &str) {
+    let session_store_config = loong_daemon::mvp::session::store::SessionStoreConfig {
+        sqlite_path: Some(sqlite_path.to_path_buf()),
+        runtime_config: None,
+    };
+    let repo =
+        loong_daemon::mvp::session::repository::SessionRepository::new(&session_store_config)
+            .expect("gateway test session repository");
+    repo.ensure_session(loong_daemon::mvp::session::repository::NewSessionRecord {
+        session_id: session_id.to_owned(),
+        kind: loong_daemon::mvp::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some(session_id.to_owned()),
+        state: loong_daemon::mvp::session::repository::SessionState::Ready,
+    })
+    .expect("seed gateway test root session");
+}
+
 async fn wait_for_gateway_control_surface(runtime_dir: &Path) {
     for _ in 0..GATEWAY_CONTROL_SURFACE_WAIT_ATTEMPTS {
         let maybe_status = load_gateway_owner_status(runtime_dir);
@@ -352,6 +370,7 @@ async fn gateway_run_turn_persists_acp_session_metadata_into_configured_sqlite_s
     let runtime_dir_for_run = runtime_dir.clone();
     let sqlite_path_for_config = sqlite_path.clone();
     let backend_id_for_config = backend_id.to_owned();
+    ensure_gateway_root_session(sqlite_path.as_path(), "gateway-session");
 
     let hooks = SupervisorRuntimeHooks {
         load_config: Arc::new(move |_| {
@@ -427,6 +446,7 @@ async fn gateway_acp_operator_endpoints_surface_shared_session_truth() {
     let runtime_dir_for_run = runtime_dir.clone();
     let sqlite_path_for_config = sqlite_path.clone();
     let backend_id_for_config = backend_id.to_owned();
+    ensure_gateway_root_session(sqlite_path.as_path(), "gateway-session");
 
     let hooks = SupervisorRuntimeHooks {
         load_config: Arc::new(move |_| {

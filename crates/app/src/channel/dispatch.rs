@@ -351,7 +351,9 @@ async fn run_telegram_channel_with_context(
     let batch_config = context.config.clone();
     let batch_kernel_ctx = Arc::new(crate::KernelContext {
         kernel: kernel_ctx.kernel.clone(),
+        pack: kernel_ctx.pack.clone(),
         token: kernel_ctx.token.clone(),
+        tool_runtime_config: kernel_ctx.tool_runtime_config.clone(),
     });
     let runtime_account_id = resolved.account.id.clone();
     let runtime_account_label = resolved.account.label.clone();
@@ -1936,7 +1938,9 @@ async fn run_matrix_channel_with_context(
                 let config = context.config.clone();
                 let batch_kernel_ctx = Arc::new(crate::KernelContext {
                     kernel: kernel_ctx.kernel.clone(),
+                    pack: kernel_ctx.pack.clone(),
                     token: kernel_ctx.token.clone(),
+                    tool_runtime_config: kernel_ctx.tool_runtime_config.clone(),
                 });
                 let token = resolved.access_token().ok_or_else(|| {
                     "matrix access token missing (set matrix.access_token or env)".to_owned()

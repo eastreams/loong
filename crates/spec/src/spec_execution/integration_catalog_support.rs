@@ -32,7 +32,7 @@ pub(super) fn default_integration_catalog() -> IntegrationCatalog {
 }
 
 pub(super) fn register_dynamic_catalog_connectors(
-    kernel: &mut Kernel,
+    kernel: &mut Kernel<crate::context::SpecContextFactory>,
     catalog: Arc<Mutex<IntegrationCatalog>>,
     bridge_runtime_policy: BridgeRuntimePolicy,
 ) {

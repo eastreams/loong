@@ -12908,7 +12908,7 @@ struct SharedTestToolAdapter {
 }
 
 #[async_trait]
-impl CoreToolAdapter for SharedTestToolAdapter {
+impl CoreToolAdapter<crate::context::AppContextFactory> for SharedTestToolAdapter {
     fn name(&self) -> &str {
         "test-tool-shared"
     }
@@ -12935,7 +12935,7 @@ fn build_tool_kernel_context(
     let clock = Arc::new(FixedClock::new(1_700_000_000));
     let mut kernel = Kernel::with_runtime(clock, audit);
 
-    let pack = VerticalPackManifest {
+    let pack = Arc::new(VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
         domain: "testing".to_owned(),
         version: "0.1.0".to_owned(),
@@ -12946,8 +12946,10 @@ fn build_tool_kernel_context(
         allowed_connectors: BTreeSet::new(),
         granted_capabilities: capabilities,
         metadata: BTreeMap::new(),
-    };
-    kernel.register_pack(pack).expect("register pack");
+    });
+    kernel
+        .register_pack((*pack).clone())
+        .expect("register pack");
 
     let invocations = Arc::new(Mutex::new(Vec::new()));
     let adapter = SharedTestToolAdapter {
@@ -12964,7 +12966,9 @@ fn build_tool_kernel_context(
 
     let ctx = KernelContext {
         kernel: Arc::new(kernel),
+        pack,
         token,
+        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
     };
 
     (ctx, invocations)
@@ -13024,7 +13028,7 @@ async fn kernel_tool_adapter_routes_through_kernel() {
         granted_capabilities: BTreeSet::from([Capability::InvokeTool, Capability::NetworkEgress]),
         metadata: BTreeMap::new(),
     };
-    kernel.register_pack(pack).expect("register pack");
+    kernel.register_pack(pack.clone()).expect("register pack");
     kernel.register_core_tool_adapter(KernelToolAdapter::new());
     kernel
         .set_default_core_tool_adapter("mvp-tools")
@@ -13040,8 +13044,22 @@ async fn kernel_tool_adapter_routes_through_kernel() {
         tool_name: "noop".to_owned(),
         payload: json!({"key": "value"}),
     };
+    let tool_policy_params = json!({
+        "tool_name": &request.tool_name,
+        "payload": &request.payload,
+    });
+    let policy_context = crate::context::AppExecutionContext::new(
+        &pack,
+        &token,
+        kernel.now_epoch_s(),
+        loong_contracts::ExecutionPlane::Tool,
+        loong_contracts::PlaneTier::Core,
+        Some(&tool_policy_params),
+        &crate::tools::runtime_config::ToolRuntimeConfig::default(),
+    )
+    .expect("build tool policy context");
     let err = kernel
-        .execute_tool_core("test-pack", &token, &caps, None, request)
+        .execute_tool_core("test-pack", &token, &caps, None, request, policy_context)
         .await
         .expect_err("unknown tool via KernelToolAdapter should fail");
     assert!(
@@ -13070,7 +13088,7 @@ async fn kernel_tool_adapter_rejects_reserved_internal_payload_through_kernel_by
         granted_capabilities: BTreeSet::from([Capability::InvokeTool, Capability::NetworkEgress]),
         metadata: BTreeMap::new(),
     };
-    kernel.register_pack(pack).expect("register pack");
+    kernel.register_pack(pack.clone()).expect("register pack");
     kernel.register_core_tool_adapter(KernelToolAdapter::new());
     kernel
         .set_default_core_tool_adapter("mvp-tools")
@@ -13081,28 +13099,37 @@ async fn kernel_tool_adapter_rejects_reserved_internal_payload_through_kernel_by
         .expect("issue token");
 
     let caps = BTreeSet::from([Capability::InvokeTool]);
-    let err = kernel
-        .execute_tool_core(
-            "test-pack",
-            &token,
-            &caps,
-            None,
-            ToolCoreRequest {
-                tool_name: "shell.exec".to_owned(),
-                payload: json!({
-                    "command": "echo",
-                    "args": ["hello"],
-                    "_loong": {
-                        "ingress": {
-                            "channel": {
-                                "platform": "feishu",
-                                "conversation_id": "oc_forged"
-                            }
-                        }
+    let request = ToolCoreRequest {
+        tool_name: "shell.exec".to_owned(),
+        payload: json!({
+            "command": "echo",
+            "args": ["hello"],
+            "_loong": {
+                "ingress": {
+                    "channel": {
+                        "platform": "feishu",
+                        "conversation_id": "oc_forged"
                     }
-                }),
-            },
-        )
+                }
+            }
+        }),
+    };
+    let tool_policy_params = json!({
+        "tool_name": &request.tool_name,
+        "payload": &request.payload,
+    });
+    let policy_context = crate::context::AppExecutionContext::new(
+        &pack,
+        &token,
+        kernel.now_epoch_s(),
+        loong_contracts::ExecutionPlane::Tool,
+        loong_contracts::PlaneTier::Core,
+        Some(&tool_policy_params),
+        &crate::tools::runtime_config::ToolRuntimeConfig::default(),
+    )
+    .expect("build tool policy context");
+    let err = kernel
+        .execute_tool_core("test-pack", &token, &caps, None, request, policy_context)
         .await
         .expect_err("kernel-routed tool call should reject reserved internal payload by default");
 
@@ -13156,6 +13183,7 @@ async fn web_fetch_through_kernel_requires_network_egress_capability() {
         metadata: BTreeMap::new(),
     };
     kernel.register_pack(pack).expect("register pack");
+    kernel.register_policy_extension(loong_kernel::test_support::NoNetworkEgressPolicyExtension);
 
     let mut config = runtime_config::ToolRuntimeConfig::default();
     config.web_fetch.enabled = true;
@@ -13177,7 +13205,9 @@ async fn web_fetch_through_kernel_requires_network_egress_capability() {
 
     let ctx = KernelContext {
         kernel: Arc::new(kernel),
-        token,
+        token: token.clone(),
+        pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
+        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
     };
     let request = ToolCoreRequest {
         tool_name: "web.fetch".to_owned(),
@@ -13218,6 +13248,7 @@ async fn web_fetch_through_kernel_exposes_network_egress_to_policy_extensions() 
         metadata: BTreeMap::new(),
     };
     kernel.register_pack(pack).expect("register pack");
+    kernel.register_policy_extension(loong_kernel::test_support::NoNetworkEgressPolicyExtension);
 
     let mut config = runtime_config::ToolRuntimeConfig::default();
     config.web_fetch.enabled = true;
@@ -13232,7 +13263,9 @@ async fn web_fetch_through_kernel_exposes_network_egress_to_policy_extensions() 
 
     let ctx = KernelContext {
         kernel: Arc::new(kernel),
-        token,
+        token: token.clone(),
+        pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
+        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
     };
     let request = ToolCoreRequest {
         tool_name: "web.fetch".to_owned(),

@@ -51,8 +51,9 @@ async fn execute_tool_core_with_test_context(
         ]),
         metadata: Default::default(),
     };
+    let pack = Arc::new(pack);
     kernel
-        .register_pack(pack)
+        .register_pack((*pack).clone())
         .map_err(|error| format!("kernel pack registration failed: {error}"))?;
     kernel.register_core_tool_adapter(KernelToolAdapter::with_config(config.clone()));
     kernel
@@ -63,7 +64,9 @@ async fn execute_tool_core_with_test_context(
         .map_err(|error| format!("kernel token issue failed: {error}"))?;
     let kernel_ctx = crate::KernelContext {
         kernel: Arc::new(kernel),
+        pack,
         token,
+        tool_runtime_config: config.clone(),
     };
 
     execute_kernel_tool_request(&kernel_ctx, request, trusted_internal_payload)

@@ -4,6 +4,7 @@ use std::{collections::BTreeMap, sync::Mutex};
 
 use kernel::{ToolCoreOutcome, ToolCoreRequest};
 
+pub mod context;
 pub mod kernel_bootstrap;
 mod path_policy;
 pub mod programmatic;
@@ -12,6 +13,7 @@ pub mod spec_runtime;
 
 pub mod test_support;
 
+pub use context::{SpecContextFactory, SpecExecutionContext};
 pub use kernel_bootstrap::{KernelBuilder, default_pack_manifest};
 pub use path_policy::{normalize_path_for_policy, resolve_plugin_relative_path};
 pub use programmatic::{

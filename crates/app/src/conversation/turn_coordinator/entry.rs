@@ -245,15 +245,17 @@ impl ConversationTurnCoordinator {
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<String> {
         let acp_options = AcpConversationTurnOptions::automatic();
-        self.handle_turn_with_runtime_and_session_and_acp_options_and_ingress(
-            config,
-            session_id,
-            user_input,
-            error_mode,
-            runtime,
-            &acp_options,
-            binding,
-            None,
+        Box::pin(
+            self.handle_turn_with_runtime_and_session_and_acp_options_and_ingress(
+                config,
+                session_id,
+                user_input,
+                error_mode,
+                runtime,
+                &acp_options,
+                binding,
+                None,
+            ),
         )
         .await
     }

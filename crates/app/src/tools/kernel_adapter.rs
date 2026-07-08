@@ -4,6 +4,7 @@ use loong_kernel::{CoreToolAdapter, ToolCoreContext, ToolCoreOutcome, ToolCoreRe
 
 use super::runtime_config::ToolRuntimeConfig;
 use crate::config::ObservabilityConfig;
+use crate::context::AppContextFactory;
 
 pub struct KernelToolAdapter {
     config: Option<ToolRuntimeConfig>,
@@ -47,7 +48,7 @@ fn default_observability_config() -> ObservabilityConfig {
 }
 
 #[async_trait]
-impl CoreToolAdapter for KernelToolAdapter {
+impl CoreToolAdapter<AppContextFactory> for KernelToolAdapter {
     fn name(&self) -> &str {
         "mvp-tools"
     }
@@ -70,7 +71,7 @@ impl CoreToolAdapter for KernelToolAdapter {
     async fn execute_core_tool_with_context(
         &self,
         request: ToolCoreRequest,
-        ctx: ToolCoreContext<'_>,
+        ctx: ToolCoreContext<'_, AppContextFactory>,
     ) -> Result<ToolCoreOutcome, ToolPlaneError> {
         // Migrated tools need the kernel context so protected side effects can
         // run through access modules. The context-free entry point remains only
@@ -85,7 +86,16 @@ impl CoreToolAdapter for KernelToolAdapter {
                 )
                 .await
             }
-            None => super::execute_tool_core(request),
+            None => {
+                let observability_config = default_observability_config();
+                super::tool_dispatch::execute_tool_core_with_config_and_context(
+                    request,
+                    super::runtime_config::get_tool_runtime_config(),
+                    &observability_config,
+                    ctx,
+                )
+                .await
+            }
         }
         .map_err(ToolPlaneError::Execution)
     }

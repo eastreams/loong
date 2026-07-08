@@ -8,6 +8,7 @@ use kernel::{
     HarnessError, HarnessKind, HarnessOutcome, HarnessRequest, InMemoryAuditSink, Kernel,
     SystemClock, TaskIntent, TaskState, TaskSupervisor, VerticalPackManifest,
 };
+use loong_spec::{SpecContextFactory, SpecExecutionContext};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -28,13 +29,17 @@ pub struct DaemonTaskExecution {
 /// dispatch fails so CLI/API surfaces can report the supervisor's terminal
 /// state instead of collapsing everything into a plain transport error.
 pub(crate) async fn execute_daemon_task_with_supervisor(
-    kernel: &Kernel,
+    kernel: &Kernel<SpecContextFactory>,
+    pack: &VerticalPackManifest,
     pack_id: &str,
     token: &CapabilityToken,
     intent: TaskIntent,
 ) -> CliResult<DaemonTaskExecution> {
     let mut supervisor = TaskSupervisor::new(intent);
-    let dispatch_result = supervisor.execute(kernel, pack_id, token).await;
+    let policy_context = SpecExecutionContext::new(pack, token, kernel.now_epoch_s(), None);
+    let dispatch_result = supervisor
+        .execute(kernel, pack_id, token, &policy_context)
+        .await;
     let supervisor_state = supervisor.state().clone();
 
     match dispatch_result {
@@ -231,6 +236,22 @@ pub(crate) fn build_seeded_gateway_turn_execution(
     mut run_config: loong_app::config::LoongConfig,
     resolved_path: Option<std::path::PathBuf>,
 ) -> Result<SeededGatewayTurnExecution, String> {
+    #[cfg(feature = "memory-sqlite")]
+    {
+        let session_store_config =
+            loong_app::session::store::session_store_config_from_memory_config_without_env_overrides(
+                &run_config.memory,
+            );
+        let repo = loong_app::session::repository::SessionRepository::new(&session_store_config)?;
+        repo.ensure_session(loong_app::session::repository::NewSessionRecord {
+            session_id: request_id.clone(),
+            kind: loong_app::session::repository::SessionKind::Root,
+            parent_session_id: None,
+            label: Some(request_id.clone()),
+            state: loong_app::session::repository::SessionState::Ready,
+        })?;
+    }
+
     let memory_config =
         loong_app::memory::runtime_config::MemoryRuntimeConfig::from_memory_config_without_env_overrides(
             &run_config.memory,
@@ -370,11 +391,11 @@ impl HarnessAdapter for EmbeddedAgentHarness {
 /// This starts from the spec/kernel bootstrap defaults and then registers the
 /// embedded agent harness so daemon task intents can route back into the shared
 /// `AgentRuntime` pipeline without spawning an external process.
-fn build_daemon_runtime_kernel() -> Kernel {
+fn build_daemon_runtime_kernel() -> Kernel<SpecContextFactory> {
     let audit_sink = Arc::new(InMemoryAuditSink::default());
     let audit_sink = audit_sink as Arc<dyn AuditSink>;
     let clock = Arc::new(SystemClock) as Arc<dyn kernel::Clock>;
-    let mut kernel = Kernel::with_runtime(clock, audit_sink);
+    let mut kernel = Kernel::<SpecContextFactory>::with_runtime(clock, audit_sink);
     let pack = daemon_runtime_pack_manifest();
     let register_pack_result = kernel.register_pack(pack);
     register_pack_result.expect("daemon runtime pack should register");
@@ -428,6 +449,7 @@ pub async fn run_demo() -> CliResult<()> {
     let token = kernel
         .issue_token(DEFAULT_PACK_ID, DEFAULT_AGENT_ID, 300)
         .map_err(|error| format!("token issue failed: {error}"))?;
+    let pack = loong_spec::default_pack_manifest();
 
     let task = TaskIntent {
         task_id: "task-bootstrap-01".to_owned(),
@@ -437,7 +459,7 @@ pub async fn run_demo() -> CliResult<()> {
     };
 
     let task_dispatch =
-        execute_daemon_task_with_supervisor(&kernel, DEFAULT_PACK_ID, &token, task).await?;
+        execute_daemon_task_with_supervisor(&kernel, &pack, DEFAULT_PACK_ID, &token, task).await?;
     let (route, outcome) = require_successful_daemon_task_execution(&task_dispatch)?;
 
     println!(
@@ -445,6 +467,7 @@ pub async fn run_demo() -> CliResult<()> {
         route.harness_kind, task_dispatch.supervisor_state, outcome.output
     );
 
+    let policy_context = SpecExecutionContext::new(&pack, &token, kernel.now_epoch_s(), None);
     let connector_dispatch = kernel
         .execute_connector_core(
             DEFAULT_PACK_ID,
@@ -456,6 +479,7 @@ pub async fn run_demo() -> CliResult<()> {
                 required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
                 payload: json!({"channel": "ops-alerts", "message": "task complete"}),
             },
+            &policy_context,
         )
         .await
         .map_err(|error| format!("connector dispatch failed: {error}"))?;
@@ -471,9 +495,11 @@ pub async fn run_task_cli(objective: &str, payload_raw: &str) -> CliResult<()> {
     let token = kernel
         .issue_token(DEFAULT_PACK_ID, DEFAULT_AGENT_ID, 120)
         .map_err(|error| format!("token issue failed: {error}"))?;
+    let pack = daemon_runtime_pack_manifest();
 
     let dispatch = execute_daemon_task_with_supervisor(
         &kernel,
+        &pack,
         DEFAULT_PACK_ID,
         &token,
         TaskIntent {
@@ -502,9 +528,11 @@ mod tests {
         let token = kernel
             .issue_token(DEFAULT_PACK_ID, DEFAULT_AGENT_ID, 120)
             .expect("issue token");
+        let pack = loong_spec::default_pack_manifest();
 
         let execution = execute_daemon_task_with_supervisor(
             &kernel,
+            &pack,
             DEFAULT_PACK_ID,
             &token,
             TaskIntent {
@@ -536,9 +564,11 @@ mod tests {
         let token = kernel
             .issue_token(DEFAULT_PACK_ID, DEFAULT_AGENT_ID, 120)
             .expect("issue token");
+        let pack = loong_spec::default_pack_manifest();
 
         let execution = execute_daemon_task_with_supervisor(
             &kernel,
+            &pack,
             DEFAULT_PACK_ID,
             &token,
             TaskIntent {
@@ -577,9 +607,11 @@ mod tests {
         let token = kernel
             .issue_token(DEFAULT_PACK_ID, DEFAULT_AGENT_ID, 120)
             .expect("issue token");
+        let pack = loong_spec::default_pack_manifest();
 
         let execution = execute_daemon_task_with_supervisor(
             &kernel,
+            &pack,
             "missing-pack",
             &token,
             TaskIntent {
@@ -611,12 +643,14 @@ mod tests {
         let token = kernel
             .issue_token(DEFAULT_PACK_ID, DEFAULT_AGENT_ID, 120)
             .expect("issue token");
+        let pack = daemon_runtime_pack_manifest();
         let payload = json!({
             "message": 42
         });
 
         let execution = execute_daemon_task_with_supervisor(
             &kernel,
+            &pack,
             DEFAULT_PACK_ID,
             &token,
             TaskIntent {

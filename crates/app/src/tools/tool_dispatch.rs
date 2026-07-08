@@ -6,6 +6,8 @@ use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 use loong_kernel::ToolCoreContext;
 use serde_json::Value;
 
+use crate::context::AppContextFactory;
+
 use super::*;
 
 pub fn execute_tool_core_with_config(
@@ -155,7 +157,7 @@ pub(crate) async fn execute_tool_core_with_config_and_context(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
     observability_config: &crate::config::ObservabilityConfig,
-    ctx: ToolCoreContext<'_>,
+    ctx: ToolCoreContext<'_, AppContextFactory>,
 ) -> Result<ToolCoreOutcome, String> {
     let requested_tool_name = request.tool_name.clone();
     let canonical_name = canonical_tool_name(request.tool_name.as_str()).to_owned();
@@ -286,6 +288,28 @@ pub(crate) async fn execute_tool_core_with_config_and_context(
     otel_span.end();
 
     result
+}
+
+pub(crate) fn effective_tool_runtime_config_for_payload(
+    payload: &Value,
+    config: &runtime_config::ToolRuntimeConfig,
+) -> Result<runtime_config::ToolRuntimeConfig, String> {
+    let workspace_root = trusted_workspace_root_from_payload(payload)?;
+    let runtime_narrowing = trusted_runtime_narrowing_from_payload(payload)?;
+    let mut effective_config = config
+        .workspace_root
+        .clone()
+        .map(|workspace_root| config.with_workspace_root_override(workspace_root))
+        .unwrap_or_else(|| config.clone());
+    if let Some(workspace_root) = workspace_root {
+        effective_config = effective_config
+            .with_workspace_root_override(workspace_root.clone())
+            .with_file_root_override(workspace_root);
+    }
+    if let Some(runtime_narrowing) = runtime_narrowing {
+        effective_config = effective_config.narrowed(&runtime_narrowing);
+    }
+    Ok(effective_config)
 }
 
 fn truncate_tool_payload_for_otel(payload: &str) -> String {

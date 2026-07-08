@@ -490,7 +490,9 @@ mod tests {
                 .expect("issue token");
             KernelContext {
                 kernel: Arc::new(kernel),
-                token,
+                token: token.clone(),
+                pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
+                tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
             }
         })
     }

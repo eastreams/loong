@@ -163,7 +163,7 @@ fn build_tool_search_operation_headline(
 }
 
 pub(super) fn emit_tool_search_audit_event(
-    kernel: &Kernel,
+    kernel: &Kernel<crate::context::SpecContextFactory>,
     pack_id: &str,
     agent_id: &str,
     summary: &ToolSearchOperationSummary,

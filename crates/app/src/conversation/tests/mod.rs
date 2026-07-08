@@ -4,7 +4,8 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use async_trait::async_trait;
 use loong_contracts::{
-    Capability, ExecutionRoute, HarnessKind, MemoryPlaneError, ToolCoreOutcome, ToolCoreRequest,
+    Capability, ExecutionPlane, ExecutionRoute, HarnessKind, MemoryPlaneError, PlaneTier,
+    ToolCoreOutcome, ToolCoreRequest,
 };
 use loong_kernel::{
     CoreMemoryAdapter, FixedClock, InMemoryAuditSink, Kernel, MemoryCoreOutcome, MemoryCoreRequest,
@@ -1169,7 +1170,7 @@ fn spawn_telegram_send_server_once() -> (
     std::sync::mpsc::Receiver<String>,
     std::thread::JoinHandle<()>,
 ) {
-    use std::io::{Read, Write};
+    use std::io::Write;
     use std::net::TcpListener;
 
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind telegram stub");
@@ -1177,12 +1178,8 @@ fn spawn_telegram_send_server_once() -> (
     let (request_tx, request_rx) = std::sync::mpsc::channel();
     let server = std::thread::spawn(move || {
         if let Ok((mut stream, _)) = listener.accept() {
-            let mut request_buf = [0_u8; 8192];
-            let read = stream
-                .read(&mut request_buf)
-                .expect("read telegram request");
             request_tx
-                .send(String::from_utf8_lossy(&request_buf[..read]).into_owned())
+                .send(read_http_request_from_stream(&mut stream))
                 .expect("send telegram request capture");
             let body = serde_json::to_string(&json!({
                 "ok": true,
@@ -1202,6 +1199,62 @@ fn spawn_telegram_send_server_once() -> (
         }
     });
     (format!("http://{addr}"), request_rx, server)
+}
+
+#[cfg(all(feature = "memory-sqlite", feature = "channel-telegram"))]
+fn read_http_request_from_stream(stream: &mut std::net::TcpStream) -> String {
+    use std::io::Read as _;
+
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+        .expect("set request read timeout");
+    let mut bytes = Vec::new();
+    let mut chunk = [0_u8; 4096];
+    let header_end = loop {
+        let read = stream.read(&mut chunk).expect("read request chunk");
+        if read == 0 {
+            break find_http_header_end(&bytes).unwrap_or(bytes.len());
+        }
+        bytes.extend_from_slice(&chunk[..read]);
+        if let Some(header_end) = find_http_header_end(&bytes) {
+            break header_end;
+        }
+    };
+
+    let content_length = find_http_header_end(&bytes)
+        .map(|end| http_content_length(&bytes[..end]))
+        .unwrap_or_default();
+    let body_start = header_end.saturating_add(4).min(bytes.len());
+    let target_len = body_start.saturating_add(content_length);
+    while bytes.len() < target_len {
+        let read = stream.read(&mut chunk).expect("read request body chunk");
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..read]);
+    }
+
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+#[cfg(all(feature = "memory-sqlite", feature = "channel-telegram"))]
+fn find_http_header_end(bytes: &[u8]) -> Option<usize> {
+    bytes.windows(4).position(|window| window == b"\r\n\r\n")
+}
+
+#[cfg(all(feature = "memory-sqlite", feature = "channel-telegram"))]
+fn http_content_length(headers: &[u8]) -> usize {
+    let headers = String::from_utf8_lossy(headers);
+    headers
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            if name.trim().eq_ignore_ascii_case("content-length") {
+                return value.trim().parse::<usize>().ok();
+            }
+            None
+        })
+        .unwrap_or_default()
 }
 
 fn register_routed_acp_backend(
@@ -1743,6 +1796,14 @@ async fn provider_messages_with_kernel_binding(
         &config.memory,
     );
     let caps = BTreeSet::from([Capability::MemoryRead]);
+    let policy_context = kernel_ctx
+        .execution_context(
+            ExecutionPlane::Memory,
+            PlaneTier::Core,
+            None,
+            &tool_runtime_config,
+        )
+        .expect("build memory policy context");
     let outcome = kernel_ctx
         .kernel
         .execute_memory_core(
@@ -1751,6 +1812,7 @@ async fn provider_messages_with_kernel_binding(
             &caps,
             None,
             request,
+            &policy_context,
         )
         .await
         .expect("load staged memory envelope via kernel");
@@ -1801,7 +1863,7 @@ fn test_kernel_context_with_memory(
     let audit = Arc::new(InMemoryAuditSink::default());
     let mut kernel = Kernel::with_runtime(clock, audit);
 
-    let pack = VerticalPackManifest {
+    let pack = Arc::new(VerticalPackManifest {
         pack_id: "test-pack-memory".to_owned(),
         domain: "testing".to_owned(),
         version: "0.1.0".to_owned(),
@@ -1812,9 +1874,9 @@ fn test_kernel_context_with_memory(
         allowed_connectors: BTreeSet::new(),
         granted_capabilities: BTreeSet::from([Capability::MemoryRead, Capability::MemoryWrite]),
         metadata: BTreeMap::new(),
-    };
+    });
     kernel
-        .register_pack(pack)
+        .register_pack((*pack).clone())
         .expect("register memory test pack");
     kernel
         .register_core_memory_adapter(crate::session::store::session_memory_adapter(memory_config));
@@ -1828,7 +1890,9 @@ fn test_kernel_context_with_memory(
 
     KernelContext {
         kernel: Arc::new(kernel),
+        pack,
         token,
+        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
     }
 }
 
@@ -8845,7 +8909,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_path_does_not_parallelize_fast_
     }
 
     #[async_trait]
-    impl CoreToolAdapter for OverlapDetectingToolAdapter {
+    impl CoreToolAdapter<crate::context::AppContextFactory> for OverlapDetectingToolAdapter {
         fn name(&self) -> &str {
             "overlap-detecting-tools"
         }
@@ -8899,7 +8963,9 @@ async fn handle_turn_with_runtime_safe_lane_plan_path_does_not_parallelize_fast_
         .expect("issue token");
     let kernel_ctx = KernelContext {
         kernel: Arc::new(kernel),
-        token,
+        token: token.clone(),
+        pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
+        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
     };
 
     let runtime = FakeRuntime::with_turn_and_completion(
@@ -9363,7 +9429,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_replans_after_transient_tool_fa
     }
 
     #[async_trait]
-    impl CoreToolAdapter for FlakyOnceToolAdapter {
+    impl CoreToolAdapter<crate::context::AppContextFactory> for FlakyOnceToolAdapter {
         fn name(&self) -> &str {
             "flaky-once-tools"
         }
@@ -9423,7 +9489,9 @@ async fn handle_turn_with_runtime_safe_lane_plan_replans_after_transient_tool_fa
         .expect("issue token");
     let ctx = KernelContext {
         kernel: Arc::new(kernel),
-        token,
+        token: token.clone(),
+        pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
+        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
     };
 
     let runtime = FakeRuntime::with_turn_and_completion(
@@ -9581,7 +9649,7 @@ async fn handle_turn_with_runtime_safe_lane_backpressure_guard_blocks_retry_stor
     }
 
     #[async_trait]
-    impl CoreToolAdapter for FlakyAlwaysRetryableAdapter {
+    impl CoreToolAdapter<crate::context::AppContextFactory> for FlakyAlwaysRetryableAdapter {
         fn name(&self) -> &str {
             "flaky-always-retryable-tools"
         }
@@ -9630,7 +9698,9 @@ async fn handle_turn_with_runtime_safe_lane_backpressure_guard_blocks_retry_stor
         .expect("issue token");
     let ctx = KernelContext {
         kernel: Arc::new(kernel),
-        token,
+        token: token.clone(),
+        pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
+        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
     };
 
     let runtime = FakeRuntime::with_turn_and_completion(
@@ -9710,7 +9780,7 @@ async fn handle_turn_with_runtime_safe_lane_verify_non_retryable_failure_skips_r
     }
 
     #[async_trait]
-    impl CoreToolAdapter for DenyMarkerAdapter {
+    impl CoreToolAdapter<crate::context::AppContextFactory> for DenyMarkerAdapter {
         fn name(&self) -> &str {
             "deny-marker-tools"
         }
@@ -9764,7 +9834,9 @@ async fn handle_turn_with_runtime_safe_lane_verify_non_retryable_failure_skips_r
         .expect("issue token");
     let ctx = KernelContext {
         kernel: Arc::new(kernel),
-        token,
+        token: token.clone(),
+        pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
+        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
     };
 
     let runtime = FakeRuntime::with_turn_and_completion(
@@ -9895,7 +9967,7 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_forces_no_replan() 
     }
 
     #[async_trait]
-    impl CoreToolAdapter for FlakyAlwaysRetryableAdapter {
+    impl CoreToolAdapter<crate::context::AppContextFactory> for FlakyAlwaysRetryableAdapter {
         fn name(&self) -> &str {
             "flaky-governor-tools"
         }
@@ -9995,7 +10067,9 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_forces_no_replan() 
         .expect("issue token");
     let ctx = KernelContext {
         kernel: Arc::new(kernel),
-        token,
+        token: token.clone(),
+        pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
+        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
     };
 
     let runtime = FakeRuntime::with_turn_and_completion(
@@ -10136,7 +10210,7 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_requests_extended_h
     struct NoopToolAdapter;
 
     #[async_trait]
-    impl CoreToolAdapter for NoopToolAdapter {
+    impl CoreToolAdapter<crate::context::AppContextFactory> for NoopToolAdapter {
         fn name(&self) -> &str {
             "noop-governor-tool"
         }
@@ -10223,7 +10297,9 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_requests_extended_h
         .expect("issue token");
     let ctx = KernelContext {
         kernel: Arc::new(kernel),
-        token,
+        token: token.clone(),
+        pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
+        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
     };
 
     let runtime = FakeRuntime::with_turn_and_completion(
@@ -10312,7 +10388,7 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_does_not_reuse_sqli
     }
 
     #[async_trait]
-    impl CoreToolAdapter for FlakyAlwaysRetryableAdapter {
+    impl CoreToolAdapter<crate::context::AppContextFactory> for FlakyAlwaysRetryableAdapter {
         fn name(&self) -> &str {
             "flaky-governor-fallback-tools"
         }
@@ -10402,7 +10478,9 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_does_not_reuse_sqli
         .expect("issue token");
     let ctx = KernelContext {
         kernel: Arc::new(kernel),
-        token,
+        token: token.clone(),
+        pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
+        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
     };
 
     let mut config = test_config();
@@ -10505,7 +10583,7 @@ async fn handle_turn_with_runtime_safe_lane_replans_failed_subgraph_only() {
     }
 
     #[async_trait]
-    impl CoreToolAdapter for FailChecklistOnceAdapter {
+    impl CoreToolAdapter<crate::context::AppContextFactory> for FailChecklistOnceAdapter {
         fn name(&self) -> &str {
             "fail-checklist-once-tools"
         }
@@ -10577,7 +10655,9 @@ async fn handle_turn_with_runtime_safe_lane_replans_failed_subgraph_only() {
         .expect("issue token");
     let ctx = KernelContext {
         kernel: Arc::new(kernel),
-        token,
+        token: token.clone(),
+        pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
+        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
     };
 
     let runtime = FakeRuntime::with_turn_and_completion(
@@ -13947,7 +14027,7 @@ async fn turn_engine_tool_execution_error_is_marked_retryable() {
     struct RetryableErrorToolAdapter;
 
     #[async_trait]
-    impl CoreToolAdapter for RetryableErrorToolAdapter {
+    impl CoreToolAdapter<crate::context::AppContextFactory> for RetryableErrorToolAdapter {
         fn name(&self) -> &str {
             "retryable-error-tools"
         }
@@ -13988,7 +14068,9 @@ async fn turn_engine_tool_execution_error_is_marked_retryable() {
 
     let ctx = KernelContext {
         kernel: Arc::new(kernel),
-        token,
+        token: token.clone(),
+        pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
+        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
     };
 
     let engine = TurnEngine::new(1);
@@ -14129,7 +14211,7 @@ async fn turn_engine_executes_known_tool_with_kernel() {
     struct EchoToolAdapter;
 
     #[async_trait]
-    impl CoreToolAdapter for EchoToolAdapter {
+    impl CoreToolAdapter<crate::context::AppContextFactory> for EchoToolAdapter {
         fn name(&self) -> &str {
             "echo-tools"
         }
@@ -14175,7 +14257,9 @@ async fn turn_engine_executes_known_tool_with_kernel() {
 
     let ctx = KernelContext {
         kernel: Arc::new(kernel),
-        token,
+        token: token.clone(),
+        pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
+        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
     };
 
     let engine = TurnEngine::new(5);
@@ -14248,7 +14332,7 @@ async fn turn_engine_truncates_oversized_tool_payload_summary() {
     struct LargePayloadToolAdapter;
 
     #[async_trait]
-    impl CoreToolAdapter for LargePayloadToolAdapter {
+    impl CoreToolAdapter<crate::context::AppContextFactory> for LargePayloadToolAdapter {
         fn name(&self) -> &str {
             "large-payload-tools"
         }
@@ -14296,7 +14380,9 @@ async fn turn_engine_truncates_oversized_tool_payload_summary() {
 
     let ctx = KernelContext {
         kernel: Arc::new(kernel),
-        token,
+        token: token.clone(),
+        pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
+        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
     };
 
     let engine = TurnEngine::new(5);
@@ -14365,7 +14451,7 @@ async fn turn_engine_keeps_discovery_shaped_payloads_intact_for_followup_compact
     struct LargeToolSearchAdapter;
 
     #[async_trait]
-    impl CoreToolAdapter for LargeToolSearchAdapter {
+    impl CoreToolAdapter<crate::context::AppContextFactory> for LargeToolSearchAdapter {
         fn name(&self) -> &str {
             "large-discovery-result-adapter"
         }
@@ -14426,7 +14512,9 @@ async fn turn_engine_keeps_discovery_shaped_payloads_intact_for_followup_compact
 
     let ctx = KernelContext {
         kernel: Arc::new(kernel),
-        token,
+        token: token.clone(),
+        pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
+        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
     };
 
     let engine = TurnEngine::new(5);
@@ -15448,7 +15536,7 @@ async fn turn_engine_rejects_legacy_external_skill_invoke_runtime_tool() {
     struct ExternalSkillInvokeAdapter;
 
     #[async_trait]
-    impl CoreToolAdapter for ExternalSkillInvokeAdapter {
+    impl CoreToolAdapter<crate::context::AppContextFactory> for ExternalSkillInvokeAdapter {
         fn name(&self) -> &str {
             "external-skill-invoke-adapter"
         }
@@ -15501,7 +15589,9 @@ async fn turn_engine_rejects_legacy_external_skill_invoke_runtime_tool() {
 
     let ctx = KernelContext {
         kernel: Arc::new(kernel),
-        token,
+        token: token.clone(),
+        pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
+        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
     };
 
     let mut config = test_config();
@@ -15534,7 +15624,7 @@ async fn turn_engine_injects_browser_scope_into_kernel_request() {
     struct BrowserScopeEchoAdapter;
 
     #[async_trait]
-    impl CoreToolAdapter for BrowserScopeEchoAdapter {
+    impl CoreToolAdapter<crate::context::AppContextFactory> for BrowserScopeEchoAdapter {
         fn name(&self) -> &str {
             "browser-scope-echo"
         }
@@ -15583,7 +15673,9 @@ async fn turn_engine_injects_browser_scope_into_kernel_request() {
 
     let ctx = KernelContext {
         kernel: Arc::new(kernel),
-        token,
+        token: token.clone(),
+        pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
+        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
     };
 
     let engine = TurnEngine::new(5);
@@ -15643,7 +15735,7 @@ async fn turn_engine_execute_turn_denied_without_capability() {
     struct NoopToolAdapter;
 
     #[async_trait]
-    impl CoreToolAdapter for NoopToolAdapter {
+    impl CoreToolAdapter<crate::context::AppContextFactory> for NoopToolAdapter {
         fn name(&self) -> &str {
             "noop-tools"
         }
@@ -15688,7 +15780,9 @@ async fn turn_engine_execute_turn_denied_without_capability() {
 
     let ctx = KernelContext {
         kernel: Arc::new(kernel),
-        token,
+        token: token.clone(),
+        pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
+        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
     };
 
     let engine = TurnEngine::new(5);
@@ -15707,14 +15801,14 @@ async fn turn_engine_execute_turn_denied_without_capability() {
     let result = engine.execute_turn(&turn, &ctx).await;
     #[allow(clippy::wildcard_enum_match_arm)]
     match result {
-        TurnResult::ToolDenied(reason) => {
+        TurnResult::FinalText(text) => {
             assert!(
-                reason.contains("apability") || reason.contains("denied"),
-                "expected capability/denial reason, got: {reason}"
+                text.contains("kernel_policy_denied") && text.contains("capability InvokeTool"),
+                "expected local tool denial line for missing capability, got: {text}"
             );
         }
         other => panic!(
-            "expected ToolDenied for missing capability, got {:?}",
+            "expected FinalText denial for missing capability, got {:?}",
             other
         ),
     }
@@ -15848,7 +15942,9 @@ fn build_kernel_context_with_window_turns(
 
     let ctx = KernelContext {
         kernel: Arc::new(kernel),
-        token,
+        token: token.clone(),
+        pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
+        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
     };
 
     (ctx, invocations)
@@ -15935,7 +16031,9 @@ fn build_kernel_context_with_window_turn_sequence(
 
     let ctx = KernelContext {
         kernel: Arc::new(kernel),
-        token,
+        token: token.clone(),
+        pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
+        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
     };
 
     (ctx, invocations)
@@ -15977,7 +16075,9 @@ fn build_kernel_context_with_window_error(
 
     let ctx = KernelContext {
         kernel: Arc::new(kernel),
-        token,
+        token: token.clone(),
+        pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
+        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
     };
 
     (ctx, invocations)
@@ -16019,7 +16119,9 @@ fn build_kernel_context_with_raw_window_payload(
 
     let ctx = KernelContext {
         kernel: Arc::new(kernel),
-        token,
+        token: token.clone(),
+        pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
+        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
     };
 
     (ctx, invocations)
@@ -16061,7 +16163,9 @@ fn build_kernel_context_with_compaction_conflict(
 
     let ctx = KernelContext {
         kernel: Arc::new(kernel),
-        token,
+        token: token.clone(),
+        pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
+        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
     };
 
     (ctx, invocations)
@@ -16105,7 +16209,9 @@ fn build_kernel_context_with_incomplete_compaction_snapshot(
 
     let ctx = KernelContext {
         kernel: Arc::new(kernel),
-        token,
+        token: token.clone(),
+        pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
+        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
     };
 
     (ctx, invocations)
@@ -19281,7 +19387,7 @@ async fn handle_turn_with_runtime_child_session_injects_runtime_narrowing_into_k
     struct EchoToolAdapter;
 
     #[async_trait::async_trait]
-    impl loong_kernel::CoreToolAdapter for EchoToolAdapter {
+    impl loong_kernel::CoreToolAdapter<crate::context::AppContextFactory> for EchoToolAdapter {
         fn name(&self) -> &str {
             "echo-tools"
         }
@@ -19402,7 +19508,9 @@ async fn handle_turn_with_runtime_child_session_injects_runtime_narrowing_into_k
         .expect("issue token");
     let kernel_ctx = KernelContext {
         kernel: Arc::new(kernel),
-        token,
+        token: token.clone(),
+        pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
+        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
     };
 
     let turn = ProviderTurn {

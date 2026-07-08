@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use loong_contracts::{Capability, ExecutionRoute, HarnessKind};
 use loong_kernel::{FixedClock, InMemoryAuditSink, Kernel, VerticalPackManifest};
 
-use crate::context::KernelContext;
+use crate::context::{AppContextFactory, KernelContext};
 use crate::conversation::{
     ConversationRuntimeBinding, DefaultAppToolDispatcher, ProviderTurn, SessionContext, ToolIntent,
     TurnEngine, TurnResult,
@@ -140,9 +140,9 @@ impl TurnTestHarness {
 
         let audit = Arc::new(InMemoryAuditSink::default());
         let clock = Arc::new(FixedClock::new(1_700_000_000));
-        let mut kernel = Kernel::with_runtime(clock, audit.clone());
+        let mut kernel = Kernel::<AppContextFactory>::with_runtime(clock, audit.clone());
 
-        let pack = VerticalPackManifest {
+        let pack = Arc::new(VerticalPackManifest {
             pack_id: "test-pack".to_owned(),
             domain: "testing".to_owned(),
             version: "0.1.0".to_owned(),
@@ -153,9 +153,11 @@ impl TurnTestHarness {
             allowed_connectors: BTreeSet::new(),
             granted_capabilities: capabilities,
             metadata: BTreeMap::new(),
-        };
-        kernel.register_pack(pack).expect("register pack");
-        kernel.register_core_tool_adapter(KernelToolAdapter::with_config(tool_config));
+        });
+        kernel
+            .register_pack((*pack).clone())
+            .expect("register pack");
+        kernel.register_core_tool_adapter(KernelToolAdapter::with_config(tool_config.clone()));
         kernel
             .set_default_core_tool_adapter("mvp-tools")
             .expect("set default adapter");
@@ -180,7 +182,9 @@ impl TurnTestHarness {
 
         let ctx = KernelContext {
             kernel: Arc::new(kernel),
+            pack,
             token,
+            tool_runtime_config: tool_config,
         };
 
         Self {

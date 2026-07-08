@@ -360,9 +360,19 @@ pub(crate) async fn load_assistant_contents_from_session_window_detailed(
             }),
         };
         let caps = BTreeSet::from([Capability::MemoryRead]);
+        let policy_context = ctx
+            .memory_core_context()
+            .map_err(AssistantHistoryLoadError::kernel_request_failed)?;
         let outcome = ctx
             .kernel
-            .execute_memory_core(ctx.pack_id(), &ctx.token, &caps, None, request)
+            .execute_memory_core(
+                ctx.pack_id(),
+                &ctx.token,
+                &caps,
+                None,
+                request,
+                &policy_context,
+            )
             .await
             .map_err(AssistantHistoryLoadError::kernel_request_failed)?;
 

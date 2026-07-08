@@ -4,7 +4,7 @@ use crate::KernelContext;
 
 #[derive(Clone, Default)]
 pub enum OwnedConversationRuntimeBinding {
-    Kernel(KernelContext),
+    Kernel(Box<KernelContext>),
     #[default]
     Direct,
 }
@@ -12,13 +12,15 @@ pub enum OwnedConversationRuntimeBinding {
 impl OwnedConversationRuntimeBinding {
     pub fn from_borrowed(binding: ConversationRuntimeBinding<'_>) -> Self {
         match binding {
-            ConversationRuntimeBinding::Kernel(kernel_ctx) => Self::Kernel(kernel_ctx.clone()),
+            ConversationRuntimeBinding::Kernel(kernel_ctx) => {
+                Self::Kernel(Box::new(kernel_ctx.clone()))
+            }
             ConversationRuntimeBinding::Direct => Self::Direct,
         }
     }
 
     pub fn kernel(kernel_ctx: KernelContext) -> Self {
-        Self::Kernel(kernel_ctx)
+        Self::Kernel(Box::new(kernel_ctx))
     }
 
     pub const fn advisory_only() -> Self {
@@ -31,14 +33,14 @@ impl OwnedConversationRuntimeBinding {
 
     pub fn as_borrowed(&self) -> ConversationRuntimeBinding<'_> {
         match self {
-            Self::Kernel(kernel_ctx) => ConversationRuntimeBinding::Kernel(kernel_ctx),
+            Self::Kernel(kernel_ctx) => ConversationRuntimeBinding::Kernel(kernel_ctx.as_ref()),
             Self::Direct => ConversationRuntimeBinding::Direct,
         }
     }
 
     pub fn kernel_context(&self) -> Option<&KernelContext> {
         match self {
-            Self::Kernel(kernel_ctx) => Some(kernel_ctx),
+            Self::Kernel(kernel_ctx) => Some(kernel_ctx.as_ref()),
             Self::Direct => None,
         }
     }

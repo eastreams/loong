@@ -4,10 +4,9 @@ use std::{
 };
 
 use loong_contracts::Capability;
-use loong_core::policy::context::{ContextFactory, PolicyContext};
+use loong_core::policy::context::{ContextFactory, FsAccessContext, PolicyContext};
 
 use super::AccessCx;
-use loong_access::fs::access::FsAccessContext;
 
 #[derive(Debug, Clone)]
 struct AccessCxPolicyContext {
@@ -53,7 +52,6 @@ impl ContextFactory for AccessCxContextFactory {
 fn loong_kernel_exposes_access_types_and_fs_surface_for_workspace_kernels() {
     fn assert_access_exported<T>() {}
 
-    assert_access_exported::<AccessCx<'static, crate::policy::KernelContextFactory>>();
     assert_access_exported::<AccessCx<'static, AccessCxContextFactory>>();
 }
 

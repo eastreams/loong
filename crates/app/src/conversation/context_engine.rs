@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 #[cfg(feature = "memory-sqlite")]
-use loong_contracts::Capability;
+use loong_contracts::{Capability, ExecutionPlane, PlaneTier};
 use serde_json::Value;
 
 use crate::config::LoongConfig;
@@ -512,6 +512,7 @@ async fn persist_memory_window(
         expected_turn_count,
     );
     let caps = BTreeSet::from([Capability::MemoryWrite]);
+    let policy_context = kernel_ctx.memory_core_context()?;
     let outcome = kernel_ctx
         .kernel
         .execute_memory_core(
@@ -520,6 +521,7 @@ async fn persist_memory_window(
             &caps,
             None,
             request,
+            &policy_context,
         )
         .await
         .map_err(|error| format!("persist compacted memory window via kernel failed: {error}"))?;
@@ -552,9 +554,22 @@ async fn load_stage_envelope(
             &config.memory,
         );
         let caps = BTreeSet::from([Capability::MemoryRead]);
+        let policy_context = ctx.execution_context(
+            ExecutionPlane::Memory,
+            PlaneTier::Core,
+            None,
+            &tool_runtime_config,
+        )?;
         let outcome = ctx
             .kernel
-            .execute_memory_core(ctx.pack_id(), &ctx.token, &caps, None, request)
+            .execute_memory_core(
+                ctx.pack_id(),
+                &ctx.token,
+                &caps,
+                None,
+                request,
+                &policy_context,
+            )
             .await
             .map_err(|error| format!("load staged memory envelope via kernel failed: {error}"))?;
 

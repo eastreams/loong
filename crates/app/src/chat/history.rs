@@ -276,6 +276,7 @@ async fn load_manual_compaction_window_snapshot(
             "allow_extended_limit": true,
         }),
     };
+    let policy_context = kernel_ctx.memory_core_context()?;
     let outcome = kernel_ctx
         .kernel
         .execute_memory_core(
@@ -284,6 +285,7 @@ async fn load_manual_compaction_window_snapshot(
             &caps,
             None,
             request,
+            &policy_context,
         )
         .await
         .map_err(|error| format!("load compaction window via kernel failed: {error}"))?;
@@ -431,9 +433,17 @@ pub(super) async fn load_history_lines(
     if let Some(ctx) = binding.kernel_context() {
         let request = memory::build_window_request(session_id, limit);
         let caps = BTreeSet::from([Capability::MemoryRead]);
+        let policy_context = ctx.memory_core_context()?;
         let outcome = ctx
             .kernel
-            .execute_memory_core(ctx.pack_id(), &ctx.token, &caps, None, request)
+            .execute_memory_core(
+                ctx.pack_id(),
+                &ctx.token,
+                &caps,
+                None,
+                request,
+                &policy_context,
+            )
             .await
             .map_err(|error| format!("load history via kernel failed: {error}"))?;
         if outcome.status != "ok" {

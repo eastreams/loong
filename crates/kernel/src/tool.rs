@@ -10,14 +10,14 @@ pub use loong_contracts::{
 };
 
 use crate::errors::ToolPlaneError;
-use crate::{AccessCx, Kernel, KernelContextFactory};
+use crate::{AccessCx, Kernel};
 
 /// Kernel-owned context passed into core tool adapters.
 ///
 /// The context carries the same policy view used by the kernel authorization
 /// step. A migrated tool should enrich this context with its own view data,
 /// then call `access()` instead of reaching for policy engines or I/O directly.
-pub struct ToolCoreContext<'a, C: ContextFactory = KernelContextFactory> {
+pub struct ToolCoreContext<'a, C: ContextFactory> {
     kernel: &'a Kernel<C>,
     policy_context: C::Cx<'a>,
 }
@@ -44,25 +44,6 @@ where
     }
 }
 
-impl<'a> ToolCoreContext<'a, KernelContextFactory> {
-    /// Attach the filesystem view used by `loong_access::fs`.
-    ///
-    /// `fs_resolution_root` decides how relative paths are resolved.
-    /// `fs_allowed_roots` preserves the runtime file-root plus workspace-root
-    /// contract: absolute paths may pass when they stay inside any allowed root.
-    #[must_use]
-    pub fn with_fs_root_view(
-        mut self,
-        fs_resolution_root: std::path::PathBuf,
-        fs_allowed_roots: Vec<std::path::PathBuf>,
-    ) -> Self {
-        self.policy_context = self
-            .policy_context
-            .with_fs_root_view(fs_resolution_root, fs_allowed_roots);
-        self
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolConcurrencyClass {
@@ -86,7 +67,7 @@ impl ToolConcurrencyClass {
 }
 
 #[async_trait]
-pub trait CoreToolAdapter<C: ContextFactory = KernelContextFactory>: Send + Sync {
+pub trait CoreToolAdapter<C: ContextFactory>: Send + Sync {
     fn name(&self) -> &str;
 
     async fn execute_core_tool(
@@ -109,7 +90,7 @@ pub trait CoreToolAdapter<C: ContextFactory = KernelContextFactory>: Send + Sync
 }
 
 #[async_trait]
-pub trait ToolExtensionAdapter<C: ContextFactory = KernelContextFactory>: Send + Sync {
+pub trait ToolExtensionAdapter<C: ContextFactory>: Send + Sync {
     fn name(&self) -> &str;
 
     async fn execute_tool_extension(
@@ -120,7 +101,7 @@ pub trait ToolExtensionAdapter<C: ContextFactory = KernelContextFactory>: Send +
 }
 
 #[derive(Default)]
-pub struct ToolPlane<C: ContextFactory = KernelContextFactory> {
+pub struct ToolPlane<C: ContextFactory> {
     core_adapters: BTreeMap<String, Arc<dyn CoreToolAdapter<C>>>,
     extension_adapters: BTreeMap<String, Arc<dyn ToolExtensionAdapter<C>>>,
     default_core_adapter: Option<String>,

@@ -501,8 +501,16 @@ where
         if let Some(ctx) = binding.kernel_context() {
             let request = memory::build_append_turn_request(session_id, role, content);
             let caps = BTreeSet::from([Capability::MemoryWrite]);
+            let policy_context = ctx.memory_core_context()?;
             ctx.kernel
-                .execute_memory_core(ctx.pack_id(), &ctx.token, &caps, None, request)
+                .execute_memory_core(
+                    ctx.pack_id(),
+                    &ctx.token,
+                    &caps,
+                    None,
+                    request,
+                    &policy_context,
+                )
                 .await
                 .map_err(|error| format!("persist {role} turn via kernel failed: {error}"))?;
             return Ok(());

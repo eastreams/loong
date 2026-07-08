@@ -4,12 +4,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
+use loong_core::policy::context::{ContextFactory, PolicyContext};
 use serde_json::json;
 
 use crate::connector::{ConnectorExtensionAdapter, CoreConnectorAdapter};
 use crate::contracts::{
-    Capability, ConnectorCommand, ConnectorOutcome, ExecutionRoute, HarnessKind, HarnessOutcome,
-    HarnessRequest,
+    Capability, CapabilityToken, ConnectorCommand, ConnectorOutcome, ExecutionRoute, HarnessKind,
+    HarnessOutcome, HarnessRequest,
 };
 use crate::errors::{ConnectorError, PolicyError};
 use crate::harness::HarnessAdapter;
@@ -18,6 +19,7 @@ use crate::memory::{
     MemoryExtensionOutcome, MemoryExtensionRequest,
 };
 use crate::pack::VerticalPackManifest;
+use crate::policy::KernelInvocationContext;
 use crate::policy_ext::{PolicyExtension, PolicyExtensionContext};
 use crate::runtime::{
     CoreRuntimeAdapter, RuntimeCoreOutcome, RuntimeCoreRequest, RuntimeExtensionAdapter,
@@ -62,6 +64,87 @@ pub const TEST_CAPABILITY_VARIANTS: [Capability; 13] = [
     Capability::ControlAcp,
 ];
 pub const TEST_CAPABILITY_VARIANT_COUNT: u8 = TEST_CAPABILITY_VARIANTS.len() as u8;
+
+pub struct TestContextFactory;
+
+impl ContextFactory for TestContextFactory {
+    type Cx<'a> = TestPolicyContext;
+}
+
+#[derive(Clone)]
+pub struct TestPolicyContext {
+    pack: VerticalPackManifest,
+    token: CapabilityToken,
+    now_epoch_s: u64,
+    request_parameters: Option<serde_json::Value>,
+}
+
+impl TestPolicyContext {
+    pub fn new(
+        pack: VerticalPackManifest,
+        token: CapabilityToken,
+        now_epoch_s: u64,
+        request_parameters: Option<serde_json::Value>,
+    ) -> Self {
+        Self {
+            pack,
+            token,
+            now_epoch_s,
+            request_parameters,
+        }
+    }
+
+    pub fn from_token(token: &CapabilityToken, now_epoch_s: u64) -> Self {
+        Self {
+            pack: VerticalPackManifest {
+                pack_id: token.pack_id.clone(),
+                domain: "test".to_owned(),
+                version: "0.1.0".to_owned(),
+                default_route: ExecutionRoute {
+                    harness_kind: HarnessKind::EmbeddedPi,
+                    adapter: None,
+                },
+                allowed_connectors: BTreeSet::new(),
+                granted_capabilities: token.allowed_capabilities.clone(),
+                metadata: BTreeMap::new(),
+            },
+            token: token.clone(),
+            now_epoch_s,
+            request_parameters: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_request_parameters(mut self, request_parameters: serde_json::Value) -> Self {
+        self.request_parameters = Some(request_parameters);
+        self
+    }
+}
+
+impl PolicyContext for TestPolicyContext {
+    fn capabilities(&self) -> BTreeSet<Capability> {
+        self.token.allowed_capabilities.clone()
+    }
+}
+
+impl KernelInvocationContext for TestPolicyContext {
+    fn pack(&self) -> &VerticalPackManifest {
+        &self.pack
+    }
+
+    fn token(&self) -> &CapabilityToken {
+        &self.token
+    }
+
+    fn now_epoch_s(&self) -> u64 {
+        self.now_epoch_s
+    }
+
+    fn request_parameters(&self) -> Option<&serde_json::Value> {
+        self.request_parameters.as_ref()
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum ToolGateMode {
     Deny,
@@ -267,7 +350,10 @@ impl RuntimeExtensionAdapter for MockRuntimeExtension {
     }
 }
 #[async_trait]
-impl CoreToolAdapter for MockCoreTool {
+impl<C> CoreToolAdapter<C> for MockCoreTool
+where
+    C: ContextFactory + Send + Sync,
+{
     fn name(&self) -> &str {
         "core-tools"
     }
@@ -283,14 +369,17 @@ impl CoreToolAdapter for MockCoreTool {
     }
 }
 #[async_trait]
-impl ToolExtensionAdapter for MockToolExtension {
+impl<C> ToolExtensionAdapter<C> for MockToolExtension
+where
+    C: ContextFactory + Send + Sync,
+{
     fn name(&self) -> &str {
         "sql-analytics"
     }
     async fn execute_tool_extension(
         &self,
         request: ToolExtensionRequest,
-        core: &(dyn CoreToolAdapter + Sync),
+        core: &(dyn CoreToolAdapter<C> + Sync),
     ) -> Result<ToolExtensionOutcome, crate::ToolPlaneError> {
         let core_probe = core
             .execute_core_tool(ToolCoreRequest {

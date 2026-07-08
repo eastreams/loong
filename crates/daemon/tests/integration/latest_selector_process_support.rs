@@ -187,6 +187,7 @@ impl LatestSelectorCliFixture {
             .current_dir(&self.root)
             .env("HOME", &self.home_dir)
             .env_remove("LOONG_CONFIG_PATH")
+            .env_remove("LOONG_SQLITE_PATH")
             .env_remove("USERPROFILE")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

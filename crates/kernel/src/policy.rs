@@ -2,7 +2,6 @@ use std::{
     borrow::Cow,
     collections::BTreeSet,
     marker::PhantomData,
-    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -10,10 +9,10 @@ use std::{
 };
 
 use async_trait::async_trait;
-use loong_access::fs::{access::FsAccessContext, action::FsReadAction};
+use loong_access::fs::action::FsReadAction;
 use loong_contracts::{
-    Capability, CapabilityToken, ExecutionPlane, GrantId, PlaneTier, PolicyDecision, PolicyEntry,
-    PolicyEvaluation, PolicyGrant, PolicyId, PolicyOutcome, PolicyReport, VerticalPackManifest,
+    Capability, CapabilityToken, GrantId, PolicyDecision, PolicyEntry, PolicyEvaluation,
+    PolicyGrant, PolicyId, PolicyOutcome, PolicyReport, VerticalPackManifest,
 };
 use loong_core::{
     error::AuthorizationError,
@@ -32,23 +31,6 @@ use crate::{
 
 const DEFAULT_DENY_REASON: &str = "No matching policy.";
 
-/// Default invocation context used by [`KernelContextFactory`].
-///
-/// This is the legacy/default context for kernel-owned entry points. App-owned
-/// runtimes can use `Kernel<C>` with their own context factory instead. Keep
-/// global invocation facts here; domain-specific facts should be exposed
-/// through small view traits such as [`FsAccessContext`].
-pub struct KernelPolicyContext<'a> {
-    pub pack: &'a VerticalPackManifest,
-    pub token: &'a CapabilityToken,
-    pub now_epoch_s: u64,
-    pub plane: ExecutionPlane,
-    pub tier: PlaneTier,
-    pub request_parameters: Option<&'a serde_json::Value>,
-    pub fs_resolution_root: PathBuf,
-    pub fs_allowed_roots: Vec<PathBuf>,
-}
-
 pub trait KernelInvocationContext: PolicyContext {
     fn pack(&self) -> &VerticalPackManifest;
 
@@ -57,88 +39,6 @@ pub trait KernelInvocationContext: PolicyContext {
     fn now_epoch_s(&self) -> u64;
 
     fn request_parameters(&self) -> Option<&serde_json::Value>;
-}
-
-impl<'a> KernelPolicyContext<'a> {
-    #[must_use]
-    pub fn new(
-        pack: &'a VerticalPackManifest,
-        token: &'a CapabilityToken,
-        now_epoch_s: u64,
-        plane: ExecutionPlane,
-        tier: PlaneTier,
-        request_parameters: Option<&'a serde_json::Value>,
-    ) -> Self {
-        Self {
-            pack,
-            token,
-            now_epoch_s,
-            plane,
-            tier,
-            request_parameters,
-            fs_resolution_root: default_fs_resolution_root(),
-            fs_allowed_roots: Vec::new(),
-        }
-    }
-
-    /// Add the filesystem view required by fs access and fs policies.
-    ///
-    /// The resolution root answers "where do relative paths start"; allowed
-    /// roots answer "which absolute locations may this invocation touch".
-    #[must_use]
-    pub fn with_fs_root_view(
-        mut self,
-        fs_resolution_root: PathBuf,
-        fs_allowed_roots: Vec<PathBuf>,
-    ) -> Self {
-        self.fs_resolution_root = fs_resolution_root;
-        self.fs_allowed_roots = fs_allowed_roots;
-        self
-    }
-}
-
-impl PolicyContext for KernelPolicyContext<'_> {
-    fn capabilities(&self) -> BTreeSet<Capability> {
-        self.token.allowed_capabilities.clone()
-    }
-}
-
-impl KernelInvocationContext for KernelPolicyContext<'_> {
-    fn pack(&self) -> &VerticalPackManifest {
-        self.pack
-    }
-
-    fn token(&self) -> &CapabilityToken {
-        self.token
-    }
-
-    fn now_epoch_s(&self) -> u64 {
-        self.now_epoch_s
-    }
-
-    fn request_parameters(&self) -> Option<&serde_json::Value> {
-        self.request_parameters
-    }
-}
-
-pub struct KernelContextFactory;
-
-impl ContextFactory for KernelContextFactory {
-    type Cx<'a> = KernelPolicyContext<'a>;
-}
-
-impl FsAccessContext for KernelPolicyContext<'_> {
-    fn fs_resolution_root(&self) -> &Path {
-        self.fs_resolution_root.as_path()
-    }
-
-    fn fs_allowed_roots(&self) -> &[PathBuf] {
-        self.fs_allowed_roots.as_slice()
-    }
-}
-
-fn default_fs_resolution_root() -> PathBuf {
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
 #[derive(Debug)]
@@ -184,7 +84,7 @@ impl Action for LegacyKernelAction {
 /// subchain and moves to the next one. If no terminal decision is produced,
 /// the pipeline returns default deny. The returned [`PolicyReport`] records the
 /// evaluated policy chain.
-pub struct PolicyPipeline<C: ContextFactory = KernelContextFactory> {
+pub struct PolicyPipeline<C: ContextFactory> {
     pre_policies: Vec<RegisteredAnyPolicy<C>>,
     typed_policies: anymap::Map<dyn anymap::any::Any + Send + Sync>,
     fallback_policies: Vec<RegisteredAnyPolicy<C>>,
@@ -610,7 +510,63 @@ fn normalize_policy_filename(filename: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use loong_contracts::{ExecutionPlane, PlaneTier};
     use loong_core::PolicyGrantError;
+
+    struct TestContextFactory;
+
+    impl ContextFactory for TestContextFactory {
+        type Cx<'a> = TestPolicyContext<'a>;
+    }
+
+    struct TestPolicyContext<'a> {
+        pack: &'a VerticalPackManifest,
+        token: &'a CapabilityToken,
+        now_epoch_s: u64,
+        request_parameters: Option<&'a serde_json::Value>,
+    }
+
+    impl<'a> TestPolicyContext<'a> {
+        fn new(
+            pack: &'a VerticalPackManifest,
+            token: &'a CapabilityToken,
+            now_epoch_s: u64,
+            _plane: ExecutionPlane,
+            _tier: PlaneTier,
+            request_parameters: Option<&'a serde_json::Value>,
+        ) -> Self {
+            Self {
+                pack,
+                token,
+                now_epoch_s,
+                request_parameters,
+            }
+        }
+    }
+
+    impl PolicyContext for TestPolicyContext<'_> {
+        fn capabilities(&self) -> BTreeSet<Capability> {
+            self.token.allowed_capabilities.clone()
+        }
+    }
+
+    impl KernelInvocationContext for TestPolicyContext<'_> {
+        fn pack(&self) -> &VerticalPackManifest {
+            self.pack
+        }
+
+        fn token(&self) -> &CapabilityToken {
+            self.token
+        }
+
+        fn now_epoch_s(&self) -> u64 {
+            self.now_epoch_s
+        }
+
+        fn request_parameters(&self) -> Option<&serde_json::Value> {
+            self.request_parameters
+        }
+    }
 
     struct DenyNetworkExtension;
 
@@ -755,12 +711,11 @@ mod tests {
 
     #[tokio::test]
     async fn policy_pipeline_grants_actions_allowed_by_registered_policy() {
-        let engine =
-            PolicyPipeline::<KernelContextFactory>::new().with_fallback_policy(AllowPolicy);
+        let engine = PolicyPipeline::<TestContextFactory>::new().with_fallback_policy(AllowPolicy);
         let pack = pack();
         let token = token();
         let required_capabilities = BTreeSet::from([Capability::InvokeTool]);
-        let ctx = KernelPolicyContext::new(
+        let ctx = TestPolicyContext::new(
             &pack,
             &token,
             1,
@@ -782,13 +737,13 @@ mod tests {
 
     #[tokio::test]
     async fn policy_pipeline_runs_registered_policy_extensions() {
-        let mut engine = PolicyPipeline::<KernelContextFactory>::default();
+        let mut engine = PolicyPipeline::<TestContextFactory>::default();
         engine.register_policy_extension(DenyNetworkExtension);
         let pack = pack();
         let mut token = token();
         token.allowed_capabilities.insert(Capability::NetworkEgress);
         let required_capabilities = BTreeSet::from([Capability::NetworkEgress]);
-        let ctx = KernelPolicyContext::new(
+        let ctx = TestPolicyContext::new(
             &pack,
             &token,
             1,
@@ -814,10 +769,10 @@ mod tests {
 
     #[tokio::test]
     async fn policy_pipeline_grant_denies_action_missing_required_capability() {
-        let engine = PolicyPipeline::<KernelContextFactory>::default();
+        let engine = PolicyPipeline::<TestContextFactory>::default();
         let pack = pack();
         let token = token();
-        let ctx = KernelPolicyContext::new(
+        let ctx = TestPolicyContext::new(
             &pack,
             &token,
             1,
@@ -842,7 +797,7 @@ mod tests {
 
     #[tokio::test]
     async fn policy_pipeline_report_preserves_pre_and_action_evaluation_stages() {
-        let engine = PolicyPipeline::<KernelContextFactory>::new()
+        let engine = PolicyPipeline::<TestContextFactory>::new()
             .with_pre_policy(StaticAnyPolicy {
                 name: "pre-continue",
                 decision: PolicyDecision::Continue,
@@ -855,7 +810,7 @@ mod tests {
             });
         let pack = pack();
         let token = token();
-        let ctx = KernelPolicyContext::new(
+        let ctx = TestPolicyContext::new(
             &pack,
             &token,
             1,
@@ -878,15 +833,16 @@ mod tests {
 
     #[tokio::test]
     async fn policy_pipeline_typed_policy_only_matches_registered_action_type() {
-        let engine = PolicyPipeline::<KernelContextFactory>::new()
-            .with_policy::<TypedOnlyAction, _>(StaticTypedPolicy {
+        let engine = PolicyPipeline::<TestContextFactory>::new().with_policy::<TypedOnlyAction, _>(
+            StaticTypedPolicy {
                 name: "typed-only",
                 decision: PolicyDecision::Allow,
                 reason: "typed only allowed",
-            });
+            },
+        );
         let pack = pack();
         let token = token();
-        let ctx = KernelPolicyContext::new(
+        let ctx = TestPolicyContext::new(
             &pack,
             &token,
             1,
@@ -914,7 +870,7 @@ mod tests {
 
     #[tokio::test]
     async fn policy_pipeline_pre_deny_prevents_typed_allow() {
-        let engine = PolicyPipeline::<KernelContextFactory>::new()
+        let engine = PolicyPipeline::<TestContextFactory>::new()
             .with_pre_policy(StaticAnyPolicy {
                 name: "pre-deny",
                 decision: PolicyDecision::Deny,
@@ -927,7 +883,7 @@ mod tests {
             });
         let pack = pack();
         let token = token();
-        let ctx = KernelPolicyContext::new(
+        let ctx = TestPolicyContext::new(
             &pack,
             &token,
             1,
@@ -953,7 +909,7 @@ mod tests {
 
     #[tokio::test]
     async fn policy_pipeline_allow_short_circuits_before_later_typed_deny() {
-        let engine = PolicyPipeline::<KernelContextFactory>::new()
+        let engine = PolicyPipeline::<TestContextFactory>::new()
             .with_pre_policy(StaticAnyPolicy {
                 name: "pre-allow",
                 decision: PolicyDecision::Allow,
@@ -966,7 +922,7 @@ mod tests {
             });
         let pack = pack();
         let token = token();
-        let ctx = KernelPolicyContext::new(
+        let ctx = TestPolicyContext::new(
             &pack,
             &token,
             1,
@@ -988,7 +944,7 @@ mod tests {
 
     #[tokio::test]
     async fn policy_pipeline_typed_deny_prevents_fallback_allow() {
-        let engine = PolicyPipeline::<KernelContextFactory>::new()
+        let engine = PolicyPipeline::<TestContextFactory>::new()
             .with_policy::<LegacyKernelAction, _>(StaticTypedPolicy {
                 name: "typed-deny",
                 decision: PolicyDecision::Deny,
@@ -997,7 +953,7 @@ mod tests {
             .with_fallback_policy(AllowPolicy);
         let pack = pack();
         let token = token();
-        let ctx = KernelPolicyContext::new(
+        let ctx = TestPolicyContext::new(
             &pack,
             &token,
             1,
@@ -1022,7 +978,7 @@ mod tests {
 
     #[tokio::test]
     async fn policy_pipeline_typed_allow_prevents_fallback_deny() {
-        let engine = PolicyPipeline::<KernelContextFactory>::new()
+        let engine = PolicyPipeline::<TestContextFactory>::new()
             .with_policy::<LegacyKernelAction, _>(StaticTypedPolicy {
                 name: "typed-allow",
                 decision: PolicyDecision::Allow,
@@ -1035,7 +991,7 @@ mod tests {
             });
         let pack = pack();
         let token = token();
-        let ctx = KernelPolicyContext::new(
+        let ctx = TestPolicyContext::new(
             &pack,
             &token,
             1,
@@ -1057,7 +1013,7 @@ mod tests {
 
     #[tokio::test]
     async fn policy_pipeline_advance_skips_rest_of_current_subchain() {
-        let engine = PolicyPipeline::<KernelContextFactory>::new()
+        let engine = PolicyPipeline::<TestContextFactory>::new()
             .with_pre_policy(StaticAnyPolicy {
                 name: "pre-advance",
                 decision: PolicyDecision::Advance,
@@ -1075,7 +1031,7 @@ mod tests {
             });
         let pack = pack();
         let token = token();
-        let ctx = KernelPolicyContext::new(
+        let ctx = TestPolicyContext::new(
             &pack,
             &token,
             1,
@@ -1096,14 +1052,14 @@ mod tests {
     #[tokio::test]
     async fn policy_pipeline_fallback_advance_defaults_to_deny() {
         let engine =
-            PolicyPipeline::<KernelContextFactory>::new().with_fallback_policy(StaticAnyPolicy {
+            PolicyPipeline::<TestContextFactory>::new().with_fallback_policy(StaticAnyPolicy {
                 name: "fallback-advance",
                 decision: PolicyDecision::Advance,
                 reason: "no next chain",
             });
         let pack = pack();
         let token = token();
-        let ctx = KernelPolicyContext::new(
+        let ctx = TestPolicyContext::new(
             &pack,
             &token,
             1,
@@ -1128,15 +1084,14 @@ mod tests {
 
     #[tokio::test]
     async fn policy_pipeline_all_continue_defaults_to_deny() {
-        let engine =
-            PolicyPipeline::<KernelContextFactory>::new().with_pre_policy(StaticAnyPolicy {
-                name: "pre-continue",
-                decision: PolicyDecision::Continue,
-                reason: "no opinion",
-            });
+        let engine = PolicyPipeline::<TestContextFactory>::new().with_pre_policy(StaticAnyPolicy {
+            name: "pre-continue",
+            decision: PolicyDecision::Continue,
+            reason: "no opinion",
+        });
         let pack = pack();
         let token = token();
-        let ctx = KernelPolicyContext::new(
+        let ctx = TestPolicyContext::new(
             &pack,
             &token,
             1,
@@ -1162,12 +1117,12 @@ mod tests {
     async fn policy_pipeline_missing_required_capability_denies_before_policy_execution() {
         let calls = Arc::new(AtomicU64::new(0));
         let engine =
-            PolicyPipeline::<KernelContextFactory>::new().with_pre_policy(CountingAnyPolicy {
+            PolicyPipeline::<TestContextFactory>::new().with_pre_policy(CountingAnyPolicy {
                 calls: calls.clone(),
             });
         let pack = pack();
         let token = token();
-        let ctx = KernelPolicyContext::new(
+        let ctx = TestPolicyContext::new(
             &pack,
             &token,
             1,

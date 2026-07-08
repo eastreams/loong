@@ -102,7 +102,8 @@ async fn mvp_memory_adapter_routes_through_kernel() {
     use loong_contracts::Capability;
     use loong_kernel::{ExecutionRoute, HarnessKind, Kernel, VerticalPackManifest};
 
-    let (mut kernel, _audit) = Kernel::new_with_in_memory_audit();
+    let (mut kernel, _audit) =
+        Kernel::<crate::context::AppContextFactory>::new_with_in_memory_audit();
 
     kernel.register_core_memory_adapter(KernelMemoryAdapter::new());
     kernel
@@ -121,7 +122,7 @@ async fn mvp_memory_adapter_routes_through_kernel() {
         granted_capabilities: BTreeSet::from([Capability::MemoryRead, Capability::MemoryWrite]),
         metadata: BTreeMap::new(),
     };
-    kernel.register_pack(pack).expect("register pack");
+    kernel.register_pack(pack.clone()).expect("register pack");
 
     let token = kernel
         .issue_token("test-pack", "test-agent", 3600)
@@ -133,8 +134,18 @@ async fn mvp_memory_adapter_routes_through_kernel() {
     };
 
     let caps = BTreeSet::from([Capability::MemoryRead]);
+    let policy_context = crate::context::AppExecutionContext::new(
+        &pack,
+        &token,
+        kernel.now_epoch_s(),
+        loong_contracts::ExecutionPlane::Memory,
+        loong_contracts::PlaneTier::Core,
+        None,
+        &crate::tools::runtime_config::ToolRuntimeConfig::default(),
+    )
+    .expect("build memory policy context");
     let outcome = kernel
-        .execute_memory_core("test-pack", &token, &caps, None, request)
+        .execute_memory_core("test-pack", &token, &caps, None, request, &policy_context)
         .await
         .expect("kernel memory core execution should succeed");
 

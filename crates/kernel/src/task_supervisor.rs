@@ -1,8 +1,10 @@
 use crate::{
     contracts::{CapabilityToken, TaskIntent},
     kernel::{Kernel, KernelDispatch},
+    policy::KernelInvocationContext,
 };
 use loong_contracts::{Fault, TaskState};
+use loong_core::policy::context::ContextFactory;
 
 /// Opt-in wrapper around `execute_task` that enforces FSM transitions.
 pub struct TaskSupervisor {
@@ -31,12 +33,17 @@ impl TaskSupervisor {
     }
 
     /// Execute the task through the kernel, tracking state transitions.
-    pub async fn execute(
+    pub async fn execute<C>(
         &mut self,
-        kernel: &Kernel,
+        kernel: &Kernel<C>,
         pack_id: &str,
         token: &CapabilityToken,
-    ) -> Result<KernelDispatch, Fault> {
+        policy_context: &C::Cx<'_>,
+    ) -> Result<KernelDispatch, Fault>
+    where
+        C: ContextFactory + Send + Sync,
+        for<'a> C::Cx<'a>: KernelInvocationContext,
+    {
         // Clone the intent before transitioning, since we need it for the
         // kernel call and transition_to_in_send consumes it.
         let intent = match &self.state {
@@ -64,7 +71,10 @@ impl TaskSupervisor {
             .map_err(|detail| Fault::ProtocolViolation { detail })?;
 
         // Execute through kernel
-        match kernel.execute_task(pack_id, token, intent).await {
+        match kernel
+            .execute_task(pack_id, token, intent, policy_context)
+            .await
+        {
             Ok(dispatch) => {
                 // InReply -> Completed (guarded transition)
                 let taken = self.take_state();

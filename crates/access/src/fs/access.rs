@@ -2,22 +2,15 @@ use std::path::{Path, PathBuf};
 
 use loong_core::{
     error::AuthorizationError,
-    policy::{context::ContextFactory, engine::PolicyEngine, grant::Granted},
+    policy::{
+        context::{ContextFactory, FsAccessContext},
+        engine::PolicyEngine,
+        grant::Granted,
+    },
 };
 use thiserror::Error;
 
 use super::{action::FsReadAction, error::FsActionError, path::CanonicalPath};
-
-/// Context required by filesystem access.
-///
-/// Implement this on the kernel-defined invocation context, not on each action.
-/// Relative paths resolve from `fs_resolution_root`; absolute paths must stay
-/// inside one of `fs_allowed_roots`.
-pub trait FsAccessContext {
-    fn fs_resolution_root(&self) -> &Path;
-
-    fn fs_allowed_roots(&self) -> &[PathBuf];
-}
 
 /// Filesystem access facade.
 ///

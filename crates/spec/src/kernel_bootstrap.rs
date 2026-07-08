@@ -7,6 +7,7 @@ use kernel::{
 };
 
 use crate::DEFAULT_PACK_ID;
+use crate::context::SpecContextFactory;
 use crate::spec_runtime::{
     AcpBridgeRuntimeExtension, ClawMigrationToolExtension, CoreToolRuntime, CrmCoreConnector,
     CrmGrpcCoreConnector, EmbeddedPiHarness, FallbackCoreRuntime, KvCoreMemory, NativeCoreRuntime,
@@ -71,7 +72,7 @@ impl KernelBuilder {
 
     /// Build and return a fully configured kernel with all builtin adapters
     /// and the default pack manifest registered.
-    pub fn build(self) -> Kernel {
+    pub fn build(self) -> Kernel<SpecContextFactory> {
         configured_kernel(
             self.clock,
             self.audit,
@@ -92,7 +93,7 @@ fn configured_kernel(
     audit: Option<Arc<dyn AuditSink>>,
     native_tool_executor: Option<crate::NativeToolExecutor>,
     register_default_embedded_harness: bool,
-) -> Kernel {
+) -> Kernel<SpecContextFactory> {
     configured_kernel_with_default_audit(
         clock,
         audit,
@@ -107,24 +108,33 @@ fn configured_kernel_with_default_audit(
     audit: Option<Arc<dyn AuditSink>>,
     native_tool_executor: Option<crate::NativeToolExecutor>,
     register_default_embedded_harness: bool,
-) -> (Kernel, Option<Arc<InMemoryAuditSink>>) {
+) -> (Kernel<SpecContextFactory>, Option<Arc<InMemoryAuditSink>>) {
     let (mut kernel, fallback_audit) = match (clock, audit) {
-        (Some(clock), Some(audit)) => (Kernel::with_runtime(clock, audit), None),
+        (Some(clock), Some(audit)) => (
+            Kernel::<SpecContextFactory>::with_runtime(clock, audit),
+            None,
+        ),
         (Some(clock), None) => {
             let audit = default_in_memory_audit_sink();
             (
-                Kernel::with_runtime(clock, audit.clone() as Arc<dyn AuditSink>),
+                Kernel::<SpecContextFactory>::with_runtime(
+                    clock,
+                    audit.clone() as Arc<dyn AuditSink>,
+                ),
                 Some(audit),
             )
         }
         (None, Some(audit)) => (
-            Kernel::with_runtime(Arc::new(SystemClock) as Arc<dyn Clock>, audit),
+            Kernel::<SpecContextFactory>::with_runtime(
+                Arc::new(SystemClock) as Arc<dyn Clock>,
+                audit,
+            ),
             None,
         ),
         (None, None) => {
             let audit = default_in_memory_audit_sink();
             (
-                Kernel::with_runtime(
+                Kernel::<SpecContextFactory>::with_runtime(
                     Arc::new(SystemClock) as Arc<dyn Clock>,
                     audit.clone() as Arc<dyn AuditSink>,
                 ),
@@ -144,7 +154,7 @@ fn configured_kernel_with_default_audit(
 }
 
 fn register_builtin_adapters(
-    kernel: &mut Kernel,
+    kernel: &mut Kernel<SpecContextFactory>,
     native_tool_executor: Option<crate::NativeToolExecutor>,
     register_default_embedded_harness: bool,
 ) {
@@ -297,7 +307,9 @@ mod tests {
 
     #[test]
     fn kernel_builder_runtime_works_with_kernel_helpers() {
-        fn issue_default_pack_token(kernel: &Kernel) -> kernel::CapabilityToken {
+        fn issue_default_pack_token(
+            kernel: &Kernel<SpecContextFactory>,
+        ) -> kernel::CapabilityToken {
             kernel
                 .issue_token(DEFAULT_PACK_ID, "test-agent", 60)
                 .expect("token issue should succeed via Kernel helper signature")
@@ -314,6 +326,9 @@ mod tests {
         let token = kernel
             .issue_token(DEFAULT_PACK_ID, "test-agent", 60)
             .expect("token issue should succeed");
+        let pack = default_pack_manifest();
+        let policy_context =
+            crate::context::SpecExecutionContext::new(&pack, &token, kernel.now_epoch_s(), None);
 
         let dispatch = kernel
             .execute_task(
@@ -325,6 +340,7 @@ mod tests {
                     required_capabilities: BTreeSet::from([Capability::InvokeTool]),
                     payload: serde_json::json!({}),
                 },
+                &policy_context,
             )
             .await
             .expect("default builder should dispatch through stub harness");
@@ -370,6 +386,9 @@ mod tests {
         let token = kernel
             .issue_token(DEFAULT_PACK_ID, "test-agent", 60)
             .expect("token issue should succeed");
+        let pack = default_pack_manifest();
+        let policy_context =
+            crate::context::SpecExecutionContext::new(&pack, &token, kernel.now_epoch_s(), None);
 
         let dispatch = kernel
             .execute_task(
@@ -381,6 +400,7 @@ mod tests {
                     required_capabilities: BTreeSet::from([Capability::InvokeTool]),
                     payload: serde_json::json!({}),
                 },
+                &policy_context,
             )
             .await
             .expect("explicit marker harness should dispatch");

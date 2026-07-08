@@ -20,6 +20,8 @@ use std::io::Write as _;
 #[cfg(feature = "tool-file")]
 use tempfile::NamedTempFile;
 
+use crate::context::AppContextFactory;
+
 #[cfg(feature = "tool-file")]
 const FILE_CHANGE_PREVIEW_MAX_LINES: usize = 8;
 #[cfg(feature = "tool-file")]
@@ -141,7 +143,7 @@ fn select_file_read_content(
 pub(super) async fn execute_file_read_tool_with_context(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
-    ctx: ToolCoreContext<'_>,
+    ctx: ToolCoreContext<'_, AppContextFactory>,
 ) -> Result<ToolCoreOutcome, String> {
     #[cfg(not(feature = "tool-file"))]
     {
@@ -151,10 +153,9 @@ pub(super) async fn execute_file_read_tool_with_context(
 
     #[cfg(feature = "tool-file")]
     {
+        let _ = config;
         let parsed = parse_file_read_request(&request)?;
-        let (resolution_root, allowed_roots) = fs_access_root_view(config)?;
         let output = ctx
-            .with_fs_root_view(resolution_root, allowed_roots)
             .access()
             .fs()
             .read_file(parsed.target.as_str())
@@ -250,21 +251,6 @@ fn file_read_outcome(
         status: "ok".to_owned(),
         payload: response_payload,
     })
-}
-
-#[cfg(feature = "tool-file")]
-fn fs_access_root_view(
-    config: &super::runtime_config::ToolRuntimeConfig,
-) -> Result<(PathBuf, Vec<PathBuf>), String> {
-    let allowed_roots = collect_allowed_roots(config)?;
-    let Some(primary_root) = allowed_roots.first().cloned() else {
-        return Err("filesystem access requires at least one allowed root".to_owned());
-    };
-    let resolution_root = config
-        .path_resolution_root()
-        .map(Path::to_path_buf)
-        .unwrap_or(primary_root);
-    Ok((resolution_root, allowed_roots))
 }
 
 pub(super) fn execute_file_write_tool_with_config(
@@ -1816,9 +1802,7 @@ mod tests {
     use loong_contracts::{
         Capability, ExecutionPlane, ExecutionRoute, HarnessKind, PlaneTier, ToolCoreRequest,
     };
-    use loong_kernel::{
-        Kernel, KernelPolicyContext, NoopAuditSink, SystemClock, VerticalPackManifest,
-    };
+    use loong_kernel::{Kernel, NoopAuditSink, SystemClock, VerticalPackManifest};
     use serde_json::json;
 
     use super::*;
@@ -1884,23 +1868,27 @@ mod tests {
         request: ToolCoreRequest,
         config: &ToolRuntimeConfig,
     ) -> Result<ToolCoreOutcome, String> {
-        let mut kernel = Kernel::with_runtime(Arc::new(SystemClock), Arc::new(NoopAuditSink));
-        let pack = test_pack();
+        let mut kernel = Kernel::<AppContextFactory>::with_runtime(
+            Arc::new(SystemClock),
+            Arc::new(NoopAuditSink),
+        );
+        let pack = Arc::new(test_pack());
         kernel
-            .register_pack(pack.clone())
+            .register_pack((*pack).clone())
             .map_err(|error| format!("register pack failed: {error}"))?;
         let token = kernel
             .issue_token("test-pack", "test-agent", 60)
             .map_err(|error| format!("issue token failed: {error}"))?;
-        let policy_context = KernelPolicyContext::new(
-            &pack,
-            &token,
-            1,
-            ExecutionPlane::Tool,
-            PlaneTier::Core,
-            None,
-        );
-        let ctx = ToolCoreContext::new(&kernel, policy_context);
+        let kernel = Arc::new(kernel);
+        let kernel_ctx = crate::KernelContext {
+            kernel: kernel.clone(),
+            pack,
+            token,
+            tool_runtime_config: config.clone(),
+        };
+        let policy_context =
+            kernel_ctx.execution_context(ExecutionPlane::Tool, PlaneTier::Core, None, config)?;
+        let ctx = ToolCoreContext::new(kernel.as_ref(), policy_context);
         execute_file_read_tool_with_context(request, config, ctx).await
     }
 

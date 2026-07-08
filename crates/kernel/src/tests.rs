@@ -317,7 +317,7 @@ fn fanout_audit_sink_records_to_all_children() {
 
 #[test]
 fn explicit_in_memory_kernel_constructor_records_token_audit_events() {
-    let (mut kernel, audit) = Kernel::new_with_in_memory_audit();
+    let (mut kernel, audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -333,7 +333,7 @@ fn explicit_in_memory_kernel_constructor_records_token_audit_events() {
 
 #[test]
 fn explicit_no_audit_kernel_constructor_keeps_side_effect_free_fixture_path() {
-    let mut kernel = Kernel::new_without_audit();
+    let mut kernel = Kernel::<TestContextFactory>::new_without_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -457,7 +457,7 @@ proptest! {
         let required_capabilities = capability_set_from_mask(required_mask);
 
         let (mut kernel, _audit) =
-            Kernel::new_with_in_memory_audit();
+            Kernel::<TestContextFactory>::new_with_in_memory_audit();
         let mut pack = sample_pack();
         pack.granted_capabilities = pack_capabilities.clone();
         kernel
@@ -482,7 +482,12 @@ proptest! {
             .enable_all()
             .build()
             .expect("runtime should build");
-        let result = runtime.block_on(kernel.execute_task("sales-intel", &token, task));
+        let result = runtime.block_on(kernel.execute_task(
+            "sales-intel",
+            &token,
+            task,
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+        ));
 
         if required_capabilities.is_subset(&pack_capabilities) {
             prop_assert!(result.is_ok());
@@ -664,7 +669,7 @@ fn task_supervisor_rejects_execute_after_completion() {
 fn record_tool_call_denial_audits_extension_denied_errors() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_004_000));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let mut kernel = Kernel::with_runtime(clock, audit.clone());
+    let mut kernel = Kernel::<TestContextFactory>::with_runtime(clock, audit.clone());
     let pack = sample_pack();
     kernel
         .register_pack(pack.clone())

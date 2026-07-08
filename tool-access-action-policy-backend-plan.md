@@ -299,8 +299,10 @@ impl<C: ContextFactory> PolicyEngine<C> for PolicyPipeline<C> {
 这类 domain getter。
 
 当前代码状态：`Kernel<C>`、`PolicyPipeline<C>`、`ToolPlane<C>`、
-`ToolCoreContext<'a, C>`、`AccessCx<'a, C>` 已落地。`KernelContextFactory`
-只是默认/legacy kernel context factory；生产 app context 仍待 app 定义。
+`ToolCoreContext<'a, C>`、`AccessCx<'a, C>` 已落地。kernel 不再定义
+`KernelPolicyContext` / `KernelContextFactory`，也不再为 `Kernel`、`ToolPlane` 或
+`PolicyPipeline` 提供默认 context factory。app 和 spec 分别定义自己的 concrete
+context factory。
 
 ### `loong-access`
 
@@ -315,7 +317,9 @@ access crate 定义 side-effect domain 的治理入口和 action。
 - `FsReadOutput`
 - `FsAccessContext`
 
-`FsAccessContext` 是 fs domain view trait，放在 `loong-access::fs`：
+`FsAccessContext` 是 fs domain view trait，放在 `loong-core::policy::context`，这样
+app-defined context 可以实现它而不依赖 `loong-access`，仍保持 access 只被 kernel
+直接依赖：
 
 ```rust
 pub trait FsAccessContext {
@@ -450,9 +454,15 @@ tool helper 在调用 access 前执行 config-backed policy 分支。需要配�
   `K: Kernel` 参数。
 - `Kernel<C>` 构造函数已泛型化，可以实例化非默认 context factory。
 - `ActionContext` / `WorkspacePolicyContext` 已从 `loong-core` 删除。
-- `KernelPolicyContext` 已降为默认/legacy context：它保留 pack/token/time/request
-  params、plane/tier invocation facts 和当前临时 fs view，不再通过 core root trait
-  传播。
+- `KernelPolicyContext` / `KernelContextFactory` 已从 kernel 删除；legacy kernel
+  policy extension 只通过 `KernelInvocationContext` 小 view trait 读取 pack/token/time/
+  request params。
+- app 已定义 `AppContextFactory` / `AppExecutionContext<'a>`，并实现
+  `PolicyContext`、`KernelInvocationContext`、`FsAccessContext`。
+- spec 已定义 `SpecContextFactory` / `SpecExecutionContext<'a>`，用于 spec bootstrap
+  和 daemon/spec runtime。
+- `ToolCoreContext::with_fs_root_view(...)` 已删除；fs root view 在 app context 构造时
+  给出。
 - `PolicyDecision` 已是 `Allow` / `Deny` / `Continue` / `Advance`。
 - `deny_read_filenames` 已作为 typed `FsReadAction` policy 接入。
 - `deny_read_filenames` 已有 config -> runtime config -> policy pipeline ->
@@ -460,18 +470,12 @@ tool helper 在调用 access 前执行 config-backed policy 分支。需要配�
 
 ### 仍是过渡形状
 
-- 默认 kernel 入口仍使用 `KernelPolicyContext<'a>`。
-- app 仍使用默认 `KernelContextFactory`，尚未拥有 concrete unified context。
-- `ToolCoreContext::with_fs_root_view(...)` 仍在临时拼 fs view。
 - `loong_access::fs::FsAccess` 内部只持有 policy engine 引用，不再持有 kernel host。
   该类型仍有 `P: PolicyEngine<C>` 泛型，因为 `PolicyEngine<C>` 需要 generic
   action grant，不能直接做成普通 trait object。
 - fs read execution boundary 仍未收敛到 `Action<Cx>::run` / `Granted<A>::run(cx)`。
 - `fs_read_error_is_policy_denial` 仍是临时 deny 分类 helper。
 
-### 尚未完成
-
-- app-defined `AppExecutionContext<'a>` 尚未落地。
 - `ActionMeta` / `Action<Cx>` split 尚未落地。
 - `Granted<A>::run(cx)` port 尚未落地。
 - HTTP / shell / browser / memory 等 tool family 尚未迁移。
@@ -480,9 +484,9 @@ tool helper 在调用 access 前执行 config-backed policy 分支。需要配�
 
 ## 实现计划
 
-### 1. 收敛 context type factory
+### 1. 收敛 context type factory（已完成）
 
-在 `loong-core` 增加只有 GAT 的 `ContextFactory`：
+已在 `loong-core` 增加只有 GAT 的 `ContextFactory`：
 
 ```rust
 pub trait ContextFactory {
@@ -492,13 +496,13 @@ pub trait ContextFactory {
 }
 ```
 
-同时重新评估并清理：
+本阶段已清理：
 
-- `ActionContext` 作为 root bound 的用法；
+- `ActionContext` root bound；
 - `WorkspacePolicyContext`；
-- 当前 `KernelPolicyContext` 字段和职责。
+- kernel-owned `KernelPolicyContext` / `KernelContextFactory`。
 
-不要给 `ContextFactory` 加 `create` / `build` method。app 自己构造 concrete
+`ContextFactory` 不提供 `create` / `build` method。app 自己构造 concrete
 context，factory 只提供类型族。
 
 除 `ContextFactory` 自己的 GAT 外，`C` 一律作为泛型参数显式传递，不通过
@@ -611,14 +615,15 @@ ctx.access().fs().read_file(&path).await
 
 ### 5. App 落地 concrete unified context
 
-在 app 定义：
+已在 app 定义：
 
 - `AppContextFactory`
 - `AppExecutionContext<'a>`
 - 需要的小 view trait impls
 
-把当前 `KernelPolicyContext::with_fs_root_view(...)` 的信息移到 app context 构造处。
-fs root view 不应由 action 持有，也不应由 access helper 临时塞入 kernel context。
+`KernelPolicyContext::with_fs_root_view(...)` 已删除。fs root view 现在由 app context
+构造处提供；fs root view 不由 action 持有，也不由 access helper 临时塞入 kernel
+context。
 
 ### 6. 固化 Config -> Policy 组装边界
 
@@ -630,7 +635,7 @@ fs root view 不应由 action 持有，也不应由 access helper 临时塞入 k
 - kernel pipeline 只接收已构造好的 policy；
 - access/tool helper 不反向读取 app config 来决定授权。
 
-在引入 `AppContextFactory` 后，config 仍不进入 `ContextFactory` trait 本身。
+引入 `AppContextFactory` 后，config 仍不进入 `ContextFactory` trait 本身。
 factory 只提供 context type family；policy pipeline construction 可以读取 normalized
 runtime config 来构造 policy。
 
@@ -638,15 +643,16 @@ runtime config 来构造 policy。
 
 删除或替换：
 
-- `KernelPolicyContext`，或至少降为 app/test-only context；
 - 当前 object-safe `Action` metadata trait；
 - `Policy<PolicyPipeline, A>` 这种 engine-bound policy impl；
-- `ToolCoreContext::with_fs_root_view(...)`。
 
 已完成：
 
 - `ActionContext` root bound 已删除；
 - `WorkspacePolicyContext` 已删除。
+- `KernelPolicyContext` / `KernelContextFactory` 已删除；
+- `ToolCoreContext::with_fs_root_view(...)` 已删除；
+- kernel/app/spec/daemon 调用点已显式传入 app/spec/test context。
 
 保持破坏性改动优先，不为已迁移路径保留 alias / compatibility shim。
 

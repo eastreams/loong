@@ -1,11 +1,8 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use loong_contracts::ToolCoreRequest;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
-use crate::tools;
 use crate::workspace_guidance::{self, WorkspaceGuidanceSearchScope};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -180,18 +177,14 @@ fn read_runtime_self_source(
     tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
 ) -> Option<String> {
     let read_runtime_config =
-        tool_runtime_config.with_file_root_override(workspace_root.to_path_buf());
+        tool_runtime_config.with_workspace_root_override(workspace_root.to_path_buf());
     let request_path = runtime_self_source_request_path(workspace_root, path)?;
-    let request = ToolCoreRequest {
-        tool_name: "read".to_owned(),
-        payload: json!({
-            "path": request_path,
-        }),
-    };
-
-    let outcome = tools::execute_tool_core_with_config(request, &read_runtime_config).ok()?;
-    let payload_content = outcome.payload.get("content")?;
-    let content = payload_content.as_str()?;
+    let (_resolved_path, bytes) = crate::context::read_file_with_access_for_runtime_config(
+        PathBuf::from(request_path),
+        &read_runtime_config,
+    )
+    .ok()?;
+    let content = String::from_utf8_lossy(&bytes);
     let trimmed = content.trim();
     if trimmed.is_empty() {
         return None;

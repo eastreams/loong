@@ -71,6 +71,7 @@ async fn load_compaction_window_snapshot(
     };
     payload.insert("allow_extended_limit".to_owned(), json!(true));
     let caps = BTreeSet::from([Capability::MemoryRead]);
+    let policy_context = kernel_ctx.memory_core_context()?;
     let outcome = kernel_ctx
         .kernel
         .execute_memory_core(
@@ -79,6 +80,7 @@ async fn load_compaction_window_snapshot(
             &caps,
             None,
             request,
+            &policy_context,
         )
         .await
         .map_err(|error| format!("load compaction window via kernel failed: {error}"))?;
@@ -103,6 +105,7 @@ async fn load_compaction_transcript_snapshot(
     let request =
         memory::build_transcript_request(session_id, DEFAULT_COMPACTION_TRANSCRIPT_PAGE_SIZE);
     let caps = BTreeSet::from([Capability::MemoryRead]);
+    let policy_context = kernel_ctx.memory_core_context()?;
     let outcome = kernel_ctx
         .kernel
         .execute_memory_core(
@@ -111,6 +114,7 @@ async fn load_compaction_transcript_snapshot(
             &caps,
             None,
             request,
+            &policy_context,
         )
         .await
         .map_err(|error| format!("load compaction transcript via kernel failed: {error}"))?;

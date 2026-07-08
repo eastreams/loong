@@ -5,6 +5,7 @@ use std::sync::atomic::AtomicU64;
 use kernel::{
     CapabilityToken, ExecutionPlane, InMemoryAuditSink, Kernel, PlaneTier, VerticalPackManifest,
 };
+use loong_spec::{SpecContextFactory, SpecExecutionContext};
 
 #[derive(Debug, Clone)]
 pub(super) struct ControlPlaneExposurePolicy {
@@ -26,7 +27,8 @@ pub(super) fn default_loopback_exposure_policy() -> ControlPlaneExposurePolicy {
 }
 
 pub(super) struct ControlPlaneKernelAuthority {
-    kernel: Kernel,
+    kernel: Kernel<SpecContextFactory>,
+    pack: VerticalPackManifest,
     _audit: Arc<InMemoryAuditSink>,
     token_bindings: std::sync::RwLock<std::collections::BTreeMap<String, CapabilityToken>>,
 }
@@ -90,11 +92,12 @@ impl ControlPlaneKernelAuthority {
         let mut kernel = kernel_with_audit.0;
         let audit = kernel_with_audit.1;
         let pack = control_plane_pack();
-        let register_result = kernel.register_pack(pack);
+        let register_result = kernel.register_pack(pack.clone());
         register_result
             .map_err(|error| format!("control-plane pack registration failed: {error}"))?;
         Ok(Self {
             kernel,
+            pack,
             _audit: audit,
             token_bindings: std::sync::RwLock::new(std::collections::BTreeMap::new()),
         })
@@ -134,6 +137,8 @@ impl ControlPlaneKernelAuthority {
                 .cloned()
                 .ok_or_else(|| "missing control-plane kernel token binding".to_owned())?
         };
+        let policy_context =
+            SpecExecutionContext::new(&self.pack, &token, self.kernel.now_epoch_s(), None);
         self.kernel
             .authorize_operation(
                 CONTROL_PLANE_PACK_ID,
@@ -144,6 +149,7 @@ impl ControlPlaneKernelAuthority {
                 None,
                 operation,
                 capabilities,
+                &policy_context,
             )
             .await
             .map_err(|error| format!("control-plane kernel authorization failed: {error}"))

@@ -1,5 +1,5 @@
 use super::*;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn unique_temp_dir(prefix: &str) -> PathBuf {
@@ -11,10 +11,11 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
     temp_dir.join(format!("{prefix}-{nanos}"))
 }
 
-fn write_gateway_test_config(root: &std::path::Path) -> PathBuf {
+fn write_gateway_test_config(root: &Path) -> PathBuf {
     fs::create_dir_all(root).expect("create gateway test root");
 
-    let config = mvp::config::LoongConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
+    config.memory.sqlite_path = root.join("memory.sqlite3").display().to_string();
     let config_path = root.join("loong.toml");
     let config_path_text = config_path
         .to_str()
@@ -503,6 +504,8 @@ fn gateway_read_model_runtime_snapshot_embeds_inventory_and_tool_summary() {
     let config_path_text = config_path
         .to_str()
         .expect("config path should be valid utf-8");
+    let mut env = loong_daemon::test_support::ScopedEnv::new();
+    env.remove("LOONG_SQLITE_PATH");
 
     let snapshot = collect_runtime_snapshot_cli_state(Some(config_path_text))
         .expect("collect runtime snapshot");
@@ -671,6 +674,8 @@ fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups()
     let config_path_text = config_path
         .to_str()
         .expect("config path should be valid utf-8");
+    let mut env = loong_daemon::test_support::ScopedEnv::new();
+    env.remove("LOONG_SQLITE_PATH");
 
     let snapshot = collect_runtime_snapshot_cli_state(Some(config_path_text))
         .expect("collect runtime snapshot");

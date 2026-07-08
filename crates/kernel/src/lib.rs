@@ -79,9 +79,7 @@ pub use plugin_ir::{
     PluginTranslationReport, PluginTranslator, canonical_channel_bridge_contract,
     evaluate_plugin_setup_requirements, plugin_runtime_scaffold_defaults,
 };
-pub use policy::{
-    AllowPolicy, KernelContextFactory, KernelPolicyContext, LegacyKernelAction, PolicyPipeline,
-};
+pub use policy::{AllowPolicy, KernelInvocationContext, LegacyKernelAction, PolicyPipeline};
 pub use policy_ext::{PolicyExtension, PolicyExtensionChain, PolicyExtensionContext};
 pub use runtime::{
     CoreRuntimeAdapter, RuntimeCoreOutcome, RuntimeCoreRequest, RuntimeExtensionAdapter,
