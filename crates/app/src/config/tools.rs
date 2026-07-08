@@ -85,7 +85,15 @@ pub struct ToolConfig {
     #[serde(default)]
     pub tool_execution: ToolExecutionToolConfig,
     #[serde(default)]
+    pub fs: FsToolConfig,
+    #[serde(default)]
     pub autonomy_profile: AutonomyProfile,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct FsToolConfig {
+    #[serde(default)]
+    pub deny_read_filenames: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -533,6 +541,7 @@ impl Default for ToolConfig {
             web: WebToolConfig::default(),
             web_search: WebSearchToolConfig::default(),
             tool_execution: ToolExecutionToolConfig::default(),
+            fs: FsToolConfig::default(),
             autonomy_profile: AutonomyProfile::default(),
         }
     }
@@ -1746,6 +1755,21 @@ per_tool_timeout = { "read" = 3, "web.search" = 9 }
                 .per_tool_timeout
                 .get("web.search"),
             Some(&9)
+        );
+    }
+
+    #[cfg(feature = "config-toml")]
+    #[test]
+    fn tool_config_parses_fs_settings_from_toml() {
+        let raw = r#"
+[tools.fs]
+deny_read_filenames = ["clippy.toml"]
+"#;
+        let parsed = toml::from_str::<crate::config::LoongConfig>(raw).expect("parse tool config");
+
+        assert_eq!(
+            parsed.tools.fs.deny_read_filenames,
+            vec!["clippy.toml".to_owned()]
         );
     }
 

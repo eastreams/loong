@@ -67,6 +67,11 @@ pub struct BrowserRuntimePolicy {
     pub max_text_chars: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FsRuntimePolicy {
+    pub deny_read_filenames: BTreeSet<String>,
+}
+
 impl Default for BrowserRuntimePolicy {
     fn default() -> Self {
         Self {
@@ -464,6 +469,7 @@ pub struct ToolRuntimeConfig {
     pub autonomy_profile: AutonomyProfile,
     pub skills: SkillsRuntimePolicy,
     pub tool_execution: ToolExecutionConfig,
+    pub fs: FsRuntimePolicy,
     #[cfg(feature = "feishu-integration")]
     pub feishu: Option<FeishuToolRuntimeConfig>,
 }
@@ -495,6 +501,7 @@ impl Default for ToolRuntimeConfig {
             autonomy_profile: AutonomyProfile::default(),
             skills: SkillsRuntimePolicy::default(),
             tool_execution: ToolExecutionConfig::default(),
+            fs: FsRuntimePolicy::default(),
             #[cfg(feature = "feishu-integration")]
             feishu: None,
         }
@@ -641,6 +648,15 @@ impl ToolRuntimeConfig {
                     .per_tool_timeout
                     .iter()
                     .map(|(k, v): (&String, &u64)| (k.to_lowercase(), *v))
+                    .collect(),
+            },
+            fs: FsRuntimePolicy {
+                deny_read_filenames: config
+                    .tools
+                    .fs
+                    .deny_read_filenames
+                    .iter()
+                    .filter_map(|name| normalize_policy_filename(name))
                     .collect(),
             },
             #[cfg(feature = "feishu-integration")]
@@ -1121,6 +1137,11 @@ fn normalize_optional_string(raw: Option<&str>) -> Option<String> {
     raw.map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
+}
+
+fn normalize_policy_filename(name: &str) -> Option<String> {
+    let normalized = name.trim().to_ascii_lowercase();
+    (!normalized.is_empty()).then_some(normalized)
 }
 
 fn parse_env_string(key: &str) -> Option<String> {
@@ -1697,6 +1718,23 @@ mod tests {
             ..ToolRuntimeConfig::default()
         };
         assert_eq!(config.file_root, Some(PathBuf::from("/tmp/test-root")));
+    }
+
+    #[test]
+    fn tool_runtime_config_from_loong_config_reads_fs_policy() {
+        let mut config = crate::config::LoongConfig::default();
+        config.tools.fs.deny_read_filenames = vec![
+            "clippy.toml".to_owned(),
+            "CLIPPY.TOML".to_owned(),
+            " ".to_owned(),
+        ];
+
+        let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
+
+        assert_eq!(
+            runtime.fs.deny_read_filenames,
+            BTreeSet::from(["clippy.toml".to_owned()])
+        );
     }
 
     #[test]

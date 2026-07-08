@@ -4,7 +4,7 @@ use std::sync::Arc;
 use loong_contracts::CapabilityToken;
 use loong_kernel::{
     AuditSink, Capability, Clock, ExecutionRoute, FanoutAuditSink, HarnessKind, InMemoryAuditSink,
-    JsonlAuditSink, Kernel, SystemClock, VerticalPackManifest,
+    JsonlAuditSink, Kernel, PolicyPipeline, SystemClock, VerticalPackManifest,
 };
 
 use crate::config::{AuditMode, LoongConfig};
@@ -114,7 +114,14 @@ fn bootstrap_kernel_context_with_audit_sink(
     audit_sink: Arc<dyn AuditSink>,
     config: &LoongConfig,
 ) -> Result<KernelContext, String> {
-    let mut kernel = Kernel::with_runtime(Arc::new(SystemClock) as Arc<dyn Clock>, audit_sink);
+    let tool_rt = crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
+    let file_root = tool_rt.file_root.clone();
+    let tool_policy_rt = tool_rt.clone();
+    let mut kernel = Kernel::with_policy_runtime(
+        policy_pipeline_for_tool_runtime_config(&tool_rt),
+        Arc::new(SystemClock) as Arc<dyn Clock>,
+        audit_sink,
+    );
 
     let pack = VerticalPackManifest {
         pack_id: EMBEDDED_RUNTIME_PACK_ID.to_owned(),
@@ -154,8 +161,6 @@ fn bootstrap_kernel_context_with_audit_sink(
             .map_err(|e| format!("set default memory adapter failed: {e}"))?;
     }
 
-    let tool_rt = crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
-    let file_root = tool_rt.file_root.clone();
     kernel.register_core_tool_adapter(
         crate::tools::KernelToolAdapter::with_config_and_observability(
             tool_rt,
@@ -167,8 +172,6 @@ fn bootstrap_kernel_context_with_audit_sink(
         .map_err(|e| format!("set default tool adapter failed: {e}"))?;
 
     // Register policy extensions for unified security enforcement.
-    let tool_policy_rt =
-        crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
     kernel.register_policy_extension(crate::tools::file_policy_ext::FilePolicyExtension::new(
         file_root,
     ));
@@ -184,6 +187,14 @@ fn bootstrap_kernel_context_with_audit_sink(
         kernel: Arc::new(kernel),
         token,
     })
+}
+
+pub(crate) fn policy_pipeline_for_tool_runtime_config(
+    config: &crate::tools::runtime_config::ToolRuntimeConfig,
+) -> PolicyPipeline {
+    let mut policy = PolicyPipeline::default();
+    policy.push_fs_read_filename_deny_policy(config.fs.deny_read_filenames.clone());
+    policy
 }
 
 #[cfg(test)]

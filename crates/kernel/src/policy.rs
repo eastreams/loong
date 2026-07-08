@@ -9,7 +9,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use loong_access::fs::access::FsAccessContext;
+use loong_access::fs::{access::FsAccessContext, action::FsReadAction};
 use loong_contracts::{
     Capability, CapabilityToken, ExecutionPlane, GrantId, PlaneTier, PolicyDecision, PolicyEntry,
     PolicyEvaluation, PolicyGrant, PolicyId, PolicyOutcome, PolicyReport, VerticalPackManifest,
@@ -215,6 +215,14 @@ impl PolicyPipeline {
             id,
             policy: Arc::new(policy),
         });
+    }
+
+    pub fn push_fs_read_filename_deny_policy(&mut self, denied_filenames: BTreeSet<String>) {
+        if denied_filenames.is_empty() {
+            return;
+        }
+
+        self.push_policy::<FsReadAction, _>(FsReadFilenameDenyPolicy::new(denied_filenames));
     }
 
     /// Register a broad gate before typed action policy.
@@ -508,6 +516,57 @@ impl<P: PolicyEngine> PolicyAny<P> for AllowPolicy {
             reason: "allowed by allow policy".into(),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+struct FsReadFilenameDenyPolicy {
+    denied_filenames: BTreeSet<String>,
+}
+
+impl FsReadFilenameDenyPolicy {
+    fn new(denied_filenames: BTreeSet<String>) -> Self {
+        let denied_filenames = denied_filenames
+            .into_iter()
+            .filter_map(|filename| normalize_policy_filename(filename.as_str()))
+            .collect();
+        Self { denied_filenames }
+    }
+}
+
+#[async_trait]
+impl Policy<PolicyPipeline, FsReadAction> for FsReadFilenameDenyPolicy {
+    fn name(&self) -> Cow<'static, str> {
+        Cow::Borrowed("fs-read-filename-deny")
+    }
+
+    async fn grant(&self, _ctx: &KernelPolicyContext<'_>, action: &FsReadAction) -> PolicyGrant {
+        let denied_filename = action
+            .path()
+            .file_name()
+            .and_then(|filename| filename.to_str())
+            .and_then(normalize_policy_filename)
+            .filter(|filename| self.denied_filenames.contains(filename));
+
+        if let Some(filename) = denied_filename {
+            return PolicyGrant {
+                decision: PolicyDecision::Deny,
+                predicate: Some(format!("fs.read filename == {filename:?}").into()),
+                reason: format!("file read denied by configured filename policy: {filename}")
+                    .into(),
+            };
+        }
+
+        PolicyGrant {
+            decision: PolicyDecision::Continue,
+            predicate: None,
+            reason: "filename did not match configured read deny policy".into(),
+        }
+    }
+}
+
+fn normalize_policy_filename(filename: &str) -> Option<String> {
+    let normalized = filename.trim().to_ascii_lowercase();
+    (!normalized.is_empty()).then_some(normalized)
 }
 
 #[cfg(test)]

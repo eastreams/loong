@@ -30,7 +30,11 @@ async fn execute_tool_core_with_test_context(
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
     let trusted_internal_payload = payload_uses_reserved_internal_tool_context(&request.payload);
-    let mut kernel = Kernel::with_runtime(Arc::new(SystemClock), Arc::new(NoopAuditSink));
+    let mut kernel = Kernel::with_policy_runtime(
+        crate::context::policy_pipeline_for_tool_runtime_config(config),
+        Arc::new(SystemClock),
+        Arc::new(NoopAuditSink),
+    );
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
         domain: "test".to_owned(),
@@ -106,6 +110,42 @@ async fn file_read_uses_runtime_workspace_root_from_runtime_config() {
 
     std::fs::remove_dir_all(&outer_root).ok();
     std::fs::remove_dir_all(&runtime_root).ok();
+}
+
+#[cfg(feature = "tool-file")]
+#[tokio::test]
+async fn file_read_rejects_configured_denied_filename() {
+    let root = std::env::temp_dir().join(format!(
+        "loong-file-read-configured-denied-filename-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).expect("create root");
+    std::fs::write(root.join("clippy.toml"), "warns = []").expect("write clippy fixture");
+
+    let mut config = test_tool_runtime_config(root.clone());
+    config
+        .fs
+        .deny_read_filenames
+        .insert("clippy.toml".to_owned());
+
+    let error = execute_tool_core_with_test_context(
+        ToolCoreRequest {
+            tool_name: "file.read".to_owned(),
+            payload: json!({
+                "path": "clippy.toml"
+            }),
+        },
+        &config,
+    )
+    .await
+    .expect_err("configured filename policy should reject clippy.toml reads");
+
+    assert!(
+        error.contains("clippy.toml"),
+        "expected clippy.toml denial, got: {error}"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
 }
 
 #[cfg(feature = "tool-file")]
