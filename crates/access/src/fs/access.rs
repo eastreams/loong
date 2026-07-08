@@ -1,6 +1,10 @@
 use std::path::{Path, PathBuf};
 
-use loong_core::{error::AuthorizationError, kernel::Kernel, policy::engine::PolicyEngine};
+use loong_core::{
+    error::AuthorizationError,
+    kernel::Kernel,
+    policy::{engine::PolicyEngine, grant::Granted},
+};
 use thiserror::Error;
 
 use super::{action::FsReadAction, error::FsActionError, path::CanonicalPath};
@@ -63,14 +67,24 @@ where
             .await
             .map_err(AuthorizationError::from)
             .map_err(FsAccessError::Authorization)?;
-        let action = grant.granted.into_action();
-        let path = action.path().to_path_buf();
-        let bytes = std::fs::read(&path).map_err(|source| FsAccessError::ReadFile {
-            path: path.clone(),
-            source,
-        })?;
-        Ok(FsReadOutput { path, bytes })
+        read_granted_file(grant.granted)
     }
+}
+
+/// Execute an already-authorized fs read.
+///
+/// This is a concrete execution boundary rather than a shared backend trait:
+/// the invariant is that filesystem side effects consume `Granted<FsReadAction>`.
+pub(super) fn read_granted_file(
+    granted: Granted<FsReadAction>,
+) -> Result<FsReadOutput, FsAccessError> {
+    let action = granted.into_action();
+    let path = action.path().to_path_buf();
+    let bytes = std::fs::read(&path).map_err(|source| FsAccessError::ReadFile {
+        path: path.clone(),
+        source,
+    })?;
+    Ok(FsReadOutput { path, bytes })
 }
 
 /// Bytes returned by a governed fs read.

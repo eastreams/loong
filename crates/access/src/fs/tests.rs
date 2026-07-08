@@ -19,7 +19,7 @@ use loong_core::{
 };
 
 use super::{
-    access::{FsAccess, FsAccessContext, FsAccessError},
+    access::{FsAccess, FsAccessContext, FsAccessError, read_granted_file},
     action::{FsAction, FsReadAction},
     error::FsActionError,
     path::CanonicalPath,
@@ -283,6 +283,37 @@ async fn tool_context_like_chain_grants_read_file_via_access_then_fs() {
         .read_file("notes/todo.md")
         .await
         .expect("grant should succeed");
+
+    let expected_path =
+        dunce::canonicalize(workspace_root.join("notes/todo.md")).expect("canonical note path");
+    assert_eq!(output.path, expected_path);
+    assert_eq!(output.bytes, b"hello");
+
+    fs::remove_dir_all(base).ok();
+}
+
+#[tokio::test]
+async fn fs_read_execution_boundary_consumes_granted_action() {
+    let kernel = FsAccessTestKernel::default();
+    let base = unique_temp_dir("loong-access-fs-granted-boundary");
+    let workspace_root = base.join("workspace");
+    fs::create_dir_all(workspace_root.join("notes")).expect("create notes dir");
+    fs::write(workspace_root.join("notes/todo.md"), "hello").expect("write note");
+    let policy_context = FsAccessPolicyContext::new(&workspace_root);
+    let path = CanonicalPath::resolve(
+        "notes/todo.md",
+        policy_context.fs_resolution_root(),
+        policy_context.fs_allowed_roots(),
+    )
+    .expect("path inside workspace should resolve");
+    let action = FsReadAction::new(path);
+    let grant = kernel
+        .policy_engine()
+        .grant(&policy_context, action)
+        .await
+        .expect("policy should grant read");
+
+    let output = read_granted_file(grant.granted).expect("granted read should execute");
 
     let expected_path =
         dunce::canonicalize(workspace_root.join("notes/todo.md")).expect("canonical note path");
