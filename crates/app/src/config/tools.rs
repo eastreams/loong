@@ -92,6 +92,10 @@ pub struct ToolConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct FsToolConfig {
+    /// filenames to be denied. This will go through
+    /// the new access-backended policy engine.
+    /// In fact, this is an `access` config
+    /// rather than a tool config.
     #[serde(default)]
     pub deny_read_filenames: Vec<String>,
 }
