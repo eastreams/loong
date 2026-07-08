@@ -23,7 +23,7 @@ pub trait Policy<P: PolicyEngine, A: Action>: Send + Sync {
 /// Untyped policy that can evaluate every action kind in a pipeline subchain.
 #[async_trait]
 pub trait PolicyAny<P: PolicyEngine>: Send + Sync {
-    fn name(&self) -> &'static str;
+    fn name(&self) -> Cow<'static, str>;
 
     async fn grant(&self, ctx: &P::Cx<'_>, action: &dyn Action) -> PolicyGrant;
 }

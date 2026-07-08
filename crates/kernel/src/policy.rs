@@ -362,7 +362,7 @@ impl PolicyEngine for PolicyPipeline {
         for registered in &self.pre_policies {
             let grant = registered.policy.grant(ctx, action).await;
             let source = PolicyEntry {
-                policy_name: registered.policy.name().into(),
+                policy_name: registered.policy.name(),
                 policy_id: registered.id,
             };
             let decision = grant.decision;
@@ -446,7 +446,7 @@ impl PolicyEngine for PolicyPipeline {
         for registered in &self.fallback_policies {
             let grant = registered.policy.grant(ctx, action).await;
             let source = PolicyEntry {
-                policy_name: registered.policy.name().into(),
+                policy_name: registered.policy.name(),
                 policy_id: registered.id,
             };
             let decision = grant.decision;
@@ -505,8 +505,8 @@ pub struct AllowPolicy;
 
 #[async_trait]
 impl<P: PolicyEngine> PolicyAny<P> for AllowPolicy {
-    fn name(&self) -> &'static str {
-        "allow"
+    fn name(&self) -> Cow<'static, str> {
+        Cow::Borrowed("allow")
     }
 
     async fn grant(&self, _ctx: &P::Cx<'_>, _action: &dyn Action) -> PolicyGrant {
@@ -607,8 +607,8 @@ mod tests {
 
     #[async_trait]
     impl<P: PolicyEngine> PolicyAny<P> for StaticAnyPolicy {
-        fn name(&self) -> &'static str {
-            self.name
+        fn name(&self) -> Cow<'static, str> {
+            Cow::Borrowed(self.name)
         }
 
         async fn grant(&self, _ctx: &P::Cx<'_>, _action: &dyn Action) -> PolicyGrant {
@@ -651,8 +651,8 @@ mod tests {
 
     #[async_trait]
     impl<P: PolicyEngine> PolicyAny<P> for CountingAnyPolicy {
-        fn name(&self) -> &'static str {
-            "counting-any"
+        fn name(&self) -> Cow<'static, str> {
+            Cow::Borrowed("counting-any")
         }
 
         async fn grant(&self, _ctx: &P::Cx<'_>, _action: &dyn Action) -> PolicyGrant {
