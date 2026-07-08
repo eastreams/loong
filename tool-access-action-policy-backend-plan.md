@@ -6,6 +6,10 @@
 - kernel 通过 context type factory 泛型连接 policy/access/tool；
 - policy 绑定 context factory，不通过 `PolicyEngine` 间接拿 `Cx`；
 - `PolicyEngine` 内不再定义或持有 factory / `Cx` associated type；
+- unified context 本身替代 `ToolCoreContext`；tool/access/policy 都围绕同一个
+  invocation context 工作，`ToolCoreContext` 是删除目标，不做长期 wrapper；
+- tool 执行模型不再区分 CoreTool / ExtensionTool；tool 来源只作为注册 metadata
+  保留，旧双 execution API 迁移时直接移除；
 - migrated side effect 只能从 access 进入；
 - 当前 object-safe action metadata trait 改名为 `ActionMeta`；
 - 新的 executable action trait 是 `Action<Cx>: ActionMeta + Sized`，其 `run`
@@ -16,8 +20,9 @@
 
 ## 已确认原则
 
-- 敢于破坏性改动，不为已迁移路径保留 alias、proxy、compatibility shim 或
-  root re-export 来拖延收口。
+- 敢于破坏性改动是默认迁移策略。对已确认的新边界，优先一次性改调用点并删除旧
+  类型/入口；不为已迁移路径保留 alias、proxy、compatibility shim 或 root re-export
+  来拖延收口。只有明确对外兼容需求时，才把兼容层写成短期 migration item。
 - 各部件尽力减少耦合：contracts 放稳定数据，core 放行为 trait，kernel 放治理
   流程，access 放 domain side-effect boundary，app 放 concrete context/config/policy
   wiring。
@@ -28,6 +33,11 @@
 - concrete unified context 由 app 定义。kernel 不固定 app context 字段，只通过
   `ContextFactory` type factory 连接 policy/access/tool。泛型传染是有意的：它强制
   调用点和测试通过 trait 约束获取 context 能力，而不是偷用 concrete context 字段。
+- unified context 是 invocation value，可以由 app 在调用链上派生出 narrowed /
+  enriched 的新值；access/policy/action 观察时借用 `&ctx`，不能消费或隐藏替换 ctx。
+- access 的 receiver 是 unified context。外部调用形状应是
+  `ctx.access().fs().read_file(&path)`，不是 `kernel.access(ctx)`，也不是
+  `ToolCoreContext::access()`。
 - `ContextFactory` 在 kernel/policy/access/tool 之间作为显式泛型参数 `C` 传递，
   不作为 `Kernel` 的 associated type 再间接取用。
 - `ContextFactory` 是 type-level factory，只有 GAT，没有 `create` / `build`
@@ -59,6 +69,12 @@
 - 不要求抽统一 backend trait。执行边界先表达为
   `Action<Cx>::run(Granted<Self>, &Cx)`；若后续 action 内部需要 backend，它只是 run
   的实现细节。
+- tool 管理参考 `/Users/yang/Projects/mvp` 的主干形状：`ToolHost`/registry 管工具
+  路径和注册，公开给工具作者的是 `ToolImpl`，内部擦除成 `RegisteredTool`。但
+  loong 不继承 mvp 里的第二套 `ToolContext`；其位置由 unified context 顶上。
+- CoreTool / ExtensionTool 不再是两套 execution API。原 core/extension 差异只能作为
+  provenance / registration metadata，用于 resolve、audit、catalog、namespace 和
+  compatibility，不进入 action/policy/access 主路径。
 - 测试跟随对应模块放置，例如 fs access 测试放在 `fs/tests.rs` 这类局部位置；
   不新增无归属的大型跨模块测试文件。
 - 注释只服务边界理解：要标出 config -> policy、kernel registration、legacy
@@ -72,8 +88,12 @@
 工具侧只表达意图，副作用必须经由 access：
 
 ```text
-tool adapter
-  -> ToolCoreContext::access()
+tool invocation
+  -> ToolPlane<C>::resolve(path/name)
+  -> RegisteredTool<C>::invoke(&ctx, payload)
+  -> ToolImpl<C>::parse_input(payload)
+  -> ToolImpl<C>::execute(&ctx, input)
+  -> ctx.access()
   -> AccessCx<'_, C>
   -> AccessCx::fs()
   -> FsAccess<'_, C, P>::read_file(path)
@@ -87,6 +107,56 @@ tool adapter
 
 `Access`、`ActionMeta`、`Action<Cx>`、`Policy` 是治理语义。tool/app 不直接拼授权链，不直接
 读取 policy context 字段，也不直接接触 backend handle。
+
+unified context 是整个 invocation 的唯一 context。它可以是 owned value，并且 app 可以
+通过派生方法生成更具体的 context：
+
+```rust
+let ctx = base_ctx.with_tool_invocation(...)?;
+let ctx = ctx.with_runtime_narrowing(...)?;
+let output = ctx.access().fs().read_file(&path).await?;
+```
+
+access facade 只借用 `&ctx`：
+
+```rust
+impl AppExecutionContext<'_> {
+    pub fn access(&self) -> AccessCx<'_, AppContextFactory> {
+        AccessCx::new(self)
+    }
+}
+```
+
+如果 access 需要 policy engine、backend 或 kernel runtime，它通过 ctx 实现的小 view
+trait 获取依赖；kernel 不是 access API 的 receiver。
+
+tool execution API 是单一的：
+
+```rust
+#[async_trait]
+pub trait ToolImpl<C: ContextFactory>: Send + Sync + 'static {
+    type Input: Send + 'static;
+    type Output: Send + Into<ToolOutcome> + 'static;
+
+    fn spec(&self) -> ToolSpec;
+
+    fn parse_input(&self, payload: serde_json::Value) -> Result<Self::Input, ToolInputError>;
+
+    async fn execute(
+        &self,
+        ctx: &C::Cx<'_>,
+        input: Self::Input,
+    ) -> Result<Self::Output, ToolExecutionError>;
+}
+```
+
+`ToolPlane<C>` 持有 `RegisteredTool<C>`，注册记录携带 `registered_at` 和来源 metadata。
+来源 metadata 可以区分 builtin / extension / discovered / compatibility route，但
+`RegisteredTool::invoke(&ctx, payload)` 只有一条路径。
+
+迁移到这条路径时应直接替换旧调用面：`CoreToolAdapter` / `ToolExtensionAdapter`、
+`ToolCoreRequest` / `ToolExtensionRequest`、`execute_tool_core` /
+`execute_tool_extension` 都是删除对象，不允许作为并行兼容 API 长期存在。
 
 ## 分层边界
 
@@ -294,15 +364,15 @@ impl<C: ContextFactory> PolicyEngine<C> for PolicyPipeline<C> {
 - 没有 terminal decision 时 default deny；
 - `PolicyReport` 记录完整 evaluations 和 outcome。
 
-`Kernel<C>` 是把 policy engine、tool context、access facade 统一到同一个
+`Kernel<C>` 是把 policy engine、tool registry、access facade 统一到同一个
 `C::Cx<'a>` 的地方。它不应该有 `fs_policy_context()` / `browser_policy_context()`
-这类 domain getter。
+这类 domain getter，也不应该发明第二套 tool context wrapper。
 
 当前代码状态：`Kernel<C>`、`PolicyPipeline<C>`、`ToolPlane<C>`、
-`ToolCoreContext<'a, C>`、`AccessCx<'a, C>` 已落地。kernel 不再定义
-`KernelPolicyContext` / `KernelContextFactory`，也不再为 `Kernel`、`ToolPlane` 或
-`PolicyPipeline` 提供默认 context factory。app 和 spec 分别定义自己的 concrete
-context factory。
+`ToolCoreContext<'a, C>`、`AccessCx<'a, C>` 已落地。`ToolCoreContext` 是过渡层，
+应被 unified context 直接替换。kernel 不再定义 `KernelPolicyContext` /
+`KernelContextFactory`，也不再为 `Kernel`、`ToolPlane` 或 `PolicyPipeline` 提供
+默认 context factory。app 和 spec 分别定义自己的 concrete context factory。
 
 ### `loong-access`
 
@@ -440,8 +510,9 @@ tool helper 在调用 access 前执行 config-backed policy 分支。需要配�
 - `loong-access` 已创建，依赖 `loong-core` 和 `loong-contracts`。
 - `loong-access` 当前只被 `loong-kernel` 依赖，app 不直接依赖 access。
 - `FsReadAction` / `FsAction` / `CanonicalPath` / `FsAccess::read_file` 已落地。
-- `file.read` / `read` path mode 已迁移到：
-  `ToolCoreContext::access().fs().read_file(...)`。
+- `file.read` / `read` path mode 已迁移到 access-backed read；当前调用经由
+  `ToolCoreContext::access().fs().read_file(...)`，这是过渡形状，目标是
+  `ctx.access().fs().read_file(...)`。
 - migrated read 已退出 `direct_policy_preflight` 的 file 分支。
 - `FilePolicyExtension` 不再覆盖 read，暂时只服务未迁移的 file surfaces。
 - `PolicyPipeline` 已有 typed registry、pre/action/fallback stages、`PolicyReport`。
@@ -449,7 +520,8 @@ tool helper 在调用 access 前执行 config-backed policy 分支。需要配�
 - `Policy` / `PolicyAny` / `PolicyEngine` 已改为显式 `C: ContextFactory` 泛型。
 - `PolicyEngine` 不再定义 `type Cx`。
 - `Kernel<C>` / `PolicyPipeline<C>` / `ToolPlane<C>` 已泛型化。
-- `ToolCoreContext<'a, C>` 携带 `C::Cx<'a>`。
+- `ToolCoreContext<'a, C>` 携带 `C::Cx<'a>`；该 wrapper 已确认应删除，由 unified
+  context 直接替代。
 - kernel facade `AccessCx<'a, C>` 只保留 context factory 泛型，不再暴露额外
   `K: Kernel` 参数。
 - `Kernel<C>` 构造函数已泛型化，可以实例化非默认 context factory。
@@ -470,6 +542,14 @@ tool helper 在调用 access 前执行 config-backed policy 分支。需要配�
 
 ### 仍是过渡形状
 
+- `ToolCoreContext` 仍存在，并且仍让 access 调用从 wrapper 进入；它应该删除。
+- `CoreToolAdapter` / `ToolExtensionAdapter` 和 `execute_tool_core` /
+  `execute_tool_extension` 仍是两套 execution API；它们应该收敛为单一 tool
+  execution path。
+- `ToolCoreRequest` / `ToolExtensionRequest` 仍在 contracts/kernel 路径中扩散；长期应
+  收敛为统一 tool invocation 数据，core/extension 只保留为 provenance metadata。
+- `AccessCx` / `FsAccess` 当前仍消费 owned context；目标是 access 借用 `&ctx`，ctx
+  自身由 app 在调用链上派生新 owned value。
 - `loong_access::fs::FsAccess` 内部只持有 policy engine 引用，不再持有 kernel host。
   该类型仍有 `P: PolicyEngine<C>` 泛型，因为 `PolicyEngine<C>` 需要 generic
   action grant，不能直接做成普通 trait object。
@@ -514,7 +594,8 @@ Policy<C, A>
 PolicyAny<C>
 Kernel<C>
 AccessCx<'a, C>
-ToolCoreContext<'a, C>
+ToolPlane<C>
+RegisteredTool<C>
 ```
 
 `loong_access::fs::FsAccess` 内部保留 `P: PolicyEngine<C>` 泛型；access crate 不依赖
@@ -576,7 +657,7 @@ Kernel { type C; }
 
 `PolicyEngine` 不拥有 factory，只被 `C: ContextFactory` 参数化。
 
-### 4. 泛型化 kernel 和 tool context
+### 4. 用 unified context 替换 ToolCoreContext
 
 把 concrete kernel 迁到：
 
@@ -587,27 +668,73 @@ pub struct Kernel<C: ContextFactory> {
 }
 ```
 
-`ToolCoreContext` 携带同一个 `C::Cx<'a>`：
+删除 `ToolCoreContext`。tool adapter/helper 看到的 context 就是 `C::Cx<'_>` 本身，
+不是 kernel 再包装出的二级 context：
 
 ```rust
-pub struct ToolCoreContext<'a, C: ContextFactory> {
-    kernel: &'a Kernel<C>,
-    context: C::Cx<'a>,
+#[async_trait]
+pub trait ToolAdapter<C: ContextFactory>: Send + Sync {
+    async fn invoke(
+        &self,
+        ctx: &C::Cx<'_>,
+        payload: serde_json::Value,
+    ) -> Result<ToolOutcome, ToolPlaneError>;
 }
 ```
 
-`AccessCx` 同样显式携带 `C`，不从 `K` 的 associated type 反查 context factory。
-作为 kernel-defined facade，它直接持有 `&Kernel<C>`，所以不需要额外的 `K`
-泛型：
+`CoreToolAdapter` / `ToolExtensionAdapter` 合并成单一 `ToolAdapter`。公开给具体工具
+实现者的是 typed `ToolImpl`；`RegisteredTool` 内部做 payload parse 和 erased invoke：
 
 ```rust
-pub struct AccessCx<'a, C: ContextFactory> {
-    kernel: &'a Kernel<C>,
-    context: C::Cx<'a>,
+#[async_trait]
+pub trait ToolImpl<C: ContextFactory>: Send + Sync + 'static {
+    type Input: Send + 'static;
+    type Output: Send + Into<ToolOutcome> + 'static;
+
+    fn spec(&self) -> ToolSpec;
+
+    fn parse_input(&self, payload: serde_json::Value) -> Result<Self::Input, ToolInputError>;
+
+    async fn execute(
+        &self,
+        ctx: &C::Cx<'_>,
+        input: Self::Input,
+    ) -> Result<Self::Output, ToolExecutionError>;
 }
 ```
 
-`AccessCx` 继续是 kernel ref + unified context。工具调用保持类似：
+`ToolPlane<C>` 只维护 tool registry 和 provenance metadata：
+
+```rust
+pub struct ToolPlane<C: ContextFactory> {
+    tools: BTreeMap<ToolPath, RegisteredTool<C>>,
+}
+
+pub struct ToolRegistration {
+    spec: ToolSpec,
+    registered_at: SystemTime,
+    provenance: ToolProvenance,
+}
+```
+
+`ToolProvenance` 可以表达 builtin / extension / discovered / compatibility route，但
+`RegisteredTool::invoke(&ctx, payload)` 只有一条 execution path。
+
+`AccessCx` 显式携带 `C`，但它由 `ctx.access()` 构造，并且只借用 unified context。
+如果 access 需要 policy engine 或 runtime host，ctx 通过小 view trait 提供：
+
+```rust
+pub trait AccessRuntime<C: ContextFactory>: PolicyContext {
+    type Engine<'a>: PolicyEngine<C>
+    where
+        Self: 'a;
+
+    fn policy_engine(&self) -> &Self::Engine<'_>;
+}
+```
+
+具体命名可在实现时按当前模块收敛；关键是不让 `Kernel` 成为 access 的外部 receiver。
+工具调用保持：
 
 ```rust
 ctx.access().fs().read_file(&path).await
@@ -654,6 +781,13 @@ runtime config 来构造 policy。
 - `ToolCoreContext::with_fs_root_view(...)` 已删除；
 - kernel/app/spec/daemon 调用点已显式传入 app/spec/test context。
 
+仍待删除：
+
+- `ToolCoreContext` wrapper 本身；
+- `CoreToolAdapter` / `ToolExtensionAdapter` 双 execution API；
+- `execute_tool_core` / `execute_tool_extension` 双 kernel entry；
+- `ToolCoreRequest` / `ToolExtensionRequest` 在主 execution path 上的扩散。
+
 保持破坏性改动优先，不为已迁移路径保留 alias / compatibility shim。
 
 ### 8. 优化 deny/report 路径
@@ -664,7 +798,7 @@ runtime config 来构造 policy。
 PolicyReport
   -> PolicyGrantError
   -> FsAccessError
-  -> ToolPlaneError / ToolCoreOutcome
+  -> ToolPlaneError / ToolOutcome
   -> Agent-facing response
 ```
 
@@ -736,6 +870,11 @@ impl BrowserClickAction {
 - tool 直接执行 migrated side effect。
 - tool 直接 name、construct 或 invoke backend handle/function / concrete backend。
 - tool-facing API 暴露 policy context、domain view trait、backend handle。
+- tool-facing API 暴露 `ToolCoreContext` 或第二套 tool context wrapper。
+- 外部 access 调用以 `kernel.access(ctx)` 或 wrapper `.access()` 为主语；access 的
+  主语必须是 unified ctx。
+- CoreTool / ExtensionTool 作为两套 execution API 存在；来源差异只能是 metadata。
+- 为迁移方便保留 `CoreToolAdapter` / `ToolExtensionAdapter` alias 或双注册面。
 - `Policy` 通过 `PolicyEngine` 获取 `Cx`。
 - `PolicyEngine` 定义 `type Cx` / `type Context`。
 - `ContextFactory` 带 create/build method。
@@ -766,6 +905,11 @@ impl BrowserClickAction {
 - 业务 policy 为任意满足所需 view trait 的 `C::Cx<'_>` 实现，不绑定
   `AppExecutionContext`。
 - kernel 只通过泛型连接统一 context，不固定 app context 字段。
+- `ToolCoreContext` 已删除；tool impl / registered tool / access 直接使用 unified
+  ctx。
+- `ToolPlane<C>` 只有单一 `RegisteredTool<C>` execution path；core/extension 来源
+  只出现在 registration/provenance metadata。
+- `CoreToolAdapter` / `ToolExtensionAdapter` 不再是主执行抽象。
 - `file.read` 继续只通过 `ctx.access().fs().read_file(...)` 执行读取。
 - migrated side effect 不经过 direct preflight / `FilePolicyExtension`。
 - config-driven policy 经由 app config -> normalized runtime config ->
