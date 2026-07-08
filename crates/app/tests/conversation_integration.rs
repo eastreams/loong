@@ -66,6 +66,21 @@ fn harness_temp_dirs_are_unique() {
     assert_ne!(h1.temp_dir, h2.temp_dir);
 }
 
+fn assert_final_tool_error_contains(result: TurnResult, expected_fragments: &[&str]) {
+    #[allow(clippy::wildcard_enum_match_arm)]
+    match result {
+        TurnResult::FinalText(text) => {
+            for expected in expected_fragments {
+                assert!(
+                    text.contains(expected),
+                    "expected `{expected}` in final tool error, got: {text}"
+                );
+            }
+        }
+        other => panic!("expected FinalText tool error, got: {other:?}"),
+    }
+}
+
 // ── Real-execution integration tests ──────────────────────────────
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -197,16 +212,7 @@ async fn integ_shell_exec_blocked_command() {
         .build();
     let result = harness.execute(&turn).await;
 
-    #[allow(clippy::wildcard_enum_match_arm)]
-    match result {
-        TurnResult::ToolDenied(err) => {
-            assert!(
-                err.contains("denied") || err.contains("default-deny"),
-                "expected denied bash-governance reason, got: {err}"
-            );
-        }
-        other => panic!("expected ToolDenied with policy reason, got: {other:?}"),
-    }
+    assert_final_tool_error_contains(result, &["kernel_policy_denied", "default-deny"]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -218,16 +224,7 @@ async fn integ_file_read_sandbox_rejects_path_escape() {
         .build();
     let result = harness.execute(&turn).await;
 
-    #[allow(clippy::wildcard_enum_match_arm)]
-    match result {
-        TurnResult::ToolDenied(err) => {
-            assert!(
-                err.contains("escapes"),
-                "expected 'escapes' in error, got: {err}"
-            );
-        }
-        other => panic!("expected ToolDenied with 'escapes', got: {other:?}"),
-    }
+    assert_final_tool_error_contains(result, &["kernel_policy_denied", "escapes"]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -239,17 +236,7 @@ async fn integ_missing_capability_denies_tool() {
         .build();
     let result = harness.execute(&turn).await;
 
-    #[allow(clippy::wildcard_enum_match_arm)]
-    match result {
-        TurnResult::ToolDenied(reason) => {
-            let lower = reason.to_lowercase();
-            assert!(
-                lower.contains("capability") || lower.contains("denied"),
-                "expected capability/denied in reason, got: {reason}"
-            );
-        }
-        other => panic!("expected ToolDenied, got: {other:?}"),
-    }
+    assert_final_tool_error_contains(result, &["kernel_policy_denied", "capability"]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -340,15 +327,5 @@ async fn integ_file_write_denied_without_capability() {
         .build();
     let result = harness.execute(&turn).await;
 
-    match result {
-        TurnResult::ToolDenied(err) => {
-            assert!(
-                err.contains("FilesystemWrite"),
-                "expected 'FilesystemWrite' in reason, got: {err}"
-            );
-        }
-        other => {
-            panic!("expected ToolDenied with FilesystemWrite, got: {other:?}")
-        }
-    }
+    assert_final_tool_error_contains(result, &["kernel_policy_denied", "FilesystemWrite"]);
 }
