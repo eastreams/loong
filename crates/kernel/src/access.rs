@@ -2,28 +2,30 @@ use loong_access::fs::{
     access::{FsAccess, FsAccessError},
     error::FsActionError,
 };
-use loong_core::kernel::Kernel;
+use loong_core::{kernel::Kernel as CoreKernel, policy::context::ContextFactory};
+
+use crate::{kernel::Kernel, policy::PolicyPipeline};
 
 /// Kernel-defined access facade.
 ///
 /// Keep this type small: it owns no policy logic and no backend state. It only
 /// carries the kernel reference plus the action context into concrete access
 /// modules such as `loong_access::fs`.
-pub struct AccessCx<'a, K>
+pub struct AccessCx<'a, C>
 where
-    K: Kernel,
+    C: ContextFactory + 'a,
 {
-    kernel: &'a K,
-    policy_context: K::Cx<'a>,
+    kernel: &'a Kernel<C>,
+    policy_context: C::Cx<'a>,
 }
 
-impl<'a, K> AccessCx<'a, K>
+impl<'a, C> AccessCx<'a, C>
 where
-    K: Kernel,
+    C: ContextFactory + 'a,
 {
     #[inline(always)]
     #[must_use]
-    pub fn new(kernel: &'a K, policy_context: K::Cx<'a>) -> Self {
+    pub fn new(kernel: &'a Kernel<C>, policy_context: C::Cx<'a>) -> Self {
         Self {
             kernel,
             policy_context,
@@ -37,8 +39,8 @@ where
     /// typed action grant, and perform the read.
     #[inline(always)]
     #[must_use]
-    pub fn fs(self) -> FsAccess<'a, K> {
-        FsAccess::new(self.kernel, self.policy_context)
+    pub fn fs(self) -> FsAccess<'a, C, PolicyPipeline<C>> {
+        FsAccess::new(self.kernel.policy_engine(), self.policy_context)
     }
 }
 

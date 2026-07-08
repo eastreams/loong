@@ -1,3 +1,4 @@
+use loong_core::policy::context::ContextFactory;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
@@ -24,7 +25,7 @@ use crate::{
         MemoryExtensionOutcome, MemoryExtensionRequest, MemoryPlane,
     },
     pack::VerticalPackManifest,
-    policy::{KernelPolicyContext, LegacyKernelAction, PolicyPipeline},
+    policy::{KernelContextFactory, KernelPolicyContext, LegacyKernelAction, PolicyPipeline},
     policy_ext::PolicyExtension,
     runtime::{
         CoreRuntimeAdapter, RuntimeCoreOutcome, RuntimeCoreRequest, RuntimeExtensionAdapter,
@@ -61,14 +62,14 @@ struct PlaneInvocationRecord<'a> {
 }
 
 // TODO: methods should be implemented in trait from core
-pub struct Kernel {
-    policy: PolicyPipeline,
+pub struct Kernel<C: ContextFactory = KernelContextFactory> {
+    policy: PolicyPipeline<C>,
     revoked_tokens: Mutex<BTreeSet<String>>,
     revoked_below_generation: AtomicU64,
 
     audit: Arc<dyn AuditSink>,
 
-    tool_plane: ToolPlane,
+    tool_plane: ToolPlane<C>,
     memory_plane: MemoryPlane,
     connector_plane: ConnectorPlane,
     runtime_plane: RuntimePlane,
@@ -79,7 +80,10 @@ pub struct Kernel {
     event_seq: AtomicU64,
 }
 
-impl Kernel {
+impl<C> Kernel<C>
+where
+    C: ContextFactory,
+{
     /// Safe convenience constructor for callers that do not need to customize
     /// runtime components. This defaults to in-memory audit rather than silent
     /// audit dropping.
@@ -118,7 +122,7 @@ impl Kernel {
 
     #[must_use]
     pub fn with_policy_runtime(
-        policy: PolicyPipeline,
+        policy: PolicyPipeline<C>,
         clock: Arc<dyn Clock>,
         audit: Arc<dyn AuditSink>,
     ) -> Self {
@@ -141,10 +145,12 @@ impl Kernel {
 
     #[inline(always)]
     #[must_use]
-    pub fn access<'a>(&'a self, policy_context: KernelPolicyContext<'a>) -> AccessCx<'a, Self> {
+    pub fn access<'a>(&'a self, policy_context: C::Cx<'a>) -> AccessCx<'a, C> {
         AccessCx::new(self, policy_context)
     }
+}
 
+impl Kernel {
     pub fn register_pack(&mut self, pack: VerticalPackManifest) -> Result<(), KernelError> {
         pack.validate()?;
         if self.packs.contains_key(&pack.pack_id) {
@@ -1101,9 +1107,11 @@ impl Kernel {
     }
 }
 
-impl loong_core::kernel::Kernel for Kernel {
-    type Cx<'a> = KernelPolicyContext<'a>;
-    type PolicyEngine = PolicyPipeline;
+impl<C> loong_core::kernel::Kernel<C> for Kernel<C>
+where
+    C: ContextFactory,
+{
+    type PolicyEngine = PolicyPipeline<C>;
 
     fn policy_engine(&self) -> &Self::PolicyEngine {
         &self.policy

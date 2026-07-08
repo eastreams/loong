@@ -1,6 +1,7 @@
 use std::{
     borrow::Cow,
     collections::BTreeSet,
+    marker::PhantomData,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -18,7 +19,7 @@ use loong_core::{
     error::AuthorizationError,
     policy::action::Action,
     policy::{
-        context::{ActionContext, PolicyContext},
+        context::{ActionContext, ContextFactory, PolicyContext},
         engine::PolicyEngine,
         policy::{Policy, PolicyAny},
     },
@@ -45,6 +46,16 @@ pub struct KernelPolicyContext<'a> {
     pub request_parameters: Option<&'a serde_json::Value>,
     pub fs_resolution_root: PathBuf,
     pub fs_allowed_roots: Vec<PathBuf>,
+}
+
+pub trait KernelInvocationContext: PolicyContext {
+    fn pack(&self) -> &VerticalPackManifest;
+
+    fn token(&self) -> &CapabilityToken;
+
+    fn now_epoch_s(&self) -> u64;
+
+    fn request_parameters(&self) -> Option<&serde_json::Value>;
 }
 
 impl<'a> KernelPolicyContext<'a> {
@@ -91,6 +102,24 @@ impl PolicyContext for KernelPolicyContext<'_> {
     }
 }
 
+impl KernelInvocationContext for KernelPolicyContext<'_> {
+    fn pack(&self) -> &VerticalPackManifest {
+        self.pack
+    }
+
+    fn token(&self) -> &CapabilityToken {
+        self.token
+    }
+
+    fn now_epoch_s(&self) -> u64 {
+        self.now_epoch_s
+    }
+
+    fn request_parameters(&self) -> Option<&serde_json::Value> {
+        self.request_parameters
+    }
+}
+
 impl ActionContext for KernelPolicyContext<'_> {
     fn execution_plane(&self) -> ExecutionPlane {
         self.plane
@@ -99,6 +128,12 @@ impl ActionContext for KernelPolicyContext<'_> {
     fn plane_tier(&self) -> PlaneTier {
         self.tier
     }
+}
+
+pub struct KernelContextFactory;
+
+impl ContextFactory for KernelContextFactory {
+    type Cx<'a> = KernelPolicyContext<'a>;
 }
 
 impl FsAccessContext for KernelPolicyContext<'_> {
@@ -158,22 +193,23 @@ impl Action for LegacyKernelAction {
 /// subchain and moves to the next one. If no terminal decision is produced,
 /// the pipeline returns default deny. The returned [`PolicyReport`] records the
 /// evaluated policy chain.
-pub struct PolicyPipeline {
-    pre_policies: Vec<RegisteredAnyPolicy>,
+pub struct PolicyPipeline<C: ContextFactory = KernelContextFactory> {
+    pre_policies: Vec<RegisteredAnyPolicy<C>>,
     typed_policies: anymap::Map<dyn anymap::any::Any + Send + Sync>,
-    fallback_policies: Vec<RegisteredAnyPolicy>,
+    fallback_policies: Vec<RegisteredAnyPolicy<C>>,
     policy_extensions: PolicyExtensionChain,
     next_policy_id: PolicyId,
     grant_seq: AtomicU64,
+    _context: PhantomData<fn() -> C>,
 }
 
-impl Default for PolicyPipeline {
+impl<C: ContextFactory> Default for PolicyPipeline<C> {
     fn default() -> Self {
         Self::new().with_fallback_policy(AllowPolicy)
     }
 }
 
-impl PolicyPipeline {
+impl<C: ContextFactory> PolicyPipeline<C> {
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -183,6 +219,7 @@ impl PolicyPipeline {
             policy_extensions: PolicyExtensionChain::new(),
             next_policy_id: 0,
             grant_seq: AtomicU64::new(0),
+            _context: PhantomData,
         }
     }
 
@@ -194,7 +231,7 @@ impl PolicyPipeline {
     pub fn with_policy<A, P>(mut self, policy: P) -> Self
     where
         A: Action + 'static,
-        P: Policy<Self, A> + 'static,
+        P: Policy<C, A> + 'static,
     {
         self.push_policy::<A, P>(policy);
         self
@@ -204,12 +241,12 @@ impl PolicyPipeline {
     pub fn push_policy<A, P>(&mut self, policy: P)
     where
         A: Action + 'static,
-        P: Policy<Self, A> + 'static,
+        P: Policy<C, A> + 'static,
     {
         let id = self.allocate_policy_id();
         let entries = self
             .typed_policies
-            .entry::<TypedPolicyEntries<A>>()
+            .entry::<TypedPolicyEntries<C, A>>()
             .or_insert_with(TypedPolicyEntries::default);
         entries.policies.push(RegisteredPolicy {
             id,
@@ -233,7 +270,7 @@ impl PolicyPipeline {
     #[must_use]
     pub fn with_pre_policy<P>(mut self, policy: P) -> Self
     where
-        P: PolicyAny<Self> + 'static,
+        P: PolicyAny<C> + 'static,
     {
         self.push_pre_policy(policy);
         self
@@ -242,7 +279,7 @@ impl PolicyPipeline {
     /// Add a broad gate before typed action policy.
     pub fn push_pre_policy<P>(&mut self, policy: P)
     where
-        P: PolicyAny<Self> + 'static,
+        P: PolicyAny<C> + 'static,
     {
         let id = self.allocate_policy_id();
         self.pre_policies.push(RegisteredAnyPolicy {
@@ -258,7 +295,7 @@ impl PolicyPipeline {
     #[must_use]
     pub fn with_fallback_policy<P>(mut self, policy: P) -> Self
     where
-        P: PolicyAny<Self> + 'static,
+        P: PolicyAny<C> + 'static,
     {
         self.push_fallback_policy(policy);
         self
@@ -267,7 +304,7 @@ impl PolicyPipeline {
     /// Add broad policy after typed action policy.
     pub fn push_fallback_policy<P>(&mut self, policy: P)
     where
-        P: PolicyAny<Self> + 'static,
+        P: PolicyAny<C> + 'static,
     {
         let id = self.allocate_policy_id();
         self.fallback_policies.push(RegisteredAnyPolicy {
@@ -286,18 +323,21 @@ impl PolicyPipeline {
     /// typed action and consume the resulting grant inside the access module.
     pub async fn authorize_kernel_action<A: Action>(
         &self,
-        ctx: &KernelPolicyContext<'_>,
+        ctx: &C::Cx<'_>,
         action: A,
-    ) -> Result<(), PolicyError> {
+    ) -> Result<(), PolicyError>
+    where
+        for<'a> C::Cx<'a>: KernelInvocationContext,
+    {
         let required_capabilities = action.required_capabilities();
         self.grant(ctx, action).await.map_err(policy_engine_error)?;
 
         self.policy_extensions.authorize(&PolicyExtensionContext {
-            pack: ctx.pack,
-            token: ctx.token,
-            now_epoch_s: ctx.now_epoch_s,
+            pack: ctx.pack(),
+            token: ctx.token(),
+            now_epoch_s: ctx.now_epoch_s(),
             required_capabilities: &required_capabilities,
-            request_parameters: ctx.request_parameters,
+            request_parameters: ctx.request_parameters(),
         })
     }
 
@@ -313,27 +353,27 @@ impl PolicyPipeline {
     }
 }
 
-struct RegisteredAnyPolicy {
+struct RegisteredAnyPolicy<C: ContextFactory> {
     id: PolicyId,
     // TODO(policy-registration-metadata): Carry registration metadata here,
     // such as registered_at, registration_order, and source. Keep this in sync
     // with typed entries so PolicyReport can explain how each policy entered
     // the pipeline, not only what it decided.
-    policy: Arc<dyn PolicyAny<PolicyPipeline>>,
+    policy: Arc<dyn PolicyAny<C>>,
 }
 
-struct RegisteredPolicy<A: Action> {
+struct RegisteredPolicy<C: ContextFactory, A: Action> {
     id: PolicyId,
     // TODO(policy-registration-metadata): Mirror RegisteredAnyPolicy metadata
     // when typed policy registration records registered_at/source data.
-    policy: Arc<dyn Policy<PolicyPipeline, A>>,
+    policy: Arc<dyn Policy<C, A>>,
 }
 
-struct TypedPolicyEntries<A: Action> {
-    policies: Vec<RegisteredPolicy<A>>,
+struct TypedPolicyEntries<C: ContextFactory, A: Action> {
+    policies: Vec<RegisteredPolicy<C, A>>,
 }
 
-impl<A: Action> Default for TypedPolicyEntries<A> {
+impl<C: ContextFactory, A: Action> Default for TypedPolicyEntries<C, A> {
     fn default() -> Self {
         Self {
             policies: Vec::new(),
@@ -353,10 +393,11 @@ fn policy_engine_error(error: impl Into<AuthorizationError>) -> PolicyError {
 }
 
 #[async_trait]
-impl PolicyEngine for PolicyPipeline {
-    type Cx<'a> = KernelPolicyContext<'a>;
-
-    async fn decide<A: Action + 'static>(&self, ctx: &Self::Cx<'_>, action: &A) -> PolicyReport {
+impl<C> PolicyEngine<C> for PolicyPipeline<C>
+where
+    C: ContextFactory + Send + Sync,
+{
+    async fn decide<A: Action + 'static>(&self, ctx: &C::Cx<'_>, action: &A) -> PolicyReport {
         let mut evaluations = Vec::new();
 
         for registered in &self.pre_policies {
@@ -400,7 +441,7 @@ impl PolicyEngine for PolicyPipeline {
             }
         }
 
-        if let Some(entries) = self.typed_policies.get::<TypedPolicyEntries<A>>() {
+        if let Some(entries) = self.typed_policies.get::<TypedPolicyEntries<C, A>>() {
             for registered in &entries.policies {
                 let grant = registered.policy.grant(ctx, action).await;
                 let source = PolicyEntry {
@@ -504,12 +545,15 @@ impl PolicyEngine for PolicyPipeline {
 pub struct AllowPolicy;
 
 #[async_trait]
-impl<P: PolicyEngine> PolicyAny<P> for AllowPolicy {
+impl<C> PolicyAny<C> for AllowPolicy
+where
+    C: ContextFactory + Send + Sync,
+{
     fn name(&self) -> Cow<'static, str> {
         Cow::Borrowed("allow")
     }
 
-    async fn grant(&self, _ctx: &P::Cx<'_>, _action: &dyn Action) -> PolicyGrant {
+    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &dyn Action) -> PolicyGrant {
         PolicyGrant {
             decision: PolicyDecision::Allow,
             predicate: None,
@@ -534,12 +578,15 @@ impl FsReadFilenameDenyPolicy {
 }
 
 #[async_trait]
-impl Policy<PolicyPipeline, FsReadAction> for FsReadFilenameDenyPolicy {
+impl<C> Policy<C, FsReadAction> for FsReadFilenameDenyPolicy
+where
+    C: ContextFactory + Send + Sync,
+{
     fn name(&self) -> Cow<'static, str> {
         Cow::Borrowed("fs-read-filename-deny")
     }
 
-    async fn grant(&self, _ctx: &KernelPolicyContext<'_>, action: &FsReadAction) -> PolicyGrant {
+    async fn grant(&self, _ctx: &C::Cx<'_>, action: &FsReadAction) -> PolicyGrant {
         let denied_filename = action
             .path()
             .file_name()
@@ -606,12 +653,15 @@ mod tests {
     }
 
     #[async_trait]
-    impl<P: PolicyEngine> PolicyAny<P> for StaticAnyPolicy {
+    impl<C> PolicyAny<C> for StaticAnyPolicy
+    where
+        C: ContextFactory + Send + Sync,
+    {
         fn name(&self) -> Cow<'static, str> {
             Cow::Borrowed(self.name)
         }
 
-        async fn grant(&self, _ctx: &P::Cx<'_>, _action: &dyn Action) -> PolicyGrant {
+        async fn grant(&self, _ctx: &C::Cx<'_>, _action: &dyn Action) -> PolicyGrant {
             PolicyGrant {
                 decision: self.decision,
                 predicate: None,
@@ -628,15 +678,16 @@ mod tests {
     }
 
     #[async_trait]
-    impl<A> Policy<PolicyPipeline, A> for StaticTypedPolicy
+    impl<C, A> Policy<C, A> for StaticTypedPolicy
     where
+        C: ContextFactory + Send + Sync,
         A: Action + Send + Sync,
     {
         fn name(&self) -> Cow<'static, str> {
             Cow::Borrowed(self.name)
         }
 
-        async fn grant(&self, _ctx: &KernelPolicyContext<'_>, _action: &A) -> PolicyGrant {
+        async fn grant(&self, _ctx: &C::Cx<'_>, _action: &A) -> PolicyGrant {
             PolicyGrant {
                 decision: self.decision,
                 predicate: None,
@@ -650,12 +701,15 @@ mod tests {
     }
 
     #[async_trait]
-    impl<P: PolicyEngine> PolicyAny<P> for CountingAnyPolicy {
+    impl<C> PolicyAny<C> for CountingAnyPolicy
+    where
+        C: ContextFactory + Send + Sync,
+    {
         fn name(&self) -> Cow<'static, str> {
             Cow::Borrowed("counting-any")
         }
 
-        async fn grant(&self, _ctx: &P::Cx<'_>, _action: &dyn Action) -> PolicyGrant {
+        async fn grant(&self, _ctx: &C::Cx<'_>, _action: &dyn Action) -> PolicyGrant {
             self.calls.fetch_add(1, Ordering::Relaxed);
             PolicyGrant {
                 decision: PolicyDecision::Allow,
@@ -710,7 +764,8 @@ mod tests {
 
     #[tokio::test]
     async fn policy_pipeline_grants_actions_allowed_by_registered_policy() {
-        let engine = PolicyPipeline::new().with_fallback_policy(AllowPolicy);
+        let engine =
+            PolicyPipeline::<KernelContextFactory>::new().with_fallback_policy(AllowPolicy);
         let pack = pack();
         let token = token();
         let required_capabilities = BTreeSet::from([Capability::InvokeTool]);
@@ -736,7 +791,7 @@ mod tests {
 
     #[tokio::test]
     async fn policy_pipeline_runs_registered_policy_extensions() {
-        let mut engine = PolicyPipeline::default();
+        let mut engine = PolicyPipeline::<KernelContextFactory>::default();
         engine.register_policy_extension(DenyNetworkExtension);
         let pack = pack();
         let mut token = token();
@@ -768,7 +823,7 @@ mod tests {
 
     #[tokio::test]
     async fn policy_pipeline_grant_denies_action_missing_required_capability() {
-        let engine = PolicyPipeline::default();
+        let engine = PolicyPipeline::<KernelContextFactory>::default();
         let pack = pack();
         let token = token();
         let ctx = KernelPolicyContext::new(
@@ -796,7 +851,7 @@ mod tests {
 
     #[tokio::test]
     async fn policy_pipeline_report_preserves_pre_and_action_evaluation_stages() {
-        let engine = PolicyPipeline::new()
+        let engine = PolicyPipeline::<KernelContextFactory>::new()
             .with_pre_policy(StaticAnyPolicy {
                 name: "pre-continue",
                 decision: PolicyDecision::Continue,
@@ -832,11 +887,12 @@ mod tests {
 
     #[tokio::test]
     async fn policy_pipeline_typed_policy_only_matches_registered_action_type() {
-        let engine = PolicyPipeline::new().with_policy::<TypedOnlyAction, _>(StaticTypedPolicy {
-            name: "typed-only",
-            decision: PolicyDecision::Allow,
-            reason: "typed only allowed",
-        });
+        let engine = PolicyPipeline::<KernelContextFactory>::new()
+            .with_policy::<TypedOnlyAction, _>(StaticTypedPolicy {
+                name: "typed-only",
+                decision: PolicyDecision::Allow,
+                reason: "typed only allowed",
+            });
         let pack = pack();
         let token = token();
         let ctx = KernelPolicyContext::new(
@@ -867,7 +923,7 @@ mod tests {
 
     #[tokio::test]
     async fn policy_pipeline_pre_deny_prevents_typed_allow() {
-        let engine = PolicyPipeline::new()
+        let engine = PolicyPipeline::<KernelContextFactory>::new()
             .with_pre_policy(StaticAnyPolicy {
                 name: "pre-deny",
                 decision: PolicyDecision::Deny,
@@ -906,7 +962,7 @@ mod tests {
 
     #[tokio::test]
     async fn policy_pipeline_allow_short_circuits_before_later_typed_deny() {
-        let engine = PolicyPipeline::new()
+        let engine = PolicyPipeline::<KernelContextFactory>::new()
             .with_pre_policy(StaticAnyPolicy {
                 name: "pre-allow",
                 decision: PolicyDecision::Allow,
@@ -941,7 +997,7 @@ mod tests {
 
     #[tokio::test]
     async fn policy_pipeline_typed_deny_prevents_fallback_allow() {
-        let engine = PolicyPipeline::new()
+        let engine = PolicyPipeline::<KernelContextFactory>::new()
             .with_policy::<LegacyKernelAction, _>(StaticTypedPolicy {
                 name: "typed-deny",
                 decision: PolicyDecision::Deny,
@@ -975,7 +1031,7 @@ mod tests {
 
     #[tokio::test]
     async fn policy_pipeline_typed_allow_prevents_fallback_deny() {
-        let engine = PolicyPipeline::new()
+        let engine = PolicyPipeline::<KernelContextFactory>::new()
             .with_policy::<LegacyKernelAction, _>(StaticTypedPolicy {
                 name: "typed-allow",
                 decision: PolicyDecision::Allow,
@@ -1010,7 +1066,7 @@ mod tests {
 
     #[tokio::test]
     async fn policy_pipeline_advance_skips_rest_of_current_subchain() {
-        let engine = PolicyPipeline::new()
+        let engine = PolicyPipeline::<KernelContextFactory>::new()
             .with_pre_policy(StaticAnyPolicy {
                 name: "pre-advance",
                 decision: PolicyDecision::Advance,
@@ -1048,11 +1104,12 @@ mod tests {
 
     #[tokio::test]
     async fn policy_pipeline_fallback_advance_defaults_to_deny() {
-        let engine = PolicyPipeline::new().with_fallback_policy(StaticAnyPolicy {
-            name: "fallback-advance",
-            decision: PolicyDecision::Advance,
-            reason: "no next chain",
-        });
+        let engine =
+            PolicyPipeline::<KernelContextFactory>::new().with_fallback_policy(StaticAnyPolicy {
+                name: "fallback-advance",
+                decision: PolicyDecision::Advance,
+                reason: "no next chain",
+            });
         let pack = pack();
         let token = token();
         let ctx = KernelPolicyContext::new(
@@ -1080,11 +1137,12 @@ mod tests {
 
     #[tokio::test]
     async fn policy_pipeline_all_continue_defaults_to_deny() {
-        let engine = PolicyPipeline::new().with_pre_policy(StaticAnyPolicy {
-            name: "pre-continue",
-            decision: PolicyDecision::Continue,
-            reason: "no opinion",
-        });
+        let engine =
+            PolicyPipeline::<KernelContextFactory>::new().with_pre_policy(StaticAnyPolicy {
+                name: "pre-continue",
+                decision: PolicyDecision::Continue,
+                reason: "no opinion",
+            });
         let pack = pack();
         let token = token();
         let ctx = KernelPolicyContext::new(
@@ -1112,9 +1170,10 @@ mod tests {
     #[tokio::test]
     async fn policy_pipeline_missing_required_capability_denies_before_policy_execution() {
         let calls = Arc::new(AtomicU64::new(0));
-        let engine = PolicyPipeline::new().with_pre_policy(CountingAnyPolicy {
-            calls: calls.clone(),
-        });
+        let engine =
+            PolicyPipeline::<KernelContextFactory>::new().with_pre_policy(CountingAnyPolicy {
+                calls: calls.clone(),
+            });
         let pack = pack();
         let token = token();
         let ctx = KernelPolicyContext::new(

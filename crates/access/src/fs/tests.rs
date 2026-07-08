@@ -13,7 +13,7 @@ use loong_core::{
     kernel::Kernel,
     policy::{
         action::Action,
-        context::{ActionContext, PolicyContext},
+        context::{ActionContext, ContextFactory, PolicyContext},
         engine::PolicyEngine,
     },
 };
@@ -69,6 +69,12 @@ impl ActionContext for FsAccessPolicyContext {
     }
 }
 
+struct FsAccessContextFactory;
+
+impl ContextFactory for FsAccessContextFactory {
+    type Cx<'a> = FsAccessPolicyContext;
+}
+
 struct FsAccessPolicyEngine {
     next_grant_id: AtomicU64,
     allow: bool,
@@ -84,10 +90,12 @@ impl Default for FsAccessPolicyEngine {
 }
 
 #[async_trait]
-impl PolicyEngine for FsAccessPolicyEngine {
-    type Cx<'a> = FsAccessPolicyContext;
-
-    async fn decide<A: Action + 'static>(&self, _ctx: &Self::Cx<'_>, _action: &A) -> PolicyReport {
+impl PolicyEngine<FsAccessContextFactory> for FsAccessPolicyEngine {
+    async fn decide<A: Action + 'static>(
+        &self,
+        _ctx: &<FsAccessContextFactory as ContextFactory>::Cx<'_>,
+        _action: &A,
+    ) -> PolicyReport {
         if self.allow {
             return PolicyReport {
                 evaluations: Vec::new(),
@@ -132,8 +140,7 @@ impl FsAccessTestKernel {
 }
 
 #[async_trait]
-impl Kernel for FsAccessTestKernel {
-    type Cx<'a> = FsAccessPolicyContext;
+impl Kernel<FsAccessContextFactory> for FsAccessTestKernel {
     type PolicyEngine = FsAccessPolicyEngine;
 
     fn policy_engine(&self) -> &Self::PolicyEngine {
@@ -168,8 +175,8 @@ impl<'a> FsAccessToolCx<'a> {
 }
 
 impl<'a> FsAccessTestCx<'a> {
-    fn fs(self) -> FsAccess<'a, FsAccessTestKernel> {
-        FsAccess::new(self.kernel, self.policy_context)
+    fn fs(self) -> FsAccess<'a, FsAccessContextFactory, FsAccessPolicyEngine> {
+        FsAccess::new(self.kernel.policy_engine(), self.policy_context)
     }
 }
 

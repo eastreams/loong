@@ -2,8 +2,7 @@ use std::path::{Path, PathBuf};
 
 use loong_core::{
     error::AuthorizationError,
-    kernel::Kernel,
-    policy::{engine::PolicyEngine, grant::Granted},
+    policy::{context::ContextFactory, engine::PolicyEngine, grant::Granted},
 };
 use thiserror::Error;
 
@@ -25,32 +24,35 @@ pub trait FsAccessContext {
 /// This module is the side-effect boundary for fs reads. Callers provide a raw
 /// path; `FsAccess` resolves it, builds the typed action, asks policy for a
 /// grant, consumes that grant, and only then reads from disk.
-pub struct FsAccess<'a, K>
+pub struct FsAccess<'a, C, P>
 where
-    K: Kernel,
+    C: ContextFactory + 'a,
+    P: PolicyEngine<C>,
 {
-    kernel: &'a K,
-    policy_context: K::Cx<'a>,
+    policy_engine: &'a P,
+    policy_context: C::Cx<'a>,
 }
 
-impl<'a, K> FsAccess<'a, K>
+impl<'a, C, P> FsAccess<'a, C, P>
 where
-    K: Kernel,
+    C: ContextFactory + 'a,
+    P: PolicyEngine<C>,
 {
     #[inline(always)]
     #[must_use]
-    pub fn new(kernel: &'a K, policy_context: K::Cx<'a>) -> Self {
+    pub fn new(policy_engine: &'a P, policy_context: C::Cx<'a>) -> Self {
         Self {
-            kernel,
+            policy_engine,
             policy_context,
         }
     }
 }
 
-impl<'a, K> FsAccess<'a, K>
+impl<'a, C, P> FsAccess<'a, C, P>
 where
-    K: Kernel,
-    K::Cx<'a>: FsAccessContext,
+    C: ContextFactory + 'a,
+    P: PolicyEngine<C>,
+    C::Cx<'a>: FsAccessContext,
 {
     /// Read a file after path resolution and typed policy grant.
     pub async fn read_file(self, path: impl AsRef<Path>) -> Result<FsReadOutput, FsAccessError> {
@@ -61,8 +63,7 @@ where
         )?;
         let action = FsReadAction::new(path);
         let grant = self
-            .kernel
-            .policy_engine()
+            .policy_engine
             .grant(&self.policy_context, action)
             .await
             .map_err(AuthorizationError::from)

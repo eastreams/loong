@@ -7,7 +7,7 @@ use crate::{
     error::PolicyGrantError,
     policy::{
         action::Action,
-        context::PolicyContext,
+        context::{ContextFactory, PolicyContext},
         grant::{ActionGrant, ActionGrantInfo},
     },
 };
@@ -18,12 +18,9 @@ use crate::{
 /// report into a [`Granted`] token and turns deny reports into structured
 /// authorization errors without inventing policy reasons.
 #[async_trait]
-pub trait PolicyEngine: Sync {
-    /// Invocation context used by policy and access actions.
-    type Cx<'a>: PolicyContext;
-
+pub trait PolicyEngine<C: ContextFactory>: Sync {
     /// Evaluate a borrowed action without consuming it.
-    async fn decide<A: Action + 'static>(&self, ctx: &Self::Cx<'_>, action: &A) -> PolicyReport;
+    async fn decide<A: Action + 'static>(&self, ctx: &C::Cx<'_>, action: &A) -> PolicyReport;
 
     /// Allocate the next grant id for an allowed action.
     async fn next_grant_id(&self) -> GrantId;
@@ -35,7 +32,7 @@ pub trait PolicyEngine: Sync {
     /// after the caller already has every capability declared by the action.
     async fn grant<A: Action>(
         &self,
-        ctx: &Self::Cx<'_>,
+        ctx: &C::Cx<'_>,
         action: A,
     ) -> Result<ActionGrant<A>, PolicyGrantError>
     where

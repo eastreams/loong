@@ -1,23 +1,12 @@
 use std::{
-    borrow::Cow,
     collections::BTreeSet,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
 };
 
-use async_trait::async_trait;
-use loong_contracts::{Capability, GrantId, PolicyEntry, PolicyOutcome, PolicyReport};
-use loong_core::{
-    kernel::Kernel as CoreKernel,
-    policy::{
-        action::Action,
-        context::{ActionContext, PolicyContext},
-        engine::PolicyEngine,
-    },
-};
+use loong_contracts::Capability;
+use loong_core::policy::context::{ActionContext, ContextFactory, PolicyContext};
 
 use super::AccessCx;
-use crate::Kernel as RuntimeKernel;
 use loong_access::fs::access::FsAccessContext;
 
 #[derive(Debug, Clone)]
@@ -64,59 +53,23 @@ impl ActionContext for AccessCxPolicyContext {
     }
 }
 
-#[derive(Default)]
-struct AccessCxPolicyEngine {
-    next_grant_id: AtomicU64,
-}
+struct AccessCxContextFactory;
 
-#[async_trait]
-impl PolicyEngine for AccessCxPolicyEngine {
+impl ContextFactory for AccessCxContextFactory {
     type Cx<'a> = AccessCxPolicyContext;
-
-    async fn decide<A: Action + 'static>(&self, _ctx: &Self::Cx<'_>, _action: &A) -> PolicyReport {
-        PolicyReport {
-            evaluations: Vec::new(),
-            outcome: PolicyOutcome::Allow {
-                source: PolicyEntry {
-                    policy_name: Cow::Borrowed("allow-all"),
-                    policy_id: 1,
-                },
-                reason: Cow::Borrowed("allowed"),
-            },
-        }
-    }
-
-    async fn next_grant_id(&self) -> GrantId {
-        GrantId(self.next_grant_id.fetch_add(1, Ordering::Relaxed) + 1)
-    }
-}
-
-#[derive(Default)]
-struct AccessCxTestKernel {
-    policy: AccessCxPolicyEngine,
-}
-
-#[async_trait]
-impl CoreKernel for AccessCxTestKernel {
-    type Cx<'a> = AccessCxPolicyContext;
-    type PolicyEngine = AccessCxPolicyEngine;
-
-    fn policy_engine(&self) -> &Self::PolicyEngine {
-        &self.policy
-    }
 }
 
 #[test]
 fn loong_kernel_exposes_access_types_and_fs_surface_for_workspace_kernels() {
     fn assert_access_exported<T>() {}
 
-    assert_access_exported::<AccessCx<'static, RuntimeKernel>>();
-    assert_access_exported::<AccessCx<'static, AccessCxTestKernel>>();
+    assert_access_exported::<AccessCx<'static, crate::policy::KernelContextFactory>>();
+    assert_access_exported::<AccessCx<'static, AccessCxContextFactory>>();
 }
 
 #[tokio::test]
 async fn access_context_preserves_workspace_policy_context_for_fs_access() {
-    let kernel = AccessCxTestKernel::default();
+    let kernel = crate::Kernel::<AccessCxContextFactory>::new_without_audit();
     let base = tempfile_dir("loong-kernel-access-context");
     let workspace_root = base.join("workspace");
     std::fs::create_dir_all(workspace_root.join("notes")).expect("create notes dir");

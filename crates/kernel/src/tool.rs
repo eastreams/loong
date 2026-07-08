@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
+use loong_core::policy::context::ContextFactory;
 use serde::Serialize;
 
 // Re-export data types from contracts
@@ -9,27 +10,41 @@ pub use loong_contracts::{
 };
 
 use crate::errors::ToolPlaneError;
-use crate::{AccessCx, Kernel, KernelPolicyContext};
+use crate::{AccessCx, Kernel, KernelContextFactory};
 
 /// Kernel-owned context passed into core tool adapters.
 ///
 /// The context carries the same policy view used by the kernel authorization
 /// step. A migrated tool should enrich this context with its own view data,
 /// then call `access()` instead of reaching for policy engines or I/O directly.
-pub struct ToolCoreContext<'a> {
-    kernel: &'a Kernel,
-    policy_context: KernelPolicyContext<'a>,
+pub struct ToolCoreContext<'a, C: ContextFactory = KernelContextFactory> {
+    kernel: &'a Kernel<C>,
+    policy_context: C::Cx<'a>,
 }
 
-impl<'a> ToolCoreContext<'a> {
+impl<'a, C> ToolCoreContext<'a, C>
+where
+    C: ContextFactory,
+{
     #[must_use]
-    pub fn new(kernel: &'a Kernel, policy_context: KernelPolicyContext<'a>) -> Self {
+    pub fn new(kernel: &'a Kernel<C>, policy_context: C::Cx<'a>) -> Self {
         Self {
             kernel,
             policy_context,
         }
     }
 
+    /// Enter the kernel-defined access facade.
+    ///
+    /// This consumes the context so access receives the complete policy view for
+    /// the action it is about to build and grant.
+    #[must_use]
+    pub fn access(self) -> AccessCx<'a, C> {
+        self.kernel.access(self.policy_context)
+    }
+}
+
+impl<'a> ToolCoreContext<'a, KernelContextFactory> {
     /// Attach the filesystem view used by `loong_access::fs`.
     ///
     /// `fs_resolution_root` decides how relative paths are resolved.
@@ -45,15 +60,6 @@ impl<'a> ToolCoreContext<'a> {
             .policy_context
             .with_fs_root_view(fs_resolution_root, fs_allowed_roots);
         self
-    }
-
-    /// Enter the kernel-defined access facade.
-    ///
-    /// This consumes the context so access receives the complete policy view for
-    /// the action it is about to build and grant.
-    #[must_use]
-    pub fn access(self) -> AccessCx<'a, Kernel> {
-        self.kernel.access(self.policy_context)
     }
 }
 
@@ -80,7 +86,7 @@ impl ToolConcurrencyClass {
 }
 
 #[async_trait]
-pub trait CoreToolAdapter: Send + Sync {
+pub trait CoreToolAdapter<C: ContextFactory = KernelContextFactory>: Send + Sync {
     fn name(&self) -> &str;
 
     async fn execute_core_tool(
@@ -96,31 +102,34 @@ pub trait CoreToolAdapter: Send + Sync {
     async fn execute_core_tool_with_context(
         &self,
         request: ToolCoreRequest,
-        _ctx: ToolCoreContext<'_>,
+        _ctx: ToolCoreContext<'_, C>,
     ) -> Result<ToolCoreOutcome, ToolPlaneError> {
         self.execute_core_tool(request).await
     }
 }
 
 #[async_trait]
-pub trait ToolExtensionAdapter: Send + Sync {
+pub trait ToolExtensionAdapter<C: ContextFactory = KernelContextFactory>: Send + Sync {
     fn name(&self) -> &str;
 
     async fn execute_tool_extension(
         &self,
         request: ToolExtensionRequest,
-        core: &(dyn CoreToolAdapter + Sync),
+        core: &(dyn CoreToolAdapter<C> + Sync),
     ) -> Result<ToolExtensionOutcome, ToolPlaneError>;
 }
 
 #[derive(Default)]
-pub struct ToolPlane {
-    core_adapters: BTreeMap<String, Arc<dyn CoreToolAdapter>>,
-    extension_adapters: BTreeMap<String, Arc<dyn ToolExtensionAdapter>>,
+pub struct ToolPlane<C: ContextFactory = KernelContextFactory> {
+    core_adapters: BTreeMap<String, Arc<dyn CoreToolAdapter<C>>>,
+    extension_adapters: BTreeMap<String, Arc<dyn ToolExtensionAdapter<C>>>,
     default_core_adapter: Option<String>,
 }
 
-impl ToolPlane {
+impl<C> ToolPlane<C>
+where
+    C: ContextFactory,
+{
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -130,7 +139,7 @@ impl ToolPlane {
         }
     }
 
-    pub fn register_core_adapter<A: CoreToolAdapter + 'static>(&mut self, adapter: A) {
+    pub fn register_core_adapter<A: CoreToolAdapter<C> + 'static>(&mut self, adapter: A) {
         let name = adapter.name().to_owned();
         if self.default_core_adapter.is_none() {
             self.default_core_adapter = Some(name.clone());
@@ -138,7 +147,7 @@ impl ToolPlane {
         self.core_adapters.insert(name, Arc::new(adapter));
     }
 
-    pub fn register_extension_adapter<A: ToolExtensionAdapter + 'static>(&mut self, adapter: A) {
+    pub fn register_extension_adapter<A: ToolExtensionAdapter<C> + 'static>(&mut self, adapter: A) {
         let name = adapter.name().to_owned();
         self.extension_adapters.insert(name, Arc::new(adapter));
     }
@@ -188,7 +197,7 @@ impl ToolPlane {
         &self,
         core_name: Option<&str>,
         request: ToolCoreRequest,
-        ctx: ToolCoreContext<'_>,
+        ctx: ToolCoreContext<'_, C>,
     ) -> Result<ToolCoreOutcome, ToolPlaneError> {
         let resolved_name = if let Some(name) = core_name {
             name
