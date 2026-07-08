@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use async_trait::async_trait;
 use loong_contracts::PolicyGrant;
 
-use crate::policy::{action::Action, context::ContextFactory};
+use crate::policy::{action::ActionMeta, context::ContextFactory};
 
 /// Typed policy that can evaluate one action kind.
 ///
@@ -11,7 +11,7 @@ use crate::policy::{action::Action, context::ContextFactory};
 /// keeps only the action-facing contract so access facades can authorize typed
 /// effects without depending on a concrete kernel.
 #[async_trait]
-pub trait Policy<C: ContextFactory, A: Action>: Send + Sync {
+pub trait Policy<C: ContextFactory, A: ActionMeta>: Send + Sync {
     /// Stable policy name used in grant metadata.
     fn name(&self) -> Cow<'static, str>;
 
@@ -25,5 +25,5 @@ pub trait Policy<C: ContextFactory, A: Action>: Send + Sync {
 pub trait PolicyAny<C: ContextFactory>: Send + Sync {
     fn name(&self) -> Cow<'static, str>;
 
-    async fn grant(&self, ctx: &C::Cx<'_>, action: &dyn Action) -> PolicyGrant;
+    async fn grant(&self, ctx: &C::Cx<'_>, action: &dyn ActionMeta) -> PolicyGrant;
 }

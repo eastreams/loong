@@ -1,8 +1,10 @@
 use std::path::{Path, PathBuf};
 
+use async_trait::async_trait;
 use loong_core::{
     error::AuthorizationError,
     policy::{
+        action::Action,
         context::{ContextFactory, FsAccessContext},
         engine::PolicyEngine,
         grant::Granted,
@@ -61,24 +63,31 @@ where
             .await
             .map_err(AuthorizationError::from)
             .map_err(FsAccessError::Authorization)?;
-        read_granted_file(grant.granted)
+        grant.granted.run(&self.policy_context).await
     }
 }
 
 /// Execute an already-authorized fs read.
 ///
-/// This is a concrete execution boundary rather than a shared backend trait:
-/// the invariant is that filesystem side effects consume `Granted<FsReadAction>`.
-pub(super) fn read_granted_file(
-    granted: Granted<FsReadAction>,
-) -> Result<FsReadOutput, FsAccessError> {
-    let action = granted.into_action();
-    let path = action.path().to_path_buf();
-    let bytes = std::fs::read(&path).map_err(|source| FsAccessError::ReadFile {
-        path: path.clone(),
-        source,
-    })?;
-    Ok(FsReadOutput { path, bytes })
+/// This is the concrete side-effect boundary for fs reads. It deliberately
+/// consumes `Granted<FsReadAction>` so raw actions cannot reach the filesystem.
+#[async_trait]
+impl<Cx> Action<Cx> for FsReadAction
+where
+    Cx: Sync,
+{
+    type Output = FsReadOutput;
+    type Error = FsAccessError;
+
+    async fn run(granted: Granted<Self>, _ctx: &Cx) -> Result<Self::Output, Self::Error> {
+        let action = granted.into_action();
+        let path = action.path().to_path_buf();
+        let bytes = std::fs::read(&path).map_err(|source| FsAccessError::ReadFile {
+            path: path.clone(),
+            source,
+        })?;
+        Ok(FsReadOutput { path, bytes })
+    }
 }
 
 /// Bytes returned by a governed fs read.

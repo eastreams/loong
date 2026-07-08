@@ -601,7 +601,7 @@ RegisteredTool<C>
 `loong_access::fs::FsAccess` 内部保留 `P: PolicyEngine<C>` 泛型；access crate 不依赖
 concrete `loong_kernel::Kernel<C>`，也不持有整个 kernel host。
 
-### 2. 拆 ActionMeta / Action<Cx>
+### 2. 拆 ActionMeta / Action<Cx>（已完成）
 
 先把当前 object-safe `Action` metadata trait 改名为 `ActionMeta`：
 
@@ -619,13 +619,13 @@ ActionMeta
 Action<Cx>: ActionMeta + Sized
   - type Output
   - type Error
-  - run(Granted<Self>, &Cx)
+  - async run(Granted<Self>, &Cx)
 ```
 
 `Granted<A>` 增加 port：
 
 ```rust
-Granted<A>::run<Cx>(&Cx)
+Granted<A>::run<Cx>(&Cx).await
 where
     A: Action<Cx>
 ```
@@ -634,6 +634,10 @@ where
 `Action<Cx>` 的 docs/comment 要说明它是 side-effect implementation hook，并且
 `run` 必须消费 `Granted<Self>`。`Granted<A>::run(cx)` 的 docs/comment 要说明它是
 授权 token 到执行的推荐入口。
+
+已落地：`ActionMeta` 只作为 policy/audit metadata view；`Action<Cx>` 是 async
+side-effect hook；`FsReadAction` 的读取副作用经由 `Granted<FsReadAction>::run(&ctx)`
+进入，不再保留平行的 `read_granted_file(...)` 执行函数。
 
 ### 3. 改 Policy / PolicyAny / PolicyEngine 泛型
 

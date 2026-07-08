@@ -6,7 +6,7 @@ use loong_contracts::{Capability, GrantId, PolicyOutcome, PolicyReport};
 use crate::{
     error::PolicyGrantError,
     policy::{
-        action::Action,
+        action::ActionMeta,
         context::{ContextFactory, PolicyContext},
         grant::{ActionGrant, ActionGrantInfo},
     },
@@ -20,7 +20,7 @@ use crate::{
 #[async_trait]
 pub trait PolicyEngine<C: ContextFactory>: Sync {
     /// Evaluate a borrowed action without consuming it.
-    async fn decide<A: Action + 'static>(&self, ctx: &C::Cx<'_>, action: &A) -> PolicyReport;
+    async fn decide<A: ActionMeta + 'static>(&self, ctx: &C::Cx<'_>, action: &A) -> PolicyReport;
 
     /// Allocate the next grant id for an allowed action.
     async fn next_grant_id(&self) -> GrantId;
@@ -30,7 +30,7 @@ pub trait PolicyEngine<C: ContextFactory>: Sync {
     ///
     /// The capability gate is deliberately built in here so policies only run
     /// after the caller already has every capability declared by the action.
-    async fn grant<A: Action>(
+    async fn grant<A: ActionMeta>(
         &self,
         ctx: &C::Cx<'_>,
         action: A,

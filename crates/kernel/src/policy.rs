@@ -16,7 +16,7 @@ use loong_contracts::{
 };
 use loong_core::{
     error::AuthorizationError,
-    policy::action::Action,
+    policy::action::ActionMeta,
     policy::{
         context::{ContextFactory, PolicyContext},
         engine::PolicyEngine,
@@ -56,7 +56,7 @@ impl LegacyKernelAction {
     }
 }
 
-impl Action for LegacyKernelAction {
+impl ActionMeta for LegacyKernelAction {
     fn kind(&self) -> &'static str {
         "action.legacy"
     }
@@ -121,7 +121,7 @@ impl<C: ContextFactory> PolicyPipeline<C> {
     #[must_use]
     pub fn with_policy<A, P>(mut self, policy: P) -> Self
     where
-        A: Action + 'static,
+        A: ActionMeta + 'static,
         P: Policy<C, A> + 'static,
     {
         self.push_policy::<A, P>(policy);
@@ -131,7 +131,7 @@ impl<C: ContextFactory> PolicyPipeline<C> {
     /// Add a typed policy to an existing pipeline.
     pub fn push_policy<A, P>(&mut self, policy: P)
     where
-        A: Action + 'static,
+        A: ActionMeta + 'static,
         P: Policy<C, A> + 'static,
     {
         let id = self.allocate_policy_id();
@@ -212,7 +212,7 @@ impl<C: ContextFactory> PolicyPipeline<C> {
     ///
     /// New access-backed side effects should prefer `PolicyEngine::grant` on a
     /// typed action and consume the resulting grant inside the access module.
-    pub async fn authorize_kernel_action<A: Action>(
+    pub async fn authorize_kernel_action<A: ActionMeta>(
         &self,
         ctx: &C::Cx<'_>,
         action: A,
@@ -253,18 +253,18 @@ struct RegisteredAnyPolicy<C: ContextFactory> {
     policy: Arc<dyn PolicyAny<C>>,
 }
 
-struct RegisteredPolicy<C: ContextFactory, A: Action> {
+struct RegisteredPolicy<C: ContextFactory, A: ActionMeta> {
     id: PolicyId,
     // TODO(policy-registration-metadata): Mirror RegisteredAnyPolicy metadata
     // when typed policy registration records registered_at/source data.
     policy: Arc<dyn Policy<C, A>>,
 }
 
-struct TypedPolicyEntries<C: ContextFactory, A: Action> {
+struct TypedPolicyEntries<C: ContextFactory, A: ActionMeta> {
     policies: Vec<RegisteredPolicy<C, A>>,
 }
 
-impl<C: ContextFactory, A: Action> Default for TypedPolicyEntries<C, A> {
+impl<C: ContextFactory, A: ActionMeta> Default for TypedPolicyEntries<C, A> {
     fn default() -> Self {
         Self {
             policies: Vec::new(),
@@ -288,7 +288,7 @@ impl<C> PolicyEngine<C> for PolicyPipeline<C>
 where
     C: ContextFactory + Send + Sync,
 {
-    async fn decide<A: Action + 'static>(&self, ctx: &C::Cx<'_>, action: &A) -> PolicyReport {
+    async fn decide<A: ActionMeta>(&self, ctx: &C::Cx<'_>, action: &A) -> PolicyReport {
         let mut evaluations = Vec::new();
 
         for registered in &self.pre_policies {
@@ -444,7 +444,7 @@ where
         Cow::Borrowed("allow")
     }
 
-    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &dyn Action) -> PolicyGrant {
+    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &dyn ActionMeta) -> PolicyGrant {
         PolicyGrant {
             decision: PolicyDecision::Allow,
             predicate: None,
@@ -608,7 +608,7 @@ mod tests {
             Cow::Borrowed(self.name)
         }
 
-        async fn grant(&self, _ctx: &C::Cx<'_>, _action: &dyn Action) -> PolicyGrant {
+        async fn grant(&self, _ctx: &C::Cx<'_>, _action: &dyn ActionMeta) -> PolicyGrant {
             PolicyGrant {
                 decision: self.decision,
                 predicate: None,
@@ -627,8 +627,8 @@ mod tests {
     #[async_trait]
     impl<C, A> Policy<C, A> for StaticTypedPolicy
     where
-        C: ContextFactory + Send + Sync,
-        A: Action + Send + Sync,
+        C: ContextFactory,
+        A: ActionMeta,
     {
         fn name(&self) -> Cow<'static, str> {
             Cow::Borrowed(self.name)
@@ -656,7 +656,7 @@ mod tests {
             Cow::Borrowed("counting-any")
         }
 
-        async fn grant(&self, _ctx: &C::Cx<'_>, _action: &dyn Action) -> PolicyGrant {
+        async fn grant(&self, _ctx: &C::Cx<'_>, _action: &dyn ActionMeta) -> PolicyGrant {
             self.calls.fetch_add(1, Ordering::Relaxed);
             PolicyGrant {
                 decision: PolicyDecision::Allow,
@@ -668,7 +668,7 @@ mod tests {
 
     struct TypedOnlyAction;
 
-    impl Action for TypedOnlyAction {
+    impl ActionMeta for TypedOnlyAction {
         fn kind(&self) -> &'static str {
             "test.typed_only"
         }

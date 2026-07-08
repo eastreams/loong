@@ -12,14 +12,14 @@ use loong_contracts::{Capability, GrantId, PolicyEntry, PolicyOutcome, PolicyRep
 use loong_core::{
     kernel::Kernel,
     policy::{
-        action::Action,
+        action::ActionMeta,
         context::{ContextFactory, FsAccessContext, PolicyContext},
         engine::PolicyEngine,
     },
 };
 
 use super::{
-    access::{FsAccess, FsAccessError, read_granted_file},
+    access::{FsAccess, FsAccessError},
     action::{FsAction, FsReadAction},
     error::FsActionError,
     path::CanonicalPath,
@@ -81,7 +81,7 @@ impl Default for FsAccessPolicyEngine {
 
 #[async_trait]
 impl PolicyEngine<FsAccessContextFactory> for FsAccessPolicyEngine {
-    async fn decide<A: Action + 'static>(
+    async fn decide<A: ActionMeta + 'static>(
         &self,
         _ctx: &<FsAccessContextFactory as ContextFactory>::Cx<'_>,
         _action: &A,
@@ -310,7 +310,11 @@ async fn fs_read_execution_boundary_consumes_granted_action() {
         .await
         .expect("policy should grant read");
 
-    let output = read_granted_file(grant.granted).expect("granted read should execute");
+    let output = grant
+        .granted
+        .run(&policy_context)
+        .await
+        .expect("granted read should execute");
 
     let expected_path =
         dunce::canonicalize(workspace_root.join("notes/todo.md")).expect("canonical note path");

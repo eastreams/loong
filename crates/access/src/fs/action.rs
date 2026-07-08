@@ -1,7 +1,7 @@
 use std::{borrow::Cow, collections::BTreeSet, path::Path};
 
 use loong_contracts::Capability;
-use loong_core::policy::action::Action;
+use loong_core::policy::action::ActionMeta;
 
 use super::path::CanonicalPath;
 
@@ -27,7 +27,7 @@ impl FsReadAction {
     }
 }
 
-impl Action for FsReadAction {
+impl ActionMeta for FsReadAction {
     fn kind(&self) -> &'static str {
         "fs.read"
     }
@@ -61,7 +61,7 @@ impl FsAction {
     }
 }
 
-impl Action for FsAction {
+impl ActionMeta for FsAction {
     fn kind(&self) -> &'static str {
         match self {
             Self::Read(action) => action.kind(),
