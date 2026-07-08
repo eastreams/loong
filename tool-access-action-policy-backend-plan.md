@@ -254,10 +254,10 @@ pub trait PolicyEngine<C: ContextFactory>: Sync {
 }
 ```
 
-`PolicyContext` 是最小 root view，主要服务 capability gate。`ActionContext`
-不应该再作为 unified context 的根约束；当前代码里的 `execution_plane()` /
-`plane_tier()` 是 invocation/global execution fact，后续应拆成更准确的小 view
-trait，例如 `ExecutionView`，只在真正需要的 policy/access 处约束。
+`PolicyContext` 是最小 root view，主要服务 capability gate。旧 `ActionContext`
+已删除；`ExecutionPlane` / `PlaneTier` 仍可作为 invocation/global execution fact
+保留在具体 context 里。后续若有 policy/access 需要读取它们，再拆成更准确的小
+view trait，例如 `ExecutionView`，只在真正需要的位置约束。
 
 ### `loong-kernel`
 
@@ -449,6 +449,10 @@ tool helper 在调用 access 前执行 config-backed policy 分支。需要配�
 - kernel facade `AccessCx<'a, C>` 只保留 context factory 泛型，不再暴露额外
   `K: Kernel` 参数。
 - `Kernel<C>` 构造函数已泛型化，可以实例化非默认 context factory。
+- `ActionContext` / `WorkspacePolicyContext` 已从 `loong-core` 删除。
+- `KernelPolicyContext` 已降为默认/legacy context：它保留 pack/token/time/request
+  params、plane/tier invocation facts 和当前临时 fs view，不再通过 core root trait
+  传播。
 - `PolicyDecision` 已是 `Allow` / `Deny` / `Continue` / `Advance`。
 - `deny_read_filenames` 已作为 typed `FsReadAction` policy 接入。
 - `deny_read_filenames` 已有 config -> runtime config -> policy pipeline ->
@@ -459,7 +463,6 @@ tool helper 在调用 access 前执行 config-backed policy 分支。需要配�
 - 默认 kernel 入口仍使用 `KernelPolicyContext<'a>`。
 - app 仍使用默认 `KernelContextFactory`，尚未拥有 concrete unified context。
 - `ToolCoreContext::with_fs_root_view(...)` 仍在临时拼 fs view。
-- `ActionContext` / `WorkspacePolicyContext` 仍在 core 中，后续需要重新评估并删减。
 - `loong_access::fs::FsAccess` 内部只持有 policy engine 引用，不再持有 kernel host。
   该类型仍有 `P: PolicyEngine<C>` 泛型，因为 `PolicyEngine<C>` 需要 generic
   action grant，不能直接做成普通 trait object。
@@ -636,11 +639,14 @@ runtime config 来构造 policy。
 删除或替换：
 
 - `KernelPolicyContext`，或至少降为 app/test-only context；
-- `ActionContext` root bound；
-- `WorkspacePolicyContext`；
 - 当前 object-safe `Action` metadata trait；
 - `Policy<PolicyPipeline, A>` 这种 engine-bound policy impl；
 - `ToolCoreContext::with_fs_root_view(...)`。
+
+已完成：
+
+- `ActionContext` root bound 已删除；
+- `WorkspacePolicyContext` 已删除。
 
 保持破坏性改动优先，不为已迁移路径保留 alias / compatibility shim。
 

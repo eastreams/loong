@@ -1,6 +1,6 @@
-use std::{collections::BTreeSet, path::Path};
+use std::collections::BTreeSet;
 
-use loong_contracts::{Capability, ExecutionPlane, PlaneTier};
+use loong_contracts::Capability;
 
 pub trait PolicyContext: Send + Sync {
     /// Allowed capabilities
@@ -16,14 +16,4 @@ pub trait ContextFactory: Send + Sync + 'static {
     type Cx<'a>: PolicyContext
     where
         Self: 'a;
-}
-
-pub trait ActionContext: PolicyContext {
-    fn execution_plane(&self) -> ExecutionPlane;
-
-    fn plane_tier(&self) -> PlaneTier;
-}
-
-pub trait WorkspacePolicyContext: PolicyContext {
-    fn workspace_root(&self) -> &Path;
 }

@@ -19,7 +19,7 @@ use loong_core::{
     error::AuthorizationError,
     policy::action::Action,
     policy::{
-        context::{ActionContext, ContextFactory, PolicyContext},
+        context::{ContextFactory, PolicyContext},
         engine::PolicyEngine,
         policy::{Policy, PolicyAny},
     },
@@ -32,11 +32,12 @@ use crate::{
 
 const DEFAULT_DENY_REASON: &str = "No matching policy.";
 
-/// Unified policy/action context assembled by the kernel for one invocation.
+/// Default invocation context used by [`KernelContextFactory`].
 ///
-/// Add global execution facts here when they are shared by tools, policies, and
-/// access actions. Do not put action-owned data here, and do not make actions
-/// carry runtime roots just because one policy needs them.
+/// This is the legacy/default context for kernel-owned entry points. App-owned
+/// runtimes can use `Kernel<C>` with their own context factory instead. Keep
+/// global invocation facts here; domain-specific facts should be exposed
+/// through small view traits such as [`FsAccessContext`].
 pub struct KernelPolicyContext<'a> {
     pub pack: &'a VerticalPackManifest,
     pub token: &'a CapabilityToken,
@@ -117,16 +118,6 @@ impl KernelInvocationContext for KernelPolicyContext<'_> {
 
     fn request_parameters(&self) -> Option<&serde_json::Value> {
         self.request_parameters
-    }
-}
-
-impl ActionContext for KernelPolicyContext<'_> {
-    fn execution_plane(&self) -> ExecutionPlane {
-        self.plane
-    }
-
-    fn plane_tier(&self) -> PlaneTier {
-        self.tier
     }
 }
 

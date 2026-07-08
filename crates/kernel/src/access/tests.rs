@@ -4,7 +4,7 @@ use std::{
 };
 
 use loong_contracts::Capability;
-use loong_core::policy::context::{ActionContext, ContextFactory, PolicyContext};
+use loong_core::policy::context::{ContextFactory, PolicyContext};
 
 use super::AccessCx;
 use loong_access::fs::access::FsAccessContext;
@@ -40,16 +40,6 @@ impl FsAccessContext for AccessCxPolicyContext {
 
     fn fs_allowed_roots(&self) -> &[PathBuf] {
         &self.allowed_roots
-    }
-}
-
-impl ActionContext for AccessCxPolicyContext {
-    fn execution_plane(&self) -> loong_contracts::ExecutionPlane {
-        loong_contracts::ExecutionPlane::Tool
-    }
-
-    fn plane_tier(&self) -> loong_contracts::PlaneTier {
-        loong_contracts::PlaneTier::Core
     }
 }
 

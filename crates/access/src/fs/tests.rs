@@ -13,7 +13,7 @@ use loong_core::{
     kernel::Kernel,
     policy::{
         action::Action,
-        context::{ActionContext, ContextFactory, PolicyContext},
+        context::{ContextFactory, PolicyContext},
         engine::PolicyEngine,
     },
 };
@@ -56,16 +56,6 @@ impl FsAccessContext for FsAccessPolicyContext {
 
     fn fs_allowed_roots(&self) -> &[PathBuf] {
         &self.allowed_roots
-    }
-}
-
-impl ActionContext for FsAccessPolicyContext {
-    fn execution_plane(&self) -> loong_contracts::ExecutionPlane {
-        loong_contracts::ExecutionPlane::Tool
-    }
-
-    fn plane_tier(&self) -> loong_contracts::PlaneTier {
-        loong_contracts::PlaneTier::Core
     }
 }
 
