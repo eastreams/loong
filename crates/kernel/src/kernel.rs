@@ -1,4 +1,4 @@
-use loong_contracts::ToolPath;
+use loong_contracts::{ToolOutcome, ToolPath};
 use loong_core::policy::context::ContextFactory;
 use loong_core::tool::ToolImpl;
 use std::{
@@ -157,6 +157,84 @@ where
     {
         self.tool_plane.register(path, tool)?;
         Ok(())
+    }
+
+    pub async fn invoke_tool<'a>(
+        &'a self,
+        pack_id: &str,
+        token: &CapabilityToken,
+        required_capabilities: &BTreeSet<Capability>,
+        path: &ToolPath,
+        payload: serde_json::Value,
+        policy_context: C::Cx<'a>,
+    ) -> Result<ToolOutcome, KernelError>
+    where
+        for<'ctx> C::Cx<'ctx>: KernelInvocationContext,
+    {
+        let pack = self.get_pack(pack_id)?;
+        let now = self
+            .authorize_pack_operation(
+                &policy_context,
+                pack,
+                token,
+                path.as_str(),
+                required_capabilities,
+            )
+            .await?;
+
+        match self
+            .tool_plane
+            .invoke(path, &policy_context, payload.clone())
+            .await
+        {
+            Ok(outcome) => {
+                self.record_plane_invocation(PlaneInvocationRecord {
+                    timestamp_epoch_s: now,
+                    agent_id: &token.agent_id,
+                    pack_id: &pack.pack_id,
+                    plane: ExecutionPlane::Tool,
+                    tier: PlaneTier::Core,
+                    primary_adapter: "typed-tool-plane".to_owned(),
+                    delegated_core_adapter: None,
+                    operation: path.to_string(),
+                    required_capabilities,
+                })?;
+                Ok(outcome)
+            }
+            Err(crate::errors::ToolPlaneError::ToolNotFound(_)) => {
+                let resolved_core_adapter = self
+                    .legacy_tool_plane
+                    .default_core_adapter_name()
+                    .map(std::string::ToString::to_string)
+                    .unwrap_or_else(|| "default".to_owned());
+                let request = ToolCoreRequest {
+                    tool_name: path.to_string(),
+                    payload,
+                };
+                let outcome = self
+                    .legacy_tool_plane
+                    .execute_core_with_context(None, request, &policy_context)
+                    .await?;
+
+                self.record_plane_invocation(PlaneInvocationRecord {
+                    timestamp_epoch_s: now,
+                    agent_id: &token.agent_id,
+                    pack_id: &pack.pack_id,
+                    plane: ExecutionPlane::Tool,
+                    tier: PlaneTier::Core,
+                    primary_adapter: format!("legacy:{resolved_core_adapter}"),
+                    delegated_core_adapter: None,
+                    operation: path.to_string(),
+                    required_capabilities,
+                })?;
+
+                Ok(ToolOutcome {
+                    status: outcome.status,
+                    payload: outcome.payload,
+                })
+            }
+            Err(error) => Err(KernelError::from(error)),
+        }
     }
 }
 
@@ -1091,6 +1169,9 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
 
 impl<C> loong_core::kernel::Kernel<C> for Kernel<C>
 where
