@@ -117,12 +117,13 @@ let ctx = ctx.with_runtime_narrowing(...)?;
 let output = ctx.access().fs().read_file(&path).await?;
 ```
 
-access facade 只借用 `&ctx`：
+access facade 只借用 `&ctx`。`AccessCx::new(...)` 只应出现在具体
+context 的 `access()` 实现里；其它调用点使用 `ctx.access()`：
 
 ```rust
-impl AppExecutionContext<'_> {
-    pub fn access(&self) -> AccessCx<'_, AppContextFactory> {
-        AccessCx::new(self)
+impl<'a> AppExecutionContext<'a> {
+    pub(crate) fn access(&self) -> AccessCx<'_, 'a, AppContextFactory> {
+        AccessCx::new(self.kernel, self)
     }
 }
 ```
@@ -379,10 +380,10 @@ impl<C: ContextFactory> PolicyEngine<C> for PolicyPipeline<C> {
 这类 domain getter，也不应该发明第二套 tool context wrapper。
 
 当前代码状态：`Kernel<C>`、`PolicyPipeline<C>`、`ToolPlane<C>`、
-`ToolCoreContext<'a, C>`、`AccessCx<'a, C>` 已落地。`ToolCoreContext` 是过渡层，
-应被 unified context 直接替换。kernel 不再定义 `KernelPolicyContext` /
-`KernelContextFactory`，也不再为 `Kernel`、`ToolPlane` 或 `PolicyPipeline` 提供
-默认 context factory。app 和 spec 分别定义自己的 concrete context factory。
+`AccessCx<'borrow, 'ctx, C>` 已落地。`ToolCoreContext` 已删除，tool adapter 直接接收
+`&C::Cx<'_>`。kernel 不再定义 `KernelPolicyContext` / `KernelContextFactory`，也不再为
+`Kernel`、`ToolPlane` 或 `PolicyPipeline` 提供默认 context factory。app 和 spec
+分别定义自己的 concrete context factory。
 
 ### `loong-access`
 
@@ -521,7 +522,6 @@ tool helper 在调用 access 前执行 config-backed policy 分支。需要配�
 - `loong-access` 当前只被 `loong-kernel` 依赖，app 不直接依赖 access。
 - `FsReadAction` / `FsAction` / `CanonicalPath` / `FsAccess::read_file` 已落地。
 - `file.read` / `read` path mode 已迁移到 access-backed read；当前调用经由
-  `ToolCoreContext::access().fs().read_file(...)`，这是过渡形状，目标是
   `ctx.access().fs().read_file(...)`。
 - migrated read 已退出 `direct_policy_preflight` 的 file 分支。
 - `FilePolicyExtension` 不再覆盖 read，暂时只服务未迁移的 file surfaces。
@@ -530,10 +530,10 @@ tool helper 在调用 access 前执行 config-backed policy 分支。需要配�
 - `Policy` / `PolicyAny` / `PolicyEngine` 已改为显式 `C: ContextFactory` 泛型。
 - `PolicyEngine` 不再定义 `type Cx`。
 - `Kernel<C>` / `PolicyPipeline<C>` / `ToolPlane<C>` 已泛型化。
-- `ToolCoreContext<'a, C>` 携带 `C::Cx<'a>`；该 wrapper 已确认应删除，由 unified
-  context 直接替代。
-- kernel facade `AccessCx<'a, C>` 只保留 context factory 泛型，不再暴露额外
-  `K: Kernel` 参数。
+- `ToolCoreContext` 已删除；kernel/tool/app 直接传递 app/spec/test 定义的 unified
+  context。
+- kernel facade `AccessCx<'borrow, 'ctx, C>` 只保留 context factory 泛型，不再暴露
+  额外 `K: Kernel` 参数；它借用 unified context，不 own context。
 - `Kernel<C>` 构造函数已泛型化，可以实例化非默认 context factory。
 - `ActionContext` / `WorkspacePolicyContext` 已从 `loong-core` 删除。
 - `KernelPolicyContext` / `KernelContextFactory` 已从 kernel 删除；legacy kernel
@@ -545,6 +545,10 @@ tool helper 在调用 access 前执行 config-backed policy 分支。需要配�
   和 daemon/spec runtime。
 - `ToolCoreContext::with_fs_root_view(...)` 已删除；fs root view 在 app context 构造时
   给出。
+- `AccessCx` / `FsAccess` 已改为借用 `&ctx`，外部调用点不再使用
+  `kernel.access(ctx)`。
+- fs read execution boundary 已收敛到 `Action<Cx>::run` /
+  `Granted<A>::run(ctx)`。
 - `PolicyDecision` 已是 `Allow` / `Deny` / `Continue` / `Advance`。
 - `deny_read_filenames` 已作为 typed `FsReadAction` policy 接入。
 - `deny_read_filenames` 已有 config -> runtime config -> policy pipeline ->
@@ -552,22 +556,15 @@ tool helper 在调用 access 前执行 config-backed policy 分支。需要配�
 
 ### 仍是过渡形状
 
-- `ToolCoreContext` 仍存在，并且仍让 access 调用从 wrapper 进入；它应该删除。
 - `CoreToolAdapter` / `ToolExtensionAdapter` 和 `execute_tool_core` /
   `execute_tool_extension` 仍是两套 execution API；它们应该收敛为单一 tool
   execution path。
 - `ToolCoreRequest` / `ToolExtensionRequest` 仍在 contracts/kernel 路径中扩散；长期应
   收敛为统一 tool invocation 数据，core/extension 只保留为 provenance metadata。
-- `AccessCx` / `FsAccess` 当前仍消费 owned context；目标是 access 借用 `&ctx`，ctx
-  自身由 app 在调用链上派生新 owned value。
 - `loong_access::fs::FsAccess` 内部只持有 policy engine 引用，不再持有 kernel host。
   该类型仍有 `P: PolicyEngine<C>` 泛型，因为 `PolicyEngine<C>` 需要 generic
   action grant，不能直接做成普通 trait object。
-- fs read execution boundary 仍未收敛到 `Action<Cx>::run` / `Granted<A>::run(cx)`。
 - `fs_read_error_is_policy_denial` 仍是临时 deny 分类 helper。
-
-- `ActionMeta` / `Action<Cx>` split 尚未落地。
-- `Granted<A>::run(cx)` port 尚未落地。
 - HTTP / shell / browser / memory 等 tool family 尚未迁移。
 - child action constructor pattern 尚未落地。
 - `PolicyReport` 尚未贯穿 access/tool error 到 Agent-facing response。
@@ -603,7 +600,7 @@ PolicyEngine<C>
 Policy<C, A>
 PolicyAny<C>
 Kernel<C>
-AccessCx<'a, C>
+AccessCx<'borrow, 'ctx, C>
 ToolPlane<C>
 RegisteredTool<C>
 ```
@@ -797,10 +794,11 @@ runtime config 来构造 policy。
 - `KernelPolicyContext` / `KernelContextFactory` 已删除；
 - `ToolCoreContext::with_fs_root_view(...)` 已删除；
 - kernel/app/spec/daemon 调用点已显式传入 app/spec/test context。
+- `ToolCoreContext` wrapper 本身已删除；tool adapter/helper 直接接收
+  `&C::Cx<'_>`。
 
 仍待删除：
 
-- `ToolCoreContext` wrapper 本身；
 - `CoreToolAdapter` / `ToolExtensionAdapter` 双 execution API；
 - `execute_tool_core` / `execute_tool_extension` 双 kernel entry；
 - `ToolCoreRequest` / `ToolExtensionRequest` 在主 execution path 上的扩散。
