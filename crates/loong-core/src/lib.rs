@@ -10,6 +10,7 @@ mod lifecycle;
 pub mod policy;
 mod session;
 mod task;
+pub mod tool;
 mod workspace;
 
 pub use artifact::{
