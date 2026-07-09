@@ -770,7 +770,18 @@ ctx.access().fs().read_file(&path).await
 
 - `AppContextFactory`
 - `AppExecutionContext<'a>`
-- 需要的小 view trait impls
+- 所需 view traits 的 impls
+
+注意：concrete context 由 app 定义，但 view trait 不一定定义在 app。view trait 的
+定义位置应跟随它服务的消费者边界：
+
+- `PolicyContext` / `FsAccessContext` 这类 core/access 共用 view 放在 `loong-core`；
+- `KernelInvocationContext` 这类 kernel governance view 放在 `loong-kernel`；
+- 只有 app 私有、且不会成为跨 crate 约束的 view 才放在 app。
+
+app 的职责是把 `AppExecutionContext<'a>` 实现为这些 view 的并集。`SpecExecutionContext`
+或测试 context 也可以实现同一组或子集 view；policy/access 只能通过 trait bound
+读取需要的信息，不能绑定 app concrete context。
 
 `KernelPolicyContext::with_fs_root_view(...)` 已删除。fs root view 现在由 app context
 构造处提供；fs root view 不由 action 持有，也不由 access helper 临时塞入 kernel
