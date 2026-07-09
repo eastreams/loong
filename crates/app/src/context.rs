@@ -463,15 +463,8 @@ fn bootstrap_kernel_context_with_audit_sink(
             .map_err(|e| format!("set default memory adapter failed: {e}"))?;
     }
 
-    kernel.register_core_tool_adapter(
-        crate::tools::KernelToolAdapter::with_config_and_observability(
-            tool_rt.clone(),
-            config.observability.clone(),
-        ),
-    );
-    kernel
-        .set_default_core_tool_adapter("mvp-tools")
-        .map_err(|e| format!("set default tool adapter failed: {e}"))?;
+    crate::tools::register_kernel_tools(&mut kernel, tool_rt.clone(), config.observability.clone())
+        .map_err(|e| format!("kernel tool registration failed: {e}"))?;
 
     // Register policy extensions for unified security enforcement.
     kernel.register_policy_extension(crate::tools::file_policy_ext::FilePolicyExtension::new(

@@ -105,6 +105,7 @@ pub use catalog::{
 };
 #[cfg(feature = "feishu-integration")]
 pub(crate) use feishu::{DeferredFeishuCardUpdate, drain_deferred_feishu_card_updates};
+pub(crate) use kernel_adapter::register_kernel_tools;
 pub use kernel_adapter::{KernelToolAdapter, MvpToolAdapter};
 pub use security_posture::{
     BrowserSurfaceSecurityPosture, ShellExecutionSecurityPosture, SkillsSecurityPosture,
@@ -381,7 +382,10 @@ pub(crate) async fn execute_kernel_tool_request(
     request: ToolCoreRequest,
     trusted_internal_payload: bool,
 ) -> Result<ToolCoreOutcome, loong_kernel::KernelError> {
-    let caps = required_capabilities_for_request(&request);
+    let request = ToolCoreRequest {
+        tool_name: canonical_tool_name(request.tool_name.as_str()).to_owned(),
+        payload: request.payload,
+    };
     let execute = async {
         let effective_config = tool_dispatch::effective_tool_runtime_config_for_payload(
             &request.payload,
@@ -390,6 +394,18 @@ pub(crate) async fn execute_kernel_tool_request(
         .map_err(|error| {
             loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(error))
         })?;
+        let request = if request.tool_name == "read" {
+            routing::route_direct_read_tool_request_for_kernel(request, &effective_config).map_err(
+                |error| {
+                    loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(
+                        error,
+                    ))
+                },
+            )?
+        } else {
+            request
+        };
+        let caps = required_capabilities_for_request(&request);
         let tool_policy_params = json!({
             "tool_name": &request.tool_name,
             "payload": &request.payload,
@@ -404,16 +420,22 @@ pub(crate) async fn execute_kernel_tool_request(
             .map_err(|error| {
                 loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(error))
             })?;
-        ctx.kernel
-            .execute_tool_core(
+        let path = loong_contracts::ToolPath::from(request.tool_name.clone());
+        let outcome = ctx
+            .kernel
+            .invoke_tool(
                 ctx.pack_id(),
                 &ctx.token,
                 &caps,
-                None,
-                request,
+                &path,
+                request.payload,
                 policy_context,
             )
-            .await
+            .await?;
+        Ok(ToolCoreOutcome {
+            status: outcome.status,
+            payload: outcome.payload,
+        })
     };
     if trusted_internal_payload {
         return with_trusted_internal_tool_payload_async(execute).await;

@@ -12,7 +12,6 @@ use crate::conversation::{
     TurnEngine, TurnResult,
 };
 use crate::session::store::SessionStoreConfig;
-use crate::tools::KernelToolAdapter;
 use crate::tools::{ToolView, runtime_config::ToolRuntimeConfig};
 
 fn env_lock() -> &'static Mutex<()> {
@@ -157,10 +156,12 @@ impl TurnTestHarness {
         kernel
             .register_pack((*pack).clone())
             .expect("register pack");
-        kernel.register_core_tool_adapter(KernelToolAdapter::with_config(tool_config.clone()));
-        kernel
-            .set_default_core_tool_adapter("mvp-tools")
-            .expect("set default adapter");
+        crate::tools::register_kernel_tools(
+            &mut kernel,
+            tool_config.clone(),
+            crate::config::ObservabilityConfig::runtime_default(),
+        )
+        .expect("register kernel tools");
 
         // TODO: The policy-extension is deleted, there may be new policy register logic
 

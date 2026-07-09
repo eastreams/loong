@@ -86,22 +86,7 @@ fn execute_direct_read_tool_core_with_config(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    let runtime_view = runtime_tool_view_for_runtime_config(config);
-    if !runtime_view.contains("read") {
-        let unavailable_hint = unavailable_runtime_hint("read", &runtime_view);
-        return Err(format!(
-            "tool_surface_unavailable: `read` cannot route to `read` in this runtime{}",
-            unavailable_hint
-        ));
-    }
-
-    let read_route = classify_direct_read_route(&request.payload)?;
-    let mut payload = request.payload;
-    normalize_direct_read_payload_for_route(read_route, &mut payload);
-    let direct_request = ToolCoreRequest {
-        tool_name: "read".to_owned(),
-        payload,
-    };
+    let (read_route, direct_request) = route_direct_read_request_for_kernel(request, config)?;
 
     match read_route {
         DirectReadRoute::Path => Err("read requires kernel access context".to_owned()),
@@ -123,22 +108,7 @@ async fn execute_direct_read_tool_core_with_context(
     config: &runtime_config::ToolRuntimeConfig,
     ctx: &AppExecutionContext<'_>,
 ) -> Result<ToolCoreOutcome, String> {
-    let runtime_view = runtime_tool_view_for_runtime_config(config);
-    if !runtime_view.contains("read") {
-        let unavailable_hint = unavailable_runtime_hint("read", &runtime_view);
-        return Err(format!(
-            "tool_surface_unavailable: `read` cannot route to `read` in this runtime{}",
-            unavailable_hint
-        ));
-    }
-
-    let read_route = classify_direct_read_route(&request.payload)?;
-    let mut payload = request.payload;
-    normalize_direct_read_payload_for_route(read_route, &mut payload);
-    let direct_request = ToolCoreRequest {
-        tool_name: "read".to_owned(),
-        payload,
-    };
+    let (read_route, direct_request) = route_direct_read_request_for_kernel(request, config)?;
 
     match read_route {
         DirectReadRoute::Path => {
@@ -155,6 +125,45 @@ async fn execute_direct_read_tool_core_with_context(
             file::execute_glob_search_tool_with_config(direct_request, config)
         }
     }
+}
+
+pub(crate) fn route_direct_read_tool_request_for_kernel(
+    request: ToolCoreRequest,
+    config: &runtime_config::ToolRuntimeConfig,
+) -> Result<ToolCoreRequest, String> {
+    let (read_route, request) = route_direct_read_request_for_kernel(request, config)?;
+    let tool_name = match read_route {
+        DirectReadRoute::Path => "read",
+        DirectReadRoute::Query => "content.search",
+        DirectReadRoute::Pattern => "glob.search",
+    };
+    Ok(ToolCoreRequest {
+        tool_name: tool_name.to_owned(),
+        payload: request.payload,
+    })
+}
+
+fn route_direct_read_request_for_kernel(
+    request: ToolCoreRequest,
+    config: &runtime_config::ToolRuntimeConfig,
+) -> Result<(DirectReadRoute, ToolCoreRequest), String> {
+    let runtime_view = runtime_tool_view_for_runtime_config(config);
+    if !runtime_view.contains("read") {
+        let unavailable_hint = unavailable_runtime_hint("read", &runtime_view);
+        return Err(format!(
+            "tool_surface_unavailable: `read` cannot route to `read` in this runtime{}",
+            unavailable_hint
+        ));
+    }
+
+    let read_route = classify_direct_read_route(&request.payload)?;
+    let mut payload = request.payload;
+    normalize_direct_read_payload_for_route(read_route, &mut payload);
+    let direct_request = ToolCoreRequest {
+        tool_name: "read".to_owned(),
+        payload,
+    };
+    Ok((read_route, direct_request))
 }
 
 fn route_direct_tool_request(

@@ -55,10 +55,12 @@ async fn execute_tool_core_with_test_context(
     kernel
         .register_pack((*pack).clone())
         .map_err(|error| format!("kernel pack registration failed: {error}"))?;
-    kernel.register_core_tool_adapter(KernelToolAdapter::with_config(config.clone()));
-    kernel
-        .set_default_core_tool_adapter("mvp-tools")
-        .map_err(|error| format!("set default tool adapter failed: {error}"))?;
+    crate::tools::register_kernel_tools(
+        &mut kernel,
+        config.clone(),
+        crate::config::ObservabilityConfig::runtime_default(),
+    )
+    .map_err(|error| format!("kernel tool registration failed: {error}"))?;
     let token = kernel
         .issue_token("test-pack", "test-agent", 60)
         .map_err(|error| format!("kernel token issue failed: {error}"))?;

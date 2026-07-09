@@ -1,6 +1,6 @@
 use async_trait::async_trait;
-use loong_contracts::ToolPlaneError;
-use loong_kernel::{CoreToolAdapter, ToolCoreOutcome, ToolCoreRequest};
+use loong_contracts::{ToolPath, ToolPlaneError};
+use loong_kernel::{CoreToolAdapter, Kernel, ToolCoreOutcome, ToolCoreRequest};
 
 use super::runtime_config::ToolRuntimeConfig;
 use crate::config::ObservabilityConfig;
@@ -45,6 +45,20 @@ impl KernelToolAdapter {
 
 fn default_observability_config() -> ObservabilityConfig {
     ObservabilityConfig::runtime_default()
+}
+
+pub(crate) fn register_kernel_tools(
+    kernel: &mut Kernel<AppContextFactory>,
+    config: ToolRuntimeConfig,
+    observability_config: ObservabilityConfig,
+) -> Result<(), loong_kernel::KernelError> {
+    kernel.register_tool(ToolPath::from("read"), super::file::ReadFileTool)?;
+    kernel.register_core_tool_adapter(KernelToolAdapter::with_config_and_observability(
+        config,
+        observability_config,
+    ));
+    kernel.set_default_core_tool_adapter("mvp-tools")?;
+    Ok(())
 }
 
 #[async_trait]

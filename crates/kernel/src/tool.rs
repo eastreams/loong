@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
-use loong_contracts::{ToolOutcome, ToolPath};
+use loong_contracts::{ToolExecutionError, ToolInputError, ToolOutcome, ToolPath};
 use loong_core::{
     policy::context::ContextFactory,
     tool::{RegisteredTool, ToolImpl, ToolProvenance},
@@ -113,7 +113,15 @@ where
         registered
             .invoke(ctx, payload)
             .await
-            .map_err(|error| ToolPlaneError::Execution(error.to_string()))
+            .map_err(|error| ToolPlaneError::Execution(tool_execution_error_reason(error)))
+    }
+}
+
+fn tool_execution_error_reason(error: ToolExecutionError) -> String {
+    match error {
+        ToolExecutionError::Input(ToolInputError::InvalidPayload { reason })
+        | ToolExecutionError::Execution { reason } => reason,
+        other => other.to_string(),
     }
 }
 

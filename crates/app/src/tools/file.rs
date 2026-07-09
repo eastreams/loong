@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{BTreeSet, VecDeque},
     ffi::OsString,
     fs,
     path::{Path, PathBuf},
@@ -9,17 +9,23 @@ use std::{
 use super::runtime_events::{
     ToolFileChangeKind, ToolFileChangePreview, ToolRuntimeEvent, current_tool_runtime_event_sink,
 };
-use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use async_trait::async_trait;
+use loong_contracts::{
+    Capability, ToolCoreOutcome, ToolCoreRequest, ToolExecutionError, ToolInputError, ToolOutcome,
+    ToolPath, ToolSpec,
+};
+use loong_core::tool::ToolImpl;
 #[cfg(feature = "tool-file")]
 use regex::{Regex, RegexBuilder};
+use serde_json::Value;
 #[cfg(feature = "tool-file")]
-use serde_json::{Value, json};
+use serde_json::json;
 #[cfg(feature = "tool-file")]
 use std::io::Write as _;
 #[cfg(feature = "tool-file")]
 use tempfile::NamedTempFile;
 
-use crate::context::AppExecutionContext;
+use crate::context::{AppContextFactory, AppExecutionContext};
 
 #[cfg(feature = "tool-file")]
 const FILE_CHANGE_PREVIEW_MAX_LINES: usize = 8;
@@ -39,9 +45,8 @@ struct FileReadSelection {
     next_offset: Option<usize>,
 }
 
-#[cfg(feature = "tool-file")]
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct FileReadRequest {
+pub(crate) struct FileReadRequest {
     tool_name: String,
     target: String,
     max_bytes: usize,
@@ -49,7 +54,60 @@ struct FileReadRequest {
     limit: Option<usize>,
 }
 
-#[cfg(feature = "tool-file")]
+pub(crate) struct ReadFileTool;
+
+#[async_trait]
+impl ToolImpl<AppContextFactory> for ReadFileTool {
+    type Input = FileReadRequest;
+    type Output = ToolOutcome;
+
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            path: ToolPath::from("read"),
+            description: "Read a file from the allowed filesystem roots.".to_owned(),
+            required_capabilities: BTreeSet::from([Capability::FilesystemRead]),
+        }
+    }
+
+    fn parse_input(&self, payload: Value) -> Result<Self::Input, ToolInputError> {
+        parse_file_read_payload("read".to_owned(), "read", &payload)
+            .map_err(ToolInputError::invalid_payload)
+    }
+
+    async fn execute(
+        &self,
+        ctx: &AppExecutionContext<'_>,
+        input: Self::Input,
+    ) -> Result<Self::Output, ToolExecutionError> {
+        #[cfg(not(feature = "tool-file"))]
+        {
+            let _ = (ctx, input);
+            Err(ToolExecutionError::execution(
+                "file tool is disabled in this build (enable feature `tool-file`)",
+            ))
+        }
+
+        #[cfg(feature = "tool-file")]
+        {
+            let output = ctx
+                .access()
+                .fs()
+                .read_file(input.target.as_str())
+                .await
+                .map_err(|error| {
+                    render_fs_read_error(
+                        error.to_string(),
+                        loong_kernel::access::fs_read_error_is_policy_denial(&error),
+                    )
+                })
+                .map_err(ToolExecutionError::execution)?;
+
+            file_read_tool_outcome(input, output.path, output.bytes)
+                .map_err(ToolExecutionError::execution)
+        }
+    }
+}
+
 fn optional_positive_usize_field(
     payload: &serde_json::Map<String, Value>,
     field_name: &str,
@@ -160,23 +218,31 @@ pub(super) async fn execute_file_read_tool_with_context(
             .read_file(parsed.target.as_str())
             .await
             .map_err(|error| {
-                let rendered = error.to_string();
-                if loong_kernel::access::fs_read_error_is_policy_denial(&error) {
-                    format!("policy_denied: {rendered}")
-                } else {
-                    rendered
-                }
+                render_fs_read_error(
+                    error.to_string(),
+                    loong_kernel::access::fs_read_error_is_policy_denial(&error),
+                )
             })?;
 
         file_read_outcome(parsed, output.path, output.bytes)
     }
 }
 
-#[cfg(feature = "tool-file")]
 fn parse_file_read_request(request: &ToolCoreRequest) -> Result<FileReadRequest, String> {
     let tool_name = super::user_visible_tool_name(request.tool_name.as_str());
-    let payload = request
-        .payload
+    parse_file_read_payload(
+        request.tool_name.clone(),
+        tool_name.as_str(),
+        &request.payload,
+    )
+}
+
+fn parse_file_read_payload(
+    raw_tool_name: String,
+    tool_name: &str,
+    payload: &Value,
+) -> Result<FileReadRequest, String> {
+    let payload = payload
         .as_object()
         .ok_or_else(|| format!("{tool_name} payload must be an object"))?;
     let target = payload
@@ -192,11 +258,11 @@ fn parse_file_read_request(request: &ToolCoreRequest) -> Result<FileReadRequest,
         .and_then(Value::as_u64)
         .unwrap_or(1_048_576)
         .min(8 * 1_048_576) as usize;
-    let offset = optional_positive_usize_field(payload, "offset", tool_name.as_str())?;
-    let limit = optional_positive_usize_field(payload, "limit", tool_name.as_str())?;
+    let offset = optional_positive_usize_field(payload, "offset", tool_name)?;
+    let limit = optional_positive_usize_field(payload, "limit", tool_name)?;
 
     Ok(FileReadRequest {
-        tool_name: request.tool_name.clone(),
+        tool_name: raw_tool_name,
         target,
         max_bytes,
         offset,
@@ -205,11 +271,33 @@ fn parse_file_read_request(request: &ToolCoreRequest) -> Result<FileReadRequest,
 }
 
 #[cfg(feature = "tool-file")]
+fn render_fs_read_error(rendered: String, policy_denied: bool) -> String {
+    if policy_denied {
+        format!("policy_denied: {rendered}")
+    } else {
+        rendered
+    }
+}
+
+#[cfg(feature = "tool-file")]
 fn file_read_outcome(
     request: FileReadRequest,
     resolved: PathBuf,
     bytes: Vec<u8>,
 ) -> Result<ToolCoreOutcome, String> {
+    let outcome = file_read_tool_outcome(request, resolved, bytes)?;
+    Ok(ToolCoreOutcome {
+        status: outcome.status,
+        payload: outcome.payload,
+    })
+}
+
+#[cfg(feature = "tool-file")]
+fn file_read_tool_outcome(
+    request: FileReadRequest,
+    resolved: PathBuf,
+    bytes: Vec<u8>,
+) -> Result<ToolOutcome, String> {
     let visible_tool_name = super::user_visible_tool_name(request.tool_name.as_str());
     let file_text = String::from_utf8_lossy(&bytes).to_string();
     let selection = select_file_read_content(
@@ -246,7 +334,7 @@ fn file_read_outcome(
         response_object.insert("next_offset".to_owned(), json!(next_offset));
     }
 
-    Ok(ToolCoreOutcome {
+    Ok(ToolOutcome {
         status: "ok".to_owned(),
         payload: response_payload,
     })

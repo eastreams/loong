@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use loong_contracts::{
     Capability, ExecutionPlane, ExecutionRoute, HarnessKind, PlaneTier, ToolCoreRequest,
 };
-use loong_kernel::{Kernel, NoopAuditSink, SystemClock, VerticalPackManifest};
+use loong_kernel::{InMemoryAuditSink, Kernel, NoopAuditSink, SystemClock, VerticalPackManifest};
 use serde_json::json;
 
 use super::*;
@@ -93,6 +93,31 @@ async fn execute_file_read_with_test_context(
     execute_file_read_tool_with_context(request, config, &policy_context).await
 }
 
+async fn execute_file_read_via_kernel_tool_registry(
+    request: ToolCoreRequest,
+    config: &ToolRuntimeConfig,
+) -> Result<(ToolCoreOutcome, Arc<InMemoryAuditSink>), loong_kernel::KernelError> {
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let mut kernel =
+        Kernel::<AppContextFactory>::with_runtime(Arc::new(SystemClock), audit.clone());
+    let pack = Arc::new(test_pack());
+    kernel.register_pack((*pack).clone())?;
+    crate::tools::register_kernel_tools(
+        &mut kernel,
+        config.clone(),
+        crate::config::ObservabilityConfig::runtime_default(),
+    )?;
+    let token = kernel.issue_token("test-pack", "test-agent", 60)?;
+    let kernel_ctx = crate::KernelContext {
+        kernel: Arc::new(kernel),
+        pack,
+        token,
+        tool_runtime_config: config.clone(),
+    };
+    let outcome = crate::tools::execute_kernel_tool_request(&kernel_ctx, request, false).await?;
+    Ok((outcome, audit))
+}
+
 #[cfg(unix)]
 #[test]
 fn resolve_safe_file_path_rejects_symlink_escape_on_read() {
@@ -149,6 +174,88 @@ async fn file_read_supports_line_window_pagination() {
     assert_eq!(outcome.payload["total_lines"], json!(4));
     assert_eq!(outcome.payload["next_offset"], json!(4));
     assert_eq!(outcome.payload["truncated"], json!(false));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[tokio::test]
+async fn kernel_routed_file_read_uses_typed_tool_registry() {
+    let base = unique_temp_dir("loong-file-read-typed-registry");
+    let root = base.join("root");
+    fs::create_dir_all(&root).expect("create root");
+    fs::write(root.join("notes.txt"), "alpha\nbeta\ngamma").expect("write fixture");
+
+    let config = ToolRuntimeConfig {
+        file_root: Some(root),
+        ..ToolRuntimeConfig::default()
+    };
+    let request = ToolCoreRequest {
+        tool_name: "file.read".to_owned(),
+        payload: json!({
+            "path": "notes.txt",
+            "offset": 2,
+            "limit": 1
+        }),
+    };
+
+    let (outcome, audit) = execute_file_read_via_kernel_tool_registry(request, &config)
+        .await
+        .expect("file.read should execute through typed registry");
+
+    assert_eq!(outcome.status, "ok");
+    assert_eq!(outcome.payload["content"], json!("beta"));
+    assert_eq!(outcome.payload["line_start"], json!(2));
+    assert_eq!(outcome.payload["line_end"], json!(2));
+    let events = audit.snapshot();
+    assert!(events.iter().any(|event| {
+        matches!(
+            &event.kind,
+            loong_kernel::AuditEventKind::PlaneInvoked {
+                plane: ExecutionPlane::Tool,
+                tier: PlaneTier::Core,
+                primary_adapter,
+                operation,
+                ..
+            } if primary_adapter == "typed-tool-plane" && operation == "read"
+        )
+    }));
+    assert!(!events.iter().any(|event| {
+        matches!(
+            &event.kind,
+            loong_kernel::AuditEventKind::PlaneInvoked {
+                primary_adapter,
+                ..
+            } if primary_adapter.starts_with("legacy:")
+        )
+    }));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[tokio::test]
+async fn kernel_routed_file_read_input_error_does_not_fallback_to_legacy_adapter() {
+    let base = unique_temp_dir("loong-file-read-typed-error");
+    let root = base.join("root");
+    fs::create_dir_all(&root).expect("create root");
+
+    let config = ToolRuntimeConfig {
+        file_root: Some(root),
+        ..ToolRuntimeConfig::default()
+    };
+    let request = ToolCoreRequest {
+        tool_name: "file.read".to_owned(),
+        payload: json!({
+            "path": "notes.txt",
+            "offset": 0
+        }),
+    };
+
+    let error = execute_file_read_via_kernel_tool_registry(request, &config)
+        .await
+        .expect_err("typed read input error should not fallback");
+
+    assert!(
+        format!("{error}").contains("read payload.offset must be a positive integer"),
+        "expected file read input error, got: {error}"
+    );
     let _ = fs::remove_dir_all(base);
 }
 
