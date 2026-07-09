@@ -15,8 +15,9 @@ use loong_contracts::{
 use serde_json::{Value, json};
 
 use crate::{
+    policy::action::ActionMeta,
     policy::context::{ContextFactory, PolicyContext},
-    tool::{RegisteredTool, ToolImpl, ToolProvenance},
+    tool::{RegisteredTool, ToolImpl, ToolInvocationAction, ToolProvenance},
 };
 
 struct TestContextFactory;
@@ -69,6 +70,34 @@ impl ToolImpl<TestContextFactory> for EchoTool {
             payload: json!({ "message": input }),
         })
     }
+}
+
+#[test]
+fn tool_invocation_action_exposes_policy_metadata() {
+    let action = ToolInvocationAction::new(
+        ToolPath::from("read"),
+        BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead]),
+        json!({ "path": "notes.txt" }),
+    );
+    let metadata = action.metadata();
+
+    assert_eq!(metadata.kind, "tool.invoke");
+    assert_eq!(metadata.operation.as_ref(), "read");
+    assert_eq!(
+        metadata
+            .required_capabilities
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([Capability::FilesystemRead, Capability::InvokeTool])
+    );
+    assert_eq!(
+        action.payload(),
+        json!({
+            "tool_path": "read",
+            "payload": { "path": "notes.txt" }
+        })
+    );
 }
 
 #[test]
