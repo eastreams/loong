@@ -51,6 +51,9 @@
 - 需要额外信息时，用小 view trait 表达使用点需求，例如 `FsAccessContext`、
   `ExecutionView`、`ToolInvocationView`。不要定义一个大 deps struct，也不要为每个
   domain 在 kernel 上加 getter。
+- view trait 应集中在明确的 `view` module 入口下，不散落在 `policy::context`、
+  `policy.rs` 或 app context 文件里。app 定义 concrete context 并实现 view，
+  不默认拥有 view trait 定义。
 - `required_capabilities` 是 `ActionMeta` 的属性；运行时 root、tool config、
   workspace view 不是 action 字段。
 - `Action<Cx>` 是 executable action：`run(granted: Granted<Self>, cx: &Cx)` 是唯一
@@ -181,20 +184,21 @@ pub trait ToolImpl<C: ContextFactory>: Send + Sync + 'static {
 不放：
 
 - `ContextFactory`
-- `PolicyContext`
+- `PolicyContext` / 其它 view traits
 - `ActionMeta`
 - `Action<Cx>`
 - `Policy`
 - `PolicyAny`
 - `PolicyEngine`
-- `FsAccessContext`
 - workspace root / file root / tool config 视图
 
-这些是行为 trait 或 domain/app view，属于 `loong-core`、`loong-access` 或 app。
+这些是行为 trait 或 view trait，属于 `loong-core::view`、`loong-kernel::view` 或更具体
+的 owning crate `view` module。
 
 ### `loong-core`
 
-放跨 kernel/access/policy 共用的行为 contract：
+放跨 kernel/access/policy 共用的行为 contract。跨 crate 使用的 view trait 应通过
+`loong_core::view` 这个统一入口暴露；不要继续散在 `policy::context`：
 
 ```rust
 /// Type-level factory for the execution context used by policy/access/tool code.
@@ -378,6 +382,8 @@ impl<C: ContextFactory> PolicyEngine<C> for PolicyPipeline<C> {
 `Kernel<C>` 是把 policy engine、tool registry、access facade 统一到同一个
 `C::Cx<'a>` 的地方。它不应该有 `fs_policy_context()` / `browser_policy_context()`
 这类 domain getter，也不应该发明第二套 tool context wrapper。
+kernel-owned governance view traits 应集中在 `loong_kernel::view`，例如
+`KernelInvocationContext`，而不是继续定义在 `policy.rs`。
 
 当前代码状态：`Kernel<C>`、`PolicyPipeline<C>`、`ToolPlane<C>`、
 `AccessCx<'a, 'ctx, C>` 已落地。`ToolCoreContext` 已删除，tool adapter 直接接收
@@ -398,9 +404,9 @@ access crate 定义 side-effect domain 的治理入口和 action。
 - `FsReadOutput`
 - `FsAccessContext`
 
-`FsAccessContext` 是 fs domain view trait，放在 `loong-core::policy::context`，这样
+`FsAccessContext` 是 fs domain view trait，目标放在 `loong_core::view` 入口下。这样
 app-defined context 可以实现它而不依赖 `loong-access`，仍保持 access 只被 kernel
-直接依赖：
+直接依赖。当前代码仍在 `loong_core::policy::context`，后续应随 view module 收口一起移动：
 
 ```rust
 pub trait FsAccessContext {
@@ -772,16 +778,22 @@ ctx.access().fs().read_file(&path).await
 - `AppExecutionContext<'a>`
 - 所需 view traits 的 impls
 
-注意：concrete context 由 app 定义，但 view trait 不一定定义在 app。view trait 的
-定义位置应跟随它服务的消费者边界：
+注意：concrete context 由 app 定义，但 view trait 不一定定义在 app。view trait 应
+集中放在 owning crate 的 `view` module，并通过这个 module 作为统一入口暴露：
 
-- `PolicyContext` / `FsAccessContext` 这类 core/access 共用 view 放在 `loong-core`；
-- `KernelInvocationContext` 这类 kernel governance view 放在 `loong-kernel`；
-- 只有 app 私有、且不会成为跨 crate 约束的 view 才放在 app。
+- `PolicyContext` / `FsAccessContext` 这类 core/access 共用 view 放在
+  `loong_core::view`；
+- `KernelInvocationContext` 这类 kernel governance view 放在 `loong_kernel::view`；
+- 只有 app 私有、且不会成为跨 crate 约束的 view 才放在 app 的 `view` module。
 
 app 的职责是把 `AppExecutionContext<'a>` 实现为这些 view 的并集。`SpecExecutionContext`
 或测试 context 也可以实现同一组或子集 view；policy/access 只能通过 trait bound
 读取需要的信息，不能绑定 app concrete context。
+
+当前代码仍是过渡状态：`PolicyContext` / `FsAccessContext` 在
+`loong_core::policy::context`，`KernelInvocationContext` 在 `kernel::policy`。后续应
+做一次最小移动，把 view traits 收到上述 `view` module 入口下，直接更新调用点，不保留
+root alias。
 
 `KernelPolicyContext::with_fs_root_view(...)` 已删除。fs root view 现在由 app context
 构造处提供；fs root view 不由 action 持有，也不由 access helper 临时塞入 kernel
