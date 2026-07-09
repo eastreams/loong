@@ -78,6 +78,10 @@
 - tool 管理参考 `/Users/yang/Projects/mvp` 的 typed tool 主干形状：具体工具是独立
   type + `impl ToolImpl<C>`，注册后擦除成 `RegisteredTool<C>`。但 loong 不继承 mvp
   里的第二套 `ToolContext` / `ToolHost` 包装；其位置由 unified context 顶上。
+- 新增 tool 的改动面必须收敛到两处：一个 concrete type 的 `impl ToolImpl<C>`，以及
+  一个 app/bootstrap/builtin 注册点（例如 `register(path, X)`，或带 metadata 的等价
+  单次注册）。不能为了新增工具去改 `ToolPlane` match、dispatcher 分支、catalog 拼装
+  分支或 policy preflight 分支。
 - 新 `ToolPlane<C>` 属于 kernel runtime：它持有 tool registry、处理 lookup/invoke、
   连接 audit/error/provenance。`loong-core` 只放 `ToolImpl<C>`、`ToolRegistration`、
   `RegisteredTool<C>` 这类抽象和注册结果对象；`loong-contracts` 只放 `ToolSpec` /
@@ -249,6 +253,11 @@ where
 `ToolImpl` 本身在 core，`ReadFileTool` 这类 concrete impl 放 app 或后续 builtin-tools
 crate。需要 access 时约束 kernel 暴露的 `KernelAccess<C>`（命名可实现时再收敛），
 不依赖 `loong-access` 的 trait。
+
+新增工具时只能新增/修改两处：具体工具类型的 `impl ToolImpl<C>`，以及 app/bootstrap
+或 builtin registration 位置的一条注册记录。注册记录可以携带 path、metadata、
+provenance 或 catalog 信息，但它必须仍是“一次注册”，而不是把工具散落到多个
+dispatcher/catalog/policy 分支里。
 
 `kernel::ToolPlane<C>` 持有 `RegisteredTool<C>`，注册记录携带 `registered_at` 和来源
 metadata。来源 metadata 可以区分 builtin / extension / discovered / compatibility route，
@@ -1233,6 +1242,8 @@ impl BrowserClickAction {
   input/execute 错误。
 - 在 `ToolPlane` 里用 match/enum 写具体工具逻辑；具体工具必须是独立 type 的
   `ToolImpl<C>`。
+- 新增工具时需要同步修改 dispatcher match、catalog builder、manual allowlist 或
+  direct preflight 分支；这些都应由注册 metadata 和 typed policy/action 表达。
 - 需要 access 的具体 tool 依赖 `loong-access` trait；tool 应依赖 kernel 暴露的
   `ctx.access()` requirement。
 - `Policy` 通过 `PolicyEngine` 获取 `Cx`。
@@ -1276,6 +1287,9 @@ impl BrowserClickAction {
 - 迁移期 fallback 只发生在 typed registry 未命中时，并记录 legacy route；typed tool
   自身错误不触发 fallback。
 - 具体工具是独立 type + `impl ToolImpl<C>`，不写进 `ToolPlane` match。
+- 新增 tool 的正常 diff 只有两类：`impl ToolImpl<C> for X`，以及一个
+  app/bootstrap/builtin 注册点；注册点可以带 metadata，但不能要求额外 dispatcher 或
+  catalog 分支。
 - 需要 access 的具体工具通过 kernel 暴露的 `ctx.access()` requirement 约束 context，
   不依赖 `loong-access` trait。
 - `CoreToolAdapter` / `ToolExtensionAdapter` 不再是主执行抽象；它们只能临时存在于
