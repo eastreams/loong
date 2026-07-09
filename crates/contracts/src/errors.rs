@@ -89,6 +89,10 @@ pub enum RuntimePlaneError {
 #[non_exhaustive]
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ToolPlaneError {
+    #[error("tool not found: {0}")]
+    ToolNotFound(String),
+    #[error("tool already registered: {0}")]
+    DuplicateTool(String),
     #[error("core tool adapter not found: {0}")]
     CoreAdapterNotFound(String),
     #[error("tool extension not found: {0}")]

@@ -1,4 +1,6 @@
+use loong_contracts::ToolPath;
 use loong_core::policy::context::ContextFactory;
+use loong_core::tool::ToolImpl;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
@@ -32,7 +34,7 @@ use crate::{
     },
     tool::{
         CoreToolAdapter, LegacyToolPlane, ToolCoreOutcome, ToolCoreRequest, ToolExtensionAdapter,
-        ToolExtensionOutcome, ToolExtensionRequest,
+        ToolExtensionOutcome, ToolExtensionRequest, ToolPlane,
     },
 };
 
@@ -68,6 +70,7 @@ pub struct Kernel<C: ContextFactory> {
 
     audit: Arc<dyn AuditSink>,
 
+    tool_plane: ToolPlane<C>,
     legacy_tool_plane: LegacyToolPlane<C>,
     memory_plane: MemoryPlane,
     connector_plane: ConnectorPlane,
@@ -132,6 +135,7 @@ where
             harness: HarnessBroker::new(),
             connector_plane: ConnectorPlane::new(),
             runtime_plane: RuntimePlane::new(),
+            tool_plane: ToolPlane::new(),
             legacy_tool_plane: LegacyToolPlane::new(),
             memory_plane: MemoryPlane::new(),
             revoked_tokens: Mutex::new(BTreeSet::new()),
@@ -145,6 +149,14 @@ where
     #[must_use]
     pub fn now_epoch_s(&self) -> u64 {
         self.clock.now_epoch_s()
+    }
+
+    pub fn register_tool<T>(&mut self, path: ToolPath, tool: T) -> Result<(), KernelError>
+    where
+        T: ToolImpl<C>,
+    {
+        self.tool_plane.register(path, tool)?;
+        Ok(())
     }
 }
 
