@@ -282,7 +282,7 @@ impl<C: ContextFactory, A: ActionMeta> Default for TypedPolicyEntries<C, A> {
 // Legacy bridge for `authorize_kernel_action`, whose caller still expects the
 // old extension-oriented `PolicyError` surface. New access-backed side effects
 // should keep typed grant errors and convert them at the caller boundary.
-fn policy_engine_error(error: impl Into<AuthorizationError>) -> PolicyError {
+pub(crate) fn policy_engine_error(error: impl Into<AuthorizationError>) -> PolicyError {
     let error = error.into();
     PolicyError::ExtensionDenied {
         extension: "policy-engine".to_owned(),

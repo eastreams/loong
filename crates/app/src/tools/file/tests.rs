@@ -90,7 +90,12 @@ async fn execute_file_read_with_test_context(
     };
     let policy_context =
         kernel_ctx.execution_context(ExecutionPlane::Tool, PlaneTier::Core, None, config)?;
-    execute_file_read_tool_with_context(request, config, &policy_context).await
+    let _ = config;
+    loong_tools::file::execute_file_read_tool_with_context::<AppContextFactory>(
+        request,
+        &policy_context,
+    )
+    .await
 }
 
 async fn execute_file_read_via_kernel_tool_registry(
@@ -209,13 +214,11 @@ async fn kernel_routed_file_read_uses_typed_tool_registry() {
     assert!(events.iter().any(|event| {
         matches!(
             &event.kind,
-            loong_kernel::AuditEventKind::PlaneInvoked {
-                plane: ExecutionPlane::Tool,
-                tier: PlaneTier::Core,
-                primary_adapter,
-                operation,
+            loong_kernel::AuditEventKind::ToolInvocation {
+                path,
+                outcome: loong_kernel::ToolInvocationOutcome::Completed,
                 ..
-            } if primary_adapter == "typed-tool-plane" && operation == "read"
+            } if path.as_str() == "read"
         )
     }));
     assert!(!events.iter().any(|event| {

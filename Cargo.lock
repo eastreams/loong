@@ -3122,6 +3122,7 @@ dependencies = [
  "loong-contracts",
  "loong-core",
  "loong-kernel",
+ "loong-tools",
  "opentelemetry",
  "prost 0.14.3",
  "pulldown-cmark",
@@ -3306,6 +3307,17 @@ dependencies = [
  "wasmparser 0.248.0",
  "wasmtime",
  "wat",
+]
+
+[[package]]
+name = "loong-tools"
+version = "0.1.2-alpha.1"
+dependencies = [
+ "async-trait",
+ "loong-contracts",
+ "loong-core",
+ "loong-kernel",
+ "serde_json",
 ]
 
 [[package]]

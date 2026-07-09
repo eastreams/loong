@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 // Re-export data types from contracts
-pub use loong_contracts::{AuditEvent, AuditEventKind, ExecutionPlane, PlaneTier};
+pub use loong_contracts::{
+    AuditEvent, AuditEventKind, ExecutionPlane, PlaneTier, ToolInvocationOutcome,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 

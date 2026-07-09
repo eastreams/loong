@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::contracts::{Capability, CapabilityToken, ExecutionRoute};
+use crate::{
+    PolicyReport, ToolPath,
+    contracts::{Capability, CapabilityToken, ExecutionRoute},
+};
 
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,6 +38,19 @@ pub enum PlaneTier {
     Extension,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ToolInvocationOutcome {
+    Completed,
+    Failed {
+        error_kind: String,
+        reason: String,
+    },
+    Denied {
+        reason: String,
+        report: Option<PolicyReport>,
+    },
+}
+
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AuditEventKind {
@@ -64,6 +80,12 @@ pub enum AuditEventKind {
         delegated_core_adapter: Option<String>,
         operation: String,
         required_capabilities: Vec<Capability>,
+    },
+    ToolInvocation {
+        pack_id: String,
+        path: ToolPath,
+        required_capabilities: Vec<Capability>,
+        outcome: ToolInvocationOutcome,
     },
     SecurityScanEvaluated {
         pack_id: String,

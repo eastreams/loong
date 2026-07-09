@@ -8,8 +8,8 @@ use loong_contracts::{CapabilityToken, ExecutionPlane, PlaneTier};
 use loong_core::policy::context::{ContextFactory, FsAccessContext, PolicyContext};
 use loong_kernel::{
     AccessCx, AuditSink, Capability, Clock, ExecutionRoute, FanoutAuditSink, HarnessKind,
-    InMemoryAuditSink, JsonlAuditSink, Kernel, KernelInvocationContext, NoopAuditSink,
-    PolicyPipeline, SystemClock, VerticalPackManifest,
+    InMemoryAuditSink, JsonlAuditSink, Kernel, KernelAccess, KernelInvocationContext,
+    NoopAuditSink, PolicyPipeline, SystemClock, VerticalPackManifest,
 };
 use serde_json::Value;
 
@@ -146,6 +146,12 @@ impl<'a> AppExecutionContext<'a> {
 
     #[must_use]
     pub(crate) fn access(&self) -> AccessCx<'_, 'a, AppContextFactory> {
+        AccessCx::new(self.kernel, self)
+    }
+}
+
+impl KernelAccess<AppContextFactory> for AppExecutionContext<'_> {
+    fn access(&self) -> AccessCx<'_, '_, AppContextFactory> {
         AccessCx::new(self.kernel, self)
     }
 }

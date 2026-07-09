@@ -9,6 +9,7 @@ members = [
   "crates/app",
   "crates/daemon",
   "crates/loong-core",
+  "crates/tools",
   "crates/access",
   "crates/loong-runtime",
   "crates/loong-app-protocol",

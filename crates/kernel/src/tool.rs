@@ -1,11 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
-use loong_contracts::{ToolExecutionError, ToolInputError, ToolOutcome, ToolPath};
-use loong_core::{
-    policy::context::ContextFactory,
-    tool::{RegisteredTool, ToolImpl, ToolProvenance},
-};
+use loong_core::policy::context::ContextFactory;
 use serde::Serialize;
 
 // Re-export data types from contracts
@@ -36,97 +32,6 @@ impl ToolConcurrencyClass {
         !matches!(self, Self::ReadOnly)
     }
 }
-
-/// Typed runtime registry for migrated tools.
-///
-/// This plane owns path lookup and invokes one `RegisteredTool<C>` after the
-/// caller has supplied the unified invocation context. It does not know about
-/// legacy core/extension adapters; kernel-level fallback is handled outside
-/// this registry and only when a path is not found here.
-#[derive(Default)]
-pub struct ToolPlane<C: ContextFactory> {
-    tools: BTreeMap<ToolPath, RegisteredTool<C>>,
-}
-
-impl<C> ToolPlane<C>
-where
-    C: ContextFactory,
-{
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            tools: BTreeMap::new(),
-        }
-    }
-
-    pub fn register<T>(&mut self, path: ToolPath, tool: T) -> Result<(), ToolPlaneError>
-    where
-        T: ToolImpl<C>,
-    {
-        self.register_with_provenance(path, ToolProvenance::Builtin, tool)
-    }
-
-    pub fn register_with_provenance<T>(
-        &mut self,
-        path: ToolPath,
-        provenance: ToolProvenance,
-        tool: T,
-    ) -> Result<(), ToolPlaneError>
-    where
-        T: ToolImpl<C>,
-    {
-        if self.tools.contains_key(&path) {
-            return Err(ToolPlaneError::DuplicateTool(path.to_string()));
-        }
-
-        self.tools
-            .insert(path, RegisteredTool::from_tool(provenance, tool));
-        Ok(())
-    }
-
-    #[must_use]
-    pub fn contains(&self, path: &ToolPath) -> bool {
-        self.tools.contains_key(path)
-    }
-
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.tools.len()
-    }
-
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.tools.is_empty()
-    }
-
-    pub async fn invoke(
-        &self,
-        path: &ToolPath,
-        ctx: &C::Cx<'_>,
-        payload: serde_json::Value,
-    ) -> Result<ToolOutcome, ToolPlaneError> {
-        let registered = self
-            .tools
-            .get(path)
-            .ok_or_else(|| ToolPlaneError::ToolNotFound(path.to_string()))?;
-
-        registered
-            .invoke(ctx, payload)
-            .await
-            .map_err(|error| ToolPlaneError::Execution(tool_execution_error_reason(error)))
-    }
-}
-
-fn tool_execution_error_reason(error: ToolExecutionError) -> String {
-    match error {
-        ToolExecutionError::Input(ToolInputError::InvalidPayload { reason })
-        | ToolExecutionError::Execution { reason } => reason,
-        other => other.to_string(),
-    }
-}
-
-#[cfg(test)]
-mod tests;
 
 #[async_trait]
 pub trait CoreToolAdapter<C: ContextFactory>: Send + Sync {
@@ -165,8 +70,8 @@ pub trait ToolExtensionAdapter<C: ContextFactory>: Send + Sync {
 /// Legacy adapter-backed tool plane.
 ///
 /// This temporarily owns the old core/extension adapter path while tools move
-/// to the typed `ToolPlane` registry. Do not register newly migrated tools
-/// here; this type is a deletion target once legacy adapters are gone.
+/// to the app-owned typed tool plane. Do not register newly migrated tools here;
+/// this type is a deletion target once legacy adapters are gone.
 #[derive(Default)]
 pub struct LegacyToolPlane<C: ContextFactory> {
     core_adapters: BTreeMap<String, Arc<dyn CoreToolAdapter<C>>>,

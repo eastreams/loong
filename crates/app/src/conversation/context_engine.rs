@@ -706,7 +706,7 @@ mod tests {
                 loong_kernel::AuditEventKind::PlaneInvoked {
                     plane: loong_contracts::ExecutionPlane::Tool,
                     ..
-                }
+                } | loong_kernel::AuditEventKind::ToolInvocation { .. }
             )
         });
 

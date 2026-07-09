@@ -1,6 +1,7 @@
-use loong_contracts::{ToolOutcome, ToolPath};
 use loong_core::policy::context::ContextFactory;
-use loong_core::tool::ToolImpl;
+use loong_core::policy::engine::PolicyEngine;
+use loong_core::policy::grant::ActionGrant;
+use loong_core::tool::ToolInvocationAction;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
@@ -26,7 +27,7 @@ use crate::{
         MemoryExtensionOutcome, MemoryExtensionRequest, MemoryPlane,
     },
     pack::VerticalPackManifest,
-    policy::{KernelInvocationContext, LegacyKernelAction, PolicyPipeline},
+    policy::{KernelInvocationContext, LegacyKernelAction, PolicyPipeline, policy_engine_error},
     policy_ext::PolicyExtension,
     runtime::{
         CoreRuntimeAdapter, RuntimeCoreOutcome, RuntimeCoreRequest, RuntimeExtensionAdapter,
@@ -34,9 +35,10 @@ use crate::{
     },
     tool::{
         CoreToolAdapter, LegacyToolPlane, ToolCoreOutcome, ToolCoreRequest, ToolExtensionAdapter,
-        ToolExtensionOutcome, ToolExtensionRequest, ToolPlane,
+        ToolExtensionOutcome, ToolExtensionRequest,
     },
 };
+use loong_contracts::{ToolInvocationOutcome, ToolPath};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct KernelDispatch {
@@ -70,7 +72,6 @@ pub struct Kernel<C: ContextFactory> {
 
     audit: Arc<dyn AuditSink>,
 
-    tool_plane: ToolPlane<C>,
     legacy_tool_plane: LegacyToolPlane<C>,
     memory_plane: MemoryPlane,
     connector_plane: ConnectorPlane,
@@ -135,7 +136,6 @@ where
             harness: HarnessBroker::new(),
             connector_plane: ConnectorPlane::new(),
             runtime_plane: RuntimePlane::new(),
-            tool_plane: ToolPlane::new(),
             legacy_tool_plane: LegacyToolPlane::new(),
             memory_plane: MemoryPlane::new(),
             revoked_tokens: Mutex::new(BTreeSet::new()),
@@ -149,92 +149,6 @@ where
     #[must_use]
     pub fn now_epoch_s(&self) -> u64 {
         self.clock.now_epoch_s()
-    }
-
-    pub fn register_tool<T>(&mut self, path: ToolPath, tool: T) -> Result<(), KernelError>
-    where
-        T: ToolImpl<C>,
-    {
-        self.tool_plane.register(path, tool)?;
-        Ok(())
-    }
-
-    pub async fn invoke_tool<'a>(
-        &'a self,
-        pack_id: &str,
-        token: &CapabilityToken,
-        required_capabilities: &BTreeSet<Capability>,
-        path: &ToolPath,
-        payload: serde_json::Value,
-        policy_context: C::Cx<'a>,
-    ) -> Result<ToolOutcome, KernelError>
-    where
-        for<'ctx> C::Cx<'ctx>: KernelInvocationContext,
-    {
-        let pack = self.get_pack(pack_id)?;
-        let now = self
-            .authorize_pack_operation(
-                &policy_context,
-                pack,
-                token,
-                path.as_str(),
-                required_capabilities,
-            )
-            .await?;
-
-        match self
-            .tool_plane
-            .invoke(path, &policy_context, payload.clone())
-            .await
-        {
-            Ok(outcome) => {
-                self.record_plane_invocation(PlaneInvocationRecord {
-                    timestamp_epoch_s: now,
-                    agent_id: &token.agent_id,
-                    pack_id: &pack.pack_id,
-                    plane: ExecutionPlane::Tool,
-                    tier: PlaneTier::Core,
-                    primary_adapter: "typed-tool-plane".to_owned(),
-                    delegated_core_adapter: None,
-                    operation: path.to_string(),
-                    required_capabilities,
-                })?;
-                Ok(outcome)
-            }
-            Err(crate::errors::ToolPlaneError::ToolNotFound(_)) => {
-                let resolved_core_adapter = self
-                    .legacy_tool_plane
-                    .default_core_adapter_name()
-                    .map(std::string::ToString::to_string)
-                    .unwrap_or_else(|| "default".to_owned());
-                let request = ToolCoreRequest {
-                    tool_name: path.to_string(),
-                    payload,
-                };
-                let outcome = self
-                    .legacy_tool_plane
-                    .execute_core_with_context(None, request, &policy_context)
-                    .await?;
-
-                self.record_plane_invocation(PlaneInvocationRecord {
-                    timestamp_epoch_s: now,
-                    agent_id: &token.agent_id,
-                    pack_id: &pack.pack_id,
-                    plane: ExecutionPlane::Tool,
-                    tier: PlaneTier::Core,
-                    primary_adapter: format!("legacy:{resolved_core_adapter}"),
-                    delegated_core_adapter: None,
-                    operation: path.to_string(),
-                    required_capabilities,
-                })?;
-
-                Ok(ToolOutcome {
-                    status: outcome.status,
-                    payload: outcome.payload,
-                })
-            }
-            Err(error) => Err(KernelError::from(error)),
-        }
     }
 }
 
@@ -310,8 +224,9 @@ where
     /// Register an old core tool adapter.
     ///
     /// This is the compatibility path for tools that have not moved to the
-    /// typed tool registry. New governed tools should register with the future
-    /// `ToolPlane<C>` instead of adding another adapter here.
+    /// app-owned typed tool plane. New governed tools should not add another
+    /// adapter here; they should be registered by app orchestration and call
+    /// kernel only for authorization and audit.
     pub fn register_core_tool_adapter<A: CoreToolAdapter<C> + 'static>(&mut self, adapter: A) {
         self.legacy_tool_plane.register_core_adapter(adapter);
     }
@@ -329,6 +244,94 @@ where
     pub fn set_default_core_tool_adapter(&mut self, name: &str) -> Result<(), KernelError> {
         self.legacy_tool_plane.set_default_core_adapter(name)?;
         Ok(())
+    }
+
+    /// Grant one app-owned typed tool invocation without executing it.
+    ///
+    /// Tool dispatch is an action in the policy pipeline. The grant only
+    /// authorizes entering the `ToolImpl`; tool-internal side effects must
+    /// request their own access grants.
+    pub async fn grant_tool_invocation(
+        &self,
+        pack_id: &str,
+        token: &CapabilityToken,
+        action: ToolInvocationAction,
+        policy_context: &C::Cx<'_>,
+    ) -> Result<ActionGrant<ToolInvocationAction>, KernelError> {
+        let pack = self.get_pack(pack_id)?;
+        let path = action.path().clone();
+        let required_capabilities = action
+            .required_capabilities()
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        self.assert_pack_grants(pack, &required_capabilities)?;
+        let now = policy_context.now_epoch_s();
+        if let Err(policy_error) = self.authorize_token(pack, token, now, &required_capabilities) {
+            self.record_tool_invocation_event(
+                now,
+                Some(token.agent_id.clone()),
+                pack.pack_id.clone(),
+                path,
+                &required_capabilities,
+                ToolInvocationOutcome::Denied {
+                    reason: policy_error.to_string(),
+                    report: None,
+                },
+            )?;
+            return Err(KernelError::Policy(policy_error));
+        }
+
+        match self.policy.grant(policy_context, action).await {
+            Ok(grant) => Ok(grant),
+            Err(grant_error) => {
+                let outcome = match &grant_error {
+                    loong_core::PolicyGrantError::MissingCapability { capability } => {
+                        ToolInvocationOutcome::Denied {
+                            reason: format!("missing capability: {capability:?}"),
+                            report: None,
+                        }
+                    }
+                    loong_core::PolicyGrantError::Denied { report, reason } => {
+                        ToolInvocationOutcome::Denied {
+                            reason: reason.to_string(),
+                            report: Some(report.clone()),
+                        }
+                    }
+                };
+                self.record_tool_invocation_event(
+                    now,
+                    Some(token.agent_id.clone()),
+                    pack.pack_id.clone(),
+                    path,
+                    &required_capabilities,
+                    outcome,
+                )?;
+                Err(KernelError::Policy(policy_engine_error(grant_error)))
+            }
+        }
+    }
+
+    /// Record the outcome of an app-owned tool invocation.
+    ///
+    /// Tool implementations never receive audit capability. App orchestration
+    /// records the dispatch outcome here after consuming a tool invocation
+    /// grant; legacy adapters keep `PlaneInvoked` until they are migrated.
+    pub fn record_tool_invocation(
+        &self,
+        policy_context: &C::Cx<'_>,
+        path: ToolPath,
+        required_capabilities: &BTreeSet<Capability>,
+        outcome: ToolInvocationOutcome,
+    ) -> Result<(), KernelError> {
+        self.record_tool_invocation_event(
+            policy_context.now_epoch_s(),
+            Some(policy_context.token().agent_id.clone()),
+            policy_context.pack().pack_id.clone(),
+            path,
+            required_capabilities,
+            outcome,
+        )
     }
 
     pub fn register_core_memory_adapter<A: CoreMemoryAdapter + 'static>(&mut self, adapter: A) {
@@ -1011,6 +1014,28 @@ where
                 delegated_core_adapter: record.delegated_core_adapter,
                 operation: record.operation,
                 required_capabilities: record.required_capabilities.iter().copied().collect(),
+            },
+        ))?;
+        Ok(())
+    }
+
+    fn record_tool_invocation_event(
+        &self,
+        timestamp_epoch_s: u64,
+        agent_id: Option<String>,
+        pack_id: String,
+        path: ToolPath,
+        required_capabilities: &BTreeSet<Capability>,
+        outcome: ToolInvocationOutcome,
+    ) -> Result<(), KernelError> {
+        self.audit.record(self.new_event(
+            timestamp_epoch_s,
+            agent_id,
+            AuditEventKind::ToolInvocation {
+                pack_id,
+                path,
+                required_capabilities: required_capabilities.iter().copied().collect(),
+                outcome,
             },
         ))?;
         Ok(())

@@ -1,7 +1,8 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loong_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolInvocationOutcome};
+use loong_core::tool::ToolInvocationAction;
 use serde_json::{Value, json};
 pub(crate) use tool_internal_context::{
     ensure_untrusted_payload_does_not_use_reserved_internal_tool_context,
@@ -49,6 +50,7 @@ mod kernel_adapter;
 mod memory_tools;
 pub(crate) mod messaging;
 mod payload;
+mod plane;
 mod process_exec;
 mod provider_schema;
 mod provider_switch;
@@ -107,6 +109,7 @@ pub use catalog::{
 pub(crate) use feishu::{DeferredFeishuCardUpdate, drain_deferred_feishu_card_updates};
 pub(crate) use kernel_adapter::register_kernel_tools;
 pub use kernel_adapter::{KernelToolAdapter, MvpToolAdapter};
+pub(crate) use plane::app_tool_plane;
 pub use security_posture::{
     BrowserSurfaceSecurityPosture, ShellExecutionSecurityPosture, SkillsSecurityPosture,
     SkillsSecurityPostureProbeFailure, ToolFileRootSecurityPosture, WebFetchSecurityPosture,
@@ -394,8 +397,86 @@ pub(crate) async fn execute_kernel_tool_request(
         .map_err(|error| {
             loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(error))
         })?;
+        let mut request = request;
+        if request.tool_name == "read" {
+            let routed_request = routing::route_direct_read_tool_request_for_legacy(
+                request.clone(),
+                &effective_config,
+            )
+            .map_err(|error| {
+                loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(error))
+            })?;
+            if routed_request.tool_name != "read" {
+                request = routed_request;
+            }
+        }
+
+        let typed_path = loong_contracts::ToolPath::from(request.tool_name.clone());
+        if app_tool_plane().contains(&typed_path) {
+            let caps = required_capabilities_for_request(&request);
+            let tool_policy_params = json!({
+                "tool_name": &request.tool_name,
+                "payload": &request.payload,
+            });
+            let policy_context = ctx
+                .execution_context(
+                    loong_contracts::ExecutionPlane::Tool,
+                    loong_contracts::PlaneTier::Core,
+                    Some(&tool_policy_params),
+                    &effective_config,
+                )
+                .map_err(|error| {
+                    loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(
+                        error,
+                    ))
+                })?;
+            let action =
+                ToolInvocationAction::new(typed_path.clone(), caps.clone(), request.payload);
+            let grant = ctx
+                .kernel
+                .grant_tool_invocation(ctx.pack_id(), &ctx.token, action, &policy_context)
+                .await?;
+            let audit_path = grant.granted.as_ref().path().clone();
+            let audit_caps = grant
+                .granted
+                .as_ref()
+                .required_capabilities()
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>();
+
+            match app_tool_plane()
+                .invoke(grant.granted, &policy_context)
+                .await
+            {
+                Ok(outcome) => {
+                    ctx.kernel.record_tool_invocation(
+                        &policy_context,
+                        audit_path,
+                        &audit_caps,
+                        ToolInvocationOutcome::Completed,
+                    )?;
+                    return Ok(ToolCoreOutcome {
+                        status: outcome.status,
+                        payload: outcome.payload,
+                    });
+                }
+                Err(error) => {
+                    let error_kind = tool_plane_error_kind(&error).to_owned();
+                    let reason = tool_plane_error_reason(&error);
+                    ctx.kernel.record_tool_invocation(
+                        &policy_context,
+                        audit_path,
+                        &audit_caps,
+                        ToolInvocationOutcome::Failed { error_kind, reason },
+                    )?;
+                    return Err(loong_kernel::KernelError::ToolPlane(error));
+                }
+            }
+        }
+
         let request = if request.tool_name == "read" {
-            routing::route_direct_read_tool_request_for_kernel(request, &effective_config).map_err(
+            routing::route_direct_read_tool_request_for_legacy(request, &effective_config).map_err(
                 |error| {
                     loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(
                         error,
@@ -420,28 +501,48 @@ pub(crate) async fn execute_kernel_tool_request(
             .map_err(|error| {
                 loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(error))
             })?;
-        let path = loong_contracts::ToolPath::from(request.tool_name.clone());
         let outcome = ctx
             .kernel
-            .invoke_tool(
+            .execute_tool_core(
                 ctx.pack_id(),
                 &ctx.token,
                 &caps,
-                &path,
-                request.payload,
+                None,
+                request,
                 policy_context,
             )
             .await?;
-        Ok(ToolCoreOutcome {
-            status: outcome.status,
-            payload: outcome.payload,
-        })
+        Ok(outcome)
     };
     if trusted_internal_payload {
         return with_trusted_internal_tool_payload_async(execute).await;
     }
 
     execute.await
+}
+
+fn tool_plane_error_kind(error: &loong_kernel::ToolPlaneError) -> &'static str {
+    match error {
+        loong_kernel::ToolPlaneError::ToolNotFound(_) => "not_found",
+        loong_kernel::ToolPlaneError::DuplicateTool(_) => "duplicate_tool",
+        loong_kernel::ToolPlaneError::CoreAdapterNotFound(_) => "core_adapter_not_found",
+        loong_kernel::ToolPlaneError::ExtensionNotFound(_) => "extension_not_found",
+        loong_kernel::ToolPlaneError::NoDefaultCoreAdapter => "no_default_core_adapter",
+        loong_kernel::ToolPlaneError::Execution(_) => "execution",
+        _ => "tool_plane",
+    }
+}
+
+fn tool_plane_error_reason(error: &loong_kernel::ToolPlaneError) -> String {
+    match error {
+        loong_kernel::ToolPlaneError::ToolNotFound(reason)
+        | loong_kernel::ToolPlaneError::DuplicateTool(reason)
+        | loong_kernel::ToolPlaneError::CoreAdapterNotFound(reason)
+        | loong_kernel::ToolPlaneError::ExtensionNotFound(reason)
+        | loong_kernel::ToolPlaneError::Execution(reason) => reason.clone(),
+        loong_kernel::ToolPlaneError::NoDefaultCoreAdapter => error.to_string(),
+        _ => error.to_string(),
+    }
 }
 
 pub fn execute_tool_core(request: ToolCoreRequest) -> Result<ToolCoreOutcome, String> {

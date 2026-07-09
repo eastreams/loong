@@ -23,7 +23,7 @@ pub mod runtime;
 pub mod task_supervisor;
 pub mod tool;
 
-pub use access::AccessCx;
+pub use access::{AccessCx, KernelAccess};
 pub use architecture::{
     ArchitectureBoundaryPolicy, ArchitectureGuardReport, ArchitecturePathDecision,
     ArchitecturePathReport,
@@ -31,8 +31,8 @@ pub use architecture::{
 pub use audit::{
     AuditEvent, AuditEventKind, AuditRepairOutcome, AuditRepairReport, AuditSink,
     AuditVerificationReport, ExecutionPlane, FanoutAuditSink, InMemoryAuditSink, JsonlAuditSink,
-    NoopAuditSink, PlaneTier, probe_jsonl_audit_journal_runtime_ready, repair_jsonl_audit_journal,
-    verify_jsonl_audit_journal,
+    NoopAuditSink, PlaneTier, ToolInvocationOutcome, probe_jsonl_audit_journal_runtime_ready,
+    repair_jsonl_audit_journal, verify_jsonl_audit_journal,
 };
 pub use awareness::{CodebaseAwarenessConfig, CodebaseAwarenessEngine, CodebaseAwarenessSnapshot};
 pub use bootstrap::{
@@ -88,7 +88,7 @@ pub use runtime::{
 pub use task_supervisor::TaskSupervisor;
 pub use tool::{
     CoreToolAdapter, LegacyToolPlane, ToolConcurrencyClass, ToolCoreOutcome, ToolCoreRequest,
-    ToolExtensionAdapter, ToolExtensionOutcome, ToolExtensionRequest, ToolPlane, ToolTier,
+    ToolExtensionAdapter, ToolExtensionOutcome, ToolExtensionRequest, ToolTier,
 };
 
 pub mod test_support;

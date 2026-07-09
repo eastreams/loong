@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use loong_contracts::{ToolPath, ToolPlaneError};
+use loong_contracts::ToolPlaneError;
 use loong_kernel::{CoreToolAdapter, Kernel, ToolCoreOutcome, ToolCoreRequest};
 
 use super::runtime_config::ToolRuntimeConfig;
@@ -52,7 +52,8 @@ pub(crate) fn register_kernel_tools(
     config: ToolRuntimeConfig,
     observability_config: ObservabilityConfig,
 ) -> Result<(), loong_kernel::KernelError> {
-    kernel.register_tool(ToolPath::from("read"), super::file::ReadFileTool)?;
+    // Kernel owns only the legacy adapter bridge. App-owned typed tools are
+    // registered in `tools::plane` and are invoked by app orchestration.
     kernel.register_core_tool_adapter(KernelToolAdapter::with_config_and_observability(
         config,
         observability_config,

@@ -57,3 +57,12 @@ impl<A: ActionMeta> Granted<A> {
         A::run(self, ctx).await
     }
 }
+
+impl<A> AsRef<A> for Granted<A>
+where
+    A: ActionMeta,
+{
+    fn as_ref(&self) -> &A {
+        &self.0
+    }
+}
