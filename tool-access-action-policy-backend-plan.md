@@ -784,6 +784,11 @@ tool helper 在调用 access 前执行 config-backed policy 分支。需要配�
 - `Kernel::invoke_tool` 已实现 typed-first 调用；只有 typed registry miss
   (`ToolPlaneError::ToolNotFound`) 才 fallback 到 `LegacyToolPlane<C>`，并用 audit
   metadata 标出 `typed-tool-plane` 或 `legacy:{adapter}` route。
+- app 已把 `ReadFileTool` 做成独立 `ToolImpl<AppContextFactory>`，并在统一的
+  kernel tool registration 入口注册到 typed `ToolPlane<C>`。
+- app kernel tool 请求已切到 `Kernel::invoke_tool`；`read/file.read` path mode
+  命中 typed plane，direct `read` 的 query/glob 模式仍在迁移期路由到 legacy
+  `content.search` / `glob.search`。
 - `ToolCoreContext` 已删除；kernel/tool/app 直接传递 app/spec/test 定义的 unified
   context。
 - kernel facade `AccessCx<'a, 'ctx, C>` 只保留 context factory 泛型，不再暴露
@@ -814,10 +819,6 @@ tool helper 在调用 access 前执行 config-backed policy 分支。需要配�
   `loong-access` 迫使 app 依赖 access。目标是由 kernel 公共边界定义 app-facing fs
   context requirement，kernel facade 抽取 `resolution_root` / `allowed_roots` 后把
   普通数据传给 access。
-- concrete tool 尚未注册到 typed `ToolPlane<C>`；`file.read` 当前仍通过
-  `CoreToolAdapter::execute_core_tool_with_context` 这条 legacy adapter API 进入
-  access-backed helper。下一步应把 `read/file.read` 改成独立 `ToolImpl<C>` 并注册进
-  typed plane。
 - `CoreToolAdapter` / `ToolExtensionAdapter` 和 `execute_tool_core` /
   `execute_tool_extension` 仍是 legacy execution API；它们只服务未迁移工具，后续迁移到
   单一 typed tool execution path 后删除。
@@ -957,8 +958,9 @@ core-private `ErasedTool<C>` 里。
 直接接收 `&C::Cx<'_>`；access-backed read path 通过
 `ctx.access().fs().read_file(...)` 进入。
 
-单一 typed tool execution API 的骨架已落地；仍待迁移的是 concrete tool 注册和旧
-adapter API 删除。
+单一 typed tool execution API 的骨架已落地；`read/file.read` 已作为第一条 concrete
+tool path 注册并调用 typed plane。仍待迁移的是其它 concrete tool 和旧 adapter API
+删除。
 
 第一步已落地：旧 adapter plane 已直接改成 legacy 名称，给目标 `ToolPlane` 腾出语义空间：
 
@@ -1056,11 +1058,11 @@ pub struct ToolPlane<C: ContextFactory> {
 `LegacyToolPlane<C>`。typed tool 自己 parse/execute 失败时不能 fallback，否则会掩盖新
 工具错误。
 
-下一步迁移 concrete tool：先把 `read/file.read` 做成独立 `ToolImpl<C>`，注册进 typed
-`ToolPlane<C>`，再把 app/kernel 调用点切到 `Kernel::invoke_tool`。完成 concrete
-tool 迁移后，最后一步删除 `LegacyToolPlane<C>`、`CoreToolAdapter`、`ToolExtensionAdapter` 和旧
-`execute_tool_core` / `execute_tool_extension` API。不能把 legacy fallback 留作长期
-路径。
+`read/file.read` concrete tool 迁移已落地：app 定义 `ReadFileTool`，注册进 typed
+`ToolPlane<C>`，app/kernel 调用点走 `Kernel::invoke_tool`。后续应按同一模式迁移其它
+concrete tool；完成迁移后删除 `LegacyToolPlane<C>`、`CoreToolAdapter`、
+`ToolExtensionAdapter` 和旧 `execute_tool_core` / `execute_tool_extension` API。
+不能把 legacy fallback 留作长期路径。
 
 `AccessCx` 显式携带 `C`，但它由 `ctx.access()` 构造，并且只借用 unified context。
 如果具体 tool 需要 access，它通过 kernel 暴露的 context requirement trait 获取：
@@ -1294,7 +1296,8 @@ impl BrowserClickAction {
   不依赖 `loong-access` trait。
 - `CoreToolAdapter` / `ToolExtensionAdapter` 不再是主执行抽象；它们只能临时存在于
   `LegacyToolPlane`，并在迁移完成后删除。
-- `file.read` 继续只通过 `ctx.access().fs().read_file(...)` 执行读取。
+- `file.read` / `read` path mode 通过独立 `ReadFileTool` 的 `ToolImpl` 路径进入
+  `ctx.access().fs().read_file(...)`，不经过 legacy adapter 执行读取。
 - migrated side effect 不经过 direct preflight / `FilePolicyExtension`。
 - config-driven policy 经由 app config -> normalized runtime config ->
   app-owned policy construction -> policy registration 进入 pipeline。
