@@ -309,7 +309,7 @@ where
             let outcome_source = source.clone();
             evaluations.push(PolicyEvaluation {
                 source,
-                policy_stage: "pre",
+                policy_stage: Cow::Borrowed("pre"),
                 grant,
             });
 
@@ -351,7 +351,7 @@ where
                 let outcome_source = source.clone();
                 evaluations.push(PolicyEvaluation {
                     source,
-                    policy_stage: "action",
+                    policy_stage: Cow::Borrowed("action"),
                     grant,
                 });
 
@@ -393,7 +393,7 @@ where
             let outcome_source = source.clone();
             evaluations.push(PolicyEvaluation {
                 source,
-                policy_stage: "fallback",
+                policy_stage: Cow::Borrowed("fallback"),
                 grant,
             });
 
