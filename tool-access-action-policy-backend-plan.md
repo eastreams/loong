@@ -233,7 +233,8 @@ pub trait ActionMeta {
 `metadata()` 只返回便宜、可借用的授权/audit 元信息；`payload()` 是按需构造的
 JSON 视图，供 `PolicyAny` 等 type-erased policy 使用。不要命名为
 `legacy_*` 或 `policy_*`：Action 类型本身已经表达 policy 语义，payload 只是
-该 Action 的结构化载荷。
+该 Action 的结构化载荷。`payload()` 没有默认值；每个 Action 必须显式声明
+自己的 type-erased payload。
 
 Executable action 绑定到具体 context，并且 `run` 直接接受 `Granted<Self>`：
 
@@ -933,7 +934,7 @@ impl BrowserClickAction {
 - `Granted<A>` 仍不可被 `loong-core` 外部伪造。
 - 代码 comment/docs 说明 `ActionMeta` / `Action<Cx>` 分工，以及
   `Granted<A>::run(cx)` 的执行边界语义；`ActionMeta::payload()` 是 Action 的
-  结构化载荷，不是 legacy-only bridge。
+  结构化载荷，不是 legacy-only bridge，且没有默认 `Null`。
 - policy deny 有结构化 report，最终可生成稳定、可行动的 Agent-facing response。
 
 ## 验证

@@ -64,6 +64,12 @@ impl ActionMeta for LegacyKernelAction {
             required_capabilities: Cow::Borrowed(self.required_capabilities.as_slice()),
         }
     }
+
+    fn payload(&self) -> serde_json::Value {
+        serde_json::json!({
+            "operation": self.operation.as_str(),
+        })
+    }
 }
 
 /// Kernel policy engine.
@@ -676,6 +682,10 @@ mod tests {
                 operation: Cow::Borrowed("typed_only"),
                 required_capabilities: Cow::Borrowed(&[Capability::InvokeTool]),
             }
+        }
+
+        fn payload(&self) -> serde_json::Value {
+            serde_json::json!({})
         }
     }
 
