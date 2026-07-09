@@ -67,14 +67,19 @@ pub trait ToolExtensionAdapter<C: ContextFactory>: Send + Sync {
     ) -> Result<ToolExtensionOutcome, ToolPlaneError>;
 }
 
+/// Legacy adapter-backed tool plane.
+///
+/// This temporarily owns the old core/extension adapter path while tools move
+/// to the typed `ToolPlane` registry. Do not register newly migrated tools
+/// here; this type is a deletion target once legacy adapters are gone.
 #[derive(Default)]
-pub struct ToolPlane<C: ContextFactory> {
+pub struct LegacyToolPlane<C: ContextFactory> {
     core_adapters: BTreeMap<String, Arc<dyn CoreToolAdapter<C>>>,
     extension_adapters: BTreeMap<String, Arc<dyn ToolExtensionAdapter<C>>>,
     default_core_adapter: Option<String>,
 }
 
-impl<C> ToolPlane<C>
+impl<C> LegacyToolPlane<C>
 where
     C: ContextFactory,
 {

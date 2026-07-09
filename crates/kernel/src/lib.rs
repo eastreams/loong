@@ -87,8 +87,8 @@ pub use runtime::{
 };
 pub use task_supervisor::TaskSupervisor;
 pub use tool::{
-    CoreToolAdapter, ToolConcurrencyClass, ToolCoreOutcome, ToolCoreRequest, ToolExtensionAdapter,
-    ToolExtensionOutcome, ToolExtensionRequest, ToolPlane, ToolTier,
+    CoreToolAdapter, LegacyToolPlane, ToolConcurrencyClass, ToolCoreOutcome, ToolCoreRequest,
+    ToolExtensionAdapter, ToolExtensionOutcome, ToolExtensionRequest, ToolTier,
 };
 
 pub mod test_support;

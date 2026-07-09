@@ -31,8 +31,8 @@ use crate::{
         RuntimeExtensionOutcome, RuntimeExtensionRequest, RuntimePlane,
     },
     tool::{
-        CoreToolAdapter, ToolCoreOutcome, ToolCoreRequest, ToolExtensionAdapter,
-        ToolExtensionOutcome, ToolExtensionRequest, ToolPlane,
+        CoreToolAdapter, LegacyToolPlane, ToolCoreOutcome, ToolCoreRequest, ToolExtensionAdapter,
+        ToolExtensionOutcome, ToolExtensionRequest,
     },
 };
 
@@ -68,7 +68,7 @@ pub struct Kernel<C: ContextFactory> {
 
     audit: Arc<dyn AuditSink>,
 
-    tool_plane: ToolPlane<C>,
+    legacy_tool_plane: LegacyToolPlane<C>,
     memory_plane: MemoryPlane,
     connector_plane: ConnectorPlane,
     runtime_plane: RuntimePlane,
@@ -132,7 +132,7 @@ where
             harness: HarnessBroker::new(),
             connector_plane: ConnectorPlane::new(),
             runtime_plane: RuntimePlane::new(),
-            tool_plane: ToolPlane::new(),
+            legacy_tool_plane: LegacyToolPlane::new(),
             memory_plane: MemoryPlane::new(),
             revoked_tokens: Mutex::new(BTreeSet::new()),
             revoked_below_generation: AtomicU64::new(0),
@@ -217,19 +217,27 @@ where
         Ok(())
     }
 
+    /// Register an old core tool adapter.
+    ///
+    /// This is the compatibility path for tools that have not moved to the
+    /// typed tool registry. New governed tools should register with the future
+    /// `ToolPlane<C>` instead of adding another adapter here.
     pub fn register_core_tool_adapter<A: CoreToolAdapter<C> + 'static>(&mut self, adapter: A) {
-        self.tool_plane.register_core_adapter(adapter);
+        self.legacy_tool_plane.register_core_adapter(adapter);
     }
 
+    /// Register an old extension tool adapter.
+    ///
+    /// This remains only while unmigrated core/extension tools exist.
     pub fn register_tool_extension_adapter<A: ToolExtensionAdapter<C> + 'static>(
         &mut self,
         adapter: A,
     ) {
-        self.tool_plane.register_extension_adapter(adapter);
+        self.legacy_tool_plane.register_extension_adapter(adapter);
     }
 
     pub fn set_default_core_tool_adapter(&mut self, name: &str) -> Result<(), KernelError> {
-        self.tool_plane.set_default_core_adapter(name)?;
+        self.legacy_tool_plane.set_default_core_adapter(name)?;
         Ok(())
     }
 
@@ -657,11 +665,11 @@ where
         Ok(outcome)
     }
 
-    /// Execute one core tool call through the kernel-owned tool plane.
+    /// Execute one core tool call through the legacy adapter plane.
     ///
-    /// This is the entry point to read first when tracing tool execution. The
-    /// kernel authorizes the caller for the requested tool, then hands the same
-    /// unified context to the adapter. Access-backed tools must call
+    /// This is the temporary compatibility entry point for unmigrated tools.
+    /// The kernel authorizes the caller for the requested tool, then hands the
+    /// same unified context to the adapter. Access-backed tools must call
     /// `ctx.access().fs().read_file(...)`; the adapter should not perform the
     /// protected side effect itself.
     pub async fn execute_tool_core<'a>(
@@ -686,14 +694,14 @@ where
         let resolved_core_adapter = core_name
             .map(std::string::ToString::to_string)
             .or_else(|| {
-                self.tool_plane
+                self.legacy_tool_plane
                     .default_core_adapter_name()
                     .map(std::string::ToString::to_string)
             })
             .unwrap_or_else(|| "default".to_owned());
         let tool_name = request.tool_name.clone();
         let outcome = self
-            .tool_plane
+            .legacy_tool_plane
             .execute_core_with_context(core_name, request, &policy_context)
             .await?;
 
@@ -712,6 +720,7 @@ where
         Ok(outcome)
     }
 
+    /// Execute one extension tool call through the legacy adapter plane.
     pub async fn execute_tool_extension(
         &self,
         pack_id: &str,
@@ -735,14 +744,14 @@ where
         let resolved_core_adapter = core_name
             .map(std::string::ToString::to_string)
             .or_else(|| {
-                self.tool_plane
+                self.legacy_tool_plane
                     .default_core_adapter_name()
                     .map(std::string::ToString::to_string)
             })
             .unwrap_or_else(|| "default".to_owned());
         let action = request.extension_action.clone();
         let outcome = self
-            .tool_plane
+            .legacy_tool_plane
             .execute_extension(extension_name, core_name, request)
             .await?;
 
