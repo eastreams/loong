@@ -380,7 +380,7 @@ impl<C: ContextFactory> PolicyEngine<C> for PolicyPipeline<C> {
 这类 domain getter，也不应该发明第二套 tool context wrapper。
 
 当前代码状态：`Kernel<C>`、`PolicyPipeline<C>`、`ToolPlane<C>`、
-`AccessCx<'borrow, 'ctx, C>` 已落地。`ToolCoreContext` 已删除，tool adapter 直接接收
+`AccessCx<'a, 'ctx, C>` 已落地。`ToolCoreContext` 已删除，tool adapter 直接接收
 `&C::Cx<'_>`。kernel 不再定义 `KernelPolicyContext` / `KernelContextFactory`，也不再为
 `Kernel`、`ToolPlane` 或 `PolicyPipeline` 提供默认 context factory。app 和 spec
 分别定义自己的 concrete context factory。
@@ -532,7 +532,7 @@ tool helper 在调用 access 前执行 config-backed policy 分支。需要配�
 - `Kernel<C>` / `PolicyPipeline<C>` / `ToolPlane<C>` 已泛型化。
 - `ToolCoreContext` 已删除；kernel/tool/app 直接传递 app/spec/test 定义的 unified
   context。
-- kernel facade `AccessCx<'borrow, 'ctx, C>` 只保留 context factory 泛型，不再暴露
+- kernel facade `AccessCx<'a, 'ctx, C>` 只保留 context factory 泛型，不再暴露
   额外 `K: Kernel` 参数；它借用 unified context，不 own context。
 - `Kernel<C>` 构造函数已泛型化，可以实例化非默认 context factory。
 - `ActionContext` / `WorkspacePolicyContext` 已从 `loong-core` 删除。
@@ -600,7 +600,7 @@ PolicyEngine<C>
 Policy<C, A>
 PolicyAny<C>
 Kernel<C>
-AccessCx<'borrow, 'ctx, C>
+AccessCx<'a, 'ctx, C>
 ToolPlane<C>
 RegisteredTool<C>
 ```
@@ -671,7 +671,7 @@ Kernel { type C; }
 
 `PolicyEngine` 不拥有 factory，只被 `C: ContextFactory` 参数化。
 
-### 4. 用 unified context 替换 ToolCoreContext
+### 4. 用 unified context 替换 ToolCoreContext（已完成）
 
 把 concrete kernel 迁到：
 
@@ -695,6 +695,12 @@ pub trait ToolAdapter<C: ContextFactory>: Send + Sync {
     ) -> Result<ToolOutcome, ToolPlaneError>;
 }
 ```
+
+已落地：`ToolCoreContext` wrapper 已删除；`CoreToolAdapter::execute_core_tool_with_context`
+直接接收 `&C::Cx<'_>`；access-backed read path 通过
+`ctx.access().fs().read_file(...)` 进入。
+
+仍待后续迁移的是单一 tool execution API，而不是 unified context receiver 本身：
 
 `CoreToolAdapter` / `ToolExtensionAdapter` 合并成单一 `ToolAdapter`。公开给具体工具
 实现者的是 typed `ToolImpl`；`RegisteredTool` 内部做 payload parse 和 erased invoke：
