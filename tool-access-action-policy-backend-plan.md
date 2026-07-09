@@ -649,7 +649,7 @@ side-effect hook；`FsReadAction` 的读取副作用经由 `Granted<FsReadAction
 `metadata()` + `payload()`：`metadata()` 不分配 capability set，`payload()`
 服务 type-erased policy 的结构化输入。
 
-### 3. 改 Policy / PolicyAny / PolicyEngine 泛型
+### 3. 改 Policy / PolicyAny / PolicyEngine 泛型（已完成）
 
 目标：
 
@@ -670,6 +670,10 @@ Kernel { type C; }
 ```
 
 `PolicyEngine` 不拥有 factory，只被 `C: ContextFactory` 参数化。
+
+已落地：`loong-core` 中的 `Policy<C, A>` / `PolicyAny<C>` / `PolicyEngine<C>` 已统一
+使用显式 `C: ContextFactory` 泛型；`kernel::PolicyPipeline<C>` 和 typed/any policy
+registry 也使用同一个 `C`，`PolicyEngine` 内没有 factory 或 `Cx` associated type。
 
 ### 4. 用 unified context 替换 ToolCoreContext（已完成）
 
