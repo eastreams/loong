@@ -135,6 +135,7 @@ async fn mvp_memory_adapter_routes_through_kernel() {
 
     let caps = BTreeSet::from([Capability::MemoryRead]);
     let policy_context = crate::context::AppExecutionContext::new(
+        &kernel,
         &pack,
         &token,
         kernel.now_epoch_s(),

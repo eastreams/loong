@@ -13049,6 +13049,7 @@ async fn kernel_tool_adapter_routes_through_kernel() {
         "payload": &request.payload,
     });
     let policy_context = crate::context::AppExecutionContext::new(
+        &kernel,
         &pack,
         &token,
         kernel.now_epoch_s(),
@@ -13119,6 +13120,7 @@ async fn kernel_tool_adapter_rejects_reserved_internal_payload_through_kernel_by
         "payload": &request.payload,
     });
     let policy_context = crate::context::AppExecutionContext::new(
+        &kernel,
         &pack,
         &token,
         kernel.now_epoch_s(),

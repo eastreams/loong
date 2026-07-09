@@ -8,7 +8,6 @@ use std::{
 };
 
 use crate::{
-    access::AccessCx,
     audit::{
         AuditEvent, AuditEventKind, AuditSink, ExecutionPlane, InMemoryAuditSink, NoopAuditSink,
         PlaneTier,
@@ -32,7 +31,7 @@ use crate::{
         RuntimeExtensionOutcome, RuntimeExtensionRequest, RuntimePlane,
     },
     tool::{
-        CoreToolAdapter, ToolCoreContext, ToolCoreOutcome, ToolCoreRequest, ToolExtensionAdapter,
+        CoreToolAdapter, ToolCoreOutcome, ToolCoreRequest, ToolExtensionAdapter,
         ToolExtensionOutcome, ToolExtensionRequest, ToolPlane,
     },
 };
@@ -141,12 +140,6 @@ where
             audit,
             event_seq: AtomicU64::new(0),
         }
-    }
-
-    #[inline(always)]
-    #[must_use]
-    pub fn access<'a>(&'a self, policy_context: C::Cx<'a>) -> AccessCx<'a, C> {
-        AccessCx::new(self, policy_context)
     }
 
     #[must_use]
@@ -667,10 +660,10 @@ where
     /// Execute one core tool call through the kernel-owned tool plane.
     ///
     /// This is the entry point to read first when tracing tool execution. The
-    /// kernel authorizes the caller for the requested tool, then hands a
-    /// [`ToolCoreContext`] to the adapter. Access-backed tools must use that
-    /// context to reach `ctx.access().fs().read_file(...)`; the adapter should
-    /// not perform the protected side effect itself.
+    /// kernel authorizes the caller for the requested tool, then hands the same
+    /// unified context to the adapter. Access-backed tools must call
+    /// `ctx.access().fs().read_file(...)`; the adapter should not perform the
+    /// protected side effect itself.
     pub async fn execute_tool_core<'a>(
         &'a self,
         pack_id: &str,
@@ -699,10 +692,9 @@ where
             })
             .unwrap_or_else(|| "default".to_owned());
         let tool_name = request.tool_name.clone();
-        let tool_context = ToolCoreContext::new(self, policy_context);
         let outcome = self
             .tool_plane
-            .execute_core_with_context(core_name, request, tool_context)
+            .execute_core_with_context(core_name, request, &policy_context)
             .await?;
 
         self.record_plane_invocation(PlaneInvocationRecord {

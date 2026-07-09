@@ -145,7 +145,7 @@ struct FsAccessToolCx<'a> {
 
 struct FsAccessTestCx<'a> {
     kernel: &'a FsAccessTestKernel,
-    policy_context: FsAccessPolicyContext,
+    policy_context: &'a FsAccessPolicyContext,
 }
 
 impl<'a> FsAccessToolCx<'a> {
@@ -156,16 +156,16 @@ impl<'a> FsAccessToolCx<'a> {
         }
     }
 
-    fn access(&self) -> FsAccessTestCx<'a> {
+    fn access(&self) -> FsAccessTestCx<'_> {
         FsAccessTestCx {
             kernel: self.kernel,
-            policy_context: self.policy_context.clone(),
+            policy_context: &self.policy_context,
         }
     }
 }
 
 impl<'a> FsAccessTestCx<'a> {
-    fn fs(self) -> FsAccess<'a, FsAccessContextFactory, FsAccessPolicyEngine> {
+    fn fs(self) -> FsAccess<'a, 'a, FsAccessContextFactory, FsAccessPolicyEngine> {
         FsAccess::new(self.kernel.policy_engine(), self.policy_context)
     }
 }

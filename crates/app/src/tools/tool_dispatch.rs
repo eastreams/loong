@@ -3,10 +3,9 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
-use loong_kernel::ToolCoreContext;
 use serde_json::Value;
 
-use crate::context::AppContextFactory;
+use crate::context::AppExecutionContext;
 
 use super::*;
 
@@ -157,7 +156,7 @@ pub(crate) async fn execute_tool_core_with_config_and_context(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
     observability_config: &crate::config::ObservabilityConfig,
-    ctx: ToolCoreContext<'_, AppContextFactory>,
+    ctx: &AppExecutionContext<'_>,
 ) -> Result<ToolCoreOutcome, String> {
     let requested_tool_name = request.tool_name.clone();
     let canonical_name = canonical_tool_name(request.tool_name.as_str()).to_owned();

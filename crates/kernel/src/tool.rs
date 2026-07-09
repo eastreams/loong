@@ -10,39 +10,6 @@ pub use loong_contracts::{
 };
 
 use crate::errors::ToolPlaneError;
-use crate::{AccessCx, Kernel};
-
-/// Kernel-owned context passed into core tool adapters.
-///
-/// The context carries the same policy view used by the kernel authorization
-/// step. A migrated tool should enrich this context with its own view data,
-/// then call `access()` instead of reaching for policy engines or I/O directly.
-pub struct ToolCoreContext<'a, C: ContextFactory> {
-    kernel: &'a Kernel<C>,
-    policy_context: C::Cx<'a>,
-}
-
-impl<'a, C> ToolCoreContext<'a, C>
-where
-    C: ContextFactory,
-{
-    #[must_use]
-    pub fn new(kernel: &'a Kernel<C>, policy_context: C::Cx<'a>) -> Self {
-        Self {
-            kernel,
-            policy_context,
-        }
-    }
-
-    /// Enter the kernel-defined access facade.
-    ///
-    /// This consumes the context so access receives the complete policy view for
-    /// the action it is about to build and grant.
-    #[must_use]
-    pub fn access(self) -> AccessCx<'a, C> {
-        self.kernel.access(self.policy_context)
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -79,11 +46,11 @@ pub trait CoreToolAdapter<C: ContextFactory>: Send + Sync {
     /// `loong_access`.
     ///
     /// The default keeps old adapters working. New access-backed tools should
-    /// override this method and route through the supplied [`ToolCoreContext`].
+    /// override this method and route through the supplied unified context.
     async fn execute_core_tool_with_context(
         &self,
         request: ToolCoreRequest,
-        _ctx: ToolCoreContext<'_, C>,
+        _ctx: &C::Cx<'_>,
     ) -> Result<ToolCoreOutcome, ToolPlaneError> {
         self.execute_core_tool(request).await
     }
@@ -178,7 +145,7 @@ where
         &self,
         core_name: Option<&str>,
         request: ToolCoreRequest,
-        ctx: ToolCoreContext<'_, C>,
+        ctx: &C::Cx<'_>,
     ) -> Result<ToolCoreOutcome, ToolPlaneError> {
         let resolved_name = if let Some(name) = core_name {
             name

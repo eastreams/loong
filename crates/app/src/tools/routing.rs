@@ -1,8 +1,7 @@
 use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
-use loong_kernel::ToolCoreContext;
 use serde_json::Value;
 
-use crate::context::AppContextFactory;
+use crate::context::AppExecutionContext;
 
 use super::{
     BASH_EXEC_TOOL_NAME, ToolView, canonical_tool_name, execute_discoverable_tool_core_with_config,
@@ -74,7 +73,7 @@ pub(super) fn execute_direct_tool_core_with_config(
 pub(super) async fn execute_direct_tool_core_with_context(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
-    ctx: ToolCoreContext<'_, AppContextFactory>,
+    ctx: &AppExecutionContext<'_>,
 ) -> Result<ToolCoreOutcome, String> {
     if request.tool_name == "read" {
         return execute_direct_read_tool_core_with_context(request, config, ctx).await;
@@ -122,7 +121,7 @@ fn execute_direct_read_tool_core_with_config(
 async fn execute_direct_read_tool_core_with_context(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
-    ctx: ToolCoreContext<'_, AppContextFactory>,
+    ctx: &AppExecutionContext<'_>,
 ) -> Result<ToolCoreOutcome, String> {
     let runtime_view = runtime_tool_view_for_runtime_config(config);
     if !runtime_view.contains("read") {

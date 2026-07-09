@@ -11,21 +11,21 @@ use crate::{kernel::Kernel, policy::PolicyPipeline};
 /// Keep this type small: it owns no policy logic and no backend state. It only
 /// carries the kernel reference plus the action context into concrete access
 /// modules such as `loong_access::fs`.
-pub struct AccessCx<'a, C>
+pub struct AccessCx<'a, 'ctx, C>
 where
-    C: ContextFactory + 'a,
+    C: ContextFactory + 'ctx,
 {
     kernel: &'a Kernel<C>,
-    policy_context: C::Cx<'a>,
+    policy_context: &'a C::Cx<'ctx>,
 }
 
-impl<'a, C> AccessCx<'a, C>
+impl<'a, 'ctx, C> AccessCx<'a, 'ctx, C>
 where
-    C: ContextFactory + 'a,
+    C: ContextFactory + 'ctx,
 {
     #[inline(always)]
     #[must_use]
-    pub fn new(kernel: &'a Kernel<C>, policy_context: C::Cx<'a>) -> Self {
+    pub fn new(kernel: &'a Kernel<C>, policy_context: &'a C::Cx<'ctx>) -> Self {
         Self {
             kernel,
             policy_context,
@@ -39,7 +39,7 @@ where
     /// typed action grant, and perform the read.
     #[inline(always)]
     #[must_use]
-    pub fn fs(self) -> FsAccess<'a, C, PolicyPipeline<C>> {
+    pub fn fs(self) -> FsAccess<'a, 'ctx, C, PolicyPipeline<C>> {
         FsAccess::new(self.kernel.policy_engine(), self.policy_context)
     }
 }

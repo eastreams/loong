@@ -7,9 +7,9 @@ use std::thread;
 use loong_contracts::{CapabilityToken, ExecutionPlane, PlaneTier};
 use loong_core::policy::context::{ContextFactory, FsAccessContext, PolicyContext};
 use loong_kernel::{
-    AuditSink, Capability, Clock, ExecutionRoute, FanoutAuditSink, HarnessKind, InMemoryAuditSink,
-    JsonlAuditSink, Kernel, KernelInvocationContext, NoopAuditSink, PolicyPipeline, SystemClock,
-    VerticalPackManifest,
+    AccessCx, AuditSink, Capability, Clock, ExecutionRoute, FanoutAuditSink, HarnessKind,
+    InMemoryAuditSink, JsonlAuditSink, Kernel, KernelInvocationContext, NoopAuditSink,
+    PolicyPipeline, SystemClock, VerticalPackManifest,
 };
 use serde_json::Value;
 
@@ -53,6 +53,7 @@ impl KernelContext {
         tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
     ) -> Result<AppExecutionContext<'a>, String> {
         AppExecutionContext::new(
+            self.kernel.as_ref(),
             self.pack.as_ref(),
             &self.token,
             self.kernel.now_epoch_s(),
@@ -97,6 +98,7 @@ impl ContextFactory for AppContextFactory {
 }
 
 pub struct AppExecutionContext<'a> {
+    kernel: &'a Kernel<AppContextFactory>,
     pack: &'a VerticalPackManifest,
     token: &'a CapabilityToken,
     now_epoch_s: u64,
@@ -119,6 +121,7 @@ impl<'a> AppExecutionContext<'a> {
     }
 
     pub(crate) fn new(
+        kernel: &'a Kernel<AppContextFactory>,
         pack: &'a VerticalPackManifest,
         token: &'a CapabilityToken,
         now_epoch_s: u64,
@@ -129,6 +132,7 @@ impl<'a> AppExecutionContext<'a> {
     ) -> Result<Self, String> {
         let (fs_resolution_root, fs_allowed_roots) = fs_access_root_view(tool_runtime_config)?;
         Ok(Self {
+            kernel,
             pack,
             token,
             now_epoch_s,
@@ -138,6 +142,11 @@ impl<'a> AppExecutionContext<'a> {
             fs_resolution_root,
             fs_allowed_roots,
         })
+    }
+
+    #[must_use]
+    pub(crate) fn access(&self) -> AccessCx<'_, 'a, AppContextFactory> {
+        AccessCx::new(self.kernel, self)
     }
 }
 
@@ -242,6 +251,7 @@ pub(crate) fn read_file_with_access_for_runtime_config(
             let pack = runtime_file_read_pack_manifest();
             let token = runtime_file_read_token(now_epoch_s);
             let policy_context = AppExecutionContext::new(
+                &kernel,
                 &pack,
                 &token,
                 now_epoch_s,
@@ -250,8 +260,8 @@ pub(crate) fn read_file_with_access_for_runtime_config(
                 None,
                 &config,
             )?;
-            let output = kernel
-                .access(policy_context)
+            let output = policy_context
+                .access()
                 .fs()
                 .read_file(path)
                 .await

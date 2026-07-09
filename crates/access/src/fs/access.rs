@@ -19,23 +19,23 @@ use super::{action::FsReadAction, error::FsActionError, path::CanonicalPath};
 /// This module is the side-effect boundary for fs reads. Callers provide a raw
 /// path; `FsAccess` resolves it, builds the typed action, asks policy for a
 /// grant, consumes that grant, and only then reads from disk.
-pub struct FsAccess<'a, C, P>
+pub struct FsAccess<'a, 'ctx, C, P>
 where
-    C: ContextFactory + 'a,
+    C: ContextFactory + 'ctx,
     P: PolicyEngine<C>,
 {
     policy_engine: &'a P,
-    policy_context: C::Cx<'a>,
+    policy_context: &'a C::Cx<'ctx>,
 }
 
-impl<'a, C, P> FsAccess<'a, C, P>
+impl<'a, 'ctx, C, P> FsAccess<'a, 'ctx, C, P>
 where
-    C: ContextFactory + 'a,
+    C: ContextFactory + 'ctx,
     P: PolicyEngine<C>,
 {
     #[inline(always)]
     #[must_use]
-    pub fn new(policy_engine: &'a P, policy_context: C::Cx<'a>) -> Self {
+    pub fn new(policy_engine: &'a P, policy_context: &'a C::Cx<'ctx>) -> Self {
         Self {
             policy_engine,
             policy_context,
@@ -43,11 +43,11 @@ where
     }
 }
 
-impl<'a, C, P> FsAccess<'a, C, P>
+impl<'a, 'ctx, C, P> FsAccess<'a, 'ctx, C, P>
 where
-    C: ContextFactory + 'a,
+    C: ContextFactory + 'ctx,
     P: PolicyEngine<C>,
-    C::Cx<'a>: FsAccessContext,
+    C::Cx<'ctx>: FsAccessContext,
 {
     /// Read a file after path resolution and typed policy grant.
     pub async fn read_file(self, path: impl AsRef<Path>) -> Result<FsReadOutput, FsAccessError> {
@@ -59,11 +59,11 @@ where
         let action = FsReadAction::new(path);
         let grant = self
             .policy_engine
-            .grant(&self.policy_context, action)
+            .grant(self.policy_context, action)
             .await
             .map_err(AuthorizationError::from)
             .map_err(FsAccessError::Authorization)?;
-        grant.granted.run(&self.policy_context).await
+        grant.granted.run(self.policy_context).await
     }
 }
 

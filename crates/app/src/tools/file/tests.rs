@@ -9,6 +9,7 @@ use loong_kernel::{Kernel, NoopAuditSink, SystemClock, VerticalPackManifest};
 use serde_json::json;
 
 use super::*;
+use crate::context::AppContextFactory;
 use crate::tools::runtime_config::ToolRuntimeConfig;
 use crate::tools::runtime_events::{
     ToolFileChangeKind, ToolRuntimeEvent, ToolRuntimeEventSink, with_tool_runtime_event_sink,
@@ -89,8 +90,7 @@ async fn execute_file_read_with_test_context(
     };
     let policy_context =
         kernel_ctx.execution_context(ExecutionPlane::Tool, PlaneTier::Core, None, config)?;
-    let ctx = ToolCoreContext::new(kernel.as_ref(), policy_context);
-    execute_file_read_tool_with_context(request, config, ctx).await
+    execute_file_read_tool_with_context(request, config, &policy_context).await
 }
 
 #[cfg(unix)]

@@ -10,7 +10,6 @@ use super::runtime_events::{
     ToolFileChangeKind, ToolFileChangePreview, ToolRuntimeEvent, current_tool_runtime_event_sink,
 };
 use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
-use loong_kernel::ToolCoreContext;
 #[cfg(feature = "tool-file")]
 use regex::{Regex, RegexBuilder};
 #[cfg(feature = "tool-file")]
@@ -20,7 +19,7 @@ use std::io::Write as _;
 #[cfg(feature = "tool-file")]
 use tempfile::NamedTempFile;
 
-use crate::context::AppContextFactory;
+use crate::context::AppExecutionContext;
 
 #[cfg(feature = "tool-file")]
 const FILE_CHANGE_PREVIEW_MAX_LINES: usize = 8;
@@ -143,7 +142,7 @@ fn select_file_read_content(
 pub(super) async fn execute_file_read_tool_with_context(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
-    ctx: ToolCoreContext<'_, AppContextFactory>,
+    ctx: &AppExecutionContext<'_>,
 ) -> Result<ToolCoreOutcome, String> {
     #[cfg(not(feature = "tool-file"))]
     {

@@ -52,7 +52,28 @@ impl ContextFactory for AccessCxContextFactory {
 fn loong_kernel_exposes_access_types_and_fs_surface_for_workspace_kernels() {
     fn assert_access_exported<T>() {}
 
-    assert_access_exported::<AccessCx<'static, AccessCxContextFactory>>();
+    assert_access_exported::<AccessCx<'static, 'static, AccessCxContextFactory>>();
+}
+
+struct AccessToolCx<'a> {
+    kernel: &'a crate::Kernel<AccessCxContextFactory>,
+    policy_context: AccessCxPolicyContext,
+}
+
+impl<'a> AccessToolCx<'a> {
+    fn new(
+        kernel: &'a crate::Kernel<AccessCxContextFactory>,
+        workspace_root: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            kernel,
+            policy_context: AccessCxPolicyContext::new(workspace_root),
+        }
+    }
+
+    fn access(&self) -> AccessCx<'_, '_, AccessCxContextFactory> {
+        AccessCx::new(self.kernel, &self.policy_context)
+    }
 }
 
 #[tokio::test]
@@ -62,9 +83,10 @@ async fn access_context_preserves_workspace_policy_context_for_fs_access() {
     let workspace_root = base.join("workspace");
     std::fs::create_dir_all(workspace_root.join("notes")).expect("create notes dir");
     std::fs::write(workspace_root.join("notes/todo.md"), "hello").expect("write note");
-    let access = AccessCx::new(&kernel, AccessCxPolicyContext::new(&workspace_root));
+    let ctx = AccessToolCx::new(&kernel, &workspace_root);
 
-    let output = access
+    let output = ctx
+        .access()
         .fs()
         .read_file("notes/todo.md")
         .await
