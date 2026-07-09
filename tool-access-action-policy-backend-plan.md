@@ -75,12 +75,27 @@
 - 不要求抽统一 backend trait。执行边界先表达为
   `Action<Cx>::run(Granted<Self>, &Cx)`；若后续 action 内部需要 backend，它只是 run
   的实现细节。
-- tool 管理参考 `/Users/yang/Projects/mvp` 的主干形状：`ToolHost`/registry 管工具
-  路径和注册，公开给工具作者的是 `ToolImpl`，内部擦除成 `RegisteredTool`。但
-  loong 不继承 mvp 里的第二套 `ToolContext`；其位置由 unified context 顶上。
-- CoreTool / ExtensionTool 不再是两套 execution API。原 core/extension 差异只能作为
+- tool 管理参考 `/Users/yang/Projects/mvp` 的 typed tool 主干形状：具体工具是独立
+  type + `impl ToolImpl<C>`，注册后擦除成 `RegisteredTool<C>`。但 loong 不继承 mvp
+  里的第二套 `ToolContext` / `ToolHost` 包装；其位置由 unified context 顶上。
+- 新 `ToolPlane<C>` 属于 kernel runtime：它持有 tool registry、处理 lookup/invoke、
+  连接 audit/error/provenance。`loong-core` 只放 `ToolImpl<C>`、`ToolRegistration`、
+  `RegisteredTool<C>` 这类抽象和注册结果对象；`loong-contracts` 只放 `ToolSpec` /
+  `ToolOutcome` 等稳定数据。
+- 现有 `ToolPlane<C>` 实际是 legacy adapter plane，应先直接重命名为
+  `LegacyToolPlane<C>`。不保留 `type ToolPlane = LegacyToolPlane` alias，也不引入
+  `ToolAdapterPlane` 这种看似长期有效的新层名。`CoreToolAdapter` /
+  `ToolExtensionAdapter` 只允许被 `LegacyToolPlane` 临时包住，后续随工具迁移一起删除。
+- CoreTool / ExtensionTool 不再是目标 execution API。原 core/extension 差异只能作为
   provenance / registration metadata，用于 resolve、audit、catalog、namespace 和
-  compatibility，不进入 action/policy/access 主路径。
+  compatibility；迁移期旧 API 只能被隔离在 `LegacyToolPlane`，不能继续占用
+  `ToolPlane` 这个正名，也不能被包装成新的 adapter plane 正常层。
+- 迁移期允许一个明确 fallback：`Kernel::invoke_tool` 先查新 `ToolPlane`，没有 typed
+  match 时跳到 `LegacyToolPlane`。fallback 必须记录为 legacy route，且只在未命中新
+  registry 时发生；不能让新 `ToolPlane` 自己持有或调用 legacy plane。
+- 需要 access 的具体 tool 通过 kernel 暴露的 context requirement 获取 `ctx.access()`。
+  这个 trait 不放 `loong-access`，因为 app/spec/test 需要实现它但不应依赖 access；
+  也不放 `loong-core`，因为它返回 kernel-defined `AccessCx`。
 - 测试跟随对应模块放置，例如 fs access 测试放在 `fs/tests.rs` 这类局部位置；
   不新增无归属的大型跨模块测试文件。
 - 注释只服务边界理解：要标出 config -> policy、kernel registration、legacy
@@ -95,12 +110,12 @@
 
 ```text
 tool invocation
-  -> ToolPlane<C>::resolve(path/name)
+  -> kernel::ToolPlane<C>::resolve(path/name)
   -> RegisteredTool<C>::invoke(&ctx, payload)
   -> ToolImpl<C>::parse_input(payload)
   -> ToolImpl<C>::execute(&ctx, input)
   -> ctx.access()
-  -> AccessCx<'_, C>
+  -> AccessCx<'_, '_, C>
   -> AccessCx::fs()
   -> FsAccess<'_, C, P>::read_file(path)
       -> CanonicalPath::resolve(path, ctx fs view)
@@ -134,8 +149,9 @@ impl<'a> AppExecutionContext<'a> {
 }
 ```
 
-如果 access 需要 policy engine、backend 或 kernel runtime，它通过 ctx 实现的小 view
-trait 获取依赖；kernel 不是 access API 的 receiver。
+`AccessCx` 可以持有 kernel ref 来取得 policy engine / runtime host；ctx 提供的是
+invocation 数据和 app-facing requirement。外部 API 的 receiver 仍是 unified ctx，
+不是 `kernel.access(ctx)`。
 
 tool execution API 是单一的：
 
@@ -157,13 +173,91 @@ pub trait ToolImpl<C: ContextFactory>: Send + Sync + 'static {
 }
 ```
 
-`ToolPlane<C>` 持有 `RegisteredTool<C>`，注册记录携带 `registered_at` 和来源 metadata。
-来源 metadata 可以区分 builtin / extension / discovered / compatibility route，但
-`RegisteredTool::invoke(&ctx, payload)` 只有一条路径。
+具体工具是单独类型实现这个 trait，不写进 `ToolPlane` 的 match/enum：
 
-迁移到这条路径时应直接替换旧调用面：`CoreToolAdapter` / `ToolExtensionAdapter`、
-`ToolCoreRequest` / `ToolExtensionRequest`、`execute_tool_core` /
-`execute_tool_extension` 都是删除对象，不允许作为并行兼容 API 长期存在。
+```rust
+pub struct ReadFileTool;
+
+pub struct ReadFileInput {
+    path: String,
+}
+
+pub struct ReadFileOutput {
+    path: String,
+    bytes: usize,
+    content: String,
+}
+
+impl From<ReadFileOutput> for ToolOutcome {
+    fn from(output: ReadFileOutput) -> Self {
+        ToolOutcome {
+            status: "ok".to_owned(),
+            payload: serde_json::json!({
+                "path": output.path,
+                "bytes": output.bytes,
+                "content": output.content,
+            }),
+        }
+    }
+}
+
+#[async_trait]
+impl<C> ToolImpl<C> for ReadFileTool
+where
+    C: ContextFactory,
+    for<'a> C::Cx<'a>: KernelAccess<C>,
+{
+    type Input = ReadFileInput;
+    type Output = ToolOutcome;
+
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: "read".to_owned(),
+            description: "Read a file from the allowed filesystem roots.".to_owned(),
+            required_capabilities: vec![Capability::FilesystemRead],
+        }
+    }
+
+    fn parse_input(&self, payload: serde_json::Value) -> Result<Self::Input, ToolInputError> {
+        let path = payload
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .ok_or(ToolInputError::MissingField("path"))?
+            .to_owned();
+        Ok(ReadFileInput { path })
+    }
+
+    async fn execute(
+        &self,
+        ctx: &C::Cx<'_>,
+        input: Self::Input,
+    ) -> Result<Self::Output, ToolExecutionError> {
+        let output = ctx.access().fs().read_file(&input.path).await?;
+        let content = String::from_utf8_lossy(&output.bytes).to_string();
+        Ok(ReadFileOutput {
+            path: output.path.display().to_string(),
+            bytes: output.bytes.len(),
+            content,
+        }
+        .into())
+    }
+}
+```
+
+`ToolImpl` 本身在 core，`ReadFileTool` 这类 concrete impl 放 app 或后续 builtin-tools
+crate。需要 access 时约束 kernel 暴露的 `KernelAccess<C>`（命名可实现时再收敛），
+不依赖 `loong-access` 的 trait。
+
+`kernel::ToolPlane<C>` 持有 `RegisteredTool<C>`，注册记录携带 `registered_at` 和来源
+metadata。来源 metadata 可以区分 builtin / extension / discovered / compatibility route，
+但 `RegisteredTool::invoke(&ctx, payload)` 只有一条路径。
+
+迁移到这条路径时应先把旧调用面隔离成 `LegacyToolPlane<C>`。`CoreToolAdapter` /
+`ToolExtensionAdapter` 只能短期服务未迁移工具，并随 legacy plane 删除；新
+`ToolPlane<C>` 不走 adapter。过渡期间 fallback 由 `Kernel::invoke_tool` 执行：新
+registry 未命中时才转交 legacy plane。
 
 ## 分层边界
 
@@ -182,7 +276,11 @@ pub trait ToolImpl<C: ContextFactory>: Send + Sync + 'static {
 - `PolicyOutcome`
 - `PolicyReport`
 - `GrantId` / `PolicyId`
-- tool/runtime/memory request/outcome 数据结构
+- `ToolSpec`
+- `ToolOutcome`
+- `ToolPath`，或先用现有 string tool id 作为过渡路径类型
+- `ToolInputError` 这类纯输入错误数据
+- legacy tool/runtime/memory request/outcome 数据结构
 
 不放：
 
@@ -193,6 +291,9 @@ pub trait ToolImpl<C: ContextFactory>: Send + Sync + 'static {
 - `Policy`
 - `PolicyAny`
 - `PolicyEngine`
+- `ToolImpl<C>`
+- `RegisteredTool<C>`
+- `ToolPlane<C>`
 - workspace root / file root / tool config 视图
 
 这些是行为 trait 或 context requirement trait，属于 `loong-core`、`loong-kernel`
@@ -201,9 +302,10 @@ pub trait ToolImpl<C: ContextFactory>: Send + Sync + 'static {
 
 ### `loong-core`
 
-放跨 kernel/access/policy 共用的行为 contract。core 只承载极基础的 context
+放跨 kernel/access/policy/tool 共用的行为 contract。core 承载极基础的 context
 requirement，例如 `ContextFactory` 和 capability gate 所需的最小 `PolicyContext`
-形状；不要把 `FsAccessContext` 这类 domain-specific access requirement 放进 core：
+形状；也承载不依赖 kernel runtime 的 tool 抽象与单工具注册对象。不要把
+`FsAccessContext` 这类 domain-specific access requirement 放进 core：
 
 ```rust
 /// Type-level factory for the execution context used by policy/access/tool code.
@@ -276,6 +378,41 @@ impl<A> Granted<A> {
   policy；
 - `Action<Cx>::run(Granted<Self>, &Cx)` 是 action 自己的执行实现，正常入口是
   `Granted<A>::run(&Cx)`。
+
+tool 抽象也放在 core，但只到单个工具的注册和 erased invoke，不拥有运行平面：
+
+```rust
+#[async_trait]
+pub trait ToolImpl<C: ContextFactory>: Send + Sync + 'static {
+    type Input: Send + 'static;
+    type Output: Send + Into<ToolOutcome> + 'static;
+
+    fn spec(&self) -> ToolSpec;
+
+    fn parse_input(&self, payload: serde_json::Value) -> Result<Self::Input, ToolInputError>;
+
+    async fn execute(
+        &self,
+        ctx: &C::Cx<'_>,
+        input: Self::Input,
+    ) -> Result<Self::Output, ToolExecutionError>;
+}
+
+pub struct ToolRegistration {
+    spec: ToolSpec,
+    registered_at: SystemTime,
+    provenance: ToolProvenance,
+}
+
+pub struct RegisteredTool<C: ContextFactory> {
+    registration: ToolRegistration,
+    erased: Box<dyn ErasedTool<C>>,
+}
+```
+
+`RegisteredTool<C>` 是一个工具的注册结果对象；它可以擦除具体 `ToolImpl<C>` 并提供
+`invoke(&C::Cx<'_>, Value)`。不要在 core 里放 `BTreeMap<ToolPath, RegisteredTool<C>>`
+这种 runtime registry，也不要让 core 处理 audit、pack、namespace 或 adapter fallback。
 
 Policy 直接绑定到 context factory：
 
@@ -359,7 +496,7 @@ kernel 固定治理流程，不固定 app context 字段。
 ```rust
 pub struct Kernel<C: ContextFactory> {
     policy: PolicyPipeline<C>,
-    // packs, tokens, planes, adapters, audit, clock ...
+    tool_plane: ToolPlane<C>,
 }
 
 pub struct PolicyPipeline<C: ContextFactory> {
@@ -373,6 +510,85 @@ impl<C: ContextFactory> PolicyEngine<C> for PolicyPipeline<C> {
     // pre -> action -> fallback
 }
 ```
+
+新 `ToolPlane<C>` 也属于 kernel。它拥有一组 core `RegisteredTool<C>`，负责 runtime
+lookup、执行入口、错误转换、provenance/audit 接入：
+
+```rust
+pub struct ToolPlane<C: ContextFactory> {
+    tools: BTreeMap<ToolPath, RegisteredTool<C>>,
+}
+
+impl<C: ContextFactory> ToolPlane<C> {
+    pub fn register<T>(&mut self, path: ToolPath, tool: T) -> Result<(), ToolPlaneError>
+    where
+        T: ToolImpl<C>,
+    {
+        let registered = RegisteredTool::from_tool(ToolProvenance::Builtin, tool)?;
+        self.tools.insert(path, registered);
+        Ok(())
+    }
+
+    pub async fn invoke(
+        &self,
+        path: &ToolPath,
+        ctx: &C::Cx<'_>,
+        payload: serde_json::Value,
+    ) -> Result<ToolOutcome, ToolPlaneError> {
+        let registered = self
+            .tools
+            .get(path)
+            .ok_or_else(|| ToolPlaneError::ToolNotFound(path.to_string()))?;
+        registered.invoke(ctx, payload).await.map_err(ToolPlaneError::from)
+    }
+}
+```
+
+迁移期间如果未迁移工具还需要旧 adapter 调用面，旧 `ToolPlane<C>` 只能先改名为
+`LegacyToolPlane<C>`，并标注为删除对象：
+
+```rust
+pub struct LegacyToolPlane<C: ContextFactory> {
+    core_adapters: BTreeMap<String, Arc<dyn CoreToolAdapter<C>>>,
+    extension_adapters: BTreeMap<String, Arc<dyn ToolExtensionAdapter<C>>>,
+    default_core_adapter: Option<String>,
+}
+```
+
+迁移期 `Kernel<C>` 可以临时持有 `legacy_tool_plane: LegacyToolPlane<C>`，但目标
+`Kernel<C>` 只保留新 `tool_plane: ToolPlane<C>`。旧 `register_core_tool_adapter` /
+`execute_tool_core` 这类 kernel API 可以暂留一小步，但注释要明确它们是 legacy path，
+并在迁移完成后删除。新工具注册走 `Kernel::register_tool(path, tool)`，新工具执行走
+`Kernel::invoke_tool(path, payload, ctx)` 或等价命名。
+
+fallback 放在 kernel，不放在新 `ToolPlane`：
+
+```rust
+impl<C: ContextFactory> Kernel<C> {
+    pub async fn invoke_tool(
+        &self,
+        path: &ToolPath,
+        payload: serde_json::Value,
+        ctx: &C::Cx<'_>,
+    ) -> Result<ToolOutcome, KernelError> {
+        match self.tool_plane.invoke(path, ctx, payload.clone()).await {
+            Ok(outcome) => Ok(outcome),
+            Err(ToolPlaneError::ToolNotFound(_)) => {
+                self.record_legacy_tool_fallback(path)?;
+                self.legacy_tool_plane
+                    .execute_core_with_context(None, legacy_request(path, payload), ctx)
+                    .await
+                    .map(Into::into)
+                    .map_err(KernelError::from)
+            }
+            Err(error) => Err(KernelError::from(error)),
+        }
+    }
+}
+```
+
+这段 fallback 是迁移期脚手架：只处理 typed registry 未命中，不覆盖 typed tool 的错误，
+并且必须有 audit/provenance 记录表明本次执行走了 legacy plane。
 
 `PolicyPipeline` 的语义固定：
 
@@ -392,10 +608,12 @@ kernel-owned governance context requirement 属于 kernel，例如
 `KernelInvocationContext`。它不应上移到 core；后续若需要整理文件，可以放到
 kernel-owned module，但不需要统一叫 view。
 
-当前代码状态：`Kernel<C>`、`PolicyPipeline<C>`、`ToolPlane<C>`、
-`AccessCx<'a, 'ctx, C>` 已落地。`ToolCoreContext` 已删除，tool adapter 直接接收
+当前代码状态：`Kernel<C>`、`PolicyPipeline<C>`、
+`AccessCx<'a, 'ctx, C>` 已落地。现有 `ToolPlane<C>` 仍是 legacy adapter plane，下一步应
+直接重命名为 `LegacyToolPlane<C>`，不保留 alias，也不引入 `ToolAdapterPlane`。
+`ToolCoreContext` 已删除，tool adapter 直接接收
 `&C::Cx<'_>`。kernel 不再定义 `KernelPolicyContext` / `KernelContextFactory`，也不再为
-`Kernel`、`ToolPlane` 或 `PolicyPipeline` 提供默认 context factory。app 和 spec
+`Kernel`、legacy plane 或 `PolicyPipeline` 提供默认 context factory。app 和 spec
 分别定义自己的 concrete context factory。
 
 ### `loong-access`
@@ -542,7 +760,8 @@ tool helper 在调用 access 前执行 config-backed policy 分支。需要配�
 - `ContextFactory` 已在 `loong-core` 落地，只有 GAT，没有 create/build method。
 - `Policy` / `PolicyAny` / `PolicyEngine` 已改为显式 `C: ContextFactory` 泛型。
 - `PolicyEngine` 不再定义 `type Cx`。
-- `Kernel<C>` / `PolicyPipeline<C>` / `ToolPlane<C>` 已泛型化。
+- `Kernel<C>` / `PolicyPipeline<C>` 已泛型化；现有 legacy adapter `ToolPlane<C>` 也已
+  随之泛型化，但还没改名，也不是目标 typed tool plane。
 - `ToolCoreContext` 已删除；kernel/tool/app 直接传递 app/spec/test 定义的 unified
   context。
 - kernel facade `AccessCx<'a, 'ctx, C>` 只保留 context factory 泛型，不再暴露
@@ -573,9 +792,12 @@ tool helper 在调用 access 前执行 config-backed policy 分支。需要配�
   `loong-access` 迫使 app 依赖 access。目标是由 kernel 公共边界定义 app-facing fs
   context requirement，kernel facade 抽取 `resolution_root` / `allowed_roots` 后把
   普通数据传给 access。
+- 当前 `ToolPlane<C>` 仍是 legacy adapter plane，名称占用了目标 typed `ToolPlane<C>`。
+  下一步先改名为 `LegacyToolPlane<C>` 并标注删除，再新增真正的 kernel
+  `ToolPlane<C>`。
 - `CoreToolAdapter` / `ToolExtensionAdapter` 和 `execute_tool_core` /
-  `execute_tool_extension` 仍是两套 execution API；它们应该收敛为单一 tool
-  execution path。
+  `execute_tool_extension` 仍是 legacy execution API；它们只服务未迁移工具，后续迁移到
+  单一 typed tool execution path 后删除。
 - `ToolCoreRequest` / `ToolExtensionRequest` 仍在 contracts/kernel 路径中扩散；长期应
   收敛为统一 tool invocation 数据，core/extension 只保留为 provenance metadata。
 - `loong_access::fs::FsAccess` 内部只持有 policy engine 引用，不再持有 kernel host。
@@ -704,27 +926,33 @@ pub struct Kernel<C: ContextFactory> {
 ```
 
 删除 `ToolCoreContext`。tool adapter/helper 看到的 context 就是 `C::Cx<'_>` 本身，
-不是 kernel 再包装出的二级 context：
-
-```rust
-#[async_trait]
-pub trait ToolAdapter<C: ContextFactory>: Send + Sync {
-    async fn invoke(
-        &self,
-        ctx: &C::Cx<'_>,
-        payload: serde_json::Value,
-    ) -> Result<ToolOutcome, ToolPlaneError>;
-}
-```
+不是 kernel 再包装出的二级 context。tool-facing adapter wrapper 不再需要；旧 adapter
+路径只隔离在 `LegacyToolPlane<C>`，新 typed path 的 erased invoke 放在
+core-private `ErasedTool<C>` 里。
 
 已落地：`ToolCoreContext` wrapper 已删除；`CoreToolAdapter::execute_core_tool_with_context`
 直接接收 `&C::Cx<'_>`；access-backed read path 通过
 `ctx.access().fs().read_file(...)` 进入。
 
-仍待后续迁移的是单一 tool execution API，而不是 unified context receiver 本身：
+仍待后续迁移的是单一 typed tool execution API，而不是 unified context receiver 本身。
 
-`CoreToolAdapter` / `ToolExtensionAdapter` 合并成单一 `ToolAdapter`。公开给具体工具
-实现者的是 typed `ToolImpl`；`RegisteredTool` 内部做 payload parse 和 erased invoke：
+第一步先把旧 adapter plane 直接改成 legacy 名称，给目标 `ToolPlane` 腾出语义空间：
+
+```rust
+pub struct LegacyToolPlane<C: ContextFactory> {
+    core_adapters: BTreeMap<String, Arc<dyn CoreToolAdapter<C>>>,
+    extension_adapters: BTreeMap<String, Arc<dyn ToolExtensionAdapter<C>>>,
+    default_core_adapter: Option<String>,
+}
+```
+
+迁移期 `Kernel<C>` 字段改为 `legacy_tool_plane: LegacyToolPlane<C>`。旧
+`register_core_tool_adapter` / `register_tool_extension_adapter` / `execute_tool_core`
+暂时保留，但 rustdoc 写明它们是 legacy path。不要保留
+`type ToolPlane = LegacyToolPlane`，也不要引入 `ToolAdapterPlane`。
+
+第二步在 contracts/core 增加 typed tool 抽象。公开给具体工具实现者的是
+`ToolImpl<C>`；`RegisteredTool<C>` 内部做 payload parse 和 erased invoke：
 
 ```rust
 #[async_trait]
@@ -744,38 +972,81 @@ pub trait ToolImpl<C: ContextFactory>: Send + Sync + 'static {
 }
 ```
 
-`ToolPlane<C>` 只维护 tool registry 和 provenance metadata：
+具体工具必须是单独 type + 单独 trait impl，不能写进 `ToolPlane` 的 match：
+
+```rust
+pub struct ReadFileTool;
+
+#[async_trait]
+impl<C> ToolImpl<C> for ReadFileTool
+where
+    C: ContextFactory,
+    for<'a> C::Cx<'a>: KernelAccess<C>,
+{
+    type Input = ReadFileInput;
+    type Output = ToolOutcome;
+
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: "read".to_owned(),
+            description: "Read a file from the allowed filesystem roots.".to_owned(),
+            required_capabilities: vec![Capability::FilesystemRead],
+        }
+    }
+
+    fn parse_input(&self, payload: serde_json::Value) -> Result<Self::Input, ToolInputError> {
+        let path = payload
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .ok_or(ToolInputError::MissingField("path"))?
+            .to_owned();
+        Ok(ReadFileInput { path })
+    }
+
+    async fn execute(
+        &self,
+        ctx: &C::Cx<'_>,
+        input: Self::Input,
+    ) -> Result<Self::Output, ToolExecutionError> {
+        let output = ctx.access().fs().read_file(&input.path).await?;
+        Ok(ReadFileOutput::from(output).into())
+    }
+}
+```
+
+第三步在 kernel 增加新的 typed `ToolPlane<C>`。它只维护 path -> core
+`RegisteredTool<C>` 的 runtime registry；provenance metadata 通过
+`RegisteredTool<C>::registration()` 读取：
 
 ```rust
 pub struct ToolPlane<C: ContextFactory> {
     tools: BTreeMap<ToolPath, RegisteredTool<C>>,
-}
-
-pub struct ToolRegistration {
-    spec: ToolSpec,
-    registered_at: SystemTime,
-    provenance: ToolProvenance,
 }
 ```
 
 `ToolProvenance` 可以表达 builtin / extension / discovered / compatibility route，但
 `RegisteredTool::invoke(&ctx, payload)` 只有一条 execution path。
 
+第四步把 fallback 接在 kernel 层：`Kernel::invoke_tool` 先调用新
+`ToolPlane<C>::invoke`，只有 `ToolPlaneError::ToolNotFound` 才转
+`LegacyToolPlane<C>`。typed tool 自己 parse/execute 失败时不能 fallback，否则会掩盖新
+工具错误。
+
+最后一步删除 `LegacyToolPlane<C>`、`CoreToolAdapter`、`ToolExtensionAdapter` 和旧
+`execute_tool_core` / `execute_tool_extension` API。不能把 legacy fallback 留作长期
+路径。
+
 `AccessCx` 显式携带 `C`，但它由 `ctx.access()` 构造，并且只借用 unified context。
-如果 access 需要 policy engine 或 runtime host，ctx 通过小 context requirement trait 提供：
+如果具体 tool 需要 access，它通过 kernel 暴露的 context requirement trait 获取：
 
 ```rust
-pub trait AccessRuntime<C: ContextFactory>: PolicyContext {
-    type Engine<'a>: PolicyEngine<C>
-    where
-        Self: 'a;
-
-    fn policy_engine(&self) -> &Self::Engine<'_>;
+pub trait KernelAccess<C: ContextFactory>: PolicyContext {
+    fn access(&self) -> AccessCx<'_, '_, C>;
 }
 ```
 
-具体命名可在实现时按当前模块收敛；关键是不让 `Kernel` 成为 access 的外部 receiver。
-工具调用保持：
+具体命名可在实现时按当前模块收敛；关键是不让 trait 进 `loong-access`，也不让
+`Kernel` 成为 access 的外部 receiver。工具调用保持：
 
 ```rust
 ctx.access().fs().read_file(&path).await
@@ -934,8 +1205,19 @@ impl BrowserClickAction {
 - tool-facing API 暴露 `ToolCoreContext` 或第二套 tool context wrapper。
 - 外部 access 调用以 `kernel.access(ctx)` 或 wrapper `.access()` 为主语；access 的
   主语必须是 unified ctx。
-- CoreTool / ExtensionTool 作为两套 execution API 存在；来源差异只能是 metadata。
-- 为迁移方便保留 `CoreToolAdapter` / `ToolExtensionAdapter` alias 或双注册面。
+- 新 typed tool path 继续区分 CoreTool / ExtensionTool 两套 execution API；来源差异只能是
+  metadata。
+- 旧 adapter path 继续叫 `ToolPlane`，或者为迁移方便保留
+  `type ToolPlane = LegacyToolPlane` alias。
+- 把旧路径命名成 `ToolAdapterPlane` 这类看似长期有效的正常层。
+- 在完成 typed tool 迁移后继续保留 `LegacyToolPlane` / `CoreToolAdapter` /
+  `ToolExtensionAdapter`。
+- typed registry 已命中后仍 fallback 到 legacy，或用 legacy fallback 掩盖 typed tool 的
+  input/execute 错误。
+- 在 `ToolPlane` 里用 match/enum 写具体工具逻辑；具体工具必须是独立 type 的
+  `ToolImpl<C>`。
+- 需要 access 的具体 tool 依赖 `loong-access` trait；tool 应依赖 kernel 暴露的
+  `ctx.access()` requirement。
 - `Policy` 通过 `PolicyEngine` 获取 `Cx`。
 - `PolicyEngine` 定义 `type Cx` / `type Context`。
 - `ContextFactory` 带 create/build method。
@@ -968,9 +1250,19 @@ impl BrowserClickAction {
 - kernel 只通过泛型连接统一 context，不固定 app context 字段。
 - `ToolCoreContext` 已删除；tool impl / registered tool / access 直接使用 unified
   ctx。
-- `ToolPlane<C>` 只有单一 `RegisteredTool<C>` execution path；core/extension 来源
-  只出现在 registration/provenance metadata。
-- `CoreToolAdapter` / `ToolExtensionAdapter` 不再是主执行抽象。
+- 旧 adapter plane 已改名为 `LegacyToolPlane<C>`，没有 `ToolPlane` alias，也没有
+  `ToolAdapterPlane` 新层。
+- `loong-core` 提供 `ToolImpl<C>` / `ToolRegistration` / `RegisteredTool<C>`；
+  `loong-contracts` 提供 `ToolSpec` / `ToolOutcome` 等纯数据。
+- `loong-kernel` 提供新的 `ToolPlane<C>`，它只有单一 `RegisteredTool<C>` execution
+  path；core/extension 来源只出现在 registration/provenance metadata。
+- 迁移期 fallback 只发生在 typed registry 未命中时，并记录 legacy route；typed tool
+  自身错误不触发 fallback。
+- 具体工具是独立 type + `impl ToolImpl<C>`，不写进 `ToolPlane` match。
+- 需要 access 的具体工具通过 kernel 暴露的 `ctx.access()` requirement 约束 context，
+  不依赖 `loong-access` trait。
+- `CoreToolAdapter` / `ToolExtensionAdapter` 不再是主执行抽象；它们只能临时存在于
+  `LegacyToolPlane`，并在迁移完成后删除。
 - `file.read` 继续只通过 `ctx.access().fs().read_file(...)` 执行读取。
 - migrated side effect 不经过 direct preflight / `FilePolicyExtension`。
 - config-driven policy 经由 app config -> normalized runtime config ->
