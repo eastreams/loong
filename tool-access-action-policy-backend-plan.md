@@ -215,16 +215,25 @@ pub trait ContextFactory {
 观察 action，不携带 execution output/error：
 
 ```rust
+pub struct ActionMetadata<'a> {
+    pub kind: &'static str,
+    pub operation: Cow<'a, str>,
+    pub required_capabilities: Cow<'a, [Capability]>,
+}
+
 pub trait ActionMeta {
-    fn kind(&self) -> &'static str;
+    fn metadata(&self) -> ActionMetadata<'_>;
 
-    fn operation(&self) -> Cow<'static, str>;
+    fn audit_resource(&self) -> Option<Cow<'_, str>>;
 
-    fn audit_resource(&self) -> Option<Cow<'static, str>>;
-
-    fn required_capabilities(&self) -> BTreeSet<Capability>;
+    fn payload(&self) -> serde_json::Value;
 }
 ```
+
+`metadata()` 只返回便宜、可借用的授权/audit 元信息；`payload()` 是按需构造的
+JSON 视图，供 `PolicyAny` 等 type-erased policy 使用。不要命名为
+`legacy_*` 或 `policy_*`：Action 类型本身已经表达 policy 语义，payload 只是
+该 Action 的结构化载荷。
 
 Executable action 绑定到具体 context，并且 `run` 直接接受 `Granted<Self>`：
 
@@ -233,7 +242,7 @@ pub trait Action<Cx>: ActionMeta + Sized {
     type Output;
     type Error;
 
-    fn run(granted: Granted<Self>, cx: &Cx) -> Result<Self::Output, Self::Error>;
+    async fn run(granted: Granted<Self>, cx: &Cx) -> Result<Self::Output, Self::Error>;
 }
 ```
 
@@ -630,14 +639,17 @@ where
     A: Action<Cx>
 ```
 
-`ActionMeta` 的 docs/comment 要说明它只是 policy/audit/type-erased metadata view。
+`ActionMeta` 的 docs/comment 要说明它只是 policy/audit/type-erased metadata view；
+便宜元信息走 `metadata()`，动态 JSON 载荷走 `payload()`。
 `Action<Cx>` 的 docs/comment 要说明它是 side-effect implementation hook，并且
 `run` 必须消费 `Granted<Self>`。`Granted<A>::run(cx)` 的 docs/comment 要说明它是
 授权 token 到执行的推荐入口。
 
 已落地：`ActionMeta` 只作为 policy/audit metadata view；`Action<Cx>` 是 async
 side-effect hook；`FsReadAction` 的读取副作用经由 `Granted<FsReadAction>::run(&ctx)`
-进入，不再保留平行的 `read_granted_file(...)` 执行函数。
+进入，不再保留平行的 `read_granted_file(...)` 执行函数。`ActionMeta` 已收敛为
+`metadata()` + `payload()`：`metadata()` 不分配 capability set，`payload()`
+服务 type-erased policy 的结构化输入。
 
 ### 3. 改 Policy / PolicyAny / PolicyEngine 泛型
 
@@ -920,7 +932,8 @@ impl BrowserClickAction {
   app-owned policy construction -> policy registration 进入 pipeline。
 - `Granted<A>` 仍不可被 `loong-core` 外部伪造。
 - 代码 comment/docs 说明 `ActionMeta` / `Action<Cx>` 分工，以及
-  `Granted<A>::run(cx)` 的执行边界语义。
+  `Granted<A>::run(cx)` 的执行边界语义；`ActionMeta::payload()` 是 Action 的
+  结构化载荷，不是 legacy-only bridge。
 - policy deny 有结构化 report，最终可生成稳定、可行动的 Agent-facing response。
 
 ## 验证

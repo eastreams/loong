@@ -193,12 +193,17 @@ fn fs_read_action_uses_canonical_path() {
     )
     .expect("path inside workspace should normalize");
     let action = FsReadAction::new(path);
+    let metadata = action.metadata();
 
     assert_eq!(action.path(), Path::new("/workspace/notes/todo.md"));
-    assert_eq!(action.operation(), Cow::Borrowed("read_file"));
+    assert_eq!(metadata.operation, "read_file");
     assert_eq!(
-        action.required_capabilities(),
-        BTreeSet::from([Capability::FilesystemRead])
+        metadata.required_capabilities.as_ref(),
+        [Capability::FilesystemRead]
+    );
+    assert_eq!(
+        action.payload(),
+        serde_json::json!({"path": "/workspace/notes/todo.md"})
     );
 }
 
@@ -228,12 +233,17 @@ fn fs_action_wraps_read_action() {
     )
     .expect("path inside workspace");
     let action = FsAction::read_file(path);
+    let metadata = action.metadata();
 
-    assert_eq!(action.kind(), "fs.read");
-    assert_eq!(action.operation(), Cow::Borrowed("read_file"));
+    assert_eq!(metadata.kind, "fs.read");
+    assert_eq!(metadata.operation, "read_file");
     assert_eq!(
-        action.required_capabilities(),
-        BTreeSet::from([Capability::FilesystemRead])
+        metadata.required_capabilities.as_ref(),
+        [Capability::FilesystemRead]
+    );
+    assert_eq!(
+        action.payload(),
+        serde_json::json!({"path": "/workspace/notes.md"})
     );
 }
 

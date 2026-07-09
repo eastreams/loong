@@ -3085,6 +3085,7 @@ dependencies = [
  "dunce",
  "loong-contracts",
  "loong-core",
+ "serde_json",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -3226,6 +3227,7 @@ dependencies = [
  "async-trait",
  "loong-contracts",
  "serde",
+ "serde_json",
  "thiserror 2.0.18",
 ]
 

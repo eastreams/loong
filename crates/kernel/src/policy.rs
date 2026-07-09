@@ -16,7 +16,7 @@ use loong_contracts::{
 };
 use loong_core::{
     error::AuthorizationError,
-    policy::action::ActionMeta,
+    policy::action::{ActionMeta, ActionMetadata},
     policy::{
         context::{ContextFactory, PolicyContext},
         engine::PolicyEngine,
@@ -44,29 +44,25 @@ pub trait KernelInvocationContext: PolicyContext {
 #[derive(Debug)]
 pub struct LegacyKernelAction {
     operation: String,
-    required_capabilities: BTreeSet<Capability>,
+    required_capabilities: Vec<Capability>,
 }
 
 impl LegacyKernelAction {
     pub fn new(operation: impl Into<String>, required_capabilities: BTreeSet<Capability>) -> Self {
         Self {
             operation: operation.into(),
-            required_capabilities,
+            required_capabilities: required_capabilities.into_iter().collect(),
         }
     }
 }
 
 impl ActionMeta for LegacyKernelAction {
-    fn kind(&self) -> &'static str {
-        "action.legacy"
-    }
-
-    fn operation(&self) -> Cow<'static, str> {
-        self.operation.clone().into()
-    }
-
-    fn required_capabilities(&self) -> BTreeSet<Capability> {
-        self.required_capabilities.clone()
+    fn metadata(&self) -> ActionMetadata<'_> {
+        ActionMetadata {
+            kind: "action.legacy",
+            operation: Cow::Borrowed(self.operation.as_str()),
+            required_capabilities: Cow::Borrowed(self.required_capabilities.as_slice()),
+        }
     }
 }
 
@@ -220,7 +216,12 @@ impl<C: ContextFactory> PolicyPipeline<C> {
     where
         for<'a> C::Cx<'a>: KernelInvocationContext,
     {
-        let required_capabilities = action.required_capabilities();
+        let required_capabilities = action
+            .metadata()
+            .required_capabilities
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
         self.grant(ctx, action).await.map_err(policy_engine_error)?;
 
         self.policy_extensions.authorize(&PolicyExtensionContext {
@@ -669,16 +670,12 @@ mod tests {
     struct TypedOnlyAction;
 
     impl ActionMeta for TypedOnlyAction {
-        fn kind(&self) -> &'static str {
-            "test.typed_only"
-        }
-
-        fn operation(&self) -> Cow<'static, str> {
-            Cow::Borrowed("typed_only")
-        }
-
-        fn required_capabilities(&self) -> BTreeSet<Capability> {
-            BTreeSet::from([Capability::InvokeTool])
+        fn metadata(&self) -> ActionMetadata<'_> {
+            ActionMetadata {
+                kind: "test.typed_only",
+                operation: Cow::Borrowed("typed_only"),
+                required_capabilities: Cow::Borrowed(&[Capability::InvokeTool]),
+            }
         }
     }
 
@@ -732,7 +729,7 @@ mod tests {
 
         assert_eq!(grant.id.0, 1);
         let _info = grant.info;
-        assert_eq!(grant.granted.into_action().operation(), "tool");
+        assert_eq!(grant.granted.into_action().metadata().operation, "tool");
     }
 
     #[tokio::test]

@@ -38,8 +38,9 @@ pub trait PolicyEngine<C: ContextFactory>: Sync {
     where
         A: 'static,
     {
+        let metadata = action.metadata();
         let granted_capabilities = ctx.capabilities();
-        for capability in action.required_capabilities() {
+        for capability in metadata.required_capabilities.iter().copied() {
             if !granted_capabilities.contains(&capability) {
                 return Err(PolicyGrantError::MissingCapability { capability });
             }

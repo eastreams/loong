@@ -1,9 +1,17 @@
-use std::{any::Any, borrow::Cow, collections::BTreeSet};
+use std::{any::Any, borrow::Cow};
 
 use async_trait::async_trait;
 use loong_contracts::Capability;
+use serde_json::Value;
 
 use crate::policy::grant::Granted;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActionMetadata<'a> {
+    pub kind: &'static str,
+    pub operation: Cow<'a, str>,
+    pub required_capabilities: Cow<'a, [Capability]>,
+}
 
 /// Type-erased metadata for a policy-facing unit of side-effect intent.
 ///
@@ -12,20 +20,22 @@ use crate::policy::grant::Granted;
 /// metadata view used by policy, audit, and type-erased pipeline stages; it is
 /// not an execution hook. The execution hook is [`Action`].
 pub trait ActionMeta: Any + Send + Sync + 'static {
-    /// Stable action kind used by policy diagnostics/audit and grant metadata.
-    fn kind(&self) -> &'static str;
-
-    /// Human-readable operation within the coarse execution plane.
-    fn operation(&self) -> Cow<'static, str>;
+    /// Cheap metadata used by capability gates, policy diagnostics, and audit.
+    fn metadata(&self) -> ActionMetadata<'_>;
 
     /// Optional resource label for audit records, such as a path, URL, or
     /// process command.
-    fn audit_resource(&self) -> Option<Cow<'static, str>> {
+    fn audit_resource(&self) -> Option<Cow<'_, str>> {
         None
     }
 
-    /// Capabilities this action requires before it may execute.
-    fn required_capabilities(&self) -> BTreeSet<Capability>;
+    /// Structured action payload for type-erased policy stages.
+    ///
+    /// The action type already carries the policy meaning; this method only
+    /// materializes the dynamic payload when a policy needs JSON-shaped input.
+    fn payload(&self) -> Value {
+        Value::Null
+    }
 }
 
 /// Executable action implementation for one concrete invocation context.

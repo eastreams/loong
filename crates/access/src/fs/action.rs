@@ -1,9 +1,12 @@
-use std::{borrow::Cow, collections::BTreeSet, path::Path};
+use std::{borrow::Cow, path::Path};
 
 use loong_contracts::Capability;
-use loong_core::policy::action::ActionMeta;
+use loong_core::policy::action::{ActionMeta, ActionMetadata};
+use serde_json::{Value, json};
 
 use super::path::CanonicalPath;
+
+const FS_READ_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 
 /// Typed action for reading one canonical filesystem path.
 ///
@@ -28,20 +31,22 @@ impl FsReadAction {
 }
 
 impl ActionMeta for FsReadAction {
-    fn kind(&self) -> &'static str {
-        "fs.read"
+    fn metadata(&self) -> ActionMetadata<'_> {
+        ActionMetadata {
+            kind: "fs.read",
+            operation: Cow::Borrowed("read_file"),
+            required_capabilities: Cow::Borrowed(&FS_READ_REQUIRED_CAPABILITIES),
+        }
     }
 
-    fn operation(&self) -> Cow<'static, str> {
-        Cow::Borrowed("read_file")
-    }
-
-    fn audit_resource(&self) -> Option<Cow<'static, str>> {
+    fn audit_resource(&self) -> Option<Cow<'_, str>> {
         Some(self.path.as_path().display().to_string().into())
     }
 
-    fn required_capabilities(&self) -> BTreeSet<Capability> {
-        BTreeSet::from([Capability::FilesystemRead])
+    fn payload(&self) -> Value {
+        json!({
+            "path": self.path.as_path().display().to_string(),
+        })
     }
 }
 
@@ -62,27 +67,21 @@ impl FsAction {
 }
 
 impl ActionMeta for FsAction {
-    fn kind(&self) -> &'static str {
+    fn metadata(&self) -> ActionMetadata<'_> {
         match self {
-            Self::Read(action) => action.kind(),
+            Self::Read(action) => action.metadata(),
         }
     }
 
-    fn operation(&self) -> Cow<'static, str> {
-        match self {
-            Self::Read(action) => action.operation(),
-        }
-    }
-
-    fn audit_resource(&self) -> Option<Cow<'static, str>> {
+    fn audit_resource(&self) -> Option<Cow<'_, str>> {
         match self {
             Self::Read(action) => action.audit_resource(),
         }
     }
 
-    fn required_capabilities(&self) -> BTreeSet<Capability> {
+    fn payload(&self) -> Value {
         match self {
-            Self::Read(action) => action.required_capabilities(),
+            Self::Read(action) => action.payload(),
         }
     }
 }
