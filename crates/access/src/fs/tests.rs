@@ -215,10 +215,12 @@ fn canonical_path_rejects_workspace_escape() {
     )
     .expect_err("path escape should be denied");
 
-    assert!(matches!(
-        error,
-        FsActionError::PathEscapesAllowedRoot { .. }
-    ));
+    match error {
+        FsActionError::PathEscapesAllowedRoots { allowed_roots, .. } => {
+            assert_eq!(allowed_roots, vec![workspace_root]);
+        }
+        other => panic!("expected root escape error, got {other:?}"),
+    }
 }
 
 #[test]
@@ -265,10 +267,15 @@ fn canonical_path_rejects_symlink_escape() {
     )
     .expect_err("symlink escape should be denied");
 
-    assert!(matches!(
-        error,
-        FsActionError::PathEscapesAllowedRoot { .. }
-    ));
+    match error {
+        FsActionError::PathEscapesAllowedRoots { allowed_roots, .. } => {
+            assert_eq!(
+                allowed_roots,
+                vec![dunce::canonicalize(&workspace_root).expect("canonical workspace root")]
+            );
+        }
+        other => panic!("expected symlink escape error, got {other:?}"),
+    }
 }
 
 #[tokio::test]

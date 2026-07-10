@@ -62,7 +62,7 @@ pub fn fs_read_error_is_policy_denial(error: &FsAccessError) -> bool {
     matches!(
         error,
         FsAccessError::Authorization(_)
-            | FsAccessError::Action(FsActionError::PathEscapesAllowedRoot { .. })
+            | FsAccessError::Action(FsActionError::PathEscapesAllowedRoots { .. })
     )
 }
 

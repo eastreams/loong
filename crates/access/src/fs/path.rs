@@ -29,9 +29,9 @@ impl CanonicalPath {
             .iter()
             .map(|root| canonicalize_or_fallback(root.as_path()))
             .collect::<Result<Vec<_>, _>>()?;
-        let Some(primary_root) = allowed_roots.first() else {
+        if allowed_roots.is_empty() {
             return Err(FsActionError::MissingAllowedRoot);
-        };
+        }
 
         let resolution_root = canonicalize_or_fallback(resolution_root.as_ref())?;
         let combined = if raw.is_absolute() {
@@ -39,8 +39,7 @@ impl CanonicalPath {
         } else {
             resolution_root.join(raw)
         };
-        let path =
-            resolve_path_within_allowed_roots(combined.as_path(), &allowed_roots, primary_root)?;
+        let path = resolve_path_within_allowed_roots(combined.as_path(), &allowed_roots)?;
         Ok(Self(path))
     }
 
@@ -64,7 +63,6 @@ impl AsRef<Path> for CanonicalPath {
 fn resolve_path_within_allowed_roots(
     path: &Path,
     allowed_roots: &[PathBuf],
-    primary_root: &Path,
 ) -> Result<PathBuf, FsActionError> {
     let normalized = normalize_without_fs(path);
 
@@ -80,17 +78,17 @@ fn resolve_path_within_allowed_roots(
 
     if normalized.exists() {
         let canonical = canonicalize_existing_path(&normalized)?;
-        ensure_path_within_allowed_roots(&canonical, allowed_roots, primary_root)?;
+        ensure_path_within_allowed_roots(&canonical, allowed_roots)?;
         return Ok(canonical);
     }
 
     let (ancestor, suffix) = split_existing_ancestor(&normalized)?;
     let mut resolved = canonicalize_existing_path(&ancestor)?;
-    ensure_path_within_allowed_roots(&resolved, allowed_roots, primary_root)?;
+    ensure_path_within_allowed_roots(&resolved, allowed_roots)?;
     for component in suffix {
         resolved.push(component);
     }
-    ensure_path_within_allowed_roots(&resolved, allowed_roots, primary_root)?;
+    ensure_path_within_allowed_roots(&resolved, allowed_roots)?;
     Ok(resolved)
 }
 
@@ -113,7 +111,6 @@ fn canonicalize_existing_path(path: &Path) -> Result<PathBuf, FsActionError> {
 fn ensure_path_within_allowed_roots(
     path: &Path,
     allowed_roots: &[PathBuf],
-    primary_root: &Path,
 ) -> Result<(), FsActionError> {
     let normalized = dunce::simplified(path);
     if allowed_roots
@@ -123,9 +120,9 @@ fn ensure_path_within_allowed_roots(
         return Ok(());
     }
 
-    Err(FsActionError::PathEscapesAllowedRoot {
+    Err(FsActionError::PathEscapesAllowedRoots {
         path: normalized.to_path_buf(),
-        allowed_root: primary_root.to_path_buf(),
+        allowed_roots: allowed_roots.to_vec(),
     })
 }
 
