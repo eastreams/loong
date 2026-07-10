@@ -47,6 +47,65 @@ authorization / adapter workaround 塑形新架构。
   发生。
 - `loong-app`：concrete context、config -> policy wiring、app-owned `ToolPlane`、
   concrete tool registration、legacy fallback orchestration。
+- `loong-tools`：concrete builtin tool implementations only。这个 crate 不承载
+  `ToolImpl`、`RegisteredTool`、registry、plane、policy/action 抽象；它只放
+  `ReadFileTool` 这类具体工具和它们的 payload/response helper。
+
+## 基础小改动优先队列
+
+这些改动不改变架构终局，但会减少后续大迁移的噪音。后续实现应优先以最小提交完成
+这些地基项，再做 `ToolPath` / aggregate `ReadTool` / legacy adapter 删除。
+
+1. Cargo workspace dependency hygiene：
+   - 新增或迁移内部 Loong crate 依赖时，先在根 `Cargo.toml` 的
+     `[workspace.dependencies]` 加一条统一声明；
+   - 叶子 crate 使用 `loong-*.workspace = true`，不要重复写
+     `package/version/path`；
+   - 已完成当前 access/action/tool 链：
+     `loong-access`、`loong-contracts`、`loong-core`、`loong-kernel`、
+     `loong-plugin-sdk`、`loong-tools`；
+   - 历史 daemon/spec/bridge 依赖不要混进功能提交里大扫除，除非该提交正好触碰这些
+     crate。
+
+2. Concrete builtin tools crate hygiene：
+   - `crates/tools` 只放具体 builtin tools；
+   - 不在 `crates/tools` 定义或 re-export `ToolPlane`、`ToolImpl`、`RegisteredTool`、
+     `Policy`、`AccessCx` 这类抽象；
+   - app feature 只负责开关 concrete tool feature，例如
+     `tool-file = ["loong-tools/file"]`；
+   - concrete tool 需要 access 时，只约束 kernel 暴露的 context requirement，例如
+     `for<'a> C::Cx<'a>: KernelAccess<C> + FsAccessContext`。
+
+3. Context access requirement hygiene：
+   - `KernelAccess<C>` 这类 trait 是 concrete tools 获取 `ctx.access()` 的窄边界；
+   - 它属于 kernel 公共边界，因为返回的是 kernel-defined `AccessCx`；
+   - 它不放 `loong-access`，避免 app/spec/test 为实现 context requirement 反向依赖
+     access；
+   - 它也不放 `loong-core`，因为 core 不该知道 kernel access facade。
+
+4. Grant inspection hygiene：
+   - `Granted<A>` 可以提供只读 `as_ref()`，用于 audit 在消费 grant 前读取 action
+     metadata；
+   - 不能提供从外部构造或复制 grant 的 API；
+   - 执行入口仍然消费 `Granted<A>`，例如 `Granted<A>::run(ctx)` 或
+     `ToolPlane::invoke(Granted<AppToolInvocationAction>, &ctx)`。
+
+5. `ActionMeta::payload` borrowing hygiene：
+   - 当前 `ActionMeta::payload(&self) -> Value` 仍会强迫持有 JSON payload 的 action
+     clone；
+   - 目标签名是 `fn payload(&self) -> Cow<'_, Value>`；
+   - 不提供默认 `Null`，每个 action 都必须显式声明自己的 type-erased payload；
+   - 对天然可借用的 action，返回 `Cow::Borrowed(&self.payload)`；
+   - 对需要临时构造 JSON view 的 action，返回 `Cow::Owned(json!(...))`；
+   - 这是小基础改动，应在搬 `ToolInvocationAction` 或拆 `ToolSpec.path` 之前完成，避免后续
+     action 迁移继续复制旧签名。
+
+6. Comment/test hygiene：
+   - 架构边界变更必须补少量注释，说明 ownership 和 why，例如 app-owned plane、
+     kernel grant/audit、concrete tools crate 不承载抽象；
+   - typed path 测试只断言 typed audit，legacy path 测试只断言 legacy audit；
+   - 不新增 `PlaneInvoked | ToolInvocation` 这种宽松断言；
+   - 模块测试继续放对应模块下，例如 `tools/plane/tests.rs`、`file/tests.rs`。
 
 ## Tool Path
 
@@ -210,8 +269,17 @@ operation/payload/required capabilities。pack boundary、token boundary、polic
 
 ## Audit
 
+typed tool invocation 应该有 audit event。tool 调用是 agent/user 可见的治理边界；
+成功、失败、拒绝都必须能在 audit 里查到。否则 typed tool 从 legacy
+`PlaneInvoked` 迁走后，证据链反而变少。
+
+但 audit event 不能固化 ToolPlane 的 registry key 类型。当前把
+`ToolInvocation { path: ToolPath, ... }` 加到 `AuditEventKind` 里是过度固化：audit
+需要的是可读、稳定、可关联的 path 表示，不是具体 plane 的 key。`ToolPath` 不应该成为
+contracts/core 的全局类型。
+
 typed tool audit event 不记录 `ToolInvocationRoute`。route 是 app orchestration 的决策，
-不是 contracts/kernel 的稳定概念。
+不是 contracts/kernel 的稳定概念，也不该成为长期 contract。
 
 当前事件只记录：
 
@@ -227,7 +295,31 @@ ToolInvocation {
 这里的 `path_display` 是 audit payload，不是 registry key 类型。不同 `ToolPlane` 可以有
 不同 path model，只要能在 audit 中给出稳定、可读、可关联的表示。
 
+`ToolInvocationOutcome` 放在 contracts 可以接受，因为它是 audit payload 的稳定结果形状。
+但它只能描述一次 tool invocation attempt 的结果，不能隐含 app plane route、fallback
+机制或 concrete registry 实现。
+
 legacy adapter 仍暂时记录旧 `PlaneInvoked`，直到对应工具迁移完成。
+
+## 当前实现偏差
+
+以下是已经出现、但不应该继续放大的过渡形状：
+
+- `crates/contracts/src/audit_types.rs` 里 `AuditEventKind::ToolInvocation` 持有
+  `ToolPath`。这把 concrete plane path 细节泄漏到了 contracts。
+- `crates/contracts/src/tool_types.rs` 仍定义全局 `ToolPath`，且 `ToolSpec` 仍携带
+  `path`。目标是 descriptor 无 path，注册点/plane 才绑定 path。
+- `crates/loong-core/src/tool.rs` 里的 `ToolInvocationAction` 持有全局 `ToolPath`。
+  这属于 app/plane-owned action，或者至少应该是 `ToolInvocationAction<P>`。
+- `crates/tools/src/file.rs` 的 `ReadFileTool::spec()` 仍返回带 path 的 `ToolSpec`。
+  这是 tool descriptor 与 registration path 未拆开的直接症状。
+- `crates/app/src/tools/mod.rs` 里 typed dispatch、grant、invoke、audit 逻辑还堆在
+  `execute_kernel_tool_request`。目标是 app orchestration 拥有这段边界，但函数应更聚焦。
+- `crates/app/src/tools/routing.rs` 的 `route_direct_read_tool_request_for_legacy` 名字不准。
+  它现在同时承担 read surface normalization 和 legacy bridge；aggregate `ReadTool`
+  落地后这块应该删除或拆清楚。
+- 若测试用 `PlaneInvoked | ToolInvocation` 同时接受，就会掩盖 typed/legacy route 回退。
+  typed path 应断言 typed audit，legacy path 应断言 legacy audit。
 
 ## `file.read` 当前迁移状态
 
@@ -242,13 +334,56 @@ legacy adapter 仍暂时记录旧 `PlaneInvoked`，直到对应工具迁移完�
 
 ## 下一步
 
-- 删除 contracts/core 全局 `ToolPath` 设计：tool descriptor 不带 path，path 类型归
-  concrete ToolPlane。
-- 把已提交/未提交的 `ToolInvocationAction { path: ToolPath, ... }` 改成 app/plane
-  concrete action，或泛型 `ToolInvocationAction<P>`。
-- 删除 `ToolPayloadMatch` / `match_payload`，把 `read` 改成 aggregate typed tool。
-- 继续把 legacy `read` 的 query/glob 搜索迁到 access-backed action。
-- 将 write/edit/config.import 按同样模式迁移，迁移后删除 `FilePolicyExtension` 对应旧分支。
-- 把 legacy `Kernel::execute_tool_core` 调用面逐步清空，再删除 `LegacyToolPlane` 和 adapter
-  trait。
-- 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration。
+按最小提交顺序推进：
+
+0. 先完成基础小改动队列：
+   - 对本轮要碰的 crate 先做 workspace dependency hygiene；
+   - 把 `ActionMeta::payload` 改成 `Cow<'_, Value>`；
+   - 补齐 concrete tools crate、`KernelAccess`、grant inspection 的边界注释；
+   - 清掉会掩盖 route 回退的宽松测试断言；
+   - 每个小项独立提交，不和下面的大结构迁移混在一起。
+
+1. 修正 `ToolInvocation` audit shape：
+   - 保留 `AuditEventKind::ToolInvocation`；
+   - 把 `path: ToolPath` 改成 `path_display: String` 或等价 audit-only 表示；
+   - 保留 `ToolInvocationOutcome`，但注释说明它只描述 invocation attempt 结果；
+   - 更新 kernel/app 测试，typed path 不再依赖全局 `ToolPath`。
+
+2. 移走或泛型化 `ToolInvocationAction`：
+   - 首选把它移到 app plane 附近，命名为 `AppToolInvocationAction`；
+   - 如果保留公共 helper，则改成 `ToolInvocationAction<P>`；
+   - kernel grant API 接受 concrete action，不知道 app plane path type；
+   - 删除 `loong-core` 对 `ToolPath` 的依赖。
+
+3. 清理 tool descriptor/path 耦合：
+   - `ToolImpl::spec()` 返回无 path descriptor；
+   - `RegisteredTool` 只保存 descriptor/provenance/registration metadata；
+   - `AppToolPlane::register(path, tool)` 组合 path + descriptor；
+   - `ReadFileTool::spec()` 不再硬编码 `"read"`。
+
+4. 收敛 app typed dispatch 边界：
+   - 从 `execute_kernel_tool_request` 中抽出一个聚焦的 app orchestration 边界；
+   - 该边界只做 resolve -> build invocation action -> kernel grant -> plane invoke ->
+     kernel audit；
+   - 不引入 `AuthorizedToolInvocation` receipt workaround。
+
+5. 改 `read` 为 aggregate typed tool：
+   - 删除 payload-claim/fallback 思路；
+   - `ReadTool` 内部解析 `path/query/pattern/glob`；
+   - `read { path, offset: 0 }` 是 typed input error，不 fallback；
+   - `read { query }` / `read { pattern }` / `read { glob }` 迁入 typed path 后，旧
+     direct read legacy bridge 删除。
+
+6. 继续迁移剩余 legacy side-effect tools：
+   - write/edit/config.import 按同样 access-backed action 模式迁移；
+   - 迁移完成后删除 `FilePolicyExtension` 对应旧分支；
+   - 逐步清空 `Kernel::execute_tool_core` 调用面，再删除 `LegacyToolPlane` 和 adapter
+     trait。
+
+7. 测试清理：
+   - typed tool 测试只接受 `ToolInvocation` audit；
+   - legacy adapter 测试只接受 `PlaneInvoked` audit；
+   - 不用 `PlaneInvoked | ToolInvocation` 这种宽松断言；
+   - 每个最小提交跑对应 targeted tests、`cargo check` 和 `git diff --check`。
+
+8. 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration。
