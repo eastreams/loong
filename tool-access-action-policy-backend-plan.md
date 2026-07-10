@@ -100,9 +100,44 @@ authorization / adapter workaround 塑形新架构。
    - 这是小基础改动，应在搬 `ToolInvocationAction` 或拆 `ToolSpec.path` 之前完成，避免后续
      action 迁移继续复制旧签名。
 
-6. Comment/test hygiene：
-   - 架构边界变更必须补少量注释，说明 ownership 和 why，例如 app-owned plane、
-     kernel grant/audit、concrete tools crate 不承载抽象；
+6. Comment audit hygiene：
+   - 架构边界变更必须补少量注释，说明 ownership 和 why。注释不是“解释代码在做什么”，
+     而是把只有迁移作者知道的设计约束写给后续 maintainer；
+   - 每次碰下面文件时都要检查注释是否仍然准确：
+     - `crates/tools/src/lib.rs`：说明 `loong-tools` 只放 concrete builtin tool
+       implementations，不放 `ToolImpl` / registry / policy / access 抽象。这里必须讲清
+       “为什么有一个 tools crate 却不承载 tool 抽象”，避免后来者把 plane 或 trait 又搬进来。
+     - `crates/tools/src/file.rs`：说明 `ReadFileTool` 只负责 payload parse、调用
+       `ctx.access().fs().read_file(...)`、格式化 response；文件读取副作用发生在
+       `loong_access::fs`，不能在 tool helper 里直接 `std::fs::read`。
+     - `crates/kernel/src/access.rs`：`KernelAccess<C>` 的注释必须讲清它为什么在 kernel
+       而不是 core/access：它返回 kernel-defined `AccessCx`，并给 concrete tools 一个
+       不依赖 `AppExecutionContext` 的窄 context requirement。
+     - `crates/app/src/context.rs`：`AppExecutionContext::access()` / `KernelAccess` impl
+       附近要讲清 `AccessCx::new(...)` 只应出现在 concrete context 的 `access()` 实现里；
+       普通 tool/action 调用点应使用 `ctx.access()`，不要恢复 `kernel.access(ctx)`。
+     - `crates/app/src/tools/plane.rs`：注释必须讲清 app owns typed plane，kernel 不持有
+       typed registry；plane 按 path resolve，不按 payload claim；`invoke` 消费
+       `Granted<AppToolInvocationAction>`，所以 concrete tool implementer 不需要也不能自己做
+       audit/grant。
+     - `crates/app/src/tools/mod.rs`：typed dispatch 边界附近要讲清它只是迁移期
+       orchestration：resolve -> invocation action -> kernel grant -> plane invoke ->
+       kernel audit；`read` query/glob legacy bridge 是临时桥，不是 payload-claim 设计。
+     - `crates/kernel/src/kernel.rs`：`grant_tool_invocation` / `record_tool_invocation`
+       注释必须讲清 kernel 是 governance authority，不执行 typed tool；tool invocation
+       grant 只授权进入 `ToolImpl`，tool 内部 side effect 仍需自己的 access action grant。
+     - `crates/contracts/src/audit_types.rs`：`ToolInvocation` / `ToolInvocationOutcome`
+       注释必须讲清 audit 记录的是一次 tool invocation attempt 的结果；它不表达
+       `ToolInvocationRoute`，也不能固化 concrete ToolPlane registry key 类型。
+     - `crates/loong-core/src/policy/action.rs`：`ActionMeta::payload()` 注释必须讲清 payload
+       是 Action 的 type-erased structured view，不是 legacy bridge；目标签名是
+       `Cow<'_, Value>`，并且没有默认 `Null`。
+     - `crates/loong-core/src/policy/grant.rs`：`Granted<A>::as_ref()` 注释必须讲清它只用于
+       grant 被消费前的 audit/metadata inspection，不能成为伪造、复制或绕过执行边界的入口。
+     - `crates/app/src/tools/routing.rs`：legacy read bridge 注释必须讲清 query/glob 暂未迁入
+       aggregate `ReadTool`；迁移完成后删除 bridge，而不是把它提升成长期 routing 机制。
+   - 注释验收标准：读者只看相关类型/函数附近的注释，就能回答“这个层拥有谁”“为什么不在
+     另一个 crate”“这个 fallback 是否长期存在”“谁可以做副作用”“grant 何时被消费”；
    - typed path 测试只断言 typed audit，legacy path 测试只断言 legacy audit；
    - 不新增 `PlaneInvoked | ToolInvocation` 这种宽松断言；
    - 模块测试继续放对应模块下，例如 `tools/plane/tests.rs`、`file/tests.rs`。
@@ -339,7 +374,8 @@ legacy adapter 仍暂时记录旧 `PlaneInvoked`，直到对应工具迁移完�
 0. 先完成基础小改动队列：
    - 对本轮要碰的 crate 先做 workspace dependency hygiene；
    - 把 `ActionMeta::payload` 改成 `Cow<'_, Value>`；
-   - 补齐 concrete tools crate、`KernelAccess`、grant inspection 的边界注释；
+   - 执行 comment audit checklist，补齐 concrete tools crate、`KernelAccess`、grant
+     inspection、typed plane、kernel grant/audit、legacy read bridge 等边界注释；
    - 清掉会掩盖 route 回退的宽松测试断言；
    - 每个小项独立提交，不和下面的大结构迁移混在一起。
 
