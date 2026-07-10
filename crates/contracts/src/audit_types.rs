@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    PolicyReport, ToolPath,
+    PolicyReport,
     contracts::{Capability, CapabilityToken, ExecutionRoute},
 };
 
@@ -87,7 +87,7 @@ pub enum AuditEventKind {
         ///
         /// This is evidence for one invocation attempt, not a global route
         /// model. The concrete plane still owns the registry key type.
-        path: ToolPath,
+        path_display: String,
         required_capabilities: Vec<Capability>,
         outcome: ToolInvocationOutcome,
     },

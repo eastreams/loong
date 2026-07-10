@@ -215,10 +215,10 @@ async fn kernel_routed_file_read_uses_typed_tool_registry() {
         matches!(
             &event.kind,
             loong_kernel::AuditEventKind::ToolInvocation {
-                path,
+                path_display,
                 outcome: loong_kernel::ToolInvocationOutcome::Completed,
                 ..
-            } if path.as_str() == "read"
+            } if path_display == "read"
         )
     }));
     assert!(!events.iter().any(|event| {

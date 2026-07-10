@@ -76,10 +76,10 @@ async fn record_tool_invocation_records_typed_completed_event() {
         matches!(
             &event.kind,
             AuditEventKind::ToolInvocation {
-                path: routed_path,
+                path_display,
                 outcome: ToolInvocationOutcome::Completed,
                 ..
-            } if routed_path == &path
+            } if path_display == path.as_str()
         )
     }));
 }

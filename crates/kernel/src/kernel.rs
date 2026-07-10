@@ -1033,7 +1033,7 @@ where
             agent_id,
             AuditEventKind::ToolInvocation {
                 pack_id,
-                path,
+                path_display: path.to_string(),
                 required_capabilities: required_capabilities.iter().copied().collect(),
                 outcome,
             },
