@@ -163,8 +163,8 @@ impl ActionMeta for TypedOnlyAction {
         }
     }
 
-    fn payload(&self) -> serde_json::Value {
-        serde_json::json!({})
+    fn payload(&self) -> Cow<'_, serde_json::Value> {
+        Cow::Owned(serde_json::json!({}))
     }
 }
 

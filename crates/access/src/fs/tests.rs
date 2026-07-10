@@ -201,10 +201,8 @@ fn fs_read_action_uses_canonical_path() {
         metadata.required_capabilities.as_ref(),
         [Capability::FilesystemRead]
     );
-    assert_eq!(
-        action.payload(),
-        serde_json::json!({"path": "/workspace/notes/todo.md"})
-    );
+    let expected_payload = serde_json::json!({"path": "/workspace/notes/todo.md"});
+    assert_eq!(action.payload().as_ref(), &expected_payload);
 }
 
 #[test]
@@ -241,10 +239,8 @@ fn fs_action_wraps_read_action() {
         metadata.required_capabilities.as_ref(),
         [Capability::FilesystemRead]
     );
-    assert_eq!(
-        action.payload(),
-        serde_json::json!({"path": "/workspace/notes.md"})
-    );
+    let expected_payload = serde_json::json!({"path": "/workspace/notes.md"});
+    assert_eq!(action.payload().as_ref(), &expected_payload);
 }
 
 #[cfg(unix)]

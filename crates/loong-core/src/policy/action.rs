@@ -35,7 +35,7 @@ pub trait ActionMeta: Any + Send + Sync + 'static {
     /// materializes the dynamic payload when a policy needs JSON-shaped input.
     /// It has no default so actions cannot silently omit their policy-facing
     /// payload.
-    fn payload(&self) -> Value;
+    fn payload(&self) -> Cow<'_, Value>;
 }
 
 /// Executable action implementation for one concrete invocation context.

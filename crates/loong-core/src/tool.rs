@@ -62,11 +62,11 @@ impl ActionMeta for ToolInvocationAction {
         }
     }
 
-    fn payload(&self) -> Value {
-        json!({
+    fn payload(&self) -> Cow<'_, Value> {
+        Cow::Owned(json!({
             "tool_path": self.path.as_str(),
             "payload": self.payload,
-        })
+        }))
     }
 }
 

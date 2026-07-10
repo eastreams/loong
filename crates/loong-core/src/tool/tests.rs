@@ -91,13 +91,11 @@ fn tool_invocation_action_exposes_policy_metadata() {
             .collect::<BTreeSet<_>>(),
         BTreeSet::from([Capability::FilesystemRead, Capability::InvokeTool])
     );
-    assert_eq!(
-        action.payload(),
-        json!({
-            "tool_path": "read",
-            "payload": { "path": "notes.txt" }
-        })
-    );
+    let expected_payload = json!({
+        "tool_path": "read",
+        "payload": { "path": "notes.txt" }
+    });
+    assert_eq!(action.payload().as_ref(), &expected_payload);
 }
 
 #[test]

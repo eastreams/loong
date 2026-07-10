@@ -43,10 +43,10 @@ impl ActionMeta for FsReadAction {
         Some(self.path.as_path().display().to_string().into())
     }
 
-    fn payload(&self) -> Value {
-        json!({
+    fn payload(&self) -> Cow<'_, Value> {
+        Cow::Owned(json!({
             "path": self.path.as_path().display().to_string(),
-        })
+        }))
     }
 }
 
@@ -79,7 +79,7 @@ impl ActionMeta for FsAction {
         }
     }
 
-    fn payload(&self) -> Value {
+    fn payload(&self) -> Cow<'_, Value> {
         match self {
             Self::Read(action) => action.payload(),
         }
