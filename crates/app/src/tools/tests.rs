@@ -13048,7 +13048,7 @@ async fn kernel_tool_adapter_routes_through_kernel() {
         "tool_name": &request.tool_name,
         "payload": &request.payload,
     });
-    let policy_context = crate::context::AppExecutionContext::new(
+    let execution_context = crate::context::AppExecutionContext::new(
         &kernel,
         &pack,
         &token,
@@ -13058,9 +13058,9 @@ async fn kernel_tool_adapter_routes_through_kernel() {
         Some(&tool_policy_params),
         &crate::tools::runtime_config::ToolRuntimeConfig::default(),
     )
-    .expect("build tool policy context");
+    .expect("build tool execution context");
     let err = kernel
-        .execute_tool_core("test-pack", &token, &caps, None, request, policy_context)
+        .execute_tool_core("test-pack", &token, &caps, None, request, execution_context)
         .await
         .expect_err("unknown tool via KernelToolAdapter should fail");
     assert!(
@@ -13119,7 +13119,7 @@ async fn kernel_tool_adapter_rejects_reserved_internal_payload_through_kernel_by
         "tool_name": &request.tool_name,
         "payload": &request.payload,
     });
-    let policy_context = crate::context::AppExecutionContext::new(
+    let execution_context = crate::context::AppExecutionContext::new(
         &kernel,
         &pack,
         &token,
@@ -13129,9 +13129,9 @@ async fn kernel_tool_adapter_rejects_reserved_internal_payload_through_kernel_by
         Some(&tool_policy_params),
         &crate::tools::runtime_config::ToolRuntimeConfig::default(),
     )
-    .expect("build tool policy context");
+    .expect("build tool execution context");
     let err = kernel
-        .execute_tool_core("test-pack", &token, &caps, None, request, policy_context)
+        .execute_tool_core("test-pack", &token, &caps, None, request, execution_context)
         .await
         .expect_err("kernel-routed tool call should reject reserved internal payload by default");
 

@@ -425,7 +425,7 @@ pub(crate) async fn execute_kernel_tool_request(
                 "tool_name": &request.tool_name,
                 "payload": &request.payload,
             });
-            let policy_context = ctx
+            let execution_context = ctx
                 .execution_context(
                     loong_contracts::ExecutionPlane::Tool,
                     loong_contracts::PlaneTier::Core,
@@ -441,7 +441,7 @@ pub(crate) async fn execute_kernel_tool_request(
                 ToolInvocationAction::new(typed_path.clone(), caps.clone(), request.payload);
             let grant = ctx
                 .kernel
-                .grant_tool_invocation(ctx.pack_id(), &ctx.token, action, &policy_context)
+                .grant_tool_invocation(ctx.pack_id(), &ctx.token, action, &execution_context)
                 .await?;
             let audit_path = grant.granted.as_ref().path().clone();
             let audit_caps = grant
@@ -453,12 +453,12 @@ pub(crate) async fn execute_kernel_tool_request(
                 .collect::<BTreeSet<_>>();
 
             match app_tool_plane()
-                .invoke(grant.granted, &policy_context)
+                .invoke(grant.granted, &execution_context)
                 .await
             {
                 Ok(outcome) => {
                     ctx.kernel.record_tool_invocation(
-                        &policy_context,
+                        &execution_context,
                         audit_path,
                         &audit_caps,
                         ToolInvocationOutcome::Completed,
@@ -472,7 +472,7 @@ pub(crate) async fn execute_kernel_tool_request(
                     let error_kind = tool_plane_error_kind(&error).to_owned();
                     let reason = tool_plane_error_reason(&error);
                     ctx.kernel.record_tool_invocation(
-                        &policy_context,
+                        &execution_context,
                         audit_path,
                         &audit_caps,
                         ToolInvocationOutcome::Failed { error_kind, reason },
@@ -498,7 +498,7 @@ pub(crate) async fn execute_kernel_tool_request(
             "tool_name": &request.tool_name,
             "payload": &request.payload,
         });
-        let policy_context = ctx
+        let execution_context = ctx
             .execution_context(
                 loong_contracts::ExecutionPlane::Tool,
                 loong_contracts::PlaneTier::Core,
@@ -516,7 +516,7 @@ pub(crate) async fn execute_kernel_tool_request(
                 &caps,
                 None,
                 request,
-                policy_context,
+                execution_context,
             )
             .await?;
         Ok(outcome)

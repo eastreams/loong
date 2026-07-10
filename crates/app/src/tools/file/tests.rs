@@ -88,12 +88,12 @@ async fn execute_file_read_with_test_context(
         token,
         tool_runtime_config: config.clone(),
     };
-    let policy_context =
+    let execution_context =
         kernel_ctx.execution_context(ExecutionPlane::Tool, PlaneTier::Core, None, config)?;
     let _ = config;
     loong_tools::file::execute_file_read_tool_with_context::<AppContextFactory>(
         request,
-        &policy_context,
+        &execution_context,
     )
     .await
 }

@@ -512,7 +512,7 @@ async fn persist_memory_window(
         expected_turn_count,
     );
     let caps = BTreeSet::from([Capability::MemoryWrite]);
-    let policy_context = kernel_ctx.memory_core_context()?;
+    let execution_context = kernel_ctx.memory_core_execution_context()?;
     let outcome = kernel_ctx
         .kernel
         .execute_memory_core(
@@ -521,7 +521,7 @@ async fn persist_memory_window(
             &caps,
             None,
             request,
-            &policy_context,
+            &execution_context,
         )
         .await
         .map_err(|error| format!("persist compacted memory window via kernel failed: {error}"))?;
@@ -554,7 +554,7 @@ async fn load_stage_envelope(
             &config.memory,
         );
         let caps = BTreeSet::from([Capability::MemoryRead]);
-        let policy_context = ctx.execution_context(
+        let execution_context = ctx.execution_context(
             ExecutionPlane::Memory,
             PlaneTier::Core,
             None,
@@ -568,7 +568,7 @@ async fn load_stage_envelope(
                 &caps,
                 None,
                 request,
-                &policy_context,
+                &execution_context,
             )
             .await
             .map_err(|error| format!("load staged memory envelope via kernel failed: {error}"))?;

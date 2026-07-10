@@ -64,7 +64,7 @@ impl KernelContext {
         )
     }
 
-    pub(crate) fn memory_core_context(&self) -> Result<AppExecutionContext<'_>, String> {
+    pub(crate) fn memory_core_execution_context(&self) -> Result<AppExecutionContext<'_>, String> {
         self.execution_context(
             ExecutionPlane::Memory,
             PlaneTier::Core,
@@ -261,7 +261,7 @@ pub(crate) fn read_file_with_access_for_runtime_config(
             let now_epoch_s = kernel.now_epoch_s();
             let pack = runtime_file_read_pack_manifest();
             let token = runtime_file_read_token(now_epoch_s);
-            let policy_context = AppExecutionContext::new(
+            let execution_context = AppExecutionContext::new(
                 &kernel,
                 &pack,
                 &token,
@@ -271,7 +271,7 @@ pub(crate) fn read_file_with_access_for_runtime_config(
                 None,
                 &config,
             )?;
-            let output = policy_context
+            let output = execution_context
                 .access()
                 .fs()
                 .read_file(path)
@@ -636,9 +636,9 @@ mod tests {
             .expect("bootstrap with config should succeed");
         let request = crate::memory::build_read_context_request("kernel-bootstrap-env-session");
         let caps = BTreeSet::from([Capability::MemoryRead]);
-        let policy_context = context
-            .memory_core_context()
-            .expect("build memory policy context");
+        let execution_context = context
+            .memory_core_execution_context()
+            .expect("build memory execution context");
         let outcome = context
             .kernel
             .execute_memory_core(
@@ -647,7 +647,7 @@ mod tests {
                 &caps,
                 None,
                 request,
-                &policy_context,
+                &execution_context,
             )
             .await
             .expect("read context via kernel");

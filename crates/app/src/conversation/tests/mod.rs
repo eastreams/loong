@@ -1796,14 +1796,14 @@ async fn provider_messages_with_kernel_binding(
         &config.memory,
     );
     let caps = BTreeSet::from([Capability::MemoryRead]);
-    let policy_context = kernel_ctx
+    let execution_context = kernel_ctx
         .execution_context(
             ExecutionPlane::Memory,
             PlaneTier::Core,
             None,
             &tool_runtime_config,
         )
-        .expect("build memory policy context");
+        .expect("build memory execution context");
     let outcome = kernel_ctx
         .kernel
         .execute_memory_core(
@@ -1812,7 +1812,7 @@ async fn provider_messages_with_kernel_binding(
             &caps,
             None,
             request,
-            &policy_context,
+            &execution_context,
         )
         .await
         .expect("load staged memory envelope via kernel");

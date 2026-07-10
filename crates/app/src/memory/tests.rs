@@ -134,7 +134,7 @@ async fn mvp_memory_adapter_routes_through_kernel() {
     };
 
     let caps = BTreeSet::from([Capability::MemoryRead]);
-    let policy_context = crate::context::AppExecutionContext::new(
+    let execution_context = crate::context::AppExecutionContext::new(
         &kernel,
         &pack,
         &token,
@@ -144,9 +144,16 @@ async fn mvp_memory_adapter_routes_through_kernel() {
         None,
         &crate::tools::runtime_config::ToolRuntimeConfig::default(),
     )
-    .expect("build memory policy context");
+    .expect("build memory execution context");
     let outcome = kernel
-        .execute_memory_core("test-pack", &token, &caps, None, request, &policy_context)
+        .execute_memory_core(
+            "test-pack",
+            &token,
+            &caps,
+            None,
+            request,
+            &execution_context,
+        )
         .await
         .expect("kernel memory core execution should succeed");
 
