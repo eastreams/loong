@@ -16,6 +16,18 @@ authorization / adapter workaround 塑形新架构。
   runtime config 是 context / resolver / policy 的输入，不塞进 required caps。
 - `Granted<A>` 是授权到执行的边界。没有 grant 就不能进入对应 side-effect 或 dispatch
   入口。
+- backend 可以存在，但不要求统一 trait。硬约束是每个执行入口消费
+  `Granted<ConcreteAction>`，例如通过 `Granted<A>::run(ctx)` 进入 action 自己的执行
+  hook。
+- `read` 可以是 aggregate tool，但不能是 aggregate action。`read { path }`、
+  `read { query }`、`read { glob/pattern }` 的泄漏面不同，最终必须落到不同 concrete
+  action。
+- 路径解析本身是 fs action。canonicalize、existing ancestor resolution、symlink
+  resolution 都是 filesystem observation，不能藏在未治理 helper 里。
+- 路径权限的共享产物叫 `GrantedPath`。它不是泛型 token，而是 fs domain 的 concrete
+  value；只能由受治理的路径解析 action 产出，构造函数不公开。
+- workspace root / allowed roots 是 path-resolution policy 的输入，不是
+  `FsReadAction` 的运行需求。`FsReadAction` 只应消费已经治理过的 `GrantedPath`。
 - policy 不依赖 app concrete context。需要 context 数据时，用小 requirement trait
   表达，例如 fs root view；业务 policy 应为任意满足 trait 的 context 实现。
 - config -> policy 路径属于 app bootstrap：app 读取 config，构造 typed policy，注册进
@@ -217,6 +229,10 @@ App execute_kernel_tool_request
   -> AppToolPlane.invoke(Granted<AppToolInvocationAction>, &ctx)
   -> ToolImpl::execute(&ctx, input)
   -> ctx.access().fs().read_file(...)
+  -> FsResolvePathAction
+  -> PolicyPipeline::grant(ctx, FsResolvePathAction)
+  -> Granted<FsResolvePathAction>::run(ctx)
+  -> GrantedPath
   -> FsReadAction
   -> PolicyPipeline::grant(ctx, FsReadAction)
   -> Granted<FsReadAction>::run(ctx)
@@ -226,7 +242,8 @@ App execute_kernel_tool_request
 这意味着 tool invocation policy 和 fs read policy 是两层不同授权：
 
 - `AppToolInvocationAction`：允许调用 app plane 上某个 path 的 tool。
-- `FsReadAction`：允许读取某个 canonical path。
+- `FsResolvePathAction`：允许把 raw path 解析成 `GrantedPath`。
+- `FsReadAction`：允许读取某个 `GrantedPath`。
 
 不能用 `AuthorizedToolInvocation` 这类 receipt workaround 表达这个关系；应该返回
 `ActionGrant<AppToolInvocationAction>` / `Granted<AppToolInvocationAction>`。
@@ -243,6 +260,63 @@ pub struct ToolInvocationAction<P> {
 
 但当前更推荐 app/plane 定义 concrete action。这样 policy 可以通过 `ActionMeta`
 观察它，kernel 可以 grant 它，core 不需要知道 path 类型。
+
+## Filesystem Path Grants
+
+当前 `CanonicalPath::resolve(...)` 同时做了 raw path 解析、existing ancestor / symlink
+resolution、allowed roots containment，并把结果直接塞进 `FsReadAction`。这能工作，但
+边界不对：read action 因为构造需要 canonical path，被迫继承了 path policy 的细节。
+
+目标形状是把“得到一个可供 fs action 使用的路径”变成独立 action：
+
+```rust
+pub struct FsResolvePathAction {
+    raw_path: PathBuf,
+}
+
+pub struct GrantedPath {
+    path: PathBuf,
+}
+
+impl GrantedPath {
+    pub fn as_path(&self) -> &Path;
+    pub fn into_path_buf(self) -> PathBuf;
+    // no public from/pathbuf constructor
+}
+```
+
+调用链：
+
+```rust
+let resolve = FsResolvePathAction::new(raw_path);
+let grant = policy_engine.grant(ctx, resolve).await?;
+let path = grant.granted.run(ctx).await?;
+
+let read = FsReadAction::new(path);
+let grant = policy_engine.grant(ctx, read).await?;
+grant.granted.run(ctx).await
+```
+
+这里有两个不同授权点：
+
+- `FsResolvePathAction`：允许在当前 context 下把 raw path 解析成 `GrantedPath`。
+  它的 policy 读取 `fs_resolution_root()` / `fs_allowed_roots()`，表达 workspace root、
+  file root、path escape、symlink escape 等路径权限。
+- `FsReadAction` / `FsContentSearchAction` / `FsGlobAction`：允许对一个已经治理过的
+  `GrantedPath` 执行具体读取、内容搜索、路径枚举。它们仍然各自声明 capability 和
+  payload，因为三者泄漏面不同。
+
+`FsResolvePathAction::run` 可以执行 canonicalize / ancestor resolution 这类 fs
+observation，但不能读取文件内容。它返回 `GrantedPath`，而不是裸 `PathBuf`，这样后续
+action 构造函数天然要求“路径已过治理”。如果解析结果逃逸 allowed roots，就不产出
+`GrantedPath`。
+
+构造函数不做 async 或 filesystem observation。不要写
+`FsReadAction::new(Granted<FsResolvePathAction>, ctx)` 这种隐藏执行的 API；先显式
+`grant.granted.run(ctx).await?`，再把 `GrantedPath` 交给下游 action。
+
+`CanonicalPath` 是过渡名。迁移后它要么消失，要么降级为 `fs::path` 内部 resolver
+helper；公开 fs action API 应该暴露 `GrantedPath`。
 
 ## ToolPlane
 
@@ -357,16 +431,22 @@ legacy adapter 仍暂时记录旧 `PlaneInvoked`，直到对应工具迁移完�
 - `crates/app/src/tools/routing.rs` 的 `route_direct_read_tool_request_for_legacy` 名字不准。
   它现在同时承担 read surface normalization 和 legacy bridge；aggregate `ReadTool`
   落地后这块应该删除或拆清楚。
+- `crates/access/src/fs/path.rs` 的 `CanonicalPath` 仍是 public fs domain type，并且
+  `FsReadAction::new(CanonicalPath)` 让 read action 看起来需要 path/root policy 的产物。
+  目标是公开 `GrantedPath`，让 `CanonicalPath` 变成内部 helper 或被删除。
+- `FsAccess::read_file` 当前还是 resolve raw path -> build `FsReadAction`。目标是先
+  grant/run `FsResolvePathAction` 得到 `GrantedPath`，再 grant/run `FsReadAction`。
 
 ## `file.read` 当前迁移状态
 
-- 目标是 `read` 作为 aggregate typed tool 进入 app plane。
+- 目标是 `read` 作为 aggregate typed tool 进入 app plane，但它内部分出来的 action
+  不能聚合。
 - `ReadFileTool` 只解析 payload、调用 `ctx.access().fs().read_file(...)`、格式化响应。
 - 文件读取副作用发生在 `loong_access::fs`。
-- `read { path }` 分支走 file read access。
+- `read { path }` 分支走 `FsResolvePathAction -> GrantedPath -> FsReadAction`。
 - `read { query }` / `read { pattern }` / `read { glob }` 后续迁入 typed `ReadTool`
-  内部分流；迁移前只能作为明确 TODO 的 legacy bridge，不作为新 plane 的 payload claim
-  设计。
+  内部分流，但分别落到 content-search / glob-path action。迁移前只能作为明确 TODO 的
+  legacy bridge，不作为新 plane 的 payload claim 设计。
 - `read { path, offset: 0 }` 是 typed input error，不 fallback。
 
 ## 下一步
@@ -387,41 +467,60 @@ legacy adapter 仍暂时记录旧 `PlaneInvoked`，直到对应工具迁移完�
    - 保留 `ToolInvocationOutcome`，但注释说明它只描述 invocation attempt 结果；
    - 更新 kernel/app 测试，typed path 不再依赖全局 `ToolPath`。
 
-2. 下一步：移走或泛型化 `ToolInvocationAction`：
+2. 下一步：建立 fs path grant 基础：
+   - 在 `loong_access::fs` 增加 `FsResolvePathAction` 和 `GrantedPath`；
+   - `GrantedPath` 构造函数保持模块私有，不提供 `From<PathBuf>`；
+   - `FsResolvePathAction` 的 metadata/payload 显式包含 raw path；
+   - `FsResolvePathAction` 的 policy requirement 读取 `FsAccessContext` 的
+     `fs_resolution_root()` / `fs_allowed_roots()`；
+   - `FsAccess::read_file` 改成先 grant/run resolve action，再 grant/run read action；
+   - `FsReadAction::new` 改成接收 `GrantedPath`，不再接收 `CanonicalPath`。
+
+3. 把 allowed roots / path escape 收敛到 path-resolution policy：
+   - `FsReadAction` 不读取 workspace root，也不表达 allowed roots；
+   - `PathEscapesAllowedRoots` 这类结果属于 `FsResolvePathAction` 的治理失败，不应散落成
+     read/glob/search 各自的特殊判断；
+   - 保留 canonicalize / symlink resolution 的共享实现，但不要让公开 API 暴露
+     `CanonicalPath` 作为“已经安全”的伪授权；
+   - policy report 应能说明是哪条 path policy deny，而不是靠 access error helper
+     猜测 `is_policy_denial()`。
+
+4. 移走或泛型化 `ToolInvocationAction`：
    - 首选把它移到 app plane 附近，命名为 `AppToolInvocationAction`；
    - 如果保留公共 helper，则改成 `ToolInvocationAction<P>`；
    - kernel grant API 接受 concrete action，不知道 app plane path type；
    - 删除 `loong-core` 对 `ToolPath` 的依赖。
 
-3. 清理 tool descriptor/path 耦合：
+5. 清理 tool descriptor/path 耦合：
    - `ToolImpl::spec()` 返回无 path descriptor；
    - `RegisteredTool` 只保存 descriptor/provenance/registration metadata；
    - `AppToolPlane::register(path, tool)` 组合 path + descriptor；
    - `ReadFileTool::spec()` 不再硬编码 `"read"`。
 
-4. 收敛 app typed dispatch 边界：
+6. 收敛 app typed dispatch 边界：
    - 从 `execute_kernel_tool_request` 中抽出一个聚焦的 app orchestration 边界；
    - 该边界只做 resolve -> build invocation action -> kernel grant -> plane invoke ->
      kernel audit；
    - 不引入 `AuthorizedToolInvocation` receipt workaround。
 
-5. 改 `read` 为 aggregate typed tool：
+7. 改 `read` 为 aggregate typed tool：
    - 删除 payload-claim/fallback 思路；
    - `ReadTool` 内部解析 `path/query/pattern/glob`；
+   - `path/query/glob` 分别构造不同 action；
    - `read { path, offset: 0 }` 是 typed input error，不 fallback；
    - `read { query }` / `read { pattern }` / `read { glob }` 迁入 typed path 后，旧
      direct read legacy bridge 删除。
 
-6. 继续迁移剩余 legacy side-effect tools：
+8. 继续迁移剩余 legacy side-effect tools：
    - write/edit/config.import 按同样 access-backed action 模式迁移；
    - 迁移完成后删除 `FilePolicyExtension` 对应旧分支；
    - 逐步清空 `Kernel::execute_tool_core` 调用面，再删除 `LegacyToolPlane` 和 adapter
      trait。
 
-7. 测试清理：
+9. 测试清理：
    - typed tool 测试只接受 `ToolInvocation` audit；
    - legacy adapter 测试只接受 `PlaneInvoked` audit；
    - 不用 `PlaneInvoked | ToolInvocation` 这种宽松断言；
    - 每个最小提交跑对应 targeted tests、`cargo check` 和 `git diff --check`。
 
-8. 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration。
+10. 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration。
