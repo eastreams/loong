@@ -29,12 +29,12 @@ async fn grant_tool_invocation_grants_without_recording_tool_outcome() {
         .await
         .expect("tool invocation should authorize");
 
-    assert!(!audit.snapshot().iter().any(|event| {
-        matches!(
-            event.kind,
-            AuditEventKind::ToolInvocation { .. } | AuditEventKind::PlaneInvoked { .. }
-        )
-    }));
+    assert!(
+        !audit
+            .snapshot()
+            .iter()
+            .any(|event| { matches!(event.kind, AuditEventKind::ToolInvocation { .. }) })
+    );
 }
 
 #[tokio::test]

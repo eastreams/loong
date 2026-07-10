@@ -1369,19 +1369,29 @@ mod tests {
         );
 
         let audit_events = harness.audit.snapshot();
-        let has_tool_plane_event = audit_events.iter().any(|event| {
+        let has_typed_tool_event = audit_events.iter().any(|event| {
+            matches!(
+                &event.kind,
+                loong_kernel::AuditEventKind::ToolInvocation { .. }
+            )
+        });
+        let has_legacy_tool_plane_event = audit_events.iter().any(|event| {
             matches!(
                 &event.kind,
                 loong_kernel::AuditEventKind::PlaneInvoked {
                     plane: loong_contracts::ExecutionPlane::Tool,
                     ..
-                } | loong_kernel::AuditEventKind::ToolInvocation { .. }
+                }
             )
         });
 
         assert!(
-            !has_tool_plane_event,
-            "disabled system prompts should not trigger runtime-self tool reads"
+            !has_typed_tool_event,
+            "disabled system prompts should not trigger typed runtime-self tool reads"
+        );
+        assert!(
+            !has_legacy_tool_plane_event,
+            "disabled system prompts should not trigger legacy runtime-self tool reads"
         );
     }
 
@@ -1408,7 +1418,16 @@ mod tests {
         assert!(system_content.contains(agents_text));
 
         let audit_events = harness.audit.snapshot();
-        let tool_plane_event_count = audit_events
+        let typed_tool_event_count = audit_events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    &event.kind,
+                    loong_kernel::AuditEventKind::ToolInvocation { .. }
+                )
+            })
+            .count();
+        let legacy_tool_plane_event_count = audit_events
             .iter()
             .filter(|event| {
                 matches!(
@@ -1416,14 +1435,18 @@ mod tests {
                     loong_kernel::AuditEventKind::PlaneInvoked {
                         plane: loong_contracts::ExecutionPlane::Tool,
                         ..
-                    } | loong_kernel::AuditEventKind::ToolInvocation { .. }
+                    }
                 )
             })
             .count();
 
         assert_eq!(
-            tool_plane_event_count, 1,
-            "only existing runtime-self files should trigger tool reads"
+            typed_tool_event_count, 1,
+            "only existing runtime-self files should trigger typed tool reads"
+        );
+        assert_eq!(
+            legacy_tool_plane_event_count, 0,
+            "runtime-self file reads should not use legacy tool-plane audit"
         );
     }
 
@@ -1453,7 +1476,16 @@ mod tests {
         assert!(runtime_self_content.contains(agents_text));
 
         let audit_events = harness.audit.snapshot();
-        let tool_plane_event_count = audit_events
+        let typed_tool_event_count = audit_events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    &event.kind,
+                    loong_kernel::AuditEventKind::ToolInvocation { .. }
+                )
+            })
+            .count();
+        let legacy_tool_plane_event_count = audit_events
             .iter()
             .filter(|event| {
                 matches!(
@@ -1461,14 +1493,18 @@ mod tests {
                     loong_kernel::AuditEventKind::PlaneInvoked {
                         plane: loong_contracts::ExecutionPlane::Tool,
                         ..
-                    } | loong_kernel::AuditEventKind::ToolInvocation { .. }
+                    }
                 )
             })
             .count();
 
         assert_eq!(
-            tool_plane_event_count, 1,
+            typed_tool_event_count, 1,
             "runtime-self loading should use the runtime workspace root, not the decoy tool root"
+        );
+        assert_eq!(
+            legacy_tool_plane_event_count, 0,
+            "runtime-self loading should not fall back to legacy tool-plane audit"
         );
     }
 

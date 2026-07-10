@@ -700,19 +700,29 @@ mod tests {
         assert!(system_content.contains(agents_text));
 
         let audit_events = harness.audit.snapshot();
-        let has_tool_plane_event = audit_events.iter().any(|event| {
+        let has_typed_tool_event = audit_events.iter().any(|event| {
+            matches!(
+                &event.kind,
+                loong_kernel::AuditEventKind::ToolInvocation { .. }
+            )
+        });
+        let has_legacy_tool_plane_event = audit_events.iter().any(|event| {
             matches!(
                 &event.kind,
                 loong_kernel::AuditEventKind::PlaneInvoked {
                     plane: loong_contracts::ExecutionPlane::Tool,
                     ..
-                } | loong_kernel::AuditEventKind::ToolInvocation { .. }
+                }
             )
         });
 
         assert!(
-            has_tool_plane_event,
-            "kernel-bound runtime self loading should emit tool-plane audit"
+            has_typed_tool_event,
+            "kernel-bound runtime self loading should emit typed tool audit"
+        );
+        assert!(
+            !has_legacy_tool_plane_event,
+            "runtime self path reads should not fall back to legacy tool-plane audit"
         );
     }
 
