@@ -68,6 +68,9 @@ fn resolve_path_within_allowed_roots(
 ) -> Result<PathBuf, FsActionError> {
     let normalized = normalize_without_fs(path);
 
+    // A configured root may not exist yet. In that case no existing ancestor
+    // can be canonicalized, so the only meaningful check is lexical: the
+    // normalized target must still be below that missing allowed root.
     if allowed_roots
         .iter()
         .any(|allowed_root| !allowed_root.exists() && normalized.starts_with(allowed_root))
