@@ -314,9 +314,21 @@ fn discover_git_executable() -> Result<PathBuf, String> {
 
     let stable_search_path = stable_command_search_path();
     let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let discovered = which::which_in("git", Some(stable_search_path), current_dir)
-        .map_err(|error| format!("resolve git executable failed: {error}"))?;
-    Ok(discovered)
+    if let Ok(discovered) = which::which_in("git", Some(stable_search_path), current_dir) {
+        return Ok(discovered);
+    }
+
+    #[cfg(windows)]
+    {
+        if let Some(discovered) = discover_git_via_where() {
+            return Ok(discovered);
+        }
+        if let Some(discovered) = discover_known_windows_git_paths() {
+            return Ok(discovered);
+        }
+    }
+
+    Err("resolve git executable failed: cannot find binary path".to_owned())
 }
 
 #[cfg(unix)]
@@ -347,9 +359,78 @@ fn stable_command_search_path() -> OsString {
     let env_path = std::env::var_os("PATH");
     env_path
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| {
-            OsString::from(r"C:\Windows\System32;C:\Windows;C:\Program Files\Git\cmd")
-        })
+        .unwrap_or_else(default_windows_search_path)
+}
+
+#[cfg(windows)]
+fn discover_git_via_where() -> Option<PathBuf> {
+    let where_executable = resolve_windows_where_executable()?;
+    let output = Command::new(where_executable).arg("git").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(PathBuf::from)
+}
+
+#[cfg(windows)]
+fn discover_known_windows_git_paths() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Some(program_files) = std::env::var_os("ProgramFiles") {
+        let base = PathBuf::from(program_files);
+        candidates.push(base.join("Git").join("cmd").join("git.exe"));
+        candidates.push(base.join("Git").join("bin").join("git.exe"));
+    }
+
+    if let Some(program_files_x86) = std::env::var_os("ProgramFiles(x86)") {
+        let base = PathBuf::from(program_files_x86);
+        candidates.push(base.join("Git").join("cmd").join("git.exe"));
+        candidates.push(base.join("Git").join("bin").join("git.exe"));
+    }
+
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+#[cfg(windows)]
+fn default_windows_search_path() -> OsString {
+    let mut parts = Vec::new();
+
+    if let Some(system_root) = std::env::var_os("SystemRoot") {
+        let root = PathBuf::from(system_root);
+        parts.push(root.join("System32").into_os_string());
+        parts.push(root.into_os_string());
+    } else {
+        parts.push(OsString::from(r"C:\Windows\System32"));
+        parts.push(OsString::from(r"C:\Windows"));
+    }
+
+    if let Some(program_files) = std::env::var_os("ProgramFiles") {
+        parts.push(
+            PathBuf::from(program_files)
+                .join("Git")
+                .join("cmd")
+                .into_os_string(),
+        );
+    }
+
+    std::env::join_paths(parts).unwrap_or_else(|_| OsString::from(r"C:\Windows\System32;C:\Windows"))
+}
+
+#[cfg(windows)]
+fn resolve_windows_where_executable() -> Option<PathBuf> {
+    if let Some(system_root) = std::env::var_os("SystemRoot") {
+        let candidate = PathBuf::from(system_root).join("System32").join("where.exe");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+
+    which::which("where.exe").ok()
 }
 
 #[cfg(test)]

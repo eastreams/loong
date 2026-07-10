@@ -14,6 +14,68 @@ impl ProcessStdioEnvironmentGuard {
     }
 }
 
+#[cfg(windows)]
+const PROCESS_STDIO_ECHO_COMMAND: &str = "cmd.exe";
+#[cfg(not(windows))]
+const PROCESS_STDIO_ECHO_COMMAND: &str = "cat";
+
+#[cfg(windows)]
+const PROCESS_STDIO_ECHO_ARGS_JSON: Option<&str> = Some(r#"["/d","/c","more"]"#);
+#[cfg(not(windows))]
+const PROCESS_STDIO_ECHO_ARGS_JSON: Option<&str> = None;
+
+#[cfg(windows)]
+const PROCESS_STDIO_INVALID_FRAME_COMMAND: &str = "cmd.exe";
+#[cfg(not(windows))]
+const PROCESS_STDIO_INVALID_FRAME_COMMAND: &str = "printf";
+
+#[cfg(windows)]
+const PROCESS_STDIO_INVALID_FRAME_ARGS_JSON: Option<&str> =
+    Some(r#"["/d","/c","echo not-json"]"#);
+#[cfg(not(windows))]
+const PROCESS_STDIO_INVALID_FRAME_ARGS_JSON: Option<&str> = Some(r#"["not-json\n"]"#);
+
+fn process_stdio_plugin_manifest(
+    plugin_id: &str,
+    provider_id: &str,
+    connector_name: &str,
+    command: &str,
+    args_json: Option<&str>,
+    process_timeout_ms: Option<&str>,
+) -> String {
+    let args_json_line = args_json
+        .map(|value| {
+            format!(
+                "#     \"args_json\":{},\n",
+                serde_json::to_string(value).expect("serialize args_json literal")
+            )
+        })
+        .unwrap_or_default();
+    let timeout_line = process_timeout_ms
+        .map(|value| format!("#     \"process_timeout_ms\":\"{value}\",\n"))
+        .unwrap_or_default();
+
+    format!(
+        r#"
+# LOONG_PLUGIN_START
+# {{
+#   "plugin_id": "{plugin_id}",
+#   "provider_id": "{provider_id}",
+#   "connector_name": "{connector_name}",
+#   "channel_id": "primary",
+#   "endpoint": "local://{provider_id}",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {{
+#     "bridge_kind":"process_stdio",
+#     "command":"{command}",
+{args_json_line}{timeout_line}#     "version":"1.0.0"
+#   }}
+# }}
+# LOONG_PLUGIN_END
+"#
+    )
+}
+
 #[tokio::test]
 async fn execute_spec_process_stdio_bridge_executes_when_enabled_and_allowed() {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -28,24 +90,14 @@ async fn execute_spec_process_stdio_bridge_executes_when_enabled_and_allowed() {
 
     fs::write(
         plugin_root.join("stdio_plugin.py"),
-        r#"
-# LOONG_PLUGIN_START
-# {
-#   "plugin_id": "stdio-plugin",
-#   "provider_id": "stdio-provider",
-#   "connector_name": "stdio-provider",
-#   "channel_id": "primary",
-#   "endpoint": "local://stdio-provider",
-#   "capabilities": ["InvokeConnector"],
-#   "metadata": {
-#     "bridge_kind":"process_stdio",
-#     "command":"cat",
-#     "process_timeout_ms":"999999999",
-#     "version":"1.0.0"
-#   }
-# }
-# LOONG_PLUGIN_END
-"#,
+        process_stdio_plugin_manifest(
+            "stdio-plugin",
+            "stdio-provider",
+            "stdio-provider",
+            PROCESS_STDIO_ECHO_COMMAND,
+            PROCESS_STDIO_ECHO_ARGS_JSON,
+            Some("999999999"),
+        ),
     )
     .expect("write stdio plugin");
 
@@ -84,7 +136,7 @@ async fn execute_spec_process_stdio_bridge_executes_when_enabled_and_allowed() {
             expected_sha256: None,
             execute_process_stdio: true,
             execute_http_json: false,
-            allowed_process_commands: vec!["cat".to_owned()],
+            allowed_process_commands: vec![PROCESS_STDIO_ECHO_COMMAND.to_owned()],
             enforce_execution_success: true,
             security_scan: None,
         }),
@@ -159,24 +211,14 @@ async fn execute_spec_process_stdio_bridge_blocks_when_command_not_allowlisted()
 
     fs::write(
         plugin_root.join("stdio_plugin.py"),
-        r#"
-# LOONG_PLUGIN_START
-# {
-#   "plugin_id": "stdio-plugin",
-#   "provider_id": "stdio-provider",
-#   "connector_name": "stdio-provider",
-#   "channel_id": "primary",
-#   "endpoint": "local://stdio-provider",
-#   "capabilities": ["InvokeConnector"],
-#   "metadata": {
-#     "bridge_kind":"process_stdio",
-#     "command":"cat",
-#     "process_timeout_ms":"999999999",
-#     "version":"1.0.0"
-#   }
-# }
-# LOONG_PLUGIN_END
-"#,
+        process_stdio_plugin_manifest(
+            "stdio-plugin",
+            "stdio-provider",
+            "stdio-provider",
+            PROCESS_STDIO_ECHO_COMMAND,
+            PROCESS_STDIO_ECHO_ARGS_JSON,
+            Some("999999999"),
+        ),
     )
     .expect("write stdio plugin");
 
@@ -273,24 +315,14 @@ async fn execute_spec_process_stdio_bridge_fails_on_invalid_json_line_response()
 
     fs::write(
         plugin_root.join("stdio_plugin.py"),
-        r#"
-# LOONG_PLUGIN_START
-# {
-#   "plugin_id": "stdio-invalid-frame-plugin",
-#   "provider_id": "stdio-invalid-frame-provider",
-#   "connector_name": "stdio-invalid-frame-provider",
-#   "channel_id": "primary",
-#   "endpoint": "local://stdio-invalid-frame-provider",
-#   "capabilities": ["InvokeConnector"],
-#   "metadata": {
-#     "bridge_kind":"process_stdio",
-#     "command":"printf",
-#     "args_json":"[\"not-json\\n\"]",
-#     "version":"1.0.0"
-#   }
-# }
-# LOONG_PLUGIN_END
-"#,
+        process_stdio_plugin_manifest(
+            "stdio-invalid-frame-plugin",
+            "stdio-invalid-frame-provider",
+            "stdio-invalid-frame-provider",
+            PROCESS_STDIO_INVALID_FRAME_COMMAND,
+            PROCESS_STDIO_INVALID_FRAME_ARGS_JSON,
+            None,
+        ),
     )
     .expect("write stdio plugin");
 
@@ -329,7 +361,7 @@ async fn execute_spec_process_stdio_bridge_fails_on_invalid_json_line_response()
             expected_sha256: None,
             execute_process_stdio: true,
             execute_http_json: false,
-            allowed_process_commands: vec!["printf".to_owned()],
+            allowed_process_commands: vec![PROCESS_STDIO_INVALID_FRAME_COMMAND.to_owned()],
             enforce_execution_success: false,
             security_scan: None,
         }),
@@ -747,24 +779,14 @@ async fn execute_spec_process_stdio_bridge_blocks_when_protocol_authorization_fa
 
     fs::write(
         plugin_root.join("stdio_plugin.py"),
-        r#"
-# LOONG_PLUGIN_START
-# {
-#   "plugin_id": "stdio-authz-block-plugin",
-#   "provider_id": "stdio-authz-block-provider",
-#   "connector_name": "stdio-authz-block-provider",
-#   "channel_id": "primary",
-#   "endpoint": "local://stdio-authz-block-provider",
-#   "capabilities": ["InvokeConnector"],
-#   "metadata": {
-#     "bridge_kind":"process_stdio",
-#     "command":"cat",
-#     "process_timeout_ms":"999999999",
-#     "version":"1.0.0"
-#   }
-# }
-# LOONG_PLUGIN_END
-"#,
+        process_stdio_plugin_manifest(
+            "stdio-authz-block-plugin",
+            "stdio-authz-block-provider",
+            "stdio-authz-block-provider",
+            PROCESS_STDIO_ECHO_COMMAND,
+            PROCESS_STDIO_ECHO_ARGS_JSON,
+            Some("999999999"),
+        ),
     )
     .expect("write stdio plugin");
 
@@ -803,7 +825,7 @@ async fn execute_spec_process_stdio_bridge_blocks_when_protocol_authorization_fa
             expected_sha256: None,
             execute_process_stdio: true,
             execute_http_json: false,
-            allowed_process_commands: vec!["cat".to_owned()],
+            allowed_process_commands: vec![PROCESS_STDIO_ECHO_COMMAND.to_owned()],
             enforce_execution_success: false,
             security_scan: None,
         }),
