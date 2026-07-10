@@ -91,14 +91,12 @@ authorization / adapter workaround 塑形新架构。
      `ToolPlane::invoke(Granted<AppToolInvocationAction>, &ctx)`。
 
 5. `ActionMeta::payload` borrowing hygiene：
-   - 当前 `ActionMeta::payload(&self) -> Value` 仍会强迫持有 JSON payload 的 action
-     clone；
-   - 目标签名是 `fn payload(&self) -> Cow<'_, Value>`；
+   - 已完成：`ActionMeta::payload(&self) -> Cow<'_, Value>`；
    - 不提供默认 `Null`，每个 action 都必须显式声明自己的 type-erased payload；
    - 对天然可借用的 action，返回 `Cow::Borrowed(&self.payload)`；
    - 对需要临时构造 JSON view 的 action，返回 `Cow::Owned(json!(...))`；
-   - 这是小基础改动，应在搬 `ToolInvocationAction` 或拆 `ToolSpec.path` 之前完成，避免后续
-     action 迁移继续复制旧签名。
+   - 这已经在搬 `ToolInvocationAction` 或拆 `ToolSpec.path` 之前完成，后续 action 迁移
+     不应复制旧的 owned `Value` 签名。
 
 6. Comment audit hygiene：
    - 架构边界变更必须补少量注释，说明 ownership 和 why。注释不是“解释代码在做什么”，
@@ -139,8 +137,16 @@ authorization / adapter workaround 塑形新架构。
    - 注释验收标准：读者只看相关类型/函数附近的注释，就能回答“这个层拥有谁”“为什么不在
      另一个 crate”“这个 fallback 是否长期存在”“谁可以做副作用”“grant 何时被消费”；
    - typed path 测试只断言 typed audit，legacy path 测试只断言 legacy audit；
-   - 不新增 `PlaneInvoked | ToolInvocation` 这种宽松断言；
+   - 已完成当前宽松断言清理：不新增 `PlaneInvoked | ToolInvocation` 这种宽松断言；
    - 模块测试继续放对应模块下，例如 `tools/plane/tests.rs`、`file/tests.rs`。
+
+7. Tool invocation audit payload hygiene：
+   - 已完成：`AuditEventKind::ToolInvocation` 记录 `path_display: String`，不再持有
+     contracts/core 定义的 concrete `ToolPath`；
+   - 这只修正 audit payload。`Kernel::record_tool_invocation` 当前仍接收旧 `ToolPath`，
+     因为 `ToolInvocationAction` 还没从 core/global path 迁走；
+   - 后续搬 `ToolInvocationAction` 时，kernel API 应进一步改成只依赖 `ActionMeta` 或
+     plane-provided display path。
 
 ## Tool Path
 
@@ -340,8 +346,6 @@ legacy adapter 仍暂时记录旧 `PlaneInvoked`，直到对应工具迁移完�
 
 以下是已经出现、但不应该继续放大的过渡形状：
 
-- `crates/contracts/src/audit_types.rs` 里 `AuditEventKind::ToolInvocation` 持有
-  `ToolPath`。这把 concrete plane path 细节泄漏到了 contracts。
 - `crates/contracts/src/tool_types.rs` 仍定义全局 `ToolPath`，且 `ToolSpec` 仍携带
   `path`。目标是 descriptor 无 path，注册点/plane 才绑定 path。
 - `crates/loong-core/src/tool.rs` 里的 `ToolInvocationAction` 持有全局 `ToolPath`。
@@ -353,8 +357,6 @@ legacy adapter 仍暂时记录旧 `PlaneInvoked`，直到对应工具迁移完�
 - `crates/app/src/tools/routing.rs` 的 `route_direct_read_tool_request_for_legacy` 名字不准。
   它现在同时承担 read surface normalization 和 legacy bridge；aggregate `ReadTool`
   落地后这块应该删除或拆清楚。
-- 若测试用 `PlaneInvoked | ToolInvocation` 同时接受，就会掩盖 typed/legacy route 回退。
-  typed path 应断言 typed audit，legacy path 应断言 legacy audit。
 
 ## `file.read` 当前迁移状态
 
