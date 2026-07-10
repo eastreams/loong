@@ -146,12 +146,17 @@ impl<'a> AppExecutionContext<'a> {
 
     #[must_use]
     pub(crate) fn access(&self) -> AccessCx<'_, 'a, AppContextFactory> {
+        // AccessCx construction is localized at the concrete context boundary.
+        // Tool/action code should call ctx.access() rather than rethreading the
+        // kernel reference or recreating access facades by hand.
         AccessCx::new(self.kernel, self)
     }
 }
 
 impl KernelAccess<AppContextFactory> for AppExecutionContext<'_> {
     fn access(&self) -> AccessCx<'_, '_, AppContextFactory> {
+        // Concrete tools depend on this narrow requirement instead of the app
+        // context type, keeping loong-tools reusable across app/test contexts.
         AccessCx::new(self.kernel, self)
     }
 }

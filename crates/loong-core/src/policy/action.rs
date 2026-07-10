@@ -33,8 +33,9 @@ pub trait ActionMeta: Any + Send + Sync + 'static {
     ///
     /// The action type already carries the policy meaning; this method only
     /// materializes the dynamic payload when a policy needs JSON-shaped input.
-    /// It has no default so actions cannot silently omit their policy-facing
-    /// payload.
+    /// Return a borrowed value when the action stores JSON already, or an owned
+    /// view when the JSON is derived. It has no default so actions cannot
+    /// silently omit their policy-facing payload.
     fn payload(&self) -> Cow<'_, Value>;
 }
 

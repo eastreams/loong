@@ -108,6 +108,9 @@ async fn execute_direct_read_tool_core_with_context(
     config: &runtime_config::ToolRuntimeConfig,
     ctx: &AppExecutionContext<'_>,
 ) -> Result<ToolCoreOutcome, String> {
+    // Migration bridge for the direct `read` facade. Path reads now use access;
+    // query/glob modes still use legacy search implementations until they move
+    // behind an aggregate typed ReadTool.
     let (read_route, direct_request) = route_direct_read_request_for_kernel(request, config)?;
 
     match read_route {

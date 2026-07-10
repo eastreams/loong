@@ -40,11 +40,11 @@ pub enum PlaneTier {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToolInvocationOutcome {
+    /// Tool dispatch reached a concrete tool and it completed normally.
     Completed,
-    Failed {
-        error_kind: String,
-        reason: String,
-    },
+    /// Tool dispatch reached a concrete tool, but execution failed.
+    Failed { error_kind: String, reason: String },
+    /// Governance rejected the invocation before tool execution.
     Denied {
         reason: String,
         report: Option<PolicyReport>,
@@ -83,6 +83,10 @@ pub enum AuditEventKind {
     },
     ToolInvocation {
         pack_id: String,
+        /// Audit-facing display path for the app-owned tool plane.
+        ///
+        /// This is evidence for one invocation attempt, not a global route
+        /// model. The concrete plane still owns the registry key type.
         path: ToolPath,
         required_capabilities: Vec<Capability>,
         outcome: ToolInvocationOutcome,

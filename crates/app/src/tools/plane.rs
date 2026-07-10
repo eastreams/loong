@@ -13,8 +13,9 @@ use crate::context::AppContextFactory;
 /// App-owned typed tool dispatch plane.
 ///
 /// The plane only resolves and executes app-registered tools. Kernel remains
-/// responsible for authorization and audit, so callers must match first,
-/// request a kernel grant, then call `invoke` only for accepted payloads.
+/// responsible for authorization and audit, so callers resolve by path, request
+/// a kernel grant, then call `invoke`. Payload parsing belongs to the selected
+/// tool; the plane does not claim ownership of a payload shape.
 #[async_trait]
 pub(crate) trait ToolPlane<C: ContextFactory>: Send + Sync {
     fn contains(&self, path: &ToolPath) -> bool;
@@ -93,6 +94,9 @@ where
         grant: Granted<ToolInvocationAction>,
         ctx: &C::Cx<'_>,
     ) -> Result<ToolOutcome, ToolPlaneError> {
+        // Consuming the grant here makes audit/grant enforcement automatic for
+        // concrete tool authors: ToolImpl implementers never receive a raw
+        // dispatch path that can bypass app orchestration.
         let (path, _required_capabilities, payload) = grant.into_action().into_parts();
         let registered = self
             .tools

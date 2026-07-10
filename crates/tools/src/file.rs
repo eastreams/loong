@@ -73,6 +73,9 @@ where
 
         #[cfg(feature = "file")]
         {
+            // ReadFileTool owns input parsing and response shaping only. The
+            // filesystem side effect must stay behind loong_access::fs, where
+            // path resolution and policy-granted execution are enforced.
             let output = ctx
                 .access()
                 .fs()
@@ -108,6 +111,9 @@ where
 
     #[cfg(feature = "file")]
     {
+        // Compatibility entry for the legacy direct-read bridge. It still uses
+        // the same access path as the typed tool so migrated reads do not regain
+        // a direct std::fs side effect here.
         let parsed = parse_file_read_request(&request)?;
         let output = ctx
             .access()

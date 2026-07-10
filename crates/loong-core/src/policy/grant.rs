@@ -62,6 +62,10 @@ impl<A> AsRef<A> for Granted<A>
 where
     A: ActionMeta,
 {
+    /// Inspect the granted action before the grant is consumed.
+    ///
+    /// This supports audit and metadata capture at the execution boundary. It
+    /// must not grow into a way to clone, mint, or bypass grants.
     fn as_ref(&self) -> &A {
         &self.0
     }

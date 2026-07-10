@@ -399,6 +399,9 @@ pub(crate) async fn execute_kernel_tool_request(
         })?;
         let mut request = request;
         if request.tool_name == "read" {
+            // Temporary read bridge: query/glob modes still route to legacy
+            // tools, while path reads continue into the typed plane below.
+            // Delete this once read becomes a single aggregate typed tool.
             let routed_request = routing::route_direct_read_tool_request_for_legacy(
                 request.clone(),
                 &effective_config,
@@ -413,6 +416,10 @@ pub(crate) async fn execute_kernel_tool_request(
 
         let typed_path = loong_contracts::ToolPath::from(request.tool_name.clone());
         if app_tool_plane().contains(&typed_path) {
+            // Typed migration path: app resolves the tool, kernel grants the
+            // invocation action, the plane consumes the grant, then app records
+            // the typed audit outcome. Unmigrated tools fall through to the
+            // legacy kernel adapter path below.
             let caps = required_capabilities_for_request(&request);
             let tool_policy_params = json!({
                 "tool_name": &request.tool_name,
