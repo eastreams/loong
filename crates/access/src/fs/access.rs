@@ -12,7 +12,11 @@ use loong_core::{
 };
 use thiserror::Error;
 
-use super::{action::FsReadAction, error::FsActionError, path::CanonicalPath};
+use super::{
+    action::{FsReadAction, FsResolvePathAction},
+    error::FsActionError,
+    path::{CanonicalPath, GrantedPath},
+};
 
 /// Filesystem access facade.
 ///
@@ -51,11 +55,15 @@ where
 {
     /// Read a file after path resolution and typed policy grant.
     pub async fn read_file(self, path: impl AsRef<Path>) -> Result<FsReadOutput, FsAccessError> {
-        let path = CanonicalPath::resolve(
-            path,
-            self.policy_context.fs_resolution_root(),
-            self.policy_context.fs_allowed_roots(),
-        )?;
+        let resolve_action = FsResolvePathAction::new(path);
+        let resolve_grant = self
+            .policy_engine
+            .grant(self.policy_context, resolve_action)
+            .await
+            .map_err(AuthorizationError::from)
+            .map_err(FsAccessError::Authorization)?;
+        let path = resolve_grant.granted.run(self.policy_context).await?;
+
         let action = FsReadAction::new(path);
         let grant = self
             .policy_engine
@@ -64,6 +72,30 @@ where
             .map_err(AuthorizationError::from)
             .map_err(FsAccessError::Authorization)?;
         grant.granted.run(self.policy_context).await
+    }
+}
+
+/// Resolve an already-authorized raw fs path into a governed path.
+///
+/// This action may observe path metadata through canonicalization and symlink
+/// resolution, but it does not read file contents. The returned `GrantedPath`
+/// is the only public input accepted by concrete fs side-effect actions.
+#[async_trait]
+impl<Cx> Action<Cx> for FsResolvePathAction
+where
+    Cx: FsAccessContext + Sync,
+{
+    type Output = GrantedPath;
+    type Error = FsActionError;
+
+    async fn run(granted: Granted<Self>, ctx: &Cx) -> Result<Self::Output, Self::Error> {
+        let action = granted.into_action();
+        let path = CanonicalPath::resolve(
+            action.raw_path(),
+            ctx.fs_resolution_root(),
+            ctx.fs_allowed_roots(),
+        )?;
+        Ok(GrantedPath::new(path.into_path_buf()))
     }
 }
 

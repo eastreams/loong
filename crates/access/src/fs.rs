@@ -4,9 +4,9 @@ pub mod error;
 pub mod path;
 
 pub use access::{FsAccess, FsAccessError, FsReadOutput};
-pub use action::{FsAction, FsReadAction};
+pub use action::{FsAction, FsReadAction, FsResolvePathAction};
 pub use error::FsActionError;
-pub use path::CanonicalPath;
+pub use path::{CanonicalPath, GrantedPath};
 
 #[cfg(test)]
 mod tests;

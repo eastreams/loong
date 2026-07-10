@@ -467,16 +467,16 @@ legacy adapter 仍暂时记录旧 `PlaneInvoked`，直到对应工具迁移完�
    - 保留 `ToolInvocationOutcome`，但注释说明它只描述 invocation attempt 结果；
    - 更新 kernel/app 测试，typed path 不再依赖全局 `ToolPath`。
 
-2. 下一步：建立 fs path grant 基础：
+2. 已完成：建立 fs path grant 基础：
    - 在 `loong_access::fs` 增加 `FsResolvePathAction` 和 `GrantedPath`；
    - `GrantedPath` 构造函数保持模块私有，不提供 `From<PathBuf>`；
    - `FsResolvePathAction` 的 metadata/payload 显式包含 raw path；
-   - `FsResolvePathAction` 的 policy requirement 读取 `FsAccessContext` 的
-     `fs_resolution_root()` / `fs_allowed_roots()`；
+   - `FsResolvePathAction` 的 execution requirement 读取 `FsAccessContext` 的
+     `fs_resolution_root()` / `fs_allowed_roots()`；policy report 收敛留给下一步；
    - `FsAccess::read_file` 改成先 grant/run resolve action，再 grant/run read action；
    - `FsReadAction::new` 改成接收 `GrantedPath`，不再接收 `CanonicalPath`。
 
-3. 把 allowed roots / path escape 收敛到 path-resolution policy：
+3. 下一步：把 allowed roots / path escape 收敛到 path-resolution policy：
    - `FsReadAction` 不读取 workspace root，也不表达 allowed roots；
    - `PathEscapesAllowedRoots` 这类结果属于 `FsResolvePathAction` 的治理失败，不应散落成
      read/glob/search 各自的特殊判断；

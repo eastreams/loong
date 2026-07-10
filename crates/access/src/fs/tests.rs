@@ -20,7 +20,7 @@ use loong_core::{
 
 use super::{
     access::{FsAccess, FsAccessError},
-    action::{FsAction, FsReadAction},
+    action::{FsAction, FsReadAction, FsResolvePathAction},
     error::FsActionError,
     path::CanonicalPath,
 };
@@ -183,15 +183,29 @@ fn canonical_path_resolves_relative_path_inside_workspace() {
     assert_eq!(path.as_path(), Path::new("/workspace/notes/todo.md"));
 }
 
-#[test]
-fn fs_read_action_uses_canonical_path() {
+#[tokio::test]
+async fn fs_resolve_path_action_outputs_granted_path_for_read_action() {
+    let kernel = FsAccessTestKernel::default();
     let workspace_root = PathBuf::from("/workspace");
-    let path = CanonicalPath::resolve(
-        "docs/../notes/todo.md",
-        &workspace_root,
-        std::slice::from_ref(&workspace_root),
-    )
-    .expect("path inside workspace should normalize");
+    let policy_context = FsAccessPolicyContext::new(&workspace_root);
+    let resolve_action = FsResolvePathAction::new("docs/../notes/todo.md");
+    let resolve_metadata = resolve_action.metadata();
+
+    assert_eq!(resolve_metadata.kind, "fs.resolve_path");
+    assert_eq!(resolve_metadata.operation, "resolve_path");
+    assert!(resolve_metadata.required_capabilities.is_empty());
+    let expected_resolve_payload = serde_json::json!({"path": "docs/../notes/todo.md"});
+    assert_eq!(resolve_action.payload().as_ref(), &expected_resolve_payload);
+
+    let path = kernel
+        .policy_engine()
+        .grant(&policy_context, resolve_action)
+        .await
+        .expect("policy should grant path resolution")
+        .granted
+        .run(&policy_context)
+        .await
+        .expect("granted path resolution should run");
     let action = FsReadAction::new(path);
     let metadata = action.metadata();
 
@@ -223,15 +237,20 @@ fn canonical_path_rejects_workspace_escape() {
     }
 }
 
-#[test]
-fn fs_action_wraps_read_action() {
+#[tokio::test]
+async fn fs_action_wraps_read_action() {
+    let kernel = FsAccessTestKernel::default();
     let workspace_root = PathBuf::from("/workspace");
-    let path = CanonicalPath::resolve(
-        "notes.md",
-        &workspace_root,
-        std::slice::from_ref(&workspace_root),
-    )
-    .expect("path inside workspace");
+    let policy_context = FsAccessPolicyContext::new(&workspace_root);
+    let path = kernel
+        .policy_engine()
+        .grant(&policy_context, FsResolvePathAction::new("notes.md"))
+        .await
+        .expect("policy should grant path resolution")
+        .granted
+        .run(&policy_context)
+        .await
+        .expect("granted path resolution should run");
     let action = FsAction::read_file(path);
     let metadata = action.metadata();
 
@@ -335,12 +354,15 @@ async fn fs_read_execution_boundary_consumes_granted_action() {
     fs::create_dir_all(workspace_root.join("notes")).expect("create notes dir");
     fs::write(workspace_root.join("notes/todo.md"), "hello").expect("write note");
     let policy_context = FsAccessPolicyContext::new(&workspace_root);
-    let path = CanonicalPath::resolve(
-        "notes/todo.md",
-        policy_context.fs_resolution_root(),
-        policy_context.fs_allowed_roots(),
-    )
-    .expect("path inside workspace should resolve");
+    let path = kernel
+        .policy_engine()
+        .grant(&policy_context, FsResolvePathAction::new("notes/todo.md"))
+        .await
+        .expect("policy should grant path resolution")
+        .granted
+        .run(&policy_context)
+        .await
+        .expect("granted path resolution should run");
     let action = FsReadAction::new(path);
     let grant = kernel
         .policy_engine()

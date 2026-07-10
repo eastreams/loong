@@ -60,6 +60,38 @@ impl AsRef<Path> for CanonicalPath {
     }
 }
 
+/// Filesystem path produced by governed path resolution.
+///
+/// Downstream fs actions accept this value instead of raw paths so their
+/// constructors prove that path resolution policy has already run. Only the fs
+/// module can mint one; callers get it by executing `FsResolvePathAction`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrantedPath {
+    path: PathBuf,
+}
+
+impl GrantedPath {
+    pub(in crate::fs) fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    #[must_use]
+    pub fn as_path(&self) -> &Path {
+        &self.path
+    }
+
+    #[must_use]
+    pub fn into_path_buf(self) -> PathBuf {
+        self.path
+    }
+}
+
+impl AsRef<Path> for GrantedPath {
+    fn as_ref(&self) -> &Path {
+        self.as_path()
+    }
+}
+
 fn resolve_path_within_allowed_roots(
     path: &Path,
     allowed_roots: &[PathBuf],
