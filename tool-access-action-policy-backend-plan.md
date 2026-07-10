@@ -128,7 +128,7 @@ authorization / adapter workaround 塑形新架构。
        注释必须讲清 audit 记录的是一次 tool invocation attempt 的结果；它不表达
        `ToolInvocationRoute`，也不能固化 concrete ToolPlane registry key 类型。
      - `crates/loong-core/src/policy/action.rs`：`ActionMeta::payload()` 注释必须讲清 payload
-       是 Action 的 type-erased structured view，不是 legacy bridge；目标签名是
+       是 Action 的 type-erased structured view，不是 legacy bridge；签名是
        `Cow<'_, Value>`，并且没有默认 `Null`。
      - `crates/loong-core/src/policy/grant.rs`：`Granted<A>::as_ref()` 注释必须讲清它只用于
        grant 被消费前的 audit/metadata inspection，不能成为伪造、复制或绕过执行边界的入口。
@@ -314,10 +314,10 @@ typed tool invocation 应该有 audit event。tool 调用是 agent/user 可见�
 成功、失败、拒绝都必须能在 audit 里查到。否则 typed tool 从 legacy
 `PlaneInvoked` 迁走后，证据链反而变少。
 
-但 audit event 不能固化 ToolPlane 的 registry key 类型。当前把
-`ToolInvocation { path: ToolPath, ... }` 加到 `AuditEventKind` 里是过度固化：audit
-需要的是可读、稳定、可关联的 path 表示，不是具体 plane 的 key。`ToolPath` 不应该成为
-contracts/core 的全局类型。
+但 audit event 不能固化 ToolPlane 的 registry key 类型。此前把
+`ToolInvocation { path: ToolPath, ... }` 加到 `AuditEventKind` 里是过度固化；现在已经
+收敛为 audit-only 的 `path_display`。audit 需要的是可读、稳定、可关联的 path 表示，
+不是具体 plane 的 key。`ToolPath` 不应该成为 contracts/core 的全局类型。
 
 typed tool audit event 不记录 `ToolInvocationRoute`。route 是 app orchestration 的决策，
 不是 contracts/kernel 的稳定概念，也不该成为长期 contract。
@@ -373,21 +373,21 @@ legacy adapter 仍暂时记录旧 `PlaneInvoked`，直到对应工具迁移完�
 
 按最小提交顺序推进：
 
-0. 先完成基础小改动队列：
+0. 已完成：基础小改动队列：
    - 对本轮要碰的 crate 先做 workspace dependency hygiene；
    - 把 `ActionMeta::payload` 改成 `Cow<'_, Value>`；
    - 执行 comment audit checklist，补齐 concrete tools crate、`KernelAccess`、grant
      inspection、typed plane、kernel grant/audit、legacy read bridge 等边界注释；
    - 清掉会掩盖 route 回退的宽松测试断言；
-   - 每个小项独立提交，不和下面的大结构迁移混在一起。
+   - 每个小项已独立提交，没有和下面的大结构迁移混在一起。
 
-1. 修正 `ToolInvocation` audit shape：
+1. 已完成：修正 `ToolInvocation` audit shape：
    - 保留 `AuditEventKind::ToolInvocation`；
    - 把 `path: ToolPath` 改成 `path_display: String` 或等价 audit-only 表示；
    - 保留 `ToolInvocationOutcome`，但注释说明它只描述 invocation attempt 结果；
    - 更新 kernel/app 测试，typed path 不再依赖全局 `ToolPath`。
 
-2. 移走或泛型化 `ToolInvocationAction`：
+2. 下一步：移走或泛型化 `ToolInvocationAction`：
    - 首选把它移到 app plane 附近，命名为 `AppToolInvocationAction`；
    - 如果保留公共 helper，则改成 `ToolInvocationAction<P>`；
    - kernel grant API 接受 concrete action，不知道 app plane path type；
