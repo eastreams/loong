@@ -27,13 +27,13 @@ impl CanonicalPath {
 
         let allowed_roots = allowed_roots
             .iter()
-            .map(|root| canonicalize_or_fallback(root.as_path()))
+            .map(|root| resolve_existing_or_missing_path(root.as_path()))
             .collect::<Result<Vec<_>, _>>()?;
         if allowed_roots.is_empty() {
             return Err(FsActionError::MissingAllowedRoot);
         }
 
-        let resolution_root = canonicalize_or_fallback(resolution_root.as_ref())?;
+        let resolution_root = resolve_existing_or_missing_path(resolution_root.as_ref())?;
         let combined = if raw.is_absolute() {
             raw.to_path_buf()
         } else {
@@ -66,37 +66,36 @@ fn resolve_path_within_allowed_roots(
 ) -> Result<PathBuf, FsActionError> {
     let normalized = normalize_without_fs(path);
 
-    // A configured root may not exist yet. In that case no existing ancestor
-    // can be canonicalized, so the only meaningful check is lexical: the
-    // normalized target must still be below that missing allowed root.
-    if allowed_roots
-        .iter()
-        .any(|allowed_root| !allowed_root.exists() && normalized.starts_with(allowed_root))
-    {
-        return Ok(normalized);
-    }
-
     if normalized.exists() {
         let canonical = canonicalize_existing_path(&normalized)?;
         ensure_path_within_allowed_roots(&canonical, allowed_roots)?;
         return Ok(canonical);
     }
 
-    let (ancestor, suffix) = split_existing_ancestor(&normalized)?;
-    let mut resolved = canonicalize_existing_path(&ancestor)?;
-    ensure_path_within_allowed_roots(&resolved, allowed_roots)?;
-    for component in suffix {
-        resolved.push(component);
-    }
+    let resolved = resolve_existing_or_missing_path(&normalized)?;
     ensure_path_within_allowed_roots(&resolved, allowed_roots)?;
     Ok(resolved)
 }
 
-fn canonicalize_or_fallback(path: &Path) -> Result<PathBuf, FsActionError> {
-    if path.exists() {
-        return canonicalize_existing_path(path);
+fn resolve_existing_or_missing_path(path: &Path) -> Result<PathBuf, FsActionError> {
+    let normalized = normalize_without_fs(path);
+    if !normalized.exists() {
+        // Missing suffixes still inherit symlinks from existing ancestors.
+        // Resolve that ancestor now so the returned path is the policy-visible
+        // filesystem location, not a lexical path that std::fs would later
+        // reinterpret at read time.
+        return resolve_from_existing_ancestor(&normalized);
     }
-    Ok(normalize_without_fs(path))
+    canonicalize_existing_path(&normalized)
+}
+
+fn resolve_from_existing_ancestor(path: &Path) -> Result<PathBuf, FsActionError> {
+    let (ancestor, suffix) = split_existing_ancestor(path)?;
+    let mut resolved = canonicalize_existing_path(&ancestor)?;
+    for component in suffix {
+        resolved.push(component);
+    }
+    Ok(dunce::simplified(&resolved).to_path_buf())
 }
 
 fn canonicalize_existing_path(path: &Path) -> Result<PathBuf, FsActionError> {

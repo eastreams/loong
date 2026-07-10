@@ -278,6 +278,31 @@ fn canonical_path_rejects_symlink_escape() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn canonical_path_resolves_missing_allowed_root_through_symlink_ancestor() {
+    let base = unique_temp_dir("loong-access-fs-missing-root-symlink");
+    let workspace_root = base.join("workspace");
+    let outside_root = base.join("outside");
+    fs::create_dir_all(&workspace_root).expect("create workspace root");
+    fs::create_dir_all(&outside_root).expect("create outside root");
+
+    let link_path = workspace_root.join("linked-root-parent");
+    create_symlink(&outside_root, &link_path).expect("create symlink");
+
+    let allowed_root = link_path.join("missing-root");
+    let path = CanonicalPath::resolve(
+        "notes.txt",
+        &allowed_root,
+        std::slice::from_ref(&allowed_root),
+    )
+    .expect("missing allowed root under symlink ancestor should resolve");
+
+    let expected_root = dunce::canonicalize(&outside_root).expect("canonical outside root");
+    assert_eq!(path.as_path(), expected_root.join("missing-root/notes.txt"));
+    fs::remove_dir_all(base).ok();
+}
+
 #[tokio::test]
 async fn tool_context_like_chain_grants_read_file_via_access_then_fs() {
     let kernel = FsAccessTestKernel::default();
