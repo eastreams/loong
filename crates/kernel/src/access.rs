@@ -1,7 +1,4 @@
-use loong_access::fs::{
-    access::{FsAccess, FsAccessError},
-    error::FsActionError,
-};
+use loong_access::fs::{FsAccess, FsAccessError, FsActionError};
 use loong_core::{kernel::Kernel as CoreKernel, policy::context::ContextFactory};
 
 use crate::{kernel::Kernel, policy::PolicyPipeline};

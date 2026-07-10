@@ -9,7 +9,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use loong_access::fs::action::FsReadAction;
+use loong_access::fs::FsReadAction;
 use loong_contracts::{
     Capability, CapabilityToken, GrantId, PolicyDecision, PolicyEntry, PolicyEvaluation,
     PolicyGrant, PolicyId, PolicyOutcome, PolicyReport, VerticalPackManifest,
