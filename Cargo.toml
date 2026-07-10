@@ -29,6 +29,12 @@ homepage = "https://github.com/eastreams/loong"
 [workspace.dependencies]
 anymap = "0.12.1"
 async-trait = "0.1"
+loong-access = { package = "loong-access", version = "0.1.2-alpha.1", path = "crates/access" }
+loong-contracts = { package = "loong-contracts", version = "0.1.2-alpha.1", path = "crates/contracts" }
+loong-core = { package = "loong-core", version = "0.1.2-alpha.1", path = "crates/loong-core" }
+loong-kernel = { package = "loong-kernel", version = "0.1.2-alpha.1", path = "crates/kernel" }
+loong-plugin-sdk = { package = "loong-plugin-sdk", version = "0.1.2-alpha.1", path = "crates/loong-plugin-sdk" }
+loong-tools = { package = "loong-tools", version = "0.1.2-alpha.1", path = "crates/tools" }
 clap = { version = "4.5", features = ["derive"] }
 dialoguer = { version = "0.12", features = ["fuzzy-select"] }
 console = "0.16.3"

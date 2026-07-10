@@ -12,10 +12,10 @@ homepage.workspace = true
 name = "loong_kernel"
 
 [dependencies]
-loong-contracts = { package = "loong-contracts", version = "0.1.2-alpha.1", path = "../contracts" }
-loong-core = { package = "loong-core", version = "0.1.2-alpha.1", path = "../loong-core" }
-loong-access = { package = "loong-access", version = "0.1.2-alpha.1", path = "../access" }
-loong-plugin-sdk = { package = "loong-plugin-sdk", version = "0.1.2-alpha.1", path = "../loong-plugin-sdk" }
+loong-contracts.workspace = true
+loong-core.workspace = true
+loong-access.workspace = true
+loong-plugin-sdk.workspace = true
 async-trait.workspace = true
 futures-util.workspace = true
 hex.workspace = true

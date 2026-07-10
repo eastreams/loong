@@ -55,10 +55,10 @@ tool-websearch = []
 test-support = []
 
 [dependencies]
-loong-contracts = { package = "loong-contracts", version = "0.1.2-alpha.1", path = "../contracts" }
-loong-core = { package = "loong-core", version = "0.1.2-alpha.1", path = "../loong-core" }
-loong-kernel = { package = "loong-kernel", version = "0.1.2-alpha.1", path = "../kernel" }
-loong-tools = { package = "loong-tools", version = "0.1.2-alpha.1", path = "../tools" }
+loong-contracts.workspace = true
+loong-core.workspace = true
+loong-kernel.workspace = true
+loong-tools.workspace = true
 bytes = "1"
 async-trait.workspace = true
 console.workspace = true
