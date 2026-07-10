@@ -22,7 +22,7 @@ pub(super) async fn fetch_available_models_with_profiles(
     validate_provider_configuration(config)?;
     validate_provider_feature_gate(config)?;
     super::copilot_auth::ensure_provider_copilot_api_key(&config.provider).await?;
-    validate_provider_auth_readiness(config).await?;
+    validate_provider_model_catalog_auth_readiness(config).await?;
     let auth_context = super::transport::resolve_request_auth_context(&config.provider).await?;
     let headers = super::transport::build_request_headers_without_provider_auth(&config.provider)?;
     let request_policy = policy::ProviderRequestPolicy::from_config(&config.provider);
@@ -74,7 +74,7 @@ pub(super) async fn fetch_model_catalog_with_profiles(
     validate_provider_configuration(config)?;
     validate_provider_feature_gate(config)?;
     super::copilot_auth::ensure_provider_copilot_api_key(&config.provider).await?;
-    validate_provider_auth_readiness(config).await?;
+    validate_provider_model_catalog_auth_readiness(config).await?;
     let auth_context = super::transport::resolve_request_auth_context(&config.provider).await?;
     let headers = super::transport::build_request_headers_without_provider_auth(&config.provider)?;
     let request_policy = policy::ProviderRequestPolicy::from_config(&config.provider);
@@ -118,4 +118,12 @@ pub(super) async fn fetch_model_catalog_with_profiles(
 
     Err(last_error
         .unwrap_or_else(|| "provider model-list unavailable for every auth profile".to_owned()))
+}
+
+async fn validate_provider_model_catalog_auth_readiness(config: &LoongConfig) -> CliResult<()> {
+    if config.provider.kind.model_probe_auth_optional() {
+        return Ok(());
+    }
+
+    validate_provider_auth_readiness(config).await
 }

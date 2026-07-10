@@ -239,6 +239,11 @@ fn build_provider_runtime_contract(
     };
     let default_reasoning_field = match transport_mode {
         ProviderTransportMode::Responses => ReasoningField::ReasoningObject,
+        ProviderTransportMode::OpenAiChatCompletions
+            if matches!(provider.kind, ProviderKind::NearAi) =>
+        {
+            ReasoningField::Omit
+        }
         ProviderTransportMode::OpenAiChatCompletions | ProviderTransportMode::KimiApi => {
             ReasoningField::ReasoningEffort
         }

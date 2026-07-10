@@ -34,7 +34,7 @@ should keep the broader hosted map legible too.
 | Family | Current built-in kinds | Use it when |
 | --- | --- | --- |
 | platform-first hosted | `volcengine`, `byteplus` | one managed hosted provider should own first value and you want a short reviewed path |
-| direct hosted general | `openai`, `anthropic`, `gemini`, `deepseek`, `minimax`, `mistral`, `cohere`, `xai`, `zai`, `zhipu`, `qwen`, `kimi`, `groq`, `fireworks`, `together`, `perplexity`, `qianfan`, `cerebras`, `nvidia`, `sambanova`, `novita`, `siliconflow`, `stepfun`, `venice` | your team already runs on a named hosted provider and you want that family to stay explicit |
+| direct hosted general | `openai`, `anthropic`, `gemini`, `deepseek`, `minimax`, `mistral`, `cohere`, `nearai`, `xai`, `zai`, `zhipu`, `qwen`, `kimi`, `groq`, `fireworks`, `together`, `perplexity`, `qianfan`, `cerebras`, `nvidia`, `sambanova`, `novita`, `siliconflow`, `stepfun`, `venice` | your team already runs on a named hosted provider and you want that family to stay explicit |
 | coding-specialized hosted | `volcengine_coding`, `byteplus_coding`, `kimi_coding`, `step_plan`, `bailian_coding` | coding traffic, pricing, or quota should stay on a deliberate lane |
 | gateway and platform routing | `openrouter`, `cloudflare_ai_gateway`, `vercel_ai_gateway`, `bedrock`, `custom` | a gateway, proxy, or managed route sits between Loong and the upstream models |
 | local and self-hosted | `ollama`, `lm_studio`, `llamacpp`, `vllm`, `sglang` | the model server boundary should stay operator-owned |
@@ -167,7 +167,7 @@ Representative direct-hosted variants:
 
 The broader direct-hosted catalog also includes `qwen`, `kimi`, `zai`, `groq`,
 `fireworks`, `together`, `perplexity`, `qianfan`, `cerebras`, `nvidia`,
-`sambanova`, `novita`, `siliconflow`, `stepfun`, and `venice`. Use the built-in
+`sambanova`, `novita`, `siliconflow`, `stepfun`, `nearai`, and `venice`. Use the built-in
 provider `kind`, then let `loong onboard` or `loong doctor` surface the exact
 default credential env and readiness hints for that family.
 

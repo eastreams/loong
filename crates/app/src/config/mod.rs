@@ -641,6 +641,7 @@ mod tests {
                 "lm_studio",
                 "mistral",
                 "minimax",
+                "nearai",
                 "novita",
                 "nvidia",
                 "ollama",
@@ -690,6 +691,10 @@ mod tests {
             (
                 ProviderKind::Minimax,
                 "https://api.minimaxi.com/v1/chat/completions",
+            ),
+            (
+                ProviderKind::NearAi,
+                "https://cloud-api.near.ai/v1/chat/completions",
             ),
             (
                 ProviderKind::Ollama,
@@ -743,6 +748,7 @@ mod tests {
         let cases = vec![
             (ProviderKind::Kimi, Some("MOONSHOT_API_KEY")),
             (ProviderKind::Minimax, Some("MINIMAX_API_KEY")),
+            (ProviderKind::NearAi, Some("NEARAI_API_KEY")),
             (ProviderKind::Openai, Some("OPENAI_API_KEY")),
             (ProviderKind::OpencodeGo, Some("OPENCODE_API_KEY")),
             (ProviderKind::OpencodeZen, Some("OPENCODE_API_KEY")),
@@ -1366,6 +1372,7 @@ kind = "bailian_coding"
             ("bailian_coding_compatible", ProviderKind::BailianCoding),
             ("byteplus_compatible", ProviderKind::Byteplus),
             ("byteplus_coding_compatible", ProviderKind::ByteplusCoding),
+            ("near_ai_cloud", ProviderKind::NearAi),
             ("openai_custom", ProviderKind::Custom),
             (
                 "volcengine_coding_compatible",
@@ -1665,6 +1672,10 @@ kind = "volcengine_coding"
             (
                 ProviderKind::OpencodeZen,
                 "https://opencode.ai/zen/v1/models",
+            ),
+            (
+                ProviderKind::NearAi,
+                "https://cloud-api.near.ai/v1/model/list",
             ),
         ];
 
@@ -2417,6 +2428,10 @@ bot_token = { file = "/run/secrets/telegram" }
                 "https://api.kimi.com/coding/v1/models",
             ),
             (ProviderKind::Minimax, "https://api.minimaxi.com/v1/models"),
+            (
+                ProviderKind::NearAi,
+                "https://cloud-api.near.ai/v1/model/list",
+            ),
             (ProviderKind::Ollama, "http://127.0.0.1:11434/v1/models"),
             (ProviderKind::Openai, "https://api.openai.com/v1/models"),
             (

@@ -672,6 +672,15 @@ pub enum ProviderKind {
     Mistral,
     #[serde(alias = "minimax_compatible")]
     Minimax,
+    #[serde(
+        rename = "nearai",
+        alias = "near_ai",
+        alias = "near-ai",
+        alias = "nearai_compatible",
+        alias = "near_ai_cloud",
+        alias = "near-ai-cloud"
+    )]
+    NearAi,
     #[serde(alias = "novita_compatible")]
     Novita,
     #[serde(
