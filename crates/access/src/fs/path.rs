@@ -5,17 +5,19 @@ use std::{
 
 use super::error::FsActionError;
 
-/// Canonical filesystem path accepted by fs actions.
+/// Resolved filesystem path facts prepared inside the access boundary.
 ///
-/// Construction is the policy-relevant path check: it resolves relative paths
-/// from the invocation root, canonicalizes existing ancestors, and rejects
-/// escapes from the allowed roots, including symlink escapes.
+/// This value deliberately does not decide authorization. It records the
+/// canonicalized candidate path and canonical allowed roots so the kernel's
+/// typed policy can produce a normal PolicyReport for root escapes.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CanonicalPath(PathBuf);
+pub(in crate::fs) struct ResolvedPath {
+    path: PathBuf,
+    allowed_roots: Vec<PathBuf>,
+}
 
-impl CanonicalPath {
-    /// Resolve a user path into a path that is safe for an fs action.
-    pub fn resolve(
+impl ResolvedPath {
+    pub(in crate::fs) fn resolve(
         path: impl AsRef<Path>,
         resolution_root: impl AsRef<Path>,
         allowed_roots: &[PathBuf],
@@ -39,24 +41,24 @@ impl CanonicalPath {
         } else {
             resolution_root.join(raw)
         };
-        let path = resolve_path_within_allowed_roots(combined.as_path(), &allowed_roots)?;
-        Ok(Self(path))
+        let path = resolve_existing_or_missing_path(&combined)?;
+
+        Ok(Self {
+            path,
+            allowed_roots,
+        })
     }
 
-    #[must_use]
-    pub fn as_path(&self) -> &Path {
-        &self.0
+    pub(in crate::fs) fn path(&self) -> &Path {
+        &self.path
     }
 
-    #[must_use]
-    pub fn into_path_buf(self) -> PathBuf {
-        self.0
+    pub(in crate::fs) fn allowed_roots(&self) -> &[PathBuf] {
+        &self.allowed_roots
     }
-}
 
-impl AsRef<Path> for CanonicalPath {
-    fn as_ref(&self) -> &Path {
-        self.as_path()
+    pub(in crate::fs) fn into_path_buf(self) -> PathBuf {
+        self.path
     }
 }
 
@@ -92,23 +94,6 @@ impl AsRef<Path> for GrantedPath {
     }
 }
 
-fn resolve_path_within_allowed_roots(
-    path: &Path,
-    allowed_roots: &[PathBuf],
-) -> Result<PathBuf, FsActionError> {
-    let normalized = normalize_without_fs(path);
-
-    if normalized.exists() {
-        let canonical = canonicalize_existing_path(&normalized)?;
-        ensure_path_within_allowed_roots(&canonical, allowed_roots)?;
-        return Ok(canonical);
-    }
-
-    let resolved = resolve_existing_or_missing_path(&normalized)?;
-    ensure_path_within_allowed_roots(&resolved, allowed_roots)?;
-    Ok(resolved)
-}
-
 fn resolve_existing_or_missing_path(path: &Path) -> Result<PathBuf, FsActionError> {
     let normalized = normalize_without_fs(path);
     if !normalized.exists() {
@@ -137,24 +122,6 @@ fn canonicalize_existing_path(path: &Path) -> Result<PathBuf, FsActionError> {
             source,
         })?;
     Ok(dunce::simplified(&canonical).to_path_buf())
-}
-
-fn ensure_path_within_allowed_roots(
-    path: &Path,
-    allowed_roots: &[PathBuf],
-) -> Result<(), FsActionError> {
-    let normalized = dunce::simplified(path);
-    if allowed_roots
-        .iter()
-        .any(|allowed_root| normalized.starts_with(allowed_root))
-    {
-        return Ok(());
-    }
-
-    Err(FsActionError::PathEscapesAllowedRoots {
-        path: normalized.to_path_buf(),
-        allowed_roots: allowed_roots.to_vec(),
-    })
 }
 
 fn split_existing_ancestor(path: &Path) -> Result<(PathBuf, Vec<OsString>), FsActionError> {

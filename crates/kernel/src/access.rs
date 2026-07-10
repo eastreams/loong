@@ -1,4 +1,4 @@
-use loong_access::fs::{FsAccess, FsAccessError, FsActionError};
+use loong_access::fs::{FsAccess, FsAccessError};
 use loong_core::{kernel::Kernel as CoreKernel, policy::context::ContextFactory};
 
 use crate::{kernel::Kernel, policy::PolicyPipeline};
@@ -56,11 +56,7 @@ where
 
 #[must_use]
 pub fn fs_read_error_is_policy_denial(error: &FsAccessError) -> bool {
-    matches!(
-        error,
-        FsAccessError::Authorization(_)
-            | FsAccessError::Action(FsActionError::PathEscapesAllowedRoots { .. })
-    )
+    matches!(error, FsAccessError::Authorization(_))
 }
 
 #[cfg(test)]

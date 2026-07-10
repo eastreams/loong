@@ -7,7 +7,7 @@ use loong_contracts::Capability;
 use loong_core::policy::action::{ActionMeta, ActionMetadata};
 use serde_json::{Value, json};
 
-use super::path::GrantedPath;
+use super::path::{GrantedPath, ResolvedPath};
 
 const FS_RESOLVE_REQUIRED_CAPABILITIES: [Capability; 0] = [];
 const FS_READ_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
@@ -16,24 +16,47 @@ const FS_READ_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRe
 ///
 /// Path resolution observes the filesystem through canonicalization and symlink
 /// handling, so it is modeled as an action instead of an ungoverned helper.
+/// The action carries resolved path facts for policy; it does not decide
+/// whether those facts are allowed.
 /// It does not declare read/search/glob capabilities; concrete data-leaking fs
 /// actions declare those after receiving the governed path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FsResolvePathAction {
     raw_path: PathBuf,
+    resolved: ResolvedPath,
 }
 
 impl FsResolvePathAction {
-    #[must_use]
-    pub fn new(path: impl AsRef<Path>) -> Self {
-        Self {
-            raw_path: path.as_ref().to_path_buf(),
-        }
+    // Access prepares filesystem-observation facts before policy evaluation.
+    // The constructor stays fs-private so callers cannot mint a resolve action
+    // without using the context roots from `FsAccess`.
+    pub(in crate::fs) fn resolve(
+        path: impl AsRef<Path>,
+        resolution_root: impl AsRef<Path>,
+        allowed_roots: &[PathBuf],
+    ) -> Result<Self, super::error::FsActionError> {
+        let raw_path = path.as_ref().to_path_buf();
+        let resolved = ResolvedPath::resolve(&raw_path, resolution_root, allowed_roots)?;
+        Ok(Self { raw_path, resolved })
     }
 
     #[must_use]
     pub fn raw_path(&self) -> &Path {
         &self.raw_path
+    }
+
+    #[must_use]
+    pub fn resolved_path(&self) -> &Path {
+        self.resolved.path()
+    }
+
+    #[must_use]
+    pub fn allowed_roots(&self) -> &[PathBuf] {
+        self.resolved.allowed_roots()
+    }
+
+    pub(in crate::fs) fn into_granted_path(self) -> GrantedPath {
+        GrantedPath::new(self.resolved.into_path_buf())
     }
 }
 
@@ -53,6 +76,12 @@ impl ActionMeta for FsResolvePathAction {
     fn payload(&self) -> Cow<'_, Value> {
         Cow::Owned(json!({
             "path": self.raw_path.display().to_string(),
+            "resolved_path": self.resolved_path().display().to_string(),
+            "allowed_roots": self
+                .allowed_roots()
+                .iter()
+                .map(|root| root.display().to_string())
+                .collect::<Vec<_>>(),
         }))
     }
 }

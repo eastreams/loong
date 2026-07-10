@@ -21,8 +21,6 @@ use loong_core::{
 use super::{
     access::{FsAccess, FsAccessError},
     action::{FsAction, FsReadAction, FsResolvePathAction},
-    error::FsActionError,
-    path::CanonicalPath,
 };
 
 #[derive(Debug, Clone)]
@@ -171,16 +169,25 @@ impl<'a> FsAccessTestCx<'a> {
 }
 
 #[test]
-fn canonical_path_resolves_relative_path_inside_workspace() {
+fn fs_resolve_path_action_resolves_relative_path_inside_workspace() {
     let workspace_root = PathBuf::from("/workspace");
-    let path = CanonicalPath::resolve(
+    let action = FsResolvePathAction::resolve(
         "docs/../notes/todo.md",
         &workspace_root,
         std::slice::from_ref(&workspace_root),
     )
     .expect("path inside workspace should normalize");
 
-    assert_eq!(path.as_path(), Path::new("/workspace/notes/todo.md"));
+    assert_eq!(
+        action.resolved_path(),
+        Path::new("/workspace/notes/todo.md")
+    );
+    assert!(
+        action
+            .allowed_roots()
+            .iter()
+            .any(|allowed_root| action.resolved_path().starts_with(allowed_root))
+    );
 }
 
 #[tokio::test]
@@ -188,13 +195,22 @@ async fn fs_resolve_path_action_outputs_granted_path_for_read_action() {
     let kernel = FsAccessTestKernel::default();
     let workspace_root = PathBuf::from("/workspace");
     let policy_context = FsAccessPolicyContext::new(&workspace_root);
-    let resolve_action = FsResolvePathAction::new("docs/../notes/todo.md");
+    let resolve_action = FsResolvePathAction::resolve(
+        "docs/../notes/todo.md",
+        policy_context.fs_resolution_root(),
+        policy_context.fs_allowed_roots(),
+    )
+    .expect("path resolution should prepare action");
     let resolve_metadata = resolve_action.metadata();
 
     assert_eq!(resolve_metadata.kind, "fs.resolve_path");
     assert_eq!(resolve_metadata.operation, "resolve_path");
     assert!(resolve_metadata.required_capabilities.is_empty());
-    let expected_resolve_payload = serde_json::json!({"path": "docs/../notes/todo.md"});
+    let expected_resolve_payload = serde_json::json!({
+        "path": "docs/../notes/todo.md",
+        "resolved_path": "/workspace/notes/todo.md",
+        "allowed_roots": ["/workspace"],
+    });
     assert_eq!(resolve_action.payload().as_ref(), &expected_resolve_payload);
 
     let path = kernel
@@ -220,21 +236,26 @@ async fn fs_resolve_path_action_outputs_granted_path_for_read_action() {
 }
 
 #[test]
-fn canonical_path_rejects_workspace_escape() {
+fn fs_resolve_path_action_marks_workspace_escape_for_policy() {
     let workspace_root = PathBuf::from("/workspace");
-    let error = CanonicalPath::resolve(
+    let action = FsResolvePathAction::resolve(
         "../secrets.txt",
         &workspace_root,
         std::slice::from_ref(&workspace_root),
     )
-    .expect_err("path escape should be denied");
+    .expect("path resolution should prepare escaped action for policy");
 
-    match error {
-        FsActionError::PathEscapesAllowedRoots { allowed_roots, .. } => {
-            assert_eq!(allowed_roots, vec![workspace_root]);
-        }
-        other => panic!("expected root escape error, got {other:?}"),
-    }
+    assert_eq!(action.resolved_path(), Path::new("/secrets.txt"));
+    assert_eq!(
+        action.allowed_roots(),
+        std::slice::from_ref(&workspace_root)
+    );
+    assert!(
+        !action
+            .allowed_roots()
+            .iter()
+            .any(|allowed_root| action.resolved_path().starts_with(allowed_root))
+    );
 }
 
 #[tokio::test]
@@ -244,7 +265,15 @@ async fn fs_action_wraps_read_action() {
     let policy_context = FsAccessPolicyContext::new(&workspace_root);
     let path = kernel
         .policy_engine()
-        .grant(&policy_context, FsResolvePathAction::new("notes.md"))
+        .grant(
+            &policy_context,
+            FsResolvePathAction::resolve(
+                "notes.md",
+                policy_context.fs_resolution_root(),
+                policy_context.fs_allowed_roots(),
+            )
+            .expect("path resolution should prepare action"),
+        )
         .await
         .expect("policy should grant path resolution")
         .granted
@@ -266,7 +295,7 @@ async fn fs_action_wraps_read_action() {
 
 #[cfg(unix)]
 #[test]
-fn canonical_path_rejects_symlink_escape() {
+fn fs_resolve_path_action_marks_symlink_escape_for_policy() {
     let base = unique_temp_dir("loong-access-fs-read");
     let workspace_root = base.join("workspace");
     let outside_root = base.join("outside");
@@ -279,27 +308,32 @@ fn canonical_path_rejects_symlink_escape() {
     let symlink_path = workspace_root.join("secret-link");
     create_symlink(&outside_file, &symlink_path).expect("create symlink");
 
-    let error = CanonicalPath::resolve(
+    let action = FsResolvePathAction::resolve(
         "secret-link",
         &workspace_root,
         std::slice::from_ref(&workspace_root),
     )
-    .expect_err("symlink escape should be denied");
+    .expect("path resolution should prepare symlink escape for policy");
 
-    match error {
-        FsActionError::PathEscapesAllowedRoots { allowed_roots, .. } => {
-            assert_eq!(
-                allowed_roots,
-                vec![dunce::canonicalize(&workspace_root).expect("canonical workspace root")]
-            );
-        }
-        other => panic!("expected symlink escape error, got {other:?}"),
-    }
+    assert_eq!(
+        action.resolved_path(),
+        dunce::canonicalize(&outside_file).expect("canonical outside file")
+    );
+    assert_eq!(
+        action.allowed_roots(),
+        [dunce::canonicalize(&workspace_root).expect("canonical workspace root")]
+    );
+    assert!(
+        !action
+            .allowed_roots()
+            .iter()
+            .any(|allowed_root| action.resolved_path().starts_with(allowed_root))
+    );
 }
 
 #[cfg(unix)]
 #[test]
-fn canonical_path_resolves_missing_allowed_root_through_symlink_ancestor() {
+fn fs_resolve_path_action_resolves_missing_allowed_root_through_symlink_ancestor() {
     let base = unique_temp_dir("loong-access-fs-missing-root-symlink");
     let workspace_root = base.join("workspace");
     let outside_root = base.join("outside");
@@ -310,7 +344,7 @@ fn canonical_path_resolves_missing_allowed_root_through_symlink_ancestor() {
     create_symlink(&outside_root, &link_path).expect("create symlink");
 
     let allowed_root = link_path.join("missing-root");
-    let path = CanonicalPath::resolve(
+    let action = FsResolvePathAction::resolve(
         "notes.txt",
         &allowed_root,
         std::slice::from_ref(&allowed_root),
@@ -318,7 +352,16 @@ fn canonical_path_resolves_missing_allowed_root_through_symlink_ancestor() {
     .expect("missing allowed root under symlink ancestor should resolve");
 
     let expected_root = dunce::canonicalize(&outside_root).expect("canonical outside root");
-    assert_eq!(path.as_path(), expected_root.join("missing-root/notes.txt"));
+    assert_eq!(
+        action.resolved_path(),
+        expected_root.join("missing-root/notes.txt")
+    );
+    assert!(
+        action
+            .allowed_roots()
+            .iter()
+            .any(|allowed_root| action.resolved_path().starts_with(allowed_root))
+    );
     fs::remove_dir_all(base).ok();
 }
 
@@ -356,7 +399,15 @@ async fn fs_read_execution_boundary_consumes_granted_action() {
     let policy_context = FsAccessPolicyContext::new(&workspace_root);
     let path = kernel
         .policy_engine()
-        .grant(&policy_context, FsResolvePathAction::new("notes/todo.md"))
+        .grant(
+            &policy_context,
+            FsResolvePathAction::resolve(
+                "notes/todo.md",
+                policy_context.fs_resolution_root(),
+                policy_context.fs_allowed_roots(),
+            )
+            .expect("path resolution should prepare action"),
+        )
         .await
         .expect("policy should grant path resolution")
         .granted

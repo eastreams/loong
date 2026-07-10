@@ -15,7 +15,7 @@ use thiserror::Error;
 use super::{
     action::{FsReadAction, FsResolvePathAction},
     error::FsActionError,
-    path::{CanonicalPath, GrantedPath},
+    path::GrantedPath,
 };
 
 /// Filesystem access facade.
@@ -53,9 +53,17 @@ where
     P: PolicyEngine<C>,
     C::Cx<'ctx>: FsAccessContext,
 {
-    /// Read a file after path resolution and typed policy grant.
+    /// Read a file through path-resolution policy and read policy.
+    ///
+    /// Access prepares the resolved-path facts because that requires
+    /// filesystem observation. Kernel policy decides whether those facts are
+    /// allowed, and only the granted resolve action can mint `GrantedPath`.
     pub async fn read_file(self, path: impl AsRef<Path>) -> Result<FsReadOutput, FsAccessError> {
-        let resolve_action = FsResolvePathAction::new(path);
+        let resolve_action = FsResolvePathAction::resolve(
+            path,
+            self.policy_context.fs_resolution_root(),
+            self.policy_context.fs_allowed_roots(),
+        )?;
         let resolve_grant = self
             .policy_engine
             .grant(self.policy_context, resolve_action)
@@ -75,27 +83,23 @@ where
     }
 }
 
-/// Resolve an already-authorized raw fs path into a governed path.
+/// Mint a governed path from an already-authorized resolution action.
 ///
-/// This action may observe path metadata through canonicalization and symlink
-/// resolution, but it does not read file contents. The returned `GrantedPath`
-/// is the only public input accepted by concrete fs side-effect actions.
+/// Canonicalization already happened when access prepared the action facts.
+/// `run` deliberately just consumes the grant and turns accepted facts into
+/// `GrantedPath`, the only public input accepted by concrete fs side-effect
+/// actions.
 #[async_trait]
 impl<Cx> Action<Cx> for FsResolvePathAction
 where
-    Cx: FsAccessContext + Sync,
+    Cx: Sync,
 {
     type Output = GrantedPath;
     type Error = FsActionError;
 
-    async fn run(granted: Granted<Self>, ctx: &Cx) -> Result<Self::Output, Self::Error> {
+    async fn run(granted: Granted<Self>, _ctx: &Cx) -> Result<Self::Output, Self::Error> {
         let action = granted.into_action();
-        let path = CanonicalPath::resolve(
-            action.raw_path(),
-            ctx.fs_resolution_root(),
-            ctx.fs_allowed_roots(),
-        )?;
-        Ok(GrantedPath::new(path.into_path_buf()))
+        Ok(action.into_granted_path())
     }
 }
 

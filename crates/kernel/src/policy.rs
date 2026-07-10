@@ -9,7 +9,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use loong_access::fs::FsReadAction;
+use loong_access::fs::{FsReadAction, FsResolvePathAction};
 use loong_contracts::{
     Capability, CapabilityToken, GrantId, PolicyDecision, PolicyEntry, PolicyEvaluation,
     PolicyGrant, PolicyId, PolicyOutcome, PolicyReport, VerticalPackManifest,
@@ -98,7 +98,9 @@ pub struct PolicyPipeline<C: ContextFactory> {
 
 impl<C: ContextFactory> Default for PolicyPipeline<C> {
     fn default() -> Self {
-        Self::new().with_fallback_policy(AllowPolicy)
+        Self::new()
+            .with_policy::<FsResolvePathAction, _>(FsResolvePathAllowedRootsPolicy)
+            .with_fallback_policy(AllowPolicy)
     }
 }
 
@@ -465,6 +467,52 @@ struct FsReadFilenameDenyPolicy {
     denied_filenames: BTreeSet<String>,
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+struct FsResolvePathAllowedRootsPolicy;
+
+/// Default fs path containment policy.
+///
+/// `loong-access` prepares resolved path facts, but containment is a policy
+/// decision owned by the kernel pipeline so denials produce `PolicyReport`
+/// evidence instead of domain action errors.
+#[async_trait]
+impl<C> Policy<C, FsResolvePathAction> for FsResolvePathAllowedRootsPolicy
+where
+    C: ContextFactory + Send + Sync,
+{
+    fn name(&self) -> Cow<'static, str> {
+        Cow::Borrowed("fs-resolve-path-allowed-roots")
+    }
+
+    async fn grant(&self, _ctx: &C::Cx<'_>, action: &FsResolvePathAction) -> PolicyGrant {
+        if resolved_path_starts_with_allowed_root(action) {
+            return PolicyGrant {
+                decision: PolicyDecision::Continue,
+                predicate: Some("resolved fs path starts with an allowed root".into()),
+                reason: "resolved fs path is within allowed roots".into(),
+            };
+        }
+
+        PolicyGrant {
+            decision: PolicyDecision::Deny,
+            predicate: Some("resolved fs path must start with an allowed root".into()),
+            reason: format!(
+                "filesystem path {} escapes allowed filesystem roots [{}]",
+                action.resolved_path().display(),
+                display_path_list(action.allowed_roots())
+            )
+            .into(),
+        }
+    }
+}
+
+fn resolved_path_starts_with_allowed_root(action: &FsResolvePathAction) -> bool {
+    action
+        .allowed_roots()
+        .iter()
+        .any(|allowed_root| action.resolved_path().starts_with(allowed_root))
+}
+
 impl FsReadFilenameDenyPolicy {
     fn new(denied_filenames: BTreeSet<String>) -> Self {
         let denied_filenames = denied_filenames
@@ -512,6 +560,14 @@ where
 fn normalize_policy_filename(filename: &str) -> Option<String> {
     let normalized = filename.trim().to_ascii_lowercase();
     (!normalized.is_empty()).then_some(normalized)
+}
+
+fn display_path_list(paths: &[std::path::PathBuf]) -> String {
+    paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]

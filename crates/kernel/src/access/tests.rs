@@ -4,7 +4,10 @@ use std::{
 };
 
 use loong_contracts::Capability;
-use loong_core::policy::context::{ContextFactory, FsAccessContext, PolicyContext};
+use loong_core::{
+    AuthorizationError, PolicyGrantError,
+    policy::context::{ContextFactory, FsAccessContext, PolicyContext},
+};
 
 use super::AccessCx;
 
@@ -96,6 +99,46 @@ async fn access_context_preserves_workspace_policy_context_for_fs_access() {
         std::fs::canonicalize(workspace_root.join("notes/todo.md")).expect("canonicalize note");
     assert_eq!(output.path, expected_path);
     assert_eq!(output.bytes, b"hello");
+
+    std::fs::remove_dir_all(base).ok();
+}
+
+#[tokio::test]
+async fn fs_path_escape_is_reported_as_path_resolution_policy_denial() {
+    let kernel = crate::Kernel::<AccessCxContextFactory>::new_without_audit();
+    let base = tempfile_dir("loong-kernel-access-path-policy");
+    let workspace_root = base.join("workspace");
+    let outside_root = base.join("outside");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    std::fs::create_dir_all(&outside_root).expect("create outside root");
+    std::fs::write(outside_root.join("secret.txt"), "secret").expect("write outside file");
+    let ctx = AccessToolCx::new(&kernel, &workspace_root);
+
+    let error = ctx
+        .access()
+        .fs()
+        .read_file("../outside/secret.txt")
+        .await
+        .expect_err("path escape should be denied by policy");
+
+    let loong_access::fs::FsAccessError::Authorization(AuthorizationError::PolicyGrant(
+        PolicyGrantError::Denied { report, reason },
+    )) = error
+    else {
+        panic!("expected path policy denial, got {error:?}");
+    };
+
+    assert!(
+        reason.contains("escapes allowed filesystem roots"),
+        "unexpected denial reason: {reason}"
+    );
+    assert!(
+        report.evaluations.iter().any(|evaluation| {
+            evaluation.policy_stage == "action"
+                && evaluation.source.policy_name == "fs-resolve-path-allowed-roots"
+        }),
+        "expected fs resolve path policy evaluation in report: {report:?}"
+    );
 
     std::fs::remove_dir_all(base).ok();
 }

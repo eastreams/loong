@@ -263,15 +263,25 @@ pub struct ToolInvocationAction<P> {
 
 ## Filesystem Path Grants
 
-当前 `CanonicalPath::resolve(...)` 同时做了 raw path 解析、existing ancestor / symlink
-resolution、allowed roots containment，并把结果直接塞进 `FsReadAction`。这能工作，但
-边界不对：read action 因为构造需要 canonical path，被迫继承了 path policy 的细节。
+“得到一个可供 fs action 使用的路径”是独立 action，不是 read action 的构造细节。
+当前形状分三步：
 
-目标形状是把“得到一个可供 fs action 使用的路径”变成独立 action：
+1. `FsAccess` 使用 `FsAccessContext` 的 `fs_resolution_root()` /
+   `fs_allowed_roots()` 准备 resolved path facts。这一步需要 canonicalize、existing
+   ancestor resolution、symlink resolution，因此属于 access 边界的 filesystem
+   observation。
+2. `PolicyPipeline` 对 `FsResolvePathAction` 做 typed policy 决策。allowed roots /
+   path escape 由 kernel policy deny，denial 进入 `PolicyReport`。
+3. 只有 granted resolve action 的 `run` 能 mint `GrantedPath`。下游 read/search/glob
+   action 只能接收 `GrantedPath`，不能接收 raw path 或普通 `PathBuf`。
+
+核心类型：
 
 ```rust
 pub struct FsResolvePathAction {
     raw_path: PathBuf,
+    resolved_path: PathBuf,
+    allowed_roots: Vec<PathBuf>,
 }
 
 pub struct GrantedPath {
@@ -288,7 +298,11 @@ impl GrantedPath {
 调用链：
 
 ```rust
-let resolve = FsResolvePathAction::new(raw_path);
+let resolve = FsResolvePathAction::resolve(
+    raw_path,
+    ctx.fs_resolution_root(),
+    ctx.fs_allowed_roots(),
+)?;
 let grant = policy_engine.grant(ctx, resolve).await?;
 let path = grant.granted.run(ctx).await?;
 
@@ -300,23 +314,19 @@ grant.granted.run(ctx).await
 这里有两个不同授权点：
 
 - `FsResolvePathAction`：允许在当前 context 下把 raw path 解析成 `GrantedPath`。
-  它的 policy 读取 `fs_resolution_root()` / `fs_allowed_roots()`，表达 workspace root、
-  file root、path escape、symlink escape 等路径权限。
+  action 携带 access 准备好的 resolved path facts；policy 只基于这些 facts 表达
+  workspace root、file root、path escape、symlink escape 等路径权限。
 - `FsReadAction` / `FsContentSearchAction` / `FsGlobAction`：允许对一个已经治理过的
   `GrantedPath` 执行具体读取、内容搜索、路径枚举。它们仍然各自声明 capability 和
   payload，因为三者泄漏面不同。
 
-`FsResolvePathAction::run` 可以执行 canonicalize / ancestor resolution 这类 fs
-observation，但不能读取文件内容。它返回 `GrantedPath`，而不是裸 `PathBuf`，这样后续
-action 构造函数天然要求“路径已过治理”。如果解析结果逃逸 allowed roots，就不产出
+`FsResolvePathAction::run` 不再重新 canonicalize，也不读取文件内容。它只消费
+`Granted<FsResolvePathAction>` 并把 policy 已接受的 resolved facts 变成 `GrantedPath`。
+如果解析结果逃逸 allowed roots，kernel typed policy 会 deny，因而不会产出
 `GrantedPath`。
 
-构造函数不做 async 或 filesystem observation。不要写
-`FsReadAction::new(Granted<FsResolvePathAction>, ctx)` 这种隐藏执行的 API；先显式
-`grant.granted.run(ctx).await?`，再把 `GrantedPath` 交给下游 action。
-
-`CanonicalPath` 是过渡名。迁移后它要么消失，要么降级为 `fs::path` 内部 resolver
-helper；公开 fs action API 应该暴露 `GrantedPath`。
+不要写 `FsReadAction::new(Granted<FsResolvePathAction>, ctx)` 这种隐藏执行的 API；
+先显式 `grant.granted.run(ctx).await?`，再把 `GrantedPath` 交给下游 action。
 
 ## ToolPlane
 
@@ -431,11 +441,6 @@ legacy adapter 仍暂时记录旧 `PlaneInvoked`，直到对应工具迁移完�
 - `crates/app/src/tools/routing.rs` 的 `route_direct_read_tool_request_for_legacy` 名字不准。
   它现在同时承担 read surface normalization 和 legacy bridge；aggregate `ReadTool`
   落地后这块应该删除或拆清楚。
-- `crates/access/src/fs/path.rs` 的 `CanonicalPath` 仍是 public fs domain type，并且
-  `FsReadAction::new(CanonicalPath)` 让 read action 看起来需要 path/root policy 的产物。
-  目标是公开 `GrantedPath`，让 `CanonicalPath` 变成内部 helper 或被删除。
-- `FsAccess::read_file` 当前还是 resolve raw path -> build `FsReadAction`。目标是先
-  grant/run `FsResolvePathAction` 得到 `GrantedPath`，再 grant/run `FsReadAction`。
 
 ## `file.read` 当前迁移状态
 
@@ -472,11 +477,11 @@ legacy adapter 仍暂时记录旧 `PlaneInvoked`，直到对应工具迁移完�
    - `GrantedPath` 构造函数保持模块私有，不提供 `From<PathBuf>`；
    - `FsResolvePathAction` 的 metadata/payload 显式包含 raw path；
    - `FsResolvePathAction` 的 execution requirement 读取 `FsAccessContext` 的
-     `fs_resolution_root()` / `fs_allowed_roots()`；policy report 收敛留给下一步；
+     `fs_resolution_root()` / `fs_allowed_roots()`；
    - `FsAccess::read_file` 改成先 grant/run resolve action，再 grant/run read action；
    - `FsReadAction::new` 改成接收 `GrantedPath`，不再接收 `CanonicalPath`。
 
-3. 下一步：把 allowed roots / path escape 收敛到 path-resolution policy：
+3. 已完成：把 allowed roots / path escape 收敛到 path-resolution policy：
    - `FsReadAction` 不读取 workspace root，也不表达 allowed roots；
    - `PathEscapesAllowedRoots` 这类结果属于 `FsResolvePathAction` 的治理失败，不应散落成
      read/glob/search 各自的特殊判断；
@@ -485,11 +490,24 @@ legacy adapter 仍暂时记录旧 `PlaneInvoked`，直到对应工具迁移完�
    - policy report 应能说明是哪条 path policy deny，而不是靠 access error helper
      猜测 `is_policy_denial()`。
 
-4. 移走或泛型化 `ToolInvocationAction`：
-   - 首选把它移到 app plane 附近，命名为 `AppToolInvocationAction`；
-   - 如果保留公共 helper，则改成 `ToolInvocationAction<P>`；
-   - kernel grant API 接受 concrete action，不知道 app plane path type；
-   - 删除 `loong-core` 对 `ToolPath` 的依赖。
+4. 下一步：移走或泛型化 `ToolInvocationAction`：
+   - 先写失败测试：`loong-core` 不再需要 `ToolPath` 才能编译 tool abstraction，
+     app typed tool invocation 仍然产生 `ToolInvocation` audit；
+   - 首选把 invocation action 移到 `crates/app/src/tools/plane.rs` 附近，命名为
+     `AppToolInvocationAction`；
+   - action payload 继续携带 agent/tool 原始 `payload: Value`，grant 后 plane 再 parse
+     concrete input；
+   - `AppToolInvocationAction` 持有 app plane 自己的 path display/registry path，不把
+     concrete path type 泄漏进 contracts/core；
+   - kernel grant API 只接受 concrete `ActionMeta`，不知道 app plane path type，也不返回
+     `AuthorizedToolInvocation` receipt；
+   - 删除 `loong-core::tool::ToolInvocationAction` 对全局 `ToolPath` 的依赖；如果确实需要
+     core helper，必须是 `ToolInvocationAction<P>`，不能重新引入全局 path；
+   - 更新注释：core 只承载 tool abstraction，app owns typed plane，kernel 只 grant/audit
+     action，不执行 typed tool；
+   - 验证：`cargo test -p loong-core tool`、`cargo test -p loong-kernel tool_invocation`、
+     `cargo test -p loong-app kernel_routed_file_read`、`cargo check -p loong-core -p
+     loong-kernel -p loong-app -p loong-tools -p loong`。
 
 5. 清理 tool descriptor/path 耦合：
    - `ToolImpl::spec()` 返回无 path descriptor；
