@@ -147,6 +147,9 @@ pub(crate) fn direct_tool_name_for_hidden_tool(raw: &str) -> Option<&'static str
     tool_surface::direct_tool_name_for_hidden_tool(canonical_name)
 }
 
+// TODO(tool-plane-display): this is a legacy display alias bridge for
+// conversation/result surfaces. Do not use it for typed dispatch, policy, or
+// capability ownership; those should read plane/tool metadata directly.
 pub fn user_visible_tool_name(raw: &str) -> String {
     let canonical_name = canonical_tool_name(raw);
 
