@@ -19,8 +19,8 @@ use loong_core::{
 };
 
 use super::{
-    FsPathPolicyContext, FsResolutionContext,
-    access::{FsAccess, FsAccessError, FsPathKind},
+    FsPathKind, FsPathPolicyContext, FsResolutionContext,
+    access::{FsAccess, FsAccessError},
     action::{FsAction, FsGlobAction, FsReadAction, FsResolvePathAction},
 };
 

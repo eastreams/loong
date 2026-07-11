@@ -3,11 +3,13 @@ use std::path::{Path, PathBuf};
 pub mod access;
 pub mod action;
 pub mod error;
+pub mod glob;
 pub mod path;
 
-pub use access::{FsAccess, FsAccessError, FsGlobOutput, FsPathKind, FsPathMatch, FsReadOutput};
+pub use access::{FsAccess, FsAccessError, FsReadOutput};
 pub use action::{FsAction, FsGlobAction, FsReadAction, FsResolvePathAction};
 pub use error::FsActionError;
+pub use glob::{FsGlobOutput, FsPathKind, FsPathMatch};
 pub use path::GrantedPath;
 
 /// Filesystem root view required by path resolution.
