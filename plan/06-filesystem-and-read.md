@@ -84,7 +84,7 @@ workspace 外部。nested root 必须 canonicalize 后仍位于 canonical worksp
   的 terminal allow policy。否则 typed read 应该 fail closed，而不是被 fallback 放过。
 - `FsGlobAction` / `FsContentSearchAction` 的 terminal allow policy 已经在 app/bootstrap
   注册。kernel/context-aware `read { pattern/glob/query }` 会走 typed tool/policy path；
-  无 context 的 legacy read 入口仍是后续统一 ctx/废弃旧入口时要删除的偏差。
+  无 context 的 legacy read 入口 fail closed，不能执行 read side effect。
 
 ## `file.read` 迁移状态
 
