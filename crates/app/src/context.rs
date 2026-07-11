@@ -13,7 +13,7 @@ use loong_kernel::{
     PolicyPipeline, SystemClock, VerticalPackManifest,
     policy::{
         FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsReadAllowPolicy, FsReadFilenameDenyPolicy,
-        FsResolvePathAllowedRootsPolicy,
+        FsResolvePathAllowedRootsPolicy, FsWriteAllowPolicy,
     },
 };
 use serde_json::Value;
@@ -533,6 +533,7 @@ fn bootstrap_kernel_context_with_audit_sink(
         ));
     }
     policy.push_policy(FsReadAllowPolicy);
+    policy.push_policy(FsWriteAllowPolicy);
     policy.push_policy(FsGlobAllowPolicy);
     policy.push_policy(FsContentSearchAllowPolicy);
     let mut kernel =

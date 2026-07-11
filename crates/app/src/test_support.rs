@@ -8,7 +8,7 @@ use loong_kernel::{
     FixedClock, InMemoryAuditSink, Kernel, PolicyPipeline, VerticalPackManifest,
     policy::{
         FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsReadAllowPolicy, FsReadFilenameDenyPolicy,
-        FsResolvePathAllowedRootsPolicy,
+        FsResolvePathAllowedRootsPolicy, FsWriteAllowPolicy,
     },
 };
 
@@ -154,6 +154,7 @@ impl TurnTestHarness {
             ));
         }
         policy.push_policy(FsReadAllowPolicy);
+        policy.push_policy(FsWriteAllowPolicy);
         policy.push_policy(FsGlobAllowPolicy);
         policy.push_policy(FsContentSearchAllowPolicy);
         let mut kernel =

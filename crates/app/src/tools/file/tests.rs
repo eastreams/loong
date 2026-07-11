@@ -10,7 +10,7 @@ use loong_kernel::{
     InMemoryAuditSink, Kernel, NoopAuditSink, PolicyPipeline, SystemClock, VerticalPackManifest,
     policy::{
         FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsReadAllowPolicy, FsReadFilenameDenyPolicy,
-        FsResolvePathAllowedRootsPolicy,
+        FsResolvePathAllowedRootsPolicy, FsWriteAllowPolicy,
     },
 };
 use loong_tools::file::ReadTool;
@@ -89,6 +89,7 @@ async fn execute_file_read_with_test_context(
         ));
     }
     policy.push_policy(FsReadAllowPolicy);
+    policy.push_policy(FsWriteAllowPolicy);
     policy.push_policy(FsGlobAllowPolicy);
     policy.push_policy(FsContentSearchAllowPolicy);
     let mut kernel = Kernel::<AppContextFactory>::with_policy_runtime(
@@ -141,6 +142,7 @@ async fn execute_file_read_via_kernel_tool_registry(
         ));
     }
     policy.push_policy(FsReadAllowPolicy);
+    policy.push_policy(FsWriteAllowPolicy);
     policy.push_policy(FsGlobAllowPolicy);
     policy.push_policy(FsContentSearchAllowPolicy);
     let mut kernel = Kernel::<AppContextFactory>::with_policy_runtime(

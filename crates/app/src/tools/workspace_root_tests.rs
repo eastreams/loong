@@ -7,7 +7,7 @@ use loong_kernel::{
     Kernel, NoopAuditSink, PolicyPipeline, SystemClock, VerticalPackManifest,
     policy::{
         FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsReadAllowPolicy, FsReadFilenameDenyPolicy,
-        FsResolvePathAllowedRootsPolicy,
+        FsResolvePathAllowedRootsPolicy, FsWriteAllowPolicy,
     },
 };
 use serde_json::json;
@@ -46,6 +46,7 @@ async fn execute_tool_core_with_test_context(
         ));
     }
     policy.push_policy(FsReadAllowPolicy);
+    policy.push_policy(FsWriteAllowPolicy);
     policy.push_policy(FsGlobAllowPolicy);
     policy.push_policy(FsContentSearchAllowPolicy);
     let mut kernel =
