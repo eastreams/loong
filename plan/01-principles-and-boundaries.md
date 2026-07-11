@@ -84,6 +84,10 @@
   agent payload 中抽取 trusted evidence，但必须立即转成 typed context overlay，并从传给 tool
   的 payload 中删除。concrete tool 不直接读取 trusted overlay；它只能通过 `ctx.access()`、
   `ctx.tool(path)?.invoke(...)` 或窄 context requirement trait 观察 overlay 的效果。
+- legacy tool code 可以在迁移期留存，但不能被包装成新架构组件来假装已迁移。typed
+  tool invocation 先尝试 app-owned ToolPlane；未注册/未迁移时只在调用边界末尾 fallback 到
+  legacy adapter/core-tool 路径。旧工具不注册进 typed ToolPlane，不通过 payload claim
+  混入新 path，也不把旧 policy helper 塞回 `PolicyPipeline` 冒充 typed action policy。
 - crate 边界要服务真实 owner。小 crate 不是问题；只做转发、占用大名字但没有 owner 职责、
   或保留 phase 过渡壳的 crate 是问题。确认替代 owner 后应破坏性收敛，不用 alias/fallback
   保留被替代形状。
