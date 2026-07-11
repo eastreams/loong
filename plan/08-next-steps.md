@@ -49,6 +49,7 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
 3. 继续迁移剩余 legacy side-effect tools：
    - access/fs 已经提供 `FsWriteAction`、`FsWriteOptions` 和 `FsAccess::write_file`；
      写入 side effect 只能通过 `Granted<FsWriteAction>::run` 执行；
+   - kernel 已经提供 `FsWriteAllowPolicy`，但 app bootstrap 尚未注册；
    - app `write` / `file.write` 仍未迁入 typed tool/access path，当前仍走 legacy tool
      helper；
    - write/edit/config.import 按同样 access-backed action 模式迁移；
