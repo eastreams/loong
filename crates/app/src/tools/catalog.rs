@@ -41,14 +41,20 @@ use browser_definition_support::{
 #[path = "catalog_skills_definition_support.rs"]
 mod skills_definition_support;
 use skills_definition_support::{config_import_definition, provider_switch_definition};
+#[cfg(feature = "tool-file")]
+#[path = "catalog_file_memory_definition_support.rs"]
+mod file_memory_definition_support;
 #[path = "catalog_io_definition_support.rs"]
 mod io_definition_support;
+#[cfg(feature = "tool-file")]
+use file_memory_definition_support::{
+    content_search_definition, glob_search_definition, memory_get_definition,
+    memory_retrieve_definition, memory_search_definition,
+};
 #[cfg(feature = "tool-websearch")]
 use io_definition_support::web_search_definition;
 use io_definition_support::{
-    bash_exec_definition, content_search_definition, glob_search_definition,
-    http_request_definition, memory_get_definition, memory_retrieve_definition,
-    memory_search_definition, shell_exec_definition, web_fetch_definition,
+    bash_exec_definition, http_request_definition, shell_exec_definition, web_fetch_definition,
 };
 #[path = "catalog_session_definition_support.rs"]
 mod session_definition_support;
