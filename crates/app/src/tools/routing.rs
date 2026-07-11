@@ -5,7 +5,7 @@ use crate::context::AppExecutionContext;
 
 use super::{
     BASH_EXEC_TOOL_NAME, ToolView, canonical_tool_name, execute_discoverable_tool_core_with_config,
-    file, plane, runtime_config, runtime_tool_view_for_runtime_config, tool_surface,
+    plane, runtime_config, runtime_tool_view_for_runtime_config, tool_surface,
 };
 use super::{DELEGATE_ASYNC_TOOL_NAME, DELEGATE_TOOL_NAME, config_import};
 
@@ -86,21 +86,8 @@ fn execute_direct_read_tool_core_with_config(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    let (read_route, direct_request) = route_direct_read_request_for_kernel(request, config)?;
-
-    match read_route {
-        DirectReadRoute::Path => Err("read requires kernel access context".to_owned()),
-        // TODO(access-migration): Move direct read query mode behind access so
-        // search file reads are governed by the same Action/Policy path.
-        DirectReadRoute::Query => {
-            file::execute_content_search_tool_with_config(direct_request, config)
-        }
-        // TODO(access-migration): Move direct read pattern mode behind access
-        // before declaring the whole read surface migrated.
-        DirectReadRoute::Pattern => {
-            file::execute_glob_search_tool_with_config(direct_request, config)
-        }
-    }
+    let (_read_route, _direct_request) = route_direct_read_request_for_kernel(request, config)?;
+    Err("read requires kernel access context".to_owned())
 }
 
 async fn execute_direct_read_tool_core_with_context(

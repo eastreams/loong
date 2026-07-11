@@ -1941,14 +1941,14 @@ fn direct_read_prioritizes_path_over_incidental_search_fields() {
 }
 
 #[test]
-fn direct_read_glob_alias_executes_glob_search_with_pattern_rewrite() {
+fn direct_read_glob_alias_requires_kernel_context() {
     let root = unique_temp_dir("loong-direct-read-glob-alias");
     std::fs::create_dir_all(root.join("docs")).expect("create docs dir");
     std::fs::write(root.join("AGENTS.md"), "agent guidance").expect("write AGENTS fixture");
     std::fs::write(root.join("docs/README.md"), "docs overview").expect("write docs fixture");
     let config = test_tool_runtime_config(&root).into_inner();
 
-    let outcome = execute_tool_core_with_config(
+    let error = execute_tool_core_with_config(
         ToolCoreRequest {
             tool_name: "read".to_owned(),
             payload: json!({
@@ -1962,16 +1962,9 @@ fn direct_read_glob_alias_executes_glob_search_with_pattern_rewrite() {
         },
         &config,
     )
-    .expect("glob alias direct read should execute");
+    .expect_err("glob alias direct read should require kernel context");
 
-    assert_eq!(outcome.payload["tool_name"], "read");
-    let matches = outcome.payload["matches"]
-        .as_array()
-        .expect("glob search matches");
-    assert!(
-        matches.iter().any(|entry| entry["path"] == "AGENTS.md"),
-        "glob alias should return AGENTS.md: {matches:?}"
-    );
+    assert_eq!(error, "read requires kernel access context");
 }
 
 #[test]
