@@ -7,48 +7,7 @@
 每个编号项都是一个最小提交候选。除非某一步明确要求合并，否则不要把相邻步骤塞进同一个
 commit。
 
-1. 删除 `loong_contracts::ToolOutcome`，把 typed tool output 改成 `Result<Value, E>`：
-   - 先写/调整失败测试：
-     - `loong-core` 的 erased invoke 返回 success payload，不返回
-       `loong_contracts::ToolOutcome { status: "ok", payload }`；
-     - `loong-tools` 的 read tool success output 是专门类型，不再直接等于
-       `loong_contracts::ToolOutcome`；
-     - app 的 `file.read` / `read { path }` 外部响应保持不变；
-   - 修改 `crates/loong-core/src/tool.rs`：
-     - 将 `ToolImpl::Output` 约束从 `Into<loong_contracts::ToolOutcome>` 收窄到 typed
-       success payload，首选 `Into<serde_json::Value>`，除非实现时发现需要一个极小的
-       本地 trait；
-     - `RegisteredTool::invoke` 只做 sealed type erasure 和 concrete tool 调用，返回
-       `Result<serde_json::Value, ToolExecutionError>`；不要在 core/erased 层拼 `"ok"`
-       status；
-     - 注释说明 legacy envelope 是 `ToolCoreOutcome`，不是 erased tool contract；
-       concrete tool 的成功和失败必须由 `Result<Output, ToolExecutionError>` 表达；
-   - 修改 `crates/tools/src/file.rs`：
-     - 增加 `ReadFileOutput` 专门 struct，字段承载 read 响应所需 payload 数据；
-     - `impl From<ReadFileOutput> for serde_json::Value`，把旧 payload JSON 构造搬到
-       `ReadFileOutput` 的转换实现；
-     - `ReadFileTool::Output = ReadFileOutput`；
-     - `build_outcome` 改名为 `build_output`，返回 `Result<ReadFileOutput, String>` 或
-       直接返回 `Result<ReadFileOutput, ToolExecutionError>`；
-     - 不在 concrete tool 内构造 `"ok"` status；
-   - `crates/contracts/src/tool_types.rs` 删除 `loong_contracts::ToolOutcome`；不要为了兼容
-     concrete tool 或 erased tool 再给它加 helper；
-   - `crates/app/src/tools/routing.rs` 继续只在 legacy bridge 边界把 typed success payload
-     包成 `ToolCoreOutcome`，不要把 legacy envelope 泄漏进 `loong-core` 或
-     `loong-tools`；
-   - 完成线：
-     - `rg "ToolOutcome" crates/loong-core crates/tools crates/contracts/src/tool_types.rs`
-       找不到定义或 typed tool 依赖；
-     - `ReadFileTool` 的 success path 返回 `ReadFileOutput`，失败 path 走 error type；
-     - 只有 legacy bridge 仍能构造 `ToolCoreOutcome`；
-   - 验证：`cargo test -p loong-core tool`、
-     `cargo test -p loong-tools --no-default-features --features file`、
-     `cargo check -p loong-app`、
-     `cargo test -p loong-app kernel_routed_file_read -- --nocapture`、
-     `cargo test -p loong-app file_read -- --nocapture`、
-     `cargo fmt --all -- --check`、`git diff --check`。
-
-2. 把 `ToolInvocationAction` 收回 `loong-app::tools::plane`：
+1. 把 `ToolInvocationAction` 收回 `loong-app::tools::plane`：
    - 先写失败测试：`loong-core` 不再需要 `ToolPath` 才能编译 tool abstraction，
      app typed tool invocation 仍然产生 app-owned tool execution audit；
    - 在 `crates/app/src/tools/plane.rs` 附近定义 plane-local `ToolPath` 和
@@ -80,7 +39,7 @@ commit。
      `cargo test -p loong-app kernel_routed_file_read`、`cargo check -p loong-core -p
      loong-kernel -p loong-app -p loong-tools -p loong`。
 
-3. 将 `ToolPlane` 内部存储改成 slot registry + path index：
+2. 将 `ToolPlane` 内部存储改成 slot registry + path index：
    - 根 `Cargo.toml` 增加 `slotmap = "1"` workspace dependency，`crates/app/Cargo.toml`
      使用 `slotmap.workspace = true`；
    - 在 `crates/app/src/tools/plane.rs` 定义 private `ToolSlot`，不要 re-export；
@@ -101,7 +60,7 @@ commit。
    - 验证：`cargo test -p loong-app tools::plane`、`cargo check -p loong-app`、
      `cargo fmt --all -- --check`、`git diff --check`。
 
-4. 实现 effective caps / child context narrowing：
+3. 实现 effective caps / child context narrowing：
    - `AppExecutionContext` 增加 explicit effective caps 字段，`PolicyContext::capabilities()`
      返回该字段，而不是每次从 token 派生；
    - 顶层 tool invocation context 由 token caps 初始化；
@@ -122,7 +81,7 @@ commit。
      `cargo test -p loong-kernel policy`、`cargo check -p loong-app -p loong-kernel`、
      `cargo fmt --all -- --check`、`git diff --check`。
 
-5. 清理 tool descriptor/path 耦合：
+4. 清理 tool descriptor/path 耦合：
    - `ToolImpl::spec()` 返回无 path descriptor；
    - `RegisteredTool` 只保存 descriptor/provenance/registration metadata；
    - `ToolPlane::register(path, tool)` 组合 path + descriptor；
@@ -135,7 +94,7 @@ commit。
      `cargo test -p loong-app kernel_routed_file_read`、
      `cargo check -p loong-core -p loong-tools -p loong-app`、`git diff --check`。
 
-6. 收敛 app typed dispatch 边界：
+5. 收敛 app typed dispatch 边界：
    - 从 `execute_kernel_tool_request` 中抽出一个聚焦的 app orchestration 边界；
    - 该边界最终落到 `ctx.tool(path)?.invoke(payload).await`；
    - `ctx.tool(path)` 返回 `Result<ToolInvocation<'_>, ToolLookupError>`，只做 plane-local
@@ -154,7 +113,7 @@ commit。
      `cargo test -p loong-app direct_read`、`cargo check -p loong-app -p loong-kernel`、
      `git diff --check`。
 
-7. 改 `read` 为 aggregate typed tool：
+6. 改 `read` 为 aggregate typed tool：
    - 删除 payload-claim/fallback 思路；
    - `ReadTool` 内部解析 `path/query/pattern/glob`；
    - `path/query/glob` 分别构造不同 action；
@@ -170,7 +129,7 @@ commit。
      `cargo test -p loong-access`、`cargo check -p loong-tools -p loong-app -p loong-access`、
      `git diff --check`。
 
-8. 继续迁移剩余 legacy side-effect tools：
+7. 继续迁移剩余 legacy side-effect tools：
    - write/edit/config.import 按同样 access-backed action 模式迁移；
    - 迁移完成后删除 `FilePolicyExtension` 对应旧分支；
    - 逐步清空 `Kernel::execute_tool_core` 调用面，再删除 `LegacyToolPlane` 和 adapter
@@ -183,7 +142,7 @@ commit。
      `cargo check -p loong-access -p loong-kernel -p loong-app -p loong` 和
      `git diff --check`。
 
-9. 测试清理：
+8. 测试清理：
    - typed tool 测试只接受 `ToolInvocation` audit；
    - legacy adapter 测试只接受 `PlaneInvoked` audit；
    - 不用 `PlaneInvoked | ToolInvocation` 这种宽松断言；
@@ -193,7 +152,7 @@ commit。
      - typed path 测试名和 helper 名不再包含 legacy fallback；
      - module-level tests 留在对应模块下，例如 `tools/plane/tests.rs`、`file/tests.rs`。
 
-10. 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration：
+9. 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration：
     - app bootstrap 从 config 构造 concrete policy value；
     - policy 注册使用 `PolicyPipeline::push_policy` / `push_pre_policy` /
       `push_fallback_policy`；
