@@ -769,8 +769,8 @@ mod tests {
             )
             .expect("build execution context");
         let invocation = execution_context
-            .tool(crate::tools::plane::ToolPath::from("file.read"))
-            .expect("file.read should be registered");
+            .tool(crate::tools::plane::ToolPath::from("read"))
+            .expect("read should be registered");
 
         let error = invocation
             .invoke_with_capabilities(
@@ -806,8 +806,8 @@ mod tests {
             )
             .expect("build execution context");
         let invocation = execution_context
-            .tool(crate::tools::plane::ToolPath::from("file.read"))
-            .expect("file.read should be registered");
+            .tool(crate::tools::plane::ToolPath::from("read"))
+            .expect("read should be registered");
 
         let error = invocation
             .invoke_with_capabilities(
