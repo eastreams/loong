@@ -24,7 +24,8 @@ caps 是硬边界，不是 policy 的附属说明。
 
 - typed app-plane invocation 已经从 `ToolSpec.required_capabilities` 构造 child
   effective caps；公开 `tool.invoke` 的外层 `capabilities_override` 也会进入同一
-  narrowing 路径。
+  narrowing 路径。override 绑定在 `ToolInvocation` handle 上，`invoke(payload)`
+  是唯一 dispatch 入口。
 - legacy direct / adapter 路径在迁移完成前仍可能通过旧
   `required_capabilities_for_request` 计算 caps；新增 typed tool 不应扩展这条旧路径。
 
