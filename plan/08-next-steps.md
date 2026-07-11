@@ -50,6 +50,9 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
    - access/fs 已经提供 `FsWriteAction`、`FsWriteOptions` 和 `FsAccess::write_file`；
      写入 side effect 只能通过 `Granted<FsWriteAction>::run` 执行；
    - kernel 已经提供 `FsWriteAllowPolicy`，但 app bootstrap 尚未注册；
+   - `loong-tools` 已经提供 typed `WriteTool` 基础：payload parsing、tool spec
+     metadata、typed output 和 access-backed execute 都在 concrete tool crate 内；
+     尚未注册到 app plane，也尚未替换 app legacy write dispatch；
    - app `write` / `file.write` 仍未迁入 typed tool/access path，当前仍走 legacy tool
      helper；
    - write/edit/config.import 按同样 access-backed action 模式迁移；
