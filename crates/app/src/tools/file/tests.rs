@@ -5,7 +5,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use loong_contracts::{
     Capability, ExecutionPlane, ExecutionRoute, HarnessKind, PlaneTier, ToolCoreRequest,
 };
+use loong_core::tool::{RegisteredTool, ToolProvenance};
 use loong_kernel::{InMemoryAuditSink, Kernel, NoopAuditSink, SystemClock, VerticalPackManifest};
+use loong_tools::file::ReadFileTool;
 use serde_json::json;
 
 use super::*;
@@ -91,12 +93,12 @@ async fn execute_file_read_with_test_context(
     let execution_context =
         kernel_ctx.execution_context(ExecutionPlane::Tool, PlaneTier::Core, None, config)?;
     let _ = config;
-    let outcome = loong_tools::file::execute_file_read_payload_with_context::<AppContextFactory>(
-        request.tool_name,
-        request.payload,
-        &execution_context,
-    )
-    .await?;
+    let tool =
+        RegisteredTool::<AppContextFactory>::from_tool(ToolProvenance::Compatibility, ReadFileTool);
+    let outcome = tool
+        .invoke(&execution_context, request.payload)
+        .await
+        .map_err(|error| error.to_string())?;
     Ok(ToolCoreOutcome {
         status: outcome.status,
         payload: outcome.payload,

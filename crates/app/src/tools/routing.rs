@@ -1,4 +1,6 @@
 use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loong_core::tool::{RegisteredTool, ToolProvenance};
+use loong_tools::file::ReadFileTool;
 use serde_json::Value;
 
 use crate::context::AppExecutionContext;
@@ -116,10 +118,17 @@ async fn execute_direct_read_tool_core_with_context(
     match read_route {
         DirectReadRoute::Path => {
             let _ = config;
-            let outcome = loong_tools::file::execute_file_read_payload_with_context::<
-                crate::context::AppContextFactory,
-            >(direct_request.tool_name, direct_request.payload, ctx)
-            .await?;
+            // Migration bridge only: once the app ToolPlane owns this direct
+            // read path, delete this local sealed-tool invocation and route
+            // through ToolPlane::invoke so there is one typed dispatch path.
+            let tool = RegisteredTool::<crate::context::AppContextFactory>::from_tool(
+                ToolProvenance::Compatibility,
+                ReadFileTool,
+            );
+            let outcome = tool
+                .invoke(ctx, direct_request.payload)
+                .await
+                .map_err(|error| error.to_string())?;
             Ok(ToolCoreOutcome {
                 status: outcome.status,
                 payload: outcome.payload,
