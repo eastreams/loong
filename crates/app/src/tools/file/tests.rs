@@ -91,11 +91,16 @@ async fn execute_file_read_with_test_context(
     let execution_context =
         kernel_ctx.execution_context(ExecutionPlane::Tool, PlaneTier::Core, None, config)?;
     let _ = config;
-    loong_tools::file::execute_file_read_tool_with_context::<AppContextFactory>(
-        request,
+    let outcome = loong_tools::file::execute_file_read_payload_with_context::<AppContextFactory>(
+        request.tool_name,
+        request.payload,
         &execution_context,
     )
-    .await
+    .await?;
+    Ok(ToolCoreOutcome {
+        status: outcome.status,
+        payload: outcome.payload,
+    })
 }
 
 async fn execute_file_read_via_kernel_tool_registry(

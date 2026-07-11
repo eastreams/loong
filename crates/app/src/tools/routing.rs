@@ -116,10 +116,14 @@ async fn execute_direct_read_tool_core_with_context(
     match read_route {
         DirectReadRoute::Path => {
             let _ = config;
-            loong_tools::file::execute_file_read_tool_with_context::<
+            let outcome = loong_tools::file::execute_file_read_payload_with_context::<
                 crate::context::AppContextFactory,
-            >(direct_request, ctx)
-            .await
+            >(direct_request.tool_name, direct_request.payload, ctx)
+            .await?;
+            Ok(ToolCoreOutcome {
+                status: outcome.status,
+                payload: outcome.payload,
+            })
         }
         // TODO(access-migration): Query search still uses the legacy file tool
         // implementation; only path reads have moved to access in this pass.

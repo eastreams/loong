@@ -2,8 +2,7 @@ use std::{collections::BTreeSet, path::PathBuf};
 
 use async_trait::async_trait;
 use loong_contracts::{
-    Capability, ToolCoreOutcome, ToolCoreRequest, ToolExecutionError, ToolInputError, ToolOutcome,
-    ToolPath, ToolSpec,
+    Capability, ToolExecutionError, ToolInputError, ToolOutcome, ToolPath, ToolSpec,
 };
 use loong_core::{
     policy::context::{ContextFactory, FsAccessContext},
@@ -87,18 +86,20 @@ where
     }
 }
 
-pub async fn execute_file_read_tool_with_context<C>(
-    request: ToolCoreRequest,
+pub async fn execute_file_read_payload_with_context<C>(
+    raw_tool_name: String,
+    payload: Value,
     ctx: &C::Cx<'_>,
-) -> Result<ToolCoreOutcome, String>
+) -> Result<ToolOutcome, String>
 where
     C: ContextFactory + Send + Sync,
     for<'a> C::Cx<'a>: KernelAccess<C> + FsAccessContext + Sync,
 {
-    // Compatibility entry for the legacy direct-read bridge. It still uses
-    // the same access path as the typed tool so migrated reads do not regain
-    // a direct std::fs side effect here.
-    let parsed = parse_file_read_request(&request)?;
+    // Compatibility entry for the legacy direct-read bridge. Keep the bridge
+    // payload-level so core request/outcome envelopes stay owned by the app
+    // dispatch layer, not by this concrete tool crate.
+    let visible_tool_name = user_visible_tool_name(raw_tool_name.as_str());
+    let parsed = parse_file_read_payload(raw_tool_name, visible_tool_name.as_str(), &payload)?;
     let output = ctx
         .access()
         .fs()
@@ -111,7 +112,7 @@ where
             )
         })?;
 
-    file_read_outcome(parsed, output.path, output.bytes)
+    file_read_tool_outcome(parsed, output.path, output.bytes)
 }
 
 fn optional_positive_usize_field(
@@ -137,14 +138,6 @@ fn optional_positive_usize_field(
         .map_err(|conversion_error| {
             format!("{tool_name} payload.{field_name} is too large: {conversion_error}")
         })
-}
-
-fn parse_file_read_request(request: &ToolCoreRequest) -> Result<FileReadRequest, String> {
-    parse_file_read_payload(
-        request.tool_name.clone(),
-        user_visible_tool_name(request.tool_name.as_str()).as_str(),
-        &request.payload,
-    )
 }
 
 fn parse_file_read_payload(
@@ -186,18 +179,6 @@ fn render_fs_read_error(rendered: String, policy_denied: bool) -> String {
     } else {
         rendered
     }
-}
-
-fn file_read_outcome(
-    request: FileReadRequest,
-    resolved: PathBuf,
-    bytes: Vec<u8>,
-) -> Result<ToolCoreOutcome, String> {
-    let outcome = file_read_tool_outcome(request, resolved, bytes)?;
-    Ok(ToolCoreOutcome {
-        status: outcome.status,
-        payload: outcome.payload,
-    })
 }
 
 fn file_read_tool_outcome(
