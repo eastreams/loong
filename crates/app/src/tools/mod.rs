@@ -509,20 +509,6 @@ pub(crate) async fn execute_kernel_tool_request(
         }
 
         let caps = required_capabilities_for_request(&request);
-        let tool_policy_params = json!({
-            "tool_name": &request.tool_name,
-            "payload": &request.payload,
-        });
-        let execution_context = ctx
-            .execution_context(
-                loong_contracts::ExecutionPlane::Tool,
-                loong_contracts::PlaneTier::Core,
-                Some(&tool_policy_params),
-                &effective_config,
-            )
-            .map_err(|error| {
-                loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(error))
-            })?;
         let outcome = ctx
             .kernel
             .execute_tool_core(
