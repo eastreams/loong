@@ -8,11 +8,11 @@
 “得到一个可供 fs action 使用的路径”是独立 action，不是 read action 的构造细节。
 目标调用形状分三步：
 
-1. `FsAccess` 使用 `FsAccessContext` 的 `fs_resolution_root()` /
-   `fs_allowed_roots()` 准备 resolved path facts。这一步需要 canonicalize、existing
-   ancestor resolution、symlink resolution，因此属于 access 边界的 filesystem
-   observation。
-2. `PolicyPipeline` 对 `FsResolvePathAction` 做 typed policy 决策。allowed roots /
+1. `FsAccess` 使用 access/fs 定义、kernel 导出的 `FsResolutionContext::fs_resolution_root()`
+   准备 resolved path facts。这一步需要 canonicalize、existing ancestor resolution、
+   symlink resolution，因此属于 access 边界的 filesystem observation。
+2. `PolicyPipeline` 对 `FsResolvePathAction` 做 typed policy 决策。allowed roots 来自
+   `FsPathPolicyContext::fs_allowed_roots()`，是 policy input，不塞进 action；
    path escape 由 kernel policy deny，denial 进入 `PolicyReport`。
 3. 只有 granted resolve action 的 `run` 能 mint `GrantedPath`。下游 read/search/glob
    action 只能接收 `GrantedPath`，不能接收 raw path 或普通 `PathBuf`。
@@ -23,7 +23,6 @@
 pub struct FsResolvePathAction {
     raw_path: PathBuf,
     resolved_path: PathBuf,
-    allowed_roots: Vec<PathBuf>,
 }
 
 pub struct GrantedPath {
@@ -43,7 +42,6 @@ impl GrantedPath {
 let resolve = FsResolvePathAction::resolve(
     raw_path,
     ctx.fs_resolution_root(),
-    ctx.fs_allowed_roots(),
 )?;
 let grant = policy_engine.grant(ctx, resolve).await?;
 let path = grant.granted.run(ctx).await?;
@@ -57,7 +55,8 @@ grant.granted.run(ctx).await
 
 - `FsResolvePathAction`：允许在本次 `Context` 下把 raw path 解析成 `GrantedPath`。
   action 携带 access 准备好的 resolved path facts；policy 只基于这些 facts 表达
-  workspace root、file root、path escape、symlink escape 等路径权限。
+  workspace root、file root、path escape、symlink escape 等路径权限，并从 context view
+  读取 allowed roots。
 - `FsReadAction` / `FsContentSearchAction` / `FsGlobAction`：允许对一个已经治理过的
   `GrantedPath` 执行具体读取、内容搜索、路径枚举。它们仍然各自声明 capability 和
   payload，因为三者泄漏面不同。
@@ -70,6 +69,14 @@ grant.granted.run(ctx).await
 不要写 `FsReadAction::new(Granted<FsResolvePathAction>, ctx)` 这种隐藏执行的 API；
 先显式 `grant.granted.run(ctx).await?`，再把 `GrantedPath` 交给下游 action。
 
+注册规则：
+
+- `PolicyPipeline::new()` 是 default deny；没有 terminal allow policy 的 action 会被拒绝。
+- legacy fallback 只能通过 `PolicyPipeline::new_legacy_allow_fallback()` 显式选择，而且只服务
+  legacy kernel action，不能 grant typed access/tool action。
+- 任何会执行 `file.read` / `read { path }` 的 app runtime、test harness、helper
+  都必须显式注册 `FsResolvePathAction` 的 allowed-roots policy 和 `FsReadAction`
+  的 terminal allow policy。否则 typed read 应该 fail closed，而不是被 fallback 放过。
 
 ## `file.read` 迁移状态
 
