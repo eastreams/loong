@@ -63,6 +63,9 @@ tool 自身返回无 path descriptor：
 pub struct ToolDescriptor {
     pub description: String,
     pub required_capabilities: BTreeSet<Capability>,
+    pub argument_hint: Option<String>,
+    pub search_hint: Option<String>,
+    pub tags: Vec<String>,
 }
 ```
 
