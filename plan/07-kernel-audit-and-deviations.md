@@ -114,9 +114,9 @@ generic grant 负责所有 action authorization audit；tool invocation executio
   contracts 只保留 kernel/sink 需要的 generic audit primitives；tool-specific execution
   outcome 应由 app runtime schema 拥有。
 - `crates/app/src/tools/plane.rs` 已经拥有自己的 `ToolPath` 和 `ToolInvocationAction`，
-  并用 private slot registry + path index 存 tool。但 `ToolPath` 目前仍是 `String`
-  newtype；后续如果要支持 structured path，应在 app plane 内演进，不能把 plane-local
-  path 提回 contracts/core。
+  并用 private slot registry + path index 存 tool。`ToolPath` 也是 app-plane-local segment
+  path；dotted provider/catalog names 只在 app plane 边界转换，不能把 plane-local path
+  提回 contracts/core。
 - `crates/kernel/src/kernel.rs` 已经用 generic `grant_action` 授权 tool invocation action；
   但 `record_tool_invocation` 仍记录 contracts 里的 `ToolInvocationOutcome`。目标是让
   kernel 只记录 sink 能理解的通用事件，tool execution outcome 的 schema 归 app runtime。

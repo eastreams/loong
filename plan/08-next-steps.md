@@ -24,6 +24,8 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
 2. 清理 tool descriptor/path 耦合剩余面：
    - `ToolImpl::spec()` 和 `ToolSpec` 已经不携带 path；
    - `ToolPlane::register(path, tool)` 是 path + descriptor 的组合边界；
+   - `ToolPath` 已经是 app-plane-local segment path；dotted provider/catalog names 只在
+     app plane 边界转换；
    - 剩余的是 agent prompt/catalog 仍主要从 legacy catalog 投影 path；
    - 不把 `ToolPath` 提回 core/contracts；plane 可以继续拥有自己的 path 类型；
    - 完成线：
