@@ -2219,6 +2219,56 @@ fn tool_search_respects_visible_tool_ids_from_runtime_context() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+#[cfg(feature = "tool-file")]
+#[test]
+fn tool_search_uses_typed_write_metadata() {
+    let root = unique_temp_dir("loongclaw-tool-search-typed-write");
+    std::fs::create_dir_all(&root).expect("create fixture root");
+
+    let config = test_tool_runtime_config(root.clone());
+    let outcome = execute_tool_core_with_test_context(
+        ToolCoreRequest {
+            tool_name: "tool.search".to_owned(),
+            payload: json!({
+                "query": "write exact file contents",
+                "_loong": {
+                    "tool_search": {
+                        "visible_tool_ids": ["tool.search", "tool.invoke", "file.write"],
+                    }
+                }
+            }),
+        },
+        &config,
+    )
+    .expect("tool search should succeed");
+
+    let results = outcome.payload["results"].as_array().expect("results");
+    let write = results
+        .iter()
+        .find(|entry| entry["tool_id"] == "write")
+        .expect("file.write alias should expose the typed write surface");
+
+    let required_fields = write["schema_preview"]["required_fields"]
+        .as_array()
+        .expect("write required fields should be an array");
+    assert!(required_fields.contains(&json!("path")));
+    assert!(required_fields.contains(&json!("content")));
+    assert_eq!(
+        write["search_hint"],
+        "write exact file contents, optionally creating parent directories or overwriting an existing file"
+    );
+    assert_eq!(write["tags"], json!(["surface", "write", "file"]));
+    assert!(
+        write["schema_preview"]["common_optional_fields"]
+            .as_array()
+            .expect("write optional fields should be an array")
+            .contains(&json!("overwrite")),
+        "typed write schema should drive tool.search metadata: {write:?}"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
 #[cfg(feature = "memory-sqlite")]
 #[test]
 fn runtime_discoverable_tool_entries_intersect_injected_view_with_runtime_surface() {
