@@ -116,6 +116,9 @@ where
     }
 }
 
+// Private by design: only RegisteredTool may erase concrete tool types. That
+// keeps registration metadata attached to every dispatch path and prevents
+// concrete ToolImpl authors from bypassing the app plane's grant/audit wrapper.
 #[async_trait]
 trait ErasedTool<C: ContextFactory>: Send + Sync {
     async fn invoke(&self, ctx: &C::Cx<'_>, payload: Value) -> Result<Value, ToolExecutionError>;
