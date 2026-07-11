@@ -10,7 +10,7 @@ pub mod fs {
     };
 }
 
-use fs::{FsAccessError, FsResolutionContext};
+use fs::FsResolutionContext;
 
 /// Kernel-defined access facade.
 ///
@@ -65,11 +65,6 @@ where
     Self: FsResolutionContext,
 {
     fn access(&self) -> AccessCx<'_, '_, C>;
-}
-
-#[must_use]
-pub fn fs_read_error_is_policy_denial(error: &FsAccessError) -> bool {
-    matches!(error, FsAccessError::Authorization(_))
 }
 
 #[cfg(test)]

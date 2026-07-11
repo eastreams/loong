@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use loong_contracts::{Capability, ToolExecutionError, ToolInputError, ToolSpec};
 use loong_core::{policy::context::ContextFactory, tool::ToolImpl};
 use loong_kernel::KernelAccess;
+use loong_kernel::access::fs::FsAccessError;
 use serde_json::{Value, json};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,7 +107,7 @@ where
             .await
             .map_err(|error| {
                 let rendered = error.to_string();
-                if loong_kernel::access::fs_read_error_is_policy_denial(&error) {
+                if matches!(error, FsAccessError::Authorization(_)) {
                     format!("policy_denied: {rendered}")
                 } else {
                     rendered
