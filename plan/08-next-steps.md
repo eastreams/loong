@@ -34,7 +34,8 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
    - `read` provider JSON schema 已经来自 `ReadTool::spec().input_schema`；
    - `tool.search` schema preview 已经通过 typed provider projection 读取 `read` 的
      `ToolSpec` schema；
-   - 剩余的是 `read` 的 search hint、argument hint、tags、governance、concurrency 等
+   - `tool.search` search hint/tags 已经优先读取 `ToolSpec` discovery metadata；
+   - 剩余的是 `read` 的 argument hint、catalog snapshot、governance、concurrency 等
      非 schema metadata 仍来自 legacy static catalog；
    - 不把 `ToolPath` 提回 core/contracts；plane 可以继续拥有自己的 path 类型；
    - 完成线：
