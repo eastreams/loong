@@ -70,8 +70,8 @@ commit。
        `ToolInvocationAction`；
      - `Kernel::grant_tool_invocation` 被 generic action grant 取代，或至少不再接收
        path-specific action type；
-     - app typed read path 通过 `ctx.invoke_tool` 进入，内部先 grant invocation action，
-       再调用 `ToolPlane::invoke`；
+     - app typed read path 通过 `ctx.tool(path)?.invoke(payload).await` 进入，内部先 grant
+       invocation action，再调用 `ToolPlane::invoke`；
      - pack/token/caps/policy denial 由 generic action grant audit 记录，不进入 app tool
        execution outcome；
      - typed path tests 断言 generic action grant audit + grant 后 app-owned tool execution
@@ -137,12 +137,17 @@ commit。
 
 6. 收敛 app typed dispatch 边界：
    - 从 `execute_kernel_tool_request` 中抽出一个聚焦的 app orchestration 边界；
-   - 该边界最终落到 `ctx.invoke_tool(path, payload)`；内部只做 app plane resolve/build
-     action -> kernel grant（自动 authorization audit）-> plane `invoke` -> grant
-     后 execution audit；
+   - 该边界最终落到 `ctx.tool(path)?.invoke(payload).await`；
+   - `ctx.tool(path)` 返回 `Result<ToolInvocation<'_>, ToolLookupError>`，只做 plane-local
+     path 解析、entry lookup 和 tool visibility 判断，不做 grant、不 parse payload；
+   - `ToolInvocation::invoke(payload)` 负责读取 descriptor、计算 child caps、构造 invocation
+     action -> kernel grant（自动 authorization audit）-> plane `invoke` -> grant 后
+     execution audit；
+   - legacy reserved payload 字段在 app ingress 抽成 `TrustedInvocationOverlay` 后，从传给
+     typed tool 的 payload 中删除；concrete tool 不直接读取 trusted overlay；
    - 不引入 `AuthorizedToolInvocation` receipt workaround；
    - 完成线：
-     - typed read path 的直接入口是 `ctx.invoke_tool(...)`；
+     - typed read path 的直接入口是 `ctx.tool(path)?.invoke(payload).await`；
      - `execute_kernel_tool_request` 不再手写 read-specific typed grant/invoke/audit 流程；
      - legacy fallback 只包旧 adapter/core-tool 路径，不参与 typed path；
    - 验证：`cargo test -p loong-app kernel_routed_file_read`、

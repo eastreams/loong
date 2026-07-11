@@ -79,11 +79,11 @@
      - `crates/app/src/tools/plane.rs`：注释必须讲清 `loong-app::tools::plane`
        owns typed plane，kernel 不持有 typed registry；plane 按 path resolve，不按 payload claim；
        `invoke` 消费 `Granted<ToolInvocationAction>`，所以它是 granted primitive；普通调用
-       点应使用 `ctx.invoke_tool(...)`，不要绕过 grant shortcut 直接执行。
+       点应使用 `ctx.tool(path)?.invoke(payload).await`，不要绕过 grant shortcut 直接执行。
      - `crates/app/src/tools/mod.rs`：typed dispatch 边界附近要讲清它只是迁移期
-       orchestration：`ctx.invoke_tool` -> app plane resolve/build action -> kernel grant ->
-       plane `invoke`；`read` query/glob legacy bridge 只存在到 aggregate `ReadTool`
-       接管 query/glob 为止，不是 payload-claim 设计。
+       orchestration：`ctx.tool(path)?` 做 lookup -> `ToolInvocation::invoke(payload)` build
+       action -> kernel grant -> plane `invoke`；`read` query/glob legacy bridge 只存在到
+       aggregate `ReadTool` 接管 query/glob 为止，不是 payload-claim 设计。
      - `crates/kernel/src/kernel.rs`：generic `grant` 注释必须讲清 kernel 是 governance
        authority，不执行 typed tool；grant 过程负责 action authorization audit；tool
        invocation grant 只授权进入 `ToolImpl`，tool 内部 side effect 仍需自己的 access

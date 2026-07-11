@@ -88,13 +88,14 @@ Tool dispatch 也是 action，但它不是 `FsReadAction` 这种 domain side-eff
 ```text
 App execute_kernel_tool_request
   -> canonicalize request
-  -> ctx.invoke_tool(path, payload)
-  -> AppToolPlane internal resolve/build action
+  -> ctx.tool(path)?
+  -> ToolInvocation::invoke(payload)
+  -> compute child caps and invocation overlay
   -> loong-app::tools::plane::ToolInvocationAction(path, required_caps, payload)
   -> Kernel::grant(action)
   -> Granted<ToolInvocationAction>
-  -> ToolPlane.invoke(Granted<ToolInvocationAction>, &ctx)
-  -> ToolImpl::execute(&ctx, input)
+  -> ToolPlane.invoke(Granted<ToolInvocationAction>, &child_ctx)
+  -> ToolImpl::execute(&child_ctx, input)
   -> ctx.access().fs().read_file(...)
   -> FsResolvePathAction
   -> PolicyPipeline::grant(ctx, FsResolvePathAction)
@@ -159,15 +160,20 @@ trait ToolPlane<C: ContextFactory> {
 执行。它返回的是 success payload，不是 legacy envelope；旧 `ToolCoreOutcome` 兼容只发生
 在 legacy bridge。`ErasedTool` 保持 private/sealed，避免 concrete tool implementer 绕过
 plane 的 grant wrapper。`ToolPlane::invoke` 是 granted primitive；普通调用点应使用
-`ctx.invoke_tool(path, payload)`，让 app context 负责 resolve/build action、kernel grant 和
-audit。
+`ctx.tool(path)?.invoke(payload).await`，让 app context 派生的 invocation handle 负责
+build action、kernel grant 和 audit。
 
-自动 grant 的 shortcut 不放在 `ToolPlane` trait 上。它挂在 app-defined context 上，例如
-`ctx.invoke_tool(path, payload)`，因为它是 app runtime orchestration：resolve path、读取
-descriptor、构造 invocation action、调用 kernel grant、再把 grant 交给 plane。
+自动 grant 的 shortcut 不放在 `ToolPlane` trait 上。它挂在 app-defined context 派生出的
+`ToolInvocation<'_>` handle 上：`ctx.tool(path)` 先做 plane-local path 解析/entry lookup，
+因此返回 `Result<ToolInvocation<'_>, ToolLookupError>`；`invoke(payload)` 才读取 descriptor、
+计算 child caps、构造 invocation action、调用 kernel grant、再把 grant 交给 plane。
 `ToolPlane` trait 只表达“已授权 invocation 如何 dispatch”，不知道 kernel、token、pack、
 audit sink 或 event id。这样 concrete tool 可以通过 ctx 做受治理的 tool->tool 调用，但
 仍然拿不到裸 audit API。
+
+`ToolInvocation<'_>` 是调用 handle，不是 authorization receipt。它可以携带 optional caps
+override 和 trusted overlay，但不能预先持有 grant；grant 必须在拿到 payload 后构造
+`ToolInvocationAction` 时发生，因为 policy 可能需要观察 action payload。
 
 新增 concrete tool 的目标改动面：
 

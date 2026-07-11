@@ -39,8 +39,21 @@ pub struct Context {
 
 impl Context {
     pub fn access(&self) -> AccessCx<'_>;
-    pub async fn invoke_tool(&self, path: ToolPath, payload: Value) -> Result<Value, ToolError>;
+    pub fn tool(&self, path: ToolPlanePath) -> Result<ToolInvocation<'_>, ToolLookupError>;
     pub fn child_with_caps(&self, allowed_caps: CapabilitySet) -> Self;
+}
+
+pub struct ToolInvocation<'ctx> {
+    ctx: &'ctx Context,
+    resolved: ResolvedToolEntry,
+    caps_override: Option<CapabilitySet>,
+    trusted_overlay: TrustedInvocationOverlay,
+}
+
+impl ToolInvocation<'_> {
+    pub fn with_caps_override(self, caps: CapabilitySet) -> Result<Self, ToolLookupError>;
+    pub fn with_trusted_overlay(self, overlay: TrustedInvocationOverlay) -> Self;
+    pub async fn invoke(self, payload: Value) -> Result<Value, ToolError>;
 }
 ```
 
@@ -54,15 +67,22 @@ impl Context {
   config snapshot、policy registry bootstrap 结果。
 - `Context` 是 session 绑定的统一 execution context。每个 session 有自己的 `Context`
   实例；所有 session 的 context 类型相同。它提供 `ctx.access()` 和
-  `ctx.invoke_tool(path, payload)`；它不是裸 kernel reference，也不是 TUI state。
+  `ctx.tool(path)?.invoke(payload).await`；它不是裸 kernel reference，也不是 TUI state。
 - `AccessCx`、后续可能的 tool invocation facade、fs facade 等都可以是具体类型。它们的
   构造入口来自 `Context`，例如 `ctx.access()`；它们只能借用/引用 `Context` 和 runtime
   内部治理对象，不能成为新的 source-of-truth context。
 - `Context` 应该是 cheap-clone 的 owned view：共享 runtime/session state 用 `Arc` 或 id，
   本次 invocation 的 overlay（如 `allowed_caps`、plane/tier、request payload）作为不可变
   字段替换。这样避免“owned ctx 没法复制”和“ref ctx 中途没法覆盖”的两难。
-- `ctx.invoke_tool` 构造同类型 child context 时继承父 runtime/session/agent view，但重新计算
-  `allowed_caps`：`child_caps = parent_caps ∩ requested_caps`。
+- `ctx.tool(path)` 返回 `Result`，因为 plane-local path 解析、registry lookup 或 tool
+  visibility 可能失败。它只返回一个 resolved invocation handle；不做 grant、不 parse payload。
+- `ToolInvocation::invoke(payload)` 构造同类型 child context 时继承父 runtime/session/agent
+  view，但重新计算 `allowed_caps`：`child_caps = parent_caps ∩ requested_caps`。若
+  requested caps 来自 override，override 必须先被证明是 tool default caps 的子集。
+- legacy reserved payload 字段不能进入 typed `ToolImpl`。迁移期可以在 app ingress 从 agent
+  payload 抽取 trusted evidence，转成 `TrustedInvocationOverlay`，然后把 reserved 字段从
+  tool payload 中删除。typed tool 只能通过 context facade/requirement trait 观察 overlay
+  带来的访问范围变化。
 - ordinary tool/action/policy 只依赖 context requirement trait，不依赖 app concrete context。
   具体 runtime/context 类型由 app/runtime 层定义。
 

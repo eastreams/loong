@@ -75,6 +75,15 @@
   reference、本次 invocation 绑定的 session/agent、effective allowed caps、request payload、plane/tier 和
   fs root 等小 view。tool->tool 调用必须构造同类型 child context 来缩窄 caps，而不是复用
   父 context 或直接传 token。
+- tool invocation 的普通调用入口是 `ctx.tool(path)?.invoke(payload).await`。`ctx.tool(path)`
+  返回 `Result<ToolInvocation<'_>, ToolLookupError>`：它只做 plane-local path 解析/entry lookup，
+  不做 grant、不 parse payload。返回的 invocation handle 借用 `&ctx`，绑定 resolved entry、
+  optional caps override 和 trusted overlay；`invoke(payload)` 才是构造 child context、kernel
+  grant、plane dispatch 和 execution audit 的治理边界。
+- `trusted_internal_payload` 这类保留字段不是 typed tool payload。legacy ingress 可以临时从
+  agent payload 中抽取 trusted evidence，但必须立即转成 typed context overlay，并从传给 tool
+  的 payload 中删除。concrete tool 不直接读取 trusted overlay；它只能通过 `ctx.access()`、
+  `ctx.tool(path)?.invoke(...)` 或窄 context requirement trait 观察 overlay 的效果。
 - crate 边界要服务真实 owner。小 crate 不是问题；只做转发、占用大名字但没有 owner 职责、
   或保留 phase 过渡壳的 crate 是问题。确认替代 owner 后应破坏性收敛，不用 alias/fallback
   保留被替代形状。
@@ -87,10 +96,9 @@
   legacy app/tool-core invocation envelope；`loong_contracts::ToolOutcome` 应删除，而不是
   作为 typed tool compatibility layer 保留。不要定义全局 `ToolPath`；不要让 tool
   descriptor 携带 registry path。
-- tool invocation shortcut 挂在 app-defined context 上，例如 `ctx.invoke_tool(path,
-  payload)`。它内部使用 app plane registry 构造 invocation action，走 kernel grant，再
-  调用 plane 的 `invoke`；`ToolPlane` trait 本身不接收 kernel/audit 参数，也不从
-  ctx 暗中偷裸 audit API。
+- tool invocation shortcut 挂在 app-defined context 派生的 invocation handle 上，例如
+  `ctx.tool(path)?.invoke(payload).await`。`ToolPlane` trait 本身只表达 granted dispatch，
+  不接收 kernel/audit 参数，也不从 ctx 暗中偷裸 audit API。
 - `loong-core`：行为 trait 和不可伪造授权模型，例如 `ActionMeta`、`Action<Cx>`、
   `Granted<A>`、`ToolImpl<C>`、`RegisteredTool<C>`。core 不决定 ToolPlane path 类型；
   core 里的 registered tool 只擦除 concrete tool，不表达注册位置，也不把 success

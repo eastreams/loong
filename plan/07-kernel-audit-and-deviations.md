@@ -28,7 +28,7 @@ grant id 都记录到 kernel audit sink。tool invocation 的 denied evidence �
 grant audit，不需要单独的 `ToolInvocationOutcome::Denied` 或 receipt workaround。
 
 grant 后的 execution outcome audit 属于 grant consumption 边界。对 tool 来说，该边界
-是 `ctx.invoke_tool(...) -> ToolPlane::invoke(...)`；对 fs 来说，是
+是 `ctx.tool(path)?.invoke(payload).await -> ToolPlane::invoke(...)`；对 fs 来说，是
 `Granted<FsReadAction>::run(ctx)`。它只能记录 grant 已经发放之后的 completed / failed /
 input error 等结果，不能重复表达 authorization deny。
 
@@ -80,7 +80,7 @@ legacy adapter 在迁移期继续记录旧 `PlaneInvoked`，直到对应工具�
 ### Tool audit failure matrix
 
 authorization audit 由 `Kernel::grant` 强制记录，concrete `ToolImpl` 不拿 audit API。
-execution audit 由 `ctx.invoke_tool` / granted action run 边界强制记录。
+execution audit 由 `ToolInvocation::invoke(payload)` / granted action run 边界强制记录。
 
 - invocation grant 被 pack/token/caps 拒绝：`Kernel::grant` 记录 generic action grant deny，
   plane 不执行。
@@ -98,7 +98,7 @@ execution audit 由 `ctx.invoke_tool` / granted action run 边界强制记录。
 
 截至 2026-07-11，`Kernel::grant_tool_invocation` 内部记录部分 deny audit，这是迁移期 helper 行为。目标是
 generic grant 负责所有 action authorization audit；tool invocation execution audit 留在
-`ctx.invoke_tool` 的 grant consumption 边界。
+`ToolInvocation::invoke(payload)` 的 grant consumption 边界。
 
 
 ## 当前实现偏差
