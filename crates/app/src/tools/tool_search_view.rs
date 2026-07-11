@@ -113,12 +113,19 @@ fn searchable_entry_from_descriptor_for_view(
 
     let parameters_value = function.and_then(|value: &serde_json::Value| value.get("parameters"));
     let parameters = parameters_value.unwrap_or(&serde_json::Value::Null);
-    let tags = descriptor
-        .tags()
-        .iter()
-        .map(|tag| (*tag).to_owned())
-        .collect::<Vec<_>>();
+    let typed_spec = crate::tools::typed_tool_spec_for_descriptor(descriptor);
+    let tags = typed_spec
+        .map(|spec| spec.tags.clone())
+        .filter(|tags| !tags.is_empty())
+        .unwrap_or_else(|| {
+            descriptor
+                .tags()
+                .iter()
+                .map(|tag| (*tag).to_owned())
+                .collect::<Vec<_>>()
+        });
     let search_hint = direct_search_hint_for_runtime_view(descriptor, view)
+        .or_else(|| typed_spec.and_then(|spec| spec.search_hint.clone()))
         .unwrap_or_else(|| descriptor.search_hint().to_owned());
     let surface_id = descriptor.surface_id().map(str::to_owned);
     let usage_guidance = direct_usage_guidance_for_runtime_view(descriptor, view)

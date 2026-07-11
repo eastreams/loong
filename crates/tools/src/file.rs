@@ -331,6 +331,14 @@ where
                 .to_owned(),
             input_schema: Self::input_schema(),
             required_capabilities: BTreeSet::from([Capability::FilesystemRead]),
+            search_hint: Some(
+                "read one file, page through a large file, search workspace content, or list matching paths through one direct tool"
+                    .to_owned(),
+            ),
+            tags: ["surface", "read", "file", "search"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
         }
     }
 

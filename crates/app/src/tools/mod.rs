@@ -21,7 +21,7 @@ use tool_search::searchable_entry_from_provider_definition;
 use tool_search::{runtime_discoverable_tool_entries, runtime_tool_search_entries};
 
 use crate::KernelContext;
-use provider_schema::tool_metadata_definition_for_view;
+use provider_schema::{tool_metadata_definition_for_view, typed_tool_spec_for_descriptor};
 #[cfg(test)]
 use routing::{
     route_direct_browser_tool_name, route_direct_web_tool_name, route_direct_web_tool_name_for_view,

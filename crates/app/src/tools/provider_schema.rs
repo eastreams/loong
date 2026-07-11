@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use loong_contracts::ToolSpec;
 use serde_json::{Value, json};
 
 use super::{
@@ -108,12 +109,7 @@ pub(super) fn tool_metadata_definition_for_view(
 }
 
 fn typed_provider_definition_for_descriptor(descriptor: &ToolDescriptor) -> Option<Value> {
-    if descriptor.name != "read" {
-        return None;
-    }
-
-    let path = super::plane::ToolPath::from(descriptor.name);
-    let spec = super::app_tool_plane().spec(&path).ok()?;
+    let spec = typed_tool_spec_for_descriptor(descriptor)?;
 
     // Transitional boundary: app still wraps provider JSON, but migrated tools
     // own their input schema through ToolSpec instead of the legacy catalog.
@@ -125,6 +121,15 @@ fn typed_provider_definition_for_descriptor(descriptor: &ToolDescriptor) -> Opti
             "parameters": spec.input_schema.clone()
         }
     }))
+}
+
+pub(super) fn typed_tool_spec_for_descriptor(
+    descriptor: &ToolDescriptor,
+) -> Option<&'static ToolSpec> {
+    // Transitional bridge: legacy descriptors still enumerate provider-visible
+    // tools, while migrated tool metadata lives in the app-owned plane.
+    let path = super::plane::ToolPath::from(descriptor.name);
+    super::app_tool_plane().spec(&path).ok()
 }
 
 fn sanitize_provider_parameter_combinators(mut definition: Value) -> Value {
