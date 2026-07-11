@@ -63,7 +63,9 @@ struct PlaneInvocationRecord<'a> {
     required_capabilities: &'a BTreeSet<Capability>,
 }
 
-// TODO: methods should be implemented in trait from core
+// TODO(kernel-contract): split a stable governance trait from this concrete
+// runtime only when an external caller needs that contract. Do not add helper
+// traits that merely forward the same Kernel methods.
 pub struct Kernel<C: ContextFactory> {
     policy: PolicyPipeline<C>,
     revoked_tokens: Mutex<BTreeSet<String>>,

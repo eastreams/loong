@@ -317,7 +317,9 @@ where
     }
 }
 
-// TODO: make this in a unified struct
+// TODO(runtime): move this OnceLock into the unified runtime/agent owner once
+// that type exists. The plane is app-owned; this global is only the current
+// bootstrap holder for builtin typed tools.
 pub(crate) fn app_tool_plane() -> &'static dyn ToolPlane<AppContextFactory> {
     static TOOL_PLANE: OnceLock<AppToolPlane<AppContextFactory>> = OnceLock::new();
     TOOL_PLANE.get_or_init(|| {

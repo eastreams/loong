@@ -366,7 +366,9 @@ pub(crate) fn resolve_installable_skill_id(root: &Path) -> Result<String, String
 ///
 /// Legacy requests are dispatched via `kernel.execute_tool_core`; typed tools
 /// should enter through the app-owned tool plane instead.
-// TODO(tool-plane): delete this legacy envelope once all tools use ctx.tool(...).invoke(...).
+// TODO(tool-plane): delete this legacy ToolCoreRequest/ToolCoreOutcome envelope
+// after every app runtime caller holds AppExecutionContext and invokes tools via
+// ctx.tool(path)?.invoke(...). Typed tools must not add new behavior here.
 pub async fn execute_tool(
     request: ToolCoreRequest,
     kernel_ctx: &KernelContext,
@@ -383,7 +385,9 @@ pub async fn execute_tool(
         .map_err(|e| format!("{e}"))
 }
 
-// TODO: remove this
+// TODO(tool-plane): collapse this bridge into AppExecutionContext::tool(...)
+// call sites. Until then, keep the only typed branch here and route unmigrated
+// tools to the legacy kernel adapter plane at this boundary.
 pub(crate) async fn execute_kernel_tool_request(
     ctx: &KernelContext,
     request: ToolCoreRequest,
