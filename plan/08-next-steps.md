@@ -49,7 +49,8 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
 3. 继续迁移剩余 legacy side-effect tools：
    - access/fs 已经提供 `FsWriteAction`、`FsWriteOptions` 和 `FsAccess::write_file`；
      写入 side effect 只能通过 `Granted<FsWriteAction>::run` 执行；
-   - kernel 已经提供 `FsWriteAllowPolicy`，但 app bootstrap 尚未注册；
+   - kernel 已经提供 `FsWriteAllowPolicy`，app production bootstrap 和 app test
+     harnesses 已经注册该 policy；
    - `loong-tools` 已经提供 typed `WriteTool` 基础：payload parsing、tool spec
      metadata、typed output 和 access-backed execute 都在 concrete tool crate 内；
      尚未注册到 app plane，也尚未替换 app legacy write dispatch；
