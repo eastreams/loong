@@ -14,6 +14,11 @@
   从 `Context` 派生的 concrete facade 可以存在；旧 `ToolCoreContext` 是删除目标。
 - 副作用 only access can do。已经迁入 Access-Action-Policy 路径的 tool/helper/adapter/kernel
   policy 都不能直接执行文件读取等 migrated side effect。
+- live workspace/runtime-self source 读取必须有 governed execution context，并通过
+  `ctx.access()` 进入 fs access。没有 kernel/runtime binding 的 prompt assembly、
+  continuity refresh、compaction helper、advisory/direct projection 不得现场读取
+  `AGENTS.md`、`TOOLS.md`、`IDENTITY.md` 等 live files；它们只能使用已经存在于 config、
+  session store 或 assembled context 中的结构化数据。
 - `ActionMeta::required_capabilities` 是 action 属性；workspace root、file root、
   runtime config 是 context / resolver / policy 的输入，不塞进 required caps。
 - context 暴露的是 effective allowed caps，不一定等于原始 token caps。tool 调 tool 时，
@@ -30,6 +35,9 @@
   action。
 - 路径解析本身是 fs action。canonicalize、existing ancestor resolution、symlink
   resolution 都是 filesystem observation，不能藏在未治理 helper 里。
+- workspace guidance / runtime-self 的候选根发现不能跟随 symlink 逃逸 workspace。
+  nested workspace 候选必须通过 canonical containment 检查；候选发现可以列出
+  root-local deterministic paths，但不能把 workspace 外部目录注册为 source root。
 - 路径权限的共享产物叫 `GrantedPath`。它不是泛型 token，而是 fs domain 的 concrete
   value；只能由受治理的路径解析 action 产出，构造函数不公开。
 - workspace root / allowed roots 是 path-resolution policy 的输入，不是
@@ -88,6 +96,11 @@
   tool invocation 先尝试 app-owned ToolPlane；未注册/未迁移时只在调用边界末尾 fallback 到
   legacy adapter/core-tool 路径。旧工具不注册进 typed ToolPlane，不通过 payload claim
   混入新 path，也不把旧 policy helper 塞回 `PolicyPipeline` 冒充 typed action policy。
+- live runtime-self continuity 是 prompt assembly 的结构化副产物，不从 prompt 文本反推。
+  provider/context engine 读取 live source 后应同时产出 `RuntimeSelfContinuity`；runtime
+  merge stored continuity 时只用这个结构化 live state 判断缺失 lane。compaction persistence
+  也接收该结构化值；没有 assembled live state 的路径传 `None`，不得 fallback 到 config
+  现场读文件。
 - crate 边界要服务真实 owner。小 crate 不是问题；只做转发、占用大名字但没有 owner 职责、
   或保留 phase 过渡壳的 crate 是问题。确认替代 owner 后应破坏性收敛，不用 alias/fallback
   保留被替代形状。

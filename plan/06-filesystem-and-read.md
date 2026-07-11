@@ -66,6 +66,11 @@ grant.granted.run(ctx).await
 如果解析结果逃逸 allowed roots，kernel typed policy 会 deny，因而不会产出
 `GrantedPath`。
 
+workspace guidance / runtime-self source discovery 也遵守同一边界：候选根只做
+deterministic discovery，不能借 `Path::is_dir` 跟随 nested workspace symlink 到
+workspace 外部。nested root 必须 canonicalize 后仍位于 canonical workspace root 内；真正
+读取文件内容仍只能通过 governed fs access。
+
 不要写 `FsReadAction::new(Granted<FsResolvePathAction>, ctx)` 这种隐藏执行的 API；
 先显式 `grant.granted.run(ctx).await?`，再把 `GrantedPath` 交给下游 action。
 

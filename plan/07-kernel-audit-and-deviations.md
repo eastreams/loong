@@ -77,6 +77,11 @@ kernel contract。
 
 legacy adapter 在迁移期继续记录旧 `PlaneInvoked`，直到对应工具迁移完成。
 
+runtime-source 文件读取属于 governed access，不属于 tool invocation。prompt assembly
+读取 `AGENTS.md` / `TOOLS.md` / `IDENTITY.md` 时，不应产生 typed tool execution audit
+或 legacy `PlaneInvoked`；证据链属于 fs access/action authorization path，以及 prompt
+assembly 产出的结构化 runtime-self continuity。
+
 ### Tool audit failure matrix
 
 authorization audit 由 `Kernel::grant` 强制记录，concrete `ToolImpl` 不拿 audit API。
@@ -130,3 +135,5 @@ generic grant 负责所有 action authorization audit；tool invocation executio
   落地后该模块职责应该删除或拆清楚。
 - `AppExecutionContext::capabilities()` 目前基本返回 token allowed caps；还没有 child
   tool context 的 effective caps narrowing。
+- `KernelContext` 仍是 app/runtime surface 中传播 kernel binding 的过渡类型。相关代码用
+  `TODO(deprecate-kernel-context)` 标记；目标是 unified runtime/context 接管这层状态。
