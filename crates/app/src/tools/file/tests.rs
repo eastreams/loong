@@ -6,7 +6,10 @@ use loong_contracts::{
     Capability, ExecutionPlane, ExecutionRoute, HarnessKind, PlaneTier, ToolCoreRequest,
 };
 use loong_core::tool::{RegisteredTool, ToolProvenance};
-use loong_kernel::{InMemoryAuditSink, Kernel, NoopAuditSink, SystemClock, VerticalPackManifest};
+use loong_kernel::{
+    InMemoryAuditSink, Kernel, NoopAuditSink, PolicyPipeline, SystemClock, VerticalPackManifest,
+    policy::{FsReadAllowPolicy, FsReadFilenameDenyPolicy, FsResolvePathAllowedRootsPolicy},
+};
 use loong_tools::file::ReadFileTool;
 use serde_json::json;
 
@@ -74,8 +77,17 @@ async fn execute_file_read_with_test_context(
     request: ToolCoreRequest,
     config: &ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
+    let mut policy = PolicyPipeline::<AppContextFactory>::new_legacy_allow_fallback()
+        .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
+        .with_policy(FsResolvePathAllowedRootsPolicy);
+    if !config.fs.deny_read_filenames.is_empty() {
+        policy.push_policy(FsReadFilenameDenyPolicy::new(
+            config.fs.deny_read_filenames.clone(),
+        ));
+    }
+    policy.push_policy(FsReadAllowPolicy);
     let mut kernel = Kernel::<AppContextFactory>::with_policy_runtime(
-        crate::context::build_app_policy_pipeline(config),
+        policy,
         Arc::new(SystemClock),
         Arc::new(NoopAuditSink),
     );
@@ -113,8 +125,17 @@ async fn execute_file_read_via_kernel_tool_registry(
     config: &ToolRuntimeConfig,
 ) -> Result<(ToolCoreOutcome, Arc<InMemoryAuditSink>), loong_kernel::KernelError> {
     let audit = Arc::new(InMemoryAuditSink::default());
+    let mut policy = PolicyPipeline::<AppContextFactory>::new_legacy_allow_fallback()
+        .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
+        .with_policy(FsResolvePathAllowedRootsPolicy);
+    if !config.fs.deny_read_filenames.is_empty() {
+        policy.push_policy(FsReadFilenameDenyPolicy::new(
+            config.fs.deny_read_filenames.clone(),
+        ));
+    }
+    policy.push_policy(FsReadAllowPolicy);
     let mut kernel = Kernel::<AppContextFactory>::with_policy_runtime(
-        crate::context::build_app_policy_pipeline(config),
+        policy,
         Arc::new(SystemClock),
         audit.clone(),
     );

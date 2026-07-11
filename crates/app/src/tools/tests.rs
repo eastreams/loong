@@ -13185,7 +13185,6 @@ async fn web_fetch_through_kernel_requires_network_egress_capability() {
         metadata: BTreeMap::new(),
     };
     kernel.register_pack(pack).expect("register pack");
-    kernel.register_policy_extension(loong_kernel::test_support::NoNetworkEgressPolicyExtension);
 
     let mut config = runtime_config::ToolRuntimeConfig::default();
     config.web_fetch.enabled = true;
@@ -13230,12 +13229,15 @@ async fn web_fetch_through_kernel_requires_network_egress_capability() {
 
 #[cfg(feature = "tool-webfetch")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn web_fetch_through_kernel_exposes_network_egress_to_policy_extensions() {
+async fn web_fetch_through_kernel_exposes_network_egress_to_pre_policy() {
     use kernel_adapter::KernelToolAdapter;
 
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = Kernel::with_legacy_allow_runtime(clock, audit);
+    let mut policy =
+        loong_kernel::PolicyPipeline::<crate::context::AppContextFactory>::new_legacy_allow_fallback();
+    policy.push_pre_policy(loong_kernel::test_support::NoNetworkEgressPolicy);
+    let mut kernel = Kernel::with_policy_runtime(policy, clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -13250,7 +13252,6 @@ async fn web_fetch_through_kernel_exposes_network_egress_to_policy_extensions() 
         metadata: BTreeMap::new(),
     };
     kernel.register_pack(pack).expect("register pack");
-    kernel.register_policy_extension(loong_kernel::test_support::NoNetworkEgressPolicyExtension);
 
     let mut config = runtime_config::ToolRuntimeConfig::default();
     config.web_fetch.enabled = true;
@@ -13276,12 +13277,12 @@ async fn web_fetch_through_kernel_exposes_network_egress_to_policy_extensions() 
 
     let error = execute_kernel_tool_request(&ctx, request, false)
         .await
-        .expect_err("policy extension should block web.fetch network egress");
+        .expect_err("pre policy should block web.fetch network egress");
 
     assert!(matches!(
         error,
         loong_kernel::KernelError::Policy(
             loong_kernel::PolicyError::ExtensionDenied { ref extension, .. }
-        ) if extension == "no-network-egress"
+        ) if extension == "policy-engine"
     ));
 }

@@ -184,7 +184,7 @@ async fn tool_invocation_grant(
     payload: Value,
 ) -> loong_core::policy::grant::Granted<ToolInvocationAction> {
     let mut policy = PolicyPipeline::<TestContextFactory>::new();
-    policy.push_policy::<ToolInvocationAction, _>(ToolInvocationAllowPolicy);
+    policy.push_policy(ToolInvocationAllowPolicy);
     policy
         .grant(
             &TestContext,

@@ -9,7 +9,6 @@ use std::{
 };
 
 use async_trait::async_trait;
-use loong_access::fs::{FsPathPolicyContext, FsReadAction, FsResolvePathAction};
 use loong_contracts::{
     Capability, CapabilityToken, GrantId, PolicyDecision, PolicyEntry, PolicyEvaluation,
     PolicyGrant, PolicyId, PolicyOutcome, PolicyReport, VerticalPackManifest,
@@ -24,10 +23,8 @@ use loong_core::{
     },
 };
 
-use crate::{
-    errors::PolicyError,
-    policy_ext::{PolicyExtension, PolicyExtensionChain, PolicyExtensionContext},
-};
+use crate::access::fs::{FsPathPolicyContext, FsReadAction, FsResolvePathAction};
+use crate::errors::PolicyError;
 
 const DEFAULT_DENY_REASON: &str = "No matching policy.";
 
@@ -90,7 +87,6 @@ pub struct PolicyPipeline<C: ContextFactory> {
     pre_policies: Vec<RegisteredAnyPolicy<C>>,
     typed_policies: anymap::Map<dyn anymap::any::Any + Send + Sync>,
     fallback_policies: Vec<RegisteredAnyPolicy<C>>,
-    policy_extensions: PolicyExtensionChain,
     next_policy_id: PolicyId,
     grant_seq: AtomicU64,
     _context: PhantomData<fn() -> C>,
@@ -108,7 +104,6 @@ impl<C: ContextFactory> PolicyPipeline<C> {
             pre_policies: Vec::new(),
             typed_policies: anymap::Map::new(),
             fallback_policies: Vec::new(),
-            policy_extensions: PolicyExtensionChain::new(),
             next_policy_id: 0,
             grant_seq: AtomicU64::new(0),
             _context: PhantomData,
@@ -149,34 +144,6 @@ impl<C: ContextFactory> PolicyPipeline<C> {
             id,
             policy: Arc::new(policy),
         });
-    }
-
-    pub fn push_fs_read_filename_deny_policy(&mut self, denied_filenames: BTreeSet<String>) {
-        if denied_filenames.is_empty() {
-            return;
-        }
-
-        self.push_policy::<FsReadAction, _>(FsReadFilenameDenyPolicy::new(denied_filenames));
-    }
-
-    pub fn push_fs_read_allow_policy(&mut self) {
-        self.push_policy::<FsReadAction, _>(FsReadAllowPolicy);
-    }
-
-    #[must_use]
-    pub fn with_fs_path_policy(mut self) -> Self
-    where
-        for<'a> C::Cx<'a>: FsPathPolicyContext,
-    {
-        self.push_fs_path_policy();
-        self
-    }
-
-    pub fn push_fs_path_policy(&mut self)
-    where
-        for<'a> C::Cx<'a>: FsPathPolicyContext,
-    {
-        self.push_policy::<FsResolvePathAction, _>(FsResolvePathAllowedRootsPolicy);
     }
 
     /// Register a broad gate before typed action policy.
@@ -230,11 +197,7 @@ impl<C: ContextFactory> PolicyPipeline<C> {
         });
     }
 
-    pub fn register_policy_extension<E: PolicyExtension + 'static>(&mut self, extension: E) {
-        self.policy_extensions.register(extension);
-    }
-
-    /// Authorize legacy kernel operations that still use policy extensions.
+    /// Authorize legacy kernel operations through the same policy pipeline.
     ///
     /// New access-backed side effects should prefer `PolicyEngine::grant` on a
     /// typed action and consume the resulting grant inside the access module.
@@ -242,25 +205,11 @@ impl<C: ContextFactory> PolicyPipeline<C> {
         &self,
         ctx: &C::Cx<'_>,
         action: A,
-    ) -> Result<(), PolicyError>
-    where
-        for<'a> C::Cx<'a>: KernelInvocationContext,
-    {
-        let required_capabilities = action
-            .metadata()
-            .required_capabilities
-            .iter()
-            .copied()
-            .collect::<BTreeSet<_>>();
-        self.grant(ctx, action).await.map_err(policy_engine_error)?;
-
-        self.policy_extensions.authorize(&PolicyExtensionContext {
-            pack: ctx.pack(),
-            token: ctx.token(),
-            now_epoch_s: ctx.now_epoch_s(),
-            required_capabilities: &required_capabilities,
-            request_parameters: ctx.request_parameters(),
-        })
+    ) -> Result<(), PolicyError> {
+        self.grant(ctx, action)
+            .await
+            .map(|_| ())
+            .map_err(policy_engine_error)
     }
 
     fn allocate_policy_id(&mut self) -> PolicyId {
@@ -514,15 +463,15 @@ where
 }
 
 #[derive(Debug, Clone)]
-struct FsReadFilenameDenyPolicy {
+pub struct FsReadFilenameDenyPolicy {
     denied_filenames: BTreeSet<String>,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
-struct FsReadAllowPolicy;
+pub struct FsReadAllowPolicy;
 
 #[derive(Debug, Default, Clone, Copy)]
-struct FsResolvePathAllowedRootsPolicy;
+pub struct FsResolvePathAllowedRootsPolicy;
 
 /// Default fs path containment policy.
 ///
@@ -572,7 +521,8 @@ fn resolved_path_starts_with_allowed_root(
 }
 
 impl FsReadFilenameDenyPolicy {
-    fn new(denied_filenames: BTreeSet<String>) -> Self {
+    #[must_use]
+    pub fn new(denied_filenames: BTreeSet<String>) -> Self {
         let denied_filenames = denied_filenames
             .into_iter()
             .filter_map(|filename| normalize_policy_filename(filename.as_str()))

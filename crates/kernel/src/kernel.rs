@@ -28,7 +28,6 @@ use crate::{
     },
     pack::VerticalPackManifest,
     policy::{KernelInvocationContext, LegacyKernelAction, PolicyPipeline, policy_engine_error},
-    policy_ext::PolicyExtension,
     runtime::{
         CoreRuntimeAdapter, RuntimeCoreOutcome, RuntimeCoreRequest, RuntimeExtensionAdapter,
         RuntimeExtensionOutcome, RuntimeExtensionRequest, RuntimePlane,
@@ -185,10 +184,6 @@ where
 
     pub fn get_namespace(&self, pack_id: &str) -> Option<&loong_contracts::Namespace> {
         self.namespaces.get(pack_id)
-    }
-
-    pub fn register_policy_extension<E: PolicyExtension + 'static>(&mut self, extension: E) {
-        self.policy.register_policy_extension(extension);
     }
 
     pub fn register_harness_adapter<A: HarnessAdapter + 'static>(&mut self, adapter: A) {

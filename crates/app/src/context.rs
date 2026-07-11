@@ -6,10 +6,12 @@ use std::thread;
 
 use loong_contracts::{CapabilityToken, ExecutionPlane, PlaneTier};
 use loong_core::policy::context::{CapabilityContext, ContextFactory};
+use loong_kernel::access::fs::{FsPathPolicyContext, FsResolutionContext};
 use loong_kernel::{
-    AccessCx, AuditSink, Capability, Clock, ExecutionRoute, FanoutAuditSink, FsPathPolicyContext,
-    FsResolutionContext, HarnessKind, InMemoryAuditSink, JsonlAuditSink, Kernel, KernelAccess,
-    KernelInvocationContext, NoopAuditSink, PolicyPipeline, SystemClock, VerticalPackManifest,
+    AccessCx, AuditSink, Capability, Clock, ExecutionRoute, FanoutAuditSink, HarnessKind,
+    InMemoryAuditSink, JsonlAuditSink, Kernel, KernelAccess, KernelInvocationContext,
+    NoopAuditSink, PolicyPipeline, SystemClock, VerticalPackManifest,
+    policy::{FsReadAllowPolicy, FsReadFilenameDenyPolicy, FsResolvePathAllowedRootsPolicy},
 };
 use serde_json::Value;
 
@@ -255,8 +257,17 @@ pub(crate) fn read_file_with_access_for_runtime_config(
 
     block_on_context_future(
         async move {
+            let mut policy = PolicyPipeline::<AppContextFactory>::new_legacy_allow_fallback()
+                .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
+                .with_policy(FsResolvePathAllowedRootsPolicy);
+            if !config.fs.deny_read_filenames.is_empty() {
+                policy.push_policy(FsReadFilenameDenyPolicy::new(
+                    config.fs.deny_read_filenames.clone(),
+                ));
+            }
+            policy.push_policy(FsReadAllowPolicy);
             let kernel = Kernel::with_policy_runtime(
-                build_app_policy_pipeline(&config),
+                policy,
                 Arc::new(SystemClock) as Arc<dyn Clock>,
                 Arc::new(NoopAuditSink),
             );
@@ -376,7 +387,7 @@ pub(crate) fn bootstrap_test_kernel_context(
 /// Bootstrap a governed kernel context for production-facing runtime entrypoints.
 ///
 /// This installs the audit sink selected by `config.audit`, registers the embedded runtime
-/// pack plus the core tool/memory adapters and policy extensions, and issues a
+/// pack plus the core tool/memory adapters and policy pipeline, and issues a
 /// long-lived capability token for `agent_id`.
 ///
 /// The helper intentionally stays below higher-level runtime initialization: it
@@ -429,13 +440,17 @@ fn bootstrap_kernel_context_with_audit_sink(
     config: &LoongConfig,
 ) -> Result<KernelContext, String> {
     let tool_rt = crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
-    let file_root = tool_rt.file_root.clone();
-    let tool_policy_rt = tool_rt.clone();
-    let mut kernel = Kernel::with_policy_runtime(
-        build_app_policy_pipeline(&tool_rt),
-        Arc::new(SystemClock) as Arc<dyn Clock>,
-        audit_sink,
-    );
+    let mut policy = PolicyPipeline::<AppContextFactory>::new_legacy_allow_fallback()
+        .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
+        .with_policy(FsResolvePathAllowedRootsPolicy);
+    if !tool_rt.fs.deny_read_filenames.is_empty() {
+        policy.push_policy(FsReadFilenameDenyPolicy::new(
+            tool_rt.fs.deny_read_filenames.clone(),
+        ));
+    }
+    policy.push_policy(FsReadAllowPolicy);
+    let mut kernel =
+        Kernel::with_policy_runtime(policy, Arc::new(SystemClock) as Arc<dyn Clock>, audit_sink);
 
     let pack = VerticalPackManifest {
         pack_id: EMBEDDED_RUNTIME_PACK_ID.to_owned(),
@@ -479,14 +494,6 @@ fn bootstrap_kernel_context_with_audit_sink(
     crate::tools::register_kernel_tools(&mut kernel, tool_rt.clone(), config.observability.clone())
         .map_err(|e| format!("kernel tool registration failed: {e}"))?;
 
-    // Register policy extensions for unified security enforcement.
-    kernel.register_policy_extension(crate::tools::file_policy_ext::FilePolicyExtension::new(
-        file_root,
-    ));
-    kernel.register_policy_extension(
-        crate::tools::shell_policy_ext::ToolPolicyExtension::from_config(&tool_policy_rt),
-    );
-
     let token = kernel
         .issue_token(EMBEDDED_RUNTIME_PACK_ID, agent_id, ttl_s)
         .map_err(|e| format!("kernel token issue failed: {e}"))?;
@@ -497,25 +504,6 @@ fn bootstrap_kernel_context_with_audit_sink(
         token,
         tool_runtime_config: tool_rt,
     })
-}
-
-pub(crate) fn build_app_policy_pipeline(
-    config: &crate::tools::runtime_config::ToolRuntimeConfig,
-) -> PolicyPipeline<AppContextFactory> {
-    // App still hosts unmigrated legacy planes, so the compatibility fallback
-    // is explicit at the app bootstrap boundary rather than hidden in kernel
-    // defaults. Typed actions below must install their own terminal policies.
-    let mut policy = PolicyPipeline::<AppContextFactory>::new_legacy_allow_fallback();
-
-    // Structural policies: these are part of the app runtime shape, not derived
-    // from user config.
-    crate::tools::register_tool_invocation_policy(&mut policy);
-    policy.push_fs_path_policy();
-
-    // Config-derived policies: these reflect the current runtime settings.
-    policy.push_fs_read_filename_deny_policy(config.fs.deny_read_filenames.clone());
-    policy.push_fs_read_allow_policy();
-    policy
 }
 
 #[cfg(test)]

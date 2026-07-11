@@ -1238,8 +1238,12 @@ async fn audit_sink_captures_runtime_tool_memory_and_connector_plane_events() {
 }
 
 #[tokio::test]
-async fn policy_extension_chain_can_block_high_risk_capabilities() {
-    let (mut kernel, _audit) = legacy_kernel_with_in_memory_audit();
+async fn policy_pipeline_pre_policy_can_block_high_risk_capabilities() {
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let mut policy = PolicyPipeline::<TestContextFactory>::new_legacy_allow_fallback();
+    policy.push_pre_policy(NoNetworkEgressPolicy);
+    let mut kernel =
+        Kernel::<TestContextFactory>::with_policy_runtime(policy, Arc::new(SystemClock), audit);
     kernel
         .register_pack(VerticalPackManifest {
             pack_id: "strict-env".to_owned(),
@@ -1260,7 +1264,6 @@ async fn policy_extension_chain_can_block_high_risk_capabilities() {
     kernel.register_harness_adapter(MockEmbeddedPiHarness {
         seen_tasks: Mutex::new(Vec::new()),
     });
-    kernel.register_policy_extension(NoNetworkEgressPolicyExtension);
 
     let token = kernel
         .issue_token("strict-env", "agent-secure", 120)
@@ -1281,11 +1284,12 @@ async fn policy_extension_chain_can_block_high_risk_capabilities() {
             &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
         )
         .await
-        .expect_err("policy extension should block network egress");
+        .expect_err("pre policy should block network egress");
 
     assert!(matches!(
         error,
-        KernelError::Policy(PolicyError::ExtensionDenied { extension, .. }) if extension == "no-network-egress"
+        KernelError::Policy(PolicyError::ExtensionDenied { extension, reason })
+            if extension == "policy-engine" && reason.contains("network egress is blocked")
     ));
 }
 
@@ -1474,8 +1478,10 @@ async fn audit_event_json_schema_for_plane_invoked_is_stable() {
 async fn tool_core_call_is_denied_when_policy_engine_rejects_rule_of_two_gate() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_002_000));
     let audit = Arc::new(InMemoryAuditSink::default());
+    let mut policy = PolicyPipeline::<TestContextFactory>::new_legacy_allow_fallback();
+    policy.push_pre_policy(ToolGatePolicy::new("shell.exec", ToolGateMode::Deny));
     let mut kernel =
-        Kernel::<TestContextFactory>::with_legacy_allow_runtime(clock.clone(), audit.clone());
+        Kernel::<TestContextFactory>::with_policy_runtime(policy, clock.clone(), audit.clone());
     kernel
         .register_pack(VerticalPackManifest {
             pack_id: "tool-gate-deny".to_owned(),
@@ -1491,10 +1497,6 @@ async fn tool_core_call_is_denied_when_policy_engine_rejects_rule_of_two_gate() 
         })
         .expect("pack should register");
     kernel.register_core_tool_adapter(MockCoreTool);
-    kernel.register_policy_extension(ToolGatePolicyExtension::new(
-        "shell.exec",
-        ToolGateMode::Deny,
-    ));
 
     let token = kernel
         .issue_token("tool-gate-deny", "agent-deny", 120)
@@ -1524,8 +1526,8 @@ async fn tool_core_call_is_denied_when_policy_engine_rejects_rule_of_two_gate() 
 
     assert!(matches!(
         error,
-        KernelError::Policy(PolicyError::ToolCallDenied { tool_name, .. })
-            if tool_name == "shell.exec"
+        KernelError::Policy(PolicyError::ExtensionDenied { extension, reason })
+            if extension == "policy-engine" && reason.contains("shell.exec")
     ));
 
     let events = audit.snapshot();

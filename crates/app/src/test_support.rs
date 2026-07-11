@@ -4,7 +4,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use loong_contracts::{Capability, ExecutionRoute, HarnessKind};
-use loong_kernel::{FixedClock, InMemoryAuditSink, Kernel, VerticalPackManifest};
+use loong_kernel::{
+    FixedClock, InMemoryAuditSink, Kernel, PolicyPipeline, VerticalPackManifest,
+    policy::{FsReadAllowPolicy, FsReadFilenameDenyPolicy, FsResolvePathAllowedRootsPolicy},
+};
 
 use crate::context::{AppContextFactory, KernelContext};
 use crate::conversation::{
@@ -139,7 +142,15 @@ impl TurnTestHarness {
 
         let audit = Arc::new(InMemoryAuditSink::default());
         let clock = Arc::new(FixedClock::new(1_700_000_000));
-        let policy = crate::context::build_app_policy_pipeline(&tool_config);
+        let mut policy = PolicyPipeline::<AppContextFactory>::new_legacy_allow_fallback()
+            .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
+            .with_policy(FsResolvePathAllowedRootsPolicy);
+        if !tool_config.fs.deny_read_filenames.is_empty() {
+            policy.push_policy(FsReadFilenameDenyPolicy::new(
+                tool_config.fs.deny_read_filenames.clone(),
+            ));
+        }
+        policy.push_policy(FsReadAllowPolicy);
         let mut kernel =
             Kernel::<AppContextFactory>::with_policy_runtime(policy, clock, audit.clone());
 

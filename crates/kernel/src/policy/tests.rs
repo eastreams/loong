@@ -57,27 +57,6 @@ impl KernelInvocationContext for TestPolicyContext<'_> {
     }
 }
 
-struct DenyNetworkExtension;
-
-impl PolicyExtension for DenyNetworkExtension {
-    fn name(&self) -> &str {
-        "deny-network"
-    }
-
-    fn authorize_extension(&self, context: &PolicyExtensionContext<'_>) -> Result<(), PolicyError> {
-        if context
-            .required_capabilities
-            .contains(&Capability::NetworkEgress)
-        {
-            return Err(PolicyError::ExtensionDenied {
-                extension: self.name().to_owned(),
-                reason: "network egress denied by test extension".to_owned(),
-            });
-        }
-        Ok(())
-    }
-}
-
 #[derive(Clone)]
 struct StaticAnyPolicy {
     name: &'static str,
@@ -113,8 +92,8 @@ struct StaticTypedPolicy {
 #[async_trait]
 impl<C, A> Policy<C, A> for StaticTypedPolicy
 where
-    C: ContextFactory,
-    A: ActionMeta,
+    C: ContextFactory + Send + Sync,
+    A: ActionMeta + Sync + 'static,
 {
     fn name(&self) -> Cow<'static, str> {
         Cow::Borrowed(self.name)
@@ -301,9 +280,13 @@ async fn policy_pipeline_grants_actions_allowed_by_registered_policy() {
 }
 
 #[tokio::test]
-async fn policy_pipeline_runs_registered_policy_extensions() {
+async fn policy_pipeline_pre_policy_can_block_legacy_actions() {
     let mut engine = PolicyPipeline::<TestContextFactory>::new_legacy_allow_fallback();
-    engine.register_policy_extension(DenyNetworkExtension);
+    engine.push_pre_policy(StaticAnyPolicy {
+        name: "deny-network",
+        decision: PolicyDecision::Deny,
+        reason: "network egress denied by test policy",
+    });
     let pack = pack();
     let mut token = token();
     token.allowed_capabilities.insert(Capability::NetworkEgress);
@@ -321,15 +304,16 @@ async fn policy_pipeline_runs_registered_policy_extensions() {
     let error = engine
         .authorize_kernel_action(&ctx, action)
         .await
-        .expect_err("registered policy extension should deny the action");
+        .expect_err("pre policy should deny the action");
 
-    assert_eq!(
+    assert!(matches!(
         error,
         PolicyError::ExtensionDenied {
-            extension: "deny-network".to_owned(),
-            reason: "network egress denied by test extension".to_owned(),
-        }
-    );
+            ref extension,
+            ref reason,
+        } if extension == "policy-engine"
+            && reason.contains("network egress denied by test policy")
+    ));
 }
 
 #[tokio::test]

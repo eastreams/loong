@@ -1,14 +1,22 @@
-use loong_access::fs::{FsAccess, FsAccessError};
-pub use loong_access::fs::{FsPathPolicyContext, FsResolutionContext};
+use loong_access::fs::FsAccess;
 use loong_core::{kernel::Kernel as CoreKernel, policy::context::ContextFactory};
 
 use crate::{kernel::Kernel, policy::PolicyPipeline};
+
+pub mod fs {
+    pub use loong_access::fs::{
+        FsAccess, FsAccessError, FsPathPolicyContext, FsReadAction, FsResolutionContext,
+        FsResolvePathAction,
+    };
+}
+
+use fs::{FsAccessError, FsResolutionContext};
 
 /// Kernel-defined access facade.
 ///
 /// Keep this type small: it owns no policy logic and no backend state. It only
 /// carries the kernel reference plus the action context into concrete access
-/// modules such as `loong_access::fs`.
+/// modules exposed through `loong_kernel::access::fs`.
 pub struct AccessCx<'a, 'ctx, C>
 where
     C: ContextFactory + 'ctx,

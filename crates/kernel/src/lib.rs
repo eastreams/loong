@@ -18,12 +18,11 @@ pub mod pack;
 pub mod plugin;
 pub mod plugin_ir;
 pub mod policy;
-pub mod policy_ext;
 pub mod runtime;
 pub mod task_supervisor;
 pub mod tool;
 
-pub use access::{AccessCx, FsPathPolicyContext, FsResolutionContext, KernelAccess};
+pub use access::{AccessCx, KernelAccess};
 pub use architecture::{
     ArchitectureBoundaryPolicy, ArchitectureGuardReport, ArchitecturePathDecision,
     ArchitecturePathReport,
@@ -80,7 +79,6 @@ pub use plugin_ir::{
     evaluate_plugin_setup_requirements, plugin_runtime_scaffold_defaults,
 };
 pub use policy::{AllowPolicy, KernelInvocationContext, LegacyKernelAction, PolicyPipeline};
-pub use policy_ext::{PolicyExtension, PolicyExtensionChain, PolicyExtensionContext};
 pub use runtime::{
     CoreRuntimeAdapter, RuntimeCoreOutcome, RuntimeCoreRequest, RuntimeExtensionAdapter,
     RuntimeExtensionOutcome, RuntimeExtensionRequest, RuntimePlane, RuntimeTier,

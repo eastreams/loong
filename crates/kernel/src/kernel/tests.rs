@@ -67,7 +67,8 @@ async fn record_tool_invocation_records_typed_completed_event() {
     let audit_caps = grant
         .granted
         .as_ref()
-        .required_capabilities()
+        .metadata()
+        .required_capabilities
         .iter()
         .copied()
         .collect::<BTreeSet<_>>();
@@ -114,7 +115,8 @@ async fn record_tool_invocation_records_typed_failed_event() {
     let audit_caps = grant
         .granted
         .as_ref()
-        .required_capabilities()
+        .metadata()
+        .required_capabilities
         .iter()
         .copied()
         .collect::<BTreeSet<_>>();
@@ -163,7 +165,8 @@ async fn record_tool_invocation_records_typed_denied_event() {
     let audit_caps = grant
         .granted
         .as_ref()
-        .required_capabilities()
+        .metadata()
+        .required_capabilities
         .iter()
         .copied()
         .collect::<BTreeSet<_>>();

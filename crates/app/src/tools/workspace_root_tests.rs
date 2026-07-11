@@ -3,7 +3,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use loong_contracts::{Capability, ExecutionRoute, HarnessKind, ToolCoreOutcome, ToolCoreRequest};
-use loong_kernel::{Kernel, NoopAuditSink, SystemClock, VerticalPackManifest};
+use loong_kernel::{
+    Kernel, NoopAuditSink, PolicyPipeline, SystemClock, VerticalPackManifest,
+    policy::{FsReadAllowPolicy, FsReadFilenameDenyPolicy, FsResolvePathAllowedRootsPolicy},
+};
 use serde_json::json;
 
 use super::*;
@@ -30,11 +33,18 @@ async fn execute_tool_core_with_test_context(
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
     let trusted_internal_payload = payload_uses_reserved_internal_tool_context(&request.payload);
-    let mut kernel = Kernel::with_policy_runtime(
-        crate::context::build_app_policy_pipeline(config),
-        Arc::new(SystemClock),
-        Arc::new(NoopAuditSink),
-    );
+    let mut policy =
+        PolicyPipeline::<crate::context::AppContextFactory>::new_legacy_allow_fallback()
+            .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
+            .with_policy(FsResolvePathAllowedRootsPolicy);
+    if !config.fs.deny_read_filenames.is_empty() {
+        policy.push_policy(FsReadFilenameDenyPolicy::new(
+            config.fs.deny_read_filenames.clone(),
+        ));
+    }
+    policy.push_policy(FsReadAllowPolicy);
+    let mut kernel =
+        Kernel::with_policy_runtime(policy, Arc::new(SystemClock), Arc::new(NoopAuditSink));
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
         domain: "test".to_owned(),

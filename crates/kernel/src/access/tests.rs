@@ -10,7 +10,9 @@ use loong_core::{
     policy::context::{CapabilityContext, ContextFactory},
 };
 
-use super::{AccessCx, FsPathPolicyContext, FsResolutionContext};
+use super::AccessCx;
+use crate::access::fs::{FsAccessError, FsPathPolicyContext, FsResolutionContext};
+use crate::policy::{FsReadAllowPolicy, FsResolvePathAllowedRootsPolicy};
 
 #[derive(Debug, Clone)]
 struct AccessCxPolicyContext {
@@ -126,9 +128,10 @@ async fn fs_path_escape_is_reported_as_path_resolution_policy_denial() {
         .await
         .expect_err("path escape should be denied by policy");
 
-    let loong_access::fs::FsAccessError::Authorization(AuthorizationError::PolicyGrant(
-        PolicyGrantError::Denied { report, reason },
-    )) = error
+    let FsAccessError::Authorization(AuthorizationError::PolicyGrant(PolicyGrantError::Denied {
+        report,
+        reason,
+    })) = error
     else {
         panic!("expected path policy denial, got {error:?}");
     };
@@ -149,9 +152,9 @@ async fn fs_path_escape_is_reported_as_path_resolution_policy_denial() {
 }
 
 fn kernel_with_fs_path_policy() -> crate::Kernel<AccessCxContextFactory> {
-    let mut policy = crate::PolicyPipeline::<AccessCxContextFactory>::new();
-    policy.push_fs_path_policy();
-    policy.push_fs_read_allow_policy();
+    let policy = crate::PolicyPipeline::<AccessCxContextFactory>::new()
+        .with_policy(FsResolvePathAllowedRootsPolicy)
+        .with_policy(FsReadAllowPolicy);
     crate::Kernel::with_policy_runtime(
         policy,
         Arc::new(crate::SystemClock),

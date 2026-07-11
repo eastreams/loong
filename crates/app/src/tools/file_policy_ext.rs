@@ -1,8 +1,6 @@
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use loong_contracts::{Capability, PolicyError};
-use loong_kernel::{PolicyExtension, PolicyExtensionContext};
+use loong_contracts::PolicyError;
 
 pub struct FilePolicyExtension {
     primary_root: Option<PathBuf>,
@@ -81,39 +79,6 @@ impl FilePolicyExtension {
             resolution_root,
             canon_resolution_root,
         }
-    }
-
-    fn required_capabilities(
-        tool_name: &str,
-        payload: &serde_json::Map<String, serde_json::Value>,
-    ) -> BTreeSet<Capability> {
-        let mut required_capabilities = BTreeSet::new();
-        let visible_tool_name = super::user_visible_tool_name(tool_name);
-
-        match visible_tool_name.as_str() {
-            "write" | "edit" => {
-                required_capabilities.insert(Capability::FilesystemWrite);
-            }
-            _ if matches!(
-                tool_name,
-                "memory.retrieve" | "memory_search" | "memory_get"
-            ) =>
-            {
-                required_capabilities.insert(Capability::FilesystemRead);
-            }
-            _ if tool_name == "config.import" => {
-                required_capabilities.insert(Capability::FilesystemRead);
-
-                let mode_requires_write =
-                    super::config_import::config_import_mode_requires_write_object(payload);
-                if mode_requires_write {
-                    required_capabilities.insert(Capability::FilesystemWrite);
-                }
-            }
-            _ => {}
-        }
-
-        required_capabilities
     }
 
     /// Check whether `raw_path` escapes the configured file root.
@@ -273,6 +238,10 @@ impl FilePolicyExtension {
 
         Ok(())
     }
+
+    fn name(&self) -> &'static str {
+        "file-policy"
+    }
 }
 
 fn canonicalize_existing_path_for_policy(path: &Path) -> Option<PathBuf> {
@@ -324,408 +293,57 @@ pub(crate) fn authorize_direct_file_payload(
     payload: &serde_json::Map<String, serde_json::Value>,
     rt: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<(), String> {
-    let extension = FilePolicyExtension::from_runtime_config(rt);
-    extension
+    let policy = FilePolicyExtension::from_runtime_config(rt);
+    policy
         .authorize_file_payload(tool_name, payload)
         .map_err(|error| format!("policy_denied: {error}"))
-}
-
-impl PolicyExtension for FilePolicyExtension {
-    fn name(&self) -> &str {
-        "file-policy"
-    }
-
-    fn authorize_extension(&self, context: &PolicyExtensionContext<'_>) -> Result<(), PolicyError> {
-        // TODO(access-migration): This extension is legacy coverage for
-        // write/edit/config.import. Do not reintroduce read checks here; read
-        // path mode is governed by loong_access::fs.
-        let Some(params) = context.request_parameters else {
-            return Ok(());
-        };
-
-        let raw_tool_name = params
-            .get("tool_name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-
-        let tool_name = super::canonical_tool_name(raw_tool_name);
-        let visible_tool_name = super::user_visible_tool_name(tool_name);
-
-        let payload = params.get("payload").and_then(serde_json::Value::as_object);
-        let Some(payload) = payload else {
-            return Ok(());
-        };
-
-        let required_capabilities = Self::required_capabilities(tool_name, payload);
-        if required_capabilities.is_empty() {
-            return Ok(());
-        }
-
-        for required_capability in required_capabilities {
-            let capability_is_allowed = context
-                .token
-                .allowed_capabilities
-                .contains(&required_capability);
-            if capability_is_allowed {
-                continue;
-            }
-
-            let extension = self.name().to_owned();
-            let reason = format!(
-                "tool `{visible_tool_name}` requires capability `{required_capability:?}` not granted to token"
-            );
-            return Err(PolicyError::ExtensionDenied { extension, reason });
-        }
-
-        self.authorize_file_payload(tool_name, payload)?;
-
-        Ok(())
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use loong_contracts::{Capability, CapabilityToken, ExecutionRoute, HarnessKind};
-    use loong_kernel::{PolicyExtensionContext, VerticalPackManifest};
     use serde_json::json;
-    use std::collections::{BTreeMap, BTreeSet};
-
-    fn test_pack() -> VerticalPackManifest {
-        VerticalPackManifest {
-            pack_id: "test-pack".into(),
-            domain: "test".into(),
-            version: "0.1.0".into(),
-            default_route: ExecutionRoute {
-                harness_kind: HarnessKind::EmbeddedPi,
-                adapter: None,
-            },
-            allowed_connectors: BTreeSet::new(),
-            granted_capabilities: BTreeSet::from([
-                Capability::InvokeTool,
-                Capability::FilesystemRead,
-                Capability::FilesystemWrite,
-            ]),
-            metadata: BTreeMap::new(),
-        }
-    }
-
-    fn token_with_caps(caps: BTreeSet<Capability>) -> CapabilityToken {
-        CapabilityToken {
-            token_id: "tok-1".into(),
-            agent_id: "agent-1".into(),
-            pack_id: "test-pack".into(),
-            issued_at_epoch_s: 1000,
-            expires_at_epoch_s: 2000,
-            allowed_capabilities: caps,
-            generation: 1,
-        }
-    }
-
-    fn make_context<'a>(
-        pack: &'a VerticalPackManifest,
-        token: &'a CapabilityToken,
-        caps: &'a BTreeSet<Capability>,
-        params: Option<&'a serde_json::Value>,
-    ) -> PolicyExtensionContext<'a> {
-        PolicyExtensionContext {
-            pack,
-            token,
-            now_epoch_s: 1500,
-            required_capabilities: caps,
-            request_parameters: params,
-        }
-    }
-
-    #[test]
-    fn denies_file_write_without_capability() {
-        let ext = FilePolicyExtension::new(None);
-        let pack = test_pack();
-        let token = token_with_caps(BTreeSet::from([Capability::InvokeTool]));
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params =
-            json!({"tool_name": "file.write", "payload": {"path": "foo.txt", "content": "x"}});
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        let result = ext.authorize_extension(&ctx);
-        let error = result.expect_err("missing write capability should deny");
-        let rendered = error.to_string();
-        assert!(rendered.contains("tool `write` requires capability"));
-        assert!(!rendered.contains("file.write"));
-    }
-
-    #[test]
-    fn denies_file_edit_without_capability() {
-        let ext = FilePolicyExtension::new(None);
-        let pack = test_pack();
-        let token = token_with_caps(BTreeSet::from([Capability::InvokeTool]));
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({
-            "tool_name": "file.edit",
-            "payload": {"path": "foo.txt", "old_string": "a", "new_string": "b"}
-        });
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        let result = ext.authorize_extension(&ctx);
-        assert!(matches!(
-            result.unwrap_err(),
-            PolicyError::ExtensionDenied { .. }
-        ));
-    }
-
-    #[test]
-    fn ignores_file_read_without_capability() {
-        let ext = FilePolicyExtension::new(None);
-        let pack = test_pack();
-        let token = token_with_caps(BTreeSet::from([Capability::InvokeTool]));
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({"tool_name": "file.read", "payload": {"path": "foo.txt"}});
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        assert!(ext.authorize_extension(&ctx).is_ok());
-    }
-
-    #[test]
-    fn ignores_file_read_with_capability() {
-        let ext = FilePolicyExtension::new(None);
-        let pack = test_pack();
-        let token = token_with_caps(BTreeSet::from([
-            Capability::InvokeTool,
-            Capability::FilesystemRead,
-        ]));
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({"tool_name": "file.read", "payload": {"path": "src/main.rs"}});
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        assert!(ext.authorize_extension(&ctx).is_ok());
-    }
-
-    #[test]
-    fn ignores_file_read_path_escape() {
-        let root_dir = tempfile::tempdir().expect("tempdir");
-        let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
-        let pack = test_pack();
-        let token = token_with_caps(BTreeSet::from([
-            Capability::InvokeTool,
-            Capability::FilesystemRead,
-        ]));
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({"tool_name": "file.read", "payload": {"path": "../../etc/passwd"}});
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        assert!(ext.authorize_extension(&ctx).is_ok());
-    }
 
     #[test]
     fn allows_path_within_root() {
         let root_dir = tempfile::tempdir().expect("tempdir");
         let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
-        let pack = test_pack();
-        let token = token_with_caps(BTreeSet::from([
-            Capability::InvokeTool,
-            Capability::FilesystemRead,
-        ]));
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({"tool_name": "file.read", "payload": {"path": "src/main.rs"}});
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        assert!(ext.authorize_extension(&ctx).is_ok());
+        let payload = json!({"path": "src/main.rs"});
+        let payload = payload.as_object().expect("object payload");
+        assert!(ext.authorize_file_payload("file.write", payload).is_ok());
     }
 
     #[test]
     fn allows_search_root_within_file_root() {
         let root_dir = tempfile::tempdir().expect("tempdir");
         let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
-        let pack = test_pack();
-        let token = token_with_caps(BTreeSet::from([
-            Capability::InvokeTool,
-            Capability::FilesystemRead,
-        ]));
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({
-            "tool_name": "glob.search",
-            "payload": {
-                "root": "src",
-                "pattern": "**/*.rs"
-            }
+        let payload = json!({
+            "root": "src",
+            "pattern": "**/*.rs"
         });
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
+        let payload = payload.as_object().expect("object payload");
 
-        assert!(ext.authorize_extension(&ctx).is_ok());
-    }
-
-    #[test]
-    fn ignores_search_root_escape() {
-        let root_dir = tempfile::tempdir().expect("tempdir");
-        let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
-        let pack = test_pack();
-        let token = token_with_caps(BTreeSet::from([
-            Capability::InvokeTool,
-            Capability::FilesystemRead,
-        ]));
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({
-            "tool_name": "content.search",
-            "payload": {
-                "root": "../outside",
-                "query": "needle"
-            }
-        });
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-
-        assert!(ext.authorize_extension(&ctx).is_ok());
-    }
-
-    #[test]
-    fn config_import_requires_filesystem_read() {
-        let ext = FilePolicyExtension::new(None);
-        let pack = test_pack();
-        let token = token_with_caps(BTreeSet::from([Capability::InvokeTool]));
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params =
-            json!({"tool_name": "config.import", "payload": {"input_path": "config.toml"}});
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        assert!(matches!(
-            ext.authorize_extension(&ctx).unwrap_err(),
-            PolicyError::ExtensionDenied { .. }
-        ));
-    }
-
-    #[test]
-    fn config_import_allowed_with_filesystem_read() {
-        let ext = FilePolicyExtension::new(None);
-        let pack = test_pack();
-        let token = token_with_caps(BTreeSet::from([
-            Capability::InvokeTool,
-            Capability::FilesystemRead,
-        ]));
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params =
-            json!({"tool_name": "config.import", "payload": {"input_path": "config.toml"}});
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        assert!(ext.authorize_extension(&ctx).is_ok());
-    }
-
-    #[test]
-    fn memory_search_requires_filesystem_read() {
-        let payload = serde_json::Map::new();
-        let required = FilePolicyExtension::required_capabilities("memory_search", &payload);
-        assert_eq!(required, BTreeSet::from([Capability::FilesystemRead]));
-
-        let ext = FilePolicyExtension::new(None);
-        let pack = test_pack();
-        let token = token_with_caps(BTreeSet::from([Capability::InvokeTool]));
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({"tool_name": "memory_search", "payload": {"query": "deploy"}});
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        assert!(matches!(
-            ext.authorize_extension(&ctx).unwrap_err(),
-            PolicyError::ExtensionDenied { .. }
-        ));
-    }
-
-    #[test]
-    fn memory_search_allowed_with_filesystem_read() {
-        let ext = FilePolicyExtension::new(None);
-        let pack = test_pack();
-        let token = token_with_caps(BTreeSet::from([
-            Capability::InvokeTool,
-            Capability::FilesystemRead,
-        ]));
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({"tool_name": "memory_search", "payload": {"query": "deploy"}});
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        assert!(ext.authorize_extension(&ctx).is_ok());
-    }
-
-    #[test]
-    fn memory_get_requires_filesystem_read() {
-        let ext = FilePolicyExtension::new(None);
-        let pack = test_pack();
-        let token = token_with_caps(BTreeSet::from([Capability::InvokeTool]));
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({"tool_name": "memory_get", "payload": {"path": "MEMORY.md"}});
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        assert!(matches!(
-            ext.authorize_extension(&ctx).unwrap_err(),
-            PolicyError::ExtensionDenied { .. }
-        ));
-    }
-
-    #[test]
-    fn memory_get_allowed_with_filesystem_read() {
-        let payload = serde_json::Map::new();
-        let required = FilePolicyExtension::required_capabilities("memory_get", &payload);
-        assert_eq!(required, BTreeSet::from([Capability::FilesystemRead]));
-
-        let ext = FilePolicyExtension::new(None);
-        let pack = test_pack();
-        let token = token_with_caps(BTreeSet::from([
-            Capability::InvokeTool,
-            Capability::FilesystemRead,
-        ]));
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({"tool_name": "memory_get", "payload": {"path": "MEMORY.md"}});
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        assert!(ext.authorize_extension(&ctx).is_ok());
-    }
-
-    #[test]
-    fn ignores_file_read_underscore_alias() {
-        let ext = FilePolicyExtension::new(None);
-        let pack = test_pack();
-        let token = token_with_caps(BTreeSet::from([Capability::InvokeTool]));
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({"tool_name": "file_read", "payload": {"path": "foo.txt"}});
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        assert!(ext.authorize_extension(&ctx).is_ok());
+        assert!(ext.authorize_file_payload("glob.search", payload).is_ok());
     }
 
     #[test]
     fn no_path_check_when_file_root_is_none() {
         let ext = FilePolicyExtension::new(None);
-        let pack = test_pack();
-        let token = token_with_caps(BTreeSet::from([
-            Capability::InvokeTool,
-            Capability::FilesystemRead,
-        ]));
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({"tool_name": "file.read", "payload": {"path": "../../etc/passwd"}});
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        // No file_root means no escape check — allowed
-        assert!(ext.authorize_extension(&ctx).is_ok());
-    }
-
-    #[test]
-    fn ignores_file_read_absolute_path_outside_root() {
-        let root_dir = tempfile::tempdir().expect("tempdir");
-        let outside_dir = tempfile::tempdir().expect("tempdir");
-        let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
-        let pack = test_pack();
-        let token = token_with_caps(BTreeSet::from([
-            Capability::InvokeTool,
-            Capability::FilesystemRead,
-        ]));
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let escape_path = outside_dir.path().join("outside.txt");
-        let params = json!({
-            "tool_name": "file.read",
-            "payload": {"path": escape_path.display().to_string()}
-        });
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        assert!(ext.authorize_extension(&ctx).is_ok());
+        let payload = json!({"path": "../../etc/passwd"});
+        let payload = payload.as_object().expect("object payload");
+        assert!(ext.authorize_file_payload("file.write", payload).is_ok());
     }
 
     #[test]
     fn config_import_sandbox_uses_input_path_key() {
         let root_dir = tempfile::tempdir().expect("tempdir");
         let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
-        let pack = test_pack();
-        let token = token_with_caps(BTreeSet::from([
-            Capability::InvokeTool,
-            Capability::FilesystemRead,
-        ]));
-        let caps = BTreeSet::from([Capability::InvokeTool]);
         // input_path escapes the root — must be denied
-        let params =
-            json!({"tool_name": "config.import", "payload": {"input_path": "../../etc/passwd"}});
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
+        let payload = json!({"input_path": "../../etc/passwd"});
+        let payload = payload.as_object().expect("object payload");
         assert!(matches!(
-            ext.authorize_extension(&ctx).unwrap_err(),
+            ext.authorize_file_payload("config.import", payload)
+                .unwrap_err(),
             PolicyError::ExtensionDenied { .. }
         ));
     }
@@ -734,40 +352,24 @@ mod tests {
     fn config_import_within_root_allowed() {
         let root_dir = tempfile::tempdir().expect("tempdir");
         let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
-        let pack = test_pack();
-        let token = token_with_caps(BTreeSet::from([
-            Capability::InvokeTool,
-            Capability::FilesystemRead,
-        ]));
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params =
-            json!({"tool_name": "config.import", "payload": {"input_path": "subdir/config.toml"}});
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        assert!(ext.authorize_extension(&ctx).is_ok());
+        let payload = json!({"input_path": "subdir/config.toml"});
+        let payload = payload.as_object().expect("object payload");
+        assert!(ext.authorize_file_payload("config.import", payload).is_ok());
     }
 
     #[test]
     fn config_import_apply_checks_output_path() {
         let root_dir = tempfile::tempdir().expect("tempdir");
         let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
-        let pack = test_pack();
-        let token = token_with_caps(BTreeSet::from([
-            Capability::InvokeTool,
-            Capability::FilesystemRead,
-            Capability::FilesystemWrite,
-        ]));
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({
-            "tool_name": "config.import",
-            "payload": {
-                "mode": "apply",
-                "input_path": "subdir/config.toml",
-                "output_path": "../../etc/passwd"
-            }
+        let payload = json!({
+            "mode": "apply",
+            "input_path": "subdir/config.toml",
+            "output_path": "../../etc/passwd"
         });
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
+        let payload = payload.as_object().expect("object payload");
         assert!(matches!(
-            ext.authorize_extension(&ctx).unwrap_err(),
+            ext.authorize_file_payload("config.import", payload)
+                .unwrap_err(),
             PolicyError::ExtensionDenied { .. }
         ));
     }
@@ -776,48 +378,15 @@ mod tests {
     fn config_import_plan_checks_trimmed_output_preview_path() {
         let root_dir = tempfile::tempdir().expect("tempdir");
         let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
-        let pack = test_pack();
-        let token = token_with_caps(BTreeSet::from([
-            Capability::InvokeTool,
-            Capability::FilesystemRead,
-        ]));
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({
-            "tool_name": "config.import",
-            "payload": {
-                "mode": "plan",
-                "input_path": "subdir/config.toml",
-                "output_path": " ../../etc/passwd "
-            }
+        let payload = json!({
+            "mode": "plan",
+            "input_path": "subdir/config.toml",
+            "output_path": " ../../etc/passwd "
         });
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        let result = ext.authorize_extension(&ctx);
+        let payload = payload.as_object().expect("object payload");
+        let result = ext.authorize_file_payload("config.import", payload);
         assert!(matches!(
             result.unwrap_err(),
-            PolicyError::ExtensionDenied { .. }
-        ));
-    }
-
-    #[test]
-    fn config_import_apply_requires_filesystem_write() {
-        let ext = FilePolicyExtension::new(None);
-        let pack = test_pack();
-        let token = token_with_caps(BTreeSet::from([
-            Capability::InvokeTool,
-            Capability::FilesystemRead,
-        ]));
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({
-            "tool_name": "config.import",
-            "payload": {
-                "mode": "apply",
-                "input_path": "config.toml",
-                "output_path": "loong.toml"
-            }
-        });
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        assert!(matches!(
-            ext.authorize_extension(&ctx).unwrap_err(),
             PolicyError::ExtensionDenied { .. }
         ));
     }

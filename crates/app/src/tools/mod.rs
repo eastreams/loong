@@ -49,7 +49,7 @@ mod kernel_adapter;
 mod memory_tools;
 pub(crate) mod messaging;
 mod payload;
-mod plane;
+pub(crate) mod plane;
 mod process_exec;
 mod provider_schema;
 mod provider_switch;
@@ -135,11 +135,6 @@ pub(crate) use tool_identity::{
     required_capabilities_for_tool_name_and_payload, resolve_tool_execution,
 };
 
-pub(crate) fn register_tool_invocation_policy(
-    policy: &mut loong_kernel::PolicyPipeline<crate::context::AppContextFactory>,
-) {
-    policy.push_policy::<plane::ToolInvocationAction, _>(plane::ToolInvocationAllowPolicy);
-}
 pub use tool_identity::{
     canonical_tool_name, is_known_tool_name, is_known_tool_name_in_view, user_visible_tool_name,
 };
@@ -366,10 +361,9 @@ pub(crate) fn resolve_installable_skill_id(root: &Path) -> Result<String, String
 /// Execute a tool request, routing through the kernel for
 /// policy enforcement and audit recording.
 ///
-/// All requests are dispatched via `kernel.execute_tool_core` which
-/// enforces the derived capability set for the effective tool request, runs
-/// policy extensions, and records audit events.
-// TODO: remove this
+/// Legacy requests are dispatched via `kernel.execute_tool_core`; typed tools
+/// should enter through the app-owned tool plane instead.
+// TODO(tool-plane): delete this legacy envelope once all tools use ctx.tool(...).invoke(...).
 pub async fn execute_tool(
     request: ToolCoreRequest,
     kernel_ctx: &KernelContext,
@@ -405,22 +399,6 @@ pub(crate) async fn execute_kernel_tool_request(
         .map_err(|error| {
             loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(error))
         })?;
-        let mut request = request;
-        if request.tool_name == "read" {
-            // Temporary read bridge: query/glob modes still route to legacy
-            // tools, while path reads continue into the typed plane below.
-            // Delete this once read becomes a single aggregate typed tool.
-            let routed_request = routing::route_direct_read_tool_request_for_legacy(
-                request.clone(),
-                &effective_config,
-            )
-            .map_err(|error| {
-                loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(error))
-            })?;
-            if routed_request.tool_name != "read" {
-                request = routed_request;
-            }
-        }
 
         let typed_path = if matches!(requested_tool_name.as_str(), "file.read" | "file_read") {
             plane::ToolPath::from("file.read")
@@ -495,6 +473,9 @@ pub(crate) async fn execute_kernel_tool_request(
         }
 
         let request = if request.tool_name == "read" {
+            // Legacy fallback for the direct read facade. Until `read` becomes
+            // an aggregate typed tool, only explicit `file.read` enters the
+            // typed plane above.
             routing::route_direct_read_tool_request_for_legacy(request, &effective_config).map_err(
                 |error| {
                     loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(
