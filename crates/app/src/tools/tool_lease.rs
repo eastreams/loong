@@ -1,4 +1,10 @@
+use std::collections::BTreeSet;
+
+use loong_contracts::Capability;
+
 use super::*;
+
+const TOOL_INVOKE_CAPABILITIES_OVERRIDE_FIELD: &str = "capabilities_override";
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PeekedToolInvokeRequest<'a> {
@@ -58,6 +64,36 @@ pub(crate) fn peek_tool_invoke_request(
         tool_name,
         arguments,
     })
+}
+
+pub(crate) fn tool_invoke_capabilities_override(
+    payload: &Value,
+) -> Result<Option<BTreeSet<Capability>>, String> {
+    let Some(raw_override) = payload.get(TOOL_INVOKE_CAPABILITIES_OVERRIDE_FIELD) else {
+        return Ok(None);
+    };
+    if raw_override.is_null() {
+        return Ok(None);
+    }
+
+    let values = raw_override.as_array().ok_or_else(|| {
+        "tool.invoke payload.capabilities_override must be an array of capability strings"
+            .to_owned()
+    })?;
+    let mut capabilities = BTreeSet::new();
+    for value in values {
+        let raw_capability = value.as_str().ok_or_else(|| {
+            "tool.invoke payload.capabilities_override must contain only strings".to_owned()
+        })?;
+        let Some(capability) = Capability::parse(raw_capability) else {
+            return Err(format!(
+                "tool.invoke payload.capabilities_override contains unknown capability `{raw_capability}`"
+            ));
+        };
+        capabilities.insert(capability);
+    }
+
+    Ok(Some(capabilities))
 }
 
 pub(crate) fn resolve_tool_invoke_request(

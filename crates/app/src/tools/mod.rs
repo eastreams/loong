@@ -140,6 +140,7 @@ pub use tool_identity::{
 };
 pub(crate) use tool_lease::{
     ToolInvokeProviderExposure, peek_tool_invoke_request, resolve_tool_invoke_request,
+    tool_invoke_capabilities_override,
 };
 pub(crate) use tool_lease::{bridge_provider_tool_call_with_scope, issue_tool_lease};
 #[cfg(test)]
@@ -443,6 +444,12 @@ pub(crate) async fn execute_kernel_tool_request(
             .map_err(|error| {
                 loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(error))
             })?;
+            let capability_override =
+                tool_invoke_capabilities_override(&request.payload).map_err(|error| {
+                    loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(
+                        error,
+                    ))
+                })?;
             let typed_path = plane::ToolPath::from(effective_request.tool_name.clone());
             match execution_context.tool(typed_path) {
                 Ok(invocation) => {
@@ -453,7 +460,9 @@ pub(crate) async fn execute_kernel_tool_request(
                     if let Some(body) = typed_payload.as_object_mut() {
                         let _trusted_overlay = take_trusted_internal_tool_context(body);
                     }
-                    let payload = invocation.invoke(typed_payload).await?;
+                    let payload = invocation
+                        .invoke_with_capabilities(typed_payload, capability_override)
+                        .await?;
                     return Ok(ToolCoreOutcome {
                         status: "ok".to_owned(),
                         payload,

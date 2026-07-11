@@ -764,7 +764,10 @@ mod tests {
             Err(error) => error,
         };
 
-        assert_eq!(error, "child execution context cannot add capabilities");
+        assert_eq!(
+            error,
+            "child execution context cannot add capabilities: missing filesystem_read"
+        );
     }
 
     #[cfg(feature = "tool-file")]

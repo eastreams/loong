@@ -368,6 +368,81 @@ async fn kernel_routed_tool_invoke_file_read_uses_typed_tool_registry() {
 }
 
 #[tokio::test]
+async fn kernel_routed_tool_invoke_capability_override_narrows_child_access_caps() {
+    let base = unique_temp_dir("loong-tool-invoke-read-capability-override");
+    let root = base.join("root");
+    fs::create_dir_all(&root).expect("create root");
+    fs::write(root.join("notes.txt"), "alpha").expect("write fixture");
+
+    let config = ToolRuntimeConfig {
+        file_root: Some(root),
+        ..ToolRuntimeConfig::default()
+    };
+    let mut request = tool_invoke_request(
+        "file.read",
+        json!({
+            "path": "notes.txt",
+        }),
+    )
+    .unwrap_or_else(|error| panic!("issue test tool lease: {error}"));
+    request
+        .payload
+        .as_object_mut()
+        .expect("tool.invoke payload object")
+        .insert("capabilities_override".to_owned(), json!([]));
+
+    let error = execute_request_via_kernel_tool_registry(request, &config)
+        .await
+        .expect_err("empty override should remove filesystem read from child context");
+
+    assert!(
+        error.to_string().contains("FilesystemRead")
+            || error.to_string().contains("filesystem_read"),
+        "expected filesystem read capability denial, got: {error}"
+    );
+    let _ = fs::remove_dir_all(base);
+}
+
+#[tokio::test]
+async fn kernel_routed_tool_invoke_capability_override_rejects_added_capabilities() {
+    let base = unique_temp_dir("loong-tool-invoke-read-capability-escalation");
+    let root = base.join("root");
+    fs::create_dir_all(&root).expect("create root");
+
+    let config = ToolRuntimeConfig {
+        file_root: Some(root),
+        ..ToolRuntimeConfig::default()
+    };
+    let mut request = tool_invoke_request(
+        "file.read",
+        json!({
+            "path": "notes.txt",
+        }),
+    )
+    .unwrap_or_else(|error| panic!("issue test tool lease: {error}"));
+    request
+        .payload
+        .as_object_mut()
+        .expect("tool.invoke payload object")
+        .insert(
+            "capabilities_override".to_owned(),
+            json!(["filesystem_write"]),
+        );
+
+    let error = execute_request_via_kernel_tool_registry(request, &config)
+        .await
+        .expect_err("override must not add capabilities beyond read descriptor");
+
+    assert!(
+        error
+            .to_string()
+            .contains("tool capability override cannot add capabilities"),
+        "expected capability override rejection, got: {error}"
+    );
+    let _ = fs::remove_dir_all(base);
+}
+
+#[tokio::test]
 async fn kernel_routed_direct_read_glob_uses_typed_tool_registry() {
     let base = unique_temp_dir("loong-read-glob-typed-registry");
     let root = base.join("root");
