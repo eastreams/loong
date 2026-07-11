@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use loong_contracts::ToolCoreRequest;
+use loong_contracts::{ExecutionPlane, PlaneTier};
 use serde_json::{Value, json};
 
 use super::runtime_binding::ProviderRuntimeBinding;
@@ -327,9 +327,13 @@ async fn load_workspace_guidance_model_with_binding_and_budget(
     let mut model = workspace_guidance::WorkspaceGuidanceModel::default();
 
     for source_path in source_candidates {
-        let maybe_content =
-            read_workspace_guidance_source_via_kernel(workspace_root, &source_path, kernel_ctx)
-                .await;
+        let maybe_content = read_workspace_guidance_source_via_access(
+            workspace_root,
+            &source_path,
+            tool_runtime_config,
+            kernel_ctx,
+        )
+        .await;
         let Some(content) = maybe_content else {
             continue;
         };
@@ -397,8 +401,13 @@ async fn load_runtime_self_model_with_binding_and_budget(
     let mut model = runtime_self::RuntimeSelfModel::default();
 
     for (candidate_path, lane) in source_candidates {
-        let Some(content) =
-            read_runtime_self_source_via_kernel(workspace_root, &candidate_path, kernel_ctx).await
+        let Some(content) = read_runtime_self_source_via_access(
+            workspace_root,
+            &candidate_path,
+            tool_runtime_config,
+            kernel_ctx,
+        )
+        .await
         else {
             continue;
         };
@@ -422,22 +431,30 @@ async fn load_runtime_self_model_with_binding_and_budget(
     model
 }
 
-async fn read_runtime_self_source_via_kernel(
+async fn read_runtime_self_source_via_access(
     workspace_root: &Path,
     path: &Path,
+    tool_runtime_config: &tools::runtime_config::ToolRuntimeConfig,
     kernel_ctx: &KernelContext,
 ) -> Option<String> {
     let request_path = workspace_guidance::workspace_source_request_path(workspace_root, path)?;
-    let request = ToolCoreRequest {
-        tool_name: "read".to_owned(),
-        payload: json!({
-            "path": request_path,
-        }),
-    };
-
-    let outcome = tools::execute_tool(request, kernel_ctx).await.ok()?;
-    let payload_content = outcome.payload.get("content")?;
-    let content = payload_content.as_str()?;
+    let read_runtime_config =
+        tool_runtime_config.with_workspace_root_override(workspace_root.to_path_buf());
+    let execution_context = kernel_ctx
+        .execution_context(
+            ExecutionPlane::Tool,
+            PlaneTier::Core,
+            None,
+            &read_runtime_config,
+        )
+        .ok()?;
+    let output = execution_context
+        .access()
+        .fs()
+        .read_file(request_path)
+        .await
+        .ok()?;
+    let content = String::from_utf8_lossy(&output.bytes);
     let trimmed = content.trim();
     if trimmed.is_empty() {
         return None;
@@ -446,22 +463,30 @@ async fn read_runtime_self_source_via_kernel(
     Some(trimmed.to_owned())
 }
 
-async fn read_workspace_guidance_source_via_kernel(
+async fn read_workspace_guidance_source_via_access(
     workspace_root: &Path,
     path: &Path,
+    tool_runtime_config: &tools::runtime_config::ToolRuntimeConfig,
     kernel_ctx: &KernelContext,
 ) -> Option<String> {
     let request_path = workspace_guidance::workspace_source_request_path(workspace_root, path)?;
-    let request = ToolCoreRequest {
-        tool_name: "read".to_owned(),
-        payload: json!({
-            "path": request_path,
-        }),
-    };
-
-    let outcome = tools::execute_tool(request, kernel_ctx).await.ok()?;
-    let payload_content = outcome.payload.get("content")?;
-    let content = payload_content.as_str()?;
+    let read_runtime_config =
+        tool_runtime_config.with_workspace_root_override(workspace_root.to_path_buf());
+    let execution_context = kernel_ctx
+        .execution_context(
+            ExecutionPlane::Tool,
+            PlaneTier::Core,
+            None,
+            &read_runtime_config,
+        )
+        .ok()?;
+    let output = execution_context
+        .access()
+        .fs()
+        .read_file(request_path)
+        .await
+        .ok()?;
+    let content = String::from_utf8_lossy(&output.bytes);
     let trimmed = content.trim();
     if trimmed.is_empty() {
         return None;
@@ -1387,11 +1412,11 @@ mod tests {
 
         assert!(
             !has_typed_tool_event,
-            "disabled system prompts should not trigger typed runtime-self tool reads"
+            "disabled system prompts should not trigger runtime-source tool invocations"
         );
         assert!(
             !has_legacy_tool_plane_event,
-            "disabled system prompts should not trigger legacy runtime-self tool reads"
+            "disabled system prompts should not trigger legacy runtime-source tool reads"
         );
     }
 
@@ -1441,8 +1466,8 @@ mod tests {
             .count();
 
         assert_eq!(
-            typed_tool_event_count, 1,
-            "only existing runtime-self files should trigger typed tool reads"
+            typed_tool_event_count, 0,
+            "runtime-source file reads are governed access, not tool invocations"
         );
         assert_eq!(
             legacy_tool_plane_event_count, 0,
@@ -1499,8 +1524,8 @@ mod tests {
             .count();
 
         assert_eq!(
-            typed_tool_event_count, 1,
-            "runtime-self loading should use the runtime workspace root, not the decoy tool root"
+            typed_tool_event_count, 0,
+            "runtime-self loading should use governed access, not tool invocation"
         );
         assert_eq!(
             legacy_tool_plane_event_count, 0,
