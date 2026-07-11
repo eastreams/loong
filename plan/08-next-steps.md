@@ -53,9 +53,10 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      harnesses 已经注册该 policy；
    - `loong-tools` 已经提供 typed `WriteTool` 基础：payload parsing、tool spec
      metadata、typed output 和 access-backed execute 都在 concrete tool crate 内；
-     尚未注册到 app plane，也尚未替换 app legacy write dispatch；
-   - app `write` / `file.write` 仍未迁入 typed tool/access path，当前仍走 legacy tool
-     helper；
+   - app plane 已经注册 typed `WriteTool`，kernel-routed `write` / `file.write`
+     已走 `ctx.tool(...).invoke(...)` -> access-backed `fs.write`；
+   - legacy direct `execute_tool_core_with_config` 的 `write` 分支仍在，主要承载迁移前
+     runtime preview/event 语义和非 kernel-routed 调用面；
    - write/edit/config.import 按同样 access-backed action 模式迁移；
    - 迁移完成后删除 `FilePolicyExtension` 对应旧分支；
    - 逐步清空 `Kernel::execute_tool_core` 调用面，再删除 `LegacyToolPlane` 和 adapter
