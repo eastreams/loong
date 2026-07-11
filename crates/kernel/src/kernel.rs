@@ -256,7 +256,7 @@ where
         pack_id: &str,
         token: &CapabilityToken,
         action: ToolInvocationAction,
-        policy_context: &C::Cx<'_>,
+        ctx: &C::Cx<'_>,
     ) -> Result<ActionGrant<ToolInvocationAction>, KernelError> {
         let pack = self.get_pack(pack_id)?;
         let path = action.path().clone();
@@ -266,7 +266,7 @@ where
             .copied()
             .collect::<BTreeSet<_>>();
         self.assert_pack_grants(pack, &required_capabilities)?;
-        let now = policy_context.now_epoch_s();
+        let now = ctx.now_epoch_s();
         if let Err(policy_error) = self.authorize_token(pack, token, now, &required_capabilities) {
             self.record_tool_invocation_event(
                 now,
@@ -282,7 +282,7 @@ where
             return Err(KernelError::Policy(policy_error));
         }
 
-        match self.policy.grant(policy_context, action).await {
+        match self.policy.grant(ctx, action).await {
             Ok(grant) => Ok(grant),
             Err(grant_error) => {
                 let outcome = match &grant_error {
@@ -319,15 +319,15 @@ where
     /// grant; legacy adapters keep `PlaneInvoked` until they are migrated.
     pub fn record_tool_invocation(
         &self,
-        policy_context: &C::Cx<'_>,
+        ctx: &C::Cx<'_>,
         path: ToolPath,
         required_capabilities: &BTreeSet<Capability>,
         outcome: ToolInvocationOutcome,
     ) -> Result<(), KernelError> {
         self.record_tool_invocation_event(
-            policy_context.now_epoch_s(),
-            Some(policy_context.token().agent_id.clone()),
-            policy_context.pack().pack_id.clone(),
+            ctx.now_epoch_s(),
+            Some(ctx.token().agent_id.clone()),
+            ctx.pack().pack_id.clone(),
             path,
             required_capabilities,
             outcome,
@@ -458,17 +458,11 @@ where
         delegated_core_adapter: Option<&str>,
         operation: &str,
         required_capabilities: &BTreeSet<Capability>,
-        policy_context: &C::Cx<'_>,
+        ctx: &C::Cx<'_>,
     ) -> Result<(), KernelError> {
         let pack = self.get_pack(pack_id)?;
         let now = self
-            .authorize_pack_operation(
-                policy_context,
-                pack,
-                token,
-                operation,
-                required_capabilities,
-            )
+            .authorize_pack_operation(ctx, pack, token, operation, required_capabilities)
             .await?;
 
         let primary_adapter = primary_adapter.to_owned();
@@ -494,12 +488,12 @@ where
         pack_id: &str,
         token: &CapabilityToken,
         task: TaskIntent,
-        policy_context: &C::Cx<'_>,
+        ctx: &C::Cx<'_>,
     ) -> Result<KernelDispatch, KernelError> {
         let pack = self.get_pack(pack_id)?;
         let now = self
             .authorize_pack_operation(
-                policy_context,
+                ctx,
                 pack,
                 token,
                 "execute_task",
@@ -542,13 +536,13 @@ where
         token: &CapabilityToken,
         core_name: Option<&str>,
         command: ConnectorCommand,
-        policy_context: &C::Cx<'_>,
+        ctx: &C::Cx<'_>,
     ) -> Result<ConnectorDispatch, KernelError> {
         let pack = self.get_pack(pack_id)?;
         self.assert_connector_allowed(pack, &command.connector_name)?;
         let now = self
             .authorize_pack_operation(
-                policy_context,
+                ctx,
                 pack,
                 token,
                 &command.operation,
@@ -605,13 +599,13 @@ where
         extension_name: &str,
         core_name: Option<&str>,
         command: ConnectorCommand,
-        policy_context: &C::Cx<'_>,
+        ctx: &C::Cx<'_>,
     ) -> Result<ConnectorDispatch, KernelError> {
         let pack = self.get_pack(pack_id)?;
         self.assert_connector_allowed(pack, &command.connector_name)?;
         let now = self
             .authorize_pack_operation(
-                policy_context,
+                ctx,
                 pack,
                 token,
                 &command.operation,
@@ -671,17 +665,11 @@ where
         required_capabilities: &BTreeSet<Capability>,
         core_name: Option<&str>,
         request: RuntimeCoreRequest,
-        policy_context: &C::Cx<'_>,
+        ctx: &C::Cx<'_>,
     ) -> Result<RuntimeCoreOutcome, KernelError> {
         let pack = self.get_pack(pack_id)?;
         let now = self
-            .authorize_pack_operation(
-                policy_context,
-                pack,
-                token,
-                &request.action,
-                required_capabilities,
-            )
+            .authorize_pack_operation(ctx, pack, token, &request.action, required_capabilities)
             .await?;
         let resolved_core_adapter = core_name
             .map(std::string::ToString::to_string)
@@ -717,17 +705,11 @@ where
         extension_name: &str,
         core_name: Option<&str>,
         request: RuntimeExtensionRequest,
-        policy_context: &C::Cx<'_>,
+        ctx: &C::Cx<'_>,
     ) -> Result<RuntimeExtensionOutcome, KernelError> {
         let pack = self.get_pack(pack_id)?;
         let now = self
-            .authorize_pack_operation(
-                policy_context,
-                pack,
-                token,
-                &request.action,
-                required_capabilities,
-            )
+            .authorize_pack_operation(ctx, pack, token, &request.action, required_capabilities)
             .await?;
         let resolved_core_adapter = core_name
             .map(std::string::ToString::to_string)
@@ -822,12 +804,12 @@ where
         extension_name: &str,
         core_name: Option<&str>,
         request: ToolExtensionRequest,
-        policy_context: &C::Cx<'_>,
+        ctx: &C::Cx<'_>,
     ) -> Result<ToolExtensionOutcome, KernelError> {
         let pack = self.get_pack(pack_id)?;
         let now = self
             .authorize_pack_operation(
-                policy_context,
+                ctx,
                 pack,
                 token,
                 &request.extension_action,
@@ -870,17 +852,11 @@ where
         required_capabilities: &BTreeSet<Capability>,
         core_name: Option<&str>,
         request: MemoryCoreRequest,
-        policy_context: &C::Cx<'_>,
+        ctx: &C::Cx<'_>,
     ) -> Result<MemoryCoreOutcome, KernelError> {
         let pack = self.get_pack(pack_id)?;
         let now = self
-            .authorize_pack_operation(
-                policy_context,
-                pack,
-                token,
-                &request.operation,
-                required_capabilities,
-            )
+            .authorize_pack_operation(ctx, pack, token, &request.operation, required_capabilities)
             .await?;
         let resolved_core_adapter = core_name
             .map(std::string::ToString::to_string)
@@ -916,17 +892,11 @@ where
         extension_name: &str,
         core_name: Option<&str>,
         request: MemoryExtensionRequest,
-        policy_context: &C::Cx<'_>,
+        ctx: &C::Cx<'_>,
     ) -> Result<MemoryExtensionOutcome, KernelError> {
         let pack = self.get_pack(pack_id)?;
         let now = self
-            .authorize_pack_operation(
-                policy_context,
-                pack,
-                token,
-                &request.operation,
-                required_capabilities,
-            )
+            .authorize_pack_operation(ctx, pack, token, &request.operation, required_capabilities)
             .await?;
         let resolved_core_adapter = core_name
             .map(std::string::ToString::to_string)
@@ -965,23 +935,16 @@ where
 
     async fn authorize_pack_operation(
         &self,
-        policy_context: &C::Cx<'_>,
+        ctx: &C::Cx<'_>,
         pack: &VerticalPackManifest,
         token: &CapabilityToken,
         operation: &str,
         required_capabilities: &BTreeSet<Capability>,
     ) -> Result<u64, KernelError> {
         self.assert_pack_grants(pack, required_capabilities)?;
-        let now = policy_context.now_epoch_s();
-        self.authorize_or_audit_denial(
-            policy_context,
-            pack,
-            token,
-            now,
-            operation,
-            required_capabilities,
-        )
-        .await?;
+        let now = ctx.now_epoch_s();
+        self.authorize_or_audit_denial(ctx, pack, token, now, operation, required_capabilities)
+            .await?;
         Ok(now)
     }
 
@@ -1099,7 +1062,7 @@ where
     // TODO: deprecate this
     async fn authorize_or_audit_denial(
         &self,
-        policy_context: &C::Cx<'_>,
+        ctx: &C::Cx<'_>,
         pack: &VerticalPackManifest,
         token: &CapabilityToken,
         now_epoch_s: u64,
@@ -1114,11 +1077,7 @@ where
         }
 
         let action = LegacyKernelAction::new(operation, required_capabilities.clone());
-        if let Err(policy_error) = self
-            .policy
-            .authorize_kernel_action(policy_context, action)
-            .await
-        {
+        if let Err(policy_error) = self.policy.authorize_kernel_action(ctx, action).await {
             self.record_authorization_denial(pack, token, now_epoch_s, &policy_error)?;
             return Err(KernelError::Policy(policy_error));
         }

@@ -45,13 +45,13 @@ async fn record_tool_invocation_records_typed_completed_event() {
         .issue_token("typed-completed", "agent-typed", 120)
         .expect("token should issue");
     let path = ToolPath::from("read");
-    let policy_context = TestPolicyContext::from_token(&token, kernel.now_epoch_s());
+    let ctx = TestPolicyContext::from_token(&token, kernel.now_epoch_s());
     let grant = kernel
         .grant_tool_invocation(
             "typed-completed",
             &token,
             tool_invocation_action(path.clone(), BTreeSet::from([Capability::InvokeTool])),
-            &policy_context,
+            &ctx,
         )
         .await
         .expect("tool invocation should authorize");
@@ -65,7 +65,7 @@ async fn record_tool_invocation_records_typed_completed_event() {
 
     kernel
         .record_tool_invocation(
-            &policy_context,
+            &ctx,
             path.clone(),
             &audit_caps,
             ToolInvocationOutcome::Completed,

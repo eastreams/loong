@@ -29,7 +29,7 @@ where
     P: PolicyEngine<C>,
 {
     policy_engine: &'a P,
-    policy_context: &'a C::Cx<'ctx>,
+    ctx: &'a C::Cx<'ctx>,
 }
 
 impl<'a, 'ctx, C, P> FsAccess<'a, 'ctx, C, P>
@@ -39,11 +39,8 @@ where
 {
     #[inline(always)]
     #[must_use]
-    pub fn new(policy_engine: &'a P, policy_context: &'a C::Cx<'ctx>) -> Self {
-        Self {
-            policy_engine,
-            policy_context,
-        }
+    pub fn new(policy_engine: &'a P, ctx: &'a C::Cx<'ctx>) -> Self {
+        Self { policy_engine, ctx }
     }
 }
 
@@ -61,25 +58,25 @@ where
     pub async fn read_file(self, path: impl AsRef<Path>) -> Result<FsReadOutput, FsAccessError> {
         let resolve_action = FsResolvePathAction::resolve(
             path,
-            self.policy_context.fs_resolution_root(),
-            self.policy_context.fs_allowed_roots(),
+            self.ctx.fs_resolution_root(),
+            self.ctx.fs_allowed_roots(),
         )?;
         let resolve_grant = self
             .policy_engine
-            .grant(self.policy_context, resolve_action)
+            .grant(self.ctx, resolve_action)
             .await
             .map_err(AuthorizationError::from)
             .map_err(FsAccessError::Authorization)?;
-        let path = resolve_grant.granted.run(self.policy_context).await?;
+        let path = resolve_grant.granted.run(self.ctx).await?;
 
         let action = FsReadAction::new(path);
         let grant = self
             .policy_engine
-            .grant(self.policy_context, action)
+            .grant(self.ctx, action)
             .await
             .map_err(AuthorizationError::from)
             .map_err(FsAccessError::Authorization)?;
-        grant.granted.run(self.policy_context).await
+        grant.granted.run(self.ctx).await
     }
 }
 

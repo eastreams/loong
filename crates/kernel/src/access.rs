@@ -13,7 +13,7 @@ where
     C: ContextFactory + 'ctx,
 {
     kernel: &'a Kernel<C>,
-    policy_context: &'a C::Cx<'ctx>,
+    ctx: &'a C::Cx<'ctx>,
 }
 
 impl<'a, 'ctx, C> AccessCx<'a, 'ctx, C>
@@ -22,11 +22,8 @@ where
 {
     #[inline(always)]
     #[must_use]
-    pub fn new(kernel: &'a Kernel<C>, policy_context: &'a C::Cx<'ctx>) -> Self {
-        Self {
-            kernel,
-            policy_context,
-        }
+    pub fn new(kernel: &'a Kernel<C>, ctx: &'a C::Cx<'ctx>) -> Self {
+        Self { kernel, ctx }
     }
 
     /// Filesystem access entry point.
@@ -37,7 +34,7 @@ where
     #[inline(always)]
     #[must_use]
     pub fn fs(self) -> FsAccess<'a, 'ctx, C, PolicyPipeline<C>> {
-        FsAccess::new(self.kernel.policy_engine(), self.policy_context)
+        FsAccess::new(self.kernel.policy_engine(), self.ctx)
     }
 }
 

@@ -38,7 +38,7 @@ impl TaskSupervisor {
         kernel: &Kernel<C>,
         pack_id: &str,
         token: &CapabilityToken,
-        policy_context: &C::Cx<'_>,
+        ctx: &C::Cx<'_>,
     ) -> Result<KernelDispatch, Fault>
     where
         C: ContextFactory + Send + Sync,
@@ -71,10 +71,7 @@ impl TaskSupervisor {
             .map_err(|detail| Fault::ProtocolViolation { detail })?;
 
         // Execute through kernel
-        match kernel
-            .execute_task(pack_id, token, intent, policy_context)
-            .await
-        {
+        match kernel.execute_task(pack_id, token, intent, ctx).await {
             Ok(dispatch) => {
                 // InReply -> Completed (guarded transition)
                 let taken = self.take_state();

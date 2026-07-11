@@ -60,7 +60,7 @@ fn loong_kernel_exposes_access_types_and_fs_surface_for_workspace_kernels() {
 
 struct AccessToolCx<'a> {
     kernel: &'a crate::Kernel<AccessCxContextFactory>,
-    policy_context: AccessCxPolicyContext,
+    ctx: AccessCxPolicyContext,
 }
 
 impl<'a> AccessToolCx<'a> {
@@ -70,17 +70,17 @@ impl<'a> AccessToolCx<'a> {
     ) -> Self {
         Self {
             kernel,
-            policy_context: AccessCxPolicyContext::new(workspace_root),
+            ctx: AccessCxPolicyContext::new(workspace_root),
         }
     }
 
     fn access(&self) -> AccessCx<'_, '_, AccessCxContextFactory> {
-        AccessCx::new(self.kernel, &self.policy_context)
+        AccessCx::new(self.kernel, &self.ctx)
     }
 }
 
 #[tokio::test]
-async fn access_context_preserves_workspace_policy_context_for_fs_access() {
+async fn access_context_preserves_workspace_context_for_fs_access() {
     let kernel = crate::Kernel::<AccessCxContextFactory>::new_without_audit();
     let base = tempfile_dir("loong-kernel-access-context");
     let workspace_root = base.join("workspace");
