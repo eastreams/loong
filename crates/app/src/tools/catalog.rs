@@ -697,7 +697,10 @@ fn annotate_tool_concurrency_classes(descriptors: &mut [ToolDescriptor]) {
     }
 }
 
-// TODO: Split Tool Desc by tool
+// TODO(tool-catalog-owner): split this static descriptor table by owning tool
+// domain. For migrated read/write entries, catalog is only the legacy
+// visibility/governance/alias projection; provider schema, search metadata, and
+// prompt summaries must prefer the typed ToolSpec registered in the app plane.
 fn build_tool_catalog() -> ToolCatalog {
     let mut descriptors = vec![
         #[cfg(feature = "tool-file")]
