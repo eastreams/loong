@@ -85,6 +85,9 @@ pub enum ToolTier {
     Extension,
 }
 
+// TODO(deprecate-tool-core-envelope): add #[deprecated] once app call sites use
+// ctx.tool(path)?.invoke(payload).await directly. These legacy bridge envelopes
+// are not the typed ToolImpl API; typed tools return Result<Value, E>.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolCoreRequest {
     pub tool_name: String,
