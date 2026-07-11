@@ -20,12 +20,13 @@ caps 是硬边界，不是 policy 的附属说明。
 - runtime config 可以影响 policy 实例、tool 可见性、默认 tool required caps 的 bootstrap
   wiring；不能在 tool helper/access helper 中绕过 caps gate。
 
-截至 2026-07-11 的缺口：
+截至 2026-07-12 的状态：
 
-- 统一 context 中的 effective caps 仍基本来自 token，尚未实现 tool->tool child context
-  的 cap narrowing。
-- `ToolImpl` descriptor/path 解耦后，tool default caps 应来自 descriptor，调用 override
-  只在 plane 构造 child context 时生效。
+- typed app-plane invocation 已经从 `ToolSpec.required_capabilities` 构造 child
+  effective caps；公开 `tool.invoke` 的外层 `capabilities_override` 也会进入同一
+  narrowing 路径。
+- legacy direct / adapter 路径在迁移完成前仍可能通过旧
+  `required_capabilities_for_request` 计算 caps；新增 typed tool 不应扩展这条旧路径。
 
 
 ## Config -> Policy 路径

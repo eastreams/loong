@@ -7,23 +7,7 @@
 每个编号项都是一个最小提交候选。除非某一步明确要求合并，否则不要把相邻步骤塞进同一个
 commit。已完成的步骤从本文件删除，避免后续实现被过期完成线误导。
 
-1. 接入 tool->tool 调用参数里的 capability override：
-   - 当前 `ctx.tool(path)?.invoke(payload).await` 已经用 registered descriptor caps 构造
-     child effective caps；
-   - `ToolInvocation::invoke_with_capabilities` 已经支持 optional override，且只能缩小
-     descriptor default caps；
-   - block：当前公开 `tool.invoke` 仍是 legacy lease -> `ToolCoreRequest` 路径，没有进入
-     `ctx.tool(path)?.invoke_with_capabilities(...)`；
-   - 剩余的是 typed tool->tool 调用入口解析 override 参数并调用该方法；
-   - 完成线：
-     - tool->tool payload/descriptor 中的 override 能进入 `invoke_with_capabilities`；
-     - override 扩大时返回 typed input error 或 policy denial，不能静默提升；
-     - concrete tool 内部 access/action policy gate 继续读取 child effective caps；
-   - 验证：`cargo test -p loong-app context::tests::`、
-     `cargo test -p loong-app kernel_routed_file_read`、
-     `cargo check -p loong-app -p loong-kernel`、`git diff --check`。
-
-2. 清理 tool descriptor/path 耦合剩余面：
+1. 清理 tool descriptor/path 耦合剩余面：
    - `ToolImpl::spec()` 和 `ToolSpec` 已经不携带 path；
    - `ToolPlane::register(path, tool)` 是 path + descriptor 的组合边界；
    - `ToolPath` 已经是 app-plane-local segment path；dotted provider/catalog names 只在
@@ -48,7 +32,7 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      `cargo test -p loong-app kernel_routed_file_read`、
      `cargo check -p loong-core -p loong-tools -p loong-app`、`git diff --check`。
 
-3. 继续迁移剩余 legacy side-effect tools：
+2. 继续迁移剩余 legacy side-effect tools：
    - access/fs 已经提供 `FsWriteAction`、`FsWriteOptions` 和 `FsAccess::write_file`；
      写入 side effect 只能通过 `Granted<FsWriteAction>::run` 执行；
    - kernel 已经提供 `FsWriteAllowPolicy`，app production bootstrap 和 app test
@@ -71,7 +55,7 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      `cargo check -p loong-access -p loong-kernel -p loong-app -p loong` 和
      `git diff --check`。
 
-4. 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration：
+3. 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration：
    - app bootstrap 从 config 构造 concrete policy value；
    - policy 注册使用 `PolicyPipeline::push_policy` / `push_pre_policy` /
      `push_fallback_policy`；
