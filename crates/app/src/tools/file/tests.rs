@@ -189,6 +189,24 @@ async fn execute_request_via_kernel_tool_registry_with_capabilities(
     Ok((outcome, audit))
 }
 
+fn tool_invoke_request(
+    tool_id: &str,
+    arguments: serde_json::Value,
+) -> Result<ToolCoreRequest, String> {
+    let lease_payload = serde_json::Map::new();
+    let lease =
+        crate::tools::issue_tool_lease(crate::tools::canonical_tool_name(tool_id), &lease_payload)?;
+
+    Ok(ToolCoreRequest {
+        tool_name: "tool.invoke".to_owned(),
+        payload: json!({
+            "tool_id": tool_id,
+            "lease": lease,
+            "arguments": arguments,
+        }),
+    })
+}
+
 #[cfg(unix)]
 #[test]
 fn resolve_safe_file_path_rejects_symlink_escape_on_read() {
@@ -276,6 +294,56 @@ async fn kernel_routed_file_read_uses_typed_tool_registry() {
     assert_eq!(outcome.payload["content"], json!("beta"));
     assert_eq!(outcome.payload["line_start"], json!(2));
     assert_eq!(outcome.payload["line_end"], json!(2));
+    let events = audit.snapshot();
+    assert!(events.iter().any(|event| {
+        matches!(
+            &event.kind,
+            loong_kernel::AuditEventKind::ToolInvocation {
+                path_display,
+                outcome: loong_kernel::ToolInvocationOutcome::Completed,
+                ..
+            } if path_display == "read"
+        )
+    }));
+    assert!(!events.iter().any(|event| {
+        matches!(
+            &event.kind,
+            loong_kernel::AuditEventKind::PlaneInvoked {
+                primary_adapter,
+                ..
+            } if primary_adapter.starts_with("legacy:")
+        )
+    }));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[tokio::test]
+async fn kernel_routed_tool_invoke_file_read_uses_typed_tool_registry() {
+    let base = unique_temp_dir("loong-tool-invoke-read-typed-registry");
+    let root = base.join("root");
+    fs::create_dir_all(&root).expect("create root");
+    fs::write(root.join("notes.txt"), "alpha\nbeta").expect("write fixture");
+
+    let config = ToolRuntimeConfig {
+        file_root: Some(root),
+        ..ToolRuntimeConfig::default()
+    };
+    let request = tool_invoke_request(
+        "file.read",
+        json!({
+            "path": "notes.txt",
+            "offset": 2,
+            "limit": 1
+        }),
+    )
+    .unwrap_or_else(|error| panic!("issue test tool lease: {error}"));
+
+    let (outcome, audit) = execute_request_via_kernel_tool_registry(request, &config)
+        .await
+        .expect("tool.invoke file.read should execute through typed registry");
+
+    assert_eq!(outcome.status, "ok");
+    assert_eq!(outcome.payload["content"], json!("beta"));
     let events = audit.snapshot();
     assert!(events.iter().any(|event| {
         matches!(
@@ -546,6 +614,58 @@ async fn kernel_routed_file_write_uses_typed_tool_registry() {
     assert_eq!(
         fs::read_to_string(root.join("nested/notes.txt")).expect("read written file"),
         "alpha\nbeta\n"
+    );
+    let events = audit.snapshot();
+    assert!(events.iter().any(|event| {
+        matches!(
+            &event.kind,
+            loong_kernel::AuditEventKind::ToolInvocation {
+                path_display,
+                outcome: loong_kernel::ToolInvocationOutcome::Completed,
+                ..
+            } if path_display == "write"
+        )
+    }));
+    assert!(!events.iter().any(|event| {
+        matches!(
+            &event.kind,
+            loong_kernel::AuditEventKind::PlaneInvoked {
+                primary_adapter,
+                ..
+            } if primary_adapter.starts_with("legacy:")
+        )
+    }));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[tokio::test]
+async fn kernel_routed_tool_invoke_file_write_uses_typed_tool_registry() {
+    let base = unique_temp_dir("loong-tool-invoke-write-typed-registry");
+    let root = base.join("root");
+    fs::create_dir_all(&root).expect("create root");
+
+    let config = ToolRuntimeConfig {
+        file_root: Some(root.clone()),
+        ..ToolRuntimeConfig::default()
+    };
+    let request = tool_invoke_request(
+        "file.write",
+        json!({
+            "path": "notes.txt",
+            "content": "alpha",
+        }),
+    )
+    .unwrap_or_else(|error| panic!("issue test tool lease: {error}"));
+
+    let (outcome, audit) = execute_request_via_kernel_tool_registry(request, &config)
+        .await
+        .expect("tool.invoke file.write should execute through typed registry");
+
+    assert_eq!(outcome.status, "ok");
+    assert_eq!(outcome.payload["tool_name"], json!("write"));
+    assert_eq!(
+        fs::read_to_string(root.join("notes.txt")).expect("read written file"),
+        "alpha"
     );
     let events = audit.snapshot();
     assert!(events.iter().any(|event| {

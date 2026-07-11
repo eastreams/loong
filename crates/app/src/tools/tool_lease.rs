@@ -6,6 +6,16 @@ pub(crate) struct PeekedToolInvokeRequest<'a> {
     pub(crate) arguments: &'a Value,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToolInvokeProviderExposure {
+    /// Legacy public `tool.invoke` is only for leased hidden/discoverable tools;
+    /// provider-exposed surfaces should still be called directly there.
+    RejectProviderExposed,
+    /// Kernel-routed typed tool-to-tool calls may target provider-exposed
+    /// surfaces because `ctx.tool(...).invoke(...)` still performs grant/audit.
+    AllowProviderExposed,
+}
+
 pub(crate) fn merge_trusted_internal_tool_context_into_arguments(
     arguments: &mut serde_json::Map<String, Value>,
     internal_context: &Value,
@@ -52,6 +62,7 @@ pub(crate) fn peek_tool_invoke_request(
 
 pub(crate) fn resolve_tool_invoke_request(
     request: &ToolCoreRequest,
+    provider_exposure: ToolInvokeProviderExposure,
 ) -> Result<(ResolvedToolExecution, ToolCoreRequest), String> {
     let Some(peeked_request) = peek_tool_invoke_request(request) else {
         return Err(format!(
@@ -90,7 +101,9 @@ pub(crate) fn resolve_tool_invoke_request(
     let resolved = resolve_tool_execution(tool_id)
         .ok_or_else(|| format!("tool_not_found: unknown tool `{tool_id}`"))?;
     let resolved_tool_name = resolved.canonical_name;
-    if is_provider_exposed_tool_name(resolved_tool_name) {
+    if provider_exposure == ToolInvokeProviderExposure::RejectProviderExposed
+        && is_provider_exposed_tool_name(resolved_tool_name)
+    {
         return Err(format!(
             "tool_not_provider_exposed: {} must be called directly as a core tool",
             resolved_tool_name
@@ -116,7 +129,8 @@ pub(crate) fn execute_tool_invoke_tool_with_config(
         inner_arguments,
         "payload.arguments",
     )?;
-    let (entry, effective_request) = resolve_tool_invoke_request(&request)?;
+    let (entry, effective_request) =
+        resolve_tool_invoke_request(&request, ToolInvokeProviderExposure::RejectProviderExposed)?;
     match entry.execution_kind {
         ToolExecutionKind::Core => {
             execute_discoverable_tool_core_with_config(effective_request, config)

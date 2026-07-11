@@ -138,8 +138,10 @@ pub(crate) use tool_identity::{
 pub use tool_identity::{
     canonical_tool_name, is_known_tool_name, is_known_tool_name_in_view, user_visible_tool_name,
 };
+pub(crate) use tool_lease::{
+    ToolInvokeProviderExposure, peek_tool_invoke_request, resolve_tool_invoke_request,
+};
 pub(crate) use tool_lease::{bridge_provider_tool_call_with_scope, issue_tool_lease};
-pub(crate) use tool_lease::{peek_tool_invoke_request, resolve_tool_invoke_request};
 #[cfg(test)]
 pub(crate) use tool_lease::{
     synthesize_test_provider_tool_call, synthesize_test_provider_tool_call_with_scope,
@@ -415,6 +417,52 @@ pub(crate) async fn execute_kernel_tool_request(
             .map_err(|error| {
                 loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(error))
             })?;
+
+        if request.tool_name == "tool.invoke" {
+            ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
+                request.tool_name.as_str(),
+                &request.payload,
+                "payload",
+            )
+            .map_err(|error| {
+                loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(error))
+            })?;
+            let inner_arguments = request.payload.get("arguments").unwrap_or(&Value::Null);
+            ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
+                request.tool_name.as_str(),
+                inner_arguments,
+                "payload.arguments",
+            )
+            .map_err(|error| {
+                loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(error))
+            })?;
+            let (_resolved_tool, effective_request) = resolve_tool_invoke_request(
+                &request,
+                ToolInvokeProviderExposure::AllowProviderExposed,
+            )
+            .map_err(|error| {
+                loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(error))
+            })?;
+            let typed_path = plane::ToolPath::from(effective_request.tool_name.clone());
+            match execution_context.tool(typed_path) {
+                Ok(invocation) => {
+                    // `tool.invoke` is only an invocation envelope here; trusted
+                    // overlays shape the AppExecutionContext and should not leak
+                    // into concrete typed tool payload parsing.
+                    let mut typed_payload = effective_request.payload;
+                    if let Some(body) = typed_payload.as_object_mut() {
+                        let _trusted_overlay = take_trusted_internal_tool_context(body);
+                    }
+                    let payload = invocation.invoke(typed_payload).await?;
+                    return Ok(ToolCoreOutcome {
+                        status: "ok".to_owned(),
+                        payload,
+                    });
+                }
+                Err(loong_kernel::ToolPlaneError::ToolNotFound(_)) => {}
+                Err(error) => return Err(loong_kernel::KernelError::ToolPlane(error)),
+            }
+        }
 
         match execution_context.tool(typed_path) {
             Ok(invocation) => {

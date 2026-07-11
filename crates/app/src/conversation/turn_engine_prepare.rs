@@ -97,7 +97,10 @@ impl<'a, 'b, D: AppToolDispatcher + ?Sized> ToolIntentPreparationHarness<'a, 'b,
         };
 
         let (normalized_payload, injected_trusted_internal_context) = match peeked_tool_invoke {
-            Some(_) => match crate::tools::resolve_tool_invoke_request(&outer_request) {
+            Some(_) => match crate::tools::resolve_tool_invoke_request(
+                &outer_request,
+                crate::tools::ToolInvokeProviderExposure::RejectProviderExposed,
+            ) {
                 Ok((_resolved_inner, inner_request)) => {
                     let injected = inject_internal_tool_ingress(
                         resolved_tool.canonical_name,
