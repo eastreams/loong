@@ -886,15 +886,11 @@ fn sessions_list_definition_and_hint_surface_offset_pagination() {
 }
 
 #[test]
-fn read_definitions_surface_line_window_fields() {
+fn read_catalog_metadata_surfaces_line_window_fields() {
     let catalog = tool_catalog();
     let direct_descriptor = catalog.descriptor("read").expect("read descriptor");
-    let direct_definition = direct_descriptor.provider_definition();
-    let direct_properties = &direct_definition["function"]["parameters"]["properties"];
     let direct_parameter_types = direct_descriptor.parameter_types();
 
-    assert!(direct_properties.get("offset").is_some());
-    assert!(direct_properties.get("limit").is_some());
     assert!(
         direct_descriptor
             .argument_hint()
@@ -905,12 +901,8 @@ fn read_definitions_surface_line_window_fields() {
     assert!(direct_parameter_types.contains(&("limit", "integer")));
 
     let file_descriptor = catalog.resolve("file.read").expect("file.read alias");
-    let file_definition = file_descriptor.provider_definition();
-    let file_properties = &file_definition["function"]["parameters"]["properties"];
     let file_parameter_types = file_descriptor.parameter_types();
 
-    assert!(file_properties.get("offset").is_some());
-    assert!(file_properties.get("limit").is_some());
     assert!(file_descriptor.argument_hint().contains("offset?:integer"));
     assert!(file_descriptor.argument_hint().contains("limit?:integer"));
     assert!(file_parameter_types.contains(&("offset", "integer")));

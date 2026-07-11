@@ -5,7 +5,7 @@ use loong_contracts::{Capability, ToolCoreOutcome, ToolCoreRequest};
 use serde_json::Value;
 use serde_json::json;
 
-use super::catalog::{ToolDescriptor, ToolView};
+use super::catalog::ToolView;
 use super::runtime_config;
 use super::{
     LOONG_INTERNAL_TOOL_SEARCH_KEY, LOONG_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY,
@@ -35,7 +35,6 @@ use result::{tool_search_diagnostics_json, tool_search_result_entry_json};
 #[cfg(test)]
 pub(crate) use view::runtime_discoverable_tool_entries;
 pub(crate) use view::runtime_tool_search_entries;
-use view::searchable_entry_from_descriptor_for_view;
 #[cfg(test)]
 pub(crate) use view::tool_id_visible_in_view;
 
@@ -301,9 +300,6 @@ pub(super) fn search_tool_view_from_payload(
     }
 }
 
-pub(super) fn searchable_entry_from_descriptor(descriptor: &ToolDescriptor) -> SearchableToolEntry {
-    searchable_entry_from_descriptor_for_view(descriptor, None)
-}
 #[cfg(test)]
 mod tests {
     use super::*;

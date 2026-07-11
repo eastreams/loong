@@ -1,4 +1,3 @@
-use super::searchable_entry_from_descriptor;
 use crate::tools::catalog::{self, ToolDescriptor, ToolView};
 use crate::tools::runtime_config;
 use crate::tools::tool_surface;
@@ -86,7 +85,9 @@ pub(crate) fn runtime_discoverable_tool_entries(
                 &visible_tool_view,
             )
         })
-        .map(searchable_entry_from_descriptor)
+        .map(|descriptor| {
+            searchable_entry_from_descriptor_for_runtime_view(descriptor, &visible_tool_view)
+        })
         .collect::<Vec<_>>()
 }
 
@@ -94,17 +95,14 @@ fn searchable_entry_from_descriptor_for_runtime_view(
     descriptor: &ToolDescriptor,
     view: &ToolView,
 ) -> SearchableToolEntry {
-    searchable_entry_from_descriptor_for_view(descriptor, Some(view))
+    searchable_entry_from_descriptor_for_view(descriptor, view)
 }
 
-pub(super) fn searchable_entry_from_descriptor_for_view(
+fn searchable_entry_from_descriptor_for_view(
     descriptor: &ToolDescriptor,
-    view: Option<&ToolView>,
+    view: &ToolView,
 ) -> SearchableToolEntry {
-    let definition = match view {
-        Some(view) => crate::tools::provider_definition_for_view(descriptor, view),
-        None => descriptor.provider_definition(),
-    };
+    let definition = crate::tools::tool_metadata_definition_for_view(descriptor, view);
     let function = definition.get("function");
 
     let summary_value = function.and_then(|value: &serde_json::Value| value.get("description"));
@@ -146,9 +144,8 @@ pub(super) fn searchable_entry_from_descriptor_for_view(
 
 fn direct_search_hint_for_runtime_view(
     descriptor: &ToolDescriptor,
-    view: Option<&ToolView>,
+    view: &ToolView,
 ) -> Option<String> {
-    let view = view?;
     match descriptor.name {
         "web" => {
             let web_runtime_modes = tool_surface::direct_web_runtime_modes_for_view(view);
@@ -161,9 +158,8 @@ fn direct_search_hint_for_runtime_view(
 
 fn direct_usage_guidance_for_runtime_view(
     descriptor: &ToolDescriptor,
-    view: Option<&ToolView>,
+    view: &ToolView,
 ) -> Option<String> {
-    let view = view?;
     if !descriptor.is_direct() {
         return None;
     }

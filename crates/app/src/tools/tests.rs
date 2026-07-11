@@ -2195,6 +2195,21 @@ fn tool_search_respects_visible_tool_ids_from_runtime_context() {
             .is_some_and(|tool_id| tool_id.starts_with("session"))),
         "search should honor the injected visible tool surface: {results:?}"
     );
+    let read = results
+        .iter()
+        .find(|entry| entry["tool_id"] == "read")
+        .expect("file.read alias should expose the typed read surface");
+    assert_eq!(
+        read["schema_preview"]["required_field_groups"],
+        json!([["path"], ["query"], ["pattern"]])
+    );
+    assert!(
+        read["schema_preview"]["common_optional_fields"]
+            .as_array()
+            .expect("read optional fields should be an array")
+            .contains(&json!("offset")),
+        "typed read schema should drive tool.search metadata: {read:?}"
+    );
 
     std::fs::remove_dir_all(&root).ok();
 }

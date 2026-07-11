@@ -47,8 +47,8 @@ fn provider_tool_definitions_for_view_with_config(view: &ToolView) -> Vec<Value>
         }
 
         // Migrated direct tools are exposed only when the app-owned typed plane
-        // registered them. The static descriptor still supplies provider JSON
-        // until tool schemas move out of the legacy catalog.
+        // registered them. Provider JSON for those tools is projected from
+        // ToolSpec below; the static descriptor no longer owns their schema.
         if descriptor.name == "read" && !typed_tool_paths.contains(descriptor.name) {
             continue;
         }
@@ -89,15 +89,22 @@ fn tool_function_name(tool: &Value) -> &str {
 }
 
 pub(super) fn provider_definition_for_view(descriptor: &ToolDescriptor, view: &ToolView) -> Value {
+    sanitize_provider_parameter_combinators(tool_metadata_definition_for_view(descriptor, view))
+}
+
+pub(super) fn tool_metadata_definition_for_view(
+    descriptor: &ToolDescriptor,
+    view: &ToolView,
+) -> Value {
+    // `tool.search` consumes this internal projection, so keep combinators that
+    // describe payload variants. Provider submission sanitizes them above.
     let definition = typed_provider_definition_for_descriptor(descriptor)
         .unwrap_or_else(|| descriptor.provider_definition());
-    let definition = match descriptor.name {
+    match descriptor.name {
         "web" => direct_web_provider_definition_for_view(definition, view),
         "browse" => direct_browser_provider_definition_for_view(definition, view),
         _ => definition,
-    };
-
-    sanitize_provider_parameter_combinators(definition)
+    }
 }
 
 fn typed_provider_definition_for_descriptor(descriptor: &ToolDescriptor) -> Option<Value> {
