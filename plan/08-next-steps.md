@@ -8,44 +8,25 @@
 commit。已完成的步骤从本文件删除，避免后续实现被过期完成线误导。
 
 1. 清理 tool descriptor/path 耦合剩余面：
-   - `ToolImpl::spec()` 和 `ToolSpec` 已经不携带 path；
-   - `ToolPlane::register(path, tool)` 是 path + descriptor 的组合边界；
-   - `ToolPath` 已经是 app-plane-local segment path；dotted provider/catalog names 只在
-     app plane 边界转换；
-   - production `ReadTool` 已经不硬编码注册 path；app plane 注册时注入 user-facing 名称，
-     仅用于响应和 continuation 推荐；
-   - provider schema 已经用 app-owned plane enumeration gate migrated `read` / `write`
-     的可见性；未注册 typed path 时不能 fallback 到 legacy static schema；
-   - `read` provider JSON schema 已经来自 `ReadTool::spec().input_schema`；
-   - `tool.search` schema preview 已经通过 typed provider projection 读取 `read` 的
-     `ToolSpec` schema；
-   - `tool.search` argument hint、search hint、tags 已经优先读取 `ToolSpec`
-     discovery metadata；
-   - `write` 已经随 typed app-plane 注册获得 `WriteTool::spec()` 的 provider/search
-     schema、argument hint、search hint 和 tags 投影；
-   - 剩余的是 catalog snapshot、governance、concurrency 等非 schema metadata 仍来自
-     legacy static catalog；
+   - catalog snapshot、governance、concurrency 等非 schema metadata 仍来自 legacy
+     static catalog；
+   - 先区分 metadata owner：typed tool 自身能稳定表达的字段进入 `ToolSpec`；app
+     orchestration 才知道的字段留在 app plane/registry；只服务旧入口的字段标成 legacy；
+   - 不为了清空 catalog 把 app-only metadata 上提到 contracts/core；
    - 不把 `ToolPath` 提回 core/contracts；plane 可以继续拥有自己的 path 类型；
    - 完成线：
-     - typed tools 的 agent-visible descriptor/schema 来自 plane/typed tool descriptor，而不是
-       legacy static catalog；
-     - legacy catalog 只描述未迁移工具，或明确标注为 legacy surface；
+     - typed tools 的 agent-visible metadata 不再从 legacy static catalog 读取；
+     - legacy catalog 只描述未迁移工具，或明确标注为 legacy surface。
    - 验证：`cargo test -p loong-tools --no-default-features --features file`、
      `cargo test -p loong-app kernel_routed_file_read`、
      `cargo check -p loong-core -p loong-tools -p loong-app`、`git diff --check`。
 
 2. 继续迁移剩余 legacy side-effect tools：
-   - access/fs 已经提供 `FsWriteAction`、`FsWriteOptions` 和 `FsAccess::write_file`；
-     写入 side effect 只能通过 `Granted<FsWriteAction>::run` 执行；
-   - kernel 已经提供 `FsWriteAllowPolicy`，app production bootstrap 和 app test
-     harnesses 已经注册该 policy；
-   - `loong-tools` 已经提供 typed `WriteTool` 基础：payload parsing、tool spec
-     metadata、typed output 和 access-backed execute 都在 concrete tool crate 内；
-   - app plane 已经注册 typed `WriteTool`，kernel-routed `write` / `file.write`
-     已走 `ctx.tool(...).invoke(...)` -> access-backed `fs.write`；
-   - legacy direct `execute_tool_core_with_config` 的 `write` 分支仍在，主要承载迁移前
-     runtime preview/event 语义和非 kernel-routed 调用面；
-   - write/edit/config.import 按同样 access-backed action 模式迁移；
+   - legacy direct `execute_tool_core_with_config` 的 `write` 分支仍有旧 runtime
+     preview/event 和非 kernel-routed 调用面；
+   - `edit` 和 `config.import` 仍未迁入 access-backed action 路径；
+   - 逐个工具迁移：concrete tool 只解析 payload、调用 `ctx.access()` / `ctx.tool()`、
+     格式化 typed output；side effect 必须落在 access crate 的 granted action run 边界；
    - 迁移完成后删除 `FilePolicyExtension` 对应旧分支；
    - 逐步清空 `Kernel::execute_tool_core` 调用面，再删除 `LegacyToolPlane` 和 adapter
      trait；
@@ -61,8 +42,6 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
    - app bootstrap 从 config 构造 concrete policy value；
    - policy 注册使用 `PolicyPipeline::push_policy` / `push_pre_policy` /
      `push_fallback_policy`；
-   - direct legacy preflight 已经排除 migrated `read`；`FilePolicyExtension` 不再有 read
-     special-case，避免 read 获得第二条旧授权路径；
    - tool helper、access helper、legacy direct preflight 不再读取 config 做授权；
    - 完成线：
      - filename deny、fs allowed roots、workspace root containment 都是 typed policy；
