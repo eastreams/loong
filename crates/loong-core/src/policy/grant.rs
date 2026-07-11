@@ -2,7 +2,10 @@ use loong_contracts::GrantId;
 
 use crate::policy::action::{Action, ActionMeta};
 
-/// TODO: Placeholder for structured action grant metadata.
+/// Placeholder for structured metadata minted with an action grant.
+///
+/// Keep this empty until grant metadata has a concrete report/audit shape.
+/// Callers should not thread side-channel metadata around `Granted<A>`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ActionGrantInfo;
 
@@ -10,7 +13,6 @@ pub struct ActionGrantInfo;
 #[derive(Debug)]
 pub struct ActionGrant<A: ActionMeta> {
     pub id: GrantId,
-    /// TODO: Replace this placeholder with structured grant/audit metadata.
     pub info: ActionGrantInfo,
     pub granted: Granted<A>,
 }
