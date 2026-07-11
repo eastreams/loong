@@ -309,14 +309,14 @@ impl ResolvedProviderTurn {
     ) -> ProviderTurnTerminalPhase<'a> {
         match self {
             Self::PersistReply(reply) => {
-                ProviderTurnTerminalPhase::PersistReply(ProviderTurnPersistReplyPhase {
+                ProviderTurnTerminalPhase::PersistReply(Box::new(ProviderTurnPersistReplyPhase {
                     checkpoint: &reply.checkpoint,
                     tail_phase: ProviderTurnReplyTailPhase::from_session(
                         session,
                         reply.reply.as_str(),
                     ),
                     usage: reply.usage.clone(),
-                })
+                }))
             }
             Self::ReturnError(error) => {
                 ProviderTurnTerminalPhase::ReturnError(ProviderTurnReturnErrorPhase {
@@ -364,7 +364,7 @@ pub(super) struct ResolvedProviderError {
 
 #[derive(Debug)]
 pub(super) enum ProviderTurnTerminalPhase<'a> {
-    PersistReply(ProviderTurnPersistReplyPhase<'a>),
+    PersistReply(Box<ProviderTurnPersistReplyPhase<'a>>),
     ReturnError(ProviderTurnReturnErrorPhase<'a>),
 }
 
@@ -379,6 +379,7 @@ impl<'a> ProviderTurnTerminalPhase<'a> {
     ) -> CliResult<ConversationTurnOutcome> {
         match self {
             Self::PersistReply(phase) => {
+                let phase = *phase;
                 finalize_provider_turn_reply(
                     config,
                     runtime,

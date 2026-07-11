@@ -447,8 +447,7 @@ where
         if action
             .metadata()
             .required_capabilities
-            .iter()
-            .any(|capability| *capability == Capability::NetworkEgress)
+            .contains(&Capability::NetworkEgress)
         {
             return PolicyGrant {
                 decision: PolicyDecision::Deny,

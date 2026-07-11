@@ -195,6 +195,7 @@ pub(super) async fn apply_resolved_provider_turn<R: ConversationRuntime + ?Sized
     let terminal_phase = resolved.terminal_phase(&preparation.session);
     let completion_event = match &terminal_phase {
         ProviderTurnTerminalPhase::PersistReply(phase) => {
+            let phase = phase.as_ref();
             let message_count = phase.tail_phase.after_turn_messages().len();
             let estimated_tokens = phase.tail_phase.estimated_tokens();
             let finalizing_event =

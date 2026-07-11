@@ -10,6 +10,8 @@ use loong_contracts::{
     Capability, PolicyDecision, PolicyGrant, ToolExecutionError, ToolInputError, ToolOutcome,
     ToolPlaneError,
 };
+#[cfg(test)]
+use loong_core::tool::ToolImpl;
 use loong_core::{
     policy::grant::Granted,
     policy::{
@@ -17,7 +19,7 @@ use loong_core::{
         context::ContextFactory,
         policy::Policy,
     },
-    tool::{RegisteredTool, ToolImpl, ToolProvenance},
+    tool::{RegisteredTool, ToolProvenance},
 };
 use serde_json::{Value, json};
 
@@ -167,6 +169,7 @@ where
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn register<T>(&mut self, path: ToolPath, tool: T) -> Result<(), ToolPlaneError>
     where
         T: ToolImpl<C>,
@@ -174,6 +177,7 @@ where
         self.register_with_provenance(path, ToolProvenance::Builtin, tool)
     }
 
+    #[cfg(test)]
     pub(crate) fn register_with_provenance<T>(
         &mut self,
         path: ToolPath,
@@ -244,21 +248,31 @@ pub(crate) fn app_tool_plane() -> &'static dyn ToolPlane<AppContextFactory> {
         #[allow(unused_mut)]
         let mut plane = AppToolPlane::new();
         #[cfg(feature = "tool-file")]
-        plane
-            // Only the provider-facing file-read tool is migrated here. The
-            // direct `read` facade stays on the legacy fallback path until it
-            // becomes an aggregate typed tool for path/query/glob actions.
-            .register(ToolPath::from("file.read"), loong_tools::file::ReadFileTool)
-            .expect("builtin app tools must register without duplicates");
+        // Only the provider-facing file-read tool is migrated here. The direct
+        // `read` facade stays on the legacy fallback path until it becomes an
+        // aggregate typed tool for path/query/glob actions.
+        drop(plane.tools.insert(
+            ToolPath::from("file.read"),
+            RegisteredTool::from_tool(ToolProvenance::Builtin, loong_tools::file::ReadFileTool),
+        ));
         plane
     })
 }
 
 fn tool_execution_error_reason(error: ToolExecutionError) -> String {
     match error {
-        ToolExecutionError::Input(ToolInputError::InvalidPayload { reason })
-        | ToolExecutionError::Execution { reason } => reason,
-        other => other.to_string(),
+        ToolExecutionError::Input(input_error) => match input_error {
+            ToolInputError::MissingField { field } => {
+                format!("missing tool input field `{field}`")
+            }
+            ToolInputError::InvalidField { field, reason } => {
+                format!("invalid tool input field `{field}`: {reason}")
+            }
+            ToolInputError::InvalidPayload { reason } => reason,
+            unknown => unknown.to_string(),
+        },
+        ToolExecutionError::Execution { reason } => reason,
+        unknown => unknown.to_string(),
     }
 }
 
