@@ -327,5 +327,5 @@ async fn integ_file_write_denied_without_capability() {
         .build();
     let result = harness.execute(&turn).await;
 
-    assert_final_tool_error_contains(result, &["kernel_policy_denied", "FilesystemWrite"]);
+    assert_final_tool_error_contains(result, &["kernel_policy_denied", "filesystem_write"]);
 }

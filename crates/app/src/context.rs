@@ -191,7 +191,14 @@ impl<'a> AppExecutionContext<'a> {
         effective_capabilities: BTreeSet<Capability>,
     ) -> Result<Self, String> {
         if !effective_capabilities.is_subset(&self.effective_capabilities) {
-            return Err("child execution context cannot add capabilities".to_owned());
+            let missing_capabilities = effective_capabilities
+                .difference(&self.effective_capabilities)
+                .map(|capability| capability.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(format!(
+                "child execution context cannot add capabilities: missing {missing_capabilities}"
+            ));
         }
 
         // Tool-to-tool and tool-to-access paths inherit runtime references but
@@ -259,7 +266,9 @@ impl ToolInvocation<'_, '_> {
             .ctx
             .narrow_capabilities(required_capabilities.clone())
             .map_err(|error| {
-                loong_kernel::KernelError::ToolPlane(ToolPlaneError::Execution(error))
+                loong_kernel::KernelError::ToolPlane(ToolPlaneError::Execution(format!(
+                    "policy_denied: {error}"
+                )))
             })?;
         let action = crate::tools::plane::ToolInvocationAction::new(
             self.path,
@@ -339,7 +348,8 @@ impl ToolInvocation<'_, '_> {
                 if !override_capabilities.is_subset(&default_tool_capabilities) {
                     return Err(loong_kernel::KernelError::ToolPlane(
                         ToolPlaneError::Execution(
-                            "tool capability override cannot add capabilities".to_owned(),
+                            "policy_denied: tool capability override cannot add capabilities"
+                                .to_owned(),
                         ),
                     ));
                 }

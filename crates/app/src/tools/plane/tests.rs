@@ -196,10 +196,11 @@ fn app_tool_plane_enumerates_registered_paths_from_plane_index() {
 
 #[cfg(feature = "tool-file")]
 #[test]
-fn builtin_tool_plane_exposes_registered_read_path() {
+fn builtin_tool_plane_exposes_registered_file_paths() {
     let paths = super::app_tool_plane().registered_paths();
 
     assert!(paths.contains(&ToolPath::from("read")));
+    assert!(paths.contains(&ToolPath::from("write")));
 }
 
 #[tokio::test]

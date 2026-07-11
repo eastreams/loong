@@ -57,7 +57,7 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
     std::env::temp_dir().join(format!("{prefix}-{nanos}"))
 }
 
-fn test_pack() -> VerticalPackManifest {
+fn test_pack_with_capabilities(granted_capabilities: BTreeSet<Capability>) -> VerticalPackManifest {
     VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
         domain: "test".to_owned(),
@@ -67,13 +67,17 @@ fn test_pack() -> VerticalPackManifest {
             adapter: None,
         },
         allowed_connectors: BTreeSet::new(),
-        granted_capabilities: BTreeSet::from([
-            Capability::InvokeTool,
-            Capability::FilesystemRead,
-            Capability::FilesystemWrite,
-        ]),
+        granted_capabilities,
         metadata: Default::default(),
     }
+}
+
+fn test_pack() -> VerticalPackManifest {
+    test_pack_with_capabilities(BTreeSet::from([
+        Capability::InvokeTool,
+        Capability::FilesystemRead,
+        Capability::FilesystemWrite,
+    ]))
 }
 
 async fn execute_file_read_with_test_context(
@@ -128,9 +132,26 @@ async fn execute_file_read_with_test_context(
     })
 }
 
-async fn execute_file_read_via_kernel_tool_registry(
+async fn execute_request_via_kernel_tool_registry(
     request: ToolCoreRequest,
     config: &ToolRuntimeConfig,
+) -> Result<(ToolCoreOutcome, Arc<InMemoryAuditSink>), loong_kernel::KernelError> {
+    execute_request_via_kernel_tool_registry_with_capabilities(
+        request,
+        config,
+        BTreeSet::from([
+            Capability::InvokeTool,
+            Capability::FilesystemRead,
+            Capability::FilesystemWrite,
+        ]),
+    )
+    .await
+}
+
+async fn execute_request_via_kernel_tool_registry_with_capabilities(
+    request: ToolCoreRequest,
+    config: &ToolRuntimeConfig,
+    capabilities: BTreeSet<Capability>,
 ) -> Result<(ToolCoreOutcome, Arc<InMemoryAuditSink>), loong_kernel::KernelError> {
     let audit = Arc::new(InMemoryAuditSink::default());
     let mut policy = PolicyPipeline::<AppContextFactory>::new_legacy_allow_fallback()
@@ -150,7 +171,7 @@ async fn execute_file_read_via_kernel_tool_registry(
         Arc::new(SystemClock),
         audit.clone(),
     );
-    let pack = Arc::new(test_pack());
+    let pack = Arc::new(test_pack_with_capabilities(capabilities));
     kernel.register_pack((*pack).clone())?;
     crate::tools::register_kernel_tools(
         &mut kernel,
@@ -247,7 +268,7 @@ async fn kernel_routed_file_read_uses_typed_tool_registry() {
         }),
     };
 
-    let (outcome, audit) = execute_file_read_via_kernel_tool_registry(request, &config)
+    let (outcome, audit) = execute_request_via_kernel_tool_registry(request, &config)
         .await
         .expect("file.read should execute through typed registry");
 
@@ -299,7 +320,7 @@ async fn kernel_routed_direct_read_glob_uses_typed_tool_registry() {
         }),
     };
 
-    let (outcome, audit) = execute_file_read_via_kernel_tool_registry(request, &config)
+    let (outcome, audit) = execute_request_via_kernel_tool_registry(request, &config)
         .await
         .expect("read glob should execute through typed registry");
 
@@ -358,7 +379,7 @@ async fn kernel_routed_direct_read_query_uses_typed_tool_registry() {
         }),
     };
 
-    let (outcome, audit) = execute_file_read_via_kernel_tool_registry(request, &config)
+    let (outcome, audit) = execute_request_via_kernel_tool_registry(request, &config)
         .await
         .expect("read query should execute through typed registry");
 
@@ -416,7 +437,7 @@ async fn kernel_routed_file_read_rejects_reserved_internal_payload_by_default() 
         }),
     };
 
-    let error = execute_file_read_via_kernel_tool_registry(request, &config)
+    let error = execute_request_via_kernel_tool_registry(request, &config)
         .await
         .expect_err("untrusted reserved internal context should be rejected");
 
@@ -449,7 +470,7 @@ async fn kernel_routed_file_read_rejects_path_escape_through_typed_policy() {
         }),
     };
 
-    let error = execute_file_read_via_kernel_tool_registry(request, &config)
+    let error = execute_request_via_kernel_tool_registry(request, &config)
         .await
         .expect_err("path escape should be denied by typed fs policy");
 
@@ -479,13 +500,145 @@ async fn kernel_routed_file_read_reports_typed_input_error() {
         }),
     };
 
-    let error = execute_file_read_via_kernel_tool_registry(request, &config)
+    let error = execute_request_via_kernel_tool_registry(request, &config)
         .await
         .expect_err("typed read input error should fail before execution");
 
     assert!(
         format!("{error}").contains("read payload.offset must be a positive integer"),
         "expected file read input error, got: {error}"
+    );
+    let _ = fs::remove_dir_all(base);
+}
+
+#[tokio::test]
+async fn kernel_routed_file_write_uses_typed_tool_registry() {
+    let base = unique_temp_dir("loong-file-write-typed-registry");
+    let root = base.join("root");
+    fs::create_dir_all(&root).expect("create root");
+
+    let config = ToolRuntimeConfig {
+        file_root: Some(root.clone()),
+        ..ToolRuntimeConfig::default()
+    };
+    let request = ToolCoreRequest {
+        tool_name: "file.write".to_owned(),
+        payload: json!({
+            "path": "nested/notes.txt",
+            "content": "alpha\nbeta\n",
+        }),
+    };
+
+    let (outcome, audit) = execute_request_via_kernel_tool_registry(request, &config)
+        .await
+        .expect("file.write should execute through typed registry");
+
+    assert_eq!(outcome.status, "ok");
+    assert_eq!(outcome.payload["tool_name"], json!("write"));
+    let response_path = outcome.payload["path"]
+        .as_str()
+        .expect("response path should be a string");
+    assert!(
+        response_path.ends_with("/nested/notes.txt"),
+        "unexpected response path: {response_path}"
+    );
+    assert_eq!(outcome.payload["bytes_written"], json!(11));
+    assert_eq!(
+        fs::read_to_string(root.join("nested/notes.txt")).expect("read written file"),
+        "alpha\nbeta\n"
+    );
+    let events = audit.snapshot();
+    assert!(events.iter().any(|event| {
+        matches!(
+            &event.kind,
+            loong_kernel::AuditEventKind::ToolInvocation {
+                path_display,
+                outcome: loong_kernel::ToolInvocationOutcome::Completed,
+                ..
+            } if path_display == "write"
+        )
+    }));
+    assert!(!events.iter().any(|event| {
+        matches!(
+            &event.kind,
+            loong_kernel::AuditEventKind::PlaneInvoked {
+                primary_adapter,
+                ..
+            } if primary_adapter.starts_with("legacy:")
+        )
+    }));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[tokio::test]
+async fn kernel_routed_file_write_rejects_path_escape_through_typed_policy() {
+    let base = unique_temp_dir("loong-file-write-typed-path-policy");
+    let root = base.join("root");
+    let outside = base.join("outside");
+    fs::create_dir_all(&root).expect("create root");
+    fs::create_dir_all(&outside).expect("create outside");
+
+    let config = ToolRuntimeConfig {
+        file_root: Some(root),
+        ..ToolRuntimeConfig::default()
+    };
+    let request = ToolCoreRequest {
+        tool_name: "file.write".to_owned(),
+        payload: json!({
+            "path": "../outside/secret.txt",
+            "content": "secret"
+        }),
+    };
+
+    let error = execute_request_via_kernel_tool_registry(request, &config)
+        .await
+        .expect_err("path escape should be denied by typed fs policy");
+
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains("policy_denied") || rendered.contains("escapes allowed filesystem roots"),
+        "expected fs path policy denial, got: {rendered}"
+    );
+    assert!(
+        !outside.join("secret.txt").exists(),
+        "denied write must not create escaped file"
+    );
+    let _ = fs::remove_dir_all(base);
+}
+
+#[tokio::test]
+async fn kernel_routed_file_write_requires_filesystem_write_capability() {
+    let base = unique_temp_dir("loong-file-write-capability");
+    let root = base.join("root");
+    fs::create_dir_all(&root).expect("create root");
+
+    let config = ToolRuntimeConfig {
+        file_root: Some(root.clone()),
+        ..ToolRuntimeConfig::default()
+    };
+    let request = ToolCoreRequest {
+        tool_name: "write".to_owned(),
+        payload: json!({
+            "path": "notes.txt",
+            "content": "alpha"
+        }),
+    };
+
+    let error = execute_request_via_kernel_tool_registry_with_capabilities(
+        request,
+        &config,
+        BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead]),
+    )
+    .await
+    .expect_err("filesystem write capability should be required");
+
+    assert!(
+        error.to_string().contains("filesystem_write"),
+        "expected write capability denial, got: {error}"
+    );
+    assert!(
+        !root.join("notes.txt").exists(),
+        "denied write must not create a file"
     );
     let _ = fs::remove_dir_all(base);
 }

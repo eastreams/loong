@@ -338,6 +338,18 @@ pub(crate) fn app_tool_plane() -> &'static dyn ToolPlane<AppContextFactory> {
                 duplicate.is_none(),
                 "duplicate builtin tool path: {duplicate:?}"
             );
+
+            let duplicate = plane
+                .register_with_provenance(
+                    ToolPath::from("write"),
+                    ToolProvenance::Builtin,
+                    loong_tools::file::WriteTool::new("write"),
+                )
+                .err();
+            debug_assert!(
+                duplicate.is_none(),
+                "duplicate builtin tool path: {duplicate:?}"
+            );
         }
         plane
     })
