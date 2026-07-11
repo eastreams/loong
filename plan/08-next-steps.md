@@ -12,7 +12,9 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      child effective caps；
    - `ToolInvocation::invoke_with_capabilities` 已经支持 optional override，且只能缩小
      descriptor default caps；
-   - 剩余的是 future tool->tool 调用入口要解析 override 参数并调用该方法；
+   - block：当前公开 `tool.invoke` 仍是 legacy lease -> `ToolCoreRequest` 路径，没有进入
+     `ctx.tool(path)?.invoke_with_capabilities(...)`；
+   - 剩余的是 typed tool->tool 调用入口解析 override 参数并调用该方法；
    - 完成线：
      - tool->tool payload/descriptor 中的 override 能进入 `invoke_with_capabilities`；
      - override 扩大时返回 typed input error 或 policy denial，不能静默提升；
