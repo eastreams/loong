@@ -23,7 +23,9 @@ use loong_core::{
     },
 };
 
-use crate::access::fs::{FsPathPolicyContext, FsReadAction, FsResolvePathAction};
+use crate::access::fs::{
+    FsContentSearchAction, FsGlobAction, FsPathPolicyContext, FsReadAction, FsResolvePathAction,
+};
 use crate::errors::PolicyError;
 
 const DEFAULT_DENY_REASON: &str = "No matching policy.";
@@ -474,6 +476,12 @@ pub struct FsReadFilenameDenyPolicy {
 pub struct FsReadAllowPolicy;
 
 #[derive(Debug, Default, Clone, Copy)]
+pub struct FsGlobAllowPolicy;
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct FsContentSearchAllowPolicy;
+
+#[derive(Debug, Default, Clone, Copy)]
 pub struct FsResolvePathAllowedRootsPolicy;
 
 /// Default fs path containment policy.
@@ -582,6 +590,42 @@ where
             decision: PolicyDecision::Allow,
             predicate: Some("fs.read reached terminal allow policy".into()),
             reason: "filesystem read allowed after configured deny policies".into(),
+        }
+    }
+}
+
+#[async_trait]
+impl<C> Policy<C, FsGlobAction> for FsGlobAllowPolicy
+where
+    C: ContextFactory + Send + Sync,
+{
+    fn name(&self) -> Cow<'static, str> {
+        Cow::Borrowed("fs-glob-allow")
+    }
+
+    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &FsGlobAction) -> PolicyGrant {
+        PolicyGrant {
+            decision: PolicyDecision::Allow,
+            predicate: Some("fs.glob reached terminal allow policy".into()),
+            reason: "filesystem glob allowed after configured deny policies".into(),
+        }
+    }
+}
+
+#[async_trait]
+impl<C> Policy<C, FsContentSearchAction> for FsContentSearchAllowPolicy
+where
+    C: ContextFactory + Send + Sync,
+{
+    fn name(&self) -> Cow<'static, str> {
+        Cow::Borrowed("fs-content-search-allow")
+    }
+
+    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &FsContentSearchAction) -> PolicyGrant {
+        PolicyGrant {
+            decision: PolicyDecision::Allow,
+            predicate: Some("fs.content_search reached terminal allow policy".into()),
+            reason: "filesystem content search allowed after configured deny policies".into(),
         }
     }
 }

@@ -12,7 +12,10 @@ use loong_core::{
 
 use super::AccessCx;
 use crate::access::fs::{FsAccessError, FsPathPolicyContext, FsResolutionContext};
-use crate::policy::{FsReadAllowPolicy, FsResolvePathAllowedRootsPolicy};
+use crate::policy::{
+    FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsReadAllowPolicy,
+    FsResolvePathAllowedRootsPolicy,
+};
 
 #[derive(Debug, Clone)]
 struct AccessCxPolicyContext {
@@ -111,6 +114,63 @@ async fn access_context_preserves_workspace_context_for_fs_access() {
 }
 
 #[tokio::test]
+async fn access_context_grants_glob_paths_with_explicit_fs_policy() {
+    let kernel = kernel_with_fs_path_policy();
+    let base = tempfile_dir("loong-kernel-access-glob-policy");
+    let workspace_root = base.join("workspace");
+    std::fs::create_dir_all(workspace_root.join("src")).expect("create source dir");
+    std::fs::write(workspace_root.join("src/lib.rs"), "pub fn lib() {}").expect("write lib");
+    let ctx = AccessToolCx::new(&kernel, &workspace_root);
+
+    let output = ctx
+        .access()
+        .fs()
+        .glob_paths(".", "**/*.rs", false, 10)
+        .await
+        .expect("glob should succeed with explicit fs policy");
+
+    assert_eq!(
+        output.matches.first().expect("first match").relative_path,
+        "src/lib.rs"
+    );
+
+    std::fs::remove_dir_all(base).ok();
+}
+
+#[tokio::test]
+async fn access_context_grants_content_search_with_explicit_fs_policy() {
+    let kernel = kernel_with_fs_path_policy();
+    let base = tempfile_dir("loong-kernel-access-content-policy");
+    let workspace_root = base.join("workspace");
+    std::fs::create_dir_all(workspace_root.join("src")).expect("create source dir");
+    std::fs::write(workspace_root.join("src/lib.rs"), "pub fn lib() {}\n").expect("write lib");
+    let ctx = AccessToolCx::new(&kernel, &workspace_root);
+
+    let output = ctx
+        .access()
+        .fs()
+        .search_content(
+            ".",
+            "lib",
+            loong_access::fs::FsContentSearchOptions {
+                glob: Some("**/*.rs".to_owned()),
+                max_results: 10,
+                max_bytes_per_file: 262_144,
+                case_sensitive: false,
+            },
+        )
+        .await
+        .expect("content search should succeed with explicit fs policy");
+
+    assert_eq!(
+        output.matches.first().expect("first match").relative_path,
+        "src/lib.rs"
+    );
+
+    std::fs::remove_dir_all(base).ok();
+}
+
+#[tokio::test]
 async fn fs_path_escape_is_reported_as_path_resolution_policy_denial() {
     let kernel = kernel_with_fs_path_policy();
     let base = tempfile_dir("loong-kernel-access-path-policy");
@@ -154,7 +214,9 @@ async fn fs_path_escape_is_reported_as_path_resolution_policy_denial() {
 fn kernel_with_fs_path_policy() -> crate::Kernel<AccessCxContextFactory> {
     let policy = crate::PolicyPipeline::<AccessCxContextFactory>::new()
         .with_policy(FsResolvePathAllowedRootsPolicy)
-        .with_policy(FsReadAllowPolicy);
+        .with_policy(FsReadAllowPolicy)
+        .with_policy(FsGlobAllowPolicy)
+        .with_policy(FsContentSearchAllowPolicy);
     crate::Kernel::with_policy_runtime(
         policy,
         Arc::new(crate::SystemClock),
