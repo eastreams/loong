@@ -23,7 +23,7 @@ pub mod runtime;
 pub mod task_supervisor;
 pub mod tool;
 
-pub use access::{AccessCx, KernelAccess};
+pub use access::{AccessCx, FsPathPolicyContext, FsResolutionContext, KernelAccess};
 pub use architecture::{
     ArchitectureBoundaryPolicy, ArchitectureGuardReport, ArchitecturePathDecision,
     ArchitecturePathReport,

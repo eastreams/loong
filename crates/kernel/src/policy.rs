@@ -9,7 +9,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use loong_access::fs::{FsReadAction, FsResolvePathAction};
+use loong_access::fs::{FsPathPolicyContext, FsReadAction, FsResolvePathAction};
 use loong_contracts::{
     Capability, CapabilityToken, GrantId, PolicyDecision, PolicyEntry, PolicyEvaluation,
     PolicyGrant, PolicyId, PolicyOutcome, PolicyReport, VerticalPackManifest,
@@ -22,6 +22,7 @@ use loong_core::{
         engine::PolicyEngine,
         policy::{Policy, PolicyAny},
     },
+    tool::ToolInvocationAction,
 };
 
 use crate::{
@@ -96,15 +97,12 @@ pub struct PolicyPipeline<C: ContextFactory> {
     _context: PhantomData<fn() -> C>,
 }
 
-impl<C: ContextFactory> Default for PolicyPipeline<C> {
-    fn default() -> Self {
-        Self::new()
-            .with_policy::<FsResolvePathAction, _>(FsResolvePathAllowedRootsPolicy)
-            .with_fallback_policy(AllowPolicy)
-    }
-}
-
 impl<C: ContextFactory> PolicyPipeline<C> {
+    /// Construct a default-deny pipeline.
+    ///
+    /// Without a terminal allow policy, unmatched actions produce a deny report.
+    /// Runtime bootstraps that still need legacy compatibility must opt into
+    /// `new_legacy_allow_fallback`.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -116,6 +114,11 @@ impl<C: ContextFactory> PolicyPipeline<C> {
             grant_seq: AtomicU64::new(0),
             _context: PhantomData,
         }
+    }
+
+    #[must_use]
+    pub fn new_legacy_allow_fallback() -> Self {
+        Self::new().with_fallback_policy(LegacyAllowPolicy)
     }
 
     /// Register a policy for exactly one action type.
@@ -155,6 +158,30 @@ impl<C: ContextFactory> PolicyPipeline<C> {
         }
 
         self.push_policy::<FsReadAction, _>(FsReadFilenameDenyPolicy::new(denied_filenames));
+    }
+
+    pub fn push_fs_read_allow_policy(&mut self) {
+        self.push_policy::<FsReadAction, _>(FsReadAllowPolicy);
+    }
+
+    #[must_use]
+    pub fn with_fs_path_policy(mut self) -> Self
+    where
+        for<'a> C::Cx<'a>: FsPathPolicyContext,
+    {
+        self.push_fs_path_policy();
+        self
+    }
+
+    pub fn push_fs_path_policy(&mut self)
+    where
+        for<'a> C::Cx<'a>: FsPathPolicyContext,
+    {
+        self.push_policy::<FsResolvePathAction, _>(FsResolvePathAllowedRootsPolicy);
+    }
+
+    pub fn push_tool_invocation_allow_policy(&mut self) {
+        self.push_policy::<ToolInvocationAction, _>(ToolInvocationAllowPolicy);
     }
 
     /// Register a broad gate before typed action policy.
@@ -462,10 +489,63 @@ where
     }
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+pub struct LegacyAllowPolicy;
+
+#[async_trait]
+impl<C> PolicyAny<C> for LegacyAllowPolicy
+where
+    C: ContextFactory + Send + Sync,
+{
+    fn name(&self) -> Cow<'static, str> {
+        Cow::Borrowed("legacy-allow")
+    }
+
+    async fn grant(&self, _ctx: &C::Cx<'_>, action: &dyn ActionMeta) -> PolicyGrant {
+        if action.metadata().kind == "action.legacy" {
+            return PolicyGrant {
+                decision: PolicyDecision::Allow,
+                predicate: Some("action kind is legacy kernel operation".into()),
+                reason: "legacy kernel operation allowed by migration fallback".into(),
+            };
+        }
+
+        PolicyGrant {
+            decision: PolicyDecision::Continue,
+            predicate: Some("action kind is not legacy kernel operation".into()),
+            reason: "legacy fallback does not grant typed actions".into(),
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct ToolInvocationAllowPolicy;
+
+#[async_trait]
+impl<C> Policy<C, ToolInvocationAction> for ToolInvocationAllowPolicy
+where
+    C: ContextFactory + Send + Sync,
+{
+    fn name(&self) -> Cow<'static, str> {
+        Cow::Borrowed("tool-invocation-allow")
+    }
+
+    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &ToolInvocationAction) -> PolicyGrant {
+        PolicyGrant {
+            decision: PolicyDecision::Allow,
+            predicate: Some("tool invocation passed capability gate".into()),
+            reason: "tool invocation allowed by app policy".into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct FsReadFilenameDenyPolicy {
     denied_filenames: BTreeSet<String>,
 }
+
+#[derive(Debug, Default, Clone, Copy)]
+struct FsReadAllowPolicy;
 
 #[derive(Debug, Default, Clone, Copy)]
 struct FsResolvePathAllowedRootsPolicy;
@@ -479,15 +559,17 @@ struct FsResolvePathAllowedRootsPolicy;
 impl<C> Policy<C, FsResolvePathAction> for FsResolvePathAllowedRootsPolicy
 where
     C: ContextFactory + Send + Sync,
+    for<'a> C::Cx<'a>: FsPathPolicyContext,
 {
     fn name(&self) -> Cow<'static, str> {
         Cow::Borrowed("fs-resolve-path-allowed-roots")
     }
 
-    async fn grant(&self, _ctx: &C::Cx<'_>, action: &FsResolvePathAction) -> PolicyGrant {
-        if resolved_path_starts_with_allowed_root(action) {
+    async fn grant(&self, ctx: &C::Cx<'_>, action: &FsResolvePathAction) -> PolicyGrant {
+        let allowed_roots = ctx.fs_allowed_roots();
+        if resolved_path_starts_with_allowed_root(action.resolved_path(), allowed_roots) {
             return PolicyGrant {
-                decision: PolicyDecision::Continue,
+                decision: PolicyDecision::Allow,
                 predicate: Some("resolved fs path starts with an allowed root".into()),
                 reason: "resolved fs path is within allowed roots".into(),
             };
@@ -499,18 +581,20 @@ where
             reason: format!(
                 "filesystem path {} escapes allowed filesystem roots [{}]",
                 action.resolved_path().display(),
-                display_path_list(action.allowed_roots())
+                display_path_list(allowed_roots)
             )
             .into(),
         }
     }
 }
 
-fn resolved_path_starts_with_allowed_root(action: &FsResolvePathAction) -> bool {
-    action
-        .allowed_roots()
+fn resolved_path_starts_with_allowed_root(
+    resolved_path: &std::path::Path,
+    allowed_roots: &[std::path::PathBuf],
+) -> bool {
+    allowed_roots
         .iter()
-        .any(|allowed_root| action.resolved_path().starts_with(allowed_root))
+        .any(|allowed_root| resolved_path.starts_with(allowed_root))
 }
 
 impl FsReadFilenameDenyPolicy {
@@ -553,6 +637,24 @@ where
             decision: PolicyDecision::Continue,
             predicate: None,
             reason: "filename did not match configured read deny policy".into(),
+        }
+    }
+}
+
+#[async_trait]
+impl<C> Policy<C, FsReadAction> for FsReadAllowPolicy
+where
+    C: ContextFactory + Send + Sync,
+{
+    fn name(&self) -> Cow<'static, str> {
+        Cow::Borrowed("fs-read-allow")
+    }
+
+    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &FsReadAction) -> PolicyGrant {
+        PolicyGrant {
+            decision: PolicyDecision::Allow,
+            predicate: Some("fs.read reached terminal allow policy".into()),
+            reason: "filesystem read allowed after configured deny policies".into(),
         }
     }
 }

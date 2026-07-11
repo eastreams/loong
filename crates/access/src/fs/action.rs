@@ -33,10 +33,9 @@ impl FsResolvePathAction {
     pub(in crate::fs) fn resolve(
         path: impl AsRef<Path>,
         resolution_root: impl AsRef<Path>,
-        allowed_roots: &[PathBuf],
     ) -> Result<Self, super::error::FsActionError> {
         let raw_path = path.as_ref().to_path_buf();
-        let resolved = ResolvedPath::resolve(&raw_path, resolution_root, allowed_roots)?;
+        let resolved = ResolvedPath::resolve(&raw_path, resolution_root)?;
         Ok(Self { raw_path, resolved })
     }
 
@@ -48,11 +47,6 @@ impl FsResolvePathAction {
     #[must_use]
     pub fn resolved_path(&self) -> &Path {
         self.resolved.path()
-    }
-
-    #[must_use]
-    pub fn allowed_roots(&self) -> &[PathBuf] {
-        self.resolved.allowed_roots()
     }
 
     pub(in crate::fs) fn into_granted_path(self) -> GrantedPath {
@@ -77,11 +71,6 @@ impl ActionMeta for FsResolvePathAction {
         Cow::Owned(json!({
             "path": self.raw_path.display().to_string(),
             "resolved_path": self.resolved_path().display().to_string(),
-            "allowed_roots": self
-                .allowed_roots()
-                .iter()
-                .map(|root| root.display().to_string())
-                .collect::<Vec<_>>(),
         }))
     }
 }

@@ -120,7 +120,16 @@ where
 
     #[must_use]
     pub fn with_runtime(clock: Arc<dyn Clock>, audit: Arc<dyn AuditSink>) -> Self {
-        Self::with_policy_runtime(PolicyPipeline::default(), clock, audit)
+        Self::with_policy_runtime(PolicyPipeline::new(), clock, audit)
+    }
+
+    /// Construct a migration runtime for old adapter planes.
+    ///
+    /// New typed actions must install their own typed policies; this fallback
+    /// only grants `LegacyKernelAction` so default construction stays deny-by-default.
+    #[must_use]
+    pub fn with_legacy_allow_runtime(clock: Arc<dyn Clock>, audit: Arc<dyn AuditSink>) -> Self {
+        Self::with_policy_runtime(PolicyPipeline::new_legacy_allow_fallback(), clock, audit)
     }
 
     #[must_use]

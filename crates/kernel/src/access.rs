@@ -1,8 +1,6 @@
 use loong_access::fs::{FsAccess, FsAccessError};
-use loong_core::{
-    kernel::Kernel as CoreKernel,
-    policy::context::{ContextFactory, FsAccessContext},
-};
+pub use loong_access::fs::{FsPathPolicyContext, FsResolutionContext};
+use loong_core::{kernel::Kernel as CoreKernel, policy::context::ContextFactory};
 
 use crate::{kernel::Kernel, policy::PolicyPipeline};
 
@@ -33,7 +31,7 @@ where
 impl<'a, 'ctx, C> AccessCx<'a, 'ctx, C>
 where
     C: ContextFactory + 'ctx,
-    C::Cx<'ctx>: FsAccessContext,
+    C::Cx<'ctx>: FsResolutionContext,
 {
     /// Filesystem access entry point.
     ///
@@ -56,6 +54,7 @@ where
 pub trait KernelAccess<C>
 where
     C: ContextFactory,
+    Self: FsResolutionContext,
 {
     fn access(&self) -> AccessCx<'_, '_, C>;
 }

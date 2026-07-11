@@ -4,10 +4,7 @@ use async_trait::async_trait;
 use loong_contracts::{
     Capability, ToolExecutionError, ToolInputError, ToolOutcome, ToolPath, ToolSpec,
 };
-use loong_core::{
-    policy::context::{ContextFactory, FsAccessContext},
-    tool::ToolImpl,
-};
+use loong_core::{policy::context::ContextFactory, tool::ToolImpl};
 use loong_kernel::KernelAccess;
 use serde_json::{Value, json};
 
@@ -42,7 +39,7 @@ pub struct ReadFileTool;
 impl<C> ToolImpl<C> for ReadFileTool
 where
     C: ContextFactory + Send + Sync,
-    for<'a> C::Cx<'a>: KernelAccess<C> + FsAccessContext + Sync,
+    for<'a> C::Cx<'a>: KernelAccess<C> + Sync,
 {
     type Input = FileReadRequest;
     type Output = ToolOutcome;

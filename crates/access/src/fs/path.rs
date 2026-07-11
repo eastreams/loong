@@ -8,31 +8,21 @@ use super::error::FsActionError;
 /// Resolved filesystem path facts prepared inside the access boundary.
 ///
 /// This value deliberately does not decide authorization. It records the
-/// canonicalized candidate path and canonical allowed roots so the kernel's
-/// typed policy can produce a normal PolicyReport for root escapes.
+/// canonicalized candidate path so the kernel's typed policy can compare it
+/// with the current context's allowed roots.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::fs) struct ResolvedPath {
     path: PathBuf,
-    allowed_roots: Vec<PathBuf>,
 }
 
 impl ResolvedPath {
     pub(in crate::fs) fn resolve(
         path: impl AsRef<Path>,
         resolution_root: impl AsRef<Path>,
-        allowed_roots: &[PathBuf],
     ) -> Result<Self, FsActionError> {
         let raw = path.as_ref();
         if raw.as_os_str().is_empty() {
             return Err(FsActionError::EmptyPath);
-        }
-
-        let allowed_roots = allowed_roots
-            .iter()
-            .map(|root| resolve_existing_or_missing_path(root.as_path()))
-            .collect::<Result<Vec<_>, _>>()?;
-        if allowed_roots.is_empty() {
-            return Err(FsActionError::MissingAllowedRoot);
         }
 
         let resolution_root = resolve_existing_or_missing_path(resolution_root.as_ref())?;
@@ -43,18 +33,11 @@ impl ResolvedPath {
         };
         let path = resolve_existing_or_missing_path(&combined)?;
 
-        Ok(Self {
-            path,
-            allowed_roots,
-        })
+        Ok(Self { path })
     }
 
     pub(in crate::fs) fn path(&self) -> &Path {
         &self.path
-    }
-
-    pub(in crate::fs) fn allowed_roots(&self) -> &[PathBuf] {
-        &self.allowed_roots
     }
 
     pub(in crate::fs) fn into_path_buf(self) -> PathBuf {

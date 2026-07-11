@@ -395,7 +395,7 @@ fn build_daemon_runtime_kernel() -> Kernel<SpecContextFactory> {
     let audit_sink = Arc::new(InMemoryAuditSink::default());
     let audit_sink = audit_sink as Arc<dyn AuditSink>;
     let clock = Arc::new(SystemClock) as Arc<dyn kernel::Clock>;
-    let mut kernel = Kernel::<SpecContextFactory>::with_runtime(clock, audit_sink);
+    let mut kernel = Kernel::<SpecContextFactory>::with_legacy_allow_runtime(clock, audit_sink);
     let pack = daemon_runtime_pack_manifest();
     let register_pack_result = kernel.register_pack(pack);
     register_pack_result.expect("daemon runtime pack should register");

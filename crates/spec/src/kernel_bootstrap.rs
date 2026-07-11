@@ -111,13 +111,13 @@ fn configured_kernel_with_default_audit(
 ) -> (Kernel<SpecContextFactory>, Option<Arc<InMemoryAuditSink>>) {
     let (mut kernel, fallback_audit) = match (clock, audit) {
         (Some(clock), Some(audit)) => (
-            Kernel::<SpecContextFactory>::with_runtime(clock, audit),
+            Kernel::<SpecContextFactory>::with_legacy_allow_runtime(clock, audit),
             None,
         ),
         (Some(clock), None) => {
             let audit = default_in_memory_audit_sink();
             (
-                Kernel::<SpecContextFactory>::with_runtime(
+                Kernel::<SpecContextFactory>::with_legacy_allow_runtime(
                     clock,
                     audit.clone() as Arc<dyn AuditSink>,
                 ),
@@ -125,7 +125,7 @@ fn configured_kernel_with_default_audit(
             )
         }
         (None, Some(audit)) => (
-            Kernel::<SpecContextFactory>::with_runtime(
+            Kernel::<SpecContextFactory>::with_legacy_allow_runtime(
                 Arc::new(SystemClock) as Arc<dyn Clock>,
                 audit,
             ),
@@ -134,7 +134,7 @@ fn configured_kernel_with_default_audit(
         (None, None) => {
             let audit = default_in_memory_audit_sink();
             (
-                Kernel::<SpecContextFactory>::with_runtime(
+                Kernel::<SpecContextFactory>::with_legacy_allow_runtime(
                     Arc::new(SystemClock) as Arc<dyn Clock>,
                     audit.clone() as Arc<dyn AuditSink>,
                 ),

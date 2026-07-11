@@ -3,16 +3,12 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use loong_core::{
     error::AuthorizationError,
-    policy::{
-        action::Action,
-        context::{ContextFactory, FsAccessContext},
-        engine::PolicyEngine,
-        grant::Granted,
-    },
+    policy::{action::Action, context::ContextFactory, engine::PolicyEngine, grant::Granted},
 };
 use thiserror::Error;
 
 use super::{
+    FsResolutionContext,
     action::{FsReadAction, FsResolvePathAction},
     error::FsActionError,
     path::GrantedPath,
@@ -27,7 +23,7 @@ pub struct FsAccess<'a, 'ctx, C, P>
 where
     C: ContextFactory + 'ctx,
     P: PolicyEngine<C>,
-    C::Cx<'ctx>: FsAccessContext,
+    C::Cx<'ctx>: FsResolutionContext,
 {
     policy_engine: &'a P,
     ctx: &'a C::Cx<'ctx>,
@@ -37,7 +33,7 @@ impl<'a, 'ctx, C, P> FsAccess<'a, 'ctx, C, P>
 where
     C: ContextFactory + 'ctx,
     P: PolicyEngine<C>,
-    C::Cx<'ctx>: FsAccessContext,
+    C::Cx<'ctx>: FsResolutionContext,
 {
     #[inline(always)]
     #[must_use]
@@ -50,7 +46,7 @@ impl<'a, 'ctx, C, P> FsAccess<'a, 'ctx, C, P>
 where
     C: ContextFactory + 'ctx,
     P: PolicyEngine<C>,
-    C::Cx<'ctx>: FsAccessContext,
+    C::Cx<'ctx>: FsResolutionContext,
 {
     /// Read a file through path-resolution policy and read policy.
     ///
@@ -58,11 +54,7 @@ where
     /// filesystem observation. Kernel policy decides whether those facts are
     /// allowed, and only the granted resolve action can mint `GrantedPath`.
     pub async fn read_file(self, path: impl AsRef<Path>) -> Result<FsReadOutput, FsAccessError> {
-        let resolve_action = FsResolvePathAction::resolve(
-            path,
-            self.ctx.fs_resolution_root(),
-            self.ctx.fs_allowed_roots(),
-        )?;
+        let resolve_action = FsResolvePathAction::resolve(path, self.ctx.fs_resolution_root())?;
         let resolve_grant = self
             .policy_engine
             .grant(self.ctx, resolve_action)

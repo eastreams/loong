@@ -5,11 +5,11 @@ use std::sync::Arc;
 use std::thread;
 
 use loong_contracts::{CapabilityToken, ExecutionPlane, PlaneTier};
-use loong_core::policy::context::{CapabilityContext, ContextFactory, FsAccessContext};
+use loong_core::policy::context::{CapabilityContext, ContextFactory};
 use loong_kernel::{
-    AccessCx, AuditSink, Capability, Clock, ExecutionRoute, FanoutAuditSink, HarnessKind,
-    InMemoryAuditSink, JsonlAuditSink, Kernel, KernelAccess, KernelInvocationContext,
-    NoopAuditSink, PolicyPipeline, SystemClock, VerticalPackManifest,
+    AccessCx, AuditSink, Capability, Clock, ExecutionRoute, FanoutAuditSink, FsPathPolicyContext,
+    FsResolutionContext, HarnessKind, InMemoryAuditSink, JsonlAuditSink, Kernel, KernelAccess,
+    KernelInvocationContext, NoopAuditSink, PolicyPipeline, SystemClock, VerticalPackManifest,
 };
 use serde_json::Value;
 
@@ -185,11 +185,13 @@ impl KernelInvocationContext for AppExecutionContext<'_> {
     }
 }
 
-impl FsAccessContext for AppExecutionContext<'_> {
+impl FsResolutionContext for AppExecutionContext<'_> {
     fn fs_resolution_root(&self) -> &Path {
         self.fs_resolution_root.as_path()
     }
+}
 
+impl FsPathPolicyContext for AppExecutionContext<'_> {
     fn fs_allowed_roots(&self) -> &[PathBuf] {
         self.fs_allowed_roots.as_slice()
     }
@@ -254,7 +256,7 @@ pub(crate) fn read_file_with_access_for_runtime_config(
     block_on_context_future(
         async move {
             let kernel = Kernel::with_policy_runtime(
-                policy_pipeline_for_tool_runtime_config(&config),
+                build_app_policy_pipeline(&config),
                 Arc::new(SystemClock) as Arc<dyn Clock>,
                 Arc::new(NoopAuditSink),
             );
@@ -430,7 +432,7 @@ fn bootstrap_kernel_context_with_audit_sink(
     let file_root = tool_rt.file_root.clone();
     let tool_policy_rt = tool_rt.clone();
     let mut kernel = Kernel::with_policy_runtime(
-        policy_pipeline_for_tool_runtime_config(&tool_rt),
+        build_app_policy_pipeline(&tool_rt),
         Arc::new(SystemClock) as Arc<dyn Clock>,
         audit_sink,
     );
@@ -497,11 +499,22 @@ fn bootstrap_kernel_context_with_audit_sink(
     })
 }
 
-pub(crate) fn policy_pipeline_for_tool_runtime_config(
+pub(crate) fn build_app_policy_pipeline(
     config: &crate::tools::runtime_config::ToolRuntimeConfig,
 ) -> PolicyPipeline<AppContextFactory> {
-    let mut policy = PolicyPipeline::<AppContextFactory>::default();
+    // App still hosts unmigrated legacy planes, so the compatibility fallback
+    // is explicit at the app bootstrap boundary rather than hidden in kernel
+    // defaults. Typed actions below must install their own terminal policies.
+    let mut policy = PolicyPipeline::<AppContextFactory>::new_legacy_allow_fallback();
+
+    // Structural policies: these are part of the app runtime shape, not derived
+    // from user config.
+    policy.push_tool_invocation_allow_policy();
+    policy.push_fs_path_policy();
+
+    // Config-derived policies: these reflect the current runtime settings.
     policy.push_fs_read_filename_deny_policy(config.fs.deny_read_filenames.clone());
+    policy.push_fs_read_allow_policy();
     policy
 }
 
