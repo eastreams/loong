@@ -31,8 +31,8 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
    - production `ReadTool` 已经不硬编码注册 path；app plane 注册时注入 user-facing 名称，
      仅用于响应和 continuation 推荐；
    - provider schema 已经用 app-owned plane enumeration gate migrated `read` 的可见性；
-   - 剩余的是 `read` 的 provider JSON schema 和部分 prompt/catalog metadata 仍来自
-     legacy static catalog；
+   - `read` provider JSON schema 已经来自 `ReadTool::spec().input_schema`；
+   - 剩余的是 `read` 的 prompt/search/governance metadata 仍来自 legacy static catalog；
    - 不把 `ToolPath` 提回 core/contracts；plane 可以继续拥有自己的 path 类型；
    - 完成线：
      - typed tools 的 agent-visible descriptor/schema 来自 plane/typed tool descriptor，而不是
