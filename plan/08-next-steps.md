@@ -34,18 +34,7 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      `cargo test -p loong-app kernel_routed_file_read`、
      `cargo check -p loong-core -p loong-tools -p loong-app`、`git diff --check`。
 
-3. 收敛 typed invocation ingress 的 trusted overlay：
-   - legacy reserved payload 字段先在 app ingress 抽成 `TrustedInvocationOverlay`；
-   - typed tool 收到的 payload 不包含 reserved internal context；
-   - concrete tool 不能直接读取 trusted overlay；
-   - 完成线：
-     - `ToolInvocation::invoke(payload)` 或其调用入口接收清理后的 agent payload；
-     - trusted overlay 只影响 app orchestration，不进入 concrete tool input parse；
-     - forged reserved payload 字段仍被拒绝；
-   - 验证：`cargo test -p loong-app tool_invoke_rejects_forged_reserved_internal_context`、
-     `cargo test -p loong-app kernel_routed_file_read`、`git diff --check`。
-
-4. 改 `read` 为 aggregate typed tool：
+3. 改 `read` 为 aggregate typed tool：
    - 删除 payload-claim/fallback 思路；
    - `ReadTool` 内部解析 `path/query/pattern/glob`；
    - `path/query/glob` 分别构造不同 action；
@@ -61,7 +50,7 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      `cargo test -p loong-access`、`cargo check -p loong-tools -p loong-app -p loong-access`、
      `git diff --check`。
 
-5. 继续迁移剩余 legacy side-effect tools：
+4. 继续迁移剩余 legacy side-effect tools：
    - write/edit/config.import 按同样 access-backed action 模式迁移；
    - 迁移完成后删除 `FilePolicyExtension` 对应旧分支；
    - 逐步清空 `Kernel::execute_tool_core` 调用面，再删除 `LegacyToolPlane` 和 adapter
@@ -74,7 +63,7 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      `cargo check -p loong-access -p loong-kernel -p loong-app -p loong` 和
      `git diff --check`。
 
-6. 测试清理：
+5. 测试清理：
    - typed tool 测试只接受 `ToolInvocation` audit；
    - legacy adapter 测试只接受 `PlaneInvoked` audit；
    - 不用 `PlaneInvoked | ToolInvocation` 这种宽松断言；
@@ -84,7 +73,7 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      - typed path 测试名和 helper 名不再包含 legacy fallback；
      - module-level tests 留在对应模块下，例如 `tools/plane/tests.rs`、`file/tests.rs`。
 
-7. 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration：
+6. 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration：
    - app bootstrap 从 config 构造 concrete policy value；
    - policy 注册使用 `PolicyPipeline::push_policy` / `push_pre_policy` /
      `push_fallback_policy`；
