@@ -21,6 +21,7 @@ use loong_core::{
     tool::{RegisteredTool, ToolProvenance},
 };
 use serde_json::{Value, json};
+use slotmap::{SlotMap, new_key_type};
 
 use crate::context::AppContextFactory;
 
@@ -153,8 +154,28 @@ pub(crate) trait ToolPlane<C: ContextFactory>: Send + Sync {
     ) -> Result<Value, ToolPlaneError>;
 }
 
+new_key_type! {
+    // Internal storage handle only. Public identity and audit payloads keep
+    // using ToolPath so slot allocation never becomes observable API.
+    struct ToolSlot;
+}
+
 pub(crate) struct AppToolPlane<C: ContextFactory> {
-    tools: BTreeMap<ToolPath, RegisteredTool<C>>,
+    entries: SlotMap<ToolSlot, ToolEntry<C>>,
+    paths: BTreeMap<ToolPath, ToolSlot>,
+}
+
+struct ToolEntry<C: ContextFactory> {
+    tool: RegisteredTool<C>,
+}
+
+impl<C> ToolEntry<C>
+where
+    C: ContextFactory,
+{
+    fn new(tool: RegisteredTool<C>) -> Self {
+        Self { tool }
+    }
 }
 
 impl<C> AppToolPlane<C>
@@ -164,7 +185,8 @@ where
     #[must_use]
     pub(crate) fn new() -> Self {
         Self {
-            tools: BTreeMap::new(),
+            entries: SlotMap::with_key(),
+            paths: BTreeMap::new(),
         }
     }
 
@@ -186,25 +208,38 @@ where
     where
         T: ToolImpl<C>,
     {
-        if self.tools.contains_key(&path) {
+        if self.paths.contains_key(&path) {
             return Err(ToolPlaneError::DuplicateTool(path.to_string()));
         }
 
-        self.tools
-            .insert(path, RegisteredTool::from_tool(provenance, tool));
+        let entry = ToolEntry::new(RegisteredTool::from_tool(provenance, tool));
+        let slot = self.entries.insert(entry);
+        self.paths.insert(path, slot);
         Ok(())
     }
 
     #[cfg(test)]
     #[must_use]
     pub(crate) fn contains(&self, path: &ToolPath) -> bool {
-        self.tools.contains_key(path)
+        self.paths.contains_key(path)
     }
 
     #[cfg(test)]
     #[must_use]
     pub(crate) fn len(&self) -> usize {
-        self.tools.len()
+        self.entry_count()
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn entry_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn path_count(&self) -> usize {
+        self.paths.len()
     }
 }
 
@@ -214,7 +249,7 @@ where
     C: ContextFactory,
 {
     fn contains(&self, path: &ToolPath) -> bool {
-        self.tools.contains_key(path)
+        self.paths.contains_key(path)
     }
 
     /// This is not expected to be used directly.
@@ -228,12 +263,17 @@ where
         // concrete tool authors: ToolImpl implementers never receive a raw
         // dispatch path that can bypass app orchestration.
         let (path, _required_capabilities, payload) = grant.into_action().into_parts();
-        let registered = self
-            .tools
+        let slot = self
+            .paths
             .get(&path)
             .ok_or_else(|| ToolPlaneError::ToolNotFound(path.to_string()))?;
+        let entry = self
+            .entries
+            .get(*slot)
+            .ok_or_else(|| ToolPlaneError::ToolNotFound(path.to_string()))?;
 
-        registered
+        entry
+            .tool
             .invoke(ctx, payload)
             .await
             .map_err(|error| ToolPlaneError::Execution(tool_execution_error_reason(error)))
@@ -250,10 +290,14 @@ pub(crate) fn app_tool_plane() -> &'static dyn ToolPlane<AppContextFactory> {
         // Only the provider-facing file-read tool is migrated here. The direct
         // `read` facade stays on the legacy fallback path until it becomes an
         // aggregate typed tool for path/query/glob actions.
-        drop(plane.tools.insert(
-            ToolPath::from("file.read"),
-            RegisteredTool::from_tool(ToolProvenance::Builtin, loong_tools::file::ReadFileTool),
-        ));
+        {
+            let entry = ToolEntry::new(RegisteredTool::from_tool(
+                ToolProvenance::Builtin,
+                loong_tools::file::ReadFileTool,
+            ));
+            let slot = plane.entries.insert(entry);
+            let _ = plane.paths.insert(ToolPath::from("file.read"), slot);
+        }
         plane
     })
 }

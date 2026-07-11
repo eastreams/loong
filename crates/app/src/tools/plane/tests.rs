@@ -144,6 +144,8 @@ fn app_tool_plane_rejects_duplicate_paths() {
         .expect_err("duplicate registration should fail");
 
     assert_eq!(error, ToolPlaneError::DuplicateTool("test.echo".to_owned()));
+    assert_eq!(plane.entry_count(), 1);
+    assert_eq!(plane.path_count(), 1);
 }
 
 #[tokio::test]
@@ -170,6 +172,36 @@ async fn app_tool_plane_registered_path_reports_tool_input_error() {
         .expect_err("invalid registered tool input must fail");
 
     assert!(matches!(error, ToolPlaneError::Execution(reason) if reason.contains("message")));
+    assert_eq!(executions.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn app_tool_plane_missing_path_reports_not_found_without_executing_tools() {
+    let executions = Arc::new(AtomicUsize::new(0));
+    let mut plane = AppToolPlane::<TestContextFactory>::new();
+    let registered_path = ToolPath::from("test.echo");
+    let missing_path = ToolPath::from("test.missing");
+    plane
+        .register(
+            registered_path,
+            EchoTool {
+                executions: executions.clone(),
+            },
+        )
+        .expect("tool should register");
+
+    let error = plane
+        .invoke(
+            tool_invocation_grant(missing_path, json!({ "message": "hello" })).await,
+            &TestContext,
+        )
+        .await
+        .expect_err("missing path should fail");
+
+    assert_eq!(
+        error,
+        ToolPlaneError::ToolNotFound("test.missing".to_owned())
+    );
     assert_eq!(executions.load(Ordering::Relaxed), 0);
 }
 

@@ -68,6 +68,7 @@ rand.workspace = true
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+slotmap.workspace = true
 serde_yaml = "0.9"
 toml = { workspace = true, optional = true }
 reqwest.workspace = true
