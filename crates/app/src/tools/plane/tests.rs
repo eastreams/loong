@@ -68,6 +68,14 @@ impl ToolImpl<TestContextFactory> for EchoTool {
 }
 
 #[test]
+fn tool_path_keeps_plane_local_segments() {
+    let path = ToolPath::from("test.echo");
+
+    assert_eq!(path.segments(), ["test", "echo"]);
+    assert_eq!(path.to_string(), "test.echo");
+}
+
+#[test]
 fn tool_invocation_action_exposes_policy_metadata() {
     let action = ToolInvocationAction::new(
         ToolPath::from("read"),

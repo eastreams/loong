@@ -25,35 +25,55 @@ use slotmap::{SlotMap, new_key_type};
 use crate::context::AppContextFactory;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ToolPath(String);
+pub(crate) struct ToolPath {
+    segments: Vec<String>,
+}
 
 impl ToolPath {
     #[must_use]
-    pub(crate) fn new(path: impl Into<String>) -> Self {
-        Self(path.into())
+    pub(crate) fn from_segments(segments: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self {
+            segments: segments.into_iter().map(Into::into).collect(),
+        }
     }
 
+    #[cfg(test)]
     #[must_use]
-    pub(crate) fn as_str(&self) -> &str {
-        &self.0
+    pub(crate) fn segments(&self) -> &[String] {
+        self.segments.as_slice()
+    }
+
+    // Provider/catalog names still arrive as dotted strings. Keep that bridge
+    // at the app plane boundary so core/contracts never learn this path shape.
+    fn from_dotted(path: &str) -> Self {
+        Self::from_segments(path.split('.'))
     }
 }
 
 impl fmt::Display for ToolPath {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
+        let mut segments = self.segments.iter();
+        let Some(first) = segments.next() else {
+            return Ok(());
+        };
+        formatter.write_str(first)?;
+        for segment in segments {
+            formatter.write_str(".")?;
+            formatter.write_str(segment)?;
+        }
+        Ok(())
     }
 }
 
 impl From<&str> for ToolPath {
     fn from(path: &str) -> Self {
-        Self::new(path)
+        Self::from_dotted(path)
     }
 }
 
 impl From<String> for ToolPath {
     fn from(path: String) -> Self {
-        Self::new(path)
+        Self::from_dotted(path.as_str())
     }
 }
 
@@ -102,14 +122,14 @@ impl ActionMeta for ToolInvocationAction {
     fn metadata(&self) -> ActionMetadata<'_> {
         ActionMetadata {
             kind: "tool.invoke",
-            operation: Cow::Borrowed(self.path.as_str()),
+            operation: Cow::Owned(self.path.to_string()),
             required_capabilities: Cow::Borrowed(self.required_capabilities.as_slice()),
         }
     }
 
     fn payload(&self) -> Cow<'_, Value> {
         Cow::Owned(json!({
-            "tool_path": self.path.as_str(),
+            "tool_path": self.path.to_string(),
             "payload": self.payload,
         }))
     }
