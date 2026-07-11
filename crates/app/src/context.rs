@@ -105,6 +105,7 @@ pub struct AppExecutionContext<'a> {
     kernel: &'a Kernel<AppContextFactory>,
     pack: &'a VerticalPackManifest,
     token: &'a CapabilityToken,
+    effective_capabilities: BTreeSet<Capability>,
     now_epoch_s: u64,
     plane: ExecutionPlane,
     tier: PlaneTier,
@@ -134,11 +135,43 @@ impl<'a> AppExecutionContext<'a> {
         request_parameters: Option<&'a Value>,
         tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
     ) -> Result<Self, String> {
+        Self::new_with_effective_capabilities(
+            kernel,
+            pack,
+            token,
+            token.allowed_capabilities.clone(),
+            now_epoch_s,
+            plane,
+            tier,
+            request_parameters,
+            tool_runtime_config,
+        )
+    }
+
+    pub(crate) fn new_with_effective_capabilities(
+        kernel: &'a Kernel<AppContextFactory>,
+        pack: &'a VerticalPackManifest,
+        token: &'a CapabilityToken,
+        effective_capabilities: BTreeSet<Capability>,
+        now_epoch_s: u64,
+        plane: ExecutionPlane,
+        tier: PlaneTier,
+        request_parameters: Option<&'a Value>,
+        tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
+    ) -> Result<Self, String> {
+        if !effective_capabilities.is_subset(&token.allowed_capabilities) {
+            return Err("execution context cannot add capabilities beyond token".to_owned());
+        }
+
         let (fs_resolution_root, fs_allowed_roots) = fs_access_root_view(tool_runtime_config)?;
+        // Policy reads effective_capabilities so child invocations can narrow
+        // authority while KernelInvocationContext still exposes original token
+        // evidence for audit.
         Ok(Self {
             kernel,
             pack,
             token,
+            effective_capabilities,
             now_epoch_s,
             plane,
             tier,
@@ -167,7 +200,7 @@ impl KernelAccess<AppContextFactory> for AppExecutionContext<'_> {
 
 impl CapabilityContext for AppExecutionContext<'_> {
     fn allowed_capabilities(&self) -> BTreeSet<Capability> {
-        self.token.allowed_capabilities.clone()
+        self.effective_capabilities.clone()
     }
 }
 
@@ -475,6 +508,60 @@ mod tests {
         assert!(
             allowed_capabilities.contains(&Capability::NetworkEgress),
             "bootstrap token should grant network egress for kernel-bound web tools"
+        );
+    }
+
+    #[test]
+    fn new_with_effective_capabilities_updates_policy_caps_without_changing_token() {
+        let context = bootstrap_test_kernel_context("test-agent", 60).expect("bootstrap context");
+        let narrowed = BTreeSet::from([Capability::MemoryRead]);
+
+        let execution_context = AppExecutionContext::new_with_effective_capabilities(
+            context.kernel.as_ref(),
+            context.pack.as_ref(),
+            &context.token,
+            narrowed.clone(),
+            context.kernel.now_epoch_s(),
+            ExecutionPlane::Memory,
+            PlaneTier::Core,
+            None,
+            &context.tool_runtime_config,
+        )
+        .expect("narrowed execution context should build");
+
+        assert_eq!(execution_context.allowed_capabilities(), narrowed);
+        assert!(
+            execution_context
+                .token()
+                .allowed_capabilities
+                .contains(&Capability::InvokeTool),
+            "token evidence should keep the originally issued capabilities"
+        );
+    }
+
+    #[test]
+    fn new_with_effective_capabilities_rejects_added_capabilities() {
+        let context = bootstrap_test_kernel_context("test-agent", 60).expect("bootstrap context");
+        let widened = BTreeSet::from([Capability::MemoryRead, Capability::ControlRead]);
+
+        let error = match AppExecutionContext::new_with_effective_capabilities(
+            context.kernel.as_ref(),
+            context.pack.as_ref(),
+            &context.token,
+            widened,
+            context.kernel.now_epoch_s(),
+            ExecutionPlane::Memory,
+            PlaneTier::Core,
+            None,
+            &context.tool_runtime_config,
+        ) {
+            Ok(_) => panic!("execution context must not add capabilities"),
+            Err(error) => error,
+        };
+
+        assert_eq!(
+            error,
+            "execution context cannot add capabilities beyond token"
         );
     }
 
