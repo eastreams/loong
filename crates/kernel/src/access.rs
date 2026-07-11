@@ -1,5 +1,8 @@
 use loong_access::fs::{FsAccess, FsAccessError};
-use loong_core::{kernel::Kernel as CoreKernel, policy::context::ContextFactory};
+use loong_core::{
+    kernel::Kernel as CoreKernel,
+    policy::context::{ContextFactory, FsAccessContext},
+};
 
 use crate::{kernel::Kernel, policy::PolicyPipeline};
 
@@ -25,7 +28,13 @@ where
     pub fn new(kernel: &'a Kernel<C>, ctx: &'a C::Cx<'ctx>) -> Self {
         Self { kernel, ctx }
     }
+}
 
+impl<'a, 'ctx, C> AccessCx<'a, 'ctx, C>
+where
+    C: ContextFactory + 'ctx,
+    C::Cx<'ctx>: FsAccessContext,
+{
     /// Filesystem access entry point.
     ///
     /// Callers should prefer `ctx.access().fs().read_file(path)` over direct

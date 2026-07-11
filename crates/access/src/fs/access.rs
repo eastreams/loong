@@ -27,6 +27,7 @@ pub struct FsAccess<'a, 'ctx, C, P>
 where
     C: ContextFactory + 'ctx,
     P: PolicyEngine<C>,
+    C::Cx<'ctx>: FsAccessContext,
 {
     policy_engine: &'a P,
     ctx: &'a C::Cx<'ctx>,
@@ -36,6 +37,7 @@ impl<'a, 'ctx, C, P> FsAccess<'a, 'ctx, C, P>
 where
     C: ContextFactory + 'ctx,
     P: PolicyEngine<C>,
+    C::Cx<'ctx>: FsAccessContext,
 {
     #[inline(always)]
     #[must_use]
