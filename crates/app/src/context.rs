@@ -226,7 +226,7 @@ impl<'a> AppExecutionContext<'a> {
         Ok(ToolInvocation {
             ctx: self,
             path,
-            required_capabilities,
+            default_capabilities: required_capabilities,
         })
     }
 }
@@ -238,20 +238,29 @@ impl<'a> AppExecutionContext<'a> {
 pub(crate) struct ToolInvocation<'ctx, 'a> {
     ctx: &'ctx AppExecutionContext<'a>,
     path: crate::tools::plane::ToolPath,
-    required_capabilities: BTreeSet<Capability>,
+    default_capabilities: BTreeSet<Capability>,
 }
 
 impl ToolInvocation<'_, '_> {
     pub(crate) async fn invoke(self, payload: Value) -> Result<Value, loong_kernel::KernelError> {
+        self.invoke_with_capabilities(payload, None).await
+    }
+
+    pub(crate) async fn invoke_with_capabilities(
+        self,
+        payload: Value,
+        capability_override: Option<BTreeSet<Capability>>,
+    ) -> Result<Value, loong_kernel::KernelError> {
+        let required_capabilities = self.required_capabilities(capability_override)?;
         let tool_ctx = self
             .ctx
-            .narrow_capabilities(self.required_capabilities.clone())
+            .narrow_capabilities(required_capabilities.clone())
             .map_err(|error| {
                 loong_kernel::KernelError::ToolPlane(ToolPlaneError::Execution(error))
             })?;
         let action = crate::tools::plane::ToolInvocationAction::new(
             self.path,
-            self.required_capabilities.clone(),
+            required_capabilities,
             payload,
         );
         let grant = self
@@ -314,6 +323,31 @@ impl ToolInvocation<'_, '_> {
                 Err(loong_kernel::KernelError::ToolPlane(error))
             }
         }
+    }
+
+    fn required_capabilities(
+        &self,
+        capability_override: Option<BTreeSet<Capability>>,
+    ) -> Result<BTreeSet<Capability>, loong_kernel::KernelError> {
+        let mut default_tool_capabilities = self.default_capabilities.clone();
+        default_tool_capabilities.remove(&Capability::InvokeTool);
+        let tool_capabilities = match capability_override {
+            Some(override_capabilities) => {
+                if !override_capabilities.is_subset(&default_tool_capabilities) {
+                    return Err(loong_kernel::KernelError::ToolPlane(
+                        ToolPlaneError::Execution(
+                            "tool capability override cannot add capabilities".to_owned(),
+                        ),
+                    ));
+                }
+                override_capabilities
+            }
+            None => default_tool_capabilities,
+        };
+
+        let mut required_capabilities = BTreeSet::from([Capability::InvokeTool]);
+        required_capabilities.extend(tool_capabilities);
+        Ok(required_capabilities)
     }
 }
 
@@ -715,6 +749,74 @@ mod tests {
         };
 
         assert_eq!(error, "child execution context cannot add capabilities");
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[tokio::test]
+    async fn typed_tool_capability_override_rejects_added_capabilities() {
+        let context = bootstrap_test_kernel_context("test-agent", 60).expect("bootstrap context");
+        let execution_context = context
+            .execution_context(
+                ExecutionPlane::Tool,
+                PlaneTier::Core,
+                None,
+                &context.tool_runtime_config,
+            )
+            .expect("build execution context");
+        let invocation = execution_context
+            .tool(crate::tools::plane::ToolPath::from("file.read"))
+            .expect("file.read should be registered");
+
+        let error = invocation
+            .invoke_with_capabilities(
+                serde_json::json!({ "path": "missing.txt" }),
+                Some(BTreeSet::from([Capability::FilesystemWrite])),
+            )
+            .await
+            .expect_err("override must not add capabilities");
+
+        assert!(
+            error
+                .to_string()
+                .contains("tool capability override cannot add capabilities"),
+            "expected capability override rejection, got: {error}"
+        );
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[tokio::test]
+    async fn typed_tool_capability_override_narrows_domain_action_caps() {
+        let tempdir = tempdir().expect("tempdir");
+        fs::write(tempdir.path().join("notes.txt"), "alpha").expect("write fixture");
+        let mut config = LoongConfig::default();
+        config.tools.file_root = Some(tempdir.path().display().to_string());
+        let context = bootstrap_kernel_context_with_config("test-agent", 60, &config)
+            .expect("bootstrap context");
+        let execution_context = context
+            .execution_context(
+                ExecutionPlane::Tool,
+                PlaneTier::Core,
+                None,
+                &context.tool_runtime_config,
+            )
+            .expect("build execution context");
+        let invocation = execution_context
+            .tool(crate::tools::plane::ToolPath::from("file.read"))
+            .expect("file.read should be registered");
+
+        let error = invocation
+            .invoke_with_capabilities(
+                serde_json::json!({ "path": "notes.txt" }),
+                Some(BTreeSet::new()),
+            )
+            .await
+            .expect_err("filesystem read should lose FilesystemRead capability");
+
+        assert!(
+            error.to_string().contains("FilesystemRead")
+                || error.to_string().contains("filesystem_read"),
+            "expected filesystem read capability denial, got: {error}"
+        );
     }
 
     #[cfg(feature = "memory-sqlite")]
