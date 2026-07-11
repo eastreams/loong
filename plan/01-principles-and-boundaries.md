@@ -137,5 +137,5 @@
   调用都应经 unified runtime/context。
 - `loong-tools`：concrete builtin tool implementations only。该 crate 不承载
   `ToolImpl`、`RegisteredTool`、registry、plane、policy/action 抽象；它只放
-  `ReadFileTool` 这类具体工具和它们的 input/output 类型及小范围格式化逻辑。concrete
+  `ReadTool` 这类具体工具和它们的 input/output 类型及小范围格式化逻辑。concrete
   tool 不直接返回 legacy envelope。

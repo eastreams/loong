@@ -114,7 +114,7 @@ impl ToolInvocation<'_> {
 - `loong-access`：副作用边界。即使小也保留，因为它提供 “only access can do side effects”
   的物理边界。
 - `loong-tools`：concrete builtin tools。它截至 2026-07-11 体量小，是因为只迁了
-  `ReadFileTool`，不是因为边界错。
+  aggregate `ReadTool`，不是因为边界错。
 - `loong-contracts` / `loong-core`：继续审边界，尤其是哪些类型是真 contracts、哪些只是
   core behavior trait。不要再把 plane-local path 或 legacy envelope 放到 contracts/core。
 - `loong` daemon：交付入口，保留；业务 runtime ownership 不继续堆在 daemon。

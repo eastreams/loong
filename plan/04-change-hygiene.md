@@ -68,9 +68,10 @@
      - `crates/tools/src/lib.rs`：说明 `loong-tools` 只放 concrete builtin tool
        implementations，不放 `ToolImpl` / registry / policy / access 抽象。注释必须讲清
        “为什么有一个 tools crate 却不承载 tool 抽象”，避免后来者把 plane 或 trait 又搬进来。
-     - `crates/tools/src/file.rs`：说明 `ReadFileTool` 只负责 payload parse、调用
-       `ctx.access().fs().read_file(...)`、格式化 response；文件读取副作用发生在
-       `loong_access::fs`，不能在 tool helper 里直接 `std::fs::read`。
+     - `crates/tools/src/file.rs`：说明 `ReadTool` 只负责 payload parse、调用
+       `ctx.access().fs()` 下的具体 fs operation、格式化 response；文件读取、目录遍历、
+       内容搜索副作用发生在 `loong_access::fs`，不能在 tool helper 里直接
+       `std::fs::read` / `std::fs::read_dir`。
      - `crates/kernel/src/access.rs`：`KernelAccess<C>` 的注释必须讲清它为什么在 kernel
        而不是 core/access：它返回 kernel-defined `AccessCx`，并给 concrete tools 一个
        不依赖 `AppExecutionContext` 的窄 context requirement。
@@ -83,8 +84,8 @@
        点应使用 `ctx.tool(path)?.invoke(payload).await`，不要绕过 grant shortcut 直接执行。
      - `crates/app/src/tools/mod.rs`：typed dispatch 边界附近要讲清它只是迁移期
        orchestration：`ctx.tool(path)?` 做 lookup -> `ToolInvocation::invoke(payload)` build
-       action -> kernel grant -> plane `invoke`；`read` query/glob legacy bridge 只存在到
-       aggregate `ReadTool` 接管 query/glob 为止，不是 payload-claim 设计。
+       action -> kernel grant -> plane `invoke`；`read` 已由 aggregate `ReadTool` 接管，
+       不要恢复按 payload claim/fallback 的 dispatch 设计。
      - `crates/kernel/src/kernel.rs`：generic `grant` 注释必须讲清 kernel 是 governance
        authority，不执行 typed tool；grant 过程负责 action authorization audit；tool
        invocation grant 只授权进入 `ToolImpl`，tool 内部 side effect 仍需自己的 access
@@ -98,8 +99,9 @@
        `Cow<'_, Value>`，并且没有默认 `Null`。
      - `crates/loong-core/src/policy/grant.rs`：`Granted<A>::as_ref()` 注释必须讲清它只用于
        grant 被消费前的 audit/metadata inspection，不能成为伪造、复制或绕过执行边界的入口。
-     - `crates/app/src/tools/routing.rs`：legacy read bridge 注释必须讲清 query/glob 暂未迁入
-       aggregate `ReadTool`；迁移完成后删除 bridge，而不是把它提升成长期 routing 机制。
+     - `crates/app/src/tools/routing.rs`：context-aware direct read 注释必须讲清它只做
+       direct-read payload normalization，然后进入 `ctx.tool("read")?.invoke(...)`；无 context
+       legacy read 入口是统一 ctx/废弃旧入口之前的偏差，不能被提升成长期 routing 机制。
    - 注释验收标准：读者只看相关类型/函数附近的注释，就能回答“该层拥有谁”“为什么不在
      另一个 crate”“该 fallback 是否长期存在”“谁可以做副作用”“grant 何时被消费”；
    - typed path 测试断言 generic action grant audit + grant 后 tool execution audit；

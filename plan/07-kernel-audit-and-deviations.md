@@ -108,32 +108,23 @@ generic grant 负责所有 action authorization audit；tool invocation executio
 
 ## 当前实现偏差
 
-以下偏差是截至 2026-07-11 的代码状态；它们描述迁移目标，不是新代码应继续复用的形状：
+以下偏差描述迁移目标，不是新代码应继续复用的形状：
 
-- `crates/contracts/src/tool_types.rs` 仍定义全局 `ToolPath`，且 `ToolSpec` 仍携带
-  `path`。目标是 descriptor 无 path，注册点/plane 才绑定 path。
-- `crates/loong-core/src/tool.rs` 里的 `ToolInvocationAction` 持有全局 `ToolPath`。
-  `ToolInvocationAction` 属于 app/plane-owned action；迁移目标是删除 core action，不新增
-  core generic helper。
-- `crates/app/src/tools/plane.rs` 截至 2026-07-11 直接使用 contracts `ToolPath`，
-  `invoke` 也消费 core `ToolInvocationAction`，内部存储还是
-  `BTreeMap<ToolPath, RegisteredTool<C>>`。目标是 app plane 自己定义 path/action，
-  并使用 private slot registry + path index；contracts/core 不知道 plane registry key
-  或 slot。
-- `crates/kernel/src/kernel.rs` 的 `grant_tool_invocation` 截至 2026-07-11 接收 core
-  `ToolInvocationAction` 并在 deny 时记录 audit。目标是拆成 generic action grant +
-  app orchestration 负责 tool invocation audit。
-- `crates/tools/src/file.rs` 的 `ReadFileTool::spec()` 仍返回带 path 的 `ToolSpec`。
-  这是 tool descriptor 与 registration path 未拆开的直接症状。
-- `crates/tools/src/file.rs` 的 `ReadFileTool::Output` 仍是 `loong_contracts::ToolOutcome`，且
-  `build_outcome` 还在 concrete tool 内构造 `status/payload` envelope。目标是
-  `ReadFileTool::Output = ReadFileOutput`，只表达成功 payload；失败用 error path 表达。
+- `crates/contracts/src/audit_types.rs` 仍定义 `ToolInvocationOutcome`。长期目标是
+  contracts 只保留 kernel/sink 需要的 generic audit primitives；tool-specific execution
+  outcome 应由 app runtime schema 拥有。
+- `crates/app/src/tools/plane.rs` 已经拥有自己的 `ToolPath` 和 `ToolInvocationAction`，
+  并用 private slot registry + path index 存 tool。但 `ToolPath` 目前仍是 `String`
+  newtype；后续如果要支持 structured path，应在 app plane 内演进，不能把 plane-local
+  path 提回 contracts/core。
+- `crates/kernel/src/kernel.rs` 已经用 generic `grant_action` 授权 tool invocation action；
+  但 `record_tool_invocation` 仍记录 contracts 里的 `ToolInvocationOutcome`。目标是让
+  kernel 只记录 sink 能理解的通用事件，tool execution outcome 的 schema 归 app runtime。
 - `crates/app/src/tools/mod.rs` 里 typed dispatch、grant、invoke、audit 逻辑还堆在
   `execute_kernel_tool_request`。目标是 app orchestration 拥有这段边界，但函数应更聚焦。
-- `crates/app/src/tools/routing.rs` 的 `route_direct_read_tool_request_for_legacy` 名字不准。
-  它现在同时承担 read surface normalization 和 legacy bridge；aggregate `ReadTool`
-  落地后该模块职责应该删除或拆清楚。
-- `AppExecutionContext::capabilities()` 目前基本返回 token allowed caps；还没有 child
-  tool context 的 effective caps narrowing。
+- `crates/app/src/tools/routing.rs` 的 context-aware direct read 已进入
+  `ctx.tool("read")?.invoke(...)`，但无 context 的 `execute_tool_core_with_config(read)`
+  仍保留旧 query/glob search side effect。目标是统一 ctx 后删除或废弃 no-context read
+  entrypoint。
 - `KernelContext` 仍是 app/runtime surface 中传播 kernel binding 的过渡类型。相关代码用
   `TODO(deprecate-kernel-context)` 标记；目标是 unified runtime/context 接管这层状态。
