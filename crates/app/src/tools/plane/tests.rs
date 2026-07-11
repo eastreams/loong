@@ -54,6 +54,7 @@ impl ToolImpl<TestContextFactory> for EchoTool {
                 "additionalProperties": false
             }),
             required_capabilities: BTreeSet::new(),
+            argument_hint: None,
             search_hint: None,
             tags: Vec::new(),
         }

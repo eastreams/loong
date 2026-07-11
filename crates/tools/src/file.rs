@@ -399,6 +399,9 @@ where
             description: "Write file contents in allowed roots.".to_owned(),
             input_schema: Self::input_schema(),
             required_capabilities: BTreeSet::from([Capability::FilesystemWrite]),
+            argument_hint: Some(
+                "path:string,content:string,create_dirs?:boolean,overwrite?:boolean".to_owned(),
+            ),
             search_hint: Some(
                 "write exact file contents, optionally creating parent directories or overwriting an existing file"
                     .to_owned(),
@@ -461,6 +464,10 @@ where
                 .to_owned(),
             input_schema: Self::input_schema(),
             required_capabilities: BTreeSet::from([Capability::FilesystemRead]),
+            argument_hint: Some(
+                "path?:string,offset?:integer,limit?:integer,max_bytes?:integer,query?:string,pattern?:string,root?:string,glob?:string,max_results?:integer,max_bytes_per_file?:integer,case_sensitive?:boolean,include_directories?:boolean"
+                    .to_owned(),
+            ),
             search_hint: Some(
                 "read one file, page through a large file, search workspace content, or list matching paths through one direct tool"
                     .to_owned(),

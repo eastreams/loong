@@ -15,6 +15,9 @@ pub struct ToolSpec {
     /// app-owned planes provide identity, while concrete tools describe input.
     pub input_schema: Value,
     pub required_capabilities: BTreeSet<Capability>,
+    /// Optional compact argument hint owned by the concrete tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argument_hint: Option<String>,
     /// Optional discovery text owned by the concrete tool, not the registry path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub search_hint: Option<String>,

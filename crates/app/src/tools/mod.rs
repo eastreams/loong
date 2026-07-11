@@ -579,6 +579,7 @@ fn feishu_searchable_entries() -> Vec<SearchableToolEntry> {
                 search_hint,
                 &parameters,
                 preferred_parameter_order,
+                None,
                 tags,
                 None,
                 None,

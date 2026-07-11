@@ -142,6 +142,7 @@ fn searchable_entry_from_descriptor_for_view(
         search_hint,
         parameters,
         descriptor.parameter_types(),
+        typed_spec.and_then(|spec| spec.argument_hint.clone()),
         tags,
         surface_id,
         usage_guidance,

@@ -2207,6 +2207,10 @@ fn tool_search_respects_visible_tool_ids_from_runtime_context() {
         read["search_hint"],
         "read one file, page through a large file, search workspace content, or list matching paths through one direct tool"
     );
+    assert_eq!(
+        read["argument_hint"],
+        "path?:string,offset?:integer,limit?:integer,max_bytes?:integer,query?:string,pattern?:string,root?:string,glob?:string,max_results?:integer,max_bytes_per_file?:integer,case_sensitive?:boolean,include_directories?:boolean"
+    );
     assert_eq!(read["tags"], json!(["surface", "read", "file", "search"]));
     assert!(
         read["schema_preview"]["common_optional_fields"]

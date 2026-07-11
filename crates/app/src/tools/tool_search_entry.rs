@@ -94,6 +94,7 @@ pub(crate) fn searchable_entry_from_provider_definition(
     search_hint: String,
     parameters: &Value,
     preferred_parameter_order: &[(&str, &str)],
+    argument_hint_override: Option<String>,
     tags: Vec<String>,
     surface_id: Option<String>,
     usage_guidance: Option<String>,
@@ -103,8 +104,9 @@ pub(crate) fn searchable_entry_from_provider_definition(
     let required_field_groups = schema_required_field_groups(parameters);
     let required_field_groups =
         default_required_field_groups(&required_fields, required_field_groups);
-    let argument_hint =
+    let schema_argument_hint =
         search_argument_hint_from_provider_definition(parameters, preferred_parameter_order);
+    let argument_hint = argument_hint_override.unwrap_or(schema_argument_hint);
     let schema_preview = build_schema_preview(&required_fields, &required_field_groups, parameters);
 
     let name_fragments = build_name_fragments(canonical_name, provider_name, aliases);
