@@ -2,10 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    PolicyReport,
-    contracts::{Capability, CapabilityToken, ExecutionRoute},
-};
+use crate::contracts::{Capability, CapabilityToken, ExecutionRoute};
 
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,11 +41,6 @@ pub enum InvocationOutcome {
     Completed,
     /// Invocation reached the concrete handler, but execution failed.
     Failed { error_kind: String, reason: String },
-    /// Governance rejected the invocation before tool execution.
-    Denied {
-        reason: String,
-        report: Option<PolicyReport>,
-    },
 }
 
 #[non_exhaustive]

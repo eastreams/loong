@@ -144,56 +144,6 @@ async fn record_tool_invocation_records_typed_failed_event() {
     }));
 }
 
-#[tokio::test]
-async fn record_tool_invocation_records_typed_denied_event() {
-    let (mut kernel, audit) = kernel_with_tool_invocation_policy();
-    register_tool_pack(&mut kernel, "typed-denied");
-    let token = kernel
-        .issue_token("typed-denied", "agent-typed", 120)
-        .expect("token should issue");
-    let path = "read";
-    let policy_context = TestPolicyContext::from_token(&token, kernel.now_epoch_s());
-    let grant = kernel
-        .grant_action(
-            "typed-denied",
-            &token,
-            tool_invocation_action(path, BTreeSet::from([Capability::InvokeTool])),
-            &policy_context,
-        )
-        .await
-        .expect("tool invocation should authorize");
-    let audit_caps = grant
-        .granted
-        .as_ref()
-        .metadata()
-        .required_capabilities
-        .iter()
-        .copied()
-        .collect::<BTreeSet<_>>();
-
-    kernel
-        .record_tool_invocation(
-            &policy_context,
-            path.to_owned(),
-            &audit_caps,
-            InvocationOutcome::Denied {
-                reason: "blocked by typed policy".to_owned(),
-                report: None,
-            },
-        )
-        .expect("tool invocation audit should record");
-
-    assert!(audit.snapshot().iter().any(|event| {
-        matches!(
-            &event.kind,
-            AuditEventKind::ToolInvocation {
-                outcome: InvocationOutcome::Denied { reason, report },
-                ..
-            } if reason == "blocked by typed policy" && report.is_none()
-        )
-    }));
-}
-
 #[derive(Debug, Clone)]
 struct TestAction {
     operation: String,

@@ -73,8 +73,8 @@ ToolInvocation {
 
 如果 app 层需要 tool-specific execution outcome enum，它只能描述 grant 后 execution
 outcome，例如 completed / failed / input_error；不能包含 denied 分支，不能隐含 fallback
-机制为 kernel contract。contracts 层的 generic `InvocationOutcome` 只能作为迁移期 sink
-payload primitives，不能表达 ToolPlane 路由语义。
+机制为 kernel contract。contracts 层的 generic `InvocationOutcome` 只表达 grant 后
+completed / failed sink payload，不能表达 ToolPlane 路由语义或 authorization deny。
 
 legacy adapter 在迁移期继续记录旧 `PlaneInvoked`，直到对应工具迁移完成。
 
