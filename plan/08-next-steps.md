@@ -36,30 +36,7 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      `cargo test -p loong-app kernel_routed_file_read`、
      `cargo check -p loong-core -p loong-tools -p loong-app`、`git diff --check`。
 
-3. 收口 `read` 的无 context legacy surface：
-   - 已完成：app plane 注册 aggregate `ReadTool`，不是只接受 path payload 的
-     `ReadFileTool` fallback 机制；
-   - 已完成：kernel/context-aware direct read 通过 `ctx.tool("read")?.invoke(...)` 进入
-     typed `ReadTool`；
-   - 已完成：`read { path }` / `read { pattern|glob }` / `read { query }` 分别走
-     `FsReadAction` / `FsGlobAction` / `FsContentSearchAction`；
-   - 已完成：`read { query }` / `read { pattern|glob }` 测试断言 `ToolInvocation` audit，
-     不接受 legacy `PlaneInvoked`；
-   - 剩余：无 context 的 `execute_tool_core_with_config(read)` 仍会在 query/glob 模式走
-     legacy file search side effect；
-   - 剩余原因：这条入口没有 unified ctx，不能安全构造 `ctx.access()` 或
-     `ctx.tool("read")`；要么先整体迁到统一 session context，要么正式废弃 no-context
-     legacy entrypoint；
-   - 完成线：
-     - no-context direct read 入口删除、废弃，或改为要求 unified ctx；
-     - `execute_direct_read_tool_core_with_config` 不再调用 legacy
-       `execute_content_search_tool_with_config` / `execute_glob_search_tool_with_config`；
-     - concrete `ReadTool` 继续不直接 `std::fs::read_dir` / `std::fs::read`；
-   - 验证：`cargo test -p loong-app direct_read`、`cargo test -p loong-app file_read`、
-     `cargo test -p loong-access`、`cargo check -p loong-tools -p loong-app -p loong-access`、
-     `git diff --check`。
-
-4. 继续迁移剩余 legacy side-effect tools：
+3. 继续迁移剩余 legacy side-effect tools：
    - write/edit/config.import 按同样 access-backed action 模式迁移；
    - 迁移完成后删除 `FilePolicyExtension` 对应旧分支；
    - 逐步清空 `Kernel::execute_tool_core` 调用面，再删除 `LegacyToolPlane` 和 adapter
@@ -72,7 +49,7 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      `cargo check -p loong-access -p loong-kernel -p loong-app -p loong` 和
      `git diff --check`。
 
-5. 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration：
+4. 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration：
    - app bootstrap 从 config 构造 concrete policy value；
    - policy 注册使用 `PolicyPipeline::push_policy` / `push_pre_policy` /
      `push_fallback_policy`；

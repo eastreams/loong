@@ -99,7 +99,7 @@ workspace 外部。nested root 必须 canonicalize 后仍位于 canonical worksp
 - kernel/context-aware direct read 已经通过 `ctx.tool("read")?.invoke(...)` 进入 typed
   `ReadTool`；这条路径不再把 query/glob fallback 到 legacy `content.search` /
   `glob.search`。
-- 无 context 的 legacy `execute_tool_core_with_config(read)` 仍保留旧 query/glob side
-  effect。它不能迁入 typed access，直到入口被统一 ctx 替换或正式废弃。
+- 无 context 的 legacy `execute_tool_core_with_config(read)` 会 fail closed，要求 kernel
+  access context；不能恢复成 query/glob legacy side effect。
 - concrete `ReadTool` 不能直接 `std::fs::read_dir` / `std::fs::read` 临时补 side effect。
 - `read { path, offset: 0 }` 是 typed input error，不 fallback。

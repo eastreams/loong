@@ -123,8 +123,7 @@ generic grant 负责所有 action authorization audit；tool invocation executio
 - `crates/app/src/tools/mod.rs` 里 typed dispatch、grant、invoke、audit 逻辑还堆在
   `execute_kernel_tool_request`。目标是 app orchestration 拥有这段边界，但函数应更聚焦。
 - `crates/app/src/tools/routing.rs` 的 context-aware direct read 已进入
-  `ctx.tool("read")?.invoke(...)`，但无 context 的 `execute_tool_core_with_config(read)`
-  仍保留旧 query/glob search side effect。目标是统一 ctx 后删除或废弃 no-context read
-  entrypoint。
+  `ctx.tool("read")?.invoke(...)`，无 context 的 `execute_tool_core_with_config(read)`
+  已 fail closed。后续统一 ctx 时可以删除这条 no-context read 入口的过渡错误。
 - `KernelContext` 仍是 app/runtime surface 中传播 kernel binding 的过渡类型。相关代码用
   `TODO(deprecate-kernel-context)` 标记；目标是 unified runtime/context 接管这层状态。

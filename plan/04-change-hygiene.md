@@ -101,7 +101,7 @@
        grant 被消费前的 audit/metadata inspection，不能成为伪造、复制或绕过执行边界的入口。
      - `crates/app/src/tools/routing.rs`：context-aware direct read 注释必须讲清它只做
        direct-read payload normalization，然后进入 `ctx.tool("read")?.invoke(...)`；无 context
-       legacy read 入口是统一 ctx/废弃旧入口之前的偏差，不能被提升成长期 routing 机制。
+       read 入口必须 fail closed，不能恢复成 legacy query/glob side-effect bridge。
    - 注释验收标准：读者只看相关类型/函数附近的注释，就能回答“该层拥有谁”“为什么不在
      另一个 crate”“该 fallback 是否长期存在”“谁可以做副作用”“grant 何时被消费”；
    - typed path 测试断言 generic action grant audit + grant 后 tool execution audit；
