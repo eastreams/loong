@@ -164,17 +164,20 @@ where
 /// tool; the plane does not claim ownership of a payload shape.
 #[async_trait]
 pub(crate) trait ToolPlane<C: ContextFactory>: Send + Sync {
+    type Path: Clone + Ord + fmt::Display + Send + Sync + 'static;
+    type InvocationAction: ActionMeta + Send + Sync + 'static;
+
     /// Enumerates app-registered paths from the plane index.
     ///
     /// Catalog/prompt projection should depend on this boundary instead of
     /// rebuilding typed tool paths from static descriptors.
-    fn registered_paths(&self) -> Vec<ToolPath>;
+    fn registered_paths(&self) -> Vec<Self::Path>;
 
-    fn spec(&self, path: &ToolPath) -> Result<&ToolSpec, ToolPlaneError>;
+    fn spec(&self, path: &Self::Path) -> Result<&ToolSpec, ToolPlaneError>;
 
     async fn invoke(
         &self,
-        grant: Granted<ToolInvocationAction>,
+        grant: Granted<Self::InvocationAction>,
         ctx: &C::Cx<'_>,
     ) -> Result<Value, ToolPlaneError>;
 }
@@ -272,6 +275,9 @@ impl<C> ToolPlane<C> for AppToolPlane<C>
 where
     C: ContextFactory,
 {
+    type Path = ToolPath;
+    type InvocationAction = ToolInvocationAction;
+
     fn registered_paths(&self) -> Vec<ToolPath> {
         self.paths.keys().cloned().collect()
     }
@@ -320,7 +326,9 @@ where
 // TODO(runtime): move this OnceLock into the unified runtime/agent owner once
 // that type exists. The plane is app-owned; this global is only the current
 // bootstrap holder for builtin typed tools.
-pub(crate) fn app_tool_plane() -> &'static dyn ToolPlane<AppContextFactory> {
+pub(crate) fn app_tool_plane()
+-> &'static dyn ToolPlane<AppContextFactory, Path = ToolPath, InvocationAction = ToolInvocationAction>
+{
     static TOOL_PLANE: OnceLock<AppToolPlane<AppContextFactory>> = OnceLock::new();
     TOOL_PLANE.get_or_init(|| {
         #[allow(unused_mut)]
