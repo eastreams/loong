@@ -38,10 +38,10 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
    - 删除 payload-claim/fallback 思路；
    - `ReadTool` 内部解析 `path/query/pattern/glob`；
    - `path/query/glob` 分别构造不同 action；
-   - `FsGlobAction` 的 access primitive 已落地；剩余工作是 typed policy registration、
-     app aggregate wiring 和 legacy bridge 删除；
-   - `query` 仍缺 content-search action，不能在 concrete tool 里直接 `std::fs::read`
-     临时补上；
+   - `FsGlobAction` 和 `FsContentSearchAction` 的 access primitive 已落地；剩余工作是
+     typed policy registration、app aggregate wiring 和 legacy bridge 删除；
+   - concrete tool 不能在 query/glob 分支里直接 `std::fs::read_dir` / `std::fs::read`
+     临时补 side effect；
    - `read { path, offset: 0 }` 是 typed input error，不 fallback；
    - `read { query }` / `read { pattern }` / `read { glob }` 迁入 typed path 后，旧
      direct read legacy bridge 删除；
