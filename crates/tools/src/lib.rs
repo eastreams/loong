@@ -2,8 +2,14 @@
 
 //! Concrete builtin tool implementations.
 //!
-//! Tool traits, registries, policy, and access facades live in core/app/kernel
-//! crates. This crate is intentionally narrow so adding a builtin tool does not
-//! turn the implementation crate back into an abstraction layer.
+//! Use this crate from the app runtime by registering concrete tool values into
+//! `loong-app::tools::plane`, for example `register(path, file::ReadFileTool)`.
+//! The registry path, audit, policy grant, and access facade are owned by
+//! app/kernel/access layers. This crate only supplies the concrete
+//! implementation type plus its payload parsing and response shaping.
+//!
+//! Do not put `ToolPlane`, registry, policy, access facade, or broad tool
+//! abstraction code here. Keeping those out prevents the builtin implementation
+//! crate from becoming the next abstraction owner by accident.
 
 pub mod file;

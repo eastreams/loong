@@ -36,6 +36,12 @@ pub struct FileReadRequest {
 
 pub struct ReadFileTool;
 
+/// Concrete builtin implementation for the file-read branch of `read`.
+///
+/// `loong-tools` exports this value so the app plane can register it at a
+/// runtime-owned path. The tool does not own that path, audit, or policy; it
+/// only parses the already-selected payload, calls governed access, and shapes
+/// the response.
 #[async_trait]
 impl<C> ToolImpl<C> for ReadFileTool
 where
