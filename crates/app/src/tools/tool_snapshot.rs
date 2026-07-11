@@ -45,9 +45,10 @@ pub fn tool_registry_with_config(
     let mut entries = Vec::new();
 
     for state in visible_direct_states {
+        let summary = agent_visible_summary_for_direct_state(&state);
         let registry_entry = ToolRegistryEntry {
             name: state.surface_id,
-            description: format!("{} {}", state.prompt_snippet, state.usage_guidance),
+            description: format!("{} {}", summary, state.usage_guidance),
         };
         entries.push(registry_entry);
     }
@@ -106,14 +107,26 @@ fn render_visible_direct_tool_lines(states: &[super::ToolSurfaceState]) -> Vec<S
     let mut lines = Vec::new();
 
     for state in states {
+        let summary = agent_visible_summary_for_direct_state(state);
         let line = format!(
             "- {}: {} {}",
-            state.surface_id, state.prompt_snippet, state.usage_guidance
+            state.surface_id, summary, state.usage_guidance
         );
         lines.push(line);
     }
 
     lines
+}
+
+fn agent_visible_summary_for_direct_state(state: &super::ToolSurfaceState) -> String {
+    // Concrete typed tools own their action-level summary. The app surface keeps
+    // usage guidance because it describes prompt/orchestration behavior, not the
+    // tool's payload or side effect boundary.
+    let typed_path = super::plane::ToolPath::from(state.surface_id.as_str());
+    super::app_tool_plane()
+        .spec(&typed_path)
+        .map(|spec| spec.description.clone())
+        .unwrap_or_else(|_| state.prompt_snippet.clone())
 }
 
 fn render_active_tool_guideline_lines(

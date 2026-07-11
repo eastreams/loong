@@ -247,6 +247,29 @@ fn tool_registry_re_exposes_session_mutation_tools_when_runtime_policy_allows_th
     assert_eq!(names, expected);
 }
 
+#[cfg(feature = "tool-file")]
+#[test]
+fn tool_registry_and_snapshot_use_typed_read_summary() {
+    let config = runtime_config::ToolRuntimeConfig::default();
+    let registry = tool_registry_with_config(Some(&config));
+    let read = registry
+        .iter()
+        .find(|entry| entry.name == "read")
+        .expect("read should be visible when file tools are compiled in");
+
+    assert!(
+        read.description
+            .contains("Read files, list paths, or search file contents in allowed roots.")
+    );
+    assert!(!read.description.contains("inspect file contents"));
+
+    let snapshot = capability_snapshot_with_config(&config);
+    assert!(
+        snapshot
+            .contains("- read: Read files, list paths, or search file contents in allowed roots.")
+    );
+}
+
 #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
 #[test]
 fn capability_snapshot_for_view_keeps_hidden_tools_out_of_direct_surface_copy() {
