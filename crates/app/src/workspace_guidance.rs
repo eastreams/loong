@@ -91,8 +91,16 @@ pub fn candidate_workspace_roots(
     }
 
     let nested_workspace_root = workspace_root.join("workspace");
-    let nested_workspace_exists = nested_workspace_root.is_dir();
-    if nested_workspace_exists {
+    // Canonical containment rejects a nested workspace symlink that escapes
+    // the active workspace root before any live-source read is attempted.
+    let nested_workspace_inside_root = workspace_root
+        .canonicalize()
+        .ok()
+        .zip(nested_workspace_root.canonicalize().ok())
+        .is_some_and(|(canonical_root, canonical_nested)| {
+            canonical_nested.starts_with(canonical_root)
+        });
+    if nested_workspace_inside_root {
         roots.push(nested_workspace_root);
     }
 
@@ -143,61 +151,6 @@ pub fn workspace_guidance_source_candidates(workspace_root: &Path) -> Vec<PathBu
     source_candidates
 }
 
-pub fn load_workspace_guidance_model(workspace_root: &Path) -> WorkspaceGuidanceModel {
-    let tool_runtime_config = crate::tools::runtime_config::ToolRuntimeConfig {
-        file_root: Some(workspace_root.to_path_buf()),
-        ..crate::tools::runtime_config::ToolRuntimeConfig::default()
-    };
-
-    load_workspace_guidance_model_with_config(workspace_root, &tool_runtime_config)
-}
-
-pub fn load_workspace_guidance_model_with_config(
-    workspace_root: &Path,
-    tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
-) -> WorkspaceGuidanceModel {
-    let mut remaining_total_chars = tool_runtime_config.runtime_self.max_total_chars;
-    load_workspace_guidance_model_with_budget(
-        workspace_root,
-        tool_runtime_config,
-        &mut remaining_total_chars,
-    )
-}
-
-pub(crate) fn load_workspace_guidance_model_with_budget(
-    workspace_root: &Path,
-    tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
-    remaining_total_chars: &mut usize,
-) -> WorkspaceGuidanceModel {
-    let source_candidates = workspace_guidance_source_candidates(workspace_root);
-    let mut loaded_paths = BTreeSet::new();
-    let mut model = WorkspaceGuidanceModel::default();
-
-    for source_path in source_candidates {
-        let maybe_content =
-            read_workspace_guidance_source(workspace_root, &source_path, tool_runtime_config);
-        let Some(content) = maybe_content else {
-            continue;
-        };
-
-        let budget_was_exhausted = *remaining_total_chars == 0;
-        let appended_content = ingest_workspace_guidance_source(
-            &mut model,
-            &mut loaded_paths,
-            remaining_total_chars,
-            &source_path,
-            content.as_str(),
-            tool_runtime_config,
-        );
-
-        if budget_was_exhausted && appended_content {
-            break;
-        }
-    }
-
-    model
-}
-
 pub fn render_workspace_guidance_section(model: &WorkspaceGuidanceModel) -> Option<String> {
     if model.is_empty() {
         return None;
@@ -233,28 +186,6 @@ pub fn workspace_source_request_path(workspace_root: &Path, path: &Path) -> Opti
     let relative_path = path.strip_prefix(workspace_root).ok()?;
     let request_path = relative_path.to_string_lossy().to_string();
     Some(request_path)
-}
-
-fn read_workspace_guidance_source(
-    workspace_root: &Path,
-    path: &Path,
-    tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
-) -> Option<String> {
-    let read_runtime_config =
-        tool_runtime_config.with_workspace_root_override(workspace_root.to_path_buf());
-    let request_path = workspace_source_request_path(workspace_root, path)?;
-    let (_resolved_path, bytes) = crate::context::read_file_with_access_for_runtime_config(
-        PathBuf::from(request_path),
-        &read_runtime_config,
-    )
-    .ok()?;
-    let content = String::from_utf8_lossy(&bytes);
-    let trimmed = content.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    Some(trimmed.to_owned())
 }
 
 pub(crate) fn ingest_workspace_guidance_source(
@@ -506,7 +437,7 @@ mod tests {
     }
 
     #[test]
-    fn load_workspace_guidance_model_ignores_claude_file() {
+    fn workspace_guidance_source_candidates_ignore_claude_file() {
         let temp_dir = tempdir().expect("tempdir");
         let workspace_root = temp_dir.path();
         let agents_path = workspace_root.join("AGENTS.md");
@@ -515,8 +446,8 @@ mod tests {
         std::fs::write(&agents_path, "agents").expect("write AGENTS");
         std::fs::write(&claude_path, "claude").expect("write CLAUDE");
 
-        let model = load_workspace_guidance_model(workspace_root);
+        let source_candidates = workspace_guidance_source_candidates(workspace_root);
 
-        assert_eq!(model.entries, vec!["agents".to_owned()]);
+        assert_eq!(source_candidates, vec![agents_path]);
     }
 }

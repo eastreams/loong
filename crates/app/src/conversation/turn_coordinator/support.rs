@@ -7,6 +7,8 @@ pub(super) struct ProviderTurnSessionState {
     pub(super) messages: Vec<Value>,
     pub(super) estimated_tokens: Option<usize>,
     pub(super) prompt_frame: PromptFrame,
+    pub(super) runtime_self_continuity:
+        Option<crate::runtime_self_continuity::RuntimeSelfContinuity>,
 }
 
 impl ProviderTurnSessionState {
@@ -20,7 +22,8 @@ impl ProviderTurnSessionState {
             artifacts,
             estimated_tokens,
             prompt_fragments,
-            system_prompt_addition,
+            system_prompt_addition: _,
+            runtime_self_continuity,
         } = assembled_context;
         let mut messages = messages;
         let turn_ephemeral_start_index = messages.len();
@@ -38,17 +41,11 @@ impl ProviderTurnSessionState {
             estimated_tokens,
             Some(turn_ephemeral_start_index),
         );
-        let assembled_context = AssembledConversationContext {
-            messages,
-            artifacts,
-            estimated_tokens,
-            prompt_fragments,
-            system_prompt_addition,
-        };
         Self {
-            messages: assembled_context.messages,
+            messages,
             estimated_tokens,
             prompt_frame,
+            runtime_self_continuity,
         }
     }
 
@@ -71,6 +68,7 @@ pub(super) struct ProviderTurnReplyTailPhase {
     reply: String,
     after_turn_messages: Vec<Value>,
     estimated_tokens: Option<usize>,
+    runtime_self_continuity: Option<crate::runtime_self_continuity::RuntimeSelfContinuity>,
 }
 
 impl ProviderTurnReplyTailPhase {
@@ -81,6 +79,7 @@ impl ProviderTurnReplyTailPhase {
             reply: normalized_reply.clone(),
             after_turn_messages: session.after_turn_messages(normalized_reply.as_str()),
             estimated_tokens: session.estimated_tokens,
+            runtime_self_continuity: session.runtime_self_continuity.clone(),
         }
     }
 
@@ -94,6 +93,12 @@ impl ProviderTurnReplyTailPhase {
 
     pub(super) fn estimated_tokens(&self) -> Option<usize> {
         self.estimated_tokens
+    }
+
+    pub(super) fn runtime_self_continuity(
+        &self,
+    ) -> Option<&crate::runtime_self_continuity::RuntimeSelfContinuity> {
+        self.runtime_self_continuity.as_ref()
     }
 }
 
@@ -160,6 +165,7 @@ impl ProviderTurnPreparation {
                 messages,
                 estimated_tokens: None,
                 prompt_frame,
+                runtime_self_continuity: self.session.runtime_self_continuity.clone(),
             },
             lane_plan: self.lane_plan.clone(),
             raw_tool_output_requested: self.raw_tool_output_requested,

@@ -904,6 +904,7 @@ mod tests {
             estimated_tokens: Some(9),
             prompt_fragments: Vec::new(),
             system_prompt_addition: None,
+            runtime_self_continuity: None,
         };
         let resume_input =
             TurnCheckpointRepairResumeInput::from_assembled_context(assembled, &checkpoint)
@@ -941,6 +942,7 @@ mod tests {
             estimated_tokens: Some(9),
             prompt_fragments: Vec::new(),
             system_prompt_addition: None,
+            runtime_self_continuity: None,
         };
         let resume_input =
             TurnCheckpointRepairResumeInput::from_assembled_context(assembled, &checkpoint)
@@ -983,6 +985,7 @@ mod tests {
             estimated_tokens: Some(9),
             prompt_fragments: Vec::new(),
             system_prompt_addition: None,
+            runtime_self_continuity: None,
         };
         let error = TurnCheckpointRepairResumeInput::from_assembled_context(assembled, &checkpoint)
             .expect_err("trailing messages should require manual inspection");

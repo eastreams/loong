@@ -14,6 +14,7 @@ use crate::conversation::{
 };
 use crate::runtime_identity;
 use crate::runtime_self;
+use crate::runtime_self_continuity::RuntimeSelfContinuity;
 use crate::tools::{self, ToolView};
 use crate::workspace_guidance;
 
@@ -32,12 +33,14 @@ pub(crate) struct ProjectedMessageContext {
     pub messages: Vec<Value>,
     pub artifacts: Vec<ContextArtifactDescriptor>,
     pub prompt_fragments: Vec<PromptFragment>,
+    pub(crate) runtime_self_continuity: Option<RuntimeSelfContinuity>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct BasePromptProjection {
     system_message: Option<Value>,
     prompt_fragments: Vec<PromptFragment>,
+    runtime_self_continuity: Option<RuntimeSelfContinuity>,
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -119,25 +122,18 @@ fn build_base_prompt_projection_with_tool_runtime_config(
         return BasePromptProjection::default();
     }
 
-    let workspace_root = tool_runtime_config.effective_workspace_root();
-    let (workspace_guidance_model, runtime_self_model) = match workspace_root {
-        Some(workspace_root) => {
-            let mut remaining_total_chars = tool_runtime_config.runtime_self.max_total_chars;
-            let workspace_guidance_model =
-                workspace_guidance::load_workspace_guidance_model_with_budget(
-                    workspace_root,
-                    tool_runtime_config,
-                    &mut remaining_total_chars,
-                );
-            let runtime_self_model = runtime_self::load_runtime_self_model_with_budget(
-                workspace_root,
-                tool_runtime_config,
-                &mut remaining_total_chars,
-            );
-            (Some(workspace_guidance_model), Some(runtime_self_model))
-        }
-        None => (None, None),
-    };
+    // TODO(deprecate-no-kernel-live-source): callers without a kernel binding
+    // cannot read live workspace/runtime-self files. Keep prompt assembly pure
+    // here until every caller provides the unified execution context.
+    let (workspace_guidance_model, runtime_self_model) =
+        if tool_runtime_config.effective_workspace_root().is_some() {
+            (
+                Some(workspace_guidance::WorkspaceGuidanceModel::default()),
+                Some(runtime_self::RuntimeSelfModel::default()),
+            )
+        } else {
+            (None, None)
+        };
 
     build_base_prompt_projection_from_prompt_sources(
         config,
@@ -225,6 +221,23 @@ fn build_base_prompt_projection_from_prompt_sources(
         return BasePromptProjection::default();
     }
 
+    let profile_note = config.memory.trimmed_profile_note();
+    let personalization = config.memory.trimmed_personalization();
+    let resolved_identity = runtime_identity::resolve_runtime_identity(
+        runtime_self_model.as_ref(),
+        profile_note.as_deref(),
+    );
+    let continuity = RuntimeSelfContinuity {
+        workspace_guidance: workspace_guidance_model.clone().unwrap_or_default(),
+        runtime_self: runtime_self_model.clone().unwrap_or_default(),
+        resolved_identity,
+        session_profile_projection: runtime_identity::render_session_profile_section(
+            profile_note.as_deref(),
+            personalization.as_ref(),
+        ),
+    };
+    let runtime_self_continuity = (!continuity.is_empty()).then_some(continuity);
+
     let prompt_fragments = build_prompt_fragments_from_prompt_sources(
         config,
         tool_view,
@@ -241,6 +254,7 @@ fn build_base_prompt_projection_from_prompt_sources(
         return BasePromptProjection {
             system_message: None,
             prompt_fragments,
+            runtime_self_continuity,
         };
     }
 
@@ -252,6 +266,7 @@ fn build_base_prompt_projection_from_prompt_sources(
     BasePromptProjection {
         system_message: Some(system_message),
         prompt_fragments,
+        runtime_self_continuity,
     }
 }
 
@@ -314,13 +329,14 @@ async fn load_workspace_guidance_model_with_binding_and_budget(
     binding: ProviderRuntimeBinding<'_>,
 ) -> workspace_guidance::WorkspaceGuidanceModel {
     let Some(kernel_ctx) = binding.kernel_context() else {
-        return workspace_guidance::load_workspace_guidance_model_with_budget(
-            workspace_root,
-            tool_runtime_config,
-            remaining_total_chars,
-        );
+        // TODO(deprecate-no-kernel-live-source): once prompt assembly always
+        // has the unified execution context, mark this no-live-source branch
+        // deprecated and remove the direct/advisory live-read escape hatch.
+        return workspace_guidance::WorkspaceGuidanceModel::default();
     };
 
+    // TODO(deprecate-provider-live-source-bridge): move this read loop into
+    // the unified context path; until then, file bytes come only through access.
     let source_candidates =
         workspace_guidance::workspace_guidance_source_candidates(workspace_root);
     let mut loaded_paths = BTreeSet::new();
@@ -388,13 +404,14 @@ async fn load_runtime_self_model_with_binding_and_budget(
     binding: ProviderRuntimeBinding<'_>,
 ) -> runtime_self::RuntimeSelfModel {
     let Some(kernel_ctx) = binding.kernel_context() else {
-        return runtime_self::load_runtime_self_model_with_budget(
-            workspace_root,
-            tool_runtime_config,
-            remaining_total_chars,
-        );
+        // TODO(deprecate-no-kernel-live-source): once prompt assembly always
+        // has the unified execution context, mark this no-live-source branch
+        // deprecated and remove the direct/advisory live-read escape hatch.
+        return runtime_self::RuntimeSelfModel::default();
     };
 
+    // TODO(deprecate-provider-live-source-bridge): move this read loop into
+    // the unified context path; until then, file bytes come only through access.
     let source_candidates =
         runtime_self::runtime_self_source_candidates(workspace_root, tool_runtime_config);
     let mut loaded_paths = BTreeSet::new();
@@ -608,11 +625,13 @@ pub(crate) fn build_projected_context_for_session_in_view(
         );
         let system_message = projection.system_message;
         let prompt_fragments = projection.prompt_fragments;
+        let runtime_self_continuity = projection.runtime_self_continuity;
         let messages = system_message.into_iter().collect();
         Ok(ProjectedMessageContext {
             messages,
             artifacts: Vec::new(),
             prompt_fragments,
+            runtime_self_continuity,
         })
     }
 }
@@ -733,6 +752,7 @@ async fn project_hydrated_memory_context_for_view_with_binding_and_session_path(
     .await;
     let system_message = projection.system_message;
     let mut prompt_fragments = projection.prompt_fragments;
+    let runtime_self_continuity = projection.runtime_self_continuity;
     let mut messages = system_message.into_iter().collect::<Vec<_>>();
     let mut artifacts = build_base_artifacts(messages.as_slice());
 
@@ -759,6 +779,7 @@ async fn project_hydrated_memory_context_for_view_with_binding_and_session_path(
         messages,
         artifacts,
         prompt_fragments,
+        runtime_self_continuity,
     }
 }
 
@@ -886,6 +907,7 @@ fn project_hydrated_memory_context_for_view_and_session_path(
     );
     let system_message = projection.system_message;
     let mut prompt_fragments = projection.prompt_fragments;
+    let runtime_self_continuity = projection.runtime_self_continuity;
     let mut messages = system_message.into_iter().collect::<Vec<_>>();
     let mut artifacts = build_base_artifacts(messages.as_slice());
 
@@ -911,6 +933,7 @@ fn project_hydrated_memory_context_for_view_and_session_path(
         messages,
         artifacts,
         prompt_fragments,
+        runtime_self_continuity,
     }
 }
 
@@ -1778,7 +1801,7 @@ mod tests {
     }
 
     #[test]
-    fn build_system_message_shares_total_budget_between_workspace_guidance_and_runtime_self() {
+    fn build_system_message_without_kernel_binding_does_not_apply_live_source_budget() {
         let temp_dir = tempdir().expect("tempdir");
         let workspace_root = temp_dir.path();
         let agents_path = workspace_root.join("AGENTS.md");
@@ -1800,17 +1823,32 @@ mod tests {
             build_system_message(&config, true).expect("system message when enabled");
         let system_content = system_message["content"].as_str().expect("system content");
 
-        assert!(system_content.contains(&agents_text));
-        assert!(
-            system_content.contains("runtime self source truncated"),
-            "expected runtime-self truncation notice, got: {system_content}"
-        );
-        assert!(
-            system_content.contains("remaining total budget"),
-            "expected total-budget wording, got: {system_content}"
-        );
+        assert!(!system_content.contains(&agents_text));
+        assert!(!system_content.contains("runtime self source truncated"));
+        assert!(!system_content.contains("remaining total budget"));
         assert!(!system_content.contains(tools_prefix));
         assert!(!system_content.contains(tools_tail));
+    }
+
+    #[test]
+    fn build_system_message_without_kernel_binding_does_not_read_live_runtime_sources() {
+        let temp_dir = tempdir().expect("tempdir");
+        let workspace_root = temp_dir.path();
+        let agents_text = "ADVISORY_AGENTS_TEXT_SHOULD_NOT_LOAD";
+        let tools_text = "ADVISORY_TOOLS_TEXT_SHOULD_NOT_LOAD";
+        let mut config = LoongConfig::default();
+
+        std::fs::write(workspace_root.join("AGENTS.md"), agents_text).expect("write AGENTS");
+        std::fs::write(workspace_root.join("TOOLS.md"), tools_text).expect("write TOOLS");
+
+        config.tools.file_root = Some(workspace_root.display().to_string());
+
+        let system_message =
+            build_system_message(&config, true).expect("system message when enabled");
+        let system_content = system_message["content"].as_str().expect("system content");
+
+        assert!(!system_content.contains(agents_text));
+        assert!(!system_content.contains(tools_text));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1980,26 +2018,17 @@ mod tests {
         assert!(!content.contains("## Native Query Search"));
     }
 
-    #[test]
-    fn build_system_message_orders_execution_discipline_before_tool_access() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn build_system_message_orders_execution_discipline_before_tool_access() {
+        let harness = TurnTestHarness::new();
         let mut config = LoongConfig::default();
         config.provider.tool_schema_mode = crate::config::ProviderToolSchemaModeConfig::Disabled;
-        let temp_dir = tempdir().expect("tempdir");
-        std::fs::write(temp_dir.path().join("AGENTS.md"), "Keep moving.").expect("write AGENTS");
-        let tool_view = tools::runtime_tool_view();
-        let tool_runtime_config = tools::runtime_config::ToolRuntimeConfig {
-            file_root: Some(temp_dir.path().to_path_buf()),
-            ..tools::runtime_config::ToolRuntimeConfig::default()
-        };
+        std::fs::write(harness.temp_dir.join("AGENTS.md"), "Keep moving.").expect("write AGENTS");
+        config.tools.file_root = Some(harness.temp_dir.display().to_string());
 
-        let system = build_system_message_with_tool_runtime_config(
-            &config,
-            true,
-            &tool_view,
-            &tool_runtime_config,
-        )
-        .expect("system message");
-        let content = system["content"].as_str().expect("system content");
+        let binding = ProviderRuntimeBinding::kernel(&harness.kernel_ctx);
+        let messages = build_base_messages_with_binding(&config, true, binding).await;
+        let content = system_prompt_content(&messages);
 
         let runtime_contract_index = content
             .find("## Workspace Guidance")
@@ -2100,16 +2129,15 @@ mod tests {
         assert!(!system_content.contains("## Personality Overlay:"));
     }
 
-    #[test]
-    fn build_system_message_includes_normalized_runtime_self_sections_from_workspace_root() {
-        let temp_dir = tempdir().expect("tempdir");
-        let workspace_root = temp_dir.path();
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn build_system_message_includes_normalized_runtime_self_sections_from_workspace_root() {
+        let harness = TurnTestHarness::new();
 
-        let agents_path = workspace_root.join("AGENTS.md");
-        let tools_path = workspace_root.join("TOOLS.md");
-        let soul_path = workspace_root.join("SOUL.md");
-        let identity_path = workspace_root.join("IDENTITY.md");
-        let user_path = workspace_root.join("USER.md");
+        let agents_path = harness.temp_dir.join("AGENTS.md");
+        let tools_path = harness.temp_dir.join("TOOLS.md");
+        let soul_path = harness.temp_dir.join("SOUL.md");
+        let identity_path = harness.temp_dir.join("IDENTITY.md");
+        let user_path = harness.temp_dir.join("USER.md");
 
         let agents_text = "Always keep workspace instructions explicit.";
         let tools_text = "Search durable workspace memory before guessing project facts.";
@@ -2123,22 +2151,12 @@ mod tests {
         std::fs::write(&identity_path, identity_text).expect("write IDENTITY");
         std::fs::write(&user_path, user_text).expect("write USER");
 
-        let config = LoongConfig::default();
-        let tool_view = tools::runtime_tool_view();
+        let mut config = LoongConfig::default();
+        config.tools.file_root = Some(harness.temp_dir.display().to_string());
 
-        let tool_runtime_config = tools::runtime_config::ToolRuntimeConfig {
-            file_root: Some(workspace_root.to_path_buf()),
-            ..tools::runtime_config::ToolRuntimeConfig::default()
-        };
-
-        let system_message = build_system_message_with_tool_runtime_config(
-            &config,
-            true,
-            &tool_view,
-            &tool_runtime_config,
-        )
-        .expect("system message");
-        let system_content = system_message["content"].as_str().expect("system content");
+        let binding = ProviderRuntimeBinding::kernel(&harness.kernel_ctx);
+        let messages = build_base_messages_with_binding(&config, true, binding).await;
+        let system_content = system_prompt_content(&messages);
 
         assert!(system_content.contains("## Workspace Guidance"));
         assert!(system_content.contains(agents_text));
@@ -2158,22 +2176,13 @@ mod tests {
 
     #[test]
     fn build_system_message_promotes_legacy_imported_identity_when_workspace_identity_is_absent() {
-        let temp_dir = tempdir().expect("tempdir");
-        let workspace_root = temp_dir.path();
-        let agents_text = "Always keep workspace instructions explicit.";
-
-        std::fs::write(workspace_root.join("AGENTS.md"), agents_text).expect("write AGENTS");
-
         let mut config = LoongConfig::default();
         let legacy_profile_note =
             "## Imported IDENTITY.md\n# Identity\n\n- Name: Legacy build copilot";
         config.memory.profile_note = Some(legacy_profile_note.to_owned());
 
         let tool_view = tools::runtime_tool_view();
-        let tool_runtime_config = tools::runtime_config::ToolRuntimeConfig {
-            file_root: Some(workspace_root.to_path_buf()),
-            ..tools::runtime_config::ToolRuntimeConfig::default()
-        };
+        let tool_runtime_config = tools::runtime_config::ToolRuntimeConfig::default();
 
         let system_message = build_system_message_with_tool_runtime_config(
             &config,
@@ -2184,19 +2193,16 @@ mod tests {
         .expect("system message");
         let system_content = system_message["content"].as_str().expect("system content");
 
-        assert!(system_content.contains("## Workspace Guidance"));
-        assert!(system_content.contains(agents_text));
         assert!(system_content.contains("## Resolved Runtime Identity"));
         assert!(system_content.contains("Legacy build copilot"));
         assert_eq!(system_content.matches("Legacy build copilot").count(), 1);
         assert!(!system_content.contains("### Identity Context"));
     }
 
-    #[test]
-    fn build_system_message_prefers_workspace_identity_over_legacy_profile_note_identity() {
-        let temp_dir = tempdir().expect("tempdir");
-        let workspace_root = temp_dir.path();
-        let identity_path = workspace_root.join("IDENTITY.md");
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn build_system_message_prefers_workspace_identity_over_legacy_profile_note_identity() {
+        let harness = TurnTestHarness::new();
+        let identity_path = harness.temp_dir.join("IDENTITY.md");
         let workspace_identity = "# Identity\n\n- Name: Workspace build copilot";
         std::fs::write(&identity_path, workspace_identity).expect("write IDENTITY");
 
@@ -2204,21 +2210,11 @@ mod tests {
         let legacy_profile_note =
             "## Imported IDENTITY.md\n# Identity\n\n- Name: Legacy build copilot";
         config.memory.profile_note = Some(legacy_profile_note.to_owned());
+        config.tools.file_root = Some(harness.temp_dir.display().to_string());
 
-        let tool_view = tools::runtime_tool_view();
-        let tool_runtime_config = tools::runtime_config::ToolRuntimeConfig {
-            file_root: Some(workspace_root.to_path_buf()),
-            ..tools::runtime_config::ToolRuntimeConfig::default()
-        };
-
-        let system_message = build_system_message_with_tool_runtime_config(
-            &config,
-            true,
-            &tool_view,
-            &tool_runtime_config,
-        )
-        .expect("system message");
-        let system_content = system_message["content"].as_str().expect("system content");
+        let binding = ProviderRuntimeBinding::kernel(&harness.kernel_ctx);
+        let messages = build_base_messages_with_binding(&config, true, binding).await;
+        let system_content = system_prompt_content(&messages);
 
         assert!(system_content.contains("## Resolved Runtime Identity"));
         assert!(system_content.contains("Workspace build copilot"));
@@ -2227,30 +2223,20 @@ mod tests {
         assert!(!system_content.contains("### Identity Context"));
     }
 
-    #[test]
-    fn build_system_message_does_not_resolve_identity_from_soul_guidance() {
-        let temp_dir = tempdir().expect("tempdir");
-        let workspace_root = temp_dir.path();
-        let soul_path = workspace_root.join("SOUL.md");
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn build_system_message_does_not_resolve_identity_from_soul_guidance() {
+        let harness = TurnTestHarness::new();
+        let soul_path = harness.temp_dir.join("SOUL.md");
         let soul_text = "# Identity\n\n- Name: Soul shadow";
 
         std::fs::write(&soul_path, soul_text).expect("write SOUL");
 
-        let config = LoongConfig::default();
-        let tool_view = tools::runtime_tool_view();
-        let tool_runtime_config = tools::runtime_config::ToolRuntimeConfig {
-            file_root: Some(workspace_root.to_path_buf()),
-            ..tools::runtime_config::ToolRuntimeConfig::default()
-        };
+        let mut config = LoongConfig::default();
+        config.tools.file_root = Some(harness.temp_dir.display().to_string());
 
-        let system_message = build_system_message_with_tool_runtime_config(
-            &config,
-            true,
-            &tool_view,
-            &tool_runtime_config,
-        )
-        .expect("system message");
-        let system_content = system_message["content"].as_str().expect("system content");
+        let binding = ProviderRuntimeBinding::kernel(&harness.kernel_ctx);
+        let messages = build_base_messages_with_binding(&config, true, binding).await;
+        let system_content = system_prompt_content(&messages);
 
         assert!(system_content.contains("## Runtime Self Context"));
         assert!(system_content.contains(soul_text));
@@ -2485,10 +2471,10 @@ mod tests {
     }
 
     #[cfg(feature = "memory-sqlite")]
-    #[test]
-    fn message_builder_keeps_durable_recall_advisory_when_memory_files_look_like_identity() {
-        let temp_dir = tempdir().expect("tempdir");
-        let workspace_root = temp_dir.path();
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn message_builder_keeps_durable_recall_advisory_when_memory_files_look_like_identity() {
+        let harness = TurnTestHarness::new();
+        let workspace_root = harness.temp_dir.as_path();
         let memory_dir = workspace_root.join("memory");
         std::fs::create_dir_all(&memory_dir).expect("create memory dir");
 
@@ -2511,8 +2497,16 @@ mod tests {
         config.tools.file_root = Some(workspace_root.display().to_string());
         config.memory.sqlite_path = db_path.display().to_string();
 
-        let messages = build_messages_for_session(&config, "durable-recall-identity", true)
-            .expect("build messages");
+        let binding = ProviderRuntimeBinding::kernel(&harness.kernel_ctx);
+        let projected = build_projected_context_for_session_with_binding(
+            &config,
+            "durable-recall-identity",
+            true,
+            binding,
+        )
+        .await
+        .expect("build messages");
+        let messages = projected.messages;
 
         let resolved_identity_message = messages
             .iter()
@@ -2665,10 +2659,10 @@ mod tests {
     }
 
     #[cfg(feature = "memory-sqlite")]
-    #[test]
-    fn message_builder_truncates_oversized_runtime_self_sources() {
-        let temp_dir = tempdir().expect("tempdir");
-        let workspace_root = temp_dir.path();
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn message_builder_truncates_oversized_runtime_self_sources() {
+        let harness = TurnTestHarness::new();
+        let workspace_root = harness.temp_dir.as_path();
         let agents_path = workspace_root.join("AGENTS.md");
         let prefix = "Keep runtime self bounded.\n";
         let tail_marker = "TAIL_MARKER_SHOULD_NOT_SURVIVE";
@@ -2681,8 +2675,16 @@ mod tests {
         config.tools.file_root = Some(workspace_root.display().to_string());
         config.memory.sqlite_path = db_path.display().to_string();
 
-        let messages = build_messages_for_session(&config, "runtime-self-budget-session", true)
-            .expect("build messages");
+        let binding = ProviderRuntimeBinding::kernel(&harness.kernel_ctx);
+        let projected = build_projected_context_for_session_with_binding(
+            &config,
+            "runtime-self-budget-session",
+            true,
+            binding,
+        )
+        .await
+        .expect("build messages");
+        let messages = projected.messages;
 
         let system_content = workspace_guidance_system_content(&messages);
 

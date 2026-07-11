@@ -68,15 +68,13 @@ pub(super) fn delegate_child_profile_prompt_summary(
 }
 
 pub(super) fn runtime_self_continuity_prompt_summary(
-    config: &LoongConfig,
     session_context: &SessionContext,
+    live_continuity: Option<&crate::runtime_self_continuity::RuntimeSelfContinuity>,
 ) -> Option<String> {
     let stored_continuity = session_context.runtime_self_continuity.as_ref()?;
-    let live_continuity =
-        crate::runtime_self_continuity::resolve_runtime_self_continuity_for_config(config);
     let missing_continuity = crate::runtime_self_continuity::missing_runtime_self_continuity(
         stored_continuity,
-        live_continuity.as_ref(),
+        live_continuity,
     )?;
     let inherited = session_context.parent_session_id.is_some();
     crate::runtime_self_continuity::render_runtime_self_continuity_section(

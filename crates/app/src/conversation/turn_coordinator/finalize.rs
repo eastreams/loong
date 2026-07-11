@@ -93,6 +93,7 @@ pub(super) async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized
             session_id,
             tail_phase.after_turn_messages(),
             tail_phase.estimated_tokens(),
+            tail_phase.runtime_self_continuity(),
             binding,
             false,
         )

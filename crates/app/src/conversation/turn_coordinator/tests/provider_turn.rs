@@ -15,6 +15,7 @@ fn provider_turn_session_state_appends_user_input_and_keeps_estimate() {
             estimated_tokens: Some(42),
             prompt_fragments: Vec::new(),
             system_prompt_addition: None,
+            runtime_self_continuity: None,
         },
         "hello world",
         None,
@@ -65,6 +66,7 @@ fn provider_turn_reply_tail_phase_captures_reply_and_after_turn_context() {
             estimated_tokens: Some(42),
             prompt_fragments: Vec::new(),
             system_prompt_addition: None,
+            runtime_self_continuity: None,
         },
         "hello world",
         None,
@@ -91,6 +93,7 @@ fn provider_turn_reply_tail_phase_salvages_leaked_tool_wrapper_prefix() {
             estimated_tokens: Some(42),
             prompt_fragments: Vec::new(),
             system_prompt_addition: None,
+            runtime_self_continuity: None,
         },
         "hello world",
         None,
@@ -149,6 +152,7 @@ fn provider_turn_followup_preparation_preserves_stable_prefix_hash_and_updates_t
         estimated_tokens: Some(24),
         prompt_fragments: vec![base_fragment],
         system_prompt_addition: None,
+        runtime_self_continuity: None,
     };
     let preparation = ProviderTurnPreparation::from_assembled_context(
         &LoongConfig::default(),
@@ -227,6 +231,7 @@ fn provider_turn_followup_preparation_retains_original_tail_across_multiple_foll
         estimated_tokens: Some(24),
         prompt_fragments: vec![base_fragment],
         system_prompt_addition: None,
+        runtime_self_continuity: None,
     };
     let preparation = ProviderTurnPreparation::from_assembled_context(
         &LoongConfig::default(),
@@ -1259,6 +1264,7 @@ fn resolved_provider_turn_terminal_phase_builds_reply_tail_and_checkpoint() {
             estimated_tokens: Some(42),
             prompt_fragments: Vec::new(),
             system_prompt_addition: None,
+            runtime_self_continuity: None,
         },
         "say hello",
         None,

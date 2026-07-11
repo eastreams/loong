@@ -1,8 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::thread;
 
 use loong_contracts::{CapabilityToken, ExecutionPlane, PlaneTier};
 use loong_core::policy::context::{CapabilityContext, ContextFactory};
@@ -10,7 +8,7 @@ use loong_kernel::access::fs::{FsPathPolicyContext, FsResolutionContext};
 use loong_kernel::{
     AccessCx, AuditSink, Capability, Clock, ExecutionRoute, FanoutAuditSink, HarnessKind,
     InMemoryAuditSink, JsonlAuditSink, Kernel, KernelAccess, KernelInvocationContext,
-    NoopAuditSink, PolicyPipeline, SystemClock, VerticalPackManifest,
+    PolicyPipeline, SystemClock, VerticalPackManifest,
     policy::{FsReadAllowPolicy, FsReadFilenameDenyPolicy, FsResolvePathAllowedRootsPolicy},
 };
 use serde_json::Value;
@@ -30,6 +28,10 @@ pub const DEFAULT_TOKEN_TTL_S: u64 = 86400;
 ///
 /// `pack_id` and `agent_id` are accessed via the embedded `CapabilityToken`
 /// to avoid data divergence.
+///
+/// TODO(deprecate-kernel-context): after the unified session/agent context owns
+/// this state, add `#[deprecated]` here and migrate call sites instead of
+/// threading new `KernelContext` uses.
 #[derive(Clone)]
 pub struct KernelContext {
     pub kernel: Arc<Kernel<AppContextFactory>>,
@@ -246,121 +248,6 @@ fn canonicalize_or_fallback(path: PathBuf) -> Result<PathBuf, String> {
         return Ok(dunce::simplified(&canonical).to_path_buf());
     }
     Ok(crate::tools::normalize_without_fs(&path))
-}
-
-pub(crate) fn read_file_with_access_for_runtime_config(
-    path: impl AsRef<Path>,
-    config: &crate::tools::runtime_config::ToolRuntimeConfig,
-) -> Result<(PathBuf, Vec<u8>), String> {
-    let path = path.as_ref().to_path_buf();
-    let config = config.clone();
-
-    block_on_context_future(
-        async move {
-            let mut policy = PolicyPipeline::<AppContextFactory>::new_legacy_allow_fallback()
-                .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
-                .with_policy(FsResolvePathAllowedRootsPolicy);
-            if !config.fs.deny_read_filenames.is_empty() {
-                policy.push_policy(FsReadFilenameDenyPolicy::new(
-                    config.fs.deny_read_filenames.clone(),
-                ));
-            }
-            policy.push_policy(FsReadAllowPolicy);
-            let kernel = Kernel::with_policy_runtime(
-                policy,
-                Arc::new(SystemClock) as Arc<dyn Clock>,
-                Arc::new(NoopAuditSink),
-            );
-            let now_epoch_s = kernel.now_epoch_s();
-            let pack = runtime_file_read_pack_manifest();
-            let token = runtime_file_read_token(now_epoch_s);
-            let execution_context = AppExecutionContext::new(
-                &kernel,
-                &pack,
-                &token,
-                now_epoch_s,
-                ExecutionPlane::Tool,
-                PlaneTier::Core,
-                None,
-                &config,
-            )?;
-            let output = execution_context
-                .access()
-                .fs()
-                .read_file(path)
-                .await
-                .map_err(|error| {
-                    let rendered = error.to_string();
-                    if loong_kernel::access::fs_read_error_is_policy_denial(&error) {
-                        format!("policy_denied: {rendered}")
-                    } else {
-                        rendered
-                    }
-                })?;
-            Ok((output.path, output.bytes))
-        },
-        "access-backed file read",
-    )
-}
-
-fn runtime_file_read_pack_manifest() -> VerticalPackManifest {
-    VerticalPackManifest {
-        pack_id: EMBEDDED_RUNTIME_PACK_ID.to_owned(),
-        domain: "app-runtime-context".to_owned(),
-        version: "0.1.0".to_owned(),
-        default_route: ExecutionRoute {
-            harness_kind: HarnessKind::EmbeddedPi,
-            adapter: None,
-        },
-        allowed_connectors: BTreeSet::new(),
-        granted_capabilities: BTreeSet::from([Capability::FilesystemRead]),
-        metadata: BTreeMap::new(),
-    }
-}
-
-fn runtime_file_read_token(now_epoch_s: u64) -> CapabilityToken {
-    CapabilityToken {
-        token_id: "runtime-file-read".to_owned(),
-        pack_id: EMBEDDED_RUNTIME_PACK_ID.to_owned(),
-        agent_id: "runtime-context".to_owned(),
-        allowed_capabilities: BTreeSet::from([Capability::FilesystemRead]),
-        issued_at_epoch_s: now_epoch_s,
-        expires_at_epoch_s: now_epoch_s,
-        generation: 0,
-    }
-}
-
-fn block_on_context_future<F, T>(future: F, label: &str) -> Result<T, String>
-where
-    F: Future<Output = Result<T, String>> + Send,
-    T: Send,
-{
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
-            tokio::task::block_in_place(|| handle.block_on(future))
-        }
-        Ok(_) => thread::scope(|scope| {
-            scope
-                .spawn(|| {
-                    let runtime = tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .map_err(|error| {
-                            format!("failed to create tokio runtime for {label}: {error}")
-                        })?;
-                    runtime.block_on(future)
-                })
-                .join()
-                .map_err(|_panic| format!("{label} worker thread panicked"))?
-        }),
-        Err(_) => {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|error| format!("failed to create tokio runtime for {label}: {error}"))?;
-            runtime.block_on(future)
-        }
-    }
 }
 
 /// Bootstrap a minimal in-memory kernel suitable for tests.

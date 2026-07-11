@@ -121,6 +121,7 @@ pub(super) async fn repair_turn_checkpoint_tail_entry<R: ConversationRuntime + ?
             session_id,
             resume_input.messages(),
             resume_input.estimated_tokens(),
+            None,
             binding,
             false,
         )

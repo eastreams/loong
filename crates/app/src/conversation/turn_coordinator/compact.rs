@@ -43,6 +43,7 @@ pub(super) async fn maybe_compact_context<R: ConversationRuntime + ?Sized>(
     session_id: &str,
     messages: &[Value],
     estimated_tokens: Option<usize>,
+    live_runtime_self_continuity: Option<&runtime_self_continuity::RuntimeSelfContinuity>,
     binding: ConversationRuntimeBinding<'_>,
     force: bool,
 ) -> CliResult<ContextCompactionOutcome> {
@@ -63,7 +64,11 @@ pub(super) async fn maybe_compact_context<R: ConversationRuntime + ?Sized>(
 
     #[cfg(feature = "memory-sqlite")]
     {
-        if let Err(error) = persist_runtime_self_continuity_for_compaction(config, session_id) {
+        if let Err(error) = persist_runtime_self_continuity_for_compaction(
+            config,
+            session_id,
+            live_runtime_self_continuity,
+        ) {
             if config.conversation.compaction_fail_open() {
                 return Ok(ContextCompactionOutcome::FailedOpen);
             }
@@ -129,18 +134,17 @@ pub(super) async fn maybe_compact_context<R: ConversationRuntime + ?Sized>(
 pub(super) fn persist_runtime_self_continuity_for_compaction(
     config: &LoongConfig,
     session_id: &str,
+    live_continuity: Option<&runtime_self_continuity::RuntimeSelfContinuity>,
 ) -> Result<(), String> {
     let memory_config = store::session_store_config_from_memory_config(&config.memory);
     let repo = SessionRepository::new(&memory_config)?;
 
     ensure_session_exists_for_runtime_self_continuity(&repo, session_id)?;
 
-    let live_continuity =
-        runtime_self_continuity::resolve_runtime_self_continuity_for_config(config);
     let stored_continuity =
         runtime_self_continuity::load_persisted_runtime_self_continuity(&repo, session_id)?;
     let continuity = runtime_self_continuity::merge_runtime_self_continuity(
-        live_continuity,
+        live_continuity.cloned(),
         stored_continuity.as_ref(),
     );
     let Some(continuity) = continuity else {

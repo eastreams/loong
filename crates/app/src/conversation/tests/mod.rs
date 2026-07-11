@@ -770,6 +770,7 @@ impl ConversationContextEngine for StubSystemPromptAdditionEngine {
             estimated_tokens: Some(42),
             prompt_fragments: Vec::new(),
             system_prompt_addition: Some("runtime-policy-addition".to_owned()),
+            runtime_self_continuity: None,
         })
     }
 
@@ -3869,12 +3870,13 @@ async fn default_runtime_build_context_prefers_live_identity_over_stored_runtime
         .expect("create root session");
     append_runtime_self_continuity_refresh_event(&repo, &session_id, stored_identity_text);
 
+    let kernel_ctx = test_kernel_context(&session_id);
     let assembled = runtime
         .build_context(
             &config,
             &session_id,
             true,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
         .expect("build context with live identity");
@@ -3926,12 +3928,13 @@ async fn default_runtime_build_context_rehydrates_missing_session_profile_from_s
         .expect("create root session");
     append_runtime_self_continuity_refresh_event(&repo, &session_id, stored_identity_text);
 
+    let kernel_ctx = test_kernel_context(&session_id);
     let assembled = runtime
         .build_context(
             &config,
             &session_id,
             true,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
         .expect("build context with live identity and stored profile");
@@ -4028,12 +4031,16 @@ async fn default_runtime_build_context_explicit_builtin_system_preserves_profile
 async fn handle_turn_with_runtime_records_runtime_self_continuity_before_compaction() {
     let session_id = unique_acp_test_id("conversation-runtime-self", "compaction");
     let sqlite_path = unique_memory_sqlite_path("runtime-self-compaction");
-    let workspace_root = create_runtime_self_workspace(
-        "runtime-self-compaction",
-        "# Identity\n\n- Name: Workspace continuity identity",
-    );
+    let workspace_root = std::env::temp_dir().join(format!(
+        "conversation-runtime-self-compaction-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos()
+    ));
     let mut config = test_config();
 
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
     config.memory.sqlite_path = sqlite_path.clone();
     config.tools.file_root = Some(workspace_root.display().to_string());
     config.conversation.compact_min_messages = Some(999);
@@ -4073,6 +4080,29 @@ async fn handle_turn_with_runtime_records_runtime_self_continuity_before_compact
         vec![json!({"role": "system", "content": "sys"})],
         Ok("I am Temporary Bob".to_owned()),
     )
+    .with_assembled_context(AssembledConversationContext {
+        messages: vec![json!({"role": "system", "content": "sys"})],
+        artifacts: Vec::new(),
+        estimated_tokens: None,
+        prompt_fragments: Vec::new(),
+        system_prompt_addition: None,
+        runtime_self_continuity: Some(crate::runtime_self_continuity::RuntimeSelfContinuity {
+            runtime_self: crate::runtime_self::RuntimeSelfModel {
+                tool_usage_policy: vec![
+                    "Search durable workspace memory before guessing project facts.".to_owned(),
+                ],
+                identity_context: vec![
+                    "# Identity\n\n- Name: Workspace continuity identity".to_owned(),
+                ],
+                ..Default::default()
+            },
+            resolved_identity: Some(crate::runtime_identity::ResolvedRuntimeIdentity {
+                source: crate::runtime_identity::RuntimeIdentitySource::WorkspaceSelf,
+                content: "# Identity\n\n- Name: Workspace continuity identity".to_owned(),
+            }),
+            ..Default::default()
+        }),
+    })
     .with_compact_hook(compact_hook);
 
     repo.create_session(root_session)
@@ -18305,6 +18335,7 @@ async fn repair_turn_checkpoint_tail_rebuilds_original_finalization_context_for_
                 estimated_tokens: Some(3),
                 prompt_fragments: Vec::new(),
                 system_prompt_addition: None,
+                runtime_self_continuity: None,
             },
             AssembledConversationContext {
                 messages: vec![
@@ -18315,6 +18346,7 @@ async fn repair_turn_checkpoint_tail_rebuilds_original_finalization_context_for_
                 estimated_tokens: Some(2),
                 prompt_fragments: Vec::new(),
                 system_prompt_addition: None,
+                runtime_self_continuity: None,
             },
         );
     let coordinator = ConversationTurnCoordinator::new();
@@ -18430,6 +18462,7 @@ async fn repair_turn_checkpoint_tail_prefers_checkpoint_estimate_for_compaction_
             estimated_tokens: Some(1),
             prompt_fragments: Vec::new(),
             system_prompt_addition: None,
+            runtime_self_continuity: None,
         });
     let coordinator = ConversationTurnCoordinator::new();
     let kernel_ctx = test_kernel_context_with_memory(
@@ -18544,6 +18577,7 @@ async fn probe_turn_checkpoint_tail_runtime_gate_reports_preparation_content_mis
             estimated_tokens: Some(99),
             prompt_fragments: Vec::new(),
             system_prompt_addition: None,
+            runtime_self_continuity: None,
         });
     let coordinator = ConversationTurnCoordinator::new();
     let limit = config.memory.sliding_window;
@@ -19065,6 +19099,7 @@ async fn load_turn_checkpoint_diagnostics_with_runtime_preserves_summary_assessm
             estimated_tokens: Some(99),
             prompt_fragments: Vec::new(),
             system_prompt_addition: None,
+            runtime_self_continuity: None,
         });
     let coordinator = ConversationTurnCoordinator::new();
 
@@ -19292,6 +19327,7 @@ async fn load_turn_checkpoint_diagnostics_uses_single_kernel_window_snapshot_for
             estimated_tokens: Some(99),
             prompt_fragments: Vec::new(),
             system_prompt_addition: None,
+            runtime_self_continuity: None,
         });
     let coordinator = ConversationTurnCoordinator::new();
 
@@ -25360,6 +25396,7 @@ async fn repair_turn_checkpoint_tail_requires_manual_repair_on_preparation_conte
             estimated_tokens: Some(99),
             prompt_fragments: Vec::new(),
             system_prompt_addition: None,
+            runtime_self_continuity: None,
         });
     let coordinator = ConversationTurnCoordinator::new();
 
@@ -25480,6 +25517,7 @@ async fn repair_turn_checkpoint_tail_requires_manual_repair_on_preparation_conte
             estimated_tokens: Some(99),
             prompt_fragments: Vec::new(),
             system_prompt_addition: None,
+            runtime_self_continuity: None,
         });
     let coordinator = ConversationTurnCoordinator::new();
 
@@ -25600,6 +25638,7 @@ async fn repair_turn_checkpoint_tail_requires_manual_repair_on_malformed_prepara
             estimated_tokens: Some(99),
             prompt_fragments: Vec::new(),
             system_prompt_addition: None,
+            runtime_self_continuity: None,
         });
     let coordinator = ConversationTurnCoordinator::new();
 

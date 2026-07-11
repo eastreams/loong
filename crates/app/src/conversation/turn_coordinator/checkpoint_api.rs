@@ -39,6 +39,7 @@ impl ConversationTurnCoordinator {
             session_id,
             &before_messages,
             estimated_tokens_before,
+            None,
             binding,
             true,
         )

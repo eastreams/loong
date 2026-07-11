@@ -19,7 +19,6 @@ fn persist_runtime_self_continuity_for_compaction_merges_live_and_stored_delegat
         .display()
         .to_string();
     std::fs::create_dir_all(&workspace_root).expect("create workspace root");
-    std::fs::write(workspace_root.join("AGENTS.md"), live_agents_text).expect("write AGENTS");
     config.memory.sqlite_path = sqlite_path;
     config.tools.file_root = Some(workspace_root.display().to_string());
 
@@ -62,8 +61,19 @@ fn persist_runtime_self_continuity_for_compaction_merges_live_and_stored_delegat
     })
     .expect("append delegate event");
 
-    persist_runtime_self_continuity_for_compaction(&config, child_session_id)
-        .expect("persist merged runtime self continuity");
+    let live_continuity = runtime_self_continuity::RuntimeSelfContinuity {
+        workspace_guidance: crate::workspace_guidance::WorkspaceGuidanceModel {
+            entries: vec![live_agents_text.to_owned()],
+        },
+        ..Default::default()
+    };
+
+    persist_runtime_self_continuity_for_compaction(
+        &config,
+        child_session_id,
+        Some(&live_continuity),
+    )
+    .expect("persist merged runtime self continuity");
 
     let recent_events = repo
         .list_recent_events(child_session_id, 10)
@@ -159,7 +169,7 @@ fn persist_runtime_self_continuity_for_compaction_reconstructs_legacy_delegate_s
     .expect("insert legacy delegate event");
     drop(conn);
 
-    persist_runtime_self_continuity_for_compaction(&config, child_session_id)
+    persist_runtime_self_continuity_for_compaction(&config, child_session_id, None)
         .expect("persist runtime self continuity");
 
     let reconstructed_session = repo
@@ -214,6 +224,7 @@ fn maybe_compact_context_fails_open_when_runtime_self_continuity_persist_cannot_
         "delegate:missing-lineage",
         &messages,
         Some(16),
+        None,
         binding,
         false,
     ));
@@ -302,6 +313,7 @@ fn maybe_compact_context_fails_open_when_durable_flush_cannot_write_workspace_ex
         "session-durable-flush-fail-open",
         &messages,
         Some(16),
+        None,
         binding,
         false,
     ));

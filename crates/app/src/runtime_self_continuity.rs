@@ -90,18 +90,15 @@ impl RuntimeSelfContinuity {
 }
 
 pub(crate) fn resolve_runtime_self_continuity(
-    workspace_root: Option<&Path>,
+    _workspace_root: Option<&Path>,
     profile_note: Option<&str>,
     personalization: Option<&PersonalizationConfig>,
 ) -> Option<RuntimeSelfContinuity> {
-    let workspace_guidance = match workspace_root {
-        Some(workspace_root) => workspace_guidance::load_workspace_guidance_model(workspace_root),
-        None => WorkspaceGuidanceModel::default(),
-    };
-    let runtime_self = match workspace_root {
-        Some(workspace_root) => runtime_self::load_runtime_self_model(workspace_root),
-        None => RuntimeSelfModel::default(),
-    };
+    // Live runtime-source files require a governed access context and are
+    // loaded by provider binding paths. Continuity refresh without that context
+    // may only contribute identity/profile state already present in config.
+    let workspace_guidance = WorkspaceGuidanceModel::default();
+    let runtime_self = RuntimeSelfModel::default();
     let resolved_identity =
         runtime_identity::resolve_runtime_identity(Some(&runtime_self), profile_note);
     let session_profile_projection =
@@ -447,7 +444,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_runtime_self_continuity_for_config_prefers_runtime_workspace_root() {
+    fn resolve_runtime_self_continuity_for_config_does_not_read_runtime_workspace_root() {
         let temp_dir = tempdir().expect("tempdir");
         let workspace_root = temp_dir.path().join("workspace-root");
         let decoy_tool_root = temp_dir.path().join("tool-root");
@@ -462,15 +459,11 @@ mod tests {
         config.tools.file_root = Some(decoy_tool_root.display().to_string());
         config.tools.runtime_workspace_root = Some(workspace_root.display().to_string());
 
-        let continuity = resolve_runtime_self_continuity_for_config(&config)
-            .expect("workspace-root continuity should load");
+        let continuity = resolve_runtime_self_continuity_for_config(&config);
 
         assert!(
-            continuity
-                .workspace_guidance
-                .entries
-                .iter()
-                .any(|entry| entry.contains(agents_text))
+            continuity.is_none(),
+            "live runtime sources require a governed access context and should not load {agents_text}"
         );
     }
 

@@ -106,6 +106,8 @@ pub struct AssembledConversationContext {
     pub estimated_tokens: Option<usize>,
     pub prompt_fragments: Vec<crate::conversation::PromptFragment>,
     pub system_prompt_addition: Option<String>,
+    pub(crate) runtime_self_continuity:
+        Option<crate::runtime_self_continuity::RuntimeSelfContinuity>,
 }
 
 impl AssembledConversationContext {
@@ -116,6 +118,7 @@ impl AssembledConversationContext {
             estimated_tokens: None,
             prompt_fragments: Vec::new(),
             system_prompt_addition: None,
+            runtime_self_continuity: None,
         }
     }
 
@@ -430,6 +433,7 @@ impl ConversationContextEngine for DefaultContextEngine {
                 estimated_tokens: None,
                 prompt_fragments: projected.prompt_fragments,
                 system_prompt_addition: None,
+                runtime_self_continuity: projected.runtime_self_continuity,
             });
         }
 
@@ -455,6 +459,7 @@ impl ConversationContextEngine for DefaultContextEngine {
                 estimated_tokens: None,
                 prompt_fragments: projected.prompt_fragments,
                 system_prompt_addition: None,
+                runtime_self_continuity: projected.runtime_self_continuity,
             });
         }
 
@@ -670,7 +675,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn default_engine_assembles_runtime_self_through_kernel_audit_path() {
+    async fn default_engine_assembles_runtime_self_through_governed_access_path() {
         let harness = TurnTestHarness::with_capabilities(std::collections::BTreeSet::from([
             loong_contracts::Capability::InvokeTool,
             loong_contracts::Capability::FilesystemRead,
@@ -717,8 +722,8 @@ mod tests {
         });
 
         assert!(
-            has_typed_tool_event,
-            "kernel-bound runtime self loading should emit typed tool audit"
+            !has_typed_tool_event,
+            "runtime-source file reads are governed access, not tool invocations"
         );
         assert!(
             !has_legacy_tool_plane_event,

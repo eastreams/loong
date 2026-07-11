@@ -161,7 +161,12 @@ where
             )
             .await?;
         let runtime_self_continuity = include_system_prompt
-            .then(|| runtime_self_continuity_prompt_summary(effective_config, session_context))
+            .then(|| {
+                runtime_self_continuity_prompt_summary(
+                    session_context,
+                    assembled.runtime_self_continuity.as_ref(),
+                )
+            })
             .flatten();
         #[cfg(feature = "memory-sqlite")]
         let active_skills = include_system_prompt

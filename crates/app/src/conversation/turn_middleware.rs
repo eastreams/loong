@@ -577,6 +577,7 @@ mod tests {
                 ),
             ],
             system_prompt_addition: Some("runtime-policy-addition".to_owned()),
+            runtime_self_continuity: None,
         };
         let runtime_tool_view = crate::tools::runtime_tool_view();
         let requested_tool_view = crate::tools::ToolView::from_tool_names(["file.read"]);
@@ -672,6 +673,7 @@ mod tests {
             estimated_tokens: None,
             prompt_fragments: Vec::new(),
             system_prompt_addition: Some("runtime-policy-addition".to_owned()),
+            runtime_self_continuity: None,
         };
         let runtime_tool_view = crate::tools::runtime_tool_view();
 

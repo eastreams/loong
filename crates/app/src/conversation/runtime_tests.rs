@@ -312,6 +312,7 @@ async fn hosted_runtime_build_context_delegates_to_inner_runtime() {
                 estimated_tokens: Some(7),
                 prompt_fragments: vec![prompt_fragment],
                 system_prompt_addition: Some("addition".to_owned()),
+                runtime_self_continuity: None,
             };
 
             Ok(assembled)
