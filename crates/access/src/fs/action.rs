@@ -11,6 +11,7 @@ use super::path::{GrantedPath, ResolvedPath};
 
 const FS_RESOLVE_REQUIRED_CAPABILITIES: [Capability; 0] = [];
 const FS_READ_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
+const FS_GLOB_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 
 /// Typed action for resolving a raw path into a governed fs path.
 ///
@@ -118,6 +119,80 @@ impl ActionMeta for FsReadAction {
     }
 }
 
+/// Typed action for listing filesystem paths by glob pattern.
+///
+/// Like `FsReadAction`, this is a data-leaking filesystem operation and
+/// therefore consumes a `GrantedPath` root. Pattern matching happens inside the
+/// access side-effect boundary so tools do not receive a broader directory
+/// listing than the action payload describes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsGlobAction {
+    root: GrantedPath,
+    pattern: String,
+    include_directories: bool,
+    max_results: usize,
+}
+
+impl FsGlobAction {
+    #[must_use]
+    pub fn new(
+        root: GrantedPath,
+        pattern: impl Into<String>,
+        include_directories: bool,
+        max_results: usize,
+    ) -> Self {
+        Self {
+            root,
+            pattern: pattern.into(),
+            include_directories,
+            max_results,
+        }
+    }
+
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        self.root.as_path()
+    }
+
+    #[must_use]
+    pub fn pattern(&self) -> &str {
+        self.pattern.as_str()
+    }
+
+    #[must_use]
+    pub fn include_directories(&self) -> bool {
+        self.include_directories
+    }
+
+    #[must_use]
+    pub fn max_results(&self) -> usize {
+        self.max_results
+    }
+}
+
+impl ActionMeta for FsGlobAction {
+    fn metadata(&self) -> ActionMetadata<'_> {
+        ActionMetadata {
+            kind: "fs.glob",
+            operation: Cow::Borrowed("glob_paths"),
+            required_capabilities: Cow::Borrowed(&FS_GLOB_REQUIRED_CAPABILITIES),
+        }
+    }
+
+    fn audit_resource(&self) -> Option<Cow<'_, str>> {
+        Some(self.root.as_path().display().to_string().into())
+    }
+
+    fn payload(&self) -> Cow<'_, Value> {
+        Cow::Owned(json!({
+            "root": self.root.as_path().display().to_string(),
+            "pattern": self.pattern,
+            "include_directories": self.include_directories,
+            "max_results": self.max_results,
+        }))
+    }
+}
+
 /// Filesystem action family.
 ///
 /// Keep variants here thin wrappers around typed actions so policies can
@@ -125,6 +200,7 @@ impl ActionMeta for FsReadAction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FsAction {
     Read(FsReadAction),
+    Glob(FsGlobAction),
 }
 
 impl FsAction {
@@ -132,24 +208,42 @@ impl FsAction {
     pub fn read_file(path: GrantedPath) -> Self {
         Self::Read(FsReadAction::new(path))
     }
+
+    #[must_use]
+    pub fn glob_paths(
+        root: GrantedPath,
+        pattern: impl Into<String>,
+        include_directories: bool,
+        max_results: usize,
+    ) -> Self {
+        Self::Glob(FsGlobAction::new(
+            root,
+            pattern,
+            include_directories,
+            max_results,
+        ))
+    }
 }
 
 impl ActionMeta for FsAction {
     fn metadata(&self) -> ActionMetadata<'_> {
         match self {
             Self::Read(action) => action.metadata(),
+            Self::Glob(action) => action.metadata(),
         }
     }
 
     fn audit_resource(&self) -> Option<Cow<'_, str>> {
         match self {
             Self::Read(action) => action.audit_resource(),
+            Self::Glob(action) => action.audit_resource(),
         }
     }
 
     fn payload(&self) -> Cow<'_, Value> {
         match self {
             Self::Read(action) => action.payload(),
+            Self::Glob(action) => action.payload(),
         }
     }
 }

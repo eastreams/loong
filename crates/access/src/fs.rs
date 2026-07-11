@@ -5,8 +5,8 @@ pub mod action;
 pub mod error;
 pub mod path;
 
-pub use access::{FsAccess, FsAccessError, FsReadOutput};
-pub use action::{FsAction, FsReadAction, FsResolvePathAction};
+pub use access::{FsAccess, FsAccessError, FsGlobOutput, FsPathKind, FsPathMatch, FsReadOutput};
+pub use action::{FsAction, FsGlobAction, FsReadAction, FsResolvePathAction};
 pub use error::FsActionError;
 pub use path::GrantedPath;
 
