@@ -12933,7 +12933,7 @@ fn build_tool_kernel_context(
     capabilities: BTreeSet<Capability>,
 ) -> (KernelContext, Arc<Mutex<Vec<ToolCoreRequest>>>) {
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = Kernel::with_runtime(clock, audit);
+    let mut kernel = Kernel::with_legacy_allow_runtime(clock, audit);
 
     let pack = Arc::new(VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -13014,7 +13014,7 @@ async fn kernel_tool_adapter_routes_through_kernel() {
 
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = Kernel::with_runtime(clock, audit.clone());
+    let mut kernel = Kernel::with_legacy_allow_runtime(clock, audit.clone());
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -13075,7 +13075,7 @@ async fn kernel_tool_adapter_rejects_reserved_internal_payload_through_kernel_by
 
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = Kernel::with_runtime(clock, audit.clone());
+    let mut kernel = Kernel::with_legacy_allow_runtime(clock, audit.clone());
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -13170,7 +13170,7 @@ async fn web_fetch_through_kernel_requires_network_egress_capability() {
 
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = Kernel::with_runtime(clock, audit);
+    let mut kernel = Kernel::with_legacy_allow_runtime(clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -13235,7 +13235,7 @@ async fn web_fetch_through_kernel_exposes_network_egress_to_policy_extensions() 
 
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = Kernel::with_runtime(clock, audit);
+    let mut kernel = Kernel::with_legacy_allow_runtime(clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),

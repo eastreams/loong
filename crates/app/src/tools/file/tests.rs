@@ -74,8 +74,11 @@ async fn execute_file_read_with_test_context(
     request: ToolCoreRequest,
     config: &ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    let mut kernel =
-        Kernel::<AppContextFactory>::with_runtime(Arc::new(SystemClock), Arc::new(NoopAuditSink));
+    let mut kernel = Kernel::<AppContextFactory>::with_policy_runtime(
+        crate::context::build_app_policy_pipeline(config),
+        Arc::new(SystemClock),
+        Arc::new(NoopAuditSink),
+    );
     let pack = Arc::new(test_pack());
     kernel
         .register_pack((*pack).clone())
@@ -110,8 +113,11 @@ async fn execute_file_read_via_kernel_tool_registry(
     config: &ToolRuntimeConfig,
 ) -> Result<(ToolCoreOutcome, Arc<InMemoryAuditSink>), loong_kernel::KernelError> {
     let audit = Arc::new(InMemoryAuditSink::default());
-    let mut kernel =
-        Kernel::<AppContextFactory>::with_runtime(Arc::new(SystemClock), audit.clone());
+    let mut kernel = Kernel::<AppContextFactory>::with_policy_runtime(
+        crate::context::build_app_policy_pipeline(config),
+        Arc::new(SystemClock),
+        audit.clone(),
+    );
     let pack = Arc::new(test_pack());
     kernel.register_pack((*pack).clone())?;
     crate::tools::register_kernel_tools(
@@ -237,6 +243,38 @@ async fn kernel_routed_file_read_uses_typed_tool_registry() {
             } if primary_adapter.starts_with("legacy:")
         )
     }));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[tokio::test]
+async fn kernel_routed_file_read_rejects_path_escape_through_typed_policy() {
+    let base = unique_temp_dir("loong-file-read-typed-path-policy");
+    let root = base.join("root");
+    let outside = base.join("outside");
+    fs::create_dir_all(&root).expect("create root");
+    fs::create_dir_all(&outside).expect("create outside");
+    fs::write(outside.join("secret.txt"), "secret").expect("write outside fixture");
+
+    let config = ToolRuntimeConfig {
+        file_root: Some(root),
+        ..ToolRuntimeConfig::default()
+    };
+    let request = ToolCoreRequest {
+        tool_name: "file.read".to_owned(),
+        payload: json!({
+            "path": "../outside/secret.txt"
+        }),
+    };
+
+    let error = execute_file_read_via_kernel_tool_registry(request, &config)
+        .await
+        .expect_err("path escape should be denied by typed fs policy");
+
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains("policy_denied") || rendered.contains("escapes allowed filesystem roots"),
+        "expected fs path policy denial, got: {rendered}"
+    );
     let _ = fs::remove_dir_all(base);
 }
 

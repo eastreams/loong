@@ -157,12 +157,14 @@ async fn tool_invocation_grant(
     path: ToolPath,
     payload: Value,
 ) -> loong_core::policy::grant::Granted<ToolInvocationAction> {
-    PolicyPipeline::<TestContextFactory>::default()
+    let mut policy = PolicyPipeline::<TestContextFactory>::new();
+    policy.push_tool_invocation_allow_policy();
+    policy
         .grant(
             &TestContext,
             ToolInvocationAction::new(path, BTreeSet::new(), payload),
         )
         .await
-        .expect("default policy should grant test tool invocation")
+        .expect("test policy should grant tool invocation")
         .granted
 }

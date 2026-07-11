@@ -13,12 +13,13 @@ use loong_core::{
     kernel::Kernel,
     policy::{
         action::ActionMeta,
-        context::{CapabilityContext, ContextFactory, FsAccessContext},
+        context::{CapabilityContext, ContextFactory},
         engine::PolicyEngine,
     },
 };
 
 use super::{
+    FsPathPolicyContext, FsResolutionContext,
     access::{FsAccess, FsAccessError},
     action::{FsAction, FsReadAction, FsResolvePathAction},
 };
@@ -47,19 +48,21 @@ impl CapabilityContext for FsAccessPolicyContext {
     }
 }
 
-impl FsAccessContext for FsAccessPolicyContext {
+impl FsResolutionContext for FsAccessPolicyContext {
     fn fs_resolution_root(&self) -> &Path {
         &self.resolution_root
     }
+}
 
+impl FsPathPolicyContext for FsAccessPolicyContext {
     fn fs_allowed_roots(&self) -> &[PathBuf] {
         &self.allowed_roots
     }
 }
 
-struct FsAccessContextFactory;
+struct FsAccessTestContextFactory;
 
-impl ContextFactory for FsAccessContextFactory {
+impl ContextFactory for FsAccessTestContextFactory {
     type Cx<'a> = FsAccessPolicyContext;
 }
 
@@ -78,10 +81,10 @@ impl Default for FsAccessPolicyEngine {
 }
 
 #[async_trait]
-impl PolicyEngine<FsAccessContextFactory> for FsAccessPolicyEngine {
+impl PolicyEngine<FsAccessTestContextFactory> for FsAccessPolicyEngine {
     async fn decide<A: ActionMeta + 'static>(
         &self,
-        _ctx: &<FsAccessContextFactory as ContextFactory>::Cx<'_>,
+        _ctx: &<FsAccessTestContextFactory as ContextFactory>::Cx<'_>,
         _action: &A,
     ) -> PolicyReport {
         if self.allow {
@@ -128,7 +131,7 @@ impl FsAccessTestKernel {
 }
 
 #[async_trait]
-impl Kernel<FsAccessContextFactory> for FsAccessTestKernel {
+impl Kernel<FsAccessTestContextFactory> for FsAccessTestKernel {
     type PolicyEngine = FsAccessPolicyEngine;
 
     fn policy_engine(&self) -> &Self::PolicyEngine {
@@ -163,7 +166,7 @@ impl<'a> FsAccessToolCx<'a> {
 }
 
 impl<'a> FsAccessTestCx<'a> {
-    fn fs(self) -> FsAccess<'a, 'a, FsAccessContextFactory, FsAccessPolicyEngine> {
+    fn fs(self) -> FsAccess<'a, 'a, FsAccessTestContextFactory, FsAccessPolicyEngine> {
         FsAccess::new(self.kernel.policy_engine(), self.ctx)
     }
 }
@@ -171,22 +174,12 @@ impl<'a> FsAccessTestCx<'a> {
 #[test]
 fn fs_resolve_path_action_resolves_relative_path_inside_workspace() {
     let workspace_root = PathBuf::from("/workspace");
-    let action = FsResolvePathAction::resolve(
-        "docs/../notes/todo.md",
-        &workspace_root,
-        std::slice::from_ref(&workspace_root),
-    )
-    .expect("path inside workspace should normalize");
+    let action = FsResolvePathAction::resolve("docs/../notes/todo.md", &workspace_root)
+        .expect("path inside workspace should normalize");
 
     assert_eq!(
         action.resolved_path(),
         Path::new("/workspace/notes/todo.md")
-    );
-    assert!(
-        action
-            .allowed_roots()
-            .iter()
-            .any(|allowed_root| action.resolved_path().starts_with(allowed_root))
     );
 }
 
@@ -195,12 +188,9 @@ async fn fs_resolve_path_action_outputs_granted_path_for_read_action() {
     let kernel = FsAccessTestKernel::default();
     let workspace_root = PathBuf::from("/workspace");
     let ctx = FsAccessPolicyContext::new(&workspace_root);
-    let resolve_action = FsResolvePathAction::resolve(
-        "docs/../notes/todo.md",
-        ctx.fs_resolution_root(),
-        ctx.fs_allowed_roots(),
-    )
-    .expect("path resolution should prepare action");
+    let resolve_action =
+        FsResolvePathAction::resolve("docs/../notes/todo.md", ctx.fs_resolution_root())
+            .expect("path resolution should prepare action");
     let resolve_metadata = resolve_action.metadata();
 
     assert_eq!(resolve_metadata.kind, "fs.resolve_path");
@@ -209,7 +199,6 @@ async fn fs_resolve_path_action_outputs_granted_path_for_read_action() {
     let expected_resolve_payload = serde_json::json!({
         "path": "docs/../notes/todo.md",
         "resolved_path": "/workspace/notes/todo.md",
-        "allowed_roots": ["/workspace"],
     });
     assert_eq!(resolve_action.payload().as_ref(), &expected_resolve_payload);
 
@@ -238,24 +227,10 @@ async fn fs_resolve_path_action_outputs_granted_path_for_read_action() {
 #[test]
 fn fs_resolve_path_action_marks_workspace_escape_for_policy() {
     let workspace_root = PathBuf::from("/workspace");
-    let action = FsResolvePathAction::resolve(
-        "../secrets.txt",
-        &workspace_root,
-        std::slice::from_ref(&workspace_root),
-    )
-    .expect("path resolution should prepare escaped action for policy");
+    let action = FsResolvePathAction::resolve("../secrets.txt", &workspace_root)
+        .expect("path resolution should prepare escaped action for policy");
 
     assert_eq!(action.resolved_path(), Path::new("/secrets.txt"));
-    assert_eq!(
-        action.allowed_roots(),
-        std::slice::from_ref(&workspace_root)
-    );
-    assert!(
-        !action
-            .allowed_roots()
-            .iter()
-            .any(|allowed_root| action.resolved_path().starts_with(allowed_root))
-    );
 }
 
 #[tokio::test]
@@ -267,12 +242,8 @@ async fn fs_action_wraps_read_action() {
         .policy_engine()
         .grant(
             &ctx,
-            FsResolvePathAction::resolve(
-                "notes.md",
-                ctx.fs_resolution_root(),
-                ctx.fs_allowed_roots(),
-            )
-            .expect("path resolution should prepare action"),
+            FsResolvePathAction::resolve("notes.md", ctx.fs_resolution_root())
+                .expect("path resolution should prepare action"),
         )
         .await
         .expect("policy should grant path resolution")
@@ -308,26 +279,12 @@ fn fs_resolve_path_action_marks_symlink_escape_for_policy() {
     let symlink_path = workspace_root.join("secret-link");
     create_symlink(&outside_file, &symlink_path).expect("create symlink");
 
-    let action = FsResolvePathAction::resolve(
-        "secret-link",
-        &workspace_root,
-        std::slice::from_ref(&workspace_root),
-    )
-    .expect("path resolution should prepare symlink escape for policy");
+    let action = FsResolvePathAction::resolve("secret-link", &workspace_root)
+        .expect("path resolution should prepare symlink escape for policy");
 
     assert_eq!(
         action.resolved_path(),
         dunce::canonicalize(&outside_file).expect("canonical outside file")
-    );
-    assert_eq!(
-        action.allowed_roots(),
-        [dunce::canonicalize(&workspace_root).expect("canonical workspace root")]
-    );
-    assert!(
-        !action
-            .allowed_roots()
-            .iter()
-            .any(|allowed_root| action.resolved_path().starts_with(allowed_root))
     );
 }
 
@@ -344,23 +301,13 @@ fn fs_resolve_path_action_resolves_missing_allowed_root_through_symlink_ancestor
     create_symlink(&outside_root, &link_path).expect("create symlink");
 
     let allowed_root = link_path.join("missing-root");
-    let action = FsResolvePathAction::resolve(
-        "notes.txt",
-        &allowed_root,
-        std::slice::from_ref(&allowed_root),
-    )
-    .expect("missing allowed root under symlink ancestor should resolve");
+    let action = FsResolvePathAction::resolve("notes.txt", &allowed_root)
+        .expect("missing allowed root under symlink ancestor should resolve");
 
     let expected_root = dunce::canonicalize(&outside_root).expect("canonical outside root");
     assert_eq!(
         action.resolved_path(),
         expected_root.join("missing-root/notes.txt")
-    );
-    assert!(
-        action
-            .allowed_roots()
-            .iter()
-            .any(|allowed_root| action.resolved_path().starts_with(allowed_root))
     );
     fs::remove_dir_all(base).ok();
 }
@@ -401,12 +348,8 @@ async fn fs_read_execution_boundary_consumes_granted_action() {
         .policy_engine()
         .grant(
             &ctx,
-            FsResolvePathAction::resolve(
-                "notes/todo.md",
-                ctx.fs_resolution_root(),
-                ctx.fs_allowed_roots(),
-            )
-            .expect("path resolution should prepare action"),
+            FsResolvePathAction::resolve("notes/todo.md", ctx.fs_resolution_root())
+                .expect("path resolution should prepare action"),
         )
         .await
         .expect("policy should grant path resolution")

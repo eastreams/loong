@@ -29,7 +29,7 @@ fn build_provider_failover_test_kernel_context(
 ) -> (KernelContext, Arc<InMemoryAuditSink>) {
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_321));
-    let mut kernel = Kernel::with_runtime(clock, audit.clone());
+    let mut kernel = Kernel::with_legacy_allow_runtime(clock, audit.clone());
     let pack = Arc::new(VerticalPackManifest {
         pack_id: "provider-test-pack".to_owned(),
         domain: "provider-test".to_owned(),

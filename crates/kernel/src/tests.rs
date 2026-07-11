@@ -456,8 +456,11 @@ proptest! {
         let pack_capabilities = capability_set_from_mask(pack_mask);
         let required_capabilities = capability_set_from_mask(required_mask);
 
-        let (mut kernel, _audit) =
-            Kernel::<TestContextFactory>::new_with_in_memory_audit();
+        let audit = Arc::new(InMemoryAuditSink::default());
+        let mut kernel = Kernel::<TestContextFactory>::with_legacy_allow_runtime(
+            Arc::new(FixedClock::new(1_700_004_100)),
+            audit,
+        );
         let mut pack = sample_pack();
         pack.granted_capabilities = pack_capabilities.clone();
         kernel
@@ -669,7 +672,7 @@ fn task_supervisor_rejects_execute_after_completion() {
 fn record_tool_call_denial_audits_extension_denied_errors() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_004_000));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let mut kernel = Kernel::<TestContextFactory>::with_runtime(clock, audit.clone());
+    let mut kernel = Kernel::<TestContextFactory>::with_legacy_allow_runtime(clock, audit.clone());
     let pack = sample_pack();
     kernel
         .register_pack(pack.clone())

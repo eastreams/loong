@@ -9,10 +9,20 @@ use serde_json::json;
 
 use super::Kernel;
 use crate::test_support::{TestContextFactory, TestPolicyContext};
+use crate::{InMemoryAuditSink, PolicyPipeline, SystemClock};
+use std::sync::Arc;
+
+fn kernel_with_tool_invocation_policy() -> (Kernel<TestContextFactory>, Arc<InMemoryAuditSink>) {
+    let mut policy = PolicyPipeline::<TestContextFactory>::new();
+    policy.push_tool_invocation_allow_policy();
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let kernel = Kernel::with_policy_runtime(policy, Arc::new(SystemClock), audit.clone());
+    (kernel, audit)
+}
 
 #[tokio::test]
 async fn grant_tool_invocation_grants_without_recording_tool_outcome() {
-    let (mut kernel, audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
+    let (mut kernel, audit) = kernel_with_tool_invocation_policy();
     register_tool_pack(&mut kernel, "typed-auth");
     let token = kernel
         .issue_token("typed-auth", "agent-typed", 120)
@@ -39,7 +49,7 @@ async fn grant_tool_invocation_grants_without_recording_tool_outcome() {
 
 #[tokio::test]
 async fn record_tool_invocation_records_typed_completed_event() {
-    let (mut kernel, audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
+    let (mut kernel, audit) = kernel_with_tool_invocation_policy();
     register_tool_pack(&mut kernel, "typed-completed");
     let token = kernel
         .issue_token("typed-completed", "agent-typed", 120)
@@ -86,7 +96,7 @@ async fn record_tool_invocation_records_typed_completed_event() {
 
 #[tokio::test]
 async fn record_tool_invocation_records_typed_failed_event() {
-    let (mut kernel, audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
+    let (mut kernel, audit) = kernel_with_tool_invocation_policy();
     register_tool_pack(&mut kernel, "typed-failed");
     let token = kernel
         .issue_token("typed-failed", "agent-typed", 120)
@@ -135,7 +145,7 @@ async fn record_tool_invocation_records_typed_failed_event() {
 
 #[tokio::test]
 async fn record_tool_invocation_records_typed_denied_event() {
-    let (mut kernel, audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
+    let (mut kernel, audit) = kernel_with_tool_invocation_policy();
     register_tool_pack(&mut kernel, "typed-denied");
     let token = kernel
         .issue_token("typed-denied", "agent-typed", 120)

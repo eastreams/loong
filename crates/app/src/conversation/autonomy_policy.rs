@@ -471,7 +471,7 @@ mod tests {
         HOLDER.get_or_init(|| {
             let audit = Arc::new(InMemoryAuditSink::default());
             let clock = Arc::new(FixedClock::new(1_700_000_000));
-            let mut kernel = Kernel::with_runtime(clock, audit);
+            let mut kernel = Kernel::with_legacy_allow_runtime(clock, audit);
             let pack = VerticalPackManifest {
                 pack_id: "autonomy-policy-test-pack".to_owned(),
                 domain: "testing".to_owned(),

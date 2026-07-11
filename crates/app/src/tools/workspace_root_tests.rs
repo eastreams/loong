@@ -31,7 +31,7 @@ async fn execute_tool_core_with_test_context(
 ) -> Result<ToolCoreOutcome, String> {
     let trusted_internal_payload = payload_uses_reserved_internal_tool_context(&request.payload);
     let mut kernel = Kernel::with_policy_runtime(
-        crate::context::policy_pipeline_for_tool_runtime_config(config),
+        crate::context::build_app_policy_pipeline(config),
         Arc::new(SystemClock),
         Arc::new(NoopAuditSink),
     );

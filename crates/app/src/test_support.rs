@@ -139,7 +139,9 @@ impl TurnTestHarness {
 
         let audit = Arc::new(InMemoryAuditSink::default());
         let clock = Arc::new(FixedClock::new(1_700_000_000));
-        let mut kernel = Kernel::<AppContextFactory>::with_runtime(clock, audit.clone());
+        let policy = crate::context::build_app_policy_pipeline(&tool_config);
+        let mut kernel =
+            Kernel::<AppContextFactory>::with_policy_runtime(policy, clock, audit.clone());
 
         let pack = Arc::new(VerticalPackManifest {
             pack_id: "test-pack".to_owned(),
@@ -162,8 +164,6 @@ impl TurnTestHarness {
             crate::config::ObservabilityConfig::runtime_default(),
         )
         .expect("register kernel tools");
-
-        // TODO: The policy-extension is deleted, there may be new policy register logic
 
         #[cfg(feature = "memory-sqlite")]
         {

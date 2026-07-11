@@ -1,15 +1,16 @@
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use loong_contracts::Capability;
 use loong_core::{
     AuthorizationError, PolicyGrantError,
-    policy::context::{CapabilityContext, ContextFactory, FsAccessContext},
+    policy::context::{CapabilityContext, ContextFactory},
 };
 
-use super::AccessCx;
+use super::{AccessCx, FsPathPolicyContext, FsResolutionContext};
 
 #[derive(Debug, Clone)]
 struct AccessCxPolicyContext {
@@ -21,9 +22,11 @@ struct AccessCxPolicyContext {
 impl AccessCxPolicyContext {
     fn new(workspace_root: impl Into<PathBuf>) -> Self {
         let workspace_root = workspace_root.into();
+        let policy_root =
+            std::fs::canonicalize(&workspace_root).unwrap_or_else(|_| workspace_root.clone());
         Self {
             resolution_root: workspace_root.clone(),
-            allowed_roots: vec![workspace_root],
+            allowed_roots: vec![policy_root],
             capabilities: BTreeSet::from([Capability::FilesystemRead]),
         }
     }
@@ -35,11 +38,13 @@ impl CapabilityContext for AccessCxPolicyContext {
     }
 }
 
-impl FsAccessContext for AccessCxPolicyContext {
+impl FsResolutionContext for AccessCxPolicyContext {
     fn fs_resolution_root(&self) -> &Path {
         &self.resolution_root
     }
+}
 
+impl FsPathPolicyContext for AccessCxPolicyContext {
     fn fs_allowed_roots(&self) -> &[PathBuf] {
         &self.allowed_roots
     }
@@ -81,7 +86,7 @@ impl<'a> AccessToolCx<'a> {
 
 #[tokio::test]
 async fn access_context_preserves_workspace_context_for_fs_access() {
-    let kernel = crate::Kernel::<AccessCxContextFactory>::new_without_audit();
+    let kernel = kernel_with_fs_path_policy();
     let base = tempfile_dir("loong-kernel-access-context");
     let workspace_root = base.join("workspace");
     std::fs::create_dir_all(workspace_root.join("notes")).expect("create notes dir");
@@ -105,7 +110,7 @@ async fn access_context_preserves_workspace_context_for_fs_access() {
 
 #[tokio::test]
 async fn fs_path_escape_is_reported_as_path_resolution_policy_denial() {
-    let kernel = crate::Kernel::<AccessCxContextFactory>::new_without_audit();
+    let kernel = kernel_with_fs_path_policy();
     let base = tempfile_dir("loong-kernel-access-path-policy");
     let workspace_root = base.join("workspace");
     let outside_root = base.join("outside");
@@ -141,6 +146,17 @@ async fn fs_path_escape_is_reported_as_path_resolution_policy_denial() {
     );
 
     std::fs::remove_dir_all(base).ok();
+}
+
+fn kernel_with_fs_path_policy() -> crate::Kernel<AccessCxContextFactory> {
+    let mut policy = crate::PolicyPipeline::<AccessCxContextFactory>::new();
+    policy.push_fs_path_policy();
+    policy.push_fs_read_allow_policy();
+    crate::Kernel::with_policy_runtime(
+        policy,
+        Arc::new(crate::SystemClock),
+        Arc::new(crate::NoopAuditSink),
+    )
 }
 
 fn tempfile_dir(prefix: &str) -> PathBuf {

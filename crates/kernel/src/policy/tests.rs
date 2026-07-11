@@ -196,6 +196,85 @@ fn token() -> CapabilityToken {
 }
 
 #[tokio::test]
+async fn policy_pipeline_new_has_no_fallback_allow() {
+    let engine = PolicyPipeline::<TestContextFactory>::new();
+    let pack = pack();
+    let token = token();
+    let ctx = TestPolicyContext::new(
+        &pack,
+        &token,
+        1,
+        ExecutionPlane::Tool,
+        PlaneTier::Core,
+        None,
+    );
+    let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+
+    let report = engine.decide(&ctx, &action).await;
+
+    assert!(report.evaluations.is_empty());
+    assert!(matches!(
+        report.outcome,
+        PolicyOutcome::Deny {
+            grant_source: None,
+            ref reason,
+        } if reason == DEFAULT_DENY_REASON
+    ));
+}
+
+#[tokio::test]
+async fn policy_pipeline_new_legacy_allow_fallback_grants_unmatched_actions() {
+    let engine = PolicyPipeline::<TestContextFactory>::new_legacy_allow_fallback();
+    let pack = pack();
+    let token = token();
+    let ctx = TestPolicyContext::new(
+        &pack,
+        &token,
+        1,
+        ExecutionPlane::Tool,
+        PlaneTier::Core,
+        None,
+    );
+    let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+
+    let report = engine.decide(&ctx, &action).await;
+
+    assert_eq!(report.evaluations.len(), 1);
+    assert_eq!(report.evaluations[0].policy_stage, "fallback");
+    assert!(matches!(
+        report.outcome,
+        PolicyOutcome::Allow { ref source, .. } if source.policy_name == "legacy-allow"
+    ));
+}
+
+#[tokio::test]
+async fn policy_pipeline_new_legacy_allow_fallback_does_not_grant_typed_actions() {
+    let engine = PolicyPipeline::<TestContextFactory>::new_legacy_allow_fallback();
+    let pack = pack();
+    let token = token();
+    let ctx = TestPolicyContext::new(
+        &pack,
+        &token,
+        1,
+        ExecutionPlane::Tool,
+        PlaneTier::Core,
+        None,
+    );
+
+    let report = engine.decide(&ctx, &TypedOnlyAction).await;
+
+    assert_eq!(report.evaluations.len(), 1);
+    assert_eq!(report.evaluations[0].policy_stage, "fallback");
+    assert!(matches!(
+        report.outcome,
+        PolicyOutcome::Deny {
+            grant_source: None,
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
 async fn policy_pipeline_grants_actions_allowed_by_registered_policy() {
     let engine = PolicyPipeline::<TestContextFactory>::new().with_fallback_policy(AllowPolicy);
     let pack = pack();
@@ -223,7 +302,7 @@ async fn policy_pipeline_grants_actions_allowed_by_registered_policy() {
 
 #[tokio::test]
 async fn policy_pipeline_runs_registered_policy_extensions() {
-    let mut engine = PolicyPipeline::<TestContextFactory>::default();
+    let mut engine = PolicyPipeline::<TestContextFactory>::new_legacy_allow_fallback();
     engine.register_policy_extension(DenyNetworkExtension);
     let pack = pack();
     let mut token = token();
@@ -255,7 +334,7 @@ async fn policy_pipeline_runs_registered_policy_extensions() {
 
 #[tokio::test]
 async fn policy_pipeline_grant_denies_action_missing_required_capability() {
-    let engine = PolicyPipeline::<TestContextFactory>::default();
+    let engine = PolicyPipeline::<TestContextFactory>::new_legacy_allow_fallback();
     let pack = pack();
     let token = token();
     let ctx = TestPolicyContext::new(
