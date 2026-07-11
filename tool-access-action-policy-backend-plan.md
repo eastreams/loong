@@ -136,6 +136,9 @@ config
      `Policy`、`AccessCx` 这类抽象；
    - app feature 只负责开关 concrete tool feature，例如
      `tool-file = ["loong-tools/file"]`；
+   - feature flag 控制模块/工具族是否存在，不在模块内部保留 disabled stub；
+   - 如果 `file` feature 关闭，`loong_tools::file` 就不应暴露；
+   - 模块内部默认 feature 已启用，disabled/unavailable 错误由上层注册或路由处理；
    - concrete tool 需要 access 时，只约束 kernel 暴露的 context requirement，例如
      `for<'a> C::Cx<'a>: KernelAccess<C> + FsAccessContext`。
 
