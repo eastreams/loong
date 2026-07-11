@@ -25,6 +25,7 @@ use loong_core::{
 
 use crate::access::fs::{
     FsContentSearchAction, FsGlobAction, FsPathPolicyContext, FsReadAction, FsResolvePathAction,
+    FsWriteAction,
 };
 use crate::errors::PolicyError;
 
@@ -476,6 +477,9 @@ pub struct FsReadFilenameDenyPolicy {
 pub struct FsReadAllowPolicy;
 
 #[derive(Debug, Default, Clone, Copy)]
+pub struct FsWriteAllowPolicy;
+
+#[derive(Debug, Default, Clone, Copy)]
 pub struct FsGlobAllowPolicy;
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -590,6 +594,24 @@ where
             decision: PolicyDecision::Allow,
             predicate: Some("fs.read reached terminal allow policy".into()),
             reason: "filesystem read allowed after configured deny policies".into(),
+        }
+    }
+}
+
+#[async_trait]
+impl<C> Policy<C, FsWriteAction> for FsWriteAllowPolicy
+where
+    C: ContextFactory + Send + Sync,
+{
+    fn name(&self) -> Cow<'static, str> {
+        Cow::Borrowed("fs-write-allow")
+    }
+
+    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &FsWriteAction) -> PolicyGrant {
+        PolicyGrant {
+            decision: PolicyDecision::Allow,
+            predicate: Some("fs.write reached terminal allow policy".into()),
+            reason: "filesystem write allowed after configured deny policies".into(),
         }
     }
 }

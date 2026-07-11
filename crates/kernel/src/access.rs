@@ -8,7 +8,7 @@ pub mod fs {
         FsAccess, FsAccessError, FsContentSearchAction, FsContentSearchMatch,
         FsContentSearchOptions, FsContentSearchOutput, FsGlobAction, FsGlobOutput, FsPathKind,
         FsPathMatch, FsPathPolicyContext, FsReadAction, FsReadOutput, FsResolutionContext,
-        FsResolvePathAction,
+        FsResolvePathAction, FsWriteAction, FsWriteOptions, FsWriteOutput,
     };
 }
 
