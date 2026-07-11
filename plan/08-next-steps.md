@@ -14,7 +14,8 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      app plane 边界转换；
    - production `ReadTool` 已经不硬编码注册 path；app plane 注册时注入 user-facing 名称，
      仅用于响应和 continuation 推荐；
-   - provider schema 已经用 app-owned plane enumeration gate migrated `read` 的可见性；
+   - provider schema 已经用 app-owned plane enumeration gate migrated `read` / `write`
+     的可见性；未注册 typed path 时不能 fallback 到 legacy static schema；
    - `read` provider JSON schema 已经来自 `ReadTool::spec().input_schema`；
    - `tool.search` schema preview 已经通过 typed provider projection 读取 `read` 的
      `ToolSpec` schema；
