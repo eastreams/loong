@@ -43,8 +43,9 @@ authorization / adapter workaround 塑形新架构。
 - `ToolImpl` 不拥有 path。tool 自身只描述输入/输出/能力/说明；注册到某个 plane 时，
   plane 才把自己的 `Path` 和 tool descriptor 组合成 registered spec。
 - `ToolInvocationAction` 可以存在，但它属于具体 plane/app 的治理边界，不能在 core 里
-  持有全局 `ToolPath`。本轮先落地 app-owned `AppToolInvocationAction`；公共泛型 helper
-  只有在多个 plane 真的复用同一形状时再引入。
+  持有全局 `ToolPath`。类型名不加 `App` 前缀；层级由模块路径表达，例如
+  `loong-app::tools::plane::ToolInvocationAction`。公共泛型 helper 只有在多个 plane
+  真的复用同一形状时再引入。
 - `ActionMeta::payload` 没有默认 `Null`。payload 是 Action 的结构化载荷；如果 action
   已经持有 `serde_json::Value`，目标 API 可以返回 `Cow<'_, Value>` 来避免无意义 clone。
 - 架构代码要有少量高信号注释，标明边界和意图。注释解释 why，不重复代码，也不写大段
@@ -63,7 +64,7 @@ authorization / adapter workaround 塑形新架构。
   concrete ToolPlane path 类型。
 - `loong-access`：domain side-effect boundary。文件读取只在 fs access/action 路径中
   发生。
-- `loong-app`：concrete context、config -> policy wiring、app-owned `ToolPlane`、
+- `loong-app`：concrete context、config -> policy wiring、`tools::plane` owns `ToolPlane`、
   concrete tool registration、legacy fallback orchestration。
 - `loong-tools`：concrete builtin tool implementations only。这个 crate 不承载
   `ToolImpl`、`RegisteredTool`、registry、plane、policy/action 抽象；它只放
@@ -81,21 +82,17 @@ caps 是硬边界，不是 policy 的附属说明。
 - tool 调 tool 时，调用参数可以提供 required caps override，但 override 只能缩窄：
   `requested_caps = override.unwrap_or(tool_default_caps)`，且 `override ⊆ tool_default_caps`；
   `child_caps = parent_caps ∩ requested_caps`。
-- `AppToolInvocationAction` 的 caps 只授权进入一个 tool。tool 内部的文件、网络、内存等
+- `ToolInvocationAction` 的 caps 只授权进入一个 tool。tool 内部的文件、网络、内存等
   side effect 仍然要各自构造 domain action，并再次通过对应 access/action policy。
 - runtime config 可以影响 policy 实例、tool 可见性、默认 tool required caps 的 bootstrap
   wiring；不能在 tool helper/access helper 中临时跳过 caps gate。
 
-当前实现状态：
+待补缺口：
 
-- 已实现：`ActionMeta::metadata().required_capabilities` + `PolicyEngine::grant` 的内建
-  capability gate。
-- 已实现：legacy/typed tool request 入口当前会根据 tool name/payload 派生
-  `required_capabilities`，并由 kernel 检查 pack/token boundary。
-- 未完成：统一 context 中的 effective caps 仍基本来自 token，尚未实现 tool->tool child
-  context 的 cap narrowing。
-- 未完成：`ToolImpl` descriptor/path 解耦后，tool default caps 应来自 descriptor，调用
-  override 只在 app-owned plane 构造 child context 时生效。
+- 统一 context 中的 effective caps 仍基本来自 token，尚未实现 tool->tool child context
+  的 cap narrowing。
+- `ToolImpl` descriptor/path 解耦后，tool default caps 应来自 descriptor，调用 override
+  只在 plane 构造 child context 时生效。
 
 ## Config -> Policy 路径
 
@@ -121,19 +118,15 @@ config
 - web/network/memory 等后续 policy：同样由 app bootstrap 从 config 构造 policy，注册到
   pipeline；tool helper 只解析输入和调用 access。
 
-## 基础小改动优先队列
+## 后续变更约束
 
-这些改动不改变架构终局，但会减少后续大迁移的噪音。后续实现应优先以最小提交完成
-这些地基项，再做 `ToolPath` / aggregate `ReadTool` / legacy adapter 删除。
+这些不是状态清单，而是后续每个最小提交都要继续遵守的约束。
 
 1. Cargo workspace dependency hygiene：
    - 新增或迁移内部 Loong crate 依赖时，先在根 `Cargo.toml` 的
      `[workspace.dependencies]` 加一条统一声明；
    - 叶子 crate 使用 `loong-*.workspace = true`，不要重复写
      `package/version/path`；
-   - 已完成当前 access/action/tool 链：
-     `loong-access`、`loong-contracts`、`loong-core`、`loong-kernel`、
-     `loong-plugin-sdk`、`loong-tools`；
    - 历史 daemon/spec/bridge 依赖不要混进功能提交里大扫除，除非该提交正好触碰这些
      crate。
 
@@ -158,15 +151,14 @@ config
      metadata；
    - 不能提供从外部构造或复制 grant 的 API；
    - 执行入口仍然消费 `Granted<A>`，例如 `Granted<A>::run(ctx)` 或
-     `ToolPlane::invoke(Granted<AppToolInvocationAction>, &ctx)`。
+     `ToolPlane::invoke(Granted<ToolInvocationAction>, &ctx)`。
 
 5. `ActionMeta::payload` borrowing hygiene：
-   - 已完成：`ActionMeta::payload(&self) -> Cow<'_, Value>`；
+   - 保持 `ActionMeta::payload(&self) -> Cow<'_, Value>`；
    - 不提供默认 `Null`，每个 action 都必须显式声明自己的 type-erased payload；
    - 对天然可借用的 action，返回 `Cow::Borrowed(&self.payload)`；
    - 对需要临时构造 JSON view 的 action，返回 `Cow::Owned(json!(...))`；
-   - 这已经在搬 `ToolInvocationAction` 或拆 `ToolSpec.path` 之前完成，后续 action 迁移
-     不应复制旧的 owned `Value` 签名。
+   - 后续 action 迁移不应复制旧的 owned `Value` 签名。
 
 6. Comment audit hygiene：
    - 架构边界变更必须补少量注释，说明 ownership 和 why。注释不是“解释代码在做什么”，
@@ -184,9 +176,9 @@ config
      - `crates/app/src/context.rs`：`AppExecutionContext::access()` / `KernelAccess` impl
        附近要讲清 `AccessCx::new(...)` 只应出现在 concrete context 的 `access()` 实现里；
        普通 tool/action 调用点应使用 `ctx.access()`，不要恢复 `kernel.access(ctx)`。
-     - `crates/app/src/tools/plane.rs`：注释必须讲清 app owns typed plane，kernel 不持有
-       typed registry；plane 按 path resolve，不按 payload claim；`invoke` 消费
-       `Granted<AppToolInvocationAction>`，所以 concrete tool implementer 不需要也不能自己做
+     - `crates/app/src/tools/plane.rs`：注释必须讲清 `loong-app::tools::plane`
+       owns typed plane，kernel 不持有 typed registry；plane 按 path resolve，不按 payload claim；`invoke` 消费
+       `Granted<ToolInvocationAction>`，所以 concrete tool implementer 不需要也不能自己做
        audit/grant。
      - `crates/app/src/tools/mod.rs`：typed dispatch 边界附近要讲清它只是迁移期
        orchestration：resolve -> invocation action -> kernel grant -> plane invoke ->
@@ -207,16 +199,8 @@ config
    - 注释验收标准：读者只看相关类型/函数附近的注释，就能回答“这个层拥有谁”“为什么不在
      另一个 crate”“这个 fallback 是否长期存在”“谁可以做副作用”“grant 何时被消费”；
    - typed path 测试只断言 typed audit，legacy path 测试只断言 legacy audit；
-   - 已完成当前宽松断言清理：不新增 `PlaneInvoked | ToolInvocation` 这种宽松断言；
+   - 不新增 `PlaneInvoked | ToolInvocation` 这种宽松断言；
    - 模块测试继续放对应模块下，例如 `tools/plane/tests.rs`、`file/tests.rs`。
-
-7. Tool invocation audit payload hygiene：
-   - 已完成：`AuditEventKind::ToolInvocation` 记录 `path_display: String`，不再持有
-     contracts/core 定义的 concrete `ToolPath`；
-   - 这只修正 audit payload。`Kernel::record_tool_invocation` 当前仍接收旧 `ToolPath`，
-     因为 `ToolInvocationAction` 还没从 core/global path 迁走；
-   - 后续搬 `ToolInvocationAction` 时，kernel API 应进一步改成只依赖 `ActionMeta` 或
-     plane-provided display path。
 
 ## Tool Path
 
@@ -241,13 +225,14 @@ trait ToolPlane<C: ContextFactory> {
     type Path: Clone + Ord;
 }
 
-struct AppToolPlane<C> {
-    tools: BTreeMap<AppToolPath, RegisteredTool<C>>,
+struct ToolRegistry<C> {
+    tools: BTreeMap<ToolPath, RegisteredTool<C>>,
 }
 ```
 
-`AppToolPath` 可以是 `Vec<String>`、smallvec、interned path、trie key，或后续其它形状。
-这是 app plane 的 registry path decision，不是 contracts/core 的决定。
+这里的 `ToolPath` 是 `loong-app::tools::plane` 内的 plane-local path，可以是
+`Vec<String>`、smallvec、interned path、trie key，或后续其它形状。层级由模块路径表达，
+不靠类型名前缀表达；也不是 contracts/core 的决定。
 
 tool 自身返回无 path descriptor：
 
@@ -266,7 +251,7 @@ pub struct RegisteredToolSpec<P> {
 因此新增 tool 的 path 只出现在注册点：
 
 ```rust
-app_tool_plane.register(app_tool_path(["read"]), ReadTool);
+tool_plane.register(tool_path(["read"]), ReadTool);
 ```
 
 具体 `Path` 需要能给 policy/audit 提供稳定显示值，但这是通过 `ActionMeta` /
@@ -280,11 +265,11 @@ Tool dispatch 也是 action，但它不是 `FsReadAction` 这种 domain side-eff
 ```text
 App execute_kernel_tool_request
   -> canonicalize request
-  -> AppToolPlane.resolve(path)
-  -> AppToolInvocationAction(path, required_caps, payload)
+  -> loong-app::tools::plane::ToolPlane.resolve(path)
+  -> loong-app::tools::plane::ToolInvocationAction(path, required_caps, payload)
   -> Kernel::grant(action)
-  -> ActionGrant<AppToolInvocationAction>
-  -> AppToolPlane.invoke(Granted<AppToolInvocationAction>, &ctx)
+  -> ActionGrant<ToolInvocationAction>
+  -> ToolPlane.invoke(Granted<ToolInvocationAction>, &ctx)
   -> ToolImpl::execute(&ctx, input)
   -> ctx.access().fs().read_file(...)
   -> FsResolvePathAction
@@ -299,14 +284,14 @@ App execute_kernel_tool_request
 
 这意味着 tool invocation policy 和 fs read policy 是两层不同授权：
 
-- `AppToolInvocationAction`：允许调用 app plane 上某个 path 的 tool。
+- `ToolInvocationAction`：允许调用 app plane 上某个 path 的 tool。
 - `FsResolvePathAction`：允许把 raw path 解析成 `GrantedPath`。
 - `FsReadAction`：允许读取某个 `GrantedPath`。
 
 不能用 `AuthorizedToolInvocation` 这类 receipt workaround 表达这个关系；应该返回
-`ActionGrant<AppToolInvocationAction>` / `Granted<AppToolInvocationAction>`。
+`ActionGrant<ToolInvocationAction>` / `Granted<ToolInvocationAction>`。
 
-本轮迁移不在 core 保留这个 action。`AppToolInvocationAction` 先放在
+本轮迁移不在 core 保留这个 action。`ToolInvocationAction` 放在
 `crates/app/src/tools/plane.rs` 附近，使用 app plane 自己的 path 类型和 stable display。
 如果后续需要在 core 提供公共 helper，只能是泛型：
 
@@ -390,9 +375,9 @@ grant.granted.run(ctx).await
 
 ## ToolPlane
 
-`ToolPlane` 属于 app runtime，不属于 kernel。
+`ToolPlane` 属于 `loong-app::tools::plane` runtime，不属于 kernel。
 
-目标 app-owned plane 形状：
+目标 plane 形状：
 
 ```rust
 trait ToolPlane<C: ContextFactory> {
@@ -552,70 +537,35 @@ generic grant 只负责授权，tool invocation audit obligation 留在 app orch
 
 按最小提交顺序推进：
 
-0. 已完成：基础小改动队列：
-   - 对本轮要碰的 crate 先做 workspace dependency hygiene；
-   - 把 `ActionMeta::payload` 改成 `Cow<'_, Value>`；
-   - 执行 comment audit checklist，补齐 concrete tools crate、`KernelAccess`、grant
-     inspection、typed plane、kernel grant/audit、legacy read bridge 等边界注释；
-   - 清掉会掩盖 route 回退的宽松测试断言；
-   - 每个小项已独立提交，没有和下面的大结构迁移混在一起。
-
-1. 已完成：修正 `ToolInvocation` audit shape：
-   - 保留 `AuditEventKind::ToolInvocation`；
-   - 把 `path: ToolPath` 改成 `path_display: String` 或等价 audit-only 表示；
-   - 保留 `ToolInvocationOutcome`，但注释说明它只描述 invocation attempt 结果；
-   - 更新 kernel/app 测试，typed path 不再依赖全局 `ToolPath`。
-
-2. 已完成：建立 fs path grant 基础：
-   - 在 `loong_access::fs` 增加 `FsResolvePathAction` 和 `GrantedPath`；
-   - `GrantedPath` 构造函数保持模块私有，不提供 `From<PathBuf>`；
-   - `FsResolvePathAction` 的 metadata/payload 显式包含 raw path；
-   - `FsAccess` 从 `FsAccessContext` 读取 `fs_resolution_root()` / `fs_allowed_roots()`，
-     并准备 resolved path facts；
-   - `FsResolvePathAction::run` 不再读取 context 或重新 canonicalize；它只消费
-     `Granted<FsResolvePathAction>` 并 mint `GrantedPath`；
-   - `FsAccess::read_file` 改成先 grant/run resolve action，再 grant/run read action；
-   - `FsReadAction::new` 改成接收 `GrantedPath`，不再接收 `CanonicalPath`。
-
-3. 已完成：把 allowed roots / path escape 收敛到 path-resolution policy：
-   - `FsReadAction` 不读取 workspace root，也不表达 allowed roots；
-   - outside-allowed-roots / path escape 属于 `FsResolvePathAction` 的治理失败，不应散落成
-     read/glob/search 各自的特殊判断；
-   - 保留 canonicalize / symlink resolution 的共享实现，但不要让公开 API 暴露
-     `CanonicalPath` 作为“已经安全”的伪授权；
-   - policy report 应能说明是哪条 path policy deny，而不是靠 access error helper
-     猜测 `is_policy_denial()`。
-
-4. 下一步：把 `ToolInvocationAction` 收回 app-owned plane：
+1. 把 `ToolInvocationAction` 收回 `loong-app::tools::plane`：
    - 先写失败测试：`loong-core` 不再需要 `ToolPath` 才能编译 tool abstraction，
      app typed tool invocation 仍然产生 `ToolInvocation` audit；
-   - 在 `crates/app/src/tools/plane.rs` 附近定义 `AppToolPath` 和
-     `AppToolInvocationAction`；
-   - `AppToolPlane` 的 trait/struct 使用自己的 `Path`，不再直接使用 contracts
-     `ToolPath`；
+   - 在 `crates/app/src/tools/plane.rs` 附近定义 plane-local `ToolPath` 和
+     `ToolInvocationAction`；
+   - `ToolPlane` 的 trait/struct 使用自己的 `Path`，不再直接使用 contracts `ToolPath`；
    - action payload 继续携带 agent/tool 原始 `payload: Value`，grant 后 plane 再 parse
      concrete input；
-   - `AppToolInvocationAction` 持有 app plane 自己的 path display/registry path，不把
+   - `ToolInvocationAction` 持有 app plane 自己的 path display/registry path，不把
      concrete path type 泄漏进 contracts/core；
    - kernel grant API 只接受 concrete `ActionMeta` 和 context，返回 `ActionGrant<A>`；
      kernel 不知道 app plane path type，也不返回 `AuthorizedToolInvocation` receipt；
    - 删除 `loong-core::tool::ToolInvocationAction`；本轮不添加 core generic helper；
-   - 更新注释：core 只承载 tool abstraction，app owns typed plane，kernel 只 grant/audit
-     action，不执行 typed tool；
+   - 更新注释：core 只承载 tool abstraction，`loong-app::tools::plane` owns typed
+     plane，kernel 只 grant/audit action，不执行 typed tool；
    - 完成线：
      - `crates/loong-core/src/tool.rs` 不再 import `loong_contracts::ToolPath`；
      - `crates/app/src/tools/plane.rs` 不再 import contracts `ToolPath` 或 core
        `ToolInvocationAction`；
      - `Kernel::grant_tool_invocation` 被 generic action grant 取代，或至少不再接收
        path-specific action type；
-     - app typed read path 仍先 grant invocation action，再 `AppToolPlane::invoke`；
+     - app typed read path 仍先 grant invocation action，再 `ToolPlane::invoke`；
      - pack/token/caps/policy denial 仍记录 `ToolInvocationOutcome::Denied`，且只记录一次；
      - typed path tests 只接受 `ToolInvocation` audit。
    - 验证：`cargo test -p loong-core tool`、`cargo test -p loong-kernel tool_invocation`、
      `cargo test -p loong-app kernel_routed_file_read`、`cargo check -p loong-core -p
      loong-kernel -p loong-app -p loong-tools -p loong`。
 
-5. 实现 effective caps / child context narrowing：
+2. 实现 effective caps / child context narrowing：
    - `AppExecutionContext` 增加 explicit effective caps 字段，`PolicyContext::capabilities()`
      返回该字段，而不是临时从 token 拷贝；
    - 顶层 tool invocation context 由 token caps 初始化；
@@ -628,19 +578,19 @@ generic grant 只负责授权，tool invocation audit obligation 留在 app orch
    - 测试覆盖：override 缩窄生效、override 扩大被拒、父 context 缺 cap 时 child 不会获得
      该 cap、domain action gate 读取的是 child effective caps。
 
-6. 清理 tool descriptor/path 耦合：
+3. 清理 tool descriptor/path 耦合：
    - `ToolImpl::spec()` 返回无 path descriptor；
    - `RegisteredTool` 只保存 descriptor/provenance/registration metadata；
-   - `AppToolPlane::register(path, tool)` 组合 path + descriptor；
+   - `ToolPlane::register(path, tool)` 组合 path + descriptor；
    - `ReadFileTool::spec()` 不再硬编码 `"read"`。
 
-7. 收敛 app typed dispatch 边界：
+4. 收敛 app typed dispatch 边界：
    - 从 `execute_kernel_tool_request` 中抽出一个聚焦的 app orchestration 边界；
    - 该边界只做 resolve -> build invocation action -> kernel grant -> plane invoke ->
      kernel audit；
    - 不引入 `AuthorizedToolInvocation` receipt workaround。
 
-8. 改 `read` 为 aggregate typed tool：
+5. 改 `read` 为 aggregate typed tool：
    - 删除 payload-claim/fallback 思路；
    - `ReadTool` 内部解析 `path/query/pattern/glob`；
    - `path/query/glob` 分别构造不同 action；
@@ -648,16 +598,16 @@ generic grant 只负责授权，tool invocation audit obligation 留在 app orch
    - `read { query }` / `read { pattern }` / `read { glob }` 迁入 typed path 后，旧
      direct read legacy bridge 删除。
 
-9. 继续迁移剩余 legacy side-effect tools：
+6. 继续迁移剩余 legacy side-effect tools：
    - write/edit/config.import 按同样 access-backed action 模式迁移；
    - 迁移完成后删除 `FilePolicyExtension` 对应旧分支；
    - 逐步清空 `Kernel::execute_tool_core` 调用面，再删除 `LegacyToolPlane` 和 adapter
      trait。
 
-10. 测试清理：
+7. 测试清理：
    - typed tool 测试只接受 `ToolInvocation` audit；
    - legacy adapter 测试只接受 `PlaneInvoked` audit；
    - 不用 `PlaneInvoked | ToolInvocation` 这种宽松断言；
    - 每个最小提交跑对应 targeted tests、`cargo check` 和 `git diff --check`。
 
-11. 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration。
+8. 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration。
