@@ -293,11 +293,6 @@ pub(crate) fn authorize_direct_file_payload(
     payload: &serde_json::Map<String, serde_json::Value>,
     rt: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<(), String> {
-    if super::canonical_tool_name(tool_name) == "read" {
-        // `read` is migrated to typed access/action/policy. Keep this legacy
-        // extension from becoming a second authorization path if miscalled.
-        return Ok(());
-    }
     // Kernel-routed `write` is also migrated, but legacy direct write still
     // enters this function through `execute_tool_core_with_config`. Do not add
     // new typed-tool policy here; delete this branch with the legacy direct
@@ -460,22 +455,6 @@ mod tests {
 
         assert!(error.starts_with("policy_denied: "));
         assert!(error.contains("outside.toml"));
-    }
-
-    #[test]
-    fn direct_file_payload_authorization_skips_migrated_read() {
-        let root_dir = tempfile::tempdir().expect("tempdir");
-        let runtime_config = crate::tools::runtime_config::ToolRuntimeConfig {
-            file_root: Some(root_dir.path().to_path_buf()),
-            ..crate::tools::runtime_config::ToolRuntimeConfig::default()
-        };
-        let payload_value = json!({"path": "../outside.txt"});
-        let payload = payload_value
-            .as_object()
-            .cloned()
-            .expect("payload should be an object");
-
-        assert!(authorize_direct_file_payload("file.read", &payload, &runtime_config).is_ok());
     }
 
     // ── Symlink-aware filesystem tests ──────────────────────────────────
