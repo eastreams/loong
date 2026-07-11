@@ -1,6 +1,4 @@
-use std::collections::BTreeSet;
-#[cfg(feature = "file")]
-use std::path::PathBuf;
+use std::{collections::BTreeSet, path::PathBuf};
 
 use async_trait::async_trait;
 use loong_contracts::{
@@ -14,7 +12,6 @@ use loong_core::{
 use loong_kernel::KernelAccess;
 use serde_json::{Value, json};
 
-#[cfg(feature = "file")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FileReadSelection {
     content: String,
@@ -69,35 +66,24 @@ where
         ctx: &C::Cx<'_>,
         input: Self::Input,
     ) -> Result<Self::Output, ToolExecutionError> {
-        #[cfg(not(feature = "file"))]
-        {
-            let _ = (ctx, input);
-            Err(ToolExecutionError::execution(
-                "file tool is disabled in this build (enable feature `file`)",
-            ))
-        }
+        // ReadFileTool owns input parsing and response shaping only. The
+        // filesystem side effect must stay behind loong_access::fs, where
+        // path resolution and policy-granted execution are enforced.
+        let output = ctx
+            .access()
+            .fs()
+            .read_file(input.target.as_str())
+            .await
+            .map_err(|error| {
+                render_fs_read_error(
+                    error.to_string(),
+                    loong_kernel::access::fs_read_error_is_policy_denial(&error),
+                )
+            })
+            .map_err(ToolExecutionError::execution)?;
 
-        #[cfg(feature = "file")]
-        {
-            // ReadFileTool owns input parsing and response shaping only. The
-            // filesystem side effect must stay behind loong_access::fs, where
-            // path resolution and policy-granted execution are enforced.
-            let output = ctx
-                .access()
-                .fs()
-                .read_file(input.target.as_str())
-                .await
-                .map_err(|error| {
-                    render_fs_read_error(
-                        error.to_string(),
-                        loong_kernel::access::fs_read_error_is_policy_denial(&error),
-                    )
-                })
-                .map_err(ToolExecutionError::execution)?;
-
-            file_read_tool_outcome(input, output.path, output.bytes)
-                .map_err(ToolExecutionError::execution)
-        }
+        file_read_tool_outcome(input, output.path, output.bytes)
+            .map_err(ToolExecutionError::execution)
     }
 }
 
@@ -109,32 +95,23 @@ where
     C: ContextFactory + Send + Sync,
     for<'a> C::Cx<'a>: KernelAccess<C> + FsAccessContext + Sync,
 {
-    #[cfg(not(feature = "file"))]
-    {
-        let _ = (request, ctx);
-        return Err("file tool is disabled in this build (enable feature `file`)".to_owned());
-    }
+    // Compatibility entry for the legacy direct-read bridge. It still uses
+    // the same access path as the typed tool so migrated reads do not regain
+    // a direct std::fs side effect here.
+    let parsed = parse_file_read_request(&request)?;
+    let output = ctx
+        .access()
+        .fs()
+        .read_file(parsed.target.as_str())
+        .await
+        .map_err(|error| {
+            render_fs_read_error(
+                error.to_string(),
+                loong_kernel::access::fs_read_error_is_policy_denial(&error),
+            )
+        })?;
 
-    #[cfg(feature = "file")]
-    {
-        // Compatibility entry for the legacy direct-read bridge. It still uses
-        // the same access path as the typed tool so migrated reads do not regain
-        // a direct std::fs side effect here.
-        let parsed = parse_file_read_request(&request)?;
-        let output = ctx
-            .access()
-            .fs()
-            .read_file(parsed.target.as_str())
-            .await
-            .map_err(|error| {
-                render_fs_read_error(
-                    error.to_string(),
-                    loong_kernel::access::fs_read_error_is_policy_denial(&error),
-                )
-            })?;
-
-        file_read_outcome(parsed, output.path, output.bytes)
-    }
+    file_read_outcome(parsed, output.path, output.bytes)
 }
 
 fn optional_positive_usize_field(
@@ -162,7 +139,6 @@ fn optional_positive_usize_field(
         })
 }
 
-#[cfg(feature = "file")]
 fn parse_file_read_request(request: &ToolCoreRequest) -> Result<FileReadRequest, String> {
     parse_file_read_payload(
         request.tool_name.clone(),
@@ -204,7 +180,6 @@ fn parse_file_read_payload(
     })
 }
 
-#[cfg(feature = "file")]
 fn render_fs_read_error(rendered: String, policy_denied: bool) -> String {
     if policy_denied {
         format!("policy_denied: {rendered}")
@@ -213,7 +188,6 @@ fn render_fs_read_error(rendered: String, policy_denied: bool) -> String {
     }
 }
 
-#[cfg(feature = "file")]
 fn file_read_outcome(
     request: FileReadRequest,
     resolved: PathBuf,
@@ -226,7 +200,6 @@ fn file_read_outcome(
     })
 }
 
-#[cfg(feature = "file")]
 fn file_read_tool_outcome(
     request: FileReadRequest,
     resolved: PathBuf,
@@ -274,7 +247,6 @@ fn file_read_tool_outcome(
     })
 }
 
-#[cfg(feature = "file")]
 fn clip_file_read_content(content: &str, max_bytes: usize) -> FileReadSelection {
     let content_bytes = content.as_bytes();
     let truncated = content_bytes.len() > max_bytes;
@@ -294,7 +266,6 @@ fn clip_file_read_content(content: &str, max_bytes: usize) -> FileReadSelection 
     }
 }
 
-#[cfg(feature = "file")]
 fn select_file_read_content(
     file_text: &str,
     max_bytes: usize,
@@ -333,7 +304,6 @@ fn select_file_read_content(
     Ok(selection)
 }
 
-#[cfg(feature = "file")]
 fn user_visible_tool_name(tool_name: &str) -> String {
     match tool_name {
         "file.read" => "read".to_owned(),

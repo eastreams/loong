@@ -113,10 +113,15 @@ where
 pub(crate) fn app_tool_plane() -> &'static dyn ToolPlane<AppContextFactory> {
     static TOOL_PLANE: OnceLock<AppToolPlane<AppContextFactory>> = OnceLock::new();
     TOOL_PLANE.get_or_init(|| {
-        let mut plane = AppToolPlane::new();
-        plane
-            .register(ToolPath::from("read"), loong_tools::file::ReadFileTool)
-            .expect("builtin app tools must register without duplicates");
+        let plane = AppToolPlane::new();
+        #[cfg(feature = "tool-file")]
+        let plane = {
+            let mut plane = plane;
+            plane
+                .register(ToolPath::from("read"), loong_tools::file::ReadFileTool)
+                .expect("builtin app tools must register without duplicates");
+            plane
+        };
         plane
     })
 }
