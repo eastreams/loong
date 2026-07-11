@@ -22,7 +22,6 @@ use loong_core::{
         engine::PolicyEngine,
         policy::{Policy, PolicyAny},
     },
-    tool::ToolInvocationAction,
 };
 
 use crate::{
@@ -178,10 +177,6 @@ impl<C: ContextFactory> PolicyPipeline<C> {
         for<'a> C::Cx<'a>: FsPathPolicyContext,
     {
         self.push_policy::<FsResolvePathAction, _>(FsResolvePathAllowedRootsPolicy);
-    }
-
-    pub fn push_tool_invocation_allow_policy(&mut self) {
-        self.push_policy::<ToolInvocationAction, _>(ToolInvocationAllowPolicy);
     }
 
     /// Register a broad gate before typed action policy.
@@ -514,27 +509,6 @@ where
             decision: PolicyDecision::Continue,
             predicate: Some("action kind is not legacy kernel operation".into()),
             reason: "legacy fallback does not grant typed actions".into(),
-        }
-    }
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-struct ToolInvocationAllowPolicy;
-
-#[async_trait]
-impl<C> Policy<C, ToolInvocationAction> for ToolInvocationAllowPolicy
-where
-    C: ContextFactory + Send + Sync,
-{
-    fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("tool-invocation-allow")
-    }
-
-    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &ToolInvocationAction) -> PolicyGrant {
-        PolicyGrant {
-            decision: PolicyDecision::Allow,
-            predicate: Some("tool invocation passed capability gate".into()),
-            reason: "tool invocation allowed by app policy".into(),
         }
     }
 }

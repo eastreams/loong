@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, fmt};
+use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -6,42 +6,8 @@ use thiserror::Error;
 
 use crate::Capability;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct ToolPath(String);
-
-impl ToolPath {
-    #[must_use]
-    pub fn new(path: impl Into<String>) -> Self {
-        Self(path.into())
-    }
-
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for ToolPath {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
-impl From<&str> for ToolPath {
-    fn from(path: &str) -> Self {
-        Self::new(path)
-    }
-}
-
-impl From<String> for ToolPath {
-    fn from(path: String) -> Self {
-        Self::new(path)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolSpec {
-    pub path: ToolPath,
     pub description: String,
     pub required_capabilities: BTreeSet<Capability>,
 }

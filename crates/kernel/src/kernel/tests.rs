@@ -1,39 +1,38 @@
-use std::collections::BTreeSet;
+use std::{borrow::Cow, collections::BTreeSet};
 
 use loong_contracts::{
-    AuditEventKind, Capability, ExecutionRoute, HarnessKind, ToolInvocationOutcome, ToolPath,
+    AuditEventKind, Capability, ExecutionRoute, HarnessKind, ToolInvocationOutcome,
     VerticalPackManifest,
 };
-use loong_core::tool::ToolInvocationAction;
+use loong_core::policy::action::{ActionMeta, ActionMetadata};
 use serde_json::json;
 
 use super::Kernel;
 use crate::test_support::{TestContextFactory, TestPolicyContext};
-use crate::{InMemoryAuditSink, PolicyPipeline, SystemClock};
+use crate::{AllowPolicy, InMemoryAuditSink, PolicyPipeline, SystemClock};
 use std::sync::Arc;
 
 fn kernel_with_tool_invocation_policy() -> (Kernel<TestContextFactory>, Arc<InMemoryAuditSink>) {
     let mut policy = PolicyPipeline::<TestContextFactory>::new();
-    policy.push_tool_invocation_allow_policy();
+    policy.push_fallback_policy(AllowPolicy);
     let audit = Arc::new(InMemoryAuditSink::default());
     let kernel = Kernel::with_policy_runtime(policy, Arc::new(SystemClock), audit.clone());
     (kernel, audit)
 }
 
 #[tokio::test]
-async fn grant_tool_invocation_grants_without_recording_tool_outcome() {
+async fn grant_action_grants_without_recording_tool_outcome() {
     let (mut kernel, audit) = kernel_with_tool_invocation_policy();
     register_tool_pack(&mut kernel, "typed-auth");
     let token = kernel
         .issue_token("typed-auth", "agent-typed", 120)
         .expect("token should issue");
-    let path = ToolPath::from("read");
 
     let _authorized = kernel
-        .grant_tool_invocation(
+        .grant_action(
             "typed-auth",
             &token,
-            tool_invocation_action(path, BTreeSet::from([Capability::InvokeTool])),
+            tool_invocation_action("read", BTreeSet::from([Capability::InvokeTool])),
             &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
         )
         .await
@@ -54,13 +53,13 @@ async fn record_tool_invocation_records_typed_completed_event() {
     let token = kernel
         .issue_token("typed-completed", "agent-typed", 120)
         .expect("token should issue");
-    let path = ToolPath::from("read");
+    let path = "read".to_owned();
     let ctx = TestPolicyContext::from_token(&token, kernel.now_epoch_s());
     let grant = kernel
-        .grant_tool_invocation(
+        .grant_action(
             "typed-completed",
             &token,
-            tool_invocation_action(path.clone(), BTreeSet::from([Capability::InvokeTool])),
+            tool_invocation_action(path.as_str(), BTreeSet::from([Capability::InvokeTool])),
             &ctx,
         )
         .await
@@ -101,13 +100,13 @@ async fn record_tool_invocation_records_typed_failed_event() {
     let token = kernel
         .issue_token("typed-failed", "agent-typed", 120)
         .expect("token should issue");
-    let path = ToolPath::from("read");
+    let path = "read";
     let policy_context = TestPolicyContext::from_token(&token, kernel.now_epoch_s());
     let grant = kernel
-        .grant_tool_invocation(
+        .grant_action(
             "typed-failed",
             &token,
-            tool_invocation_action(path.clone(), BTreeSet::from([Capability::InvokeTool])),
+            tool_invocation_action(path, BTreeSet::from([Capability::InvokeTool])),
             &policy_context,
         )
         .await
@@ -123,7 +122,7 @@ async fn record_tool_invocation_records_typed_failed_event() {
     kernel
         .record_tool_invocation(
             &policy_context,
-            path,
+            path.to_owned(),
             &audit_caps,
             ToolInvocationOutcome::Failed {
                 error_kind: "input".to_owned(),
@@ -150,13 +149,13 @@ async fn record_tool_invocation_records_typed_denied_event() {
     let token = kernel
         .issue_token("typed-denied", "agent-typed", 120)
         .expect("token should issue");
-    let path = ToolPath::from("read");
+    let path = "read";
     let policy_context = TestPolicyContext::from_token(&token, kernel.now_epoch_s());
     let grant = kernel
-        .grant_tool_invocation(
+        .grant_action(
             "typed-denied",
             &token,
-            tool_invocation_action(path.clone(), BTreeSet::from([Capability::InvokeTool])),
+            tool_invocation_action(path, BTreeSet::from([Capability::InvokeTool])),
             &policy_context,
         )
         .await
@@ -172,7 +171,7 @@ async fn record_tool_invocation_records_typed_denied_event() {
     kernel
         .record_tool_invocation(
             &policy_context,
-            path,
+            path.to_owned(),
             &audit_caps,
             ToolInvocationOutcome::Denied {
                 reason: "blocked by typed policy".to_owned(),
@@ -192,11 +191,36 @@ async fn record_tool_invocation_records_typed_denied_event() {
     }));
 }
 
+#[derive(Debug, Clone)]
+struct TestAction {
+    operation: String,
+    required_capabilities: Vec<Capability>,
+    payload: serde_json::Value,
+}
+
+impl ActionMeta for TestAction {
+    fn metadata(&self) -> ActionMetadata<'_> {
+        ActionMetadata {
+            kind: "tool.invoke",
+            operation: Cow::Borrowed(self.operation.as_str()),
+            required_capabilities: Cow::Borrowed(self.required_capabilities.as_slice()),
+        }
+    }
+
+    fn payload(&self) -> Cow<'_, serde_json::Value> {
+        Cow::Borrowed(&self.payload)
+    }
+}
+
 fn tool_invocation_action(
-    path: ToolPath,
+    operation: &str,
     required_capabilities: BTreeSet<Capability>,
-) -> ToolInvocationAction {
-    ToolInvocationAction::new(path, required_capabilities, json!({ "path": "notes.txt" }))
+) -> TestAction {
+    TestAction {
+        operation: operation.to_owned(),
+        required_capabilities: required_capabilities.into_iter().collect(),
+        payload: json!({ "path": "notes.txt" }),
+    }
 }
 
 fn register_tool_pack(kernel: &mut Kernel<TestContextFactory>, pack_id: &str) {

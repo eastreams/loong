@@ -1,7 +1,7 @@
+use loong_core::policy::action::ActionMeta;
 use loong_core::policy::context::ContextFactory;
 use loong_core::policy::engine::PolicyEngine;
 use loong_core::policy::grant::ActionGrant;
-use loong_core::tool::ToolInvocationAction;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
@@ -38,7 +38,7 @@ use crate::{
         ToolExtensionOutcome, ToolExtensionRequest,
     },
 };
-use loong_contracts::{ToolInvocationOutcome, ToolPath};
+use loong_contracts::ToolInvocationOutcome;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct KernelDispatch {
@@ -255,68 +255,42 @@ where
         Ok(())
     }
 
-    /// Grant one app-owned typed tool invocation without executing it.
+    /// Grant one typed action without executing it.
     ///
-    /// Tool dispatch is an action in the policy pipeline. The grant only
-    /// authorizes entering the `ToolImpl`; tool-internal side effects must
-    /// request their own access grants.
-    pub async fn grant_tool_invocation(
+    /// Kernel owns pack/token/policy authorization, but not the concrete app
+    /// registry that will consume the grant.
+    pub async fn grant_action<A>(
         &self,
         pack_id: &str,
         token: &CapabilityToken,
-        action: ToolInvocationAction,
+        action: A,
         ctx: &C::Cx<'_>,
-    ) -> Result<ActionGrant<ToolInvocationAction>, KernelError> {
+    ) -> Result<ActionGrant<A>, KernelError>
+    where
+        A: ActionMeta + 'static,
+    {
         let pack = self.get_pack(pack_id)?;
-        let path = action.path().clone();
-        let required_capabilities = action
-            .required_capabilities()
-            .iter()
-            .copied()
-            .collect::<BTreeSet<_>>();
+        let required_capabilities = {
+            let metadata = action.metadata();
+            metadata
+                .required_capabilities
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+        };
         self.assert_pack_grants(pack, &required_capabilities)?;
         let now = ctx.now_epoch_s();
         if let Err(policy_error) = self.authorize_token(pack, token, now, &required_capabilities) {
-            self.record_tool_invocation_event(
-                now,
-                Some(token.agent_id.clone()),
-                pack.pack_id.clone(),
-                path,
-                &required_capabilities,
-                ToolInvocationOutcome::Denied {
-                    reason: policy_error.to_string(),
-                    report: None,
-                },
-            )?;
+            self.record_authorization_denial(pack, token, now, &policy_error)?;
             return Err(KernelError::Policy(policy_error));
         }
 
         match self.policy.grant(ctx, action).await {
             Ok(grant) => Ok(grant),
             Err(grant_error) => {
-                let outcome = match &grant_error {
-                    loong_core::PolicyGrantError::MissingCapability { capability } => {
-                        ToolInvocationOutcome::Denied {
-                            reason: format!("missing capability: {capability:?}"),
-                            report: None,
-                        }
-                    }
-                    loong_core::PolicyGrantError::Denied { report, reason } => {
-                        ToolInvocationOutcome::Denied {
-                            reason: reason.to_string(),
-                            report: Some(report.clone()),
-                        }
-                    }
-                };
-                self.record_tool_invocation_event(
-                    now,
-                    Some(token.agent_id.clone()),
-                    pack.pack_id.clone(),
-                    path,
-                    &required_capabilities,
-                    outcome,
-                )?;
-                Err(KernelError::Policy(policy_engine_error(grant_error)))
+                let policy_error = policy_engine_error(grant_error);
+                self.record_authorization_denial(pack, token, now, &policy_error)?;
+                Err(KernelError::Policy(policy_error))
             }
         }
     }
@@ -329,7 +303,7 @@ where
     pub fn record_tool_invocation(
         &self,
         ctx: &C::Cx<'_>,
-        path: ToolPath,
+        path_display: impl Into<String>,
         required_capabilities: &BTreeSet<Capability>,
         outcome: ToolInvocationOutcome,
     ) -> Result<(), KernelError> {
@@ -337,7 +311,7 @@ where
             ctx.now_epoch_s(),
             Some(ctx.token().agent_id.clone()),
             ctx.pack().pack_id.clone(),
-            path,
+            path_display.into(),
             required_capabilities,
             outcome,
         )
@@ -996,7 +970,7 @@ where
         timestamp_epoch_s: u64,
         agent_id: Option<String>,
         pack_id: String,
-        path: ToolPath,
+        path_display: String,
         required_capabilities: &BTreeSet<Capability>,
         outcome: ToolInvocationOutcome,
     ) -> Result<(), KernelError> {
@@ -1005,7 +979,7 @@ where
             agent_id,
             AuditEventKind::ToolInvocation {
                 pack_id,
-                path_display: path.to_string(),
+                path_display,
                 required_capabilities: required_capabilities.iter().copied().collect(),
                 outcome,
             },

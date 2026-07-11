@@ -1,74 +1,10 @@
-use std::{borrow::Cow, collections::BTreeSet, time::SystemTime};
+use std::time::SystemTime;
 
 use async_trait::async_trait;
-use loong_contracts::{
-    Capability, ToolExecutionError, ToolInputError, ToolOutcome, ToolPath, ToolSpec,
-};
-use serde_json::{Value, json};
+use loong_contracts::{ToolExecutionError, ToolInputError, ToolOutcome, ToolSpec};
+use serde_json::Value;
 
-use crate::policy::{
-    action::{ActionMeta, ActionMetadata},
-    context::ContextFactory,
-};
-
-/// Policy action for allowing app orchestration to call one tool.
-///
-/// This action gates dispatch into a `ToolImpl`. It does not authorize the
-/// side effects the tool may perform internally; those must still pass through
-/// their own access actions such as filesystem read/write.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ToolInvocationAction {
-    path: ToolPath,
-    required_capabilities: Vec<Capability>,
-    payload: Value,
-}
-
-impl ToolInvocationAction {
-    #[must_use]
-    pub fn new(
-        path: ToolPath,
-        required_capabilities: BTreeSet<Capability>,
-        payload: Value,
-    ) -> Self {
-        Self {
-            path,
-            required_capabilities: required_capabilities.into_iter().collect(),
-            payload,
-        }
-    }
-
-    #[must_use]
-    pub fn path(&self) -> &ToolPath {
-        &self.path
-    }
-
-    #[must_use]
-    pub fn required_capabilities(&self) -> &[Capability] {
-        self.required_capabilities.as_slice()
-    }
-
-    #[must_use]
-    pub fn into_parts(self) -> (ToolPath, Vec<Capability>, Value) {
-        (self.path, self.required_capabilities, self.payload)
-    }
-}
-
-impl ActionMeta for ToolInvocationAction {
-    fn metadata(&self) -> ActionMetadata<'_> {
-        ActionMetadata {
-            kind: "tool.invoke",
-            operation: Cow::Borrowed(self.path.as_str()),
-            required_capabilities: Cow::Borrowed(self.required_capabilities.as_slice()),
-        }
-    }
-
-    fn payload(&self) -> Cow<'_, Value> {
-        Cow::Owned(json!({
-            "tool_path": self.path.as_str(),
-            "payload": self.payload,
-        }))
-    }
-}
+use crate::policy::context::ContextFactory;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolProvenance {

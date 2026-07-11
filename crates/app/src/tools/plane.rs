@@ -1,14 +1,139 @@
-use std::{collections::BTreeMap, sync::OnceLock};
-
-use async_trait::async_trait;
-use loong_contracts::{ToolExecutionError, ToolInputError, ToolOutcome, ToolPath, ToolPlaneError};
-use loong_core::{
-    policy::context::ContextFactory,
-    policy::grant::Granted,
-    tool::{RegisteredTool, ToolImpl, ToolInvocationAction, ToolProvenance},
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    sync::OnceLock,
 };
 
+use async_trait::async_trait;
+use loong_contracts::{
+    Capability, PolicyDecision, PolicyGrant, ToolExecutionError, ToolInputError, ToolOutcome,
+    ToolPlaneError,
+};
+use loong_core::{
+    policy::grant::Granted,
+    policy::{
+        action::{ActionMeta, ActionMetadata},
+        context::ContextFactory,
+        policy::Policy,
+    },
+    tool::{RegisteredTool, ToolImpl, ToolProvenance},
+};
+use serde_json::{Value, json};
+
 use crate::context::AppContextFactory;
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct ToolPath(String);
+
+impl ToolPath {
+    #[must_use]
+    pub(crate) fn new(path: impl Into<String>) -> Self {
+        Self(path.into())
+    }
+
+    #[must_use]
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ToolPath {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl From<&str> for ToolPath {
+    fn from(path: &str) -> Self {
+        Self::new(path)
+    }
+}
+
+impl From<String> for ToolPath {
+    fn from(path: String) -> Self {
+        Self::new(path)
+    }
+}
+
+/// App-plane action for authorizing entry into one registered tool.
+///
+/// This gates dispatch only. Side effects inside the tool still need their own
+/// access actions, such as fs read/write actions.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ToolInvocationAction {
+    path: ToolPath,
+    required_capabilities: Vec<Capability>,
+    payload: Value,
+}
+
+impl ToolInvocationAction {
+    #[must_use]
+    pub(crate) fn new(
+        path: ToolPath,
+        required_capabilities: BTreeSet<Capability>,
+        payload: Value,
+    ) -> Self {
+        Self {
+            path,
+            required_capabilities: required_capabilities.into_iter().collect(),
+            payload,
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn path(&self) -> &ToolPath {
+        &self.path
+    }
+
+    #[must_use]
+    pub(crate) fn required_capabilities(&self) -> &[Capability] {
+        self.required_capabilities.as_slice()
+    }
+
+    #[must_use]
+    pub(crate) fn into_parts(self) -> (ToolPath, Vec<Capability>, Value) {
+        (self.path, self.required_capabilities, self.payload)
+    }
+}
+
+impl ActionMeta for ToolInvocationAction {
+    fn metadata(&self) -> ActionMetadata<'_> {
+        ActionMetadata {
+            kind: "tool.invoke",
+            operation: Cow::Borrowed(self.path.as_str()),
+            required_capabilities: Cow::Borrowed(self.required_capabilities.as_slice()),
+        }
+    }
+
+    fn payload(&self) -> Cow<'_, Value> {
+        Cow::Owned(json!({
+            "tool_path": self.path.as_str(),
+            "payload": self.payload,
+        }))
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ToolInvocationAllowPolicy;
+
+#[async_trait]
+impl<C> Policy<C, ToolInvocationAction> for ToolInvocationAllowPolicy
+where
+    C: ContextFactory + Send + Sync,
+{
+    fn name(&self) -> Cow<'static, str> {
+        Cow::Borrowed("tool-invocation-allow")
+    }
+
+    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &ToolInvocationAction) -> PolicyGrant {
+        PolicyGrant {
+            decision: PolicyDecision::Allow,
+            predicate: Some("tool invocation passed capability gate".into()),
+            reason: "tool invocation allowed by app policy".into(),
+        }
+    }
+}
 
 /// App-owned typed tool dispatch plane.
 ///
@@ -120,7 +245,10 @@ pub(crate) fn app_tool_plane() -> &'static dyn ToolPlane<AppContextFactory> {
         let mut plane = AppToolPlane::new();
         #[cfg(feature = "tool-file")]
         plane
-            .register(ToolPath::from("read"), loong_tools::file::ReadFileTool)
+            // Only the provider-facing file-read tool is migrated here. The
+            // direct `read` facade stays on the legacy fallback path until it
+            // becomes an aggregate typed tool for path/query/glob actions.
+            .register(ToolPath::from("file.read"), loong_tools::file::ReadFileTool)
             .expect("builtin app tools must register without duplicates");
         plane
     })

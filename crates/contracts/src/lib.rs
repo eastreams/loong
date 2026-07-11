@@ -58,7 +58,7 @@ pub use secret_value::SecretValue;
 pub use task_state::TaskState;
 pub use tool_types::{
     ToolCoreOutcome, ToolCoreRequest, ToolExecutionError, ToolExtensionOutcome,
-    ToolExtensionRequest, ToolInputError, ToolOutcome, ToolPath, ToolSpec, ToolTier,
+    ToolExtensionRequest, ToolInputError, ToolOutcome, ToolSpec, ToolTier,
 };
 pub use work_types::{
     WorkRuntimeHealthSnapshot, WorkSourceKind, WorkUnitEventRecord, WorkUnitKind,

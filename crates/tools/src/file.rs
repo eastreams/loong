@@ -1,9 +1,7 @@
 use std::{collections::BTreeSet, path::PathBuf};
 
 use async_trait::async_trait;
-use loong_contracts::{
-    Capability, ToolExecutionError, ToolInputError, ToolOutcome, ToolPath, ToolSpec,
-};
+use loong_contracts::{Capability, ToolExecutionError, ToolInputError, ToolOutcome, ToolSpec};
 use loong_core::{policy::context::ContextFactory, tool::ToolImpl};
 use loong_kernel::KernelAccess;
 use serde_json::{Value, json};
@@ -46,7 +44,6 @@ where
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
-            path: ToolPath::from("read"),
             description: "Read a file from the allowed filesystem roots.".to_owned(),
             required_capabilities: BTreeSet::from([Capability::FilesystemRead]),
         }

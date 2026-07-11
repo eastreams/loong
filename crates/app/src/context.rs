@@ -509,7 +509,7 @@ pub(crate) fn build_app_policy_pipeline(
 
     // Structural policies: these are part of the app runtime shape, not derived
     // from user config.
-    policy.push_tool_invocation_allow_policy();
+    crate::tools::register_tool_invocation_policy(&mut policy);
     policy.push_fs_path_policy();
 
     // Config-derived policies: these reflect the current runtime settings.

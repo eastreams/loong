@@ -231,7 +231,7 @@ async fn kernel_routed_file_read_uses_typed_tool_registry() {
                 path_display,
                 outcome: loong_kernel::ToolInvocationOutcome::Completed,
                 ..
-            } if path_display == "read"
+            } if path_display == "file.read"
         )
     }));
     assert!(!events.iter().any(|event| {

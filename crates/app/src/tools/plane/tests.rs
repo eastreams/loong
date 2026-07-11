@@ -8,17 +8,18 @@ use std::{
 
 use async_trait::async_trait;
 use loong_contracts::{
-    Capability, ToolExecutionError, ToolInputError, ToolOutcome, ToolPath, ToolPlaneError, ToolSpec,
+    Capability, ToolExecutionError, ToolInputError, ToolOutcome, ToolPlaneError, ToolSpec,
 };
 use loong_core::{
+    policy::action::ActionMeta,
     policy::context::{CapabilityContext, ContextFactory},
     policy::engine::PolicyEngine,
-    tool::{ToolImpl, ToolInvocationAction},
+    tool::ToolImpl,
 };
 use loong_kernel::PolicyPipeline;
 use serde_json::{Value, json};
 
-use super::{AppToolPlane, ToolPlane};
+use super::{AppToolPlane, ToolInvocationAction, ToolInvocationAllowPolicy, ToolPath, ToolPlane};
 
 struct TestContextFactory;
 
@@ -45,7 +46,6 @@ impl ToolImpl<TestContextFactory> for EchoTool {
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
-            path: ToolPath::from("test.echo"),
             description: "Echo the provided message.".to_owned(),
             required_capabilities: BTreeSet::new(),
         }
@@ -70,6 +70,32 @@ impl ToolImpl<TestContextFactory> for EchoTool {
             payload: json!({ "message": input }),
         })
     }
+}
+
+#[test]
+fn tool_invocation_action_exposes_policy_metadata() {
+    let action = ToolInvocationAction::new(
+        ToolPath::from("read"),
+        BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead]),
+        json!({ "path": "notes.txt" }),
+    );
+    let metadata = action.metadata();
+
+    assert_eq!(metadata.kind, "tool.invoke");
+    assert_eq!(metadata.operation.as_ref(), "read");
+    assert_eq!(
+        metadata
+            .required_capabilities
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([Capability::FilesystemRead, Capability::InvokeTool])
+    );
+    let expected_payload = json!({
+        "tool_path": "read",
+        "payload": { "path": "notes.txt" }
+    });
+    assert_eq!(action.payload().as_ref(), &expected_payload);
 }
 
 #[tokio::test]
@@ -158,7 +184,7 @@ async fn tool_invocation_grant(
     payload: Value,
 ) -> loong_core::policy::grant::Granted<ToolInvocationAction> {
     let mut policy = PolicyPipeline::<TestContextFactory>::new();
-    policy.push_tool_invocation_allow_policy();
+    policy.push_policy::<ToolInvocationAction, _>(ToolInvocationAllowPolicy);
     policy
         .grant(
             &TestContext,

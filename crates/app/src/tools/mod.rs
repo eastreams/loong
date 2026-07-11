@@ -2,7 +2,6 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use loong_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolInvocationOutcome};
-use loong_core::tool::ToolInvocationAction;
 use serde_json::{Value, json};
 pub(crate) use tool_internal_context::{
     ensure_untrusted_payload_does_not_use_reserved_internal_tool_context,
@@ -135,6 +134,12 @@ pub(crate) use tool_identity::{
     model_visible_tool_name, required_capabilities_for_request,
     required_capabilities_for_tool_name_and_payload, resolve_tool_execution,
 };
+
+pub(crate) fn register_tool_invocation_policy(
+    policy: &mut loong_kernel::PolicyPipeline<crate::context::AppContextFactory>,
+) {
+    policy.push_policy::<plane::ToolInvocationAction, _>(plane::ToolInvocationAllowPolicy);
+}
 pub use tool_identity::{
     canonical_tool_name, is_known_tool_name, is_known_tool_name_in_view, user_visible_tool_name,
 };
@@ -387,6 +392,7 @@ pub(crate) async fn execute_kernel_tool_request(
     request: ToolCoreRequest,
     trusted_internal_payload: bool,
 ) -> Result<ToolCoreOutcome, loong_kernel::KernelError> {
+    let requested_tool_name = request.tool_name.clone();
     let request = ToolCoreRequest {
         tool_name: canonical_tool_name(request.tool_name.as_str()).to_owned(),
         payload: request.payload,
@@ -416,15 +422,19 @@ pub(crate) async fn execute_kernel_tool_request(
             }
         }
 
-        let typed_path = loong_contracts::ToolPath::from(request.tool_name.clone());
+        let typed_path = if matches!(requested_tool_name.as_str(), "file.read" | "file_read") {
+            plane::ToolPath::from("file.read")
+        } else {
+            plane::ToolPath::from(request.tool_name.clone())
+        };
         if app_tool_plane().contains(&typed_path) {
             // Typed migration path: app resolves the tool, kernel grants the
             // invocation action, the plane consumes the grant, then app records
-            // the typed audit outcome. Unmigrated tools fall through to the
-            // legacy kernel adapter path below.
+            // the typed audit outcome. Unmigrated tools fall through at the
+            // end of this method; old tools are not wrapped into this path.
             let caps = required_capabilities_for_request(&request);
             let tool_policy_params = json!({
-                "tool_name": &request.tool_name,
+                "tool_name": &requested_tool_name,
                 "payload": &request.payload,
             });
             let execution_context = ctx
@@ -440,10 +450,10 @@ pub(crate) async fn execute_kernel_tool_request(
                     ))
                 })?;
             let action =
-                ToolInvocationAction::new(typed_path.clone(), caps.clone(), request.payload);
+                plane::ToolInvocationAction::new(typed_path.clone(), caps.clone(), request.payload);
             let grant = ctx
                 .kernel
-                .grant_tool_invocation(ctx.pack_id(), &ctx.token, action, &execution_context)
+                .grant_action(ctx.pack_id(), &ctx.token, action, &execution_context)
                 .await?;
             let audit_path = grant.granted.as_ref().path().clone();
             let audit_caps = grant
@@ -461,7 +471,7 @@ pub(crate) async fn execute_kernel_tool_request(
                 Ok(outcome) => {
                     ctx.kernel.record_tool_invocation(
                         &execution_context,
-                        audit_path,
+                        audit_path.to_string(),
                         &audit_caps,
                         ToolInvocationOutcome::Completed,
                     )?;
@@ -475,7 +485,7 @@ pub(crate) async fn execute_kernel_tool_request(
                     let reason = tool_plane_error_reason(&error);
                     ctx.kernel.record_tool_invocation(
                         &execution_context,
-                        audit_path,
+                        audit_path.to_string(),
                         &audit_caps,
                         ToolInvocationOutcome::Failed { error_kind, reason },
                     )?;

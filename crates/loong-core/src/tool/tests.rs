@@ -9,15 +9,12 @@ use std::{
 };
 
 use async_trait::async_trait;
-use loong_contracts::{
-    Capability, ToolExecutionError, ToolInputError, ToolOutcome, ToolPath, ToolSpec,
-};
+use loong_contracts::{Capability, ToolExecutionError, ToolInputError, ToolOutcome, ToolSpec};
 use serde_json::{Value, json};
 
 use crate::{
-    policy::action::ActionMeta,
     policy::context::{CapabilityContext, ContextFactory},
-    tool::{RegisteredTool, ToolImpl, ToolInvocationAction, ToolProvenance},
+    tool::{RegisteredTool, ToolImpl, ToolProvenance},
 };
 
 struct TestContextFactory;
@@ -45,7 +42,6 @@ impl ToolImpl<TestContextFactory> for EchoTool {
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
-            path: ToolPath::from("test.echo"),
             description: "Echo the provided message.".to_owned(),
             required_capabilities: BTreeSet::new(),
         }
@@ -73,32 +69,6 @@ impl ToolImpl<TestContextFactory> for EchoTool {
 }
 
 #[test]
-fn tool_invocation_action_exposes_policy_metadata() {
-    let action = ToolInvocationAction::new(
-        ToolPath::from("read"),
-        BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead]),
-        json!({ "path": "notes.txt" }),
-    );
-    let metadata = action.metadata();
-
-    assert_eq!(metadata.kind, "tool.invoke");
-    assert_eq!(metadata.operation.as_ref(), "read");
-    assert_eq!(
-        metadata
-            .required_capabilities
-            .iter()
-            .copied()
-            .collect::<BTreeSet<_>>(),
-        BTreeSet::from([Capability::FilesystemRead, Capability::InvokeTool])
-    );
-    let expected_payload = json!({
-        "tool_path": "read",
-        "payload": { "path": "notes.txt" }
-    });
-    assert_eq!(action.payload().as_ref(), &expected_payload);
-}
-
-#[test]
 fn registered_tool_invokes_erased_tool_impl() {
     let executions = Arc::new(AtomicUsize::new(0));
     let tool = RegisteredTool::<TestContextFactory>::from_tool(
@@ -111,7 +81,7 @@ fn registered_tool_invokes_erased_tool_impl() {
     let outcome = block_on(tool.invoke(&TestContext, json!({ "message": "hello" })))
         .expect("tool should execute");
 
-    assert_eq!(tool.spec().path.as_str(), "test.echo");
+    assert_eq!(tool.spec().description, "Echo the provided message.");
     assert_eq!(outcome.status, "ok");
     assert_eq!(outcome.payload, json!({ "message": "hello" }));
     assert_eq!(executions.load(Ordering::Relaxed), 1);
