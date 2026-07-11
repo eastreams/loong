@@ -130,12 +130,12 @@ impl FsPathKind {
     }
 }
 
-struct GlobMatcher {
+pub(in crate::fs) struct GlobMatcher {
     regexes: Vec<regex::Regex>,
 }
 
 impl GlobMatcher {
-    fn new(pattern: &str) -> Result<Self, FsAccessError> {
+    pub(in crate::fs) fn new(pattern: &str) -> Result<Self, FsAccessError> {
         let regexes = Self::split_patterns(pattern)
             .into_iter()
             .map(|candidate| {
@@ -151,7 +151,7 @@ impl GlobMatcher {
         Ok(Self { regexes })
     }
 
-    fn is_match(&self, relative_path: &str) -> bool {
+    pub(in crate::fs) fn is_match(&self, relative_path: &str) -> bool {
         self.regexes
             .iter()
             .any(|regex| regex.is_match(relative_path))

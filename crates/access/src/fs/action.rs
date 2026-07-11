@@ -12,6 +12,7 @@ use super::path::{GrantedPath, ResolvedPath};
 const FS_RESOLVE_REQUIRED_CAPABILITIES: [Capability; 0] = [];
 const FS_READ_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 const FS_GLOB_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
+const FS_CONTENT_SEARCH_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 
 /// Typed action for resolving a raw path into a governed fs path.
 ///
@@ -193,6 +194,85 @@ impl ActionMeta for FsGlobAction {
     }
 }
 
+/// Policy-visible options for one governed content search.
+///
+/// Defaults and bounds belong to the caller/tool parser; access receives the
+/// already-selected values and records them in the action payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsContentSearchOptions {
+    pub glob: Option<String>,
+    pub max_results: usize,
+    pub max_bytes_per_file: usize,
+    pub case_sensitive: bool,
+}
+
+/// Typed action for searching text inside files under one governed root.
+///
+/// Content search reads many candidate files, so the query and optional glob
+/// filter belong to the action payload. Keeping matching inside access avoids
+/// returning broad file contents to a tool just so it can filter them itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsContentSearchAction {
+    root: GrantedPath,
+    query: String,
+    options: FsContentSearchOptions,
+}
+
+impl FsContentSearchAction {
+    #[must_use]
+    pub fn new(
+        root: GrantedPath,
+        query: impl Into<String>,
+        options: FsContentSearchOptions,
+    ) -> Self {
+        Self {
+            root,
+            query: query.into(),
+            options,
+        }
+    }
+
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        self.root.as_path()
+    }
+
+    #[must_use]
+    pub fn query(&self) -> &str {
+        self.query.as_str()
+    }
+
+    #[must_use]
+    pub fn options(&self) -> &FsContentSearchOptions {
+        &self.options
+    }
+}
+
+impl ActionMeta for FsContentSearchAction {
+    fn metadata(&self) -> ActionMetadata<'_> {
+        ActionMetadata {
+            kind: "fs.content_search",
+            operation: Cow::Borrowed("search_content"),
+            required_capabilities: Cow::Borrowed(&FS_CONTENT_SEARCH_REQUIRED_CAPABILITIES),
+        }
+    }
+
+    fn audit_resource(&self) -> Option<Cow<'_, str>> {
+        Some(self.root.as_path().display().to_string().into())
+    }
+
+    fn payload(&self) -> Cow<'_, Value> {
+        Cow::Owned(json!({
+            "root": self.root.as_path().display().to_string(),
+            "query": self.query,
+            "glob": self.options.glob.as_deref(),
+            "max_results": self.options.max_results,
+            "max_bytes_per_file": self.options.max_bytes_per_file,
+            "case_sensitive": self.options.case_sensitive,
+        }))
+    }
+}
+
 /// Filesystem action family.
 ///
 /// Keep variants here thin wrappers around typed actions so policies can
@@ -201,6 +281,7 @@ impl ActionMeta for FsGlobAction {
 pub enum FsAction {
     Read(FsReadAction),
     Glob(FsGlobAction),
+    ContentSearch(FsContentSearchAction),
 }
 
 impl FsAction {
@@ -223,6 +304,15 @@ impl FsAction {
             max_results,
         ))
     }
+
+    #[must_use]
+    pub fn search_content(
+        root: GrantedPath,
+        query: impl Into<String>,
+        options: FsContentSearchOptions,
+    ) -> Self {
+        Self::ContentSearch(FsContentSearchAction::new(root, query, options))
+    }
 }
 
 impl ActionMeta for FsAction {
@@ -230,6 +320,7 @@ impl ActionMeta for FsAction {
         match self {
             Self::Read(action) => action.metadata(),
             Self::Glob(action) => action.metadata(),
+            Self::ContentSearch(action) => action.metadata(),
         }
     }
 
@@ -237,6 +328,7 @@ impl ActionMeta for FsAction {
         match self {
             Self::Read(action) => action.audit_resource(),
             Self::Glob(action) => action.audit_resource(),
+            Self::ContentSearch(action) => action.audit_resource(),
         }
     }
 
@@ -244,6 +336,7 @@ impl ActionMeta for FsAction {
         match self {
             Self::Read(action) => action.payload(),
             Self::Glob(action) => action.payload(),
+            Self::ContentSearch(action) => action.payload(),
         }
     }
 }

@@ -9,7 +9,11 @@ use thiserror::Error;
 
 use super::{
     FsResolutionContext,
-    action::{FsGlobAction, FsReadAction, FsResolvePathAction},
+    action::{
+        FsContentSearchAction, FsContentSearchOptions, FsGlobAction, FsReadAction,
+        FsResolvePathAction,
+    },
+    content_search::FsContentSearchOutput,
     error::FsActionError,
     glob::FsGlobOutput,
     path::GrantedPath,
@@ -104,6 +108,36 @@ where
             .map_err(FsAccessError::Authorization)?;
         grant.granted.run(self.ctx).await
     }
+
+    /// Search file contents under a governed root.
+    ///
+    /// Access performs the candidate traversal and file reads. The caller only
+    /// receives match metadata, so content search cannot bypass fs read policy
+    /// by moving bulk file reads into a concrete tool implementation.
+    pub async fn search_content(
+        self,
+        root: impl AsRef<Path>,
+        query: impl Into<String>,
+        options: FsContentSearchOptions,
+    ) -> Result<FsContentSearchOutput, FsAccessError> {
+        let resolve_action = FsResolvePathAction::resolve(root, self.ctx.fs_resolution_root())?;
+        let resolve_grant = self
+            .policy_engine
+            .grant(self.ctx, resolve_action)
+            .await
+            .map_err(AuthorizationError::from)
+            .map_err(FsAccessError::Authorization)?;
+        let root = resolve_grant.granted.run(self.ctx).await?;
+
+        let action = FsContentSearchAction::new(root, query, options);
+        let grant = self
+            .policy_engine
+            .grant(self.ctx, action)
+            .await
+            .map_err(AuthorizationError::from)
+            .map_err(FsAccessError::Authorization)?;
+        grant.granted.run(self.ctx).await
+    }
 }
 
 /// Mint a governed path from an already-authorized resolution action.
@@ -171,6 +205,12 @@ pub enum FsAccessError {
         #[source]
         source: regex::Error,
     },
+    #[error("failed to build content search matcher for {query}: {source}")]
+    BuildContentSearchRegex {
+        query: String,
+        #[source]
+        source: regex::Error,
+    },
     #[error("failed to read directory {path}: {source}", path = .path.display())]
     ReadDirectory {
         path: PathBuf,
@@ -194,6 +234,8 @@ pub enum FsAccessError {
         #[source]
         source: std::path::StripPrefixError,
     },
+    #[error("content search produced an invalid match range in {path}", path = .path.display())]
+    InvalidContentMatchRange { path: PathBuf },
     #[error("failed to read file {path}: {source}", path = .path.display())]
     ReadFile {
         path: PathBuf,
