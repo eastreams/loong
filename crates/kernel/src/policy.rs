@@ -18,7 +18,7 @@ use loong_core::{
     error::AuthorizationError,
     policy::action::{ActionMeta, ActionMetadata},
     policy::{
-        context::{ContextFactory, PolicyContext},
+        context::{CapabilityContext, ContextFactory},
         engine::PolicyEngine,
         policy::{Policy, PolicyAny},
     },
@@ -31,7 +31,7 @@ use crate::{
 
 const DEFAULT_DENY_REASON: &str = "No matching policy.";
 
-pub trait KernelInvocationContext: PolicyContext {
+pub trait KernelInvocationContext: CapabilityContext {
     fn pack(&self) -> &VerticalPackManifest;
 
     fn token(&self) -> &CapabilityToken;

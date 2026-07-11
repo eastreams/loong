@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use kernel::{Capability, CapabilityToken, KernelInvocationContext, VerticalPackManifest};
-use loong_core::policy::context::{ContextFactory, PolicyContext};
+use loong_core::policy::context::{CapabilityContext, ContextFactory};
 use serde_json::Value;
 
 #[derive(Debug, Clone, Copy)]
@@ -35,7 +35,7 @@ impl<'a> SpecExecutionContext<'a> {
     }
 }
 
-impl PolicyContext for SpecExecutionContext<'_> {
+impl CapabilityContext for SpecExecutionContext<'_> {
     fn allowed_capabilities(&self) -> BTreeSet<Capability> {
         self.token.allowed_capabilities.clone()
     }

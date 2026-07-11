@@ -11,7 +11,7 @@ use loong_contracts::{
     Capability, ToolExecutionError, ToolInputError, ToolOutcome, ToolPath, ToolPlaneError, ToolSpec,
 };
 use loong_core::{
-    policy::context::{ContextFactory, PolicyContext},
+    policy::context::{CapabilityContext, ContextFactory},
     policy::engine::PolicyEngine,
     tool::{ToolImpl, ToolInvocationAction},
 };
@@ -28,7 +28,7 @@ impl ContextFactory for TestContextFactory {
 
 struct TestContext;
 
-impl PolicyContext for TestContext {
+impl CapabilityContext for TestContext {
     fn allowed_capabilities(&self) -> BTreeSet<Capability> {
         BTreeSet::new()
     }

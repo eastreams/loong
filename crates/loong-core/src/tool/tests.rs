@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 
 use crate::{
     policy::action::ActionMeta,
-    policy::context::{ContextFactory, PolicyContext},
+    policy::context::{CapabilityContext, ContextFactory},
     tool::{RegisteredTool, ToolImpl, ToolInvocationAction, ToolProvenance},
 };
 
@@ -28,7 +28,7 @@ impl ContextFactory for TestContextFactory {
 
 struct TestContext;
 
-impl PolicyContext for TestContext {
+impl CapabilityContext for TestContext {
     fn allowed_capabilities(&self) -> BTreeSet<Capability> {
         BTreeSet::new()
     }

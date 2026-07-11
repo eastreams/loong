@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::thread;
 
 use loong_contracts::{CapabilityToken, ExecutionPlane, PlaneTier};
-use loong_core::policy::context::{ContextFactory, FsAccessContext, PolicyContext};
+use loong_core::policy::context::{CapabilityContext, ContextFactory, FsAccessContext};
 use loong_kernel::{
     AccessCx, AuditSink, Capability, Clock, ExecutionRoute, FanoutAuditSink, HarnessKind,
     InMemoryAuditSink, JsonlAuditSink, Kernel, KernelAccess, KernelInvocationContext,
@@ -161,7 +161,7 @@ impl KernelAccess<AppContextFactory> for AppExecutionContext<'_> {
     }
 }
 
-impl PolicyContext for AppExecutionContext<'_> {
+impl CapabilityContext for AppExecutionContext<'_> {
     fn allowed_capabilities(&self) -> BTreeSet<Capability> {
         self.token.allowed_capabilities.clone()
     }

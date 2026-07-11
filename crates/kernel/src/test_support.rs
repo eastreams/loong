@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use loong_core::policy::context::{ContextFactory, PolicyContext};
+use loong_core::policy::context::{CapabilityContext, ContextFactory};
 use serde_json::json;
 
 use crate::connector::{ConnectorExtensionAdapter, CoreConnectorAdapter};
@@ -121,7 +121,7 @@ impl TestPolicyContext {
     }
 }
 
-impl PolicyContext for TestPolicyContext {
+impl CapabilityContext for TestPolicyContext {
     fn allowed_capabilities(&self) -> BTreeSet<Capability> {
         self.token.allowed_capabilities.clone()
     }
