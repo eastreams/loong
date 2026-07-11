@@ -56,7 +56,7 @@ where
     }
 
     fn parse_input(&self, payload: Value) -> Result<Self::Input, ToolInputError> {
-        parse_file_read_payload("read".to_owned(), "read", &payload)
+        parse_file_read_payload("read".to_owned(), &payload)
             .map_err(ToolInputError::invalid_payload)
     }
 
@@ -98,8 +98,7 @@ where
     // Compatibility entry for the legacy direct-read bridge. Keep the bridge
     // payload-level so core request/outcome envelopes stay owned by the app
     // dispatch layer, not by this concrete tool crate.
-    let visible_tool_name = user_visible_tool_name(raw_tool_name.as_str());
-    let parsed = parse_file_read_payload(raw_tool_name, visible_tool_name.as_str(), &payload)?;
+    let parsed = parse_file_read_payload(raw_tool_name, &payload)?;
     let output = ctx
         .access()
         .fs()
@@ -140,11 +139,7 @@ fn optional_positive_usize_field(
         })
 }
 
-fn parse_file_read_payload(
-    raw_tool_name: String,
-    tool_name: &str,
-    payload: &Value,
-) -> Result<FileReadRequest, String> {
+fn parse_file_read_payload(tool_name: String, payload: &Value) -> Result<FileReadRequest, String> {
     let payload = payload
         .as_object()
         .ok_or_else(|| format!("{tool_name} payload must be an object"))?;
@@ -161,11 +156,11 @@ fn parse_file_read_payload(
         .and_then(Value::as_u64)
         .unwrap_or(1_048_576)
         .min(8 * 1_048_576) as usize;
-    let offset = optional_positive_usize_field(payload, "offset", tool_name)?;
-    let limit = optional_positive_usize_field(payload, "limit", tool_name)?;
+    let offset = optional_positive_usize_field(payload, "offset", &tool_name)?;
+    let limit = optional_positive_usize_field(payload, "limit", &tool_name)?;
 
     Ok(FileReadRequest {
-        tool_name: raw_tool_name,
+        tool_name,
         target,
         max_bytes,
         offset,
@@ -186,19 +181,18 @@ fn file_read_tool_outcome(
     resolved: PathBuf,
     bytes: Vec<u8>,
 ) -> Result<ToolOutcome, String> {
-    let visible_tool_name = user_visible_tool_name(request.tool_name.as_str());
     let file_text = String::from_utf8_lossy(&bytes).to_string();
     let selection = select_file_read_content(
         file_text.as_str(),
         request.max_bytes,
         request.offset,
         request.limit,
-        visible_tool_name.as_str(),
+        request.tool_name.as_str(),
     )?;
 
     let mut response_payload = json!({
         "adapter": "core-tools",
-        "tool_name": request.tool_name,
+        "tool_name": request.tool_name.as_str(),
         "path": resolved.display().to_string(),
         "bytes": bytes.len(),
         "truncated": selection.truncated,
@@ -206,7 +200,8 @@ fn file_read_tool_outcome(
     });
     let Some(response_object) = response_payload.as_object_mut() else {
         return Err(format!(
-            "{visible_tool_name} internal response payload must be an object"
+            "{} internal response payload must be an object",
+            request.tool_name
         ));
     };
     if let Some(line_start) = selection.line_start {
@@ -285,20 +280,13 @@ fn select_file_read_content(
     Ok(selection)
 }
 
-fn user_visible_tool_name(tool_name: &str) -> String {
-    match tool_name {
-        "file.read" => "read".to_owned(),
-        other => other.to_owned(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn parse_read_payload_requires_path() {
-        let error = parse_file_read_payload("read".to_owned(), "read", &json!({}))
+        let error = parse_file_read_payload("read".to_owned(), &json!({}))
             .expect_err("missing path should fail");
 
         assert_eq!(error, "read requires payload.path");
@@ -308,7 +296,6 @@ mod tests {
     fn parse_read_payload_keeps_window_fields() {
         let parsed = parse_file_read_payload(
             "read".to_owned(),
-            "read",
             &json!({
                 "path": "notes.txt",
                 "offset": 2,
