@@ -7,7 +7,7 @@ authorization / adapter workaround 塑形新架构。
 
 - 敢于破坏性改动。新边界确认后，直接迁移调用点并删除旧入口；不保留 alias、
   proxy 或长期 fallback。避免会模糊 ownership 的 root re-export；清晰的 domain module
-  re-export 可以接受，例如 `loong_access::fs::{FsAccess, FsReadAction}`。
+  re-export 可以接受，例如 `loong_access::fs::{FsAccess, FsReadAction}`，但需保持导出路径唯一。
 - concrete unified context 由 app 定义。kernel/access/policy/tool 只通过
   `ContextFactory` 和小的 context requirement trait 观察它。
 - tool/access/policy 共享同一个 invocation context。旧 `ToolCoreContext` 是删除目标。
@@ -16,8 +16,9 @@ authorization / adapter workaround 塑形新架构。
 - `ActionMeta::required_capabilities` 是 action 属性；workspace root、file root、
   runtime config 是 context / resolver / policy 的输入，不塞进 required caps。
 - context 暴露的是 effective allowed caps，不一定等于原始 token caps。tool 调 tool 时，
-  child context 的 caps 必须是 parent effective caps 与 tool 默认 required caps /
-  调用参数 override 的交集；override 只能缩窄，不能扩大。
+  child context 的 caps 必须从 parent effective caps 缩窄出来。调用参数可以提供
+  `Option<required_caps_override>`；有 override 时先校验它是 tool default caps 的子集，
+  再用它替代 default caps 计算 child effective caps。没有 override 时使用 default caps。
 - `Granted<A>` 是授权到执行的边界。没有 grant 就不能进入对应 side-effect 或 dispatch
   入口。
 - backend 可以存在，但不要求统一 trait。硬约束是每个执行入口消费
@@ -42,8 +43,8 @@ authorization / adapter workaround 塑形新架构。
 - `ToolImpl` 不拥有 path。tool 自身只描述输入/输出/能力/说明；注册到某个 plane 时，
   plane 才把自己的 `Path` 和 tool descriptor 组合成 registered spec。
 - `ToolInvocationAction` 可以存在，但它属于具体 plane/app 的治理边界，不能在 core 里
-  持有全局 `ToolPath`。如果保留公共 helper，也必须是 `ToolInvocationAction<P>`，其中
-  `P` 是具体 plane path。
+  持有全局 `ToolPath`。本轮先落地 app-owned `AppToolInvocationAction`；公共泛型 helper
+  只有在多个 plane 真的复用同一形状时再引入。
 - `ActionMeta::payload` 没有默认 `Null`。payload 是 Action 的结构化载荷；如果 action
   已经持有 `serde_json::Value`，目标 API 可以返回 `Cow<'_, Value>` 来避免无意义 clone。
 - 架构代码要有少量高信号注释，标明边界和意图。注释解释 why，不重复代码，也不写大段
@@ -78,12 +79,23 @@ caps 是硬边界，不是 policy 的附属说明。
 - `PolicyContext::capabilities()` 表示当前 invocation 的 effective allowed caps。app
   顶层 context 可以来自 token；子工具 context 必须来自父 context 的 effective caps。
 - tool 调 tool 时，调用参数可以提供 required caps override，但 override 只能缩窄：
-  `child_caps = parent_caps ∩ requested_caps ∩ tool_default_caps`。如果没有 override，就用
-  `parent_caps ∩ tool_default_caps`。
+  `requested_caps = override.unwrap_or(tool_default_caps)`，且 `override ⊆ tool_default_caps`；
+  `child_caps = parent_caps ∩ requested_caps`。
 - `AppToolInvocationAction` 的 caps 只授权进入一个 tool。tool 内部的文件、网络、内存等
   side effect 仍然要各自构造 domain action，并再次通过对应 access/action policy。
 - runtime config 可以影响 policy 实例、tool 可见性、默认 tool required caps 的 bootstrap
   wiring；不能在 tool helper/access helper 中临时跳过 caps gate。
+
+当前实现状态：
+
+- 已实现：`ActionMeta::metadata().required_capabilities` + `PolicyEngine::grant` 的内建
+  capability gate。
+- 已实现：legacy/typed tool request 入口当前会根据 tool name/payload 派生
+  `required_capabilities`，并由 kernel 检查 pack/token boundary。
+- 未完成：统一 context 中的 effective caps 仍基本来自 token，尚未实现 tool->tool child
+  context 的 cap narrowing。
+- 未完成：`ToolImpl` descriptor/path 解耦后，tool default caps 应来自 descriptor，调用
+  override 只在 app-owned plane 构造 child context 时生效。
 
 ## Config -> Policy 路径
 
@@ -294,6 +306,8 @@ App execute_kernel_tool_request
 不能用 `AuthorizedToolInvocation` 这类 receipt workaround 表达这个关系；应该返回
 `ActionGrant<AppToolInvocationAction>` / `Granted<AppToolInvocationAction>`。
 
+本轮迁移不在 core 保留这个 action。`AppToolInvocationAction` 先放在
+`crates/app/src/tools/plane.rs` 附近，使用 app plane 自己的 path 类型和 stable display。
 如果后续需要在 core 提供公共 helper，只能是泛型：
 
 ```rust
@@ -304,8 +318,8 @@ pub struct ToolInvocationAction<P> {
 }
 ```
 
-但当前更推荐 app/plane 定义 concrete action。这样 policy 可以通过 `ActionMeta`
-观察它，kernel 可以 grant 它，core 不需要知道 path 类型。
+但这不是当前步骤的目标。当前目标是 app/plane 定义 concrete action。这样 policy 可以
+通过 `ActionMeta` 观察它，kernel 可以 grant 它，core 不需要知道 path 类型。
 
 ## Filesystem Path Grants
 
@@ -432,6 +446,10 @@ tool invocation 的治理入口不需要知道 concrete path 类型；它只需�
 operation/payload/required capabilities。pack boundary、token boundary、policy pipeline
 仍在 kernel 检查。
 
+`Kernel::grant` 不做 tool dispatch，也不拥有 tool registry。tool invocation audit 是 app
+orchestration 的 obligation：app 在调用 grant 前保留 action metadata/path display，在
+grant deny / invoke failed / invoke completed 后调用 kernel audit API 记录结果。
+
 `record_tool_invocation` 记录的是 plane 给出的 stable display path / serialized path，
 不是 contracts 定义的全局 `ToolPath`。ToolImpl 本身不拿 audit capability。
 
@@ -476,9 +494,9 @@ legacy adapter 仍暂时记录旧 `PlaneInvoked`，直到对应工具迁移完�
 
 typed tool audit 由 app orchestration 强制记录，concrete `ToolImpl` 不拿 audit API。
 
-- invocation grant 被 pack/token/caps 拒绝：kernel 在 grant API 内记录
+- invocation grant 被 pack/token/caps 拒绝：app orchestration 通过 kernel audit API 记录
   `ToolInvocationOutcome::Denied { report: None, ... }`，plane 不执行。
-- invocation policy 被 `PolicyPipeline` 拒绝：kernel 在 grant API 内记录
+- invocation policy 被 `PolicyPipeline` 拒绝：app orchestration 通过 kernel audit API 记录
   `ToolInvocationOutcome::Denied { report: Some(PolicyReport), ... }`，plane 不执行。
 - payload parse / typed input error：grant 已消费进入 plane，app orchestration 记录
   `ToolInvocationOutcome::Failed { error_kind: "input", ... }`，不 fallback。
@@ -490,6 +508,10 @@ typed tool audit 由 app orchestration 强制记录，concrete `ToolImpl` 不拿
 - legacy fallback：继续记录 `PlaneInvoked`，直到该 tool 迁入 typed plane；typed 测试不再
   接受 `PlaneInvoked | ToolInvocation` 这种宽松断言。
 
+当前 `Kernel::grant_tool_invocation` 内部记录部分 deny audit 是迁移期 helper 行为。目标是
+generic grant 只负责授权，tool invocation audit obligation 留在 app orchestration 边界，
+并通过 kernel 的 audit sink 写入事件。
+
 ## 当前实现偏差
 
 以下是已经出现、但不应该继续放大的过渡形状：
@@ -497,7 +519,13 @@ typed tool audit 由 app orchestration 强制记录，concrete `ToolImpl` 不拿
 - `crates/contracts/src/tool_types.rs` 仍定义全局 `ToolPath`，且 `ToolSpec` 仍携带
   `path`。目标是 descriptor 无 path，注册点/plane 才绑定 path。
 - `crates/loong-core/src/tool.rs` 里的 `ToolInvocationAction` 持有全局 `ToolPath`。
-  这属于 app/plane-owned action，或者至少应该是 `ToolInvocationAction<P>`。
+  这属于 app/plane-owned action；本轮目标是删除 core action，不新增 core generic helper。
+- `crates/app/src/tools/plane.rs` 当前 `ToolPlane` 直接使用 contracts `ToolPath`，
+  `invoke` 也消费 core `ToolInvocationAction`。目标是 app plane 自己定义 path/action，
+  contracts/core 不知道 plane registry key。
+- `crates/kernel/src/kernel.rs` 的 `grant_tool_invocation` 当前接收 core
+  `ToolInvocationAction` 并在 deny 时记录 audit。目标是拆成 generic action grant +
+  app orchestration 负责 tool invocation audit。
 - `crates/tools/src/file.rs` 的 `ReadFileTool::spec()` 仍返回带 path 的 `ToolSpec`。
   这是 tool descriptor 与 registration path 未拆开的直接症状。
 - `crates/app/src/tools/mod.rs` 里 typed dispatch、grant、invoke、audit 逻辑还堆在
@@ -505,6 +533,8 @@ typed tool audit 由 app orchestration 强制记录，concrete `ToolImpl` 不拿
 - `crates/app/src/tools/routing.rs` 的 `route_direct_read_tool_request_for_legacy` 名字不准。
   它现在同时承担 read surface normalization 和 legacy bridge；aggregate `ReadTool`
   落地后这块应该删除或拆清楚。
+- `AppExecutionContext::capabilities()` 目前基本返回 token allowed caps；还没有 child
+  tool context 的 effective caps narrowing。
 
 ## `file.read` 当前迁移状态
 
@@ -556,44 +586,61 @@ typed tool audit 由 app orchestration 强制记录，concrete `ToolImpl` 不拿
    - policy report 应能说明是哪条 path policy deny，而不是靠 access error helper
      猜测 `is_policy_denial()`。
 
-4. 下一步：移走或泛型化 `ToolInvocationAction`：
+4. 下一步：把 `ToolInvocationAction` 收回 app-owned plane：
    - 先写失败测试：`loong-core` 不再需要 `ToolPath` 才能编译 tool abstraction，
      app typed tool invocation 仍然产生 `ToolInvocation` audit；
-   - 首选把 invocation action 移到 `crates/app/src/tools/plane.rs` 附近，命名为
+   - 在 `crates/app/src/tools/plane.rs` 附近定义 `AppToolPath` 和
      `AppToolInvocationAction`；
+   - `AppToolPlane` 的 trait/struct 使用自己的 `Path`，不再直接使用 contracts
+     `ToolPath`；
    - action payload 继续携带 agent/tool 原始 `payload: Value`，grant 后 plane 再 parse
      concrete input；
    - `AppToolInvocationAction` 持有 app plane 自己的 path display/registry path，不把
      concrete path type 泄漏进 contracts/core；
    - kernel grant API 只接受 concrete `ActionMeta` 和 context，返回 `ActionGrant<A>`；
      kernel 不知道 app plane path type，也不返回 `AuthorizedToolInvocation` receipt；
-   - 删除 `loong-core::tool::ToolInvocationAction` 对全局 `ToolPath` 的依赖；如果确实需要
-     core helper，必须是 `ToolInvocationAction<P>`，不能重新引入全局 path；
+   - 删除 `loong-core::tool::ToolInvocationAction`；本轮不添加 core generic helper；
    - 更新注释：core 只承载 tool abstraction，app owns typed plane，kernel 只 grant/audit
      action，不执行 typed tool；
    - 完成线：
      - `crates/loong-core/src/tool.rs` 不再 import `loong_contracts::ToolPath`；
-     - `Kernel::grant_tool_invocation` 不再接收或返回任何 path-specific receipt；
+     - `crates/app/src/tools/plane.rs` 不再 import contracts `ToolPath` 或 core
+       `ToolInvocationAction`；
+     - `Kernel::grant_tool_invocation` 被 generic action grant 取代，或至少不再接收
+       path-specific action type；
      - app typed read path 仍先 grant invocation action，再 `AppToolPlane::invoke`；
-     - pack/token/caps denial 仍记录 `ToolInvocationOutcome::Denied`；
+     - pack/token/caps/policy denial 仍记录 `ToolInvocationOutcome::Denied`，且只记录一次；
      - typed path tests 只接受 `ToolInvocation` audit。
    - 验证：`cargo test -p loong-core tool`、`cargo test -p loong-kernel tool_invocation`、
      `cargo test -p loong-app kernel_routed_file_read`、`cargo check -p loong-core -p
      loong-kernel -p loong-app -p loong-tools -p loong`。
 
-5. 清理 tool descriptor/path 耦合：
+5. 实现 effective caps / child context narrowing：
+   - `AppExecutionContext` 增加 explicit effective caps 字段，`PolicyContext::capabilities()`
+     返回该字段，而不是临时从 token 拷贝；
+   - 顶层 tool invocation context 由 token caps 初始化；
+   - tool 调 tool 时，根据 child tool descriptor default caps 和 optional override 构造
+     child effective caps；
+   - override 必须是 default caps 的子集，否则 typed input error / policy deny，不能静默
+     提升；
+   - child context 继承 kernel/workspace/config 等 ref 字段，但 caps 字段使用缩窄后的
+     集合；
+   - 测试覆盖：override 缩窄生效、override 扩大被拒、父 context 缺 cap 时 child 不会获得
+     该 cap、domain action gate 读取的是 child effective caps。
+
+6. 清理 tool descriptor/path 耦合：
    - `ToolImpl::spec()` 返回无 path descriptor；
    - `RegisteredTool` 只保存 descriptor/provenance/registration metadata；
    - `AppToolPlane::register(path, tool)` 组合 path + descriptor；
    - `ReadFileTool::spec()` 不再硬编码 `"read"`。
 
-6. 收敛 app typed dispatch 边界：
+7. 收敛 app typed dispatch 边界：
    - 从 `execute_kernel_tool_request` 中抽出一个聚焦的 app orchestration 边界；
    - 该边界只做 resolve -> build invocation action -> kernel grant -> plane invoke ->
      kernel audit；
    - 不引入 `AuthorizedToolInvocation` receipt workaround。
 
-7. 改 `read` 为 aggregate typed tool：
+8. 改 `read` 为 aggregate typed tool：
    - 删除 payload-claim/fallback 思路；
    - `ReadTool` 内部解析 `path/query/pattern/glob`；
    - `path/query/glob` 分别构造不同 action；
@@ -601,16 +648,16 @@ typed tool audit 由 app orchestration 强制记录，concrete `ToolImpl` 不拿
    - `read { query }` / `read { pattern }` / `read { glob }` 迁入 typed path 后，旧
      direct read legacy bridge 删除。
 
-8. 继续迁移剩余 legacy side-effect tools：
+9. 继续迁移剩余 legacy side-effect tools：
    - write/edit/config.import 按同样 access-backed action 模式迁移；
    - 迁移完成后删除 `FilePolicyExtension` 对应旧分支；
    - 逐步清空 `Kernel::execute_tool_core` 调用面，再删除 `LegacyToolPlane` 和 adapter
      trait。
 
-9. 测试清理：
+10. 测试清理：
    - typed tool 测试只接受 `ToolInvocation` audit；
    - legacy adapter 测试只接受 `PlaneInvoked` audit；
    - 不用 `PlaneInvoked | ToolInvocation` 这种宽松断言；
    - 每个最小提交跑对应 targeted tests、`cargo check` 和 `git diff --check`。
 
-10. 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration。
+11. 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration。
