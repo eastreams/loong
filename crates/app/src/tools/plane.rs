@@ -9,8 +9,6 @@ use async_trait::async_trait;
 use loong_contracts::{
     Capability, PolicyDecision, PolicyGrant, ToolExecutionError, ToolInputError, ToolPlaneError,
 };
-#[cfg(test)]
-use loong_core::tool::ToolImpl;
 use loong_core::{
     policy::grant::Granted,
     policy::{
@@ -18,7 +16,7 @@ use loong_core::{
         context::ContextFactory,
         policy::Policy,
     },
-    tool::{RegisteredTool, ToolProvenance},
+    tool::{RegisteredTool, ToolImpl, ToolProvenance},
 };
 use serde_json::{Value, json};
 use slotmap::{SlotMap, new_key_type};
@@ -198,7 +196,6 @@ where
         self.register_with_provenance(path, ToolProvenance::Builtin, tool)
     }
 
-    #[cfg(test)]
     pub(crate) fn register_with_provenance<T>(
         &mut self,
         path: ToolPath,
@@ -291,12 +288,17 @@ pub(crate) fn app_tool_plane() -> &'static dyn ToolPlane<AppContextFactory> {
         // `read` facade stays on the legacy fallback path until it becomes an
         // aggregate typed tool for path/query/glob actions.
         {
-            let entry = ToolEntry::new(RegisteredTool::from_tool(
-                ToolProvenance::Builtin,
-                loong_tools::file::ReadFileTool,
-            ));
-            let slot = plane.entries.insert(entry);
-            let _ = plane.paths.insert(ToolPath::from("file.read"), slot);
+            let duplicate = plane
+                .register_with_provenance(
+                    ToolPath::from("file.read"),
+                    ToolProvenance::Builtin,
+                    loong_tools::file::ReadFileTool,
+                )
+                .err();
+            debug_assert!(
+                duplicate.is_none(),
+                "duplicate builtin tool path: {duplicate:?}"
+            );
         }
         plane
     })
