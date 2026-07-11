@@ -43,6 +43,14 @@ impl ToolImpl<TestContextFactory> for EchoTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             description: "Echo the provided message.".to_owned(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "message": { "type": "string" }
+                },
+                "required": ["message"],
+                "additionalProperties": false
+            }),
             required_capabilities: BTreeSet::new(),
         }
     }

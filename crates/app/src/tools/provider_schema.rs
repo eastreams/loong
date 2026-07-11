@@ -89,7 +89,8 @@ fn tool_function_name(tool: &Value) -> &str {
 }
 
 pub(super) fn provider_definition_for_view(descriptor: &ToolDescriptor, view: &ToolView) -> Value {
-    let definition = descriptor.provider_definition();
+    let definition = typed_provider_definition_for_descriptor(descriptor)
+        .unwrap_or_else(|| descriptor.provider_definition());
     let definition = match descriptor.name {
         "web" => direct_web_provider_definition_for_view(definition, view),
         "browse" => direct_browser_provider_definition_for_view(definition, view),
@@ -97,6 +98,26 @@ pub(super) fn provider_definition_for_view(descriptor: &ToolDescriptor, view: &T
     };
 
     sanitize_provider_parameter_combinators(definition)
+}
+
+fn typed_provider_definition_for_descriptor(descriptor: &ToolDescriptor) -> Option<Value> {
+    if descriptor.name != "read" {
+        return None;
+    }
+
+    let path = super::plane::ToolPath::from(descriptor.name);
+    let spec = super::app_tool_plane().spec(&path).ok()?;
+
+    // Transitional boundary: app still wraps provider JSON, but migrated tools
+    // own their input schema through ToolSpec instead of the legacy catalog.
+    Some(json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": spec.description.clone(),
+            "parameters": spec.input_schema.clone()
+        }
+    }))
 }
 
 fn sanitize_provider_parameter_combinators(mut definition: Value) -> Value {

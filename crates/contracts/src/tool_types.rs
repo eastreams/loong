@@ -9,6 +9,11 @@ use crate::Capability;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolSpec {
     pub description: String,
+    /// JSON Schema for the payload accepted by this tool.
+    ///
+    /// The registry path/function name is intentionally not part of the schema;
+    /// app-owned planes provide identity, while concrete tools describe input.
+    pub input_schema: Value,
     pub required_capabilities: BTreeSet<Capability>,
 }
 

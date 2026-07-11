@@ -557,6 +557,20 @@ fn provider_tool_definitions_are_stable_and_cover_direct_surface() {
         }
     }
 
+    let read = defs
+        .iter()
+        .find(|item| {
+            item.get("function")
+                .and_then(|function| function.get("name"))
+                .and_then(Value::as_str)
+                == Some("read")
+        })
+        .expect("read definition should exist");
+    assert_eq!(
+        read["function"]["description"],
+        "Read files, list paths, or search file contents in allowed roots."
+    );
+
     let web = defs
         .iter()
         .find(|item| {
