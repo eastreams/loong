@@ -327,7 +327,7 @@ pub(crate) fn app_tool_plane() -> &'static dyn ToolPlane<AppContextFactory> {
                 .register_with_provenance(
                     ToolPath::from("read"),
                     ToolProvenance::Builtin,
-                    loong_tools::file::ReadTool,
+                    loong_tools::file::ReadTool::new("read"),
                 )
                 .err();
             debug_assert!(

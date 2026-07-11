@@ -122,7 +122,8 @@ impl From<GlobReadOutput> for Value {
                 })
             })
             .collect::<Vec<_>>();
-        let continuation = glob_search_continuation_payload(matches.as_slice());
+        let continuation =
+            glob_search_continuation_payload(output.tool_name.as_str(), matches.as_slice());
         let mut payload = json!({
             "adapter": "core-tools",
             "tool_name": output.tool_name,
@@ -224,9 +225,22 @@ struct ContentSearchReadMatch {
     truncated_file: bool,
 }
 
-pub struct ReadTool;
+pub struct ReadTool {
+    tool_name: &'static str,
+}
 
-/// Concrete builtin implementation for the aggregate `read` facade.
+impl ReadTool {
+    /// Creates the aggregate read implementation for an app-facing tool name.
+    ///
+    /// The name is used in legacy-compatible responses and continuation
+    /// payloads only. The actual registry path remains owned by the app plane.
+    #[must_use]
+    pub const fn new(tool_name: &'static str) -> Self {
+        Self { tool_name }
+    }
+}
+
+/// Concrete builtin implementation for the aggregate file-reading facade.
 ///
 /// `loong-tools` exports this value so the app plane can register it at a
 /// runtime-owned path. The tool does not own that path, audit, or policy; it
@@ -250,7 +264,7 @@ where
     }
 
     fn parse_input(&self, payload: Value) -> Result<Self::Input, ToolInputError> {
-        ReadRequest::parse_payload("read".to_owned(), &payload)
+        ReadRequest::parse_payload(self.tool_name.to_owned(), &payload)
             .map_err(ToolInputError::invalid_payload)
     }
 
@@ -611,7 +625,7 @@ fn normalize_direct_read_glob_alias_pattern(raw: &str) -> String {
     trimmed.to_owned()
 }
 
-fn glob_search_continuation_payload(matches: &[Value]) -> Option<Value> {
+fn glob_search_continuation_payload(tool_name: &str, matches: &[Value]) -> Option<Value> {
     let first_path = matches
         .iter()
         .filter_map(|entry| entry.get("path").and_then(Value::as_str))
@@ -620,11 +634,11 @@ fn glob_search_continuation_payload(matches: &[Value]) -> Option<Value> {
     Some(json!({
         "state": "path_listing",
         "is_terminal": false,
-        "recommended_tool": "read",
+        "recommended_tool": tool_name,
         "recommended_payload": {
             "path": first_path,
         },
-        "note": "The last read result only listed candidate paths. If the user still needs grounded file contents or a repository summary, continue with direct `read` calls before answering."
+        "note": format!("The last read result only listed candidate paths. If the user still needs grounded file contents or a repository summary, continue with direct `{tool_name}` calls before answering.")
     }))
 }
 

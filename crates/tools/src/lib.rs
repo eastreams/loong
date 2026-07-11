@@ -3,8 +3,9 @@
 //! Concrete builtin tool implementations.
 //!
 //! Use this crate from the app runtime by registering concrete tool values into
-//! `loong-app::tools::plane`, for example `register(path, file::ReadTool)`
-//! when the `file` feature exposes that module. The registry path, audit,
+//! `loong-app::tools::plane`, for example
+//! `register(path, file::ReadTool::new("read"))` when the `file` feature exposes
+//! that module. The registry path, audit,
 //! policy grant, and access facade are owned by app/kernel/access layers. This
 //! crate only supplies the concrete implementation type plus its payload
 //! parsing and response shaping.

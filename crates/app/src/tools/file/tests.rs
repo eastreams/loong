@@ -113,8 +113,10 @@ async fn execute_file_read_with_test_context(
     let execution_context =
         kernel_ctx.execution_context(ExecutionPlane::Tool, PlaneTier::Core, None, config)?;
     let _ = config;
-    let tool =
-        RegisteredTool::<AppContextFactory>::from_tool(ToolProvenance::Compatibility, ReadTool);
+    let tool = RegisteredTool::<AppContextFactory>::from_tool(
+        ToolProvenance::Compatibility,
+        ReadTool::new("read"),
+    );
     let outcome = tool
         .invoke(&execution_context, request.payload)
         .await
