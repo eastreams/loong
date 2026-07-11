@@ -61,7 +61,8 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
    - app bootstrap 从 config 构造 concrete policy value；
    - policy 注册使用 `PolicyPipeline::push_policy` / `push_pre_policy` /
      `push_fallback_policy`；
-   - `FilePolicyExtension` 已经显式跳过 migrated `read`，避免 read 获得第二条旧授权路径；
+   - direct legacy preflight 已经排除 migrated `read`；`FilePolicyExtension` 不再有 read
+     special-case，避免 read 获得第二条旧授权路径；
    - tool helper、access helper、legacy direct preflight 不再读取 config 做授权；
    - 完成线：
      - filename deny、fs allowed roots、workspace root containment 都是 typed policy；
