@@ -113,10 +113,10 @@ async fn execute_file_read_with_test_context(
     let outcome = tool
         .invoke(&execution_context, request.payload)
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(crate::tools::plane::tool_execution_error_reason)?;
     Ok(ToolCoreOutcome {
-        status: outcome.status,
-        payload: outcome.payload,
+        status: "ok".to_owned(),
+        payload: outcome,
     })
 }
 

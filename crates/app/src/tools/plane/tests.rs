@@ -7,9 +7,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use loong_contracts::{
-    Capability, ToolExecutionError, ToolInputError, ToolOutcome, ToolPlaneError, ToolSpec,
-};
+use loong_contracts::{Capability, ToolExecutionError, ToolInputError, ToolPlaneError, ToolSpec};
 use loong_core::{
     policy::action::ActionMeta,
     policy::context::{CapabilityContext, ContextFactory},
@@ -42,7 +40,7 @@ struct EchoTool {
 #[async_trait]
 impl ToolImpl<TestContextFactory> for EchoTool {
     type Input = String;
-    type Output = ToolOutcome;
+    type Output = Value;
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -65,10 +63,7 @@ impl ToolImpl<TestContextFactory> for EchoTool {
         input: Self::Input,
     ) -> Result<Self::Output, ToolExecutionError> {
         self.executions.fetch_add(1, Ordering::Relaxed);
-        Ok(ToolOutcome {
-            status: "ok".to_owned(),
-            payload: json!({ "message": input }),
-        })
+        Ok(json!({ "message": input }))
     }
 }
 
@@ -122,8 +117,7 @@ async fn app_tool_plane_invokes_registered_tool() {
 
     assert!(plane.contains(&path));
     assert_eq!(plane.len(), 1);
-    assert_eq!(outcome.status, "ok");
-    assert_eq!(outcome.payload, json!({ "message": "hello" }));
+    assert_eq!(outcome, json!({ "message": "hello" }));
     assert_eq!(executions.load(Ordering::Relaxed), 1);
 }
 

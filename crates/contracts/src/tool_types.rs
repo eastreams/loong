@@ -12,12 +12,6 @@ pub struct ToolSpec {
     pub required_capabilities: BTreeSet<Capability>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ToolOutcome {
-    pub status: String,
-    pub payload: Value,
-}
-
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Error, Serialize, Deserialize)]
 pub enum ToolInputError {

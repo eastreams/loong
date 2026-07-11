@@ -128,10 +128,10 @@ async fn execute_direct_read_tool_core_with_context(
             let outcome = tool
                 .invoke(ctx, direct_request.payload)
                 .await
-                .map_err(|error| error.to_string())?;
+                .map_err(super::plane::tool_execution_error_reason)?;
             Ok(ToolCoreOutcome {
-                status: outcome.status,
-                payload: outcome.payload,
+                status: "ok".to_owned(),
+                payload: outcome,
             })
         }
         // TODO(access-migration): Query search still uses the legacy file tool

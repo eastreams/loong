@@ -1,7 +1,7 @@
 use std::{collections::BTreeSet, path::PathBuf};
 
 use async_trait::async_trait;
-use loong_contracts::{Capability, ToolExecutionError, ToolInputError, ToolOutcome, ToolSpec};
+use loong_contracts::{Capability, ToolExecutionError, ToolInputError, ToolSpec};
 use loong_core::{policy::context::ContextFactory, tool::ToolImpl};
 use loong_kernel::KernelAccess;
 use serde_json::{Value, json};
@@ -14,6 +14,43 @@ struct FileReadSelection {
     line_end: Option<usize>,
     total_lines: Option<usize>,
     next_offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadFileOutput {
+    tool_name: String,
+    path: PathBuf,
+    bytes: usize,
+    selection: FileReadSelection,
+}
+
+impl From<ReadFileOutput> for Value {
+    fn from(output: ReadFileOutput) -> Self {
+        let mut payload = json!({
+            "adapter": "core-tools",
+            "tool_name": output.tool_name,
+            "path": output.path.display().to_string(),
+            "bytes": output.bytes,
+            "truncated": output.selection.truncated,
+            "content": output.selection.content,
+        });
+        let Some(payload_object) = payload.as_object_mut() else {
+            return payload;
+        };
+        if let Some(line_start) = output.selection.line_start {
+            payload_object.insert("line_start".to_owned(), json!(line_start));
+        }
+        if let Some(line_end) = output.selection.line_end {
+            payload_object.insert("line_end".to_owned(), json!(line_end));
+        }
+        if let Some(total_lines) = output.selection.total_lines {
+            payload_object.insert("total_lines".to_owned(), json!(total_lines));
+        }
+        if let Some(next_offset) = output.selection.next_offset {
+            payload_object.insert("next_offset".to_owned(), json!(next_offset));
+        }
+        payload
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,7 +77,7 @@ where
     for<'a> C::Cx<'a>: KernelAccess<C> + Sync,
 {
     type Input = FileReadRequest;
-    type Output = ToolOutcome;
+    type Output = ReadFileOutput;
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -77,16 +114,16 @@ where
             })
             .map_err(ToolExecutionError::execution)?;
 
-        Self::build_outcome(input, output.path, output.bytes).map_err(ToolExecutionError::execution)
+        Self::build_output(input, output.path, output.bytes).map_err(ToolExecutionError::execution)
     }
 }
 
 impl ReadFileTool {
-    fn build_outcome(
+    fn build_output(
         request: FileReadRequest,
         resolved: PathBuf,
         bytes: Vec<u8>,
-    ) -> Result<ToolOutcome, String> {
+    ) -> Result<ReadFileOutput, String> {
         let file_text = String::from_utf8_lossy(&bytes).to_string();
         let selection = select_file_read_content(
             file_text.as_str(),
@@ -96,36 +133,11 @@ impl ReadFileTool {
             request.tool_name.as_str(),
         )?;
 
-        let mut response_payload = json!({
-            "adapter": "core-tools",
-            "tool_name": request.tool_name.as_str(),
-            "path": resolved.display().to_string(),
-            "bytes": bytes.len(),
-            "truncated": selection.truncated,
-            "content": selection.content,
-        });
-        let Some(response_object) = response_payload.as_object_mut() else {
-            return Err(format!(
-                "{} internal response payload must be an object",
-                request.tool_name
-            ));
-        };
-        if let Some(line_start) = selection.line_start {
-            response_object.insert("line_start".to_owned(), json!(line_start));
-        }
-        if let Some(line_end) = selection.line_end {
-            response_object.insert("line_end".to_owned(), json!(line_end));
-        }
-        if let Some(total_lines) = selection.total_lines {
-            response_object.insert("total_lines".to_owned(), json!(total_lines));
-        }
-        if let Some(next_offset) = selection.next_offset {
-            response_object.insert("next_offset".to_owned(), json!(next_offset));
-        }
-
-        Ok(ToolOutcome {
-            status: "ok".to_owned(),
-            payload: response_payload,
+        Ok(ReadFileOutput {
+            tool_name: request.tool_name,
+            path: resolved,
+            bytes: bytes.len(),
+            selection,
         })
     }
 }
@@ -274,5 +286,33 @@ mod tests {
         assert_eq!(parsed.offset, Some(2));
         assert_eq!(parsed.limit, Some(3));
         assert_eq!(parsed.max_bytes, 4);
+    }
+
+    #[test]
+    fn build_output_returns_typed_payload_without_legacy_status() {
+        let request = FileReadRequest {
+            tool_name: "read".to_owned(),
+            target: "notes.txt".to_owned(),
+            max_bytes: 1_024,
+            offset: None,
+            limit: None,
+        };
+
+        let output =
+            ReadFileTool::build_output(request, PathBuf::from("notes.txt"), b"hello".to_vec())
+                .expect("read output should build");
+        let payload: Value = output.into();
+
+        assert_eq!(
+            payload,
+            json!({
+                "adapter": "core-tools",
+                "tool_name": "read",
+                "path": "notes.txt",
+                "bytes": 5,
+                "truncated": false,
+                "content": "hello",
+            })
+        );
     }
 }

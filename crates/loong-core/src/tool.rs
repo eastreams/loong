@@ -1,7 +1,7 @@
 use std::time::SystemTime;
 
 use async_trait::async_trait;
-use loong_contracts::{ToolExecutionError, ToolInputError, ToolOutcome, ToolSpec};
+use loong_contracts::{ToolExecutionError, ToolInputError, ToolSpec};
 use serde_json::Value;
 
 use crate::policy::context::ContextFactory;
@@ -17,7 +17,7 @@ pub enum ToolProvenance {
 #[async_trait]
 pub trait ToolImpl<C: ContextFactory>: Send + Sync + 'static {
     type Input: Send + 'static;
-    type Output: Send + Into<ToolOutcome> + 'static;
+    type Output: Send + Into<Value> + 'static;
 
     fn spec(&self) -> ToolSpec;
 
@@ -103,22 +103,22 @@ where
         self.registration.spec()
     }
 
+    /// Invoke the concrete tool and return its typed success payload.
+    ///
+    /// Legacy `"ok"/payload` envelopes belong to app bridge code that still
+    /// speaks [`loong_contracts::ToolCoreOutcome`], not to erased tools.
     pub async fn invoke(
         &self,
         ctx: &C::Cx<'_>,
         payload: Value,
-    ) -> Result<ToolOutcome, ToolExecutionError> {
+    ) -> Result<Value, ToolExecutionError> {
         self.erased.invoke(ctx, payload).await
     }
 }
 
 #[async_trait]
 trait ErasedTool<C: ContextFactory>: Send + Sync {
-    async fn invoke(
-        &self,
-        ctx: &C::Cx<'_>,
-        payload: Value,
-    ) -> Result<ToolOutcome, ToolExecutionError>;
+    async fn invoke(&self, ctx: &C::Cx<'_>, payload: Value) -> Result<Value, ToolExecutionError>;
 }
 
 #[async_trait]
@@ -127,11 +127,7 @@ where
     C: ContextFactory,
     T: ToolImpl<C>,
 {
-    async fn invoke(
-        &self,
-        ctx: &C::Cx<'_>,
-        payload: Value,
-    ) -> Result<ToolOutcome, ToolExecutionError> {
+    async fn invoke(&self, ctx: &C::Cx<'_>, payload: Value) -> Result<Value, ToolExecutionError> {
         let input = self.parse_input(payload)?;
         self.execute(ctx, input).await.map(Into::into)
     }

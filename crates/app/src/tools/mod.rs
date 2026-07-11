@@ -454,8 +454,8 @@ pub(crate) async fn execute_kernel_tool_request(
                         ToolInvocationOutcome::Completed,
                     )?;
                     return Ok(ToolCoreOutcome {
-                        status: outcome.status,
-                        payload: outcome.payload,
+                        status: "ok".to_owned(),
+                        payload: outcome,
                     });
                 }
                 Err(error) => {

@@ -7,8 +7,7 @@ use std::{
 
 use async_trait::async_trait;
 use loong_contracts::{
-    Capability, PolicyDecision, PolicyGrant, ToolExecutionError, ToolInputError, ToolOutcome,
-    ToolPlaneError,
+    Capability, PolicyDecision, PolicyGrant, ToolExecutionError, ToolInputError, ToolPlaneError,
 };
 #[cfg(test)]
 use loong_core::tool::ToolImpl;
@@ -151,7 +150,7 @@ pub(crate) trait ToolPlane<C: ContextFactory>: Send + Sync {
         &self,
         grant: Granted<ToolInvocationAction>,
         ctx: &C::Cx<'_>,
-    ) -> Result<ToolOutcome, ToolPlaneError>;
+    ) -> Result<Value, ToolPlaneError>;
 }
 
 pub(crate) struct AppToolPlane<C: ContextFactory> {
@@ -224,7 +223,7 @@ where
         &self,
         grant: Granted<ToolInvocationAction>,
         ctx: &C::Cx<'_>,
-    ) -> Result<ToolOutcome, ToolPlaneError> {
+    ) -> Result<Value, ToolPlaneError> {
         // Consuming the grant here makes audit/grant enforcement automatic for
         // concrete tool authors: ToolImpl implementers never receive a raw
         // dispatch path that can bypass app orchestration.
@@ -259,7 +258,10 @@ pub(crate) fn app_tool_plane() -> &'static dyn ToolPlane<AppContextFactory> {
     })
 }
 
-fn tool_execution_error_reason(error: ToolExecutionError) -> String {
+// Boundary conversion: legacy kernel/app error surfaces still carry plain
+// strings, but policy-denial detection depends on preserving prefixes such as
+// `policy_denied:` instead of formatting the whole error display.
+pub(crate) fn tool_execution_error_reason(error: ToolExecutionError) -> String {
     match error {
         ToolExecutionError::Input(input_error) => match input_error {
             ToolInputError::MissingField { field } => {
