@@ -11,7 +11,10 @@ use loong_kernel::{
     AccessCx, AuditSink, Capability, Clock, ExecutionRoute, FanoutAuditSink, HarnessKind,
     InMemoryAuditSink, JsonlAuditSink, Kernel, KernelAccess, KernelInvocationContext,
     PolicyPipeline, SystemClock, VerticalPackManifest,
-    policy::{FsReadAllowPolicy, FsReadFilenameDenyPolicy, FsResolvePathAllowedRootsPolicy},
+    policy::{
+        FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsReadAllowPolicy, FsReadFilenameDenyPolicy,
+        FsResolvePathAllowedRootsPolicy,
+    },
 };
 use serde_json::Value;
 
@@ -530,6 +533,8 @@ fn bootstrap_kernel_context_with_audit_sink(
         ));
     }
     policy.push_policy(FsReadAllowPolicy);
+    policy.push_policy(FsGlobAllowPolicy);
+    policy.push_policy(FsContentSearchAllowPolicy);
     let mut kernel =
         Kernel::with_policy_runtime(policy, Arc::new(SystemClock) as Arc<dyn Clock>, audit_sink);
 

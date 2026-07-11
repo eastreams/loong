@@ -5,7 +5,10 @@ use std::sync::Arc;
 use loong_contracts::{Capability, ExecutionRoute, HarnessKind, ToolCoreOutcome, ToolCoreRequest};
 use loong_kernel::{
     Kernel, NoopAuditSink, PolicyPipeline, SystemClock, VerticalPackManifest,
-    policy::{FsReadAllowPolicy, FsReadFilenameDenyPolicy, FsResolvePathAllowedRootsPolicy},
+    policy::{
+        FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsReadAllowPolicy, FsReadFilenameDenyPolicy,
+        FsResolvePathAllowedRootsPolicy,
+    },
 };
 use serde_json::json;
 
@@ -43,6 +46,8 @@ async fn execute_tool_core_with_test_context(
         ));
     }
     policy.push_policy(FsReadAllowPolicy);
+    policy.push_policy(FsGlobAllowPolicy);
+    policy.push_policy(FsContentSearchAllowPolicy);
     let mut kernel =
         Kernel::with_policy_runtime(policy, Arc::new(SystemClock), Arc::new(NoopAuditSink));
     let pack = VerticalPackManifest {

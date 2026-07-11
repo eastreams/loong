@@ -6,7 +6,10 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use loong_contracts::{Capability, ExecutionRoute, HarnessKind};
 use loong_kernel::{
     FixedClock, InMemoryAuditSink, Kernel, PolicyPipeline, VerticalPackManifest,
-    policy::{FsReadAllowPolicy, FsReadFilenameDenyPolicy, FsResolvePathAllowedRootsPolicy},
+    policy::{
+        FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsReadAllowPolicy, FsReadFilenameDenyPolicy,
+        FsResolvePathAllowedRootsPolicy,
+    },
 };
 
 use crate::context::{AppContextFactory, KernelContext};
@@ -151,6 +154,8 @@ impl TurnTestHarness {
             ));
         }
         policy.push_policy(FsReadAllowPolicy);
+        policy.push_policy(FsGlobAllowPolicy);
+        policy.push_policy(FsContentSearchAllowPolicy);
         let mut kernel =
             Kernel::<AppContextFactory>::with_policy_runtime(policy, clock, audit.clone());
 
