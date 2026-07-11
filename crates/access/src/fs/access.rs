@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    io::Write as _,
+    path::{Path, PathBuf},
+};
 
 use async_trait::async_trait;
 use loong_core::{
@@ -11,7 +14,7 @@ use super::{
     FsResolutionContext,
     action::{
         FsContentSearchAction, FsContentSearchOptions, FsGlobAction, FsReadAction,
-        FsResolvePathAction,
+        FsResolvePathAction, FsWriteAction, FsWriteOptions,
     },
     content_search::FsContentSearchOutput,
     error::FsActionError,
@@ -69,6 +72,35 @@ where
         let path = resolve_grant.granted.run(self.ctx).await?;
 
         let action = FsReadAction::new(path);
+        let grant = self
+            .policy_engine
+            .grant(self.ctx, action)
+            .await
+            .map_err(AuthorizationError::from)
+            .map_err(FsAccessError::Authorization)?;
+        grant.granted.run(self.ctx).await
+    }
+
+    /// Write bytes through path-resolution policy and write policy.
+    ///
+    /// This only prepares the access-backed primitive. App write/edit tools
+    /// still own payload parsing and response/audit preview until they migrate.
+    pub async fn write_file(
+        self,
+        path: impl AsRef<Path>,
+        bytes: impl Into<Vec<u8>>,
+        options: FsWriteOptions,
+    ) -> Result<FsWriteOutput, FsAccessError> {
+        let resolve_action = FsResolvePathAction::resolve(path, self.ctx.fs_resolution_root())?;
+        let resolve_grant = self
+            .policy_engine
+            .grant(self.ctx, resolve_action)
+            .await
+            .map_err(AuthorizationError::from)
+            .map_err(FsAccessError::Authorization)?;
+        let path = resolve_grant.granted.run(self.ctx).await?;
+
+        let action = FsWriteAction::new(path, bytes.into(), options);
         let grant = self
             .policy_engine
             .grant(self.ctx, action)
@@ -183,6 +215,99 @@ where
     }
 }
 
+/// Execute an already-authorized fs write.
+///
+/// This consumes `Granted<FsWriteAction>` so write side effects cannot be
+/// reached with a raw path or an ungranted action.
+#[async_trait]
+impl<Cx> Action<Cx> for FsWriteAction
+where
+    Cx: Sync,
+{
+    type Output = FsWriteOutput;
+    type Error = FsAccessError;
+
+    async fn run(granted: Granted<Self>, _ctx: &Cx) -> Result<Self::Output, Self::Error> {
+        let action = granted.into_action();
+        let path = action.path().to_path_buf();
+        let options = action.options();
+
+        if symlink_metadata_is_symlink(&path)? {
+            return Err(FsAccessError::RefuseSymlink { path });
+        }
+        if path.is_dir() {
+            return Err(FsAccessError::PathIsDirectory { path });
+        }
+        if options.create_dirs
+            && let Some(parent) = path.parent()
+        {
+            std::fs::create_dir_all(parent).map_err(|source| {
+                FsAccessError::CreateParentDirectory {
+                    path: parent.to_path_buf(),
+                    source,
+                }
+            })?;
+        }
+
+        let overwritten = path
+            .try_exists()
+            .map_err(|source| FsAccessError::InspectPath {
+                path: path.clone(),
+                source,
+            })?;
+        if overwritten && !options.overwrite {
+            return Err(FsAccessError::FileExistsRequiresOverwrite { path });
+        }
+
+        let mut file = open_write_target(&path, options.overwrite)?;
+        file.write_all(action.bytes())
+            .map_err(|source| FsAccessError::WriteFile {
+                path: path.clone(),
+                source,
+            })?;
+
+        Ok(FsWriteOutput {
+            path,
+            bytes_written: action.bytes().len(),
+            overwritten,
+        })
+    }
+}
+
+fn symlink_metadata_is_symlink(path: &Path) -> Result<bool, FsAccessError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(metadata.file_type().is_symlink()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(source) => Err(FsAccessError::InspectPath {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
+}
+
+fn open_write_target(path: &Path, overwrite: bool) -> Result<std::fs::File, FsAccessError> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true);
+    if overwrite {
+        options.create(true).truncate(true);
+    } else {
+        options.create_new(true);
+    }
+
+    options.open(path).map_err(|source| {
+        if source.kind() == std::io::ErrorKind::AlreadyExists && !overwrite {
+            return FsAccessError::FileExistsRequiresOverwrite {
+                path: path.to_path_buf(),
+            };
+        }
+
+        FsAccessError::OpenWriteFile {
+            path: path.to_path_buf(),
+            source,
+        }
+    })
+}
+
 /// Bytes returned by a governed fs read.
 ///
 /// `path` is the canonical path actually read, suitable for response metadata
@@ -191,6 +316,14 @@ where
 pub struct FsReadOutput {
     pub path: PathBuf,
     pub bytes: Vec<u8>,
+}
+
+/// Result returned after a governed fs write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsWriteOutput {
+    pub path: PathBuf,
+    pub bytes_written: usize,
+    pub overwritten: bool,
 }
 
 #[derive(Debug, Error)]
@@ -238,6 +371,30 @@ pub enum FsAccessError {
     InvalidContentMatchRange { path: PathBuf },
     #[error("failed to read file {path}: {source}", path = .path.display())]
     ReadFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to create parent directory {path}: {source}", path = .path.display())]
+    CreateParentDirectory {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("path {path} is a directory, not a file", path = .path.display())]
+    PathIsDirectory { path: PathBuf },
+    #[error("refusing to write through symlink {path}", path = .path.display())]
+    RefuseSymlink { path: PathBuf },
+    #[error("file {path} already exists; overwrite is required", path = .path.display())]
+    FileExistsRequiresOverwrite { path: PathBuf },
+    #[error("failed to open file {path} for writing: {source}", path = .path.display())]
+    OpenWriteFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to write file {path}: {source}", path = .path.display())]
+    WriteFile {
         path: PathBuf,
         #[source]
         source: std::io::Error,

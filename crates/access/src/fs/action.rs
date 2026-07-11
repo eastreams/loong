@@ -11,6 +11,7 @@ use super::path::{GrantedPath, ResolvedPath};
 
 const FS_RESOLVE_REQUIRED_CAPABILITIES: [Capability; 0] = [];
 const FS_READ_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
+const FS_WRITE_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
 const FS_GLOB_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 const FS_CONTENT_SEARCH_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 
@@ -116,6 +117,74 @@ impl ActionMeta for FsReadAction {
     fn payload(&self) -> Cow<'_, Value> {
         Cow::Owned(json!({
             "path": self.path.as_path().display().to_string(),
+        }))
+    }
+}
+
+/// Policy-visible options for writing one governed filesystem path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FsWriteOptions {
+    pub create_dirs: bool,
+    pub overwrite: bool,
+}
+
+/// Typed action for writing bytes to one governed filesystem path.
+///
+/// The action carries bytes because the access side-effect boundary needs them
+/// to perform the write. Its audit payload records only byte count and flags,
+/// not file content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsWriteAction {
+    path: GrantedPath,
+    bytes: Vec<u8>,
+    options: FsWriteOptions,
+}
+
+impl FsWriteAction {
+    #[must_use]
+    pub fn new(path: GrantedPath, bytes: Vec<u8>, options: FsWriteOptions) -> Self {
+        Self {
+            path,
+            bytes,
+            options,
+        }
+    }
+
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        self.path.as_path()
+    }
+
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        self.bytes.as_slice()
+    }
+
+    #[must_use]
+    pub fn options(&self) -> FsWriteOptions {
+        self.options
+    }
+}
+
+impl ActionMeta for FsWriteAction {
+    fn metadata(&self) -> ActionMetadata<'_> {
+        ActionMetadata {
+            kind: "fs.write",
+            operation: Cow::Borrowed("write_file"),
+            required_capabilities: Cow::Borrowed(&FS_WRITE_REQUIRED_CAPABILITIES),
+        }
+    }
+
+    fn audit_resource(&self) -> Option<Cow<'_, str>> {
+        Some(self.path.as_path().display().to_string().into())
+    }
+
+    fn payload(&self) -> Cow<'_, Value> {
+        Cow::Owned(json!({
+            "path": self.path.as_path().display().to_string(),
+            "byte_count": self.bytes.len(),
+            "create_dirs": self.options.create_dirs,
+            "overwrite": self.options.overwrite,
         }))
     }
 }
@@ -280,6 +349,7 @@ impl ActionMeta for FsContentSearchAction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FsAction {
     Read(FsReadAction),
+    Write(FsWriteAction),
     Glob(FsGlobAction),
     ContentSearch(FsContentSearchAction),
 }
@@ -288,6 +358,11 @@ impl FsAction {
     #[must_use]
     pub fn read_file(path: GrantedPath) -> Self {
         Self::Read(FsReadAction::new(path))
+    }
+
+    #[must_use]
+    pub fn write_file(path: GrantedPath, bytes: Vec<u8>, options: FsWriteOptions) -> Self {
+        Self::Write(FsWriteAction::new(path, bytes, options))
     }
 
     #[must_use]
@@ -319,6 +394,7 @@ impl ActionMeta for FsAction {
     fn metadata(&self) -> ActionMetadata<'_> {
         match self {
             Self::Read(action) => action.metadata(),
+            Self::Write(action) => action.metadata(),
             Self::Glob(action) => action.metadata(),
             Self::ContentSearch(action) => action.metadata(),
         }
@@ -327,6 +403,7 @@ impl ActionMeta for FsAction {
     fn audit_resource(&self) -> Option<Cow<'_, str>> {
         match self {
             Self::Read(action) => action.audit_resource(),
+            Self::Write(action) => action.audit_resource(),
             Self::Glob(action) => action.audit_resource(),
             Self::ContentSearch(action) => action.audit_resource(),
         }
@@ -335,6 +412,7 @@ impl ActionMeta for FsAction {
     fn payload(&self) -> Cow<'_, Value> {
         match self {
             Self::Read(action) => action.payload(),
+            Self::Write(action) => action.payload(),
             Self::Glob(action) => action.payload(),
             Self::ContentSearch(action) => action.payload(),
         }

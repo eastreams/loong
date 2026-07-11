@@ -7,10 +7,10 @@ pub mod error;
 pub mod glob;
 pub mod path;
 
-pub use access::{FsAccess, FsAccessError, FsReadOutput};
+pub use access::{FsAccess, FsAccessError, FsReadOutput, FsWriteOutput};
 pub use action::{
     FsAction, FsContentSearchAction, FsContentSearchOptions, FsGlobAction, FsReadAction,
-    FsResolvePathAction,
+    FsResolvePathAction, FsWriteAction, FsWriteOptions,
 };
 pub use content_search::{FsContentSearchMatch, FsContentSearchOutput};
 pub use error::FsActionError;
