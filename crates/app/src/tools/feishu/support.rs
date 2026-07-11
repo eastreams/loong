@@ -622,7 +622,7 @@ pub(super) fn read_safe_tool_text_file(
     raw_path: &str,
     config: &super::super::runtime_config::ToolRuntimeConfig,
 ) -> CliResult<String> {
-    let resolved = super::super::file::resolve_safe_file_path_with_config(raw_path, config)?;
+    let resolved = super::super::file_path::resolve_safe_file_path_with_config(raw_path, config)?;
     let bytes = fs::read(&resolved).map_err(|error| {
         format!(
             "{tool_name} failed to read {} `{}`: {error}",
@@ -675,7 +675,7 @@ pub(super) fn read_safe_tool_media_file(
     raw_path: &str,
     config: &super::super::runtime_config::ToolRuntimeConfig,
 ) -> CliResult<PreparedFeishuToolUpload> {
-    let resolved = super::super::file::resolve_safe_file_path_with_config(raw_path, config)?;
+    let resolved = super::super::file_path::resolve_safe_file_path_with_config(raw_path, config)?;
     let file_name = resolved
         .file_name()
         .and_then(|value| value.to_str())

@@ -451,7 +451,7 @@ pub(super) fn execute_memory_get_tool_with_config(
 
     let workspace_root = workspace_root_from_config(config)?;
     let locations = collect_workspace_memory_document_locations(workspace_root)?;
-    let resolved_path = super::file::resolve_safe_file_path_with_config(raw_path, config)?;
+    let resolved_path = super::file_path::resolve_safe_file_path_with_config(raw_path, config)?;
     let matched_location = find_memory_location_for_path(&locations, resolved_path.as_path())?
         .ok_or_else(|| {
             format!(

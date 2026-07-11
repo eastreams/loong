@@ -502,10 +502,15 @@ fn dispatch_tool_request(
         "shell.exec" => shell::execute_shell_tool_with_config(request, config),
         #[cfg(feature = "tool-shell")]
         "bash.exec" => bash::execute_bash_tool_with_config(request, config),
+        #[cfg(feature = "tool-file")]
         "read" => Err("read requires kernel access context".to_owned()),
+        #[cfg(feature = "tool-file")]
         "write" => file::execute_file_write_tool_with_config(request, config),
+        #[cfg(feature = "tool-file")]
         "edit" => file::execute_file_edit_tool_with_config(request, config),
+        #[cfg(feature = "tool-file")]
         "glob.search" => file::execute_glob_search_tool_with_config(request, config),
+        #[cfg(feature = "tool-file")]
         "content.search" => file::execute_content_search_tool_with_config(request, config),
         #[cfg(feature = "tool-file")]
         "memory.retrieve" => {

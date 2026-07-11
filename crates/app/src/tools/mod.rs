@@ -40,7 +40,9 @@ mod direct_policy_preflight;
 pub(crate) mod download_guard;
 #[cfg(feature = "feishu-integration")]
 mod feishu;
+#[cfg(feature = "tool-file")]
 mod file;
+mod file_path;
 pub mod file_policy_ext;
 #[cfg(feature = "tool-http")]
 mod http_request;
