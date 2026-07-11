@@ -63,7 +63,10 @@ pub(super) fn execute_direct_tool_core_with_config(
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
     if request.tool_name == "read" {
-        return execute_direct_read_tool_core_with_config(request, config);
+        // Validate the direct-read surface before failing closed; actual read
+        // execution needs AppExecutionContext so it can enter typed access.
+        let (_read_route, _direct_request) = route_direct_read_request_for_kernel(request, config)?;
+        return Err("read requires kernel access context".to_owned());
     }
 
     let routed_request = route_direct_tool_request(request, config)?;
@@ -80,14 +83,6 @@ pub(super) async fn execute_direct_tool_core_with_context(
     }
 
     execute_direct_tool_core_with_config(request, config)
-}
-
-fn execute_direct_read_tool_core_with_config(
-    request: ToolCoreRequest,
-    config: &runtime_config::ToolRuntimeConfig,
-) -> Result<ToolCoreOutcome, String> {
-    let (_read_route, _direct_request) = route_direct_read_request_for_kernel(request, config)?;
-    Err("read requires kernel access context".to_owned())
 }
 
 async fn execute_direct_read_tool_core_with_context(
