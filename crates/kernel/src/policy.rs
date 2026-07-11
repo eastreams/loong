@@ -197,10 +197,13 @@ impl<C: ContextFactory> PolicyPipeline<C> {
         });
     }
 
-    /// Authorize legacy kernel operations through the same policy pipeline.
+    /// TODO(deprecate-legacy-kernel-auth): add `#[deprecated]` once legacy
+    /// kernel operations no longer need `Result<(), PolicyError>`.
     ///
-    /// New access-backed side effects should prefer `PolicyEngine::grant` on a
-    /// typed action and consume the resulting grant inside the access module.
+    /// New access-backed side effects must call `PolicyEngine::grant` on a
+    /// typed action and pass `Granted<ConcreteAction>` to the side-effect
+    /// entrypoint. Do not add new callers here; this exists only until legacy
+    /// core/tool/memory/connector/harness envelopes consume typed grants.
     pub async fn authorize_kernel_action<A: ActionMeta>(
         &self,
         ctx: &C::Cx<'_>,
@@ -252,9 +255,9 @@ impl<C: ContextFactory, A: ActionMeta> Default for TypedPolicyEntries<C, A> {
     }
 }
 
-// Legacy bridge for `authorize_kernel_action`, whose caller still expects the
-// old extension-oriented `PolicyError` surface. New access-backed side effects
-// should keep typed grant errors and convert them at the caller boundary.
+// TODO(deprecate-legacy-policy-error): add `#[deprecated]` after callers stop
+// expecting the old extension-oriented `PolicyError` surface. New access-backed
+// side effects should keep typed grant errors at their owning boundary.
 pub(crate) fn policy_engine_error(error: impl Into<AuthorizationError>) -> PolicyError {
     let error = error.into();
     PolicyError::ExtensionDenied {

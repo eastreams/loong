@@ -1037,7 +1037,9 @@ where
         Ok(())
     }
 
-    // TODO: deprecate this
+    // TODO(deprecate-legacy-kernel-auth): add `#[deprecated]` once old kernel
+    // envelopes stop returning `PolicyError`; new side effects must consume
+    // `Granted<ConcreteAction>` at their execution boundary.
     async fn authorize_or_audit_denial(
         &self,
         ctx: &C::Cx<'_>,
