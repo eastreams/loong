@@ -367,8 +367,9 @@ impl ToolInvocation<'_, '_> {
 impl KernelAccess<AppContextFactory> for AppExecutionContext<'_> {
     fn access(&self) -> AccessCx<'_, '_, AppContextFactory> {
         // Concrete tools depend on this narrow requirement instead of the app
-        // context type, keeping loong-tools reusable across app/test contexts.
-        AccessCx::new(self.kernel, self)
+        // context type. Delegate to the inherent accessor so this concrete
+        // context has one AccessCx construction point.
+        AppExecutionContext::access(self)
     }
 }
 
