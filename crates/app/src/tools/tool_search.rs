@@ -6,10 +6,12 @@ use serde_json::Value;
 use serde_json::json;
 
 use super::catalog::ToolView;
+#[cfg(feature = "tool-file")]
+use super::memory_tools;
 use super::runtime_config;
 use super::{
     LOONG_INTERNAL_TOOL_SEARCH_KEY, LOONG_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY,
-    TOOL_SEARCH_GRANTED_CAPABILITIES_FIELD, canonical_tool_name, issue_tool_lease, memory_tools,
+    TOOL_SEARCH_GRANTED_CAPABILITIES_FIELD, canonical_tool_name, issue_tool_lease,
 };
 
 #[path = "tool_search_entry.rs"]

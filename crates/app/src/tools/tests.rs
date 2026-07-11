@@ -593,6 +593,22 @@ fn provider_tool_definitions_are_stable_and_cover_direct_surface() {
     assert!(web_provider_description.contains("plain URL fetch/request mode"));
 }
 
+#[cfg(not(feature = "tool-file"))]
+#[test]
+fn provider_tool_definitions_hide_typed_file_tools_when_file_feature_disabled() {
+    let config = runtime_config::ToolRuntimeConfig::default();
+    let defs = provider_tool_definitions_with_config(Some(&config));
+    let names = defs
+        .iter()
+        .filter_map(|item| item.get("function"))
+        .filter_map(|function| function.get("name"))
+        .filter_map(Value::as_str)
+        .collect::<BTreeSet<_>>();
+
+    assert!(!names.contains("read"));
+    assert!(!names.contains("write"));
+}
+
 #[test]
 fn provider_exposed_tool_gate_covers_direct_and_gateway_tools() {
     assert!(is_provider_exposed_tool_name("read"));
