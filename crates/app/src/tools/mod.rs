@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use loong_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolInvocationOutcome};
+use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 use serde_json::{Value, json};
 pub(crate) use tool_internal_context::{
     ensure_untrusted_payload_does_not_use_reserved_internal_tool_context,
@@ -405,71 +405,34 @@ pub(crate) async fn execute_kernel_tool_request(
         } else {
             plane::ToolPath::from(request.tool_name.clone())
         };
-        if app_tool_plane().contains(&typed_path) {
-            // Typed migration path: app resolves the tool, kernel grants the
-            // invocation action, the plane consumes the grant, then app records
-            // the typed audit outcome. Unmigrated tools fall through at the
-            // end of this method; old tools are not wrapped into this path.
-            let caps = required_capabilities_for_request(&request);
-            let tool_policy_params = json!({
-                "tool_name": &requested_tool_name,
-                "payload": &request.payload,
-            });
-            let execution_context = ctx
-                .execution_context(
-                    loong_contracts::ExecutionPlane::Tool,
-                    loong_contracts::PlaneTier::Core,
-                    Some(&tool_policy_params),
-                    &effective_config,
-                )
-                .map_err(|error| {
-                    loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(
-                        error,
-                    ))
-                })?;
-            let action =
-                plane::ToolInvocationAction::new(typed_path.clone(), caps.clone(), request.payload);
-            let grant = ctx
-                .kernel
-                .grant_action(ctx.pack_id(), &ctx.token, action, &execution_context)
-                .await?;
-            let audit_path = grant.granted.as_ref().path().clone();
-            let audit_caps = grant
-                .granted
-                .as_ref()
-                .required_capabilities()
-                .iter()
-                .copied()
-                .collect::<BTreeSet<_>>();
+        let tool_policy_params = json!({
+            "tool_name": &requested_tool_name,
+            "payload": &request.payload,
+        });
+        let execution_context = ctx
+            .execution_context(
+                loong_contracts::ExecutionPlane::Tool,
+                loong_contracts::PlaneTier::Core,
+                Some(&tool_policy_params),
+                &effective_config,
+            )
+            .map_err(|error| {
+                loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(error))
+            })?;
 
-            match app_tool_plane()
-                .invoke(grant.granted, &execution_context)
-                .await
-            {
-                Ok(outcome) => {
-                    ctx.kernel.record_tool_invocation(
-                        &execution_context,
-                        audit_path.to_string(),
-                        &audit_caps,
-                        ToolInvocationOutcome::Completed,
-                    )?;
-                    return Ok(ToolCoreOutcome {
-                        status: "ok".to_owned(),
-                        payload: outcome,
-                    });
-                }
-                Err(error) => {
-                    let error_kind = tool_plane_error_kind(&error).to_owned();
-                    let reason = tool_plane_error_reason(&error);
-                    ctx.kernel.record_tool_invocation(
-                        &execution_context,
-                        audit_path.to_string(),
-                        &audit_caps,
-                        ToolInvocationOutcome::Failed { error_kind, reason },
-                    )?;
-                    return Err(loong_kernel::KernelError::ToolPlane(error));
-                }
+        match execution_context.tool(typed_path) {
+            Ok(invocation) => {
+                // Typed migration path: app context owns tool lookup, grant,
+                // plane invocation, and audit. Unmigrated tools fall through
+                // below instead of being wrapped into the typed path.
+                let payload = invocation.invoke(request.payload).await?;
+                return Ok(ToolCoreOutcome {
+                    status: "ok".to_owned(),
+                    payload,
+                });
             }
+            Err(loong_kernel::ToolPlaneError::ToolNotFound(_)) => {}
+            Err(error) => return Err(loong_kernel::KernelError::ToolPlane(error)),
         }
 
         let request = if request.tool_name == "read" {
@@ -519,30 +482,6 @@ pub(crate) async fn execute_kernel_tool_request(
     }
 
     execute.await
-}
-
-fn tool_plane_error_kind(error: &loong_kernel::ToolPlaneError) -> &'static str {
-    match error {
-        loong_kernel::ToolPlaneError::ToolNotFound(_) => "not_found",
-        loong_kernel::ToolPlaneError::DuplicateTool(_) => "duplicate_tool",
-        loong_kernel::ToolPlaneError::CoreAdapterNotFound(_) => "core_adapter_not_found",
-        loong_kernel::ToolPlaneError::ExtensionNotFound(_) => "extension_not_found",
-        loong_kernel::ToolPlaneError::NoDefaultCoreAdapter => "no_default_core_adapter",
-        loong_kernel::ToolPlaneError::Execution(_) => "execution",
-        _ => "tool_plane",
-    }
-}
-
-fn tool_plane_error_reason(error: &loong_kernel::ToolPlaneError) -> String {
-    match error {
-        loong_kernel::ToolPlaneError::ToolNotFound(reason)
-        | loong_kernel::ToolPlaneError::DuplicateTool(reason)
-        | loong_kernel::ToolPlaneError::CoreAdapterNotFound(reason)
-        | loong_kernel::ToolPlaneError::ExtensionNotFound(reason)
-        | loong_kernel::ToolPlaneError::Execution(reason) => reason.clone(),
-        loong_kernel::ToolPlaneError::NoDefaultCoreAdapter => error.to_string(),
-        _ => error.to_string(),
-    }
 }
 
 pub fn execute_tool_core(request: ToolCoreRequest) -> Result<ToolCoreOutcome, String> {

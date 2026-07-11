@@ -8,6 +8,7 @@ use std::{
 use async_trait::async_trait;
 use loong_contracts::{
     Capability, PolicyDecision, PolicyGrant, ToolExecutionError, ToolInputError, ToolPlaneError,
+    ToolSpec,
 };
 use loong_core::{
     policy::grant::Granted,
@@ -143,7 +144,7 @@ where
 /// tool; the plane does not claim ownership of a payload shape.
 #[async_trait]
 pub(crate) trait ToolPlane<C: ContextFactory>: Send + Sync {
-    fn contains(&self, path: &ToolPath) -> bool;
+    fn spec(&self, path: &ToolPath) -> Result<&ToolSpec, ToolPlaneError>;
 
     async fn invoke(
         &self,
@@ -245,12 +246,21 @@ impl<C> ToolPlane<C> for AppToolPlane<C>
 where
     C: ContextFactory,
 {
-    fn contains(&self, path: &ToolPath) -> bool {
-        self.paths.contains_key(path)
+    fn spec(&self, path: &ToolPath) -> Result<&ToolSpec, ToolPlaneError> {
+        let slot = self
+            .paths
+            .get(path)
+            .ok_or_else(|| ToolPlaneError::ToolNotFound(path.to_string()))?;
+        let entry = self
+            .entries
+            .get(*slot)
+            .ok_or_else(|| ToolPlaneError::ToolNotFound(path.to_string()))?;
+
+        Ok(entry.tool.spec())
     }
 
-    /// This is not expected to be used directly.
-    /// Use `ctx.invoke_tool()` in the future
+    /// This is not expected to be called from tool orchestration directly.
+    /// Use `ctx.tool(path)?.invoke(payload).await` so grant and audit stay paired.
     async fn invoke(
         &self,
         grant: Granted<ToolInvocationAction>,

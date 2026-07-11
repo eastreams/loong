@@ -2,7 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use loong_contracts::{CapabilityToken, ExecutionPlane, PlaneTier};
+use loong_contracts::{
+    CapabilityToken, ExecutionPlane, PlaneTier, ToolInvocationOutcome, ToolPlaneError,
+};
 use loong_core::policy::context::{CapabilityContext, ContextFactory};
 use loong_kernel::access::fs::{FsPathPolicyContext, FsResolutionContext};
 use loong_kernel::{
@@ -187,6 +189,101 @@ impl<'a> AppExecutionContext<'a> {
         // Tool/action code should call ctx.access() rather than rethreading the
         // kernel reference or recreating access facades by hand.
         AccessCx::new(self.kernel, self)
+    }
+
+    pub(crate) fn tool(
+        &self,
+        path: crate::tools::plane::ToolPath,
+    ) -> Result<ToolInvocation<'_, 'a>, ToolPlaneError> {
+        let spec = crate::tools::app_tool_plane().spec(&path)?;
+        let mut required_capabilities = BTreeSet::from([Capability::InvokeTool]);
+        required_capabilities.extend(spec.required_capabilities.iter().copied());
+
+        Ok(ToolInvocation {
+            ctx: self,
+            path,
+            required_capabilities,
+        })
+    }
+}
+
+/// App orchestration handle for one typed tool invocation.
+///
+/// Concrete tool implementations never receive this handle; they only receive
+/// parsed input after `invoke` has paired kernel grant, plane dispatch, and audit.
+pub(crate) struct ToolInvocation<'ctx, 'a> {
+    ctx: &'ctx AppExecutionContext<'a>,
+    path: crate::tools::plane::ToolPath,
+    required_capabilities: BTreeSet<Capability>,
+}
+
+impl ToolInvocation<'_, '_> {
+    pub(crate) async fn invoke(self, payload: Value) -> Result<Value, loong_kernel::KernelError> {
+        let action = crate::tools::plane::ToolInvocationAction::new(
+            self.path,
+            self.required_capabilities.clone(),
+            payload,
+        );
+        let grant = self
+            .ctx
+            .kernel
+            .grant_action(
+                self.ctx.pack.pack_id.as_str(),
+                self.ctx.token,
+                action,
+                self.ctx,
+            )
+            .await?;
+        let audit_path = grant.granted.as_ref().path().to_string();
+        let audit_caps = grant
+            .granted
+            .as_ref()
+            .required_capabilities()
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+
+        match crate::tools::app_tool_plane()
+            .invoke(grant.granted, self.ctx)
+            .await
+        {
+            Ok(output) => {
+                self.ctx.kernel.record_tool_invocation(
+                    self.ctx,
+                    audit_path,
+                    &audit_caps,
+                    ToolInvocationOutcome::Completed,
+                )?;
+                Ok(output)
+            }
+            Err(error) => {
+                let (error_kind, reason) = match &error {
+                    ToolPlaneError::ToolNotFound(reason) => ("not_found", reason.clone()),
+                    ToolPlaneError::DuplicateTool(reason) => ("duplicate_tool", reason.clone()),
+                    ToolPlaneError::CoreAdapterNotFound(reason) => {
+                        ("core_adapter_not_found", reason.clone())
+                    }
+                    ToolPlaneError::ExtensionNotFound(reason) => {
+                        ("extension_not_found", reason.clone())
+                    }
+                    ToolPlaneError::NoDefaultCoreAdapter => {
+                        ("no_default_core_adapter", error.to_string())
+                    }
+                    ToolPlaneError::Execution(reason) => ("execution", reason.clone()),
+                    _ => ("tool_plane", error.to_string()),
+                };
+                self.ctx.kernel.record_tool_invocation(
+                    self.ctx,
+                    audit_path,
+                    &audit_caps,
+                    ToolInvocationOutcome::Failed {
+                        error_kind: error_kind.to_owned(),
+                        reason,
+                    },
+                )?;
+                Err(loong_kernel::KernelError::ToolPlane(error))
+            }
+        }
     }
 }
 
