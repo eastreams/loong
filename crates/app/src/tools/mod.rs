@@ -364,6 +364,7 @@ pub(crate) fn resolve_installable_skill_id(root: &Path) -> Result<String, String
 /// All requests are dispatched via `kernel.execute_tool_core` which
 /// enforces the derived capability set for the effective tool request, runs
 /// policy extensions, and records audit events.
+// TODO: remove this
 pub async fn execute_tool(
     request: ToolCoreRequest,
     kernel_ctx: &KernelContext,
@@ -380,6 +381,7 @@ pub async fn execute_tool(
         .map_err(|e| format!("{e}"))
 }
 
+// TODO: remove this
 pub(crate) async fn execute_kernel_tool_request(
     ctx: &KernelContext,
     request: ToolCoreRequest,
