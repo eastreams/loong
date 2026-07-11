@@ -148,6 +148,34 @@ fn app_tool_plane_rejects_duplicate_paths() {
     assert_eq!(plane.path_count(), 1);
 }
 
+#[test]
+fn app_tool_plane_enumerates_registered_paths_from_plane_index() {
+    let mut plane = AppToolPlane::<TestContextFactory>::new();
+    plane
+        .register(
+            ToolPath::from("test.beta"),
+            EchoTool {
+                executions: Arc::new(AtomicUsize::new(0)),
+            },
+        )
+        .expect("beta tool should register");
+    plane
+        .register(
+            ToolPath::from("test.alpha"),
+            EchoTool {
+                executions: Arc::new(AtomicUsize::new(0)),
+            },
+        )
+        .expect("alpha tool should register");
+
+    let paths = plane.registered_paths();
+
+    assert_eq!(
+        paths,
+        vec![ToolPath::from("test.alpha"), ToolPath::from("test.beta")]
+    );
+}
+
 #[tokio::test]
 async fn app_tool_plane_registered_path_reports_tool_input_error() {
     let executions = Arc::new(AtomicUsize::new(0));

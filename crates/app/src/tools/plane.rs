@@ -224,6 +224,12 @@ where
 
     #[cfg(test)]
     #[must_use]
+    pub(crate) fn registered_paths(&self) -> Vec<ToolPath> {
+        self.paths.keys().cloned().collect()
+    }
+
+    #[cfg(test)]
+    #[must_use]
     pub(crate) fn len(&self) -> usize {
         self.entry_count()
     }
