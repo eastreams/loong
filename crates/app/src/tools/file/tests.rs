@@ -458,7 +458,7 @@ async fn kernel_routed_file_read_rejects_path_escape_through_typed_policy() {
 }
 
 #[tokio::test]
-async fn kernel_routed_file_read_input_error_does_not_fallback_to_legacy_adapter() {
+async fn kernel_routed_file_read_reports_typed_input_error() {
     let base = unique_temp_dir("loong-file-read-typed-error");
     let root = base.join("root");
     fs::create_dir_all(&root).expect("create root");
@@ -477,7 +477,7 @@ async fn kernel_routed_file_read_input_error_does_not_fallback_to_legacy_adapter
 
     let error = execute_file_read_via_kernel_tool_registry(request, &config)
         .await
-        .expect_err("typed read input error should not fallback");
+        .expect_err("typed read input error should fail before execution");
 
     assert!(
         format!("{error}").contains("read payload.offset must be a positive integer"),
