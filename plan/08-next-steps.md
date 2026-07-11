@@ -5,94 +5,47 @@
 `07-kernel-audit-and-deviations.md`。
 
 每个编号项都是一个最小提交候选。除非某一步明确要求合并，否则不要把相邻步骤塞进同一个
-commit。
+commit。已完成的步骤从本文件删除，避免后续实现被过期完成线误导。
 
-1. 把 `ToolInvocationAction` 收回 `loong-app::tools::plane`：
-   - 先写失败测试：`loong-core` 不再需要 `ToolPath` 才能编译 tool abstraction，
-     app typed tool invocation 仍然产生 app-owned tool execution audit；
-   - 在 `crates/app/src/tools/plane.rs` 附近定义 plane-local `ToolPath` 和
-     `ToolInvocationAction`；
-   - `AppToolPlane` 使用自己的 `Path`，不再直接使用 contracts `ToolPath`；`ToolPlane`
-     trait 不要求公开 path 类型；
-   - action payload 继续携带 agent/tool 原始 `payload: Value`，grant 后 plane 再 parse
-     concrete input；
-   - `ToolInvocationAction` 持有 app plane 自己的 path display/registry path，不把
-     concrete path type 泄漏进 contracts/core；
-   - kernel grant API 只接受 concrete `ActionMeta` 和 context，返回 `ActionGrant<A>`；
-     kernel 不知道 app plane path type，也不返回 `AuthorizedToolInvocation` receipt；
-   - 删除 `loong-core::tool::ToolInvocationAction`；该提交不添加 core generic helper；
-   - 更新注释：core 只承载 tool abstraction，`loong-app::tools::plane` owns typed
-     plane，kernel 只 grant/audit action，不执行 typed tool；
-   - 完成线：
-     - `crates/loong-core/src/tool.rs` 不再 import `loong_contracts::ToolPath`；
-     - `crates/app/src/tools/plane.rs` 不再 import contracts `ToolPath` 或 core
-       `ToolInvocationAction`；
-     - `Kernel::grant_tool_invocation` 被 generic action grant 取代，或至少不再接收
-       path-specific action type；
-     - app typed read path 通过 `ctx.tool(path)?.invoke(payload).await` 进入，内部先 grant
-       invocation action，再调用 `ToolPlane::invoke`；
-     - pack/token/caps/policy denial 由 generic action grant audit 记录，不进入 app tool
-       execution outcome；
-     - typed path tests 断言 generic action grant audit + grant 后 app-owned tool execution
-       audit，不接受 legacy `PlaneInvoked` 兜底；
-   - 验证：`cargo test -p loong-core tool`、`cargo test -p loong-kernel tool_invocation`、
-     `cargo test -p loong-app kernel_routed_file_read`、`cargo check -p loong-core -p
-     loong-kernel -p loong-app -p loong-tools -p loong`。
-
-2. 实现 effective caps / child context narrowing：
-   - `AppExecutionContext` 增加 explicit effective caps 字段，`PolicyContext::capabilities()`
-     返回该字段，而不是每次从 token 派生；
-   - 顶层 tool invocation context 由 token caps 初始化；
-   - tool 调 tool 时，根据 child tool descriptor default caps 和 optional override 构造
+1. 补齐 typed tool child capability override：
+   - 当前 `ctx.tool(path)?.invoke(payload).await` 已经用 registered descriptor caps 构造
      child effective caps；
-   - override 必须是 default caps 的子集，否则 typed input error / policy deny，不能静默
-     提升；
-   - child context 继承 kernel/workspace/config 等 ref 字段，但 caps 字段使用缩窄后的
-     集合；
+   - 剩余的是 tool->tool 调用参数里的 optional capability override；
+   - override 只能缩小 descriptor default caps，不能增加 caps；
+   - override 扩大时返回 typed input error 或 policy denial，不能静默提升；
    - 完成线：
-     - `PolicyContext::capabilities()` 的实现读取 context 字段，而不是每次从 token 派生；
-     - child context 构造函数显式接收 narrowed caps；
-     - tool invocation action 的 required caps 来自 descriptor 或 override，不在 helper 中
-     即时拼装；
-   - 测试覆盖：override 缩窄生效、override 扩大被拒、父 context 缺 cap 时 child 不会获得
-     该 cap、domain action gate 读取的是 child effective caps；
-   - 验证：`cargo test -p loong-app capabilities`、
-     `cargo test -p loong-kernel policy`、`cargo check -p loong-app -p loong-kernel`、
-     `cargo fmt --all -- --check`、`git diff --check`。
+     - child context 的 effective caps = `InvokeTool + descriptor caps` 与 override 的合法交集；
+     - 父 context 缺 cap 时 child 不会重新获得该 cap；
+     - concrete tool 内部 access/action policy gate 读取 child effective caps；
+   - 验证：`cargo test -p loong-app context::tests::`、
+     `cargo test -p loong-app kernel_routed_file_read`、
+     `cargo check -p loong-app -p loong-kernel`、`git diff --check`。
 
-3. 清理 tool descriptor/path 耦合：
-   - `ToolImpl::spec()` 返回无 path descriptor；
-   - `RegisteredTool` 只保存 descriptor/provenance/registration metadata；
-   - `ToolPlane::register(path, tool)` 组合 path + descriptor；
-   - `ReadFileTool::spec()` 不再硬编码 `"read"`；
+2. 清理 tool descriptor/path 耦合剩余面：
+   - `ToolImpl::spec()` 和 `ToolSpec` 已经不携带 path；
+   - `ToolPlane::register(path, tool)` 是 path + descriptor 的组合边界；
+   - 剩余的是 agent prompt/catalog 仍主要从 legacy catalog 投影 path；
+   - 不把 `ToolPath` 提回 core/contracts；plane 可以继续拥有自己的 path 类型；
    - 完成线：
-     - `crates/contracts/src/tool_types.rs` 不再有 tool descriptor path 字段；
-     - `crates/tools/src/file.rs` 不再出现 `"read"` / `"file.read"` 注册 path 字符串；
-     - agent prompt/catalog 的 path 显示由 plane enumeration 投影出来；
+     - typed tools 的 agent-visible path 来自 plane enumeration；
+     - concrete tool crate 不出现注册路径字符串；
+     - legacy catalog 只描述未迁移工具，或明确标注为 legacy surface；
    - 验证：`cargo test -p loong-tools --no-default-features --features file`、
      `cargo test -p loong-app kernel_routed_file_read`、
      `cargo check -p loong-core -p loong-tools -p loong-app`、`git diff --check`。
 
-4. 收敛 app typed dispatch 边界：
-   - 从 `execute_kernel_tool_request` 中抽出一个聚焦的 app orchestration 边界；
-   - 该边界最终落到 `ctx.tool(path)?.invoke(payload).await`；
-   - `ctx.tool(path)` 返回 `Result<ToolInvocation<'_>, ToolLookupError>`，只做 plane-local
-     path 解析、entry lookup 和 tool visibility 判断，不做 grant、不 parse payload；
-   - `ToolInvocation::invoke(payload)` 负责读取 descriptor、计算 child caps、构造 invocation
-     action -> kernel grant（自动 authorization audit）-> plane `invoke` -> grant 后
-     execution audit；
-   - legacy reserved payload 字段在 app ingress 抽成 `TrustedInvocationOverlay` 后，从传给
-     typed tool 的 payload 中删除；concrete tool 不直接读取 trusted overlay；
-   - 不引入 `AuthorizedToolInvocation` receipt workaround；
+3. 收敛 typed invocation ingress 的 trusted overlay：
+   - legacy reserved payload 字段先在 app ingress 抽成 `TrustedInvocationOverlay`；
+   - typed tool 收到的 payload 不包含 reserved internal context；
+   - concrete tool 不能直接读取 trusted overlay；
    - 完成线：
-     - typed read path 的直接入口是 `ctx.tool(path)?.invoke(payload).await`；
-     - `execute_kernel_tool_request` 不再手写 read-specific typed grant/invoke/audit 流程；
-     - legacy fallback 只包旧 adapter/core-tool 路径，不参与 typed path；
-   - 验证：`cargo test -p loong-app kernel_routed_file_read`、
-     `cargo test -p loong-app direct_read`、`cargo check -p loong-app -p loong-kernel`、
-     `git diff --check`。
+     - `ToolInvocation::invoke(payload)` 或其调用入口接收清理后的 agent payload；
+     - trusted overlay 只影响 app orchestration，不进入 concrete tool input parse；
+     - forged reserved payload 字段仍被拒绝；
+   - 验证：`cargo test -p loong-app tool_invoke_rejects_forged_reserved_internal_context`、
+     `cargo test -p loong-app kernel_routed_file_read`、`git diff --check`。
 
-5. 改 `read` 为 aggregate typed tool：
+4. 改 `read` 为 aggregate typed tool：
    - 删除 payload-claim/fallback 思路；
    - `ReadTool` 内部解析 `path/query/pattern/glob`；
    - `path/query/glob` 分别构造不同 action；
@@ -108,7 +61,7 @@ commit。
      `cargo test -p loong-access`、`cargo check -p loong-tools -p loong-app -p loong-access`、
      `git diff --check`。
 
-6. 继续迁移剩余 legacy side-effect tools：
+5. 继续迁移剩余 legacy side-effect tools：
    - write/edit/config.import 按同样 access-backed action 模式迁移；
    - 迁移完成后删除 `FilePolicyExtension` 对应旧分支；
    - 逐步清空 `Kernel::execute_tool_core` 调用面，再删除 `LegacyToolPlane` 和 adapter
@@ -121,7 +74,7 @@ commit。
      `cargo check -p loong-access -p loong-kernel -p loong-app -p loong` 和
      `git diff --check`。
 
-7. 测试清理：
+6. 测试清理：
    - typed tool 测试只接受 `ToolInvocation` audit；
    - legacy adapter 测试只接受 `PlaneInvoked` audit；
    - 不用 `PlaneInvoked | ToolInvocation` 这种宽松断言；
@@ -131,15 +84,15 @@ commit。
      - typed path 测试名和 helper 名不再包含 legacy fallback；
      - module-level tests 留在对应模块下，例如 `tools/plane/tests.rs`、`file/tests.rs`。
 
-8. 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration：
-    - app bootstrap 从 config 构造 concrete policy value；
-    - policy 注册使用 `PolicyPipeline::push_policy` / `push_pre_policy` /
-      `push_fallback_policy`；
-    - tool helper、access helper、legacy direct preflight 不再读取 config 做授权；
-    - 完成线：
-      - filename deny、fs allowed roots、workspace root containment 都是 typed policy；
-      - `FilePolicyExtension` 只剩未迁移 legacy tool 的迁移期分支，或在全部迁移后删除；
-      - 配置变更通过 policy registration 改变行为，不通过 action required caps 改变行为；
-    - 验证：`cargo test -p loong-kernel policy`、`cargo test -p loong-app workspace_root_tests`、
-      `cargo test -p loong-app file_read`、`cargo check -p loong-app -p loong-kernel`、
-      `git diff --check`。
+7. 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration：
+   - app bootstrap 从 config 构造 concrete policy value；
+   - policy 注册使用 `PolicyPipeline::push_policy` / `push_pre_policy` /
+     `push_fallback_policy`；
+   - tool helper、access helper、legacy direct preflight 不再读取 config 做授权；
+   - 完成线：
+     - filename deny、fs allowed roots、workspace root containment 都是 typed policy；
+     - `FilePolicyExtension` 只剩未迁移 legacy tool 的迁移期分支，或在全部迁移后删除；
+     - 配置变更通过 policy registration 改变行为，不通过 action required caps 改变行为；
+   - 验证：`cargo test -p loong-kernel policy`、`cargo test -p loong-app workspace_root_tests`、
+     `cargo test -p loong-app file_read`、`cargo check -p loong-app -p loong-kernel`、
+     `git diff --check`。
