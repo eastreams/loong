@@ -82,20 +82,24 @@ workspace 外部。nested root 必须 canonicalize 后仍位于 canonical worksp
 - 任何会执行 `file.read` / `read { path }` 的 app runtime、test harness、helper
   都必须显式注册 `FsResolvePathAction` 的 allowed-roots policy 和 `FsReadAction`
   的 terminal allow policy。否则 typed read 应该 fail closed，而不是被 fallback 放过。
-- `FsGlobAction` / `FsContentSearchAction` 的 access-side primitive 已经存在，但
-  app/bootstrap 还没有把 direct `read { pattern/glob/query }` 接到 typed tool/policy path。
-  接入前必须先补 terminal allow / configured deny policies，而不是让 legacy fallback grant
-  typed action。
+- `FsGlobAction` / `FsContentSearchAction` 的 terminal allow policy 已经在 app/bootstrap
+  注册。kernel/context-aware `read { pattern/glob/query }` 会走 typed tool/policy path；
+  无 context 的 legacy read 入口仍是后续统一 ctx/废弃旧入口时要删除的偏差。
 
 ## `file.read` 迁移状态
 
 - 目标是 `read` 作为 aggregate typed tool 进入 app plane，但它内部分出来的 action
   不能聚合。
-- `ReadFileTool` 只解析 payload、调用 `ctx.access().fs().read_file(...)`、格式化响应。
+- `ReadTool` 是 app plane 注册的 aggregate typed tool。它只解析 payload、调用
+  `ctx.access().fs()` 下的具体 operation、格式化响应。
 - 文件读取副作用发生在 `loong_access::fs`。
 - `read { path }` 分支走 `FsResolvePathAction -> GrantedPath -> FsReadAction`。
-- `read { pattern }` / `read { glob }` 已有 access-side `FsGlobAction` 前置能力；
-  `read { query }` 已有 access-side `FsContentSearchAction` 前置能力。
-- 后续需要 app policy registration 和 aggregate `ReadTool` wiring 后才能删除 legacy bridge；
-  不能在 concrete tool 里直接 `std::fs::read_dir` / `std::fs::read` 临时补 side effect。
+- `read { pattern }` / `read { glob }` 走 `FsGlobAction`。
+- `read { query }` 走 `FsContentSearchAction`。
+- kernel/context-aware direct read 已经通过 `ctx.tool("read")?.invoke(...)` 进入 typed
+  `ReadTool`；这条路径不再把 query/glob fallback 到 legacy `content.search` /
+  `glob.search`。
+- 无 context 的 legacy `execute_tool_core_with_config(read)` 仍保留旧 query/glob side
+  effect。它不能迁入 typed access，直到入口被统一 ctx 替换或正式废弃。
+- concrete `ReadTool` 不能直接 `std::fs::read_dir` / `std::fs::read` 临时补 side effect。
 - `read { path, offset: 0 }` 是 typed input error，不 fallback。

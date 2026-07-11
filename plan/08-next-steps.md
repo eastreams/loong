@@ -34,22 +34,25 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      `cargo test -p loong-app kernel_routed_file_read`、
      `cargo check -p loong-core -p loong-tools -p loong-app`、`git diff --check`。
 
-3. 改 `read` 为 aggregate typed tool：
-   - 删除 payload-claim/fallback 思路；
-   - `ReadTool` 内部解析 `path/query/pattern/glob`；
-   - `path/query/glob` 分别构造不同 action；
-   - `FsGlobAction` 和 `FsContentSearchAction` 的 access primitive 已落地；剩余工作是
-     typed policy registration、app aggregate wiring 和 legacy bridge 删除；
-   - concrete tool 不能在 query/glob 分支里直接 `std::fs::read_dir` / `std::fs::read`
-     临时补 side effect；
-   - `read { path, offset: 0 }` 是 typed input error，不 fallback；
-   - `read { query }` / `read { pattern }` / `read { glob }` 迁入 typed path 后，旧
-     direct read legacy bridge 删除；
+3. 收口 `read` 的无 context legacy surface：
+   - 已完成：app plane 注册 aggregate `ReadTool`，不是只接受 path payload 的
+     `ReadFileTool` fallback 机制；
+   - 已完成：kernel/context-aware direct read 通过 `ctx.tool("read")?.invoke(...)` 进入
+     typed `ReadTool`；
+   - 已完成：`read { path }` / `read { pattern|glob }` / `read { query }` 分别走
+     `FsReadAction` / `FsGlobAction` / `FsContentSearchAction`；
+   - 已完成：`read { query }` / `read { pattern|glob }` 测试断言 `ToolInvocation` audit，
+     不接受 legacy `PlaneInvoked`；
+   - 剩余：无 context 的 `execute_tool_core_with_config(read)` 仍会在 query/glob 模式走
+     legacy file search side effect；
+   - 剩余原因：这条入口没有 unified ctx，不能安全构造 `ctx.access()` 或
+     `ctx.tool("read")`；要么先整体迁到统一 session context，要么正式废弃 no-context
+     legacy entrypoint；
    - 完成线：
-     - app plane 注册的是 aggregate `ReadTool`，不是只接受 path payload 的 `ReadFileTool`
-       fallback 机制；
-     - `read { query }` / `read { pattern }` / `read { glob }` 的测试不再经过 legacy bridge；
-     - file read、content search、glob path 分别有自己的 concrete action；
+     - no-context direct read 入口删除、废弃，或改为要求 unified ctx；
+     - `execute_direct_read_tool_core_with_config` 不再调用 legacy
+       `execute_content_search_tool_with_config` / `execute_glob_search_tool_with_config`；
+     - concrete `ReadTool` 继续不直接 `std::fs::read_dir` / `std::fs::read`；
    - 验证：`cargo test -p loong-app direct_read`、`cargo test -p loong-app file_read`、
      `cargo test -p loong-access`、`cargo check -p loong-tools -p loong-app -p loong-access`、
      `git diff --check`。
