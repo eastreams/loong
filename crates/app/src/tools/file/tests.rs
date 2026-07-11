@@ -268,6 +268,40 @@ async fn kernel_routed_file_read_uses_typed_tool_registry() {
 }
 
 #[tokio::test]
+async fn kernel_routed_file_read_rejects_reserved_internal_payload_by_default() {
+    let base = unique_temp_dir("loong-file-read-reserved-internal-context");
+    let root = base.join("root");
+    fs::create_dir_all(&root).expect("create root");
+    fs::write(root.join("notes.txt"), "alpha").expect("write fixture");
+
+    let config = ToolRuntimeConfig {
+        file_root: Some(root),
+        ..ToolRuntimeConfig::default()
+    };
+    let request = ToolCoreRequest {
+        tool_name: "file.read".to_owned(),
+        payload: json!({
+            "path": "notes.txt",
+            "_loong": {
+                "workspace_root": base.display().to_string()
+            }
+        }),
+    };
+
+    let error = execute_file_read_via_kernel_tool_registry(request, &config)
+        .await
+        .expect_err("untrusted reserved internal context should be rejected");
+
+    assert!(
+        error
+            .to_string()
+            .contains("payload._loong is reserved for trusted internal tool context"),
+        "expected reserved internal context rejection, got: {error}"
+    );
+    let _ = fs::remove_dir_all(base);
+}
+
+#[tokio::test]
 async fn kernel_routed_file_read_rejects_path_escape_through_typed_policy() {
     let base = unique_temp_dir("loong-file-read-typed-path-policy");
     let root = base.join("root");

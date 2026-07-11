@@ -425,7 +425,21 @@ pub(crate) async fn execute_kernel_tool_request(
                 // Typed migration path: app context owns tool lookup, grant,
                 // plane invocation, and audit. Unmigrated tools fall through
                 // below instead of being wrapped into the typed path.
-                let payload = invocation.invoke(request.payload).await?;
+                ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
+                    request.tool_name.as_str(),
+                    &request.payload,
+                    "payload",
+                )
+                .map_err(|error| {
+                    loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(
+                        error,
+                    ))
+                })?;
+                let mut typed_payload = request.payload;
+                if let Some(body) = typed_payload.as_object_mut() {
+                    let _trusted_overlay = take_trusted_internal_tool_context(body);
+                }
+                let payload = invocation.invoke(typed_payload).await?;
                 return Ok(ToolCoreOutcome {
                     status: "ok".to_owned(),
                     payload,
