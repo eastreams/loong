@@ -164,6 +164,12 @@ where
 /// tool; the plane does not claim ownership of a payload shape.
 #[async_trait]
 pub(crate) trait ToolPlane<C: ContextFactory>: Send + Sync {
+    /// Enumerates app-registered paths from the plane index.
+    ///
+    /// Catalog/prompt projection should depend on this boundary instead of
+    /// rebuilding typed tool paths from static descriptors.
+    fn registered_paths(&self) -> Vec<ToolPath>;
+
     fn spec(&self, path: &ToolPath) -> Result<&ToolSpec, ToolPlaneError>;
 
     async fn invoke(
@@ -244,12 +250,6 @@ where
 
     #[cfg(test)]
     #[must_use]
-    pub(crate) fn registered_paths(&self) -> Vec<ToolPath> {
-        self.paths.keys().cloned().collect()
-    }
-
-    #[cfg(test)]
-    #[must_use]
     pub(crate) fn len(&self) -> usize {
         self.entry_count()
     }
@@ -272,6 +272,10 @@ impl<C> ToolPlane<C> for AppToolPlane<C>
 where
     C: ContextFactory,
 {
+    fn registered_paths(&self) -> Vec<ToolPath> {
+        self.paths.keys().cloned().collect()
+    }
+
     fn spec(&self, path: &ToolPath) -> Result<&ToolSpec, ToolPlaneError> {
         let slot = self
             .paths

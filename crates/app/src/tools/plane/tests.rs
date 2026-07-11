@@ -184,6 +184,14 @@ fn app_tool_plane_enumerates_registered_paths_from_plane_index() {
     );
 }
 
+#[cfg(feature = "tool-file")]
+#[test]
+fn builtin_tool_plane_exposes_registered_read_path() {
+    let paths = super::app_tool_plane().registered_paths();
+
+    assert!(paths.contains(&ToolPath::from("read")));
+}
+
 #[tokio::test]
 async fn app_tool_plane_registered_path_reports_tool_input_error() {
     let executions = Arc::new(AtomicUsize::new(0));

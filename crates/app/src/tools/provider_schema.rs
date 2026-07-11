@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Value, json};
 
@@ -33,11 +33,23 @@ pub fn try_provider_tool_definitions_for_view(view: &ToolView) -> Result<Vec<Val
 
 fn provider_tool_definitions_for_view_with_config(view: &ToolView) -> Vec<Value> {
     let catalog = tool_catalog();
+    let typed_tool_paths = super::app_tool_plane()
+        .registered_paths()
+        .into_iter()
+        .map(|path| path.to_string())
+        .collect::<BTreeSet<_>>();
     let mut tools = Vec::new();
 
     for descriptor in catalog.descriptors().iter() {
         if descriptor.availability != ToolAvailability::Runtime || !descriptor.is_provider_exposed()
         {
+            continue;
+        }
+
+        // Migrated direct tools are exposed only when the app-owned typed plane
+        // registered them. The static descriptor still supplies provider JSON
+        // until tool schemas move out of the legacy catalog.
+        if descriptor.name == "read" && !typed_tool_paths.contains(descriptor.name) {
             continue;
         }
 
