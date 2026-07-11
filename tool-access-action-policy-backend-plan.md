@@ -48,6 +48,10 @@ authorization / adapter workaround 塑形新架构。
   真的复用同一形状时再引入。
 - `ActionMeta::payload` 没有默认 `Null`。payload 是 Action 的结构化载荷；如果 action
   已经持有 `serde_json::Value`，目标 API 可以返回 `Cow<'_, Value>` 来避免无意义 clone。
+- 减少 helper function。能用类型、trait bound、owned boundary 或 action/context
+  结构表达的约束，不用 helper 暗中搬运或转换。只有在它统一多处真实重复的调用形态、
+  且该形态不适合用类型表达时，helper 才可以存在；存在时必须在 helper 附近写清楚理由
+  和归属边界。
 - 架构代码要有少量高信号注释，标明边界和意图。注释解释 why，不重复代码，也不写大段
   散文。
 
@@ -163,7 +167,20 @@ config
    - 对需要临时构造 JSON view 的 action，返回 `Cow::Owned(json!(...))`；
    - 后续 action 迁移不应复制旧的 owned `Value` 签名。
 
-6. Comment audit hygiene：
+6. Helper function hygiene：
+   - 默认先问“这里能不能用类型表达”：例如 concrete action、context requirement trait、
+     `Granted<A>`、`GrantedPath`、plane-local path/action、`ToolRegistration`；
+   - 不为 legacy envelope、display alias、policy preflight、access construction、payload
+     claim 之类边界残留新增 helper。先把转换留在 owning boundary；如果该 boundary
+     本身应该消失，就在计划里迁移/删除，而不是扩写 helper；
+   - 可以接受的 helper 必须满足两个条件：统一多处真实重复的调用形态；该调用形态不适合
+     用类型、trait 或 owned struct 表达；
+   - 每个保留的 helper 附近都要有短注释，说明它为什么不是类型、为什么放在这个模块、
+     它是否是迁移期边界。没有这些理由，就内联或类型化替代；
+   - code review 时发现 helper 只是在搬运同构数据、包装 `from`/`into`、隐藏 policy/access
+     边界或制造 alias，应当直接删除并把逻辑放回 owning layer。
+
+7. Comment audit hygiene：
    - 架构边界变更必须补少量注释，说明 ownership 和 why。注释不是“解释代码在做什么”，
      而是把只有迁移作者知道的设计约束写给后续 maintainer；
    - 每次碰下面文件时都要检查注释是否仍然准确：
@@ -224,18 +241,39 @@ pub struct ToolSpec {
 目标形状：
 
 ```rust
+slotmap::new_key_type! {
+    struct ToolSlot;
+}
+
 trait ToolPlane<C: ContextFactory> {
     type Path: Clone + Ord;
 }
 
 struct ToolRegistry<C> {
-    tools: BTreeMap<ToolPath, RegisteredTool<C>>,
+    entries: slotmap::SlotMap<ToolSlot, ToolEntry<C>>,
+    paths: BTreeMap<ToolPath, ToolSlot>,
+}
+
+struct ToolEntry<C> {
+    path: ToolPath,
+    tool: RegisteredTool<C>,
+    registration: ToolRegistration,
+}
+
+struct ToolRegistration {
+    provenance: ToolProvenance,
 }
 ```
 
 这里的 `ToolPath` 是 `loong-app::tools::plane` 内的 plane-local path，可以是
 `Vec<String>`、smallvec、interned path、trie key，或后续其它形状。层级由模块路径表达，
 不靠类型名前缀表达；也不是 contracts/core 的决定。
+
+`ToolSlot` 只是 `ToolPlane` 内部注册句柄。外部调用、audit payload、kernel grant、
+contracts/core 都不暴露 slot；它们只看 plane 提供的 path display / action payload。
+`paths` 负责把 registry path resolve 到 slot，`entries` 承载 `RegisteredTool` 本体、
+provenance 和注册元数据。未来如果 path index 换成 trie，只替换 `paths` 这一层，
+不用改 entry storage 或 concrete tool。
 
 tool 自身返回无 path descriptor：
 
@@ -413,6 +451,34 @@ grant/audit wrapper。
 
 不要为了新增工具去改 dispatcher match、catalog 拼装分支或 policy preflight 分支。
 
+内部 registry 使用 slot storage + path index：
+
+```rust
+slotmap::new_key_type! {
+    struct ToolSlot;
+}
+
+struct ToolPlaneRegistry<C> {
+    entries: slotmap::SlotMap<ToolSlot, ToolEntry<C>>,
+    paths: BTreeMap<ToolPath, ToolSlot>,
+}
+
+struct ToolEntry<C> {
+    path: ToolPath,
+    tool: RegisteredTool<C>,
+    registration: ToolRegistration,
+}
+
+struct ToolRegistration {
+    provenance: ToolProvenance,
+}
+```
+
+`ToolSlot` 不跨过 `loong-app::tools::plane` 模块边界，不出现在 audit event、
+`ToolInvocationAction`、contracts/core 或 concrete tool API 里。不要先做 alias：
+一个 path 对应一个 slot；如果后续需要多个 path 指向同一个 tool，必须单独设计 alias
+语义，不能把它当成兼容 shim 偷偷塞进 registry。
+
 ## Kernel
 
 Kernel 不再提供 typed `Kernel::invoke_tool`，也不持有 typed `tool_plane` 字段。
@@ -509,8 +575,10 @@ generic grant 只负责授权，tool invocation audit obligation 留在 app orch
 - `crates/loong-core/src/tool.rs` 里的 `ToolInvocationAction` 持有全局 `ToolPath`。
   这属于 app/plane-owned action；本轮目标是删除 core action，不新增 core generic helper。
 - `crates/app/src/tools/plane.rs` 当前 `ToolPlane` 直接使用 contracts `ToolPath`，
-  `invoke` 也消费 core `ToolInvocationAction`。目标是 app plane 自己定义 path/action，
-  contracts/core 不知道 plane registry key。
+  `invoke` 也消费 core `ToolInvocationAction`，内部存储还是
+  `BTreeMap<ToolPath, RegisteredTool<C>>`。目标是 app plane 自己定义 path/action，
+  并使用 private slot registry + path index；contracts/core 不知道 plane registry key
+  或 slot。
 - `crates/kernel/src/kernel.rs` 的 `grant_tool_invocation` 当前接收 core
   `ToolInvocationAction` 并在 deny 时记录 audit。目标是拆成 generic action grant +
   app orchestration 负责 tool invocation audit。
@@ -568,7 +636,26 @@ generic grant 只负责授权，tool invocation audit obligation 留在 app orch
      `cargo test -p loong-app kernel_routed_file_read`、`cargo check -p loong-core -p
      loong-kernel -p loong-app -p loong-tools -p loong`。
 
-2. 实现 effective caps / child context narrowing：
+2. 将 `ToolPlane` 内部存储改成 slot registry + path index：
+   - 根 `Cargo.toml` 增加 `slotmap = "1"` workspace dependency，`crates/app/Cargo.toml`
+     使用 `slotmap.workspace = true`；
+   - 在 `crates/app/src/tools/plane.rs` 定义 private `ToolSlot`，不要 re-export；
+   - 将 `AppToolPlane<C>` 从 `BTreeMap<ToolPath, RegisteredTool<C>>` 改为
+     `entries: slotmap::SlotMap<ToolSlot, ToolEntry<C>>` +
+     `paths: BTreeMap<ToolPath, ToolSlot>`；
+   - `ToolEntry<C>` 保存 `path`、`RegisteredTool<C>` 和 `ToolRegistration`；
+     `ToolRegistration` 先至少承载 provenance，后续 registration time/source 也放这里；
+     注释说明 slot 是内部注册句柄，不是 public identity；
+   - `register(path, tool)` 先检查 `paths` duplicate，再 insert entry，最后写入
+     `paths.insert(path, slot)`；不要允许 alias；
+   - `invoke(grant, ctx)` 先从 action 取 path，经 `paths` 查 slot，再从 `entries`
+     取 entry 并调用 tool；缺失 slot 返回 `ToolPlaneError::ToolNotFound(path_display)`；
+   - 测试覆盖：duplicate path 不产生第二个 entry、missing path 返回 not found、
+     invoke 仍消费 grant 并执行目标 tool、slot 不出现在 public audit payload；
+   - 验证：`cargo test -p loong-app tools::plane`、`cargo check -p loong-app`、
+     `cargo fmt --all -- --check`、`git diff --check`。
+
+3. 实现 effective caps / child context narrowing：
    - `AppExecutionContext` 增加 explicit effective caps 字段，`PolicyContext::capabilities()`
      返回该字段，而不是临时从 token 拷贝；
    - 顶层 tool invocation context 由 token caps 初始化；
@@ -581,19 +668,19 @@ generic grant 只负责授权，tool invocation audit obligation 留在 app orch
    - 测试覆盖：override 缩窄生效、override 扩大被拒、父 context 缺 cap 时 child 不会获得
      该 cap、domain action gate 读取的是 child effective caps。
 
-3. 清理 tool descriptor/path 耦合：
+4. 清理 tool descriptor/path 耦合：
    - `ToolImpl::spec()` 返回无 path descriptor；
    - `RegisteredTool` 只保存 descriptor/provenance/registration metadata；
    - `ToolPlane::register(path, tool)` 组合 path + descriptor；
    - `ReadFileTool::spec()` 不再硬编码 `"read"`。
 
-4. 收敛 app typed dispatch 边界：
+5. 收敛 app typed dispatch 边界：
    - 从 `execute_kernel_tool_request` 中抽出一个聚焦的 app orchestration 边界；
    - 该边界只做 resolve -> build invocation action -> kernel grant -> plane invoke ->
      kernel audit；
    - 不引入 `AuthorizedToolInvocation` receipt workaround。
 
-5. 改 `read` 为 aggregate typed tool：
+6. 改 `read` 为 aggregate typed tool：
    - 删除 payload-claim/fallback 思路；
    - `ReadTool` 内部解析 `path/query/pattern/glob`；
    - `path/query/glob` 分别构造不同 action；
@@ -601,16 +688,16 @@ generic grant 只负责授权，tool invocation audit obligation 留在 app orch
    - `read { query }` / `read { pattern }` / `read { glob }` 迁入 typed path 后，旧
      direct read legacy bridge 删除。
 
-6. 继续迁移剩余 legacy side-effect tools：
+7. 继续迁移剩余 legacy side-effect tools：
    - write/edit/config.import 按同样 access-backed action 模式迁移；
    - 迁移完成后删除 `FilePolicyExtension` 对应旧分支；
    - 逐步清空 `Kernel::execute_tool_core` 调用面，再删除 `LegacyToolPlane` 和 adapter
      trait。
 
-7. 测试清理：
+8. 测试清理：
    - typed tool 测试只接受 `ToolInvocation` audit；
    - legacy adapter 测试只接受 `PlaneInvoked` audit；
    - 不用 `PlaneInvoked | ToolInvocation` 这种宽松断言；
    - 每个最小提交跑对应 targeted tests、`cargo check` 和 `git diff --check`。
 
-8. 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration。
+9. 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration。
