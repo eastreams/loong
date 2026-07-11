@@ -39,7 +39,7 @@ pub trait PolicyEngine<C: ContextFactory>: Sync {
         A: 'static,
     {
         let metadata = action.metadata();
-        let granted_capabilities = ctx.capabilities();
+        let granted_capabilities = ctx.allowed_capabilities();
         for capability in metadata.required_capabilities.iter().copied() {
             if !granted_capabilities.contains(&capability) {
                 return Err(PolicyGrantError::MissingCapability { capability });
@@ -65,7 +65,7 @@ pub trait PolicyEngine<C: ContextFactory>: Sync {
 }
 
 impl PolicyContext for () {
-    fn capabilities(&self) -> BTreeSet<Capability> {
+    fn allowed_capabilities(&self) -> BTreeSet<Capability> {
         BTreeSet::new()
     }
 }

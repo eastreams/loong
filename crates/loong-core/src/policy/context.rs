@@ -5,7 +5,7 @@ use loong_contracts::Capability;
 
 pub trait PolicyContext: Send + Sync {
     /// Allowed capabilities
-    fn capabilities(&self) -> BTreeSet<Capability>;
+    fn allowed_capabilities(&self) -> BTreeSet<Capability>;
 }
 
 /// Filesystem view required by fs access.

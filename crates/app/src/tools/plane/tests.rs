@@ -29,7 +29,7 @@ impl ContextFactory for TestContextFactory {
 struct TestContext;
 
 impl PolicyContext for TestContext {
-    fn capabilities(&self) -> BTreeSet<Capability> {
+    fn allowed_capabilities(&self) -> BTreeSet<Capability> {
         BTreeSet::new()
     }
 }

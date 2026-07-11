@@ -30,7 +30,7 @@ impl AccessCxPolicyContext {
 }
 
 impl PolicyContext for AccessCxPolicyContext {
-    fn capabilities(&self) -> BTreeSet<Capability> {
+    fn allowed_capabilities(&self) -> BTreeSet<Capability> {
         self.capabilities.clone()
     }
 }

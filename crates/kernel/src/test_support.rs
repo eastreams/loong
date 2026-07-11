@@ -122,7 +122,7 @@ impl TestPolicyContext {
 }
 
 impl PolicyContext for TestPolicyContext {
-    fn capabilities(&self) -> BTreeSet<Capability> {
+    fn allowed_capabilities(&self) -> BTreeSet<Capability> {
         self.token.allowed_capabilities.clone()
     }
 }
