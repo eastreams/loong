@@ -183,6 +183,30 @@ impl<'a> AppExecutionContext<'a> {
         })
     }
 
+    pub(crate) fn narrow_capabilities(
+        &self,
+        effective_capabilities: BTreeSet<Capability>,
+    ) -> Result<Self, String> {
+        if !effective_capabilities.is_subset(&self.effective_capabilities) {
+            return Err("child execution context cannot add capabilities".to_owned());
+        }
+
+        // Tool-to-tool and tool-to-access paths inherit runtime references but
+        // must not regain capabilities removed by the parent context.
+        Ok(Self {
+            kernel: self.kernel,
+            pack: self.pack,
+            token: self.token,
+            effective_capabilities,
+            now_epoch_s: self.now_epoch_s,
+            plane: self.plane,
+            tier: self.tier,
+            request_parameters: self.request_parameters,
+            fs_resolution_root: self.fs_resolution_root.clone(),
+            fs_allowed_roots: self.fs_allowed_roots.clone(),
+        })
+    }
+
     #[must_use]
     pub(crate) fn access(&self) -> AccessCx<'_, 'a, AppContextFactory> {
         // AccessCx construction is localized at the concrete context boundary.
@@ -219,6 +243,12 @@ pub(crate) struct ToolInvocation<'ctx, 'a> {
 
 impl ToolInvocation<'_, '_> {
     pub(crate) async fn invoke(self, payload: Value) -> Result<Value, loong_kernel::KernelError> {
+        let tool_ctx = self
+            .ctx
+            .narrow_capabilities(self.required_capabilities.clone())
+            .map_err(|error| {
+                loong_kernel::KernelError::ToolPlane(ToolPlaneError::Execution(error))
+            })?;
         let action = crate::tools::plane::ToolInvocationAction::new(
             self.path,
             self.required_capabilities.clone(),
@@ -228,10 +258,10 @@ impl ToolInvocation<'_, '_> {
             .ctx
             .kernel
             .grant_action(
-                self.ctx.pack.pack_id.as_str(),
-                self.ctx.token,
+                tool_ctx.pack.pack_id.as_str(),
+                tool_ctx.token,
                 action,
-                self.ctx,
+                &tool_ctx,
             )
             .await?;
         let audit_path = grant.granted.as_ref().path().to_string();
@@ -244,12 +274,12 @@ impl ToolInvocation<'_, '_> {
             .collect::<BTreeSet<_>>();
 
         match crate::tools::app_tool_plane()
-            .invoke(grant.granted, self.ctx)
+            .invoke(grant.granted, &tool_ctx)
             .await
         {
             Ok(output) => {
-                self.ctx.kernel.record_tool_invocation(
-                    self.ctx,
+                tool_ctx.kernel.record_tool_invocation(
+                    &tool_ctx,
                     audit_path,
                     &audit_caps,
                     ToolInvocationOutcome::Completed,
@@ -272,8 +302,8 @@ impl ToolInvocation<'_, '_> {
                     ToolPlaneError::Execution(reason) => ("execution", reason.clone()),
                     _ => ("tool_plane", error.to_string()),
                 };
-                self.ctx.kernel.record_tool_invocation(
-                    self.ctx,
+                tool_ctx.kernel.record_tool_invocation(
+                    &tool_ctx,
                     audit_path,
                     &audit_caps,
                     ToolInvocationOutcome::Failed {
@@ -660,6 +690,31 @@ mod tests {
             error,
             "execution context cannot add capabilities beyond token"
         );
+    }
+
+    #[test]
+    fn narrow_capabilities_rejects_capabilities_removed_by_parent_context() {
+        let context = bootstrap_test_kernel_context("test-agent", 60).expect("bootstrap context");
+        let parent = AppExecutionContext::new_with_effective_capabilities(
+            context.kernel.as_ref(),
+            context.pack.as_ref(),
+            &context.token,
+            BTreeSet::from([Capability::MemoryRead]),
+            context.kernel.now_epoch_s(),
+            ExecutionPlane::Memory,
+            PlaneTier::Core,
+            None,
+            &context.tool_runtime_config,
+        )
+        .expect("parent execution context should build");
+        let child_caps = BTreeSet::from([Capability::MemoryRead, Capability::FilesystemRead]);
+
+        let error = match parent.narrow_capabilities(child_caps) {
+            Ok(_) => panic!("child context must not regain parent-removed capabilities"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error, "child execution context cannot add capabilities");
     }
 
     #[cfg(feature = "memory-sqlite")]
