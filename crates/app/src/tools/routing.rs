@@ -1,13 +1,11 @@
 use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
-use loong_core::tool::{RegisteredTool, ToolProvenance};
-use loong_tools::file::ReadFileTool;
 use serde_json::Value;
 
 use crate::context::AppExecutionContext;
 
 use super::{
     BASH_EXEC_TOOL_NAME, ToolView, canonical_tool_name, execute_discoverable_tool_core_with_config,
-    file, runtime_config, runtime_tool_view_for_runtime_config, tool_surface,
+    file, plane, runtime_config, runtime_tool_view_for_runtime_config, tool_surface,
 };
 use super::{DELEGATE_ASYNC_TOOL_NAME, DELEGATE_TOOL_NAME, config_import};
 
@@ -110,56 +108,18 @@ async fn execute_direct_read_tool_core_with_context(
     config: &runtime_config::ToolRuntimeConfig,
     ctx: &AppExecutionContext<'_>,
 ) -> Result<ToolCoreOutcome, String> {
-    // Migration bridge for the direct `read` facade. Path reads now use access;
-    // query/glob modes still use legacy search implementations until they move
-    // behind an aggregate typed ReadTool.
-    let (read_route, direct_request) = route_direct_read_request_for_kernel(request, config)?;
-
-    match read_route {
-        DirectReadRoute::Path => {
-            let _ = config;
-            // Migration bridge only: once the app ToolPlane owns this direct
-            // read path, delete this local sealed-tool invocation and route
-            // through ToolPlane::invoke so there is one typed dispatch path.
-            let tool = RegisteredTool::<crate::context::AppContextFactory>::from_tool(
-                ToolProvenance::Compatibility,
-                ReadFileTool,
-            );
-            let outcome = tool
-                .invoke(ctx, direct_request.payload)
-                .await
-                .map_err(super::plane::tool_execution_error_reason)?;
-            Ok(ToolCoreOutcome {
-                status: "ok".to_owned(),
-                payload: outcome,
-            })
-        }
-        // TODO(access-migration): Query search still uses the legacy file tool
-        // implementation; only path reads have moved to access in this pass.
-        DirectReadRoute::Query => {
-            file::execute_content_search_tool_with_config(direct_request, config)
-        }
-        // TODO(access-migration): Glob search still uses the legacy file tool
-        // implementation; move it before widening the migrated read surface.
-        DirectReadRoute::Pattern => {
-            file::execute_glob_search_tool_with_config(direct_request, config)
-        }
-    }
-}
-
-pub(crate) fn route_direct_read_tool_request_for_legacy(
-    request: ToolCoreRequest,
-    config: &runtime_config::ToolRuntimeConfig,
-) -> Result<ToolCoreRequest, String> {
-    let (read_route, request) = route_direct_read_request_for_kernel(request, config)?;
-    let tool_name = match read_route {
-        DirectReadRoute::Path => "read",
-        DirectReadRoute::Query => "content.search",
-        DirectReadRoute::Pattern => "glob.search",
-    };
-    Ok(ToolCoreRequest {
-        tool_name: tool_name.to_owned(),
-        payload: request.payload,
+    // Preserve direct-read normalization (path priority, glob alias handling)
+    // before dispatching through the typed aggregate tool.
+    let (_read_route, direct_request) = route_direct_read_request_for_kernel(request, config)?;
+    let outcome = ctx
+        .tool(plane::ToolPath::from("read"))
+        .map_err(|error| error.to_string())?
+        .invoke(direct_request.payload)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(ToolCoreOutcome {
+        status: "ok".to_owned(),
+        payload: outcome,
     })
 }
 

@@ -13,7 +13,7 @@ use loong_kernel::{
         FsResolvePathAllowedRootsPolicy,
     },
 };
-use loong_tools::file::ReadFileTool;
+use loong_tools::file::ReadTool;
 use serde_json::json;
 
 use super::*;
@@ -114,7 +114,7 @@ async fn execute_file_read_with_test_context(
         kernel_ctx.execution_context(ExecutionPlane::Tool, PlaneTier::Core, None, config)?;
     let _ = config;
     let tool =
-        RegisteredTool::<AppContextFactory>::from_tool(ToolProvenance::Compatibility, ReadFileTool);
+        RegisteredTool::<AppContextFactory>::from_tool(ToolProvenance::Compatibility, ReadTool);
     let outcome = tool
         .invoke(&execution_context, request.payload)
         .await
@@ -259,7 +259,124 @@ async fn kernel_routed_file_read_uses_typed_tool_registry() {
                 path_display,
                 outcome: loong_kernel::ToolInvocationOutcome::Completed,
                 ..
-            } if path_display == "file.read"
+            } if path_display == "read"
+        )
+    }));
+    assert!(!events.iter().any(|event| {
+        matches!(
+            &event.kind,
+            loong_kernel::AuditEventKind::PlaneInvoked {
+                primary_adapter,
+                ..
+            } if primary_adapter.starts_with("legacy:")
+        )
+    }));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[tokio::test]
+async fn kernel_routed_direct_read_glob_uses_typed_tool_registry() {
+    let base = unique_temp_dir("loong-read-glob-typed-registry");
+    let root = base.join("root");
+    fs::create_dir_all(root.join("src/nested")).expect("create root");
+    fs::write(root.join("src/lib.rs"), "pub fn alpha() {}").expect("write lib");
+    fs::write(root.join("src/nested/mod.rs"), "pub fn beta() {}").expect("write mod");
+    fs::write(root.join("README.md"), "hello").expect("write readme");
+
+    let config = ToolRuntimeConfig {
+        file_root: Some(root),
+        ..ToolRuntimeConfig::default()
+    };
+    let request = ToolCoreRequest {
+        tool_name: "read".to_owned(),
+        payload: json!({
+            "pattern": "src/**/*.rs",
+            "max_results": 10
+        }),
+    };
+
+    let (outcome, audit) = execute_file_read_via_kernel_tool_registry(request, &config)
+        .await
+        .expect("read glob should execute through typed registry");
+
+    assert_eq!(outcome.status, "ok");
+    let matches = outcome.payload["matches"]
+        .as_array()
+        .expect("matches array");
+    assert_eq!(matches.len(), 2);
+    assert_eq!(matches[0]["path"], "src/lib.rs");
+    assert_eq!(matches[1]["path"], "src/nested/mod.rs");
+    let events = audit.snapshot();
+    assert!(events.iter().any(|event| {
+        matches!(
+            &event.kind,
+            loong_kernel::AuditEventKind::ToolInvocation {
+                path_display,
+                outcome: loong_kernel::ToolInvocationOutcome::Completed,
+                ..
+            } if path_display == "read"
+        )
+    }));
+    assert!(!events.iter().any(|event| {
+        matches!(
+            &event.kind,
+            loong_kernel::AuditEventKind::PlaneInvoked {
+                primary_adapter,
+                ..
+            } if primary_adapter.starts_with("legacy:")
+        )
+    }));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[tokio::test]
+async fn kernel_routed_direct_read_query_uses_typed_tool_registry() {
+    let base = unique_temp_dir("loong-read-query-typed-registry");
+    let root = base.join("root");
+    fs::create_dir_all(root.join("src")).expect("create root");
+    fs::write(
+        root.join("src/main.rs"),
+        "fn main() {\n    println!(\"hello world\");\n}\n",
+    )
+    .expect("write main");
+    fs::write(root.join("notes.txt"), "hello from notes").expect("write notes");
+
+    let config = ToolRuntimeConfig {
+        file_root: Some(root),
+        ..ToolRuntimeConfig::default()
+    };
+    let request = ToolCoreRequest {
+        tool_name: "read".to_owned(),
+        payload: json!({
+            "query": "hello world",
+            "glob": "src/**/*.rs",
+            "max_results": 5
+        }),
+    };
+
+    let (outcome, audit) = execute_file_read_via_kernel_tool_registry(request, &config)
+        .await
+        .expect("read query should execute through typed registry");
+
+    assert_eq!(outcome.status, "ok");
+    let matches = outcome.payload["matches"]
+        .as_array()
+        .expect("matches array");
+    let first = matches.first().expect("first match");
+    assert_eq!(matches.len(), 1);
+    assert_eq!(first["path"], "src/main.rs");
+    assert_eq!(first["line"], 2);
+    assert_eq!(first["column"], 15);
+    assert_eq!(first["snippet"], "println!(\"hello world\");");
+    let events = audit.snapshot();
+    assert!(events.iter().any(|event| {
+        matches!(
+            &event.kind,
+            loong_kernel::AuditEventKind::ToolInvocation {
+                path_display,
+                outcome: loong_kernel::ToolInvocationOutcome::Completed,
+                ..
+            } if path_display == "read"
         )
     }));
     assert!(!events.iter().any(|event| {

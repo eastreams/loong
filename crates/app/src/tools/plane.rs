@@ -300,15 +300,14 @@ pub(crate) fn app_tool_plane() -> &'static dyn ToolPlane<AppContextFactory> {
         #[allow(unused_mut)]
         let mut plane = AppToolPlane::new();
         #[cfg(feature = "tool-file")]
-        // Only the provider-facing file-read tool is migrated here. The direct
-        // `read` facade stays on the legacy fallback path until it becomes an
-        // aggregate typed tool for path/query/glob actions.
+        // `read` is the aggregate typed facade; provider aliases such as
+        // `file.read` canonicalize to this path before plane lookup.
         {
             let duplicate = plane
                 .register_with_provenance(
-                    ToolPath::from("file.read"),
+                    ToolPath::from("read"),
                     ToolProvenance::Builtin,
-                    loong_tools::file::ReadFileTool,
+                    loong_tools::file::ReadTool,
                 )
                 .err();
             debug_assert!(

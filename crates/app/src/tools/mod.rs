@@ -400,11 +400,7 @@ pub(crate) async fn execute_kernel_tool_request(
             loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(error))
         })?;
 
-        let typed_path = if matches!(requested_tool_name.as_str(), "file.read" | "file_read") {
-            plane::ToolPath::from("file.read")
-        } else {
-            plane::ToolPath::from(request.tool_name.clone())
-        };
+        let typed_path = plane::ToolPath::from(request.tool_name.clone());
         let tool_policy_params = json!({
             "tool_name": &requested_tool_name,
             "payload": &request.payload,
@@ -449,20 +445,6 @@ pub(crate) async fn execute_kernel_tool_request(
             Err(error) => return Err(loong_kernel::KernelError::ToolPlane(error)),
         }
 
-        let request = if request.tool_name == "read" {
-            // Legacy fallback for the direct read facade. Until `read` becomes
-            // an aggregate typed tool, only explicit `file.read` enters the
-            // typed plane above.
-            routing::route_direct_read_tool_request_for_legacy(request, &effective_config).map_err(
-                |error| {
-                    loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(
-                        error,
-                    ))
-                },
-            )?
-        } else {
-            request
-        };
         let caps = required_capabilities_for_request(&request);
         let tool_policy_params = json!({
             "tool_name": &request.tool_name,
