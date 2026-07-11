@@ -27,7 +27,7 @@ impl AccessCxPolicyContext {
         let policy_root =
             std::fs::canonicalize(&workspace_root).unwrap_or_else(|_| workspace_root.clone());
         Self {
-            resolution_root: workspace_root.clone(),
+            resolution_root: workspace_root,
             allowed_roots: vec![policy_root],
             capabilities: BTreeSet::from([Capability::FilesystemRead]),
         }
