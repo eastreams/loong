@@ -42,6 +42,9 @@ authorization / adapter workaround 塑形新架构。
   类型由具体 `ToolPlane` 定义；core 不能替所有 plane 规定 `ToolPath` 的结构。
 - `ToolImpl` 不拥有 path。tool 自身只描述输入/输出/能力/说明；注册到某个 plane 时，
   plane 才把自己的 `Path` 和 tool descriptor 组合成 registered spec。
+- `loong_contracts::ToolOutcome` 直接删除。typed target 是 `Result<Value, E>`：success
+  是 `serde_json::Value`，failure 是该层自己的 error type。尚未迁完的 legacy bridge
+  继续用 `ToolCoreOutcome` 兼容旧 app/tool-core 边界。
 - `ToolInvocationAction` 可以存在，但它属于具体 plane/app 的治理边界，不能在 core 里
   持有全局 `ToolPath`。类型名不加 `App` 前缀；层级由模块路径表达，例如
   `loong-app::tools::plane::ToolInvocationAction`。公共泛型 helper 只有在多个 plane
@@ -57,12 +60,19 @@ authorization / adapter workaround 塑形新架构。
 
 ## 分层边界
 
-- `loong-contracts`：稳定数据类型，例如 `ToolOutcome`、`ToolInputError`、
-  `AuditEventKind`、`PolicyReport`。不要定义全局 `ToolPath`；不要让 tool descriptor
-  携带 registry path。
+- `loong-contracts`：稳定数据类型，例如 `ToolInputError`、`ToolCoreOutcome`、
+  `PolicyReport`，以及 kernel/sink 需要的 generic audit primitives。`ToolCoreOutcome` 是
+  legacy app/tool-core invocation envelope；`loong_contracts::ToolOutcome` 应删除，而不是
+  作为 typed tool compatibility layer 保留。不要定义全局 `ToolPath`；不要让 tool
+  descriptor 携带 registry path。
+- tool invocation shortcut 挂在 app-defined context 上，例如 `ctx.invoke_tool(path,
+  payload)`。它内部使用 app plane registry 构造 invocation action，走 kernel grant，再
+  调用 plane 的 `invoke`；`ToolPlane` trait 本身不接收 kernel/audit 参数，也不从
+  ctx 暗中偷裸 audit API。
 - `loong-core`：行为 trait 和不可伪造授权模型，例如 `ActionMeta`、`Action<Cx>`、
   `Granted<A>`、`ToolImpl<C>`、`RegisteredTool<C>`。core 不决定 ToolPlane path 类型；
-  core 里的 registered tool 只擦除 concrete tool，不表达注册位置。
+  core 里的 registered tool 只擦除 concrete tool，不表达注册位置，也不把 success
+  payload 包成 legacy envelope。
 - `loong-kernel`：governance authority，提供 policy pipeline、token/pack boundary、
   grant、audit sink、clock/event id。kernel 不持有 typed tool registry，也不拥有
   concrete ToolPlane path 类型。
@@ -72,7 +82,8 @@ authorization / adapter workaround 塑形新架构。
   concrete tool registration、legacy fallback orchestration。
 - `loong-tools`：concrete builtin tool implementations only。这个 crate 不承载
   `ToolImpl`、`RegisteredTool`、registry、plane、policy/action 抽象；它只放
-  `ReadFileTool` 这类具体工具和它们的 payload/response helper。
+  `ReadFileTool` 这类具体工具和它们的 input/output 类型及小范围格式化逻辑。concrete
+  tool 不直接返回 legacy envelope。
 
 ## Capability 不变量
 
@@ -197,18 +208,21 @@ config
        附近要讲清 `AccessCx::new(...)` 只应出现在 concrete context 的 `access()` 实现里；
        普通 tool/action 调用点应使用 `ctx.access()`，不要恢复 `kernel.access(ctx)`。
      - `crates/app/src/tools/plane.rs`：注释必须讲清 `loong-app::tools::plane`
-       owns typed plane，kernel 不持有 typed registry；plane 按 path resolve，不按 payload claim；`invoke` 消费
-       `Granted<ToolInvocationAction>`，所以 concrete tool implementer 不需要也不能自己做
-       audit/grant。
+       owns typed plane，kernel 不持有 typed registry；plane 按 path resolve，不按 payload claim；
+       `invoke` 消费 `Granted<ToolInvocationAction>`，所以它是 granted primitive；普通调用
+       点应使用 `ctx.invoke_tool(...)`，不要绕过 grant shortcut 直接执行。
      - `crates/app/src/tools/mod.rs`：typed dispatch 边界附近要讲清它只是迁移期
-       orchestration：resolve -> invocation action -> kernel grant -> plane invoke ->
-       kernel audit；`read` query/glob legacy bridge 是临时桥，不是 payload-claim 设计。
-     - `crates/kernel/src/kernel.rs`：`grant_tool_invocation` / `record_tool_invocation`
-       注释必须讲清 kernel 是 governance authority，不执行 typed tool；tool invocation
-       grant 只授权进入 `ToolImpl`，tool 内部 side effect 仍需自己的 access action grant。
-     - `crates/contracts/src/audit_types.rs`：`ToolInvocation` / `ToolInvocationOutcome`
-       注释必须讲清 audit 记录的是一次 tool invocation attempt 的结果；它不表达
-       `ToolInvocationRoute`，也不能固化 concrete ToolPlane registry key 类型。
+       orchestration：`ctx.invoke_tool` -> app plane resolve/build action -> kernel grant ->
+       plane `invoke`；`read` query/glob legacy bridge 是临时桥，不是 payload-claim
+       设计。
+     - `crates/kernel/src/kernel.rs`：generic `grant` 注释必须讲清 kernel 是 governance
+       authority，不执行 typed tool；grant 过程负责 action authorization audit；tool
+       invocation grant 只授权进入 `ToolImpl`，tool 内部 side effect 仍需自己的 access
+       action grant。
+     - `crates/contracts/src/audit_types.rs`：逐步只保留 kernel/sink 需要的 generic audit
+       primitives。tool-specific execution audit 是 app runtime schema，不应在
+       contracts/kernel 固化 `ToolInvocationRoute`、`ToolInvocationOutcome` 或 concrete
+       ToolPlane registry key 类型。
      - `crates/loong-core/src/policy/action.rs`：`ActionMeta::payload()` 注释必须讲清 payload
        是 Action 的 type-erased structured view，不是 legacy bridge；签名是
        `Cow<'_, Value>`，并且没有默认 `Null`。
@@ -218,7 +232,8 @@ config
        aggregate `ReadTool`；迁移完成后删除 bridge，而不是把它提升成长期 routing 机制。
    - 注释验收标准：读者只看相关类型/函数附近的注释，就能回答“这个层拥有谁”“为什么不在
      另一个 crate”“这个 fallback 是否长期存在”“谁可以做副作用”“grant 何时被消费”；
-   - typed path 测试只断言 typed audit，legacy path 测试只断言 legacy audit；
+   - typed path 测试断言 generic action grant audit + grant 后 tool execution audit；
+     legacy path 测试只断言 legacy audit；
    - 不新增 `PlaneInvoked | ToolInvocation` 这种宽松断言；
    - 模块测试继续放对应模块下，例如 `tools/plane/tests.rs`、`file/tests.rs`。
 
@@ -255,7 +270,6 @@ struct ToolRegistry<C> {
 }
 
 struct ToolEntry<C> {
-    path: ToolPath,
     tool: RegisteredTool<C>,
     registration: ToolRegistration,
 }
@@ -274,6 +288,8 @@ contracts/core 都不暴露 slot；它们只看 plane 提供的 path display / a
 `paths` 负责把 registry path resolve 到 slot，`entries` 承载 `RegisteredTool` 本体、
 provenance 和注册元数据。未来如果 path index 换成 trie，只替换 `paths` 这一层，
 不用改 entry storage 或 concrete tool。
+`ToolEntry` 不保存 path，避免和 `paths` index 形成可 drift 的重复状态。当前不设计
+slot-based unregister；如果后续需要，再补 reverse index 或明确 owner invariant。
 
 tool 自身返回无 path descriptor：
 
@@ -282,12 +298,11 @@ pub struct ToolDescriptor {
     pub description: String,
     pub required_capabilities: BTreeSet<Capability>,
 }
-
-pub struct RegisteredToolSpec<P> {
-    pub path: P,
-    pub descriptor: ToolDescriptor,
-}
 ```
+
+如果 catalog / agent prompt 需要“path + descriptor”的视图，由 plane 在列举时从
+`paths` index 和 entry descriptor 临时投影出来；不要先固定一个 core-level
+`RegisteredToolSpec<P>`。
 
 因此新增 tool 的 path 只出现在注册点：
 
@@ -306,10 +321,11 @@ Tool dispatch 也是 action，但它不是 `FsReadAction` 这种 domain side-eff
 ```text
 App execute_kernel_tool_request
   -> canonicalize request
-  -> loong-app::tools::plane::ToolPlane.resolve(path)
+  -> ctx.invoke_tool(path, payload)
+  -> AppToolPlane internal resolve/build action
   -> loong-app::tools::plane::ToolInvocationAction(path, required_caps, payload)
   -> Kernel::grant(action)
-  -> ActionGrant<ToolInvocationAction>
+  -> Granted<ToolInvocationAction>
   -> ToolPlane.invoke(Granted<ToolInvocationAction>, &ctx)
   -> ToolImpl::execute(&ctx, input)
   -> ctx.access().fs().read_file(...)
@@ -422,16 +438,13 @@ grant.granted.run(ctx).await
 
 ```rust
 trait ToolPlane<C: ContextFactory> {
-    type Path: Clone + Ord;
     type InvocationAction: ActionMeta;
-
-    fn resolve(&self, path: &Self::Path) -> Result<&RegisteredTool<C>, ToolPlaneError>;
 
     async fn invoke(
         &self,
         grant: Granted<Self::InvocationAction>,
         ctx: &C::Cx<'_>,
-    ) -> Result<ToolOutcome, ToolPlaneError>;
+    ) -> Result<serde_json::Value, ToolPlaneError>;
 }
 ```
 
@@ -441,8 +454,18 @@ trait ToolPlane<C: ContextFactory> {
 是否 fallback。
 
 `invoke` 消费 `Granted<Self::InvocationAction>`，所以 typed tool 不能绕过 policy grant
-执行。`ErasedTool` 保持 private/sealed，避免 concrete tool implementer 绕过 plane 的
-grant/audit wrapper。
+执行。它返回的是 success payload，不是 legacy envelope；旧 `ToolCoreOutcome` 兼容只发生
+在 legacy bridge。`ErasedTool` 保持 private/sealed，避免 concrete tool implementer 绕过
+plane 的 grant wrapper。这个方法是 granted primitive；普通调用点应使用
+`ctx.invoke_tool(path, payload)`，让 app context 负责 resolve/build action、kernel grant 和
+audit。
+
+自动 grant 的 shortcut 不放在 `ToolPlane` trait 上。它挂在 app-defined context 上，例如
+`ctx.invoke_tool(path, payload)`，因为它是 app runtime orchestration：resolve path、读取
+descriptor、构造 invocation action、调用 kernel grant、再把 grant 交给 plane。
+`ToolPlane` trait 只表达“已授权 invocation 如何 dispatch”，不知道 kernel、token、pack、
+audit sink 或 event id。这样 concrete tool 可以通过 ctx 做受治理的 tool->tool 调用，但
+仍然拿不到裸 audit API。
 
 新增 concrete tool 的目标改动面：
 
@@ -464,7 +487,6 @@ struct ToolPlaneRegistry<C> {
 }
 
 struct ToolEntry<C> {
-    path: ToolPath,
     tool: RegisteredTool<C>,
     registration: ToolRegistration,
 }
@@ -492,70 +514,79 @@ Kernel::grant(
     impl ActionMeta,
     &ctx,
 ) -> ActionGrant<A>
-
-Kernel::record_tool_invocation(&ctx, path_display, required_caps, outcome)
 ```
 
 tool invocation 的治理入口不需要知道 concrete path 类型；它只需要 `ActionMeta` 提供
 operation/payload/required capabilities。pack boundary、token boundary、policy pipeline
 仍在 kernel 检查。
 
-`Kernel::grant` 不做 tool dispatch，也不拥有 tool registry。tool invocation audit 是 app
-orchestration 的 obligation：app 在调用 grant 前保留 action metadata/path display，在
-grant deny / invoke failed / invoke completed 后调用 kernel audit API 记录结果。
+`Kernel::grant` 不做 tool dispatch，也不拥有 tool registry。grant 过程天然记录
+authorization audit：action metadata、required caps、policy report、allow/deny 和
+grant id 都在这里落审计。tool invocation 的 denied evidence 因而属于 generic action
+grant audit，不需要单独的 `ToolInvocationOutcome::Denied` 或 receipt workaround。
 
-`record_tool_invocation` 记录的是 plane 给出的 stable display path / serialized path，
-不是 contracts 定义的全局 `ToolPath`。ToolImpl 本身不拿 audit capability。
+grant 后的 execution outcome audit 属于 grant consumption 边界。对 tool 来说，这个边界
+是 `ctx.invoke_tool(...) -> ToolPlane::invoke(...)`；对 fs 来说，是
+`Granted<FsReadAction>::run(ctx)`。它只能记录 grant 已经发放之后的 completed / failed /
+input error 等结果，不能重复表达 authorization deny。
 
 旧 `Kernel::execute_tool_core` 暂时只服务 legacy fallback。旧 `CoreToolAdapter` /
 `ToolExtensionAdapter` 只能被 `LegacyToolPlane` 包住，迁移完后删除。
 
 ## Audit
 
-typed tool invocation 应该有 audit event。tool 调用是 agent/user 可见的治理边界；
-成功、失败、拒绝都必须能在 audit 里查到。否则 typed tool 从 legacy
-`PlaneInvoked` 迁走后，证据链反而变少。
+audit 分两层，不再把所有内容塞进 kernel/contract enum。
 
-但 audit event 不能固化 ToolPlane 的 registry key 类型。此前把
-`ToolInvocation { path: ToolPath, ... }` 加到 `AuditEventKind` 里是过度固化；现在已经
-收敛为 audit-only 的 `path_display`。audit 需要的是可读、稳定、可关联的 path 表示，
-不是具体 plane 的 key。`ToolPath` 不应该成为 contracts/core 的全局类型。
+- kernel 只拥有 `AuditSink`、event id/clock/grant id，以及 generic action authorization
+  audit。`Kernel::grant` 对任意 action 统一记录 action metadata、required caps、
+  policy report、allow/deny 和 grant id。
+- app 拥有 tool-specific execution audit schema。tool path display、tool execution
+  outcome、legacy fallback 对比都属于 app runtime 语义；app 可以把这些事件写入 kernel
+  提供的 sink，但 kernel 不需要定义这些业务 enum。
 
-typed tool audit event 不记录 `ToolInvocationRoute`。route 是 app orchestration 的决策，
-不是 contracts/kernel 的稳定概念，也不该成为长期 contract。
+typed tool invocation 应该有 audit evidence。tool 调用是 agent/user 可见的治理边界；
+authorization allow/deny 由 generic action grant audit 记录；grant 后的执行成功/失败由
+app-owned execution audit 记录。否则 typed tool 从 legacy `PlaneInvoked` 迁走后，证据链
+反而变少。
 
-当前事件只记录：
+tool-specific audit event 不能固化到 contracts/kernel 的 ToolPlane registry key 类型。
+此前把 `ToolInvocation { path: ToolPath, ... }` 加到 `AuditEventKind` 里是过度固化。app
+层可以为 audit payload 存 `path_display`，因为 audit 需要的是可读、稳定、可关联的 path
+表示，不是具体 plane 的 key。`ToolPath` 不应该成为 contracts/core 的全局类型。
+
+app-owned tool execution event 只记录 grant 后结果：
 
 ```rust
 ToolInvocation {
     pack_id,
     path_display,
-    required_capabilities,
-    outcome,
+    grant_id,
+    execution_outcome,
 }
 ```
 
-这里的 `path_display` 是 audit payload，不是 registry key 类型。不同 `ToolPlane` 可以有
-不同 path model，只要能在 audit 中给出稳定、可读、可关联的表示。
+这里的 `path_display` 是 app audit payload，不是 registry key 类型。不同 `ToolPlane` 可以
+有不同 path model，只要 app 在 audit 中给出稳定、可读、可关联的表示。
 
-`ToolInvocationOutcome` 放在 contracts 可以接受，因为它是 audit payload 的稳定结果形状。
-但它只能描述一次 tool invocation attempt 的结果，不能隐含 app plane route、fallback
-机制或 concrete registry 实现。
+`ToolInvocationOutcome` 如果保留，应放在 app 层，只能描述 grant 后 execution outcome，
+例如 completed / failed / input_error；不能包含 denied 分支，不能隐含 fallback 机制为
+kernel contract。
 
 legacy adapter 仍暂时记录旧 `PlaneInvoked`，直到对应工具迁移完成。
 
 ### Tool audit failure matrix
 
-typed tool audit 由 app orchestration 强制记录，concrete `ToolImpl` 不拿 audit API。
+authorization audit 由 `Kernel::grant` 强制记录，concrete `ToolImpl` 不拿 audit API。
+execution audit 由 `ctx.invoke_tool` / granted action run 边界强制记录。
 
-- invocation grant 被 pack/token/caps 拒绝：app orchestration 通过 kernel audit API 记录
-  `ToolInvocationOutcome::Denied { report: None, ... }`，plane 不执行。
-- invocation policy 被 `PolicyPipeline` 拒绝：app orchestration 通过 kernel audit API 记录
-  `ToolInvocationOutcome::Denied { report: Some(PolicyReport), ... }`，plane 不执行。
+- invocation grant 被 pack/token/caps 拒绝：`Kernel::grant` 记录 generic action grant deny，
+  plane 不执行。
+- invocation policy 被 `PolicyPipeline` 拒绝：`Kernel::grant` 记录带 `PolicyReport` 的
+  generic action grant deny，plane 不执行。
 - payload parse / typed input error：grant 已消费进入 plane，app orchestration 记录
-  `ToolInvocationOutcome::Failed { error_kind: "input", ... }`，不 fallback。
+  grant 后 execution failed/input_error，不 fallback。
 - concrete tool execution error：app orchestration 记录
-  `ToolInvocationOutcome::Failed { error_kind: "execution", ... }`。
+  grant 后 execution failed。
 - tool 内部 access/action policy denial：domain access 返回 authorization error；app
   orchestration 把本次 tool invocation 记为 failed。domain action 的 policy evidence
   保留在 `PolicyGrantError::Denied { report, ... }`，不要把它伪装成 tool route。
@@ -563,8 +594,8 @@ typed tool audit 由 app orchestration 强制记录，concrete `ToolImpl` 不拿
   接受 `PlaneInvoked | ToolInvocation` 这种宽松断言。
 
 当前 `Kernel::grant_tool_invocation` 内部记录部分 deny audit 是迁移期 helper 行为。目标是
-generic grant 只负责授权，tool invocation audit obligation 留在 app orchestration 边界，
-并通过 kernel 的 audit sink 写入事件。
+generic grant 负责所有 action authorization audit；tool invocation execution audit 留在
+`ctx.invoke_tool` 的 grant consumption 边界。
 
 ## 当前实现偏差
 
@@ -584,6 +615,9 @@ generic grant 只负责授权，tool invocation audit obligation 留在 app orch
   app orchestration 负责 tool invocation audit。
 - `crates/tools/src/file.rs` 的 `ReadFileTool::spec()` 仍返回带 path 的 `ToolSpec`。
   这是 tool descriptor 与 registration path 未拆开的直接症状。
+- `crates/tools/src/file.rs` 的 `ReadFileTool::Output` 仍是 `loong_contracts::ToolOutcome`，且
+  `build_outcome` 还在 concrete tool 内构造 `status/payload` envelope。目标是
+  `ReadFileTool::Output = ReadFileOutput`，只表达成功 payload；失败用 error path 表达。
 - `crates/app/src/tools/mod.rs` 里 typed dispatch、grant、invoke、audit 逻辑还堆在
   `execute_kernel_tool_request`。目标是 app orchestration 拥有这段边界，但函数应更聚焦。
 - `crates/app/src/tools/routing.rs` 的 `route_direct_read_tool_request_for_legacy` 名字不准。
@@ -608,12 +642,48 @@ generic grant 只负责授权，tool invocation audit obligation 留在 app orch
 
 按最小提交顺序推进：
 
-1. 把 `ToolInvocationAction` 收回 `loong-app::tools::plane`：
+1. 删除 `loong_contracts::ToolOutcome`，把 typed tool output 改成 `Result<Value, E>`：
+   - 先写/调整失败测试：
+     - `loong-core` 的 erased invoke 返回 success payload，不返回
+       `loong_contracts::ToolOutcome { status: "ok", payload }`；
+     - `loong-tools` 的 read tool success output 是专门类型，不再直接等于
+       `loong_contracts::ToolOutcome`；
+     - app 的 `file.read` / `read { path }` 外部响应保持不变；
+   - 修改 `crates/loong-core/src/tool.rs`：
+     - 将 `ToolImpl::Output` 约束从 `Into<loong_contracts::ToolOutcome>` 收窄到 typed
+       success payload，首选 `Into<serde_json::Value>`，除非实现时发现需要一个极小的
+       本地 trait；
+     - `RegisteredTool::invoke` 只做 sealed type erasure 和 concrete tool 调用，返回
+       `Result<serde_json::Value, ToolExecutionError>`；不要在 core/erased 层拼 `"ok"`
+       status；
+     - 注释说明 legacy envelope 是 `ToolCoreOutcome`，不是 erased tool contract；
+       concrete tool 的成功和失败必须由 `Result<Output, ToolExecutionError>` 表达；
+   - 修改 `crates/tools/src/file.rs`：
+     - 增加 `ReadFileOutput` 专门 struct，字段承载 read 响应所需 payload 数据；
+     - `impl From<ReadFileOutput> for serde_json::Value`，把旧 payload JSON 构造搬到这里；
+     - `ReadFileTool::Output = ReadFileOutput`；
+     - `build_outcome` 改名为 `build_output`，返回 `Result<ReadFileOutput, String>` 或
+       直接返回 `Result<ReadFileOutput, ToolExecutionError>`；
+     - 不在 concrete tool 内构造 `"ok"` status；
+   - `crates/contracts/src/tool_types.rs` 删除 `loong_contracts::ToolOutcome`；不要为了兼容
+     concrete tool 或 erased tool 再给它加 helper；
+   - `crates/app/src/tools/routing.rs` 继续只在 legacy bridge 边界把 typed success payload
+     包成 `ToolCoreOutcome`，不要把 legacy envelope 泄漏进 `loong-core` 或
+     `loong-tools`；
+   - 验证：`cargo test -p loong-core tool`、
+     `cargo test -p loong-tools --no-default-features --features file`、
+     `cargo check -p loong-app`、
+     `cargo test -p loong-app kernel_routed_file_read -- --nocapture`、
+     `cargo test -p loong-app file_read -- --nocapture`、
+     `cargo fmt --all -- --check`、`git diff --check`。
+
+2. 把 `ToolInvocationAction` 收回 `loong-app::tools::plane`：
    - 先写失败测试：`loong-core` 不再需要 `ToolPath` 才能编译 tool abstraction，
-     app typed tool invocation 仍然产生 `ToolInvocation` audit；
+     app typed tool invocation 仍然产生 app-owned tool execution audit；
    - 在 `crates/app/src/tools/plane.rs` 附近定义 plane-local `ToolPath` 和
      `ToolInvocationAction`；
-   - `ToolPlane` 的 trait/struct 使用自己的 `Path`，不再直接使用 contracts `ToolPath`；
+   - `AppToolPlane` 使用自己的 `Path`，不再直接使用 contracts `ToolPath`；`ToolPlane`
+     trait 不要求公开 path 类型；
    - action payload 继续携带 agent/tool 原始 `payload: Value`，grant 后 plane 再 parse
      concrete input；
    - `ToolInvocationAction` 持有 app plane 自己的 path display/registry path，不把
@@ -629,23 +699,27 @@ generic grant 只负责授权，tool invocation audit obligation 留在 app orch
        `ToolInvocationAction`；
      - `Kernel::grant_tool_invocation` 被 generic action grant 取代，或至少不再接收
        path-specific action type；
-     - app typed read path 仍先 grant invocation action，再 `ToolPlane::invoke`；
-     - pack/token/caps/policy denial 仍记录 `ToolInvocationOutcome::Denied`，且只记录一次；
-     - typed path tests 只接受 `ToolInvocation` audit。
+     - app typed read path 通过 `ctx.invoke_tool` 进入，内部先 grant invocation action，
+       再调用 `ToolPlane::invoke`；
+     - pack/token/caps/policy denial 由 generic action grant audit 记录，不进入 app tool
+       execution outcome；
+     - typed path tests 断言 generic action grant audit + grant 后 app-owned tool execution
+       audit，不接受 legacy `PlaneInvoked` 兜底。
    - 验证：`cargo test -p loong-core tool`、`cargo test -p loong-kernel tool_invocation`、
      `cargo test -p loong-app kernel_routed_file_read`、`cargo check -p loong-core -p
      loong-kernel -p loong-app -p loong-tools -p loong`。
 
-2. 将 `ToolPlane` 内部存储改成 slot registry + path index：
+3. 将 `ToolPlane` 内部存储改成 slot registry + path index：
    - 根 `Cargo.toml` 增加 `slotmap = "1"` workspace dependency，`crates/app/Cargo.toml`
      使用 `slotmap.workspace = true`；
    - 在 `crates/app/src/tools/plane.rs` 定义 private `ToolSlot`，不要 re-export；
    - 将 `AppToolPlane<C>` 从 `BTreeMap<ToolPath, RegisteredTool<C>>` 改为
      `entries: slotmap::SlotMap<ToolSlot, ToolEntry<C>>` +
      `paths: BTreeMap<ToolPath, ToolSlot>`；
-   - `ToolEntry<C>` 保存 `path`、`RegisteredTool<C>` 和 `ToolRegistration`；
+   - `ToolEntry<C>` 只保存 `RegisteredTool<C>` 和 `ToolRegistration`；
      `ToolRegistration` 先至少承载 provenance，后续 registration time/source 也放这里；
-     注释说明 slot 是内部注册句柄，不是 public identity；
+     注释说明 slot 是内部注册句柄，不是 public identity；entry 不保存 path，避免和
+     `paths` index 重复；
    - `register(path, tool)` 先检查 `paths` duplicate，再 insert entry，最后写入
      `paths.insert(path, slot)`；不要允许 alias；
    - `invoke(grant, ctx)` 先从 action 取 path，经 `paths` 查 slot，再从 `entries`
@@ -655,7 +729,7 @@ generic grant 只负责授权，tool invocation audit obligation 留在 app orch
    - 验证：`cargo test -p loong-app tools::plane`、`cargo check -p loong-app`、
      `cargo fmt --all -- --check`、`git diff --check`。
 
-3. 实现 effective caps / child context narrowing：
+4. 实现 effective caps / child context narrowing：
    - `AppExecutionContext` 增加 explicit effective caps 字段，`PolicyContext::capabilities()`
      返回该字段，而不是临时从 token 拷贝；
    - 顶层 tool invocation context 由 token caps 初始化；
@@ -668,19 +742,20 @@ generic grant 只负责授权，tool invocation audit obligation 留在 app orch
    - 测试覆盖：override 缩窄生效、override 扩大被拒、父 context 缺 cap 时 child 不会获得
      该 cap、domain action gate 读取的是 child effective caps。
 
-4. 清理 tool descriptor/path 耦合：
+5. 清理 tool descriptor/path 耦合：
    - `ToolImpl::spec()` 返回无 path descriptor；
    - `RegisteredTool` 只保存 descriptor/provenance/registration metadata；
    - `ToolPlane::register(path, tool)` 组合 path + descriptor；
    - `ReadFileTool::spec()` 不再硬编码 `"read"`。
 
-5. 收敛 app typed dispatch 边界：
+6. 收敛 app typed dispatch 边界：
    - 从 `execute_kernel_tool_request` 中抽出一个聚焦的 app orchestration 边界；
-   - 该边界只做 resolve -> build invocation action -> kernel grant -> plane invoke ->
-     kernel audit；
+   - 该边界最终落到 `ctx.invoke_tool(path, payload)`；内部只做 app plane resolve/build
+     action -> kernel grant（自动 authorization audit）-> plane `invoke` -> grant
+     后 execution audit；
    - 不引入 `AuthorizedToolInvocation` receipt workaround。
 
-6. 改 `read` 为 aggregate typed tool：
+7. 改 `read` 为 aggregate typed tool：
    - 删除 payload-claim/fallback 思路；
    - `ReadTool` 内部解析 `path/query/pattern/glob`；
    - `path/query/glob` 分别构造不同 action；
@@ -688,16 +763,16 @@ generic grant 只负责授权，tool invocation audit obligation 留在 app orch
    - `read { query }` / `read { pattern }` / `read { glob }` 迁入 typed path 后，旧
      direct read legacy bridge 删除。
 
-7. 继续迁移剩余 legacy side-effect tools：
+8. 继续迁移剩余 legacy side-effect tools：
    - write/edit/config.import 按同样 access-backed action 模式迁移；
    - 迁移完成后删除 `FilePolicyExtension` 对应旧分支；
    - 逐步清空 `Kernel::execute_tool_core` 调用面，再删除 `LegacyToolPlane` 和 adapter
      trait。
 
-8. 测试清理：
+9. 测试清理：
    - typed tool 测试只接受 `ToolInvocation` audit；
    - legacy adapter 测试只接受 `PlaneInvoked` audit；
    - 不用 `PlaneInvoked | ToolInvocation` 这种宽松断言；
    - 每个最小提交跑对应 targeted tests、`cargo check` 和 `git diff --check`。
 
-9. 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration。
+10. 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration。
