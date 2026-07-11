@@ -261,7 +261,25 @@ impl ToolInvocation<'_, '_> {
         payload: Value,
         capability_override: Option<BTreeSet<Capability>>,
     ) -> Result<Value, loong_kernel::KernelError> {
-        let required_capabilities = self.required_capabilities(capability_override)?;
+        let mut default_tool_capabilities = self.default_capabilities.clone();
+        default_tool_capabilities.remove(&Capability::InvokeTool);
+        let tool_capabilities = match capability_override {
+            Some(override_capabilities) => {
+                if !override_capabilities.is_subset(&default_tool_capabilities) {
+                    return Err(loong_kernel::KernelError::ToolPlane(
+                        ToolPlaneError::Execution(
+                            "policy_denied: tool capability override cannot add capabilities"
+                                .to_owned(),
+                        ),
+                    ));
+                }
+                override_capabilities
+            }
+            None => default_tool_capabilities,
+        };
+
+        let mut required_capabilities = BTreeSet::from([Capability::InvokeTool]);
+        required_capabilities.extend(tool_capabilities);
         let tool_ctx = self
             .ctx
             .narrow_capabilities(required_capabilities.clone())
@@ -335,32 +353,6 @@ impl ToolInvocation<'_, '_> {
                 Err(loong_kernel::KernelError::ToolPlane(error))
             }
         }
-    }
-
-    fn required_capabilities(
-        &self,
-        capability_override: Option<BTreeSet<Capability>>,
-    ) -> Result<BTreeSet<Capability>, loong_kernel::KernelError> {
-        let mut default_tool_capabilities = self.default_capabilities.clone();
-        default_tool_capabilities.remove(&Capability::InvokeTool);
-        let tool_capabilities = match capability_override {
-            Some(override_capabilities) => {
-                if !override_capabilities.is_subset(&default_tool_capabilities) {
-                    return Err(loong_kernel::KernelError::ToolPlane(
-                        ToolPlaneError::Execution(
-                            "policy_denied: tool capability override cannot add capabilities"
-                                .to_owned(),
-                        ),
-                    ));
-                }
-                override_capabilities
-            }
-            None => default_tool_capabilities,
-        };
-
-        let mut required_capabilities = BTreeSet::from([Capability::InvokeTool]);
-        required_capabilities.extend(tool_capabilities);
-        Ok(required_capabilities)
     }
 }
 
