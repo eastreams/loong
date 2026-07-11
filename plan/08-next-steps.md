@@ -72,17 +72,7 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      `cargo check -p loong-access -p loong-kernel -p loong-app -p loong` 和
      `git diff --check`。
 
-5. 测试清理：
-   - typed tool 测试只接受 `ToolInvocation` audit；
-   - legacy adapter 测试只接受 `PlaneInvoked` audit；
-   - 不用 `PlaneInvoked | ToolInvocation` 这种宽松断言；
-   - 每个最小提交跑对应 targeted tests、`cargo check` 和 `git diff --check`；
-   - 完成线：
-     - `rg "PlaneInvoked.*ToolInvocation|ToolInvocation.*PlaneInvoked" crates -n` 找不到宽松断言；
-     - typed path 测试名和 helper 名不再包含 legacy fallback；
-     - module-level tests 留在对应模块下，例如 `tools/plane/tests.rs`、`file/tests.rs`。
-
-6. 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration：
+5. 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration：
    - app bootstrap 从 config 构造 concrete policy value；
    - policy 注册使用 `PolicyPipeline::push_policy` / `push_pre_policy` /
      `push_fallback_policy`；
