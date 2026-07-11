@@ -466,9 +466,13 @@ pub(crate) async fn execute_kernel_tool_request(
                     if let Some(body) = typed_payload.as_object_mut() {
                         let _trusted_overlay = take_trusted_internal_tool_context(body);
                     }
-                    let payload = invocation
-                        .invoke_with_capabilities(typed_payload, capability_override)
-                        .await?;
+                    let invocation = match capability_override {
+                        Some(capabilities) => {
+                            invocation.with_capabilities_override(capabilities)?
+                        }
+                        None => invocation,
+                    };
+                    let payload = invocation.invoke(typed_payload).await?;
                     return Ok(ToolCoreOutcome {
                         status: "ok".to_owned(),
                         payload,

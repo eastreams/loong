@@ -237,6 +237,7 @@ impl<'a> AppExecutionContext<'a> {
             ctx: self,
             path,
             default_capabilities: required_capabilities,
+            capability_override: None,
         })
     }
 }
@@ -249,34 +250,39 @@ pub(crate) struct ToolInvocation<'ctx, 'a> {
     ctx: &'ctx AppExecutionContext<'a>,
     path: crate::tools::plane::ToolPath,
     default_capabilities: BTreeSet<Capability>,
+    capability_override: Option<BTreeSet<Capability>>,
 }
 
 impl ToolInvocation<'_, '_> {
-    pub(crate) async fn invoke(self, payload: Value) -> Result<Value, loong_kernel::KernelError> {
-        self.invoke_with_capabilities(payload, None).await
-    }
-
-    pub(crate) async fn invoke_with_capabilities(
-        self,
-        payload: Value,
-        capability_override: Option<BTreeSet<Capability>>,
-    ) -> Result<Value, loong_kernel::KernelError> {
+    /// Bind a narrowed capability set before payload dispatch.
+    ///
+    /// This proves the override cannot add authority before `invoke` builds the
+    /// child context and asks kernel for a `ToolInvocationAction` grant.
+    pub(crate) fn with_capabilities_override(
+        mut self,
+        capabilities: BTreeSet<Capability>,
+    ) -> Result<Self, loong_kernel::KernelError> {
         let mut default_tool_capabilities = self.default_capabilities.clone();
         default_tool_capabilities.remove(&Capability::InvokeTool);
-        let tool_capabilities = match capability_override {
-            Some(override_capabilities) => {
-                if !override_capabilities.is_subset(&default_tool_capabilities) {
-                    return Err(loong_kernel::KernelError::ToolPlane(
-                        ToolPlaneError::Execution(
-                            "policy_denied: tool capability override cannot add capabilities"
-                                .to_owned(),
-                        ),
-                    ));
-                }
-                override_capabilities
-            }
-            None => default_tool_capabilities,
-        };
+
+        if !capabilities.is_subset(&default_tool_capabilities) {
+            return Err(loong_kernel::KernelError::ToolPlane(
+                ToolPlaneError::Execution(
+                    "policy_denied: tool capability override cannot add capabilities".to_owned(),
+                ),
+            ));
+        }
+
+        self.capability_override = Some(capabilities);
+        Ok(self)
+    }
+
+    pub(crate) async fn invoke(self, payload: Value) -> Result<Value, loong_kernel::KernelError> {
+        let mut default_tool_capabilities = self.default_capabilities.clone();
+        default_tool_capabilities.remove(&Capability::InvokeTool);
+        let tool_capabilities = self
+            .capability_override
+            .unwrap_or(default_tool_capabilities);
 
         let mut required_capabilities = BTreeSet::from([Capability::InvokeTool]);
         required_capabilities.extend(tool_capabilities);
@@ -779,13 +785,12 @@ mod tests {
             .tool(crate::tools::plane::ToolPath::from("read"))
             .expect("read should be registered");
 
-        let error = invocation
-            .invoke_with_capabilities(
-                serde_json::json!({ "path": "missing.txt" }),
-                Some(BTreeSet::from([Capability::FilesystemWrite])),
-            )
-            .await
-            .expect_err("override must not add capabilities");
+        let error = match invocation
+            .with_capabilities_override(BTreeSet::from([Capability::FilesystemWrite]))
+        {
+            Ok(_) => panic!("override must not add capabilities"),
+            Err(error) => error,
+        };
 
         assert!(
             error
@@ -817,10 +822,9 @@ mod tests {
             .expect("read should be registered");
 
         let error = invocation
-            .invoke_with_capabilities(
-                serde_json::json!({ "path": "notes.txt" }),
-                Some(BTreeSet::new()),
-            )
+            .with_capabilities_override(BTreeSet::new())
+            .expect("empty override is a valid narrowing")
+            .invoke(serde_json::json!({ "path": "notes.txt" }))
             .await
             .expect_err("filesystem read should lose FilesystemRead capability");
 
