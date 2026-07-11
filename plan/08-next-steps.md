@@ -7,16 +7,16 @@
 每个编号项都是一个最小提交候选。除非某一步明确要求合并，否则不要把相邻步骤塞进同一个
 commit。已完成的步骤从本文件删除，避免后续实现被过期完成线误导。
 
-1. 补齐 typed tool child capability override：
+1. 接入 tool->tool 调用参数里的 capability override：
    - 当前 `ctx.tool(path)?.invoke(payload).await` 已经用 registered descriptor caps 构造
      child effective caps；
-   - 剩余的是 tool->tool 调用参数里的 optional capability override；
-   - override 只能缩小 descriptor default caps，不能增加 caps；
-   - override 扩大时返回 typed input error 或 policy denial，不能静默提升；
+   - `ToolInvocation::invoke_with_capabilities` 已经支持 optional override，且只能缩小
+     descriptor default caps；
+   - 剩余的是 future tool->tool 调用入口要解析 override 参数并调用该方法；
    - 完成线：
-     - child context 的 effective caps = `InvokeTool + descriptor caps` 与 override 的合法交集；
-     - 父 context 缺 cap 时 child 不会重新获得该 cap；
-     - concrete tool 内部 access/action policy gate 读取 child effective caps；
+     - tool->tool payload/descriptor 中的 override 能进入 `invoke_with_capabilities`；
+     - override 扩大时返回 typed input error 或 policy denial，不能静默提升；
+     - concrete tool 内部 access/action policy gate 继续读取 child effective caps；
    - 验证：`cargo test -p loong-app context::tests::`、
      `cargo test -p loong-app kernel_routed_file_read`、
      `cargo check -p loong-app -p loong-kernel`、`git diff --check`。
