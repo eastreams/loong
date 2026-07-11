@@ -23,9 +23,15 @@ use metadata_support::{
 #[path = "catalog_core_definition_support.rs"]
 mod core_definition_support;
 use core_definition_support::{
-    direct_bash_definition, direct_browser_definition, direct_edit_definition,
-    direct_memory_definition, direct_read_definition, direct_web_definition,
-    direct_write_definition,
+    direct_bash_definition, direct_browser_definition, direct_memory_definition,
+    direct_web_definition,
+};
+#[cfg(feature = "tool-file")]
+#[path = "catalog_file_definition_support.rs"]
+mod file_definition_support;
+#[cfg(feature = "tool-file")]
+use file_definition_support::{
+    direct_edit_definition, direct_read_definition, direct_write_definition,
 };
 #[path = "catalog_browser_definition_support.rs"]
 mod browser_definition_support;
@@ -688,6 +694,7 @@ fn annotate_tool_concurrency_classes(descriptors: &mut [ToolDescriptor]) {
 // TODO: Split Tool Desc by tool
 fn build_tool_catalog() -> ToolCatalog {
     let mut descriptors = vec![
+        #[cfg(feature = "tool-file")]
         ToolDescriptor {
             name: "read",
             provider_name: "read",
@@ -702,6 +709,7 @@ fn build_tool_catalog() -> ToolCatalog {
             concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: direct_read_definition,
         },
+        #[cfg(feature = "tool-file")]
         ToolDescriptor {
             name: "write",
             provider_name: "write",
@@ -716,6 +724,7 @@ fn build_tool_catalog() -> ToolCatalog {
             concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: direct_write_definition,
         },
+        #[cfg(feature = "tool-file")]
         ToolDescriptor {
             name: "edit",
             provider_name: "edit",

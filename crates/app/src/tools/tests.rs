@@ -609,6 +609,33 @@ fn provider_tool_definitions_hide_typed_file_tools_when_file_feature_disabled() 
     assert!(!names.contains("write"));
 }
 
+#[cfg(not(feature = "tool-file"))]
+#[test]
+fn runtime_surfaces_hide_file_tools_when_file_feature_disabled() {
+    let config = runtime_config::ToolRuntimeConfig::default();
+    let view = runtime_tool_view_for_runtime_config(&config);
+
+    for tool_name in ["read", "write", "edit"] {
+        assert!(!view.contains(tool_name), "{tool_name} should be hidden");
+    }
+
+    let registry_names = tool_registry_with_config(Some(&config))
+        .into_iter()
+        .map(|entry| entry.name)
+        .collect::<BTreeSet<_>>();
+    let search_entry_names = runtime_tool_search_entries(&config, None, false)
+        .into_iter()
+        .map(|entry| entry.canonical_name)
+        .collect::<BTreeSet<_>>();
+    let snapshot = capability_snapshot_with_config(&config);
+
+    for tool_name in ["read", "write", "edit"] {
+        assert!(!registry_names.contains(tool_name));
+        assert!(!search_entry_names.contains(tool_name));
+        assert!(!snapshot.contains(&format!("- {tool_name}:")));
+    }
+}
+
 #[test]
 fn provider_exposed_tool_gate_covers_direct_and_gateway_tools() {
     assert!(is_provider_exposed_tool_name("read"));
