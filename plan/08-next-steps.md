@@ -28,11 +28,12 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
    - `ToolPlane::register(path, tool)` 是 path + descriptor 的组合边界；
    - `ToolPath` 已经是 app-plane-local segment path；dotted provider/catalog names 只在
      app plane 边界转换；
+   - production `ReadTool` 已经不硬编码注册 path；app plane 注册时注入 user-facing 名称，
+     仅用于响应和 continuation 推荐；
    - 剩余的是 agent prompt/catalog 仍主要从 legacy catalog 投影 path；
    - 不把 `ToolPath` 提回 core/contracts；plane 可以继续拥有自己的 path 类型；
    - 完成线：
      - typed tools 的 agent-visible path 来自 plane enumeration；
-     - concrete tool crate 不出现注册路径字符串；
      - legacy catalog 只描述未迁移工具，或明确标注为 legacy surface；
    - 验证：`cargo test -p loong-tools --no-default-features --features file`、
      `cargo test -p loong-app kernel_routed_file_read`、
