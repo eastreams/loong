@@ -298,6 +298,10 @@ pub(crate) fn authorize_direct_file_payload(
         // extension from becoming a second authorization path if miscalled.
         return Ok(());
     }
+    // Kernel-routed `write` is also migrated, but legacy direct write still
+    // enters this function through `execute_tool_core_with_config`. Do not add
+    // new typed-tool policy here; delete this branch with the legacy direct
+    // write dispatch instead.
 
     let policy = FilePolicyExtension::from_runtime_config(rt);
     policy

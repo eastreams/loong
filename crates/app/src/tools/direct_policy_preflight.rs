@@ -20,11 +20,12 @@ pub(super) fn run(
     }
 
     let visible_tool_name = super::user_visible_tool_name(tool_name);
-    // `read`/`file.read` is access-backed now, and no-context direct read fails
-    // closed. Keep this legacy preflight only for tools that have not moved
-    // their file side effects behind access.
-    // TODO(access-migration): Delete this file branch after write/edit and
-    // config.import move to typed Action/Policy access paths.
+    // Kernel-routed `read` and `write` are access-backed typed tools now.
+    // This preflight belongs only to legacy direct dispatch through
+    // `execute_tool_core_with_config`, where write/edit/config.import still
+    // need the old file policy guard until those direct entry points disappear.
+    // TODO(access-migration): Delete this file branch after the remaining
+    // legacy direct file tools move to typed Action/Policy access paths.
     let is_file_tool =
         matches!(visible_tool_name.as_str(), "write" | "edit") || tool_name == "config.import";
     if is_file_tool {
