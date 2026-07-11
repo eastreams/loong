@@ -39,28 +39,7 @@ commit。
      `cargo test -p loong-app kernel_routed_file_read`、`cargo check -p loong-core -p
      loong-kernel -p loong-app -p loong-tools -p loong`。
 
-2. 将 `ToolPlane` 内部存储改成 slot registry + path index：
-   - 根 `Cargo.toml` 增加 `slotmap = "1"` workspace dependency，`crates/app/Cargo.toml`
-     使用 `slotmap.workspace = true`；
-   - 在 `crates/app/src/tools/plane.rs` 定义 private `ToolSlot`，不要 re-export；
-   - 将 `AppToolPlane<C>` 从 `BTreeMap<ToolPath, RegisteredTool<C>>` 改为
-     `entries: slotmap::SlotMap<ToolSlot, ToolEntry<C>>` +
-     `paths: BTreeMap<ToolPath, ToolSlot>`；
-   - `ToolEntry<C>` 只保存 `RegisteredTool<C>` 和 `ToolRegistration`；
-     `ToolRegistration` 先至少承载 provenance，后续 registration time/source 也放在
-     `ToolRegistration`；
-     注释说明 slot 是内部注册句柄，不是 public identity；entry 不保存 path，避免和
-     `paths` index 重复；
-   - `register(path, tool)` 先检查 `paths` duplicate，再 insert entry，最后写入
-     `paths.insert(path, slot)`；不要允许 alias；
-   - `invoke(grant, ctx)` 先从 action 取 path，经 `paths` 查 slot，再从 `entries`
-     取 entry 并调用 tool；缺失 slot 返回 `ToolPlaneError::ToolNotFound(path_display)`；
-   - 测试覆盖：duplicate path 不产生第二个 entry、missing path 返回 not found、
-     invoke 仍消费 grant 并执行目标 tool、slot 不出现在 public audit payload；
-   - 验证：`cargo test -p loong-app tools::plane`、`cargo check -p loong-app`、
-     `cargo fmt --all -- --check`、`git diff --check`。
-
-3. 实现 effective caps / child context narrowing：
+2. 实现 effective caps / child context narrowing：
    - `AppExecutionContext` 增加 explicit effective caps 字段，`PolicyContext::capabilities()`
      返回该字段，而不是每次从 token 派生；
    - 顶层 tool invocation context 由 token caps 初始化；
@@ -81,7 +60,7 @@ commit。
      `cargo test -p loong-kernel policy`、`cargo check -p loong-app -p loong-kernel`、
      `cargo fmt --all -- --check`、`git diff --check`。
 
-4. 清理 tool descriptor/path 耦合：
+3. 清理 tool descriptor/path 耦合：
    - `ToolImpl::spec()` 返回无 path descriptor；
    - `RegisteredTool` 只保存 descriptor/provenance/registration metadata；
    - `ToolPlane::register(path, tool)` 组合 path + descriptor；
@@ -94,7 +73,7 @@ commit。
      `cargo test -p loong-app kernel_routed_file_read`、
      `cargo check -p loong-core -p loong-tools -p loong-app`、`git diff --check`。
 
-5. 收敛 app typed dispatch 边界：
+4. 收敛 app typed dispatch 边界：
    - 从 `execute_kernel_tool_request` 中抽出一个聚焦的 app orchestration 边界；
    - 该边界最终落到 `ctx.tool(path)?.invoke(payload).await`；
    - `ctx.tool(path)` 返回 `Result<ToolInvocation<'_>, ToolLookupError>`，只做 plane-local
@@ -113,7 +92,7 @@ commit。
      `cargo test -p loong-app direct_read`、`cargo check -p loong-app -p loong-kernel`、
      `git diff --check`。
 
-6. 改 `read` 为 aggregate typed tool：
+5. 改 `read` 为 aggregate typed tool：
    - 删除 payload-claim/fallback 思路；
    - `ReadTool` 内部解析 `path/query/pattern/glob`；
    - `path/query/glob` 分别构造不同 action；
@@ -129,7 +108,7 @@ commit。
      `cargo test -p loong-access`、`cargo check -p loong-tools -p loong-app -p loong-access`、
      `git diff --check`。
 
-7. 继续迁移剩余 legacy side-effect tools：
+6. 继续迁移剩余 legacy side-effect tools：
    - write/edit/config.import 按同样 access-backed action 模式迁移；
    - 迁移完成后删除 `FilePolicyExtension` 对应旧分支；
    - 逐步清空 `Kernel::execute_tool_core` 调用面，再删除 `LegacyToolPlane` 和 adapter
@@ -142,7 +121,7 @@ commit。
      `cargo check -p loong-access -p loong-kernel -p loong-app -p loong` 和
      `git diff --check`。
 
-8. 测试清理：
+7. 测试清理：
    - typed tool 测试只接受 `ToolInvocation` audit；
    - legacy adapter 测试只接受 `PlaneInvoked` audit；
    - 不用 `PlaneInvoked | ToolInvocation` 这种宽松断言；
@@ -152,7 +131,7 @@ commit。
      - typed path 测试名和 helper 名不再包含 legacy fallback；
      - module-level tests 留在对应模块下，例如 `tools/plane/tests.rs`、`file/tests.rs`。
 
-9. 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration：
+8. 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration：
     - app bootstrap 从 config 构造 concrete policy value；
     - policy 注册使用 `PolicyPipeline::push_policy` / `push_pre_policy` /
       `push_fallback_policy`；
