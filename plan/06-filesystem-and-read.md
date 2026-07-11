@@ -1,0 +1,84 @@
+# plan: Filesystem Path Grants 与 `read`
+
+本文件定义 filesystem path authorization 和 `read` 迁移状态。它只讨论 fs/read domain，
+不重复 tool plane 或 kernel audit 的通用规则。
+
+## Filesystem Path Grants
+
+“得到一个可供 fs action 使用的路径”是独立 action，不是 read action 的构造细节。
+目标调用形状分三步：
+
+1. `FsAccess` 使用 `FsAccessContext` 的 `fs_resolution_root()` /
+   `fs_allowed_roots()` 准备 resolved path facts。这一步需要 canonicalize、existing
+   ancestor resolution、symlink resolution，因此属于 access 边界的 filesystem
+   observation。
+2. `PolicyPipeline` 对 `FsResolvePathAction` 做 typed policy 决策。allowed roots /
+   path escape 由 kernel policy deny，denial 进入 `PolicyReport`。
+3. 只有 granted resolve action 的 `run` 能 mint `GrantedPath`。下游 read/search/glob
+   action 只能接收 `GrantedPath`，不能接收 raw path 或普通 `PathBuf`。
+
+核心类型：
+
+```rust
+pub struct FsResolvePathAction {
+    raw_path: PathBuf,
+    resolved_path: PathBuf,
+    allowed_roots: Vec<PathBuf>,
+}
+
+pub struct GrantedPath {
+    path: PathBuf,
+}
+
+impl GrantedPath {
+    pub fn as_path(&self) -> &Path;
+    pub fn into_path_buf(self) -> PathBuf;
+    // no public from/pathbuf constructor
+}
+```
+
+调用链：
+
+```rust
+let resolve = FsResolvePathAction::resolve(
+    raw_path,
+    ctx.fs_resolution_root(),
+    ctx.fs_allowed_roots(),
+)?;
+let grant = policy_engine.grant(ctx, resolve).await?;
+let path = grant.granted.run(ctx).await?;
+
+let read = FsReadAction::new(path);
+let grant = policy_engine.grant(ctx, read).await?;
+grant.granted.run(ctx).await
+```
+
+这条链路有两个不同授权点：
+
+- `FsResolvePathAction`：允许在本次 `Context` 下把 raw path 解析成 `GrantedPath`。
+  action 携带 access 准备好的 resolved path facts；policy 只基于这些 facts 表达
+  workspace root、file root、path escape、symlink escape 等路径权限。
+- `FsReadAction` / `FsContentSearchAction` / `FsGlobAction`：允许对一个已经治理过的
+  `GrantedPath` 执行具体读取、内容搜索、路径枚举。它们仍然各自声明 capability 和
+  payload，因为三者泄漏面不同。
+
+`FsResolvePathAction::run` 不再重新 canonicalize，也不读取文件内容。它只消费
+`Granted<FsResolvePathAction>` 并把 policy 已接受的 resolved facts 变成 `GrantedPath`。
+如果解析结果逃逸 allowed roots，kernel typed policy 会 deny，因而不会产出
+`GrantedPath`。
+
+不要写 `FsReadAction::new(Granted<FsResolvePathAction>, ctx)` 这种隐藏执行的 API；
+先显式 `grant.granted.run(ctx).await?`，再把 `GrantedPath` 交给下游 action。
+
+
+## `file.read` 迁移状态
+
+- 目标是 `read` 作为 aggregate typed tool 进入 app plane，但它内部分出来的 action
+  不能聚合。
+- `ReadFileTool` 只解析 payload、调用 `ctx.access().fs().read_file(...)`、格式化响应。
+- 文件读取副作用发生在 `loong_access::fs`。
+- `read { path }` 分支走 `FsResolvePathAction -> GrantedPath -> FsReadAction`。
+- `read { query }` / `read { pattern }` / `read { glob }` 后续迁入 typed `ReadTool`
+  内部分流，但分别落到 content-search / glob-path action。迁移前只能作为明确迁移任务的
+  legacy bridge，不作为新 plane 的 payload claim 设计。
+- `read { path, offset: 0 }` 是 typed input error，不 fallback。
