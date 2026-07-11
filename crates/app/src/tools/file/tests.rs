@@ -300,7 +300,7 @@ async fn kernel_routed_file_read_uses_typed_tool_registry() {
             &event.kind,
             loong_kernel::AuditEventKind::ToolInvocation {
                 path_display,
-                outcome: loong_kernel::ToolInvocationOutcome::Completed,
+                outcome: loong_kernel::InvocationOutcome::Completed,
                 ..
             } if path_display == "read"
         )
@@ -350,7 +350,7 @@ async fn kernel_routed_tool_invoke_file_read_uses_typed_tool_registry() {
             &event.kind,
             loong_kernel::AuditEventKind::ToolInvocation {
                 path_display,
-                outcome: loong_kernel::ToolInvocationOutcome::Completed,
+                outcome: loong_kernel::InvocationOutcome::Completed,
                 ..
             } if path_display == "read"
         )
@@ -480,7 +480,7 @@ async fn kernel_routed_direct_read_glob_uses_typed_tool_registry() {
             &event.kind,
             loong_kernel::AuditEventKind::ToolInvocation {
                 path_display,
-                outcome: loong_kernel::ToolInvocationOutcome::Completed,
+                outcome: loong_kernel::InvocationOutcome::Completed,
                 ..
             } if path_display == "read"
         )
@@ -542,7 +542,7 @@ async fn kernel_routed_direct_read_query_uses_typed_tool_registry() {
             &event.kind,
             loong_kernel::AuditEventKind::ToolInvocation {
                 path_display,
-                outcome: loong_kernel::ToolInvocationOutcome::Completed,
+                outcome: loong_kernel::InvocationOutcome::Completed,
                 ..
             } if path_display == "read"
         )
@@ -696,7 +696,7 @@ async fn kernel_routed_file_write_uses_typed_tool_registry() {
             &event.kind,
             loong_kernel::AuditEventKind::ToolInvocation {
                 path_display,
-                outcome: loong_kernel::ToolInvocationOutcome::Completed,
+                outcome: loong_kernel::InvocationOutcome::Completed,
                 ..
             } if path_display == "write"
         )
@@ -748,7 +748,7 @@ async fn kernel_routed_tool_invoke_file_write_uses_typed_tool_registry() {
             &event.kind,
             loong_kernel::AuditEventKind::ToolInvocation {
                 path_display,
-                outcome: loong_kernel::ToolInvocationOutcome::Completed,
+                outcome: loong_kernel::InvocationOutcome::Completed,
                 ..
             } if path_display == "write"
         )

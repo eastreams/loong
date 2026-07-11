@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use loong_contracts::{
-    CapabilityToken, ExecutionPlane, PlaneTier, ToolInvocationOutcome, ToolPlaneError,
+    CapabilityToken, ExecutionPlane, InvocationOutcome, PlaneTier, ToolPlaneError,
 };
 use loong_core::policy::context::{CapabilityContext, ContextFactory};
 use loong_kernel::access::fs::{FsPathPolicyContext, FsResolutionContext};
@@ -303,7 +303,7 @@ impl ToolInvocation<'_, '_> {
                     &tool_ctx,
                     audit_path,
                     &audit_caps,
-                    ToolInvocationOutcome::Completed,
+                    InvocationOutcome::Completed,
                 )?;
                 Ok(output)
             }
@@ -327,7 +327,7 @@ impl ToolInvocation<'_, '_> {
                     &tool_ctx,
                     audit_path,
                     &audit_caps,
-                    ToolInvocationOutcome::Failed {
+                    InvocationOutcome::Failed {
                         error_kind: error_kind.to_owned(),
                         reason,
                     },

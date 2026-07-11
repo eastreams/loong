@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 // Re-export data types from contracts
 pub use loong_contracts::{
-    AuditEvent, AuditEventKind, ExecutionPlane, PlaneTier, ToolInvocationOutcome,
+    AuditEvent, AuditEventKind, ExecutionPlane, InvocationOutcome, PlaneTier,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

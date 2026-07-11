@@ -92,7 +92,7 @@
        action grant。
      - `crates/contracts/src/audit_types.rs`：逐步只保留 kernel/sink 需要的 generic audit
        primitives。tool-specific execution audit 是 app runtime schema，不应在
-       contracts/kernel 固化 `ToolInvocationRoute`、`ToolInvocationOutcome` 或 concrete
+       contracts/kernel 固化 `ToolInvocationRoute`、tool-specific outcome enum 或 concrete
        ToolPlane registry key 类型。
      - `crates/loong-core/src/policy/action.rs`：`ActionMeta::payload()` 注释必须讲清 payload
        是 Action 的 type-erased structured view，不是 legacy bridge；签名是

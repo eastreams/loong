@@ -25,9 +25,7 @@ pub use action_grant::{
     GrantId, PolicyDecision, PolicyEntry, PolicyEvaluation, PolicyGrant, PolicyId, PolicyOutcome,
     PolicyReport,
 };
-pub use audit_types::{
-    AuditEvent, AuditEventKind, ExecutionPlane, PlaneTier, ToolInvocationOutcome,
-};
+pub use audit_types::{AuditEvent, AuditEventKind, ExecutionPlane, InvocationOutcome, PlaneTier};
 pub use child_process_env::{
     HIGH_RISK_CHILD_PROCESS_ENV_VARS, child_process_env_var_is_allowed, sanitized_child_process_env,
 };

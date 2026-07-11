@@ -1,7 +1,7 @@
 use std::{borrow::Cow, collections::BTreeSet};
 
 use loong_contracts::{
-    AuditEventKind, Capability, ExecutionRoute, HarnessKind, ToolInvocationOutcome,
+    AuditEventKind, Capability, ExecutionRoute, HarnessKind, InvocationOutcome,
     VerticalPackManifest,
 };
 use loong_core::policy::action::{ActionMeta, ActionMetadata};
@@ -78,7 +78,7 @@ async fn record_tool_invocation_records_typed_completed_event() {
             &ctx,
             path.clone(),
             &audit_caps,
-            ToolInvocationOutcome::Completed,
+            InvocationOutcome::Completed,
         )
         .expect("tool invocation audit should record");
 
@@ -87,7 +87,7 @@ async fn record_tool_invocation_records_typed_completed_event() {
             &event.kind,
             AuditEventKind::ToolInvocation {
                 path_display,
-                outcome: ToolInvocationOutcome::Completed,
+                outcome: InvocationOutcome::Completed,
                 ..
             } if path_display == path.as_str()
         )
@@ -126,7 +126,7 @@ async fn record_tool_invocation_records_typed_failed_event() {
             &policy_context,
             path.to_owned(),
             &audit_caps,
-            ToolInvocationOutcome::Failed {
+            InvocationOutcome::Failed {
                 error_kind: "input".to_owned(),
                 reason: "read requires payload.path".to_owned(),
             },
@@ -137,7 +137,7 @@ async fn record_tool_invocation_records_typed_failed_event() {
         matches!(
             &event.kind,
             AuditEventKind::ToolInvocation {
-                outcome: ToolInvocationOutcome::Failed { error_kind, reason },
+                outcome: InvocationOutcome::Failed { error_kind, reason },
                 ..
             } if error_kind == "input" && reason.contains("payload.path")
         )
@@ -176,7 +176,7 @@ async fn record_tool_invocation_records_typed_denied_event() {
             &policy_context,
             path.to_owned(),
             &audit_caps,
-            ToolInvocationOutcome::Denied {
+            InvocationOutcome::Denied {
                 reason: "blocked by typed policy".to_owned(),
                 report: None,
             },
@@ -187,7 +187,7 @@ async fn record_tool_invocation_records_typed_denied_event() {
         matches!(
             &event.kind,
             AuditEventKind::ToolInvocation {
-                outcome: ToolInvocationOutcome::Denied { reason, report },
+                outcome: InvocationOutcome::Denied { reason, report },
                 ..
             } if reason == "blocked by typed policy" && report.is_none()
         )

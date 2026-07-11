@@ -37,7 +37,7 @@ use crate::{
         ToolExtensionOutcome, ToolExtensionRequest,
     },
 };
-use loong_contracts::ToolInvocationOutcome;
+use loong_contracts::InvocationOutcome;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct KernelDispatch {
@@ -302,7 +302,7 @@ where
         ctx: &C::Cx<'_>,
         path_display: impl Into<String>,
         required_capabilities: &BTreeSet<Capability>,
-        outcome: ToolInvocationOutcome,
+        outcome: InvocationOutcome,
     ) -> Result<(), KernelError> {
         self.record_tool_invocation_event(
             ctx.now_epoch_s(),
@@ -969,7 +969,7 @@ where
         pack_id: String,
         path_display: String,
         required_capabilities: &BTreeSet<Capability>,
-        outcome: ToolInvocationOutcome,
+        outcome: InvocationOutcome,
     ) -> Result<(), KernelError> {
         self.audit.record(self.new_event(
             timestamp_epoch_s,

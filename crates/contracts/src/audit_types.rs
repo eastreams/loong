@@ -39,10 +39,10 @@ pub enum PlaneTier {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ToolInvocationOutcome {
-    /// Tool dispatch reached a concrete tool and it completed normally.
+pub enum InvocationOutcome {
+    /// Invocation reached the concrete handler and completed normally.
     Completed,
-    /// Tool dispatch reached a concrete tool, but execution failed.
+    /// Invocation reached the concrete handler, but execution failed.
     Failed { error_kind: String, reason: String },
     /// Governance rejected the invocation before tool execution.
     Denied {
@@ -81,6 +81,9 @@ pub enum AuditEventKind {
         operation: String,
         required_capabilities: Vec<Capability>,
     },
+    // TODO(tool-audit-owner): this event still marks the app typed-tool
+    // migration boundary. Keep the outcome generic here; richer app/runtime
+    // route schema should live with the app plane, not contracts.
     ToolInvocation {
         pack_id: String,
         /// Audit-facing display path for the app-owned tool plane.
@@ -89,7 +92,7 @@ pub enum AuditEventKind {
         /// model. The concrete plane still owns the registry key type.
         path_display: String,
         required_capabilities: Vec<Capability>,
-        outcome: ToolInvocationOutcome,
+        outcome: InvocationOutcome,
     },
     SecurityScanEvaluated {
         pack_id: String,

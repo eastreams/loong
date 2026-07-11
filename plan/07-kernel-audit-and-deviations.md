@@ -25,7 +25,7 @@ operation/payload/required capabilities。pack boundary、token boundary、polic
 `Kernel::grant` 不做 tool dispatch，也不拥有 tool registry。grant 过程天然记录
 authorization audit：action metadata、required caps、policy report、allow/deny 和
 grant id 都记录到 kernel audit sink。tool invocation 的 denied evidence 因而属于 generic action
-grant audit，不需要单独的 `ToolInvocationOutcome::Denied` 或 receipt workaround。
+grant audit，不需要单独的 tool-specific denied outcome 或 receipt workaround。
 
 grant 后的 execution outcome audit 属于 grant consumption 边界。对 tool 来说，该边界
 是 `ctx.tool(path)?.invoke(payload).await -> ToolPlane::invoke(...)`；对 fs 来说，是
@@ -71,9 +71,10 @@ ToolInvocation {
 `path_display` 是 app audit payload，不是 registry key 类型。不同 `ToolPlane` 可以
 有不同 path model，只要 app 在 audit 中给出稳定、可读、可关联的表示。
 
-`ToolInvocationOutcome` 如果保留，应放在 app 层，只能描述 grant 后 execution outcome，
-例如 completed / failed / input_error；不能包含 denied 分支，不能隐含 fallback 机制为
-kernel contract。
+如果 app 层需要 tool-specific execution outcome enum，它只能描述 grant 后 execution
+outcome，例如 completed / failed / input_error；不能包含 denied 分支，不能隐含 fallback
+机制为 kernel contract。contracts 层的 generic `InvocationOutcome` 只能作为迁移期 sink
+payload primitives，不能表达 ToolPlane 路由语义。
 
 legacy adapter 在迁移期继续记录旧 `PlaneInvoked`，直到对应工具迁移完成。
 
@@ -110,16 +111,17 @@ generic grant 负责所有 action authorization audit；tool invocation executio
 
 以下偏差描述迁移目标，不是新代码应继续复用的形状：
 
-- `crates/contracts/src/audit_types.rs` 仍定义 `ToolInvocationOutcome`。长期目标是
-  contracts 只保留 kernel/sink 需要的 generic audit primitives；tool-specific execution
-  outcome 应由 app runtime schema 拥有。
+- `crates/contracts/src/audit_types.rs` 已把 execution result 收敛为 generic
+  `InvocationOutcome`，但 `AuditEventKind::ToolInvocation` 仍是迁移期 typed-tool event
+  shape。长期目标是 contracts 只保留 kernel/sink 需要的 generic audit primitives；
+  tool-specific execution outcome 应由 app runtime schema 拥有。
 - `crates/app/src/tools/plane.rs` 已经拥有自己的 `ToolPath` 和 `ToolInvocationAction`，
   并用 private slot registry + path index 存 tool。`ToolPath` 也是 app-plane-local segment
   path；dotted provider/catalog names 只在 app plane 边界转换，不能把 plane-local path
   提回 contracts/core。
 - `crates/kernel/src/kernel.rs` 已经用 generic `grant_action` 授权 tool invocation action；
-  但 `record_tool_invocation` 仍记录 contracts 里的 `ToolInvocationOutcome`。目标是让
-  kernel 只记录 sink 能理解的通用事件，tool execution outcome 的 schema 归 app runtime。
+  但 `record_tool_invocation` 仍记录 contracts 里的 typed-tool event。目标是让 kernel
+  只记录 sink 能理解的通用事件，tool execution outcome 的 schema 归 app runtime。
 - `crates/app/src/tools/mod.rs` 里 typed dispatch、grant、invoke、audit 逻辑还堆在
   `execute_kernel_tool_request`。目标是 app orchestration 拥有这段边界，但函数应更聚焦。
 - `crates/app/src/tools/routing.rs` 的 context-aware direct read 已进入
