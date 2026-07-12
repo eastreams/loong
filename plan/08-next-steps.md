@@ -85,8 +85,11 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      all-feature tests、strict clippy、architecture check、`git diff --check`。
 
 3. 将 provider/runtime-self live-source 读取迁入 governed access：
-   - `AGENTS.md` / `TOOLS.md` / `IDENTITY.md` 等 source discovery 只产生候选路径；内容读取统一
-     使用 session context 派生的 fs access，不能保留 provider 内部 direct read loop；
+   - `AGENTS.md` / `TOOLS.md` / `IDENTITY.md` 等 source discovery 已只产生 lexical 候选路径；
+     文件存在性、canonical containment、symlink escape 和内容读取都由后续 fs access 决定；
+   - 当前 provider read loop 虽然只通过 access 获取文件字节，仍会从
+     `ProviderRuntimeBinding` 取 `KernelContext` 并为每个候选临时构造 execution context；下一步
+     直接接收 session 持有的 unified context，不能把这层 bridge 固化成 provider API；
    - kernel-bound 与普通 provider assembly 使用同一 context/access 路径，并同时产出
      `RuntimeSelfContinuity`；删除 no-kernel live-source fallback，而不是再增加 advisory bridge；
    - 删除 `TODO(deprecate-no-kernel-live-source)` 和
