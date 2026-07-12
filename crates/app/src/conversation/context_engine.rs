@@ -1022,7 +1022,9 @@ mod tests {
 
     #[cfg(feature = "memory-sqlite")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::await_holding_lock)] // Both projections reread process env; serialize with env-mutating tests.
     async fn default_engine_kernel_bound_messages_match_provider_governed_profile_projection() {
+        let _env_guard = crate::test_support::lock_process_env_for_tests();
         let durable_flush_lock = crate::test_utils::durable_memory_flush_test_lock();
         let _guard = durable_flush_lock.lock().await;
         let capabilities = std::collections::BTreeSet::from([
