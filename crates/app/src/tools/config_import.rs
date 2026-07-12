@@ -46,8 +46,8 @@ pub(super) fn config_import_mode_requires_write_value(payload: &Value) -> bool {
 }
 
 // Only these modes are safe to route through the context-aware access path
-// today. `apply` writes the output config through fs access; apply_selected and
-// rollback still need governed backup/manifest/restore work before joining.
+// today. `apply` writes the output config through fs access; apply_selected
+// still needs governed backup/manifest/skills-bridge work before joining.
 pub(super) fn config_import_mode_is_context_access_backed(mode: &str) -> bool {
     matches!(
         mode,
@@ -58,6 +58,7 @@ pub(super) fn config_import_mode_is_context_access_backed(mode: &str) -> bool {
             | "merge_profiles"
             | MAP_SKILLS_MODE_KEY
             | "apply"
+            | "rollback_last_apply"
     )
 }
 
@@ -67,8 +68,8 @@ pub(super) fn execute_config_import_tool_with_config(
 ) -> Result<ToolCoreOutcome, String> {
     // TODO(config-import-access): keep this legacy path out of the typed
     // ToolPlane until migration filesystem I/O is supplied by ctx.access().
-    // Registering this function as a typed tool would only hide direct reads,
-    // writes, backups, manifests, and skills-bridge rollback behind a new name.
+    // Registering this whole function as a typed tool would only hide the
+    // remaining direct apply_selected I/O behind a new name.
     let payload = request
         .payload
         .as_object()
@@ -329,13 +330,6 @@ pub(super) async fn execute_config_import_tool_with_context(
         ));
     }
 
-    let input_path = payload
-        .get("input_path")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| format!("{CONFIG_IMPORT_TOOL_NAME} requires payload.input_path"))?;
-    let input_path = resolve_path_with_access(ctx, Path::new(input_path)).await?;
     let output_path = payload
         .get("output_path")
         .and_then(Value::as_str)
@@ -346,6 +340,34 @@ pub(super) async fn execute_config_import_tool_with_context(
         Some(path) => Some(resolve_path_with_access(ctx, path.as_path()).await?),
         None => None,
     };
+
+    if mode == "rollback_last_apply" {
+        let output_path = output_path.ok_or_else(|| {
+            format!(
+                "{CONFIG_IMPORT_TOOL_NAME} rollback_last_apply mode requires payload.output_path"
+            )
+        })?;
+        let restored_path =
+            migration::rollback_last_migration_with_access(ctx, output_path.as_path()).await?;
+        return Ok(ToolCoreOutcome {
+            status: "ok".to_owned(),
+            payload: json!({
+                "adapter": "core-tools",
+                "tool_name": request.tool_name,
+                "mode": "rollback_last_apply",
+                "output_path": restored_path.display().to_string(),
+                "rolled_back": true,
+            }),
+        });
+    }
+
+    let input_path = payload
+        .get("input_path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("{CONFIG_IMPORT_TOOL_NAME} requires payload.input_path"))?;
+    let input_path = resolve_path_with_access(ctx, Path::new(input_path)).await?;
     let hint = payload
         .get("source")
         .and_then(Value::as_str)
@@ -1115,5 +1137,173 @@ mod tests {
             "unexpected denial: {error}"
         );
         assert!(!harness.temp_dir.join("generated/loong.toml").exists());
+    }
+
+    #[tokio::test]
+    async fn kernel_routed_config_import_rollback_last_apply_restores_through_access() {
+        let harness = TurnTestHarness::new();
+        let openclaw_root = harness.temp_dir.join("openclaw-workspace");
+        fs::create_dir_all(&openclaw_root).expect("create openclaw root");
+        fs::write(
+            openclaw_root.join("SOUL.md"),
+            "# Soul\n\nPrefer direct answers and keep OpenClaw style concise.\n",
+        )
+        .expect("write prompt fixture");
+
+        let output_path = harness.temp_dir.join("loong.toml");
+        let original_body = config::render(&LoongConfig::default()).expect("render default config");
+        fs::write(&output_path, &original_body).expect("write original config");
+        let discovery = migration::discover_import_sources(
+            &harness.temp_dir,
+            migration::DiscoveryOptions::default(),
+        )
+        .expect("discovery should succeed");
+        migration::apply_import_selection(&migration::ApplyImportSelection {
+            discovery,
+            output_path: output_path.clone(),
+            mode: migration::ImportSelectionMode::RecommendedSingleSource {
+                source_id: "openclaw".to_owned(),
+            },
+            apply_skills_plan: false,
+            skills_input_path: None,
+        })
+        .expect("apply selection should create rollback manifest");
+
+        let outcome = crate::tools::execute_tool(
+            ToolCoreRequest {
+                tool_name: CONFIG_IMPORT_TOOL_NAME.to_owned(),
+                payload: json!({
+                    "mode": "rollback_last_apply",
+                    "output_path": "loong.toml"
+                }),
+            },
+            &harness.kernel_ctx,
+        )
+        .await
+        .expect("rollback should execute through kernel context");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["mode"], "rollback_last_apply");
+        assert_eq!(
+            fs::read_to_string(&output_path).expect("read restored config"),
+            original_body
+        );
+    }
+
+    #[tokio::test]
+    async fn kernel_routed_config_import_rollback_last_apply_requires_filesystem_write_capability()
+    {
+        let harness = TurnTestHarness::with_capabilities(BTreeSet::from([
+            Capability::InvokeTool,
+            Capability::FilesystemRead,
+        ]));
+        let openclaw_root = harness.temp_dir.join("openclaw-workspace");
+        fs::create_dir_all(&openclaw_root).expect("create openclaw root");
+        fs::write(
+            openclaw_root.join("SOUL.md"),
+            "# Soul\n\nPrefer direct answers.\n",
+        )
+        .expect("write prompt fixture");
+
+        let output_path = harness.temp_dir.join("loong.toml");
+        let original_body = config::render(&LoongConfig::default()).expect("render default config");
+        fs::write(&output_path, &original_body).expect("write original config");
+        let discovery = migration::discover_import_sources(
+            &harness.temp_dir,
+            migration::DiscoveryOptions::default(),
+        )
+        .expect("discovery should succeed");
+        migration::apply_import_selection(&migration::ApplyImportSelection {
+            discovery,
+            output_path: output_path.clone(),
+            mode: migration::ImportSelectionMode::RecommendedSingleSource {
+                source_id: "openclaw".to_owned(),
+            },
+            apply_skills_plan: false,
+            skills_input_path: None,
+        })
+        .expect("apply selection should create rollback manifest");
+        let applied_body = fs::read_to_string(&output_path).expect("read applied config");
+        assert_ne!(applied_body, original_body);
+
+        let error = crate::tools::execute_tool(
+            ToolCoreRequest {
+                tool_name: CONFIG_IMPORT_TOOL_NAME.to_owned(),
+                payload: json!({
+                    "mode": "rollback_last_apply",
+                    "output_path": "loong.toml"
+                }),
+            },
+            &harness.kernel_ctx,
+        )
+        .await
+        .expect_err("missing write capability should deny rollback");
+
+        assert!(
+            error.contains("FilesystemWrite") || error.contains("filesystem_write"),
+            "unexpected denial: {error}"
+        );
+        assert_eq!(
+            fs::read_to_string(&output_path).expect("read preserved applied config"),
+            applied_body
+        );
+    }
+
+    #[tokio::test]
+    async fn kernel_routed_config_import_rollback_last_apply_requires_filesystem_read_capability() {
+        let harness = TurnTestHarness::with_capabilities(BTreeSet::from([
+            Capability::InvokeTool,
+            Capability::FilesystemWrite,
+        ]));
+        let openclaw_root = harness.temp_dir.join("openclaw-workspace");
+        fs::create_dir_all(&openclaw_root).expect("create openclaw root");
+        fs::write(
+            openclaw_root.join("SOUL.md"),
+            "# Soul\n\nPrefer direct answers.\n",
+        )
+        .expect("write prompt fixture");
+
+        let output_path = harness.temp_dir.join("loong.toml");
+        let original_body = config::render(&LoongConfig::default()).expect("render default config");
+        fs::write(&output_path, &original_body).expect("write original config");
+        let discovery = migration::discover_import_sources(
+            &harness.temp_dir,
+            migration::DiscoveryOptions::default(),
+        )
+        .expect("discovery should succeed");
+        migration::apply_import_selection(&migration::ApplyImportSelection {
+            discovery,
+            output_path: output_path.clone(),
+            mode: migration::ImportSelectionMode::RecommendedSingleSource {
+                source_id: "openclaw".to_owned(),
+            },
+            apply_skills_plan: false,
+            skills_input_path: None,
+        })
+        .expect("apply selection should create rollback manifest");
+        let applied_body = fs::read_to_string(&output_path).expect("read applied config");
+        assert_ne!(applied_body, original_body);
+
+        let error = crate::tools::execute_tool(
+            ToolCoreRequest {
+                tool_name: CONFIG_IMPORT_TOOL_NAME.to_owned(),
+                payload: json!({
+                    "mode": "rollback_last_apply",
+                    "output_path": "loong.toml"
+                }),
+            },
+            &harness.kernel_ctx,
+        )
+        .await
+        .expect_err("missing read capability should deny rollback manifest read");
+
+        assert!(
+            error.contains("FilesystemRead") || error.contains("filesystem_read"),
+            "unexpected denial: {error}"
+        );
+        assert_eq!(
+            fs::read_to_string(&output_path).expect("read preserved applied config"),
+            applied_body
+        );
     }
 }

@@ -27,7 +27,7 @@ pub use orchestrator::{
 };
 pub(crate) use orchestrator::{
     discover_import_sources_with_access, merge_profile_sources_with_access,
-    plan_import_sources_with_access,
+    plan_import_sources_with_access, rollback_last_migration_with_access,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

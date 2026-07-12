@@ -6,7 +6,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use loong_kernel::access::fs::{FsInspectPathOutput, FsPathKind};
+use loong_kernel::access::fs::{FsAccessError, FsInspectPathOutput, FsPathKind, FsWriteOptions};
 use serde::{Deserialize, Serialize};
 
 use crate::CliResult;
@@ -1004,9 +1004,9 @@ fn build_skills_apply_manifest(
 }
 
 pub fn rollback_last_migration(output_path: &Path) -> CliResult<PathBuf> {
-    // TODO(config-import-access): rollback is also legacy direct filesystem
-    // I/O. Do not route rollback_last_apply through ToolPlane until manifest
-    // reads and restore/remove operations consume access grants.
+    // TODO(config-import-access): this direct-fs function remains only for
+    // legacy callers. Kernel-routed rollback_last_apply must use the
+    // access-backed variant below.
     let manifest = load_last_migration_manifest(output_path)?;
     let backup_path = PathBuf::from(&manifest.backup_path);
     if manifest.output_preexisted {
@@ -1028,6 +1028,59 @@ pub fn rollback_last_migration(output_path: &Path) -> CliResult<PathBuf> {
     Ok(output_path.to_path_buf())
 }
 
+pub(crate) async fn rollback_last_migration_with_access(
+    ctx: &crate::context::AppExecutionContext<'_>,
+    output_path: &Path,
+) -> CliResult<PathBuf> {
+    let manifest = load_last_migration_manifest_with_access(ctx, output_path).await?;
+    let backup_path = PathBuf::from(&manifest.backup_path);
+    if manifest.output_preexisted {
+        let restored = ctx
+            .access()
+            .fs()
+            .copy_file(
+                backup_path.as_path(),
+                output_path,
+                FsWriteOptions {
+                    create_dirs: true,
+                    overwrite: true,
+                },
+            )
+            .await
+            .map_err(|error| {
+                format!(
+                    "failed to restore config {} from backup {}: {error}",
+                    output_path.display(),
+                    backup_path.display()
+                )
+            })?;
+        return Ok(restored.destination);
+    }
+
+    let inspection = ctx
+        .access()
+        .fs()
+        .inspect_path(output_path)
+        .await
+        .map_err(|error| error.to_string())?;
+    if inspection.kind.is_some() {
+        let removed = ctx
+            .access()
+            .fs()
+            .remove_file(output_path)
+            .await
+            .map_err(|error| {
+                format!(
+                    "failed to remove imported config {}: {error}",
+                    output_path.display()
+                )
+            })?;
+        return Ok(removed.path);
+    }
+
+    Ok(inspection.path)
+}
+
 fn load_last_migration_manifest(output_path: &Path) -> CliResult<ImportApplyManifest> {
     let state_dir = migration_state_dir(output_path);
     let manifest_path = manifest_path_for_output(output_path, &state_dir);
@@ -1041,6 +1094,41 @@ fn load_last_migration_manifest(output_path: &Path) -> CliResult<ImportApplyMani
                 }
                 Err(legacy_error) if legacy_error.kind() == ErrorKind::NotFound => Err(format!(
                     "failed to read migration manifest {} or legacy import manifest {}: {error}",
+                    manifest_path.display(),
+                    legacy_manifest_path.display()
+                )),
+                Err(legacy_error) => Err(format!(
+                    "failed to read legacy import manifest {}: {legacy_error}",
+                    legacy_manifest_path.display()
+                )),
+            }
+        }
+        Err(error) => Err(format!(
+            "failed to read migration manifest {}: {error}",
+            manifest_path.display()
+        )),
+    }
+}
+
+async fn load_last_migration_manifest_with_access(
+    ctx: &crate::context::AppExecutionContext<'_>,
+    output_path: &Path,
+) -> CliResult<ImportApplyManifest> {
+    let state_dir = migration_state_dir(output_path);
+    let manifest_path = manifest_path_for_output(output_path, &state_dir);
+    match ctx.access().fs().read_file(&manifest_path).await {
+        Ok(manifest_body) => parse_import_apply_manifest(&manifest_path, &manifest_body.bytes),
+        Err(FsAccessError::ReadFile { source, .. }) if source.kind() == ErrorKind::NotFound => {
+            let legacy_manifest_path = legacy_manifest_path_for_output(output_path, &state_dir);
+            match ctx.access().fs().read_file(&legacy_manifest_path).await {
+                Ok(manifest_body) => {
+                    parse_import_apply_manifest(&legacy_manifest_path, &manifest_body.bytes)
+                }
+                Err(FsAccessError::ReadFile {
+                    source: legacy_error,
+                    ..
+                }) if legacy_error.kind() == ErrorKind::NotFound => Err(format!(
+                    "failed to read migration manifest {} or legacy import manifest {}: {source}",
                     manifest_path.display(),
                     legacy_manifest_path.display()
                 )),
