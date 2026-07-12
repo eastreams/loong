@@ -177,30 +177,40 @@ async fn build_base_prompt_projection_with_binding_and_tool_runtime_config(
     }
 
     let workspace_root = tool_runtime_config.effective_workspace_root();
-    let (workspace_guidance_model, runtime_self_model) = match workspace_root {
-        Some(workspace_root) => {
+    let (runtime, workspace_guidance_model, runtime_self_model) = match (workspace_root, binding) {
+        (Some(workspace_root), ProviderRuntimeBinding::Context(app_ctx)) => {
             let mut remaining_total_chars = tool_runtime_config.runtime_self.max_total_chars;
-            let workspace_guidance_model = load_workspace_guidance_model_with_binding_and_budget(
+            let workspace_guidance_model = load_workspace_guidance_model_with_budget(
                 workspace_root,
                 tool_runtime_config,
                 &mut remaining_total_chars,
-                binding,
+                app_ctx,
             )
             .await;
-            let runtime_self_model = load_runtime_self_model_with_binding_and_budget(
+            let runtime_self_model = load_runtime_self_model_with_budget(
                 workspace_root,
                 tool_runtime_config,
                 &mut remaining_total_chars,
-                binding,
+                app_ctx,
             )
             .await;
-            (Some(workspace_guidance_model), Some(runtime_self_model))
+            (
+                Some(app_ctx.runtime()),
+                Some(workspace_guidance_model),
+                Some(runtime_self_model),
+            )
         }
-        None => (None, None),
+        (Some(_), ProviderRuntimeBinding::AdvisoryOnly) => (
+            None,
+            Some(workspace_guidance::WorkspaceGuidanceModel::default()),
+            Some(runtime_self::RuntimeSelfModel::default()),
+        ),
+        (None, ProviderRuntimeBinding::Context(app_ctx)) => (Some(app_ctx.runtime()), None, None),
+        (None, ProviderRuntimeBinding::AdvisoryOnly) => (None, None, None),
     };
 
     build_base_prompt_projection_from_prompt_sources(
-        binding.context().map(AppContext::runtime),
+        runtime,
         config,
         include_system_prompt,
         tool_view,
@@ -329,28 +339,19 @@ fn build_prompt_fragments_from_prompt_sources(
     )
 }
 
-async fn load_workspace_guidance_model_with_binding_and_budget(
+async fn load_workspace_guidance_model_with_budget(
     workspace_root: &Path,
     tool_runtime_config: &tools::runtime_config::ToolRuntimeConfig,
     remaining_total_chars: &mut usize,
-    binding: ProviderRuntimeBinding<'_>,
+    app_ctx: &AppContext,
 ) -> workspace_guidance::WorkspaceGuidanceModel {
-    let Some(app_ctx) = binding.context() else {
-        // TODO(deprecate-no-kernel-live-source): once prompt assembly always
-        // has the unified execution context, mark this no-live-source branch
-        // deprecated and remove the direct/advisory live-read escape hatch.
-        return workspace_guidance::WorkspaceGuidanceModel::default();
-    };
-
-    // TODO(deprecate-provider-live-source-bridge): move this read loop into
-    // the unified context path; until then, file bytes come only through access.
     let source_candidates =
         workspace_guidance::workspace_guidance_source_candidates(workspace_root);
     let mut loaded_paths = BTreeSet::new();
     let mut model = workspace_guidance::WorkspaceGuidanceModel::default();
 
     for source_path in source_candidates {
-        let maybe_content = read_workspace_guidance_source_via_access(
+        let maybe_content = read_prompt_source_via_access(
             workspace_root,
             &source_path,
             tool_runtime_config,
@@ -404,28 +405,19 @@ fn build_base_artifacts(messages: &[Value]) -> Vec<ContextArtifactDescriptor> {
     ]
 }
 
-async fn load_runtime_self_model_with_binding_and_budget(
+async fn load_runtime_self_model_with_budget(
     workspace_root: &Path,
     tool_runtime_config: &tools::runtime_config::ToolRuntimeConfig,
     remaining_total_chars: &mut usize,
-    binding: ProviderRuntimeBinding<'_>,
+    app_ctx: &AppContext,
 ) -> runtime_self::RuntimeSelfModel {
-    let Some(app_ctx) = binding.context() else {
-        // TODO(deprecate-no-kernel-live-source): once prompt assembly always
-        // has the unified execution context, mark this no-live-source branch
-        // deprecated and remove the direct/advisory live-read escape hatch.
-        return runtime_self::RuntimeSelfModel::default();
-    };
-
-    // TODO(deprecate-provider-live-source-bridge): move this read loop into
-    // the unified context path; until then, file bytes come only through access.
     let source_candidates =
         runtime_self::runtime_self_source_candidates(workspace_root, tool_runtime_config);
     let mut loaded_paths = BTreeSet::new();
     let mut model = runtime_self::RuntimeSelfModel::default();
 
     for (candidate_path, lane) in source_candidates {
-        let Some(content) = read_runtime_self_source_via_access(
+        let Some(content) = read_prompt_source_via_access(
             workspace_root,
             &candidate_path,
             tool_runtime_config,
@@ -455,39 +447,9 @@ async fn load_runtime_self_model_with_binding_and_budget(
     model
 }
 
-async fn read_runtime_self_source_via_access(
-    workspace_root: &Path,
-    path: &Path,
-    tool_runtime_config: &tools::runtime_config::ToolRuntimeConfig,
-    app_ctx: &AppContext,
-) -> Option<String> {
-    let request_path = workspace_guidance::workspace_source_request_path(workspace_root, path)?;
-    let read_runtime_config =
-        tool_runtime_config.with_workspace_root_override(workspace_root.to_path_buf());
-    let execution_context = app_ctx
-        .for_invocation(
-            ExecutionPlane::Tool,
-            PlaneTier::Core,
-            None,
-            &read_runtime_config,
-        )
-        .ok()?;
-    let output = execution_context
-        .access()
-        .fs()
-        .read_file(request_path)
-        .await
-        .ok()?;
-    let content = String::from_utf8_lossy(&output.bytes);
-    let trimmed = content.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    Some(trimmed.to_owned())
-}
-
-async fn read_workspace_guidance_source_via_access(
+// Workspace guidance and runtime-self have distinct discovery and ingestion
+// rules, but share this governed read and text-normalization boundary.
+async fn read_prompt_source_via_access(
     workspace_root: &Path,
     path: &Path,
     tool_runtime_config: &tools::runtime_config::ToolRuntimeConfig,

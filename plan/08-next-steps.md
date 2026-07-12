@@ -70,22 +70,40 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      `cargo check -p loong-access -p loong-kernel -p loong-app -p loong` 和
      `git diff --check`。
 
-2. 将 provider/runtime-self live-source 读取迁入 governed access：
+2. 完成 runtime owner 与 session-owned unified context：
+   - 当前 private `AppContextShared` 实际承担 runtime owner，但 host surface 仍直接持有
+     `AppContext`，conversation 另有一份 `SessionContext` 保存 session id、parent、tool view、
+     workspace/skill roots、runtime narrowing 和 runtime-self continuity；这是两个 source of truth；
+   - 把长期共享对象提升为显式 runtime owner，由 CLI/channel/daemon host 持有；session 创建时
+     构造一次自己的 `AppContext`，invocation 只从该 session context cheap-clone 派生 overlay；
+   - 将 `SessionContext` 的 session/agent metadata、tool namespace view、roots、narrowing 和
+     continuity 并入 `AppContext`，随后直接删除 `SessionContext`，不留 alias、wrapper 或
+     `Option<session>` 兼容形状；
+   - runtime owner 持有 kernel、tool plane、pack/token/config 等长期 authority；`AppContext`
+     只持有共享 owner 与当前 session/invocation 的不可变 view，child context 仍只能收窄 caps；
+   - 完成线：turn/tool/access/policy/provider 从同一个 session-owned context source of truth 读取
+     session、agent、tool view、caps、roots 和 continuity；host 不再把 root context 当作 session；
+   - 验证：context/session/conversation/provider/tool execution 测试，workspace default/all-feature
+     tests、strict clippy、architecture check、`git diff --check`。
+
+3. 将 provider/runtime-self live-source 读取迁入 governed access：
    - `AGENTS.md` / `TOOLS.md` / `IDENTITY.md` 等 source discovery 已只产生 lexical 候选路径；
      文件存在性、canonical containment、symlink escape 和内容读取都由后续 fs access 决定；
-   - 当前 provider read loop 虽然只通过 access 获取文件字节，仍会从
-     `ProviderRuntimeBinding` 取 `AppContext` 并为每个候选派生 invocation overlay；下一步
-     直接接收 session 持有的 unified context，不能把这层 bridge 固化成 provider API；
+   - provider source loader 已直接接收 `&AppContext`；`ProviderRuntimeBinding` 只在 prompt
+     projection 入口决定 context-bound 或 advisory，不再向具体 loader 传播；workspace guidance
+     和 runtime-self 共享唯一的 governed access read/text-normalization boundary；
+   - 当前传入的仍是 host/root context。步骤 2 完成后必须改为 session 持有的 unified context，
+     再删除 advisory/no-context prompt assembly 分支；不能把 host context 当作最终 session API；
    - context-bound 与普通 provider assembly 使用同一 context/access 路径，并同时产出
      `RuntimeSelfContinuity`；删除 no-kernel live-source fallback，而不是再增加 advisory bridge；
-   - 删除 `TODO(deprecate-no-kernel-live-source)` 和
-     `TODO(deprecate-provider-live-source-bridge)` 标记对应的旧分支；
+   - 删除 `TODO(deprecate-no-kernel-live-source)` 标记对应的旧分支；loader bridge TODO 已随
+     loader 直接接收 context 删除；
    - 完成线：runtime-self 文件内容只在 granted fs action 中读取；provider 只消费读取结果并
      构造 prompt projection；typed path 有 generic action audit，但没有伪造 tool invocation audit；
    - 验证：provider request-message、context-engine、workspace-guidance、runtime-self continuity
      测试，以及 `cargo check -p loong-access -p loong-app -p loong`、`git diff --check`。
 
-3. 收敛 ToolPlane ingress、catalog 与 display ownership：
+4. 收敛 ToolPlane ingress、catalog 与 display ownership：
    - 所有持有 unified context 的调用点直接使用 `ctx.tool(path)?.invoke(payload).await`；删除
      `execute_kernel_tool_request` 中只为 typed path 搬运 legacy envelope 的 bridge；
    - concrete tool descriptor 由 tool 实现提供，plane 在注册/list 时组合 path + descriptor；拆除
@@ -99,7 +117,7 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
    - 验证：tool plane/registry/catalog/search tests、每个 migrated tool 的调用测试、workspace
      default/all-feature tests、strict clippy、`git diff --check`。
 
-4. 把 tool execution audit 从 contracts/kernel 收回 runtime owner：
+5. 把 tool execution audit 从 contracts/kernel 收回 runtime owner：
    - `Kernel::grant` 继续强制记录 generic action authorization audit，包括 caps、policy report、
      allow/deny 和 grant id；这部分不能下沉到 ToolPlane 或 concrete tool；
    - grant 消费后的 tool completed/failed/input-error 由 `ToolInvocation::invoke` 在 app/runtime
@@ -113,7 +131,7 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
    - 验证：kernel grant audit、app typed tool completed/failed/input-error、daemon audit rendering
      测试，以及 workspace default/all-feature tests、strict clippy、`git diff --check`。
 
-5. 收敛 Kernel/Policy contract：
+6. 收敛 Kernel/Policy contract：
    - 从 concrete `Kernel<C>` 提取调用方真正需要的稳定 governance trait；trait 只暴露 grant、
      token/pack boundary 和 audit authority，不暴露 typed tool registry 或 app runtime state；
    - legacy caller 清空后直接删除旧 `authorize_operation`、legacy kernel auth、legacy policy error
@@ -124,7 +142,7 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
    - 验证：kernel policy/grant/audit tests、all policy report ordering tests、workspace
      default/all-feature tests、strict clippy、architecture check、`git diff --check`。
 
-6. 用 descriptor-relative fs backend 关闭 pathname TOCTOU：
+7. 用 descriptor-relative fs backend 关闭 pathname TOCTOU：
    - 先记录跨平台 backend 决策并评估成熟库；优先采用经过验证的 descriptor-relative/
      capability-based filesystem primitive，不手写一套未经审计的 syscall wrapper；
    - path resolution 与 allowed-roots policy 仍是独立 action，但 `GrantedFsPath` 必须携带或引用
@@ -137,7 +155,7 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
    - 验证：access/kernel path policy tests、并发 symlink/rename race regression tests、各支持平台
      的 compile/test gate、workspace default/all-feature tests、strict clippy、`git diff --check`。
 
-7. 按 owner 收敛 transitional crates 并更新架构文档：
+8. 按 owner 收敛 transitional crates 并更新架构文档：
     - 在 unified runtime 稳定后逐个审计 `loong-cli`、`loong-app-protocol`、`loong-runtime`、
       `loong-plugin-sdk`、`protocol` 和 `bridge-runtime`；每次只合并/删除一个 ownership 明确的
       forwarding shell，不按 crate 行数批量合并；
@@ -155,8 +173,7 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
 代码里的迁移 TODO 必须能映射到上面的执行步骤；对应步骤完成时删除 TODO 和旧分支：
 
 - `TODO(config-import-access)` / `TODO(access-migration)` -> 步骤 1；
-- `TODO(deprecate-no-kernel-live-source)` /
-  `TODO(deprecate-provider-live-source-bridge)` -> 步骤 2；
-- `TODO(tool-plane)` / `TODO(tool-plane-display)` / `TODO(tool-catalog-owner)` -> 步骤 3；
+- `TODO(deprecate-no-kernel-live-source)` -> 步骤 3；
+- `TODO(tool-plane)` / `TODO(tool-plane-display)` / `TODO(tool-catalog-owner)` -> 步骤 4；
 - `TODO(kernel-contract)` / `TODO(deprecate-legacy-kernel-auth)` /
-  `TODO(deprecate-legacy-policy-error)` -> 步骤 5。
+  `TODO(deprecate-legacy-policy-error)` -> 步骤 6。
