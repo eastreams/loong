@@ -13,9 +13,9 @@ use loong_kernel::{
     PolicyPipeline, SystemClock, VerticalPackManifest,
     policy::{
         FsContentSearchAllowPolicy, FsCopyFileAllowPolicy, FsCreateDirAllAllowPolicy,
-        FsGlobAllowPolicy, FsInspectPathAllowPolicy, FsReadAllowPolicy, FsReadFilenameDenyPolicy,
-        FsRemoveFileAllowPolicy, FsRemoveFileAllowedRootsPolicy, FsResolvePathAllowedRootsPolicy,
-        FsWriteAllowPolicy,
+        FsGlobAllowPolicy, FsInspectPathAllowPolicy, FsReadAllowPolicy, FsReadDirAllowPolicy,
+        FsReadFilenameDenyPolicy, FsRemoveFileAllowPolicy, FsRemoveFileAllowedRootsPolicy,
+        FsResolvePathAllowedRootsPolicy, FsWriteAllowPolicy,
     },
 };
 use serde_json::Value;
@@ -552,6 +552,7 @@ fn bootstrap_kernel_context_with_audit_sink(
     policy.push_policy(FsRemoveFileAllowPolicy);
     policy.push_policy(FsInspectPathAllowPolicy);
     policy.push_policy(FsGlobAllowPolicy);
+    policy.push_policy(FsReadDirAllowPolicy);
     policy.push_policy(FsContentSearchAllowPolicy);
     let mut kernel =
         Kernel::with_policy_runtime(policy, Arc::new(SystemClock) as Arc<dyn Clock>, audit_sink);

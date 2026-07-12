@@ -8,9 +8,9 @@ use loong_kernel::{
     FixedClock, InMemoryAuditSink, Kernel, PolicyPipeline, VerticalPackManifest,
     policy::{
         FsContentSearchAllowPolicy, FsCopyFileAllowPolicy, FsCreateDirAllAllowPolicy,
-        FsGlobAllowPolicy, FsInspectPathAllowPolicy, FsReadAllowPolicy, FsReadFilenameDenyPolicy,
-        FsRemoveFileAllowPolicy, FsRemoveFileAllowedRootsPolicy, FsResolvePathAllowedRootsPolicy,
-        FsWriteAllowPolicy,
+        FsGlobAllowPolicy, FsInspectPathAllowPolicy, FsReadAllowPolicy, FsReadDirAllowPolicy,
+        FsReadFilenameDenyPolicy, FsRemoveFileAllowPolicy, FsRemoveFileAllowedRootsPolicy,
+        FsResolvePathAllowedRootsPolicy, FsWriteAllowPolicy,
     },
 };
 
@@ -163,6 +163,7 @@ impl TurnTestHarness {
         policy.push_policy(FsRemoveFileAllowPolicy);
         policy.push_policy(FsInspectPathAllowPolicy);
         policy.push_policy(FsGlobAllowPolicy);
+        policy.push_policy(FsReadDirAllowPolicy);
         policy.push_policy(FsContentSearchAllowPolicy);
         let mut kernel =
             Kernel::<AppContextFactory>::with_policy_runtime(policy, clock, audit.clone());

@@ -17,10 +17,10 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      迁移完成线必须先把这些 I/O 抽到 access-backed port 或等价的 granted action run
      边界；
    - `config.import` 的迁移先拆 filesystem primitive，再迁 tool 入口。当前 `loong-access::fs`
-     已有 read/write/copy-file/remove-file/glob/content-search/inspect-path/create-dir-all，
-     仍不足以覆盖 import 的全部副作用：
-     - discovery / plan：已有受治理的 file read、directory scan、canonical/path metadata
-       基础；后续迁移时仍要把调用点改成显式 I/O 边界；
+     已有 read/write/copy-file/remove-file/read-dir/glob/content-search/inspect-path/
+     create-dir-all，仍不足以覆盖 import 的全部副作用：
+     - discovery / plan：已有受治理的 file read、一层 directory scan、canonical/path
+       metadata 基础；后续迁移时仍要把调用点改成显式 I/O 边界；
      - apply：已有读取现有 output config、写 output config、创建 state dir、写 backup、
        写 import manifest、可选写 external skills manifest 的基础 primitive；后续仍要把
        `migration::*` / `config::{load,write}` 改成使用这些边界；

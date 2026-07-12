@@ -14,8 +14,8 @@ use super::{
     FsResolutionContext,
     action::{
         FsContentSearchAction, FsContentSearchOptions, FsCopyFileAction, FsCreateDirAllAction,
-        FsGlobAction, FsInspectPathAction, FsReadAction, FsRemoveFileAction, FsResolvePathAction,
-        FsWriteAction, FsWriteOptions,
+        FsGlobAction, FsInspectPathAction, FsReadAction, FsReadDirAction, FsRemoveFileAction,
+        FsResolvePathAction, FsWriteAction, FsWriteOptions,
     },
     content_search::FsContentSearchOutput,
     copy::FsCopyFileOutput,
@@ -24,6 +24,7 @@ use super::{
     glob::FsGlobOutput,
     inspect::FsInspectPathOutput,
     path::GrantedPath,
+    read_dir::FsReadDirOutput,
     remove::FsRemoveFileOutput,
 };
 
@@ -244,6 +245,35 @@ where
         let root = resolve_grant.granted.run(self.ctx).await?;
 
         let action = FsGlobAction::new(root, pattern, include_directories, max_results);
+        let grant = self
+            .policy_engine
+            .grant(self.ctx, action)
+            .await
+            .map_err(AuthorizationError::from)
+            .map_err(FsAccessError::Authorization)?;
+        grant.granted.run(self.ctx).await
+    }
+
+    /// Read the immediate children of one governed directory.
+    ///
+    /// This is narrower than `glob_paths`: callers get one directory's direct
+    /// entries, which is the shape migration discovery needs before it can move
+    /// off direct `std::fs::read_dir`.
+    pub async fn read_dir(
+        self,
+        root: impl AsRef<Path>,
+        max_entries: usize,
+    ) -> Result<FsReadDirOutput, FsAccessError> {
+        let resolve_action = FsResolvePathAction::resolve(root, self.ctx.fs_resolution_root())?;
+        let resolve_grant = self
+            .policy_engine
+            .grant(self.ctx, resolve_action)
+            .await
+            .map_err(AuthorizationError::from)
+            .map_err(FsAccessError::Authorization)?;
+        let root = resolve_grant.granted.run(self.ctx).await?;
+
+        let action = FsReadDirAction::new(root, max_entries);
         let grant = self
             .policy_engine
             .grant(self.ctx, action)

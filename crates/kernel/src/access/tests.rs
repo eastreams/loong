@@ -13,8 +13,8 @@ use loong_core::{
 use super::AccessCx;
 use crate::access::fs::{FsAccessError, FsPathPolicyContext, FsResolutionContext};
 use crate::policy::{
-    FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsReadAllowPolicy, FsRemoveFileAllowPolicy,
-    FsRemoveFileAllowedRootsPolicy, FsResolvePathAllowedRootsPolicy,
+    FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsReadAllowPolicy, FsReadDirAllowPolicy,
+    FsRemoveFileAllowPolicy, FsRemoveFileAllowedRootsPolicy, FsResolvePathAllowedRootsPolicy,
 };
 
 #[derive(Debug, Clone)]
@@ -266,6 +266,7 @@ fn kernel_with_fs_path_policy() -> crate::Kernel<AccessCxContextFactory> {
         .with_policy(FsReadAllowPolicy)
         .with_policy(FsRemoveFileAllowPolicy)
         .with_policy(FsGlobAllowPolicy)
+        .with_policy(FsReadDirAllowPolicy)
         .with_policy(FsContentSearchAllowPolicy);
     crate::Kernel::with_policy_runtime(
         policy,

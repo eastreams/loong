@@ -25,7 +25,7 @@ use loong_core::{
 
 use crate::access::fs::{
     FsContentSearchAction, FsCopyFileAction, FsCreateDirAllAction, FsGlobAction,
-    FsInspectPathAction, FsPathPolicyContext, FsReadAction, FsRemoveFileAction,
+    FsInspectPathAction, FsPathPolicyContext, FsReadAction, FsReadDirAction, FsRemoveFileAction,
     FsResolvePathAction, FsWriteAction,
 };
 use crate::errors::PolicyError;
@@ -496,6 +496,9 @@ pub struct FsInspectPathAllowPolicy;
 pub struct FsGlobAllowPolicy;
 
 #[derive(Debug, Default, Clone, Copy)]
+pub struct FsReadDirAllowPolicy;
+
+#[derive(Debug, Default, Clone, Copy)]
 pub struct FsContentSearchAllowPolicy;
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -755,6 +758,24 @@ where
             decision: PolicyDecision::Allow,
             predicate: Some("fs.glob reached terminal allow policy".into()),
             reason: "filesystem glob allowed after configured deny policies".into(),
+        }
+    }
+}
+
+#[async_trait]
+impl<C> Policy<C, FsReadDirAction> for FsReadDirAllowPolicy
+where
+    C: ContextFactory + Send + Sync,
+{
+    fn name(&self) -> Cow<'static, str> {
+        Cow::Borrowed("fs-read-dir-allow")
+    }
+
+    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &FsReadDirAction) -> PolicyGrant {
+        PolicyGrant {
+            decision: PolicyDecision::Allow,
+            predicate: Some("fs.read_dir reached terminal allow policy".into()),
+            reason: "filesystem directory listing allowed after path policy".into(),
         }
     }
 }

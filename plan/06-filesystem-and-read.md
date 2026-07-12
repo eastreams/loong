@@ -60,8 +60,9 @@ grant.granted.run(ctx).await
   workspace root、file root、path escape、symlink escape 等路径权限，并从 context view
   读取 allowed roots。
 - `FsReadAction` / `FsWriteAction` / `FsCopyFileAction` / `FsCreateDirAllAction` /
-  `FsContentSearchAction` / `FsGlobAction` / `FsInspectPathAction`：允许对一个已经治理过的
-  `GrantedPath` 执行具体读写、文件复制、目录创建、内容搜索、路径枚举或路径元数据观察。
+  `FsContentSearchAction` / `FsGlobAction` / `FsReadDirAction` /
+  `FsInspectPathAction`：允许对一个已经治理过的 `GrantedPath` 执行具体读写、文件复制、
+  目录创建、内容搜索、递归路径匹配、一层目录枚举或路径元数据观察。
   它们仍然各自声明 capability 和 payload，因为副作用和泄漏面不同。
 - `FsRemoveFileAction`：允许删除一个文件或 symlink。它携带 raw path 和 deletion path facts；
   ancestor symlink 会被 canonicalize 给 policy 看，final symlink 不跟随，所以删除的是 link
@@ -89,8 +90,8 @@ workspace 外部。nested root 必须 canonicalize 后仍位于 canonical worksp
   都必须显式注册 `FsResolvePathAction` 的 allowed-roots policy 和 `FsReadAction`
   的 terminal allow policy。否则 typed read 应该 fail closed，而不是被 fallback 放过。
 - `FsCopyFileAction` / `FsCreateDirAllAction` / `FsRemoveFileAction` /
-  `FsInspectPathAction` / `FsGlobAction` / `FsContentSearchAction` 的 terminal allow policy
-  已经在 app/bootstrap 注册。
+  `FsInspectPathAction` / `FsGlobAction` / `FsReadDirAction` / `FsContentSearchAction`
+  的 terminal allow policy 已经在 app/bootstrap 注册。
   kernel/context-aware `read { pattern/glob/query }` 会走 typed tool/policy path；
   无 context 的 legacy read 入口 fail closed，不能执行 read side effect。
 

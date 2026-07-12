@@ -17,6 +17,7 @@ const FS_COPY_FILE_REQUIRED_CAPABILITIES: [Capability; 2] =
 const FS_CREATE_DIR_ALL_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
 const FS_REMOVE_FILE_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
 const FS_GLOB_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
+const FS_READ_DIR_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 const FS_CONTENT_SEARCH_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 const FS_INSPECT_PATH_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 
@@ -474,6 +475,56 @@ impl ActionMeta for FsGlobAction {
     }
 }
 
+/// Typed action for reading one immediate filesystem directory listing.
+///
+/// This is separate from `FsGlobAction`: discovery/import flows often need the
+/// direct children of one directory, not a recursive pattern search. Keeping
+/// that distinction in the action prevents callers from broadening the read
+/// surface and filtering the result outside access.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsReadDirAction {
+    root: GrantedPath,
+    max_entries: usize,
+}
+
+impl FsReadDirAction {
+    #[must_use]
+    pub fn new(root: GrantedPath, max_entries: usize) -> Self {
+        Self { root, max_entries }
+    }
+
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        self.root.as_path()
+    }
+
+    #[must_use]
+    pub fn max_entries(&self) -> usize {
+        self.max_entries
+    }
+}
+
+impl ActionMeta for FsReadDirAction {
+    fn metadata(&self) -> ActionMetadata<'_> {
+        ActionMetadata {
+            kind: "fs.read_dir",
+            operation: Cow::Borrowed("read_dir"),
+            required_capabilities: Cow::Borrowed(&FS_READ_DIR_REQUIRED_CAPABILITIES),
+        }
+    }
+
+    fn audit_resource(&self) -> Option<Cow<'_, str>> {
+        Some(self.root.as_path().display().to_string().into())
+    }
+
+    fn payload(&self) -> Cow<'_, Value> {
+        Cow::Owned(json!({
+            "root": self.root.as_path().display().to_string(),
+            "max_entries": self.max_entries,
+        }))
+    }
+}
+
 /// Policy-visible options for one governed content search.
 ///
 /// Defaults and bounds belong to the caller/tool parser; access receives the
@@ -566,6 +617,7 @@ pub enum FsAction {
     RemoveFile(FsRemoveFileAction),
     InspectPath(FsInspectPathAction),
     Glob(FsGlobAction),
+    ReadDir(FsReadDirAction),
     ContentSearch(FsContentSearchAction),
 }
 
@@ -620,6 +672,11 @@ impl FsAction {
     }
 
     #[must_use]
+    pub fn read_dir(root: GrantedPath, max_entries: usize) -> Self {
+        Self::ReadDir(FsReadDirAction::new(root, max_entries))
+    }
+
+    #[must_use]
     pub fn search_content(
         root: GrantedPath,
         query: impl Into<String>,
@@ -639,6 +696,7 @@ impl ActionMeta for FsAction {
             Self::RemoveFile(action) => action.metadata(),
             Self::InspectPath(action) => action.metadata(),
             Self::Glob(action) => action.metadata(),
+            Self::ReadDir(action) => action.metadata(),
             Self::ContentSearch(action) => action.metadata(),
         }
     }
@@ -652,6 +710,7 @@ impl ActionMeta for FsAction {
             Self::RemoveFile(action) => action.audit_resource(),
             Self::InspectPath(action) => action.audit_resource(),
             Self::Glob(action) => action.audit_resource(),
+            Self::ReadDir(action) => action.audit_resource(),
             Self::ContentSearch(action) => action.audit_resource(),
         }
     }
@@ -665,6 +724,7 @@ impl ActionMeta for FsAction {
             Self::RemoveFile(action) => action.payload(),
             Self::InspectPath(action) => action.payload(),
             Self::Glob(action) => action.payload(),
+            Self::ReadDir(action) => action.payload(),
             Self::ContentSearch(action) => action.payload(),
         }
     }
