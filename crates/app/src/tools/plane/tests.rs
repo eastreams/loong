@@ -140,6 +140,51 @@ async fn app_tool_plane_invokes_registered_tool() {
     assert_eq!(executions.load(Ordering::Relaxed), 1);
 }
 
+#[tokio::test]
+async fn app_tool_plane_success_observer_runs_after_registered_tool() {
+    let executions = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut plane = AppToolPlane::<TestContextFactory>::new();
+    let path = ToolPath::from("test.echo");
+
+    plane
+        .register_with_provenance_and_success_observer(
+            path.clone(),
+            loong_core::tool::ToolProvenance::Builtin,
+            EchoTool {
+                executions: executions.clone(),
+            },
+            {
+                let observed = observed.clone();
+                move |_ctx, output: &Value| {
+                    observed.lock().expect("observer lock").push(
+                        output
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                    );
+                    Ok(())
+                }
+            },
+        )
+        .expect("tool should register");
+    let outcome = plane
+        .invoke(
+            tool_invocation_grant(path, json!({ "message": "hello" })).await,
+            &TestContext,
+        )
+        .await
+        .expect("tool should execute");
+
+    assert_eq!(outcome, json!({ "message": "hello" }));
+    assert_eq!(executions.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        observed.lock().expect("observer lock").as_slice(),
+        ["hello"]
+    );
+}
+
 #[test]
 fn app_tool_plane_rejects_duplicate_paths() {
     let mut plane = AppToolPlane::<TestContextFactory>::new();

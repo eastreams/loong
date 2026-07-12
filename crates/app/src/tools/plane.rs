@@ -245,6 +245,39 @@ where
         Ok(())
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "edit migration will attach the file-preview observer through this registration path"
+        )
+    )]
+    pub(crate) fn register_with_provenance_and_success_observer<T, F>(
+        &mut self,
+        path: ToolPath,
+        provenance: ToolProvenance,
+        tool: T,
+        observer: F,
+    ) -> Result<(), ToolPlaneError>
+    where
+        T: ToolImpl<C>,
+        F: for<'a> Fn(&C::Cx<'a>, &T::Output) -> Result<(), ToolExecutionError>
+            + Send
+            + Sync
+            + 'static,
+    {
+        if self.paths.contains_key(&path) {
+            return Err(ToolPlaneError::DuplicateTool(path.to_string()));
+        }
+
+        let entry = ToolEntry::new(RegisteredTool::from_tool_with_success_observer(
+            provenance, tool, observer,
+        ));
+        let slot = self.entries.insert(entry);
+        self.paths.insert(path, slot);
+        Ok(())
+    }
+
     #[cfg(test)]
     #[must_use]
     pub(crate) fn contains(&self, path: &ToolPath) -> bool {
