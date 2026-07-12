@@ -28,6 +28,9 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
        解析/编码边界；`config::load` / `config::write` 仍是 legacy direct fs 调用点；
      - rollback：已有读取 manifest、复制 backup、恢复 output 的基础 primitive；仍缺少
        删除不存在前 output 的受治理 remove primitive；
+       不要直接用当前 `GrantedPath` 实现 remove：`GrantedPath` 表示 canonical target，
+       不能表达“删除 symlink 本身还是删除 target”。remove 需要先明确 raw path / lstat
+       语义，再定义 action 和 policy payload；
      - apply_selected failure rollback：需要恢复 config output，并协调 skills bridge rollback。
    - 因此第一个 code 步骤不是 `Register(ConfigImportTool)`，而是把
      `migration::*` / `config::{load,write}` 依赖的 filesystem 操作改成显式 I/O 边界：
