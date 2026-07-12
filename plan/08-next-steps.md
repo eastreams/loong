@@ -8,9 +8,10 @@
 commit。已完成的步骤从本文件删除，避免后续实现被过期完成线误导。
 
 1. 让 `loong-runtime::Runtime<C>` 接管 ToolPlane 与 kernel owner：
-   - `loong-runtime` 增加对 `loong-kernel` / `loong-contracts` 的依赖，并把 generic
-     `ToolPlane<C>`、plane-local `ToolPath`、`ToolInvocationAction`、slot registry 从 app
-     移入 runtime crate；不得把 `AppContextFactory`、app config 或 concrete tool 下沉；
+   - generic `ToolPlane<C>`、plane-local `ToolPath`、`ToolInvocationAction` 和 slot registry
+     已由 runtime crate 提供；下一提交给 `loong-runtime` 增加 `loong-kernel` 依赖并引入
+     `Runtime<C>`，由该类型共同持有 `Kernel<C>` 与 tool plane registry；不得把
+     `AppContextFactory`、app config 或 concrete tool 下沉；
    - app bootstrap 用显式 `Result` 构造 builtin plane，再创建
      `Runtime<AppContextFactory>`；builtin duplicate registration 必须作为 bootstrap error
      返回，删除 `app_tool_plane()` 全局 `OnceLock` 和全部 registration `expect`；
@@ -19,8 +20,8 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      lookup，不给 concrete tool 暴露裸 registry/audit；
    - 先让现有 `KernelContext` 内部持有 `Arc<Runtime<AppContextFactory>>`，保持迁移可分提交；
      不增加 alias/fallback。后续 host/session 迁移完成后直接删除 `KernelContext`；
-   - 最小提交顺序：先移动 plane primitive 与测试；再引入 `Runtime<C>` 和 fallible app
-     bootstrap；再切换 context/tool 调用点并删除全局 plane；每个提交都必须独立通过完整 gate；
+   - 剩余最小提交顺序：先引入 `Runtime<C>` 和 fallible app bootstrap；再切换 context/tool
+     调用点并删除全局 plane；每个提交都必须独立通过完整 gate；
    - 完成线：production 没有 builtin registration panic；kernel 不持有 plane；app context
      concrete type仍由 app 定义；所有 typed tool lookup/dispatch 使用当前 runtime 实例；
    - 验证：`cargo test -p loong-runtime`、`cargo test -p loong-app tools::plane`、
