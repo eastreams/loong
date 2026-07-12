@@ -114,6 +114,41 @@ fn registered_tool_parse_failure_does_not_execute_tool() {
     assert_eq!(executions.load(Ordering::Relaxed), 0);
 }
 
+#[test]
+fn registered_tool_success_observer_sees_typed_output_before_erasure() {
+    let executions = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let tool = RegisteredTool::<TestContextFactory>::from_tool_with_success_observer(
+        ToolProvenance::Builtin,
+        EchoTool {
+            executions: executions.clone(),
+        },
+        {
+            let observed = observed.clone();
+            move |_ctx, output: &Value| {
+                observed.lock().expect("observer lock").push(
+                    output
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                );
+                Ok(())
+            }
+        },
+    );
+
+    let outcome = block_on(tool.invoke(&TestContext, json!({ "message": "hello" })))
+        .expect("tool should execute");
+
+    assert_eq!(outcome, json!({ "message": "hello" }));
+    assert_eq!(executions.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        observed.lock().expect("observer lock").as_slice(),
+        ["hello"]
+    );
+}
+
 fn block_on<F: Future>(future: F) -> F::Output {
     let mut context = Context::from_waker(Waker::noop());
     let mut future = std::pin::pin!(future);

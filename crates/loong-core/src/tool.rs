@@ -89,7 +89,33 @@ where
         let registration = ToolRegistration::new(tool.spec(), provenance);
         Self {
             registration,
-            erased: Box::new(tool),
+            erased: Box::new(PlainTool { tool }),
+        }
+    }
+
+    /// Register a tool with a typed success observer owned by the registrar.
+    ///
+    /// Concrete tool crates still only implement [`ToolImpl`]. This hook lets
+    /// the app/runtime boundary observe the concrete output before it is erased
+    /// into JSON, which is where app-owned side channels such as preview events
+    /// belong.
+    #[must_use]
+    pub fn from_tool_with_success_observer<T, F>(
+        provenance: ToolProvenance,
+        tool: T,
+        observer: F,
+    ) -> Self
+    where
+        T: ToolImpl<C>,
+        F: for<'a> Fn(&C::Cx<'a>, &T::Output) -> Result<(), ToolExecutionError>
+            + Send
+            + Sync
+            + 'static,
+    {
+        let registration = ToolRegistration::new(tool.spec(), provenance);
+        Self {
+            registration,
+            erased: Box::new(ObservedTool { tool, observer }),
         }
     }
 
@@ -124,15 +150,39 @@ trait ErasedTool<C: ContextFactory>: Send + Sync {
     async fn invoke(&self, ctx: &C::Cx<'_>, payload: Value) -> Result<Value, ToolExecutionError>;
 }
 
+struct ObservedTool<T, F> {
+    tool: T,
+    observer: F,
+}
+
+struct PlainTool<T> {
+    tool: T,
+}
+
 #[async_trait]
-impl<C, T> ErasedTool<C> for T
+impl<C, T, F> ErasedTool<C> for ObservedTool<T, F>
+where
+    C: ContextFactory,
+    T: ToolImpl<C>,
+    F: for<'a> Fn(&C::Cx<'a>, &T::Output) -> Result<(), ToolExecutionError> + Send + Sync + 'static,
+{
+    async fn invoke(&self, ctx: &C::Cx<'_>, payload: Value) -> Result<Value, ToolExecutionError> {
+        let input = self.tool.parse_input(payload)?;
+        let output = self.tool.execute(ctx, input).await?;
+        (self.observer)(ctx, &output)?;
+        Ok(output.into())
+    }
+}
+
+#[async_trait]
+impl<C, T> ErasedTool<C> for PlainTool<T>
 where
     C: ContextFactory,
     T: ToolImpl<C>,
 {
     async fn invoke(&self, ctx: &C::Cx<'_>, payload: Value) -> Result<Value, ToolExecutionError> {
-        let input = self.parse_input(payload)?;
-        self.execute(ctx, input).await.map(Into::into)
+        let input = self.tool.parse_input(payload)?;
+        self.tool.execute(ctx, input).await.map(Into::into)
     }
 }
 
