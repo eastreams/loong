@@ -16,6 +16,18 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      `migration::*` / `config::load` / `config::write` 当前会直接读写、备份、扫描文件。
      迁移完成线必须先把这些 I/O 抽到 access-backed port 或等价的 granted action run
      边界；
+   - `config.import` 的迁移先拆 filesystem primitive，再迁 tool 入口。当前 `loong-access::fs`
+     只有 read/write/glob/content-search，尚不足以覆盖 import 的全部副作用：
+     - discovery / plan：需要受治理的 file read、directory scan、canonical/path metadata；
+     - apply：需要读取现有 output config、写 output config、创建 state dir、写 backup、
+       写 import manifest、可选写 external skills manifest；
+     - rollback：需要读取 manifest、复制 backup、删除不存在前的 output、恢复 output；
+     - apply_selected failure rollback：需要恢复 config output，并协调 skills bridge rollback。
+   - 因此第一个 code 步骤不是 `Register(ConfigImportTool)`，而是把
+     `migration::*` / `config::{load,write}` 依赖的 filesystem 操作改成显式 I/O 边界：
+     要么新增能消费 `Granted<ConcreteFsAction>` 的 access primitives，要么让 migration
+     函数接收一个 app-owned access-backed filesystem port；这个 port 不能绕过
+     `ctx.access()`，也不能退回 `FilePolicyExtension`；
    - `glob.search` / `content.search` 的 kernel-routed 调用已注册为 typed read-family
      path；无 context direct 调用已 fail closed，旧 app-local search helper 已删除；
    - 逐个工具迁移：concrete tool 只解析 payload、调用 `ctx.access()` / `ctx.tool()`、
