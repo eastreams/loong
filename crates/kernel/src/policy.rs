@@ -6,13 +6,15 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
 use loong_access::fs::path::{EntryPath, FsPathMode, TargetPath};
 use loong_contracts::{
     Capability, CapabilityToken, GrantId, PolicyDecision, PolicyEntry, PolicyEvaluation,
-    PolicyGrant, PolicyId, PolicyOutcome, PolicyReport, VerticalPackManifest,
+    PolicyGrant, PolicyId, PolicyOutcome, PolicyRegistration, PolicyRegistrationSource,
+    PolicyReport, VerticalPackManifest,
 };
 use loong_core::{
     error::AuthorizationError,
@@ -126,6 +128,7 @@ impl<C: ContextFactory> PolicyPipeline<C> {
     /// Use this when the policy needs typed action data, such as a canonical fs
     /// path. Policies registered here will not see other action types.
     #[must_use]
+    #[track_caller]
     pub fn with_policy<A, P>(mut self, policy: P) -> Self
     where
         A: ActionMeta + 'static,
@@ -136,18 +139,20 @@ impl<C: ContextFactory> PolicyPipeline<C> {
     }
 
     /// Add a typed policy to an existing pipeline.
+    #[track_caller]
     pub fn push_policy<A, P>(&mut self, policy: P)
     where
         A: ActionMeta + 'static,
         P: Policy<C, A> + 'static,
     {
-        let id = self.allocate_policy_id();
+        let (id, registration) = self.allocate_registration();
         let entries = self
             .typed_policies
             .entry::<TypedPolicyEntries<C, A>>()
             .or_insert_with(TypedPolicyEntries::default);
         entries.policies.push(RegisteredPolicy {
             id,
+            registration,
             policy: Arc::new(policy),
         });
     }
@@ -158,6 +163,7 @@ impl<C: ContextFactory> PolicyPipeline<C> {
     /// policy runs. Keep action-specific checks in `with_policy` so unrelated
     /// actions do not share unnecessary context requirements.
     #[must_use]
+    #[track_caller]
     pub fn with_pre_policy<P>(mut self, policy: P) -> Self
     where
         P: PolicyAny<C> + 'static,
@@ -167,13 +173,15 @@ impl<C: ContextFactory> PolicyPipeline<C> {
     }
 
     /// Add a broad gate before typed action policy.
+    #[track_caller]
     pub fn push_pre_policy<P>(&mut self, policy: P)
     where
         P: PolicyAny<C> + 'static,
     {
-        let id = self.allocate_policy_id();
+        let (id, registration) = self.allocate_registration();
         self.pre_policies.push(RegisteredAnyPolicy {
             id,
+            registration,
             policy: Arc::new(policy),
         });
     }
@@ -183,6 +191,7 @@ impl<C: ContextFactory> PolicyPipeline<C> {
     /// The default allow policy belongs here: typed policies must get a chance
     /// to deny before the compatibility fallback grants legacy actions.
     #[must_use]
+    #[track_caller]
     pub fn with_fallback_policy<P>(mut self, policy: P) -> Self
     where
         P: PolicyAny<C> + 'static,
@@ -192,13 +201,15 @@ impl<C: ContextFactory> PolicyPipeline<C> {
     }
 
     /// Add broad policy after typed action policy.
+    #[track_caller]
     pub fn push_fallback_policy<P>(&mut self, policy: P)
     where
         P: PolicyAny<C> + 'static,
     {
-        let id = self.allocate_policy_id();
+        let (id, registration) = self.allocate_registration();
         self.fallback_policies.push(RegisteredAnyPolicy {
             id,
+            registration,
             policy: Arc::new(policy),
         });
     }
@@ -221,10 +232,26 @@ impl<C: ContextFactory> PolicyPipeline<C> {
             .map_err(policy_engine_error)
     }
 
-    fn allocate_policy_id(&mut self) -> PolicyId {
+    #[track_caller]
+    fn allocate_registration(&mut self) -> (PolicyId, PolicyRegistration) {
         let id = self.next_policy_id;
         self.next_policy_id = self.next_policy_id.saturating_add(1);
-        id
+        let caller = std::panic::Location::caller();
+        let registered_at_unix_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| {
+                u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+            });
+        let registration = PolicyRegistration {
+            order: id,
+            registered_at_unix_ms,
+            source: PolicyRegistrationSource {
+                file: caller.file().to_owned(),
+                line: caller.line(),
+                column: caller.column(),
+            },
+        };
+        (id, registration)
     }
 
     fn next_grant_id_sync(&self) -> GrantId {
@@ -235,17 +262,13 @@ impl<C: ContextFactory> PolicyPipeline<C> {
 
 struct RegisteredAnyPolicy<C: ContextFactory> {
     id: PolicyId,
-    // TODO(policy-registration-metadata): Carry registration metadata here,
-    // such as registered_at, registration_order, and source. Keep this in sync
-    // with typed entries so PolicyReport can explain how each policy entered
-    // the pipeline, not only what it decided.
+    registration: PolicyRegistration,
     policy: Arc<dyn PolicyAny<C>>,
 }
 
 struct RegisteredPolicy<C: ContextFactory, A: ActionMeta> {
     id: PolicyId,
-    // TODO(policy-registration-metadata): Mirror RegisteredAnyPolicy metadata
-    // when typed policy registration records registered_at/source data.
+    registration: PolicyRegistration,
     policy: Arc<dyn Policy<C, A>>,
 }
 
@@ -285,6 +308,7 @@ where
             let source = PolicyEntry {
                 policy_name: registered.policy.name(),
                 policy_id: registered.id,
+                registration: registered.registration.clone(),
             };
             let decision = grant.decision;
             let reason = grant.reason.clone();
@@ -327,6 +351,7 @@ where
                 let source = PolicyEntry {
                     policy_name: registered.policy.name(),
                     policy_id: registered.id,
+                    registration: registered.registration.clone(),
                 };
                 let decision = grant.decision;
                 let reason = grant.reason.clone();
@@ -369,6 +394,7 @@ where
             let source = PolicyEntry {
                 policy_name: registered.policy.name(),
                 policy_id: registered.id,
+                registration: registered.registration.clone(),
             };
             let decision = grant.decision;
             let reason = grant.reason.clone();

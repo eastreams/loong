@@ -59,7 +59,10 @@ pub trait PolicyEngine<C: ContextFactory>: Sync {
             PolicyOutcome::Deny {
                 grant_source: _,
                 reason,
-            } => Err(PolicyGrantError::Denied { report, reason }),
+            } => Err(PolicyGrantError::Denied {
+                report: Box::new(report),
+                reason,
+            }),
         }
     }
 }

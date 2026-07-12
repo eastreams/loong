@@ -381,6 +381,57 @@ async fn policy_pipeline_report_preserves_pre_and_action_evaluation_stages() {
 }
 
 #[tokio::test]
+async fn policy_pipeline_report_preserves_registration_metadata() {
+    let engine = PolicyPipeline::<TestContextFactory>::new()
+        .with_pre_policy(StaticAnyPolicy {
+            name: "pre-continue",
+            decision: PolicyDecision::Continue,
+            reason: "no opinion",
+        })
+        .with_policy::<LegacyKernelAction, _>(StaticTypedPolicy {
+            name: "typed-allow",
+            decision: PolicyDecision::Allow,
+            reason: "typed allowed",
+        });
+    let pack = pack();
+    let token = token();
+    let ctx = TestPolicyContext::new(
+        &pack,
+        &token,
+        1,
+        ExecutionPlane::Tool,
+        PlaneTier::Core,
+        None,
+    );
+    let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+
+    let report = engine.decide(&ctx, &action).await;
+    let pre_registration = &report.evaluations[0].source.registration;
+    let typed_registration = &report.evaluations[1].source.registration;
+
+    assert_eq!(pre_registration.order, 0);
+    assert_eq!(typed_registration.order, 1);
+    assert!(pre_registration.registered_at_unix_ms > 0);
+    assert!(typed_registration.registered_at_unix_ms > 0);
+    assert!(
+        pre_registration
+            .source
+            .file
+            .ends_with("crates/kernel/src/policy/tests.rs")
+    );
+    assert!(pre_registration.source.line > 0);
+    assert!(pre_registration.source.column > 0);
+    assert!(
+        typed_registration
+            .source
+            .file
+            .ends_with("crates/kernel/src/policy/tests.rs")
+    );
+    assert!(typed_registration.source.line > pre_registration.source.line);
+    assert!(typed_registration.source.column > 0);
+}
+
+#[tokio::test]
 async fn policy_pipeline_typed_policy_only_matches_registered_action_type() {
     let engine = PolicyPipeline::<TestContextFactory>::new().with_policy::<TypedOnlyAction, _>(
         StaticTypedPolicy {

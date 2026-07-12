@@ -8,6 +8,25 @@ pub struct GrantId(pub u64);
 
 pub type PolicyId = u64;
 
+/// Source location where a policy entered its runtime pipeline.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolicyRegistrationSource {
+    pub file: String,
+    pub line: u32,
+    pub column: u32,
+}
+
+/// Runtime registration facts attached to every evaluated policy.
+///
+/// `order` is pipeline-wide rather than stage-local, so reports can reconstruct
+/// registration order even when evaluation jumps between subchains.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolicyRegistration {
+    pub order: u64,
+    pub registered_at_unix_ms: u64,
+    pub source: PolicyRegistrationSource,
+}
+
 /// Decision returned by one policy evaluation.
 ///
 /// `Allow` and `Deny` are terminal decisions for the whole pipeline.
@@ -99,6 +118,7 @@ impl<'de> Deserialize<'de> for PolicyEvaluation {
 pub struct PolicyEntry {
     pub policy_name: Cow<'static, str>,
     pub policy_id: PolicyId,
+    pub registration: PolicyRegistration,
 }
 
 impl<'de> Deserialize<'de> for PolicyEntry {
@@ -110,12 +130,14 @@ impl<'de> Deserialize<'de> for PolicyEntry {
         struct Helper {
             policy_name: String,
             policy_id: PolicyId,
+            registration: PolicyRegistration,
         }
 
         let helper = Helper::deserialize(deserializer)?;
         Ok(Self {
             policy_name: Cow::Owned(helper.policy_name),
             policy_id: helper.policy_id,
+            registration: helper.registration,
         })
     }
 }

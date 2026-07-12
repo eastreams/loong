@@ -9,8 +9,8 @@ use std::{
 
 use async_trait::async_trait;
 use loong_contracts::{
-    Capability, GrantId, PolicyEntry, PolicyOutcome, PolicyReport, ToolExecutionError,
-    ToolInputError, ToolPlaneError, ToolSpec,
+    Capability, GrantId, PolicyEntry, PolicyOutcome, PolicyRegistration, PolicyRegistrationSource,
+    PolicyReport, ToolExecutionError, ToolInputError, ToolPlaneError, ToolSpec,
 };
 use loong_core::{
     policy::{
@@ -63,6 +63,15 @@ impl PolicyEngine<TestContextFactory> for AllowPolicyEngine {
                 source: PolicyEntry {
                     policy_name: Cow::Borrowed("test-allow"),
                     policy_id: 1,
+                    registration: PolicyRegistration {
+                        order: 1,
+                        registered_at_unix_ms: 1,
+                        source: PolicyRegistrationSource {
+                            file: "tool_plane/tests.rs".to_owned(),
+                            line: 1,
+                            column: 1,
+                        },
+                    },
                 },
                 reason: Cow::Borrowed("test policy allows invocation"),
             },

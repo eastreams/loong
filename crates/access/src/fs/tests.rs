@@ -8,7 +8,10 @@ use std::{
 };
 
 use async_trait::async_trait;
-use loong_contracts::{Capability, GrantId, PolicyEntry, PolicyOutcome, PolicyReport};
+use loong_contracts::{
+    Capability, GrantId, PolicyEntry, PolicyOutcome, PolicyRegistration, PolicyRegistrationSource,
+    PolicyReport,
+};
 use loong_core::{
     kernel::Kernel,
     policy::{
@@ -101,6 +104,15 @@ impl PolicyEngine<FsAccessTestContextFactory> for FsAccessPolicyEngine {
                     source: PolicyEntry {
                         policy_name: Cow::Borrowed("allow-all"),
                         policy_id: 1,
+                        registration: PolicyRegistration {
+                            order: 1,
+                            registered_at_unix_ms: 1,
+                            source: PolicyRegistrationSource {
+                                file: "fs/tests.rs".to_owned(),
+                                line: 1,
+                                column: 1,
+                            },
+                        },
                     },
                     reason: Cow::Borrowed("allowed"),
                 },

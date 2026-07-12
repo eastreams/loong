@@ -11,7 +11,8 @@ pub enum PolicyGrantError {
     MissingCapability { capability: Capability },
     #[error("authorization denied: {reason}")]
     Denied {
-        report: PolicyReport,
+        /// Box the full report so authorization errors stay cheap to propagate.
+        report: Box<PolicyReport>,
         reason: Cow<'static, str>,
     },
 }
