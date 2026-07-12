@@ -1656,7 +1656,7 @@ requires_openai_auth = true
             "role": "user",
             "content": "ping"
         })],
-        mvp::provider::ProviderRuntimeBinding::direct(),
+        mvp::provider::ProviderRuntimeBinding::advisory_only(),
     )
     .await
     .expect("imported config should support a provider completion request");
@@ -1790,7 +1790,7 @@ requires_openai_auth = true
             "role": "user",
             "content": "ping"
         })],
-        mvp::provider::ProviderRuntimeBinding::direct(),
+        mvp::provider::ProviderRuntimeBinding::advisory_only(),
     )
     .await
     .expect("imported config should send chat completions to the custom endpoint");
@@ -1908,7 +1908,7 @@ requires_openai_auth = true
             "role": "user",
             "content": "ping"
         })],
-        mvp::provider::ProviderRuntimeBinding::direct(),
+        mvp::provider::ProviderRuntimeBinding::advisory_only(),
     )
     .await
     .expect("imported config should fallback from Responses to chat-completions for turn requests");
@@ -2020,7 +2020,7 @@ requires_openai_auth = true
             "role": "user",
             "content": "ping"
         })],
-        mvp::provider::ProviderRuntimeBinding::direct(),
+        mvp::provider::ProviderRuntimeBinding::advisory_only(),
     )
     .await
     .expect(

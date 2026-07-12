@@ -491,7 +491,7 @@ async fn request_turn_auto_model_rejects_missing_volcengine_credentials_before_t
             "role": "user",
             "content": "ping"
         })],
-        ProviderRuntimeBinding::direct(),
+        ProviderRuntimeBinding::advisory_only(),
     )
     .await
     .expect_err("auto-model requests should fail on missing managed credentials before transport");
@@ -628,7 +628,7 @@ async fn request_completion_auto_model_falls_forward_to_next_auth_profile_after_
             "role": "user",
             "content": "ping"
         })],
-        ProviderRuntimeBinding::direct(),
+        ProviderRuntimeBinding::advisory_only(),
     )
     .await
     .expect("request should succeed with the next auth profile after catalog auth failure");
@@ -1685,7 +1685,7 @@ async fn opencode_zen_claude_route_skips_oauth_only_profiles_before_request_disp
             "role": "user",
             "content": "ping"
         })],
-        ProviderRuntimeBinding::direct(),
+        ProviderRuntimeBinding::advisory_only(),
     )
     .await
     .expect("opencode claude route should succeed with api key profile");
@@ -2981,7 +2981,7 @@ async fn request_turn_streaming_rejects_unsupported_transport_modes() {
             "role": "user",
             "content": "turn ping"
         })],
-        ProviderRuntimeBinding::direct(),
+        ProviderRuntimeBinding::advisory_only(),
         None,
     )
     .await
@@ -3361,7 +3361,7 @@ async fn responses_completion_falls_back_to_chat_completions_for_compatible_endp
             "role": "user",
             "content": "ping"
         })],
-        ProviderRuntimeBinding::direct(),
+        ProviderRuntimeBinding::advisory_only(),
     )
     .await
     .expect("compatible responses transport should retry chat-completions automatically");
@@ -3445,7 +3445,7 @@ async fn responses_turn_falls_back_to_chat_completions_for_compatible_endpoints(
             "role": "user",
             "content": "turn ping"
         })],
-        ProviderRuntimeBinding::direct(),
+        ProviderRuntimeBinding::advisory_only(),
     )
     .await
     .expect("turn requests should retry chat-completions when Responses is rejected");
@@ -3514,7 +3514,7 @@ async fn responses_turn_does_not_fallback_for_generic_gateway_failures() {
             "role": "user",
             "content": "turn ping"
         })],
-        ProviderRuntimeBinding::direct(),
+        ProviderRuntimeBinding::advisory_only(),
     )
     .await
     .expect_err("generic gateway failures should stay on the same transport and eventually fail");
@@ -3576,7 +3576,7 @@ async fn routed_google_requests_do_not_retry_responses_fallback_logic() {
             "role": "user",
             "content": "ping"
         })],
-        ProviderRuntimeBinding::direct(),
+        ProviderRuntimeBinding::advisory_only(),
     )
     .await
     .expect_err("google routed request should fail without a duplicate fallback retry");
@@ -3756,7 +3756,7 @@ fn provider_failover_audit_event_is_noop_without_kernel_context() {
     let before = audit.snapshot().len();
 
     record_provider_failover_audit_event(
-        ProviderRuntimeBinding::direct(),
+        ProviderRuntimeBinding::advisory_only(),
         &provider,
         &snapshot,
         false,
@@ -3785,7 +3785,7 @@ fn provider_failover_metrics_record_even_without_kernel_context() {
     let provider = ProviderConfig::default();
 
     record_provider_failover_audit_event(
-        ProviderRuntimeBinding::direct(),
+        ProviderRuntimeBinding::advisory_only(),
         &provider,
         &snapshot,
         false,
@@ -3844,7 +3844,7 @@ fn provider_failover_metrics_track_continue_path() {
     };
 
     record_provider_failover_audit_event(
-        ProviderRuntimeBinding::direct(),
+        ProviderRuntimeBinding::advisory_only(),
         &provider,
         &snapshot,
         true,
@@ -4383,7 +4383,7 @@ fn request_across_model_candidates_preserves_first_cooldown_trigger_across_auth_
         .block_on(async {
             request_failover_runtime::request_across_model_candidates(
                 &provider,
-                ProviderRuntimeBinding::direct(),
+                ProviderRuntimeBinding::advisory_only(),
                 &auth_profiles,
                 None,
                 &["model-a".to_owned(), "model-b".to_owned()],
@@ -4500,7 +4500,7 @@ fn request_across_model_candidates_upgrades_to_later_rate_limit_hint() {
         .block_on(async {
             request_failover_runtime::request_across_model_candidates(
                 &provider,
-                ProviderRuntimeBinding::direct(),
+                ProviderRuntimeBinding::advisory_only(),
                 &auth_profiles,
                 None,
                 &["model-a".to_owned(), "model-b".to_owned()],

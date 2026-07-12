@@ -1275,7 +1275,7 @@ mod tests {
             &config,
             false,
             &crate::tools::runtime_tool_view(),
-            ProviderRuntimeBinding::direct(),
+            ProviderRuntimeBinding::advisory_only(),
             &hydrated,
         )
         .await;
@@ -1386,7 +1386,7 @@ mod tests {
             &config,
             true,
             &crate::tools::runtime_tool_view(),
-            ProviderRuntimeBinding::direct(),
+            ProviderRuntimeBinding::advisory_only(),
             &envelope,
         )
         .await;
@@ -1931,8 +1931,12 @@ mod tests {
 
         config.tools.file_root = Some(harness.temp_dir.display().to_string());
 
-        let advisory_messages =
-            build_base_messages_with_binding(&config, true, ProviderRuntimeBinding::direct()).await;
+        let advisory_messages = build_base_messages_with_binding(
+            &config,
+            true,
+            ProviderRuntimeBinding::advisory_only(),
+        )
+        .await;
         let advisory_content = system_prompt_content(&advisory_messages);
         assert!(advisory_content.contains("## Governed Runtime Binding"));
         assert!(advisory_content.contains("session_mode: advisory_only"));

@@ -18,10 +18,6 @@ impl<'a> ProviderRuntimeBinding<'a> {
         Self::AdvisoryOnly
     }
 
-    pub const fn direct() -> Self {
-        Self::AdvisoryOnly
-    }
-
     pub fn kernel_context(self) -> Option<&'a KernelContext> {
         match self {
             Self::Kernel(kernel_ctx) => Some(kernel_ctx),
@@ -64,7 +60,10 @@ mod tests {
             .expect("kernel context should bootstrap");
         let binding = ProviderRuntimeBinding::kernel(&kernel_context);
 
-        assert_eq!(ProviderRuntimeBinding::direct().as_str(), "advisory_only");
+        assert_eq!(
+            ProviderRuntimeBinding::advisory_only().as_str(),
+            "advisory_only"
+        );
         assert_eq!(binding.as_str(), "kernel");
     }
 }
