@@ -1,136 +1,103 @@
 # plan: Kernel / Audit / 当前实现偏差
 
-本文件定义 kernel/audit 边界，并列出截至 2026-07-11 的实现偏差。后续最小提交顺序见
-`08-next-steps.md`。
+本文件记录 kernel/audit 的稳定职责，以及截至 2026-07-13 仍存在的实现偏差。
 
-## Kernel
+## Kernel Boundary
 
-Kernel 不再提供 typed `Kernel::invoke_tool`，也不持有 typed `tool_plane` 字段。
+Kernel 是 governance authority：
 
-目标 API：
+- 验证 pack/token/revocation/time/capability boundary；
+- 运行 typed policy pipeline；
+- 发放 `ActionGrant<A>` / `Granted<A>`；
+- 持有 audit sink、clock、event/grant identity；
+- 不持有 typed ToolPlane，不 dispatch concrete tool，不拥有 app Session/Context。
 
-```rust
-Kernel::grant(
-    pack_id,
-    token,
-    impl ActionMeta,
-    &ctx,
-) -> ActionGrant<A>
-```
+tool invocation、filesystem operation 和其它 domain intent 都走同一个 generic action grant
+contract。不要增加 `AuthorizedToolInvocation`、tool-specific receipt 或只把 generic grant 包一层的
+helper。
 
-tool invocation 的治理入口不需要知道 concrete path 类型；它只需要 `ActionMeta` 提供
-operation/payload/required capabilities。pack boundary、token boundary、policy pipeline
-仍在 kernel 检查。
+现有 `loong_core::kernel::Kernel<C>` trait 只为 Access 暴露 `policy_engine()`，已经满足当前跨 crate
+需求。没有第二个 concrete kernel 或外部 caller 的真实需求前，不提取更宽的 forwarding
+governance trait。
 
-`Kernel::grant` 不做 tool dispatch，也不拥有 tool registry。grant 过程天然记录
-authorization audit：action metadata、required caps、policy report、allow/deny 和
-grant id 都记录到 kernel audit sink。tool invocation 的 denied evidence 因而属于 generic action
-grant audit，不需要单独的 tool-specific denied outcome 或 receipt workaround。
+## Audit Invariant
 
-grant 后的 execution outcome audit 属于 grant consumption 边界。对 tool 来说，该边界
-是 `ctx.tool(path)?.invoke(payload).await -> ToolPlane::invoke(...)`；对 fs 来说，是
-`Granted<FsReadAction>::run(ctx)`。它只能记录 grant 已经发放之后的 completed / failed /
-input error 等结果，不能重复表达 authorization deny。
+audit 分为两个强制边界：
 
-旧 `Kernel::execute_tool_core` 只在迁移期服务 legacy fallback。旧 `CoreToolAdapter` /
-`ToolExtensionAdapter` 只能被 `LegacyToolPlane` 包住，迁移完后删除。
+1. **Authorization evidence**：Kernel generic grant 记录 action metadata、required caps、pack/token
+   结果、policy report、allow/deny 和 grant id。deny 不进入 execution。
+2. **Execution evidence**：grant consumption owner 记录 completed/failed/input-error/cancelled。对 tool
+   是 `ctx.tool(...).invoke(...)`；对 fs 是 concrete `Granted<Action>::run(ctx)`。
 
+两层不能重复表达同一事实：
 
-## Audit
+- capability/token/policy deny 只属于 authorization evidence；
+- tool 内部 fs policy deny 是 fs action authorization deny，同时让外层 tool execution 以 domain
+  error 失败；不能伪装成 ToolPlane route/deny；
+- concrete tool 不获得裸 audit API；runtime invocation wrapper 自动记录 execution outcome；
+- audit 使用 stable display/resource，不把 ToolPlane slot、registry key concrete type、legacy route
+  或 fallback 语义固化进 contracts/kernel。
 
-audit 分两层，不再把所有内容塞进 kernel/contract enum。
+Turn cancellation 另有 execution lifecycle evidence：client disconnect、explicit cancel 和 runtime
+shutdown 必须能区分；partial output 不能记录成 completed。已经提交的 side effect 保留各自 action
+execution evidence。
 
-- kernel 只拥有 `AuditSink`、event id/clock/grant id，以及 generic action authorization
-  audit。`Kernel::grant` 对任意 action 统一记录 action metadata、required caps、
-  policy report、allow/deny 和 grant id。
-- app 拥有 tool-specific execution audit schema。tool path display、tool execution
-  outcome、legacy fallback 对比都属于 app runtime 语义；app 可以把这些事件写入 kernel
-  提供的 sink，但 kernel 不需要定义这些业务 enum。
+## Tool Failure Matrix
 
-typed tool invocation 应该有 audit evidence。tool 调用是 agent/user 可见的治理边界；
-authorization allow/deny 由 generic action grant audit 记录；grant 后的执行成功/失败由
-app-owned execution audit 记录。否则 typed tool 从 legacy `PlaneInvoked` 迁走后，证据链
-反而变少。
+- pack/token/capability reject：generic action authorization deny；plane 不执行。
+- invocation policy deny：generic action authorization deny，包含 `PolicyReport`；plane 不执行。
+- payload parse/input error：invocation grant 已消费，记录 tool execution input error；不 fallback。
+- concrete tool error：记录 tool execution failed。
+- tool 内部 access deny：记录 domain action authorization deny；外层 tool execution failed。
+- cooperative cancellation：停止新 action，记录 tool/turn cancelled；不改写成 policy deny。
+- forced abort after grace timeout：记录 cancellation timeout/forced termination，不能假装正常 cancelled。
+- legacy fallback：只记录 legacy evidence，直到对应 tool 迁移；typed tests 不接受宽松双断言。
 
-tool-specific audit event 不能固化到 contracts/kernel 的 ToolPlane registry key 类型。
-此前把 `ToolInvocation { path: ToolPath, ... }` 加到 `AuditEventKind` 里是过度固化。app
-层可以为 audit payload 存 `path_display`，因为 audit 需要的是可读、稳定、可关联的 path
-表示，不是具体 plane 的 key。`ToolPath` 不应该成为 contracts/core 的全局类型。
+## 当前偏差
 
-app-owned tool execution event 只记录 grant 后结果：
+### Generic grant evidence 不完整
 
-```rust
-ToolInvocation {
-    pack_id,
-    path_display,
-    grant_id,
-    execution_outcome,
-}
-```
+- `PolicyEngine::grant` 在 allow 时取得完整 `PolicyReport`，但 `ActionGrantInfo` 为空，allow report
+  被丢弃。
+- `Kernel::grant_action` 对 token/policy deny 仍转换成 legacy `PolicyError` 并记录旧 authorization
+  denial；没有统一记录 action metadata、report 和 grant id。
+- `KernelInvocationContext::request_parameters()` 仍让 legacy `PolicyAny` 从 Context 读取另一份请求
+  JSON，而不是读取 `ActionMeta::payload()`。
 
-`path_display` 是 app audit payload，不是 registry key 类型。不同 `ToolPlane` 可以
-有不同 path model，只要 app 在 audit 中给出稳定、可读、可关联的表示。
+### Tool execution audit ownership 未收敛
 
-如果 app 层需要 tool-specific execution outcome enum，它只能描述 grant 后 execution
-outcome，例如 completed / failed / input_error；不能包含 denied 分支，不能隐含 fallback
-机制为 kernel contract。contracts 层的 generic `InvocationOutcome` 只表达 grant 后
-completed / failed sink payload，不能表达 ToolPlane 路由语义或 authorization deny。
+- `contracts::AuditEventKind::ToolInvocation` 仍是 tool-specific event；
+  `Kernel::record_tool_invocation` 仍由 kernel 构造它。
+- 当前 event 没有 grant id；typed authorization 与 execution evidence 不能可靠关联。
+- app/runtime 强制记录 execution outcome 的要求已经明确，但 sink 如何承载 app-owned payload 仍需
+  与现有 closed `AuditEventKind` contract 一起收敛，不能只移动函数名。
 
-legacy adapter 在迁移期继续记录旧 `PlaneInvoked`，直到对应工具迁移完成。
+### Legacy tool/kernel 路径仍大
 
-runtime-source 文件读取属于 governed access，不属于 tool invocation。prompt assembly
-读取 `AGENTS.md` / `TOOLS.md` / `IDENTITY.md` 时，不应产生 typed tool execution audit
-或 legacy `PlaneInvoked`；证据链属于 fs access/action authorization path，以及 prompt
-assembly 产出的结构化 runtime-self continuity。
+- `Kernel` 仍持有 `LegacyToolPlane`、memory/connector/runtime legacy planes 和旧 adapter registration。
+- `execute_tool_core` 仍有大量 production/test caller；`ToolCoreRequest` / `ToolCoreOutcome` 仍是
+  conversation/session/tool ingress 的主 envelope。
+- app static catalog、legacy display alias 和 direct dispatch match 仍与 typed plane metadata 重复。
+- `authorize_kernel_action`、`policy_engine_error`、`authorize_operation` 和 control-plane legacy allow
+  bootstrap 仍依赖旧 `PolicyError` surface。
 
-### Tool audit failure matrix
+### Context 仍是旧 owner
 
-authorization audit 由 `Kernel::grant` 强制记录，concrete `ToolImpl` 不拿 audit API。
-execution audit 由 `ToolInvocation::invoke(payload)` / granted action run 边界强制记录。
+- typed tool invocation 已通过 `AppContext::tool(...).invoke(...)` 请求 generic action grant，但
+  `AppContext` 仍是 Arc/COW session+invocation 混合体。
+- `plane` / `tier` 没有真实 Context consumer；`request_parameters` 只服务 legacy policy test/path。
+- `ConversationRuntimeBinding` / `ProviderRuntimeBinding` 仍用 optional/advisory 分支传播“可能没有
+  Context”。
 
-- invocation grant 被 pack/token/caps 拒绝：`Kernel::grant` 记录 generic action grant deny，
-  plane 不执行。
-- invocation policy 被 `PolicyPipeline` 拒绝：`Kernel::grant` 记录带 `PolicyReport` 的
-  generic action grant deny，plane 不执行。
-- payload parse / typed input error：grant 已消费进入 plane，app orchestration 记录
-  grant 后 execution failed/input_error，不 fallback。
-- concrete tool execution error：app orchestration 记录
-  grant 后 execution failed。
-- tool 内部 access/action policy denial：domain access 返回 authorization error；app
-  orchestration 把本次 tool invocation 记为 failed。domain action 的 policy evidence
-  保留在 `PolicyGrantError::Denied { report, ... }`，不要把它伪装成 tool route。
-- legacy fallback：继续记录 `PlaneInvoked`，直到该 tool 迁入 typed plane；typed 测试不再
-  接受 `PlaneInvoked | ToolInvocation` 这种宽松断言。
+### Streaming disconnect 不取消执行
 
-当前 tool invocation 已经通过 `Kernel::grant_action` 请求
-`ToolInvocationAction` grant；不要恢复 `grant_tool_invocation` 这类 tool-specific receipt
-helper。目标仍然是 generic grant 负责所有 action authorization audit；tool invocation
-execution audit 留在 `ToolInvocation::invoke(payload)` 的 grant consumption 边界。
+- `/v1/chat/completions` streaming 在 detached `tokio::spawn` 中执行完整 turn。
+- SSE receiver drop 只使 `sender.send` 失败；provider stream、tool、持久化和 final response 继续运行。
+- provider streaming loop 与 retry sleep 没有 Turn cancellation signal；Session/Turn outcome 也没有
+  cancelled finalization contract。
 
+### Runtime crate root 仍有旧 spine
 
-## 当前实现偏差
-
-以下偏差描述迁移目标，不是新代码应继续复用的形状：
-
-- `crates/contracts/src/audit_types.rs` 已把 execution result 收敛为 generic
-  `InvocationOutcome`，但 `AuditEventKind::ToolInvocation` 仍是迁移期 typed-tool event
-  shape。长期目标是 contracts 只保留 kernel/sink 需要的 generic audit primitives；
-  tool-specific execution outcome 应由 app runtime schema 拥有。
-- `crates/app/src/tools/plane.rs` 已经拥有自己的 `ToolPath` 和 `ToolInvocationAction`，
-  并用 private slot registry + path index 存 tool。`ToolPath` 也是 app-plane-local segment
-  path；dotted provider/catalog names 只在 app plane 边界转换，不能把 plane-local path
-  提回 contracts/core。
-- builtin plane 目前仍由全局 `OnceLock` 构造，而且注册失败通过 `expect` 变成 production
-  panic。这不是可保留的初始化语义，也不能用 lint suppression 掩盖。unified runtime 必须
-  持有构造完成的 plane，并让 builtin/plugin 注册错误在 runtime bootstrap 返回的 `Result`
-  中显式传播；迁移后删除 `app_tool_plane()` 全局入口。
-- `crates/kernel/src/kernel.rs` 已经用 generic `grant_action` 授权 tool invocation action；
-  但 `record_tool_invocation` 仍记录 contracts 里的 typed-tool event。目标是让 kernel
-  只记录 sink 能理解的通用事件，tool execution outcome 的 schema 归 app runtime。
-- `crates/app/src/tools/mod.rs` 的 `execute_kernel_tool_request` 仍是 legacy envelope
-  ingress。typed branch 目前先走旧 `AppContext::tool(...).invoke(...)`；目标是随 concrete
-  context 迁移改成 `Context::tool(...).invoke(...)`，并让
-  持有 context 的调用点直接进入该 API，并把 legacy fallback 留在最后的未迁移边界。
-- `crates/app/src/tools/routing.rs` 的 context-aware direct read 已进入
-  `ctx.tool("read")?.invoke(...)`，无 context 的 `execute_tool_core_with_config(read)`
-  已 fail closed。后续统一 ctx 时可以删除这条 no-context read 入口的过渡错误。
+- `loong-runtime::runtime::Runtime<C>` 和 `tool_plane` 已经是有效 owner；
+- crate root 仍宣称自己是 transitional spine，并保存与 app conversation runtime 重叠的 one-shot /
+  interactive contract。这部分需要删除或迁入真实 owner，不能继续与新 Runtime 并存。

@@ -1,33 +1,31 @@
 # plan
 
-本目录是 Access-Action-Policy / ToolPlane / Runtime 收敛的迁移计划入口。它仍是仓库
-根目录下的迁移期工程计划，不是 reader-facing `docs/` 文档。
+本目录记录 Access-Action-Policy、ToolPlane、Runtime 与 turn context 的剩余迁移计划。它是
+仓库内工程计划，不是 reader-facing `docs/`，也不保存已经完成的提交历史。
 
-每个文件只承担一种阅读目的：
+阅读顺序：
 
-1. [原则与分层边界](01-principles-and-boundaries.md)：长期原则和 crate/module owner。
-2. [Runtime / Context / Crate 收敛](02-runtime-and-crates.md)：二核心 runtime/context
-   模型，以及哪些 crate 应保留、重定义或合并。
-3. [Capability 与 Policy](03-capability-and-policy.md)：effective caps、tool->tool caps
-   narrowing、config -> typed policy registration。
-4. [跨模块变更约束](04-change-hygiene.md)：每个最小提交都要遵守的 dependency、feature、
-   helper、comment、test hygiene。
-5. [ToolPlane 与 Tool Invocation](05-tool-plane.md)：plane-local path、tool invocation
-   action、sealed invocation boundary、registry shape。
-6. [Filesystem Path Grants 与 `read`](06-filesystem-and-read.md)：`GrantedPath`、fs resolve/read
-   action 边界、`read` 迁移状态。
-7. [Kernel / Audit / 当前实现偏差](07-kernel-audit-and-deviations.md)：kernel 只做
-   governance、audit 分层、截至 2026-07-11 仍存在的偏差。
-8. [最小提交顺序](08-next-steps.md)：后续实现顺序、每步完成线和验证命令。
+1. [原则与分层边界](01-principles-and-boundaries.md)：长期不变量和 owner。
+2. [Runtime / Session / Context / Crate](02-runtime-and-crates.md)：一次 Turn 的 context
+   形状、长期 owner 和 crate 收敛。
+3. [Capability 与 Policy](03-capability-and-policy.md)：capability gate、pipeline 和 grant
+   metadata。
+4. [跨模块变更约束](04-change-hygiene.md)：dependency、feature、helper、comment 和 test
+   hygiene。
+5. [ToolPlane 与 Tool Invocation](05-tool-plane.md)：plane-local path、sealed dispatch 和
+   legacy ingress 删除目标。
+6. [Filesystem Path Grants](06-filesystem-and-read.md)：fs typestate、安全边界和剩余
+   TOCTOU 工作。
+7. [Kernel / Audit / 当前偏差](07-kernel-audit-and-deviations.md)：governance 与 audit
+   目标，以及截至 2026-07-13 仍存在的代码偏差。
+8. [最小提交顺序](08-next-steps.md)：只列尚未完成的实施步骤、完成线和验证命令。
 
-状态词约定：
+维护规则：
 
-- “原则”表示后续实现不能违反的约束。
-- “目标形状”表示迁移完成后的结构，不代表当前代码已经满足。
-- “截至 2026-07-11”表示写入计划时观察到的当前代码状态。
-- “迁移期”表示只允许存在到对应工具/路径迁完；不能扩展成长期兼容层。
-- “legacy”表示旧 tool-core / adapter / authorization 路径，除非明确标为保留边界，否则都是删除目标。
-
-维护约束：代码中的架构迁移 `TODO(tag)` 必须在 `08-next-steps.md` 的 Code TODO 对照中映射到
-一个有完成线和验证命令的步骤。新增 TODO 时同步增加映射；步骤完成时同时删除 TODO、旧分支和
-对应映射，不能让 TODO 变成没有 owner 的长期注释。
+- 已完成步骤直接从 `08-next-steps.md` 删除；稳定下来的行为只在对应原则文件中保留为
+  不变量，不继续写成“目标形状”。
+- 尚未决定的设计不能伪装成计划结论。先在讨论中决策，再写入对应文件。
+- 代码中的架构迁移 `TODO(tag)` 必须映射到 `08-next-steps.md` 的一个剩余步骤。步骤完成时
+  同时删除 TODO、旧分支和映射。
+- “legacy”只表示尚未迁移的 tool-core / adapter / authorization 边界。除非原则文件明确
+  保留，否则 legacy 都是删除目标，不能扩展成兼容层。

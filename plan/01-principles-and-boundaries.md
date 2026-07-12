@@ -1,144 +1,113 @@
 # plan: 原则与分层边界
 
-本文件记录长期原则和 crate/module ownership。它不列具体提交步骤；具体步骤见
-`08-next-steps.md`。
+本文件只记录长期不变量和 owner。剩余提交顺序见 `08-next-steps.md`。
 
-## 已确认原则
+## 迁移纪律
 
-- 敢于破坏性改动。替代边界确认后，直接迁移调用点并删除被替代入口；不保留 alias、
-  proxy 或长期 fallback。避免会模糊 ownership 的 root re-export；清晰的 domain module
-  re-export 可以接受，例如 `loong_access::fs::{FsAccess, FsReadAction}`，但需保持导出路径唯一。
-- concrete unified `Context<'a>` 类型由 runtime/app 层定义。kernel/access/policy/tool 只通过
-  `ContextFactory` 和小的 context requirement trait 观察它。目标 concrete 名称固定为
-  `Context<'a>`，对应 GAT marker 固定为 `RuntimeContextFactory`；旧 `AppContext`、
-  `AppContextInner`、`AppContextFactory` 必须从代码、测试、注释和文档彻底删除，不保留
-  alias 或 re-export。
-- tool/access/policy 共享同一个 session-level `Context` source of truth。`AccessCx` 这类
-  从 `Context` 派生的 concrete facade 可以存在；旧 `ToolCoreContext` 是删除目标。
-- 副作用 only access can do。已经迁入 Access-Action-Policy 路径的 tool/helper/adapter/kernel
-  policy 都不能直接执行文件读取等 migrated side effect。
-- live workspace/runtime-self source 读取必须有 governed execution context，并通过
-  `ctx.access()` 进入 fs access。没有 kernel/runtime binding 的 prompt assembly、
-  continuity refresh、compaction helper、advisory/direct projection 不得现场读取
-  `AGENTS.md`、`TOOLS.md`、`IDENTITY.md` 等 live files；它们只能使用已经存在于 config、
-  session store 或 assembled context 中的结构化数据。
-- `ActionMeta::required_capabilities` 是 action 属性；workspace root、file root、
-  runtime config 是 context / resolver / policy 的输入，不塞进 required caps。
-- context 暴露的是 effective allowed caps，不一定等于原始 token caps。tool 调 tool 时，
-  child context 的 caps 必须从 parent effective caps 缩窄出来。调用参数可以提供
-  `Option<required_caps_override>`；有 override 时先校验它是 tool default caps 的子集，
-  再用它替代 default caps 计算 child effective caps。没有 override 时使用 default caps。
-- `Granted<A>` 是授权到执行的边界。没有 grant 就不能进入对应 side-effect 或 dispatch
-  入口。
-- backend 可以存在，但不要求统一 trait。硬约束是每个执行入口消费
-  `Granted<ConcreteAction>`，例如通过 `Granted<A>::run(ctx)` 进入 action 自己的执行
-  hook。
-- `read` 可以是 aggregate tool，但不能是 aggregate action。`read { path }`、
-  `read { query }`、`read { glob/pattern }` 的泄漏面不同，最终必须落到不同 concrete
-  action。
-- 路径解析本身是 fs action。canonicalize、existing ancestor resolution、symlink
-  resolution 都是 filesystem observation，不能藏在未治理 helper 里。
-- workspace guidance / runtime-self 的候选根发现不能跟随 symlink 逃逸 workspace。
-  nested workspace 候选必须通过 canonical containment 检查；候选发现可以列出
-  root-local deterministic paths，但不能把 workspace 外部目录注册为 source root。
-- 路径权限的共享产物叫 `GrantedPath`。它不是泛型 token，而是 fs domain 的 concrete
-  value；只能由受治理的路径解析 action 产出，构造函数不公开。
-- workspace root / allowed roots 是 path-resolution policy 的输入，不是
-  `FsReadAction` 的运行需求。`FsReadAction` 只应消费已经治理过的 `GrantedPath`。
-- policy 不依赖 app concrete context。需要 context 数据时，用小 requirement trait
-  表达，例如 fs root view；业务 policy 应为任意满足 trait 的 context 实现。
-- config -> policy 路径属于 app bootstrap：app 读取 config，构造 typed policy，注册进
-  pipeline。access 不读取 app config，tool helper 不做 policy preflight；config 不能
-  通过修改 action required caps 来表达业务授权。
-- `path` 是 ToolPlane registry 的路径，不是 contracts/core 的全局概念。具体 path
-  类型由具体 `ToolPlane` 定义；core 不能替所有 plane 规定 `ToolPath` 的结构。
-- `ToolImpl` 不拥有 path。tool 自身只描述输入/输出/能力/说明；注册到某个 plane 时，
-  plane 才把自己的 `Path` 和 tool descriptor 组合成 registered spec。
-- `loong_contracts::ToolOutcome` 直接删除。typed target 是 `Result<Value, E>`：success
-  是 `serde_json::Value`，failure 是该层自己的 error type。尚未迁入 typed path 的 legacy
-  bridge 继续用 `ToolCoreOutcome` 兼容旧 app/tool-core 边界。
-- `ToolInvocationAction` 可以存在，但它属于具体 plane/app 的治理边界，不能在 core 里
-  持有全局 `ToolPath`。类型名不加 `App` 前缀；层级由模块路径表达，例如
-  `loong-app::tools::plane::ToolInvocationAction`。公共泛型 helper 只有在多个 plane
-  真的复用同一形状时再引入。
-- `ActionMeta::payload` 没有默认 `Null`。payload 是 Action 的结构化载荷；如果 action
-  已经持有 `serde_json::Value`，目标 API 可以返回 `Cow<'_, Value>` 来避免无意义 clone。
-- 减少 helper function。能用类型、trait bound、owned boundary 或 action/context
-  结构表达的约束，不用 helper 暗中搬运或转换。只有在它统一多处真实重复的调用形态、
-  且该形态不适合用类型表达时，helper 才可以存在；存在时必须在 helper 附近写清楚理由
-  和归属边界。
-- 架构代码要有少量高信号注释，标明边界和意图。注释解释 why，不重复代码，也不写大段
-  散文。
-- app/runtime surface 长期拥有 `Runtime` 与 `Session`；一次 turn/tool/action 只传播借用型
-  `Context<'a>`。kernel authority 是 `Runtime` 的内部 governance 组件，不再存在第二套
-  governance capsule；conversation、provider、channel 和 tool orchestration 共享同一种
-  concrete context 类型。
-- unified runtime 是 app 运行时 owner：持有 tool plane、session/agent view、runtime config
-  snapshot、config -> policy wiring 和每次 invocation context 的构造入口。kernel 不持有
-  app tool registry，也不拥有 session/agent/tool namespace。
-- `Runtime` 是一个治理域内唯一的运行主体；`Session` 是挂在 runtime 下的 agent/task
-  实例，拥有 session authority、identity 和 lifecycle state；`Context<'a>` 是某个 Session
-  在一次执行中的统一投影。Session 不持有 Context，registry 也不存 invocation Context。
-- 统一的是 source-of-truth execution context，不是禁止具体 facade/view 类型。`AccessCx`
-  这种从 `Context` 派生出的 concrete Cx 很有必要；它可以承载 domain API 和窄依赖，但不能
-  拥有独立 runtime、capability、policy 或 audit 状态。
-- 一次 tool/action invocation 使用同一个 `Context<'a>` 类型的本次 invocation view。它借用
-  runtime 与 session，并携带 effective allowed caps、request payload、plane/tier 和 fs root
-  等 execution overlay。tool->tool 调用必须构造同类型 child context 来缩窄 caps，而不是
-  复用父 context 或直接传 token。
-- tool invocation 的普通调用入口是 `ctx.tool(path)?.invoke(payload).await`。`ctx.tool(path)`
-  返回 `Result<ToolInvocation<'_>, ToolLookupError>`：它只做 plane-local path 解析/entry lookup，
-  不做 grant、不 parse payload。返回的 invocation handle 借用 `&ctx`，绑定 resolved entry、
-  optional caps override 和 trusted overlay；`invoke(payload)` 才是构造 child context、kernel
-  grant、plane dispatch 和 execution audit 的治理边界。
-- `trusted_internal_payload` 这类保留字段不是 typed tool payload。legacy ingress 可以临时从
-  agent payload 中抽取 trusted evidence，但必须立即转成 typed context overlay，并从传给 tool
-  的 payload 中删除。concrete tool 不直接读取 trusted overlay；它只能通过 `ctx.access()`、
-  `ctx.tool(path)?.invoke(...)` 或窄 context requirement trait 观察 overlay 的效果。
-- legacy tool code 可以在迁移期留存，但不能被包装成新架构组件来假装已迁移。typed
-  tool invocation 先尝试 app-owned ToolPlane；未注册/未迁移时只在调用边界末尾 fallback 到
-  legacy adapter/core-tool 路径。旧工具不注册进 typed ToolPlane，不通过 payload claim
-  混入新 path，也不把旧 policy helper 塞回 `PolicyPipeline` 冒充 typed action policy。
-- live runtime-self continuity 是 prompt assembly 的结构化副产物，不从 prompt 文本反推。
-  provider/context engine 读取 live source 后应同时产出 `RuntimeSelfContinuity`；runtime
-  merge stored continuity 时只用这个结构化 live state 判断缺失 lane。compaction persistence
-  也接收该结构化值；没有 assembled live state 的路径传 `None`，不得 fallback 到 config
-  现场读文件。
-- crate 边界要服务真实 owner。小 crate 不是问题；只做转发、占用大名字但没有 owner 职责、
-  或保留 phase 过渡壳的 crate 是问题。确认替代 owner 后应破坏性收敛，不用 alias/fallback
-  保留被替代形状。
+- 敢于破坏性改动。替代边界确认后，迁移调用点并删除旧入口；不保留 alias、proxy、长期
+  fallback 或同义 wrapper。
+- 每个提交只完成一个可解释的边界变化。机械迁移、行为变化、文档清理和无关重构不能混在
+  同一个提交里。
+- helper 默认不成立。只有它统一多个真实重复调用面，而且该约束不适合由类型、trait、owned
+  boundary 或 action/context 表达时才保留；附近必须用短注释说明理由和 owner。
+- 架构注释解释 ownership、why 和安全边界，不复述代码，也不把讨论历史写成注释墙。
+- feature flag 控制完整模块或工具族是否存在。feature 关闭时不编译该模块，不在模块内部保留
+  disabled stub。
+- root re-export 只用于不会混淆 owner 的明确 domain API。每个公开概念保持唯一推荐路径。
 
+## Runtime、Session 与 Context
 
-## 分层边界
+- `Runtime<C>` 是长期 runtime owner，持有 `Kernel<C>` 和 typed `ToolPlane<C>`。kernel 是
+  Runtime 内的 governance authority，不是第二套 app runtime，也不持有 typed tool registry。
+- `Session` 是跨 Turn 存活的主体，拥有 session identity、基础 authority 和 lifecycle state。
+  Session 的业务生命周期不由 Rust lifetime 表达；Session 不是 Future。
+- `Context<'a>` 是一次 Turn 的不可变执行快照，由 app/runtime 层根据 Session authority、
+  本次 Turn 的 typed options 和本次执行的 cancellation signal 构造。Plan、Implementation、
+  Goal 等模式/选择，以及会影响工具、权限、workspace 或 policy 的选项，都必须在构造时
+  归一化。
+- 一个 Context 生命周期内，影响 authority 或 policy 输入的 Turn 选项不可原地修改。需要改变
+  这些选项时，结束旧执行并构造新 Context。是否仍属于同一个持久化用户 Turn，由 conversation
+  层决定。
+- nested tool invocation 可以派生同一种 concrete `Context<'a>`，但只能继承或收窄 authority：
+  `child_caps ⊆ parent_caps`。它继承同一 Turn 的 identity、mode/goal 和 cancellation signal。
+- Context 不保存 tool payload、action payload、`ExecutionPlane` 或 `PlaneTier`。payload 属于
+  concrete Action；tool invocation、`AccessCx` 和 concrete Action 类型已经表达执行域。
+- Session、Runtime registry 和持久化 store 都不保存 invocation Context。需要 `'static` 的任务
+  持有真正的长期 owner，并在 future 内构造借用型 Context；不能把整个 Context 重新 Arc 化。
+- concrete 名称固定为 `Context<'a>`，GAT marker 固定为 `RuntimeContextFactory`。旧
+  `AppContext`、`AppContextInner`、`AppContextFactory` 必须彻底删除，不留 alias、deprecated
+  wrapper 或 re-export。
+- `ContextFactory` 只是 lifetime 到 concrete context 的 GAT 映射，不构造值，也不持有 policy
+  engine 或 runtime。
 
-- `loong-contracts`：稳定数据类型，例如 `ToolInputError`、`ToolCoreOutcome`、
-  `PolicyReport`，以及 kernel/sink 需要的 generic audit primitives。`ToolCoreOutcome` 是
-  legacy app/tool-core invocation envelope；`loong_contracts::ToolOutcome` 应删除，而不是
-  作为 typed tool compatibility layer 保留。不要定义全局 `ToolPath`；不要让 tool
-  descriptor 携带 registry path。
-- tool invocation shortcut 挂在 app-defined context 派生的 invocation handle 上，例如
-  `ctx.tool(path)?.invoke(payload).await`。`ToolPlane` trait 本身只表达 granted dispatch，
-  不接收 kernel/audit 参数，也不从 ctx 暗中偷裸 audit API。
-- `loong-core`：行为 trait 和不可伪造授权模型，例如 `ActionMeta`、`Action<Cx>`、
-  `Granted<A>`、`ToolImpl<C>`、`RegisteredTool<C>`。core 不决定 ToolPlane path 类型；
-  core 里的 registered tool 只擦除 concrete tool，不表达注册位置，也不把 success
-  payload 包成 legacy envelope。
-- `loong-kernel`：governance authority，提供 policy pipeline、token/pack boundary、
-  grant、audit sink、clock/event id。kernel 不持有 typed tool registry，也不拥有
-  concrete ToolPlane path 类型。
-- `loong-access`：domain side-effect boundary。文件读取只在 fs access/action 路径中
-  发生。
-- `loong-runtime`：目标是 unified runtime crate，而不是截至 2026-07-11 仍只有
-  `loong-core` 依赖的 transitional protocol spine。它应成为持有 app runtime owner 的地方：tool plane、
-  session/agent namespace、effective caps context、config -> policy registration wiring、
-  以及 invocation context construction。若直接移动会被 app config/provider/channel
-  类型强耦合，可以先在 `loong-app` 内 staging；但 `loong-runtime` 不能长期保留为
-  只有宏大名字、没有 runtime owner 职责的过渡壳。
-- `loong-app`：concrete integration layer。它定义 `Context<'a>`、`RuntimeContextFactory`
-  和 session/execution overlay 的装配，连接
-  provider/channel/TUI/config/memory 等 app 侧适配，并从 unified runtime/context 进入
-  tool/session/access 调用。legacy fallback 只属于尚未迁移工具的末端调用边界。
-- `loong-tools`：concrete builtin tool implementations only。该 crate 不承载
-  `ToolImpl`、`RegisteredTool`、registry、plane、policy/action 抽象；它只放
-  `ReadTool` 这类具体工具和它们的 input/output 类型及小范围格式化逻辑。concrete
-  tool 不直接返回 legacy envelope。
+## Cancellation
+
+- streaming client disconnect 取消当前 Turn execution，不取消整个 Session。Session shutdown
+  可以向下取消其活跃 Turn；Runtime shutdown 可以向下取消活跃 Session/Turn。
+- cancellation 是协作式执行边界。Provider、tool orchestration 和长时 access operation 在安全
+  点观察同一个 Turn cancellation signal；强制 task abort 只能是超过 grace period 后的最后手段。
+- cancellation 不承诺回滚已经提交的 side effect。取消后不得再 grant/启动新的 action；已经进入
+  backend 的操作按其原子性契约完成或失败，并保留 audit evidence。
+- partial assistant output 不能伪装成 completed reply。Turn finalization 必须区分 completed、failed
+  和 cancelled，并恢复 Session 的可继续状态或记录明确的 terminal lifecycle。
+
+## Access、Action 与 Policy
+
+- 副作用 only access can do。migrated tool/helper/adapter/policy/kernel 不能直接执行文件、网络、
+  process 或其它 domain side effect。
+- `ActionMeta::required_capabilities` 是 action 属性。workspace root、allowed roots、runtime config
+  等是 context/resolver/policy 输入，不塞进 caps。
+- `ActionMeta::payload()` 必须显式返回 `Cow<'_, Value>`，没有默认 `Null`。Action 自身表达
+  policy 含义，payload 只是 type-erased structured view。
+- `PolicyEngine::grant` 先做 capability gate，再运行 policy pipeline。没有 terminal allow 就
+  default deny；没有 grant 不能进入 dispatch 或 side-effect execution。
+- `Granted<A>` 是授权到执行的不可伪造边界。执行入口消费 `Granted<ConcreteAction>`；backend
+  可以存在，但不要求统一 backend trait。
+- policy 不依赖 app concrete Context。它通过小 requirement trait 读取所需字段；config ->
+  concrete typed policy registration 属于 app bootstrap。
+- `AccessCx`、fs facade 等 concrete view 可以存在，但只能借用 Context/Runtime 中的 source of
+  truth，不能拥有独立 capability、policy、audit 或 runtime state。
+
+## Tool
+
+- 普通调用入口是 `ctx.tool(path)?.invoke(payload).await`。lookup 只解析 plane-local path 和
+  entry；`invoke` 才计算 child caps、构造 `ToolInvocationAction`、请求 grant、dispatch 并强制
+  记录 grant 后 execution outcome。
+- `ToolPlane::invoke` 只消费 `Granted<InvocationAction>` 并 dispatch；它不知道 kernel token、
+  pack、audit sink 或 event id。`ErasedTool` 保持 private/sealed，concrete `ToolImpl` 不得绕过
+  plane wrapper。
+- `path` 属于具体 ToolPlane，不属于 contracts/core。tool descriptor 不带 path；注册点把
+  plane path 与 `RegisteredTool` 组合。新增 builtin tool 的目标改动面只有 concrete
+  `ToolImpl` 和一条 registration。
+- 一个 path 命中后由 concrete tool parse payload。不存在 `ToolPayloadMatch`、payload claim 或
+  “解析失败就 fallback”。aggregate `read` 可以内部选择 file/query/glob，但这些分支必须进入
+  不同 concrete fs actions。
+- typed success 是 `Result<Value, E>`。`ToolCoreRequest` / `ToolCoreOutcome` 只属于未迁移 legacy
+  envelope，不能进入 concrete tool crate 或 typed plane。
+- legacy tool code 可以暂时存在，但不能注册成 typed tool 冒充迁移完成。typed path 未注册时，
+  fallback 只能位于旧 ingress 的最后边界，并随调用面迁移删除。
+
+## Filesystem
+
+- path resolution 是 fs action，因为 canonicalize、existing-ancestor 和 symlink resolution 都是
+  filesystem observation。
+- resolve action 只产出不可伪造的 resolved fact；path policy 接受 resolved fact 并产出
+  `GrantedPath` / `GrantedEntryPath`；具体 fs action 只接受对应 grant type。
+- resolution root 是 access/action execution 输入；allowed roots 是 path policy 输入；两者由不同
+  context requirement trait 暴露。`FsReadAction` 不读取 workspace root。
+- target-following 与 final-component no-follow 必须由 typestate 区分。path grant 目前不等于
+  inode/object capability；descriptor-relative backend 落地前必须明确记录 TOCTOU 残余风险。
+
+## Crate Ownership
+
+- `loong-contracts`：稳定数据、error/report/audit primitives；不定义全局 ToolPath，不承载
+  concrete ToolPlane registry key。
+- `loong-core`：`ContextFactory`、Action/Granted/Policy/ToolImpl 等行为 contract 和不可伪造授权。
+- `loong-kernel`：pack/token/capability/policy/grant/audit authority；不执行 typed tool。
+- `loong-access`：domain side-effect boundary。
+- `loong-runtime`：`Runtime<C>`、ToolPlane primitive 和 plane-local default registry。crate root
+  仍有 transitional spine 时应删除旧 spine，而不是删除已经形成的 runtime owner。
+- `loong-app`：concrete `Context<'a>`、`RuntimeContextFactory`、Session/Turn option 装配、builtin
+  registration、provider/channel/conversation integration 和 legacy ingress migration。
+- `loong-tools`：concrete builtin tool implementations only；不拥有 registry、policy、access
+  facade 或 legacy envelope。

@@ -1,58 +1,74 @@
 # plan: Capability 与 Policy
 
-本文件只记录 capability 和 policy 的授权语义。tool plane、fs path grant、kernel audit
-分别在对应文件中展开。
+本文件记录 capability、policy pipeline 和 grant metadata 不变量，以及仍未完成的 contract
+收敛。
 
-## Capability 不变量
+## Capability Gate
 
-caps 是硬边界，不是 policy 的附属说明。
-
-- 每个 concrete action 自己声明 `required_capabilities`。`PolicyEngine::grant` 在任何
-  policy 执行前先做 capability gate；缺 cap 时不进入 policy chain，也不产生
+- 每个 concrete action 通过 `ActionMeta::metadata()` 声明 required capabilities。
+- `PolicyEngine::grant` 在 policy chain 前执行 capability gate。缺 cap 时不执行 policy，不产生
   `Granted<A>`。
-- `PolicyContext::capabilities()` 表示本次 invocation 的 effective allowed caps。app
-  顶层 context 可以来自 token；子工具 context 必须来自父 context 的 effective caps。
-- tool 调 tool 时，调用参数可以提供 required caps override，但 override 只能缩窄：
-  `requested_caps = override.unwrap_or(tool_default_caps)`，且 `override ⊆ tool_default_caps`；
-  `child_caps = parent_caps ∩ requested_caps`。
-- `ToolInvocationAction` 的 caps 只授权进入一个 tool。tool 内部的文件、网络、内存等
-  side effect 仍然要各自构造 domain action，并再次通过对应 access/action policy。
-- runtime config 可以影响 policy 实例、tool 可见性、默认 tool required caps 的 bootstrap
-  wiring；不能在 tool helper/access helper 中绕过 caps gate。
+- Context 暴露本次执行的 effective capabilities。base Context 来自 Session baseline 与 Turn
+  options 的交集；tool->tool child Context 只能继续缩窄。
+- tool caps override 必须先证明 `override ⊆ tool_default_caps`，再计算
+  `child_caps = parent_caps ∩ override`。无 override 时使用 tool default caps。
+- `ToolInvocationAction` 只授权进入一个 tool；tool 内部 filesystem/network/memory/process
+  side effect 仍需各自的 domain action grant。
+- `CapabilityContext::allowed_capabilities()` 目标返回借用，不能为每次 capability gate clone
+  整个 `BTreeSet<Capability>`。
 
-截至 2026-07-12 的状态：
+## PolicyPipeline
 
-- typed app-plane invocation 已经从 `ToolSpec.required_capabilities` 构造 child
-  effective caps；公开 `tool.invoke` 的外层 `capabilities_override` 也会进入同一
-  narrowing 路径。override 绑定在 `ToolInvocation` handle 上，`invoke(payload)`
-  是唯一 dispatch 入口。
-- legacy direct / adapter 路径在迁移完成前仍可能通过旧
-  `required_capabilities_for_request` 计算 caps；新增 typed tool 不应扩展这条旧路径。
-
-
-## Config -> Policy 路径
-
-config-driven policy 只在 app bootstrap 发生。
-
-目标 config -> policy 路径：
+当前三段顺序是稳定 contract：
 
 ```text
-config
-  -> app bootstrap / runtime policy builder
-  -> concrete typed policy value
-  -> PolicyPipeline::push_policy / push_pre_policy / push_fallback_policy
-  -> PolicyReport
+pre PolicyAny -> typed Policy<C, A> -> fallback PolicyAny
 ```
 
-需要从旧路径迁入 typed policy/action path 的 policy：
+- `Allow` / `Deny` 终止整个 pipeline。
+- `Continue` 进入当前子链下一条 policy。
+- `Advance` 跳过当前子链剩余 policy，进入下一子链。
+- 没有 terminal decision 时 default deny。
+- pipeline registry 保留每个 policy 的 id、注册顺序、注册时间和 source location；
+  `PolicyReport` 保留完整 evaluation order、stage、grant 和 outcome。
+- `Policy` 与 `PolicyAny` 都通过 `&C::Cx<'_>` 读取 Context，不持有 Factory，不依赖 app concrete
+  Context。
+- `PolicyPipeline::new()` 是 default deny；legacy allow fallback 必须显式选择，且不能授权新
+  typed tool/access action。
 
-- fs path resolution observation：typed `FsResolvePathAction` allow policy；它只生成 opaque
-  resolved fact，不替代后续 path/operation authorization。
-- fs allowed roots / workspace root containment：typed `FsPathAction` policy。
-- filename deny，例如“不许读 clippy.toml”：typed `FsReadAction` policy，来自 app config
-  或测试 bootstrap，不写死在 access/tool 里。若该 deny 只是测试用例，它的删除条件是对应
-  测试不再需要该 policy fixture。
-- `FilePolicyExtension` 的 read/write/search/edit 分支已删除；迁移期只允许
-  `config.import` 继续作为 legacy bridge。
-- web/network/memory 等后续 policy：同样由 app bootstrap 从 config 构造 policy，注册到
-  pipeline；tool helper 只解析输入和调用 access。
+## Grant Metadata
+
+`PolicyEngine::grant` 已经获得 allow `PolicyReport` 和 `GrantId`，但当前
+`ActionGrantInfo` 仍是空 placeholder，allow report 被丢弃。目标：
+
+- `ActionGrantInfo` 保存发放 grant 所依据的完整 `PolicyReport`；
+- `ActionGrant<A>` 同时提供 `GrantId`、grant metadata 和不可伪造的 `Granted<A>`；
+- deny 继续通过 typed authorization error 保存 report；
+- kernel generic authorization audit 直接使用 allow/deny report，不重新运行 policy，也不生成
+  替代 reason；
+- `Granted<A>::as_ref()` 只允许 execution boundary 在消费前读取 action metadata，不能提供
+  clone/mint/bypass API。
+
+## Context Requirement
+
+- `CapabilityContext` 是所有 governed execution Context 的基础要求，因为每个 action 都必须先过
+  capability gate。
+- fs resolution root、fs allowed roots、provider-specific view 等不放进这个基础 trait；它们由
+  对应 domain requirement trait 表达。
+- `KernelInvocationContext::request_parameters()` 是 legacy request duplication，应删除。
+  type-erased policy 读取 `ActionMeta::payload()`；typed policy 直接读取 concrete action。
+
+## Config -> Policy
+
+config-driven policy 只在 app/runtime bootstrap 注册：
+
+```text
+config -> concrete policy value -> PolicyPipeline registration -> PolicyReport
+```
+
+- access 不读取 app config；tool helper 不做 direct policy preflight。
+- config 不能通过修改 action required caps 表达 path/filename 等业务授权。
+- fs resolution allow、allowed-roots containment、filename deny 和各 concrete operation allow 都是
+  typed policy。`deny_read_filenames` 已是普通 config input，不是写死的临时 deny。
+- `FilePolicyExtension` 只允许覆盖尚未迁移的 legacy `config.import` skills bridge；不能扩回
+  read/write/edit/search 或其它已迁移 action。
