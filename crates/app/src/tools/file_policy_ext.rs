@@ -3,26 +3,20 @@ use std::path::{Path, PathBuf};
 use loong_contracts::PolicyError;
 
 pub struct FilePolicyExtension {
-    primary_root: Option<PathBuf>,
+    // Migration bridge only: authorization checks `normalized_allowed_roots`.
+    // This root is just the legacy default/display root when config.import
+    // receives a relative path without a more specific resolution root.
+    fallback_root: Option<PathBuf>,
     normalized_allowed_roots: Vec<PathBuf>,
     resolution_root: Option<PathBuf>,
     canon_resolution_root: Option<PathBuf>,
 }
 
 impl FilePolicyExtension {
+    #[cfg(test)]
     pub fn new(access_root: Option<PathBuf>) -> Self {
         let allowed_roots = access_root.iter().cloned().collect();
         Self::from_roots(allowed_roots, access_root.clone(), access_root)
-    }
-
-    pub fn with_resolution_root(
-        access_root: Option<PathBuf>,
-        resolution_root: Option<PathBuf>,
-    ) -> Self {
-        let allowed_roots = access_root.iter().cloned().collect();
-        let primary_root = access_root.clone();
-        let effective_resolution_root = resolution_root.or(access_root);
-        Self::from_roots(allowed_roots, primary_root, effective_resolution_root)
     }
 
     pub fn from_runtime_config(rt: &super::runtime_config::ToolRuntimeConfig) -> Self {
@@ -39,28 +33,28 @@ impl FilePolicyExtension {
             }
         }
 
-        let primary_root = allowed_roots.first().cloned();
+        let fallback_root = allowed_roots.first().cloned();
         let resolution_root = rt
             .path_resolution_root()
             .map(Path::to_path_buf)
-            .or_else(|| primary_root.clone());
+            .or_else(|| fallback_root.clone());
 
-        Self::from_roots(allowed_roots, primary_root, resolution_root)
+        Self::from_roots(allowed_roots, fallback_root, resolution_root)
     }
 
     fn from_roots(
         allowed_roots: Vec<PathBuf>,
-        primary_root: Option<PathBuf>,
+        fallback_root: Option<PathBuf>,
         resolution_root: Option<PathBuf>,
     ) -> Self {
-        if primary_root.is_some() && allowed_roots.is_empty() {
+        if fallback_root.is_some() && allowed_roots.is_empty() {
             #[cfg(feature = "tool-file")]
             #[allow(clippy::print_stderr)]
             {
                 eprintln!(
                     "warning: file_root {:?} could not be canonicalized; \
                      symlink-aware path checks will use raw path comparison",
-                    primary_root.as_deref().unwrap_or(Path::new("")),
+                    fallback_root.as_deref().unwrap_or(Path::new("")),
                 );
             }
         }
@@ -74,7 +68,7 @@ impl FilePolicyExtension {
             .and_then(canonicalize_existing_path_for_policy);
 
         Self {
-            primary_root,
+            fallback_root,
             normalized_allowed_roots,
             resolution_root,
             canon_resolution_root,
@@ -114,7 +108,7 @@ impl FilePolicyExtension {
         let resolution_root = self
             .resolution_root
             .as_deref()
-            .or(self.primary_root.as_deref());
+            .or(self.fallback_root.as_deref());
         let effective_resolution_root = self.canon_resolution_root.as_deref().or(resolution_root);
         let effective_resolution_root = match effective_resolution_root {
             Some(root) => root,
@@ -204,7 +198,7 @@ impl FilePolicyExtension {
         tool_name: &str,
         payload: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<(), PolicyError> {
-        let Some(root) = self.primary_root.as_deref() else {
+        let Some(root) = self.fallback_root.as_deref() else {
             return Ok(());
         };
 
