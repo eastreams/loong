@@ -296,7 +296,7 @@ fn owned_binding_from_detached_payload(
             Ok(owned_binding)
         }
         DetachedDelegateChildBinding::Direct => {
-            let owned_binding = app::conversation::OwnedConversationRuntimeBinding::direct();
+            let owned_binding = app::conversation::OwnedConversationRuntimeBinding::advisory_only();
             Ok(owned_binding)
         }
     }

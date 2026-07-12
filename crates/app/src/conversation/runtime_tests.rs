@@ -244,7 +244,7 @@ fn async_delegate_spawn_request_round_trips_runtime_self_continuity_json() {
         execution: execution.clone(),
         runtime_self_continuity: Some(continuity.clone()),
         timeout_seconds: 30,
-        binding: OwnedConversationRuntimeBinding::direct(),
+        binding: OwnedConversationRuntimeBinding::advisory_only(),
     };
 
     let encoded = request
@@ -260,7 +260,7 @@ fn async_delegate_spawn_request_round_trips_runtime_self_continuity_json() {
         execution,
         encoded,
         request.timeout_seconds,
-        OwnedConversationRuntimeBinding::direct(),
+        OwnedConversationRuntimeBinding::advisory_only(),
     )
     .expect("round-trip async delegate request");
 

@@ -27,10 +27,6 @@ impl OwnedConversationRuntimeBinding {
         Self::Direct
     }
 
-    pub const fn direct() -> Self {
-        Self::Direct
-    }
-
     pub fn as_borrowed(&self) -> ConversationRuntimeBinding<'_> {
         match self {
             Self::Kernel(kernel_ctx) => ConversationRuntimeBinding::Kernel(kernel_ctx.as_ref()),
