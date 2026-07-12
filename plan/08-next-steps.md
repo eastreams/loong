@@ -7,21 +7,7 @@
 每个编号项都是一个最小提交候选。除非某一步明确要求合并，否则不要把相邻步骤塞进同一个
 commit。已完成的步骤从本文件删除，避免后续实现被过期完成线误导。
 
-1. 清理 tool descriptor/path 耦合剩余面：
-   - catalog snapshot、governance、concurrency 等非 schema metadata 仍来自 legacy
-     static catalog；
-   - 先区分 metadata owner：typed tool 自身能稳定表达的字段进入 `ToolSpec`；app
-     orchestration 才知道的字段留在 app plane/registry；只服务旧入口的字段标成 legacy；
-   - 不为了清空 catalog 把 app-only metadata 上提到 contracts/core；
-   - 不把 `ToolPath` 提回 core/contracts；plane 可以继续拥有自己的 path 类型；
-   - 完成线：
-     - typed tools 的 agent-visible metadata 不再从 legacy static catalog 读取；
-     - legacy catalog 只描述未迁移工具，或明确标注为 legacy surface。
-   - 验证：`cargo test -p loong-tools --no-default-features --features file`、
-     `cargo test -p loong-app kernel_routed_file_read`、
-     `cargo check -p loong-core -p loong-tools -p loong-app`、`git diff --check`。
-
-2. 继续迁移剩余 legacy side-effect tools：
+1. 继续迁移剩余 legacy side-effect tools：
    - legacy direct `execute_tool_core_with_config` 的 `write` 分支仍有旧 runtime
      preview/event 和非 kernel-routed 调用面；
    - `edit` 和 `config.import` 仍未迁入 access-backed action 路径；
@@ -38,7 +24,7 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      `cargo check -p loong-access -p loong-kernel -p loong-app -p loong` 和
      `git diff --check`。
 
-3. 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration：
+2. 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration：
    - app bootstrap 从 config 构造 concrete policy value；
    - policy 注册使用 `PolicyPipeline::push_policy` / `push_pre_policy` /
      `push_fallback_policy`；
