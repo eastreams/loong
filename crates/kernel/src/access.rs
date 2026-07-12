@@ -46,8 +46,8 @@ where
     /// Filesystem access entry point.
     ///
     /// Callers should prefer `ctx.access().fs().read_file(path)` over direct
-    /// filesystem I/O. The concrete `FsAccess` will resolve paths, request a
-    /// typed action grant, and perform the read.
+    /// filesystem I/O. The concrete `FsAccess` will resolve paths, request
+    /// typed action grants, and perform the fs side effect.
     #[inline(always)]
     #[must_use]
     pub fn fs(self) -> FsAccess<'a, 'ctx, C, PolicyPipeline<C>> {

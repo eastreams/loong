@@ -24,9 +24,9 @@ use super::{
 
 /// Filesystem access facade.
 ///
-/// This module is the side-effect boundary for fs reads. Callers provide a raw
-/// path; `FsAccess` resolves it, builds the typed action, asks policy for a
-/// grant, consumes that grant, and only then reads from disk.
+/// This module is the side-effect boundary for governed filesystem operations.
+/// Callers provide raw paths and operation inputs; `FsAccess` resolves paths,
+/// builds typed actions, asks policy for grants, and only then touches disk.
 pub struct FsAccess<'a, 'ctx, C, P>
 where
     C: ContextFactory + 'ctx,
