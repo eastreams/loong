@@ -10,11 +10,12 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
 1. 继续迁移剩余 legacy side-effect tools：
    - `write` / `edit` 的 context/kernel-routed 调用已走 typed plane；无 context direct
      `write` / `edit` 已 fail closed；
-   - `config.import` 的 kernel-routed/context-aware read-only modes 已通过 `ctx.access()`
-     读取 import files、candidate directories、skills artifacts 和可选 output preview config：
-     `plan` / `discover` / `plan_many` / `recommend_primary` / `merge_profiles` /
-     `map_skills`；`apply` / `apply_selected` / `rollback_last_apply` 仍未迁入
-     access-backed action 路径，且仍依赖 `FilePolicyExtension` 的迁移期 guard；
+   - `config.import` 的 kernel-routed/context-aware `plan` / `discover` / `plan_many` /
+     `recommend_primary` / `merge_profiles` / `map_skills` 已通过 `ctx.access()` 读取
+     import files、candidate directories、skills artifacts 和可选 output preview config；
+     simple `apply` 已通过 `ctx.access()` 读取现有 output config 并写回最终 config；
+     `apply_selected` / `rollback_last_apply` 仍未迁入 access-backed action 路径，且仍依赖
+     `FilePolicyExtension` 的迁移期 guard；
    - 不要只把 `config.import` 入口注册进 typed plane 来假装迁移：它调用的
      `migration::*` / `config::load` / `config::write` 当前会直接读写、备份、扫描文件。
      迁移完成线必须先把这些 I/O 抽到 access-backed port 或等价的 granted action run
@@ -24,19 +25,20 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      create-dir-all，仍不足以覆盖 import 的全部副作用：
      - discovery / plan：已有受治理的 file read、一层 directory scan、canonical/path
        metadata 基础；read-only modes 的 context-aware path 已接入；
-     - apply：已有读取现有 output config、写 output config、创建 state dir、写 backup、
-       写 import manifest、可选写 external skills manifest 的基础 primitive；后续仍要把
-       `migration::*` / `config::{load,write}` 改成使用这些边界；
+     - simple apply：已用 access 读取现有 output config、渲染 config、写最终 output
+       config；不再调用 `config::{load,write}`；
+     - apply_selected：仍需要把创建 state dir、写 backup、写 import manifest、可选写
+       external skills manifest 迁到 access-backed path；
      - config codec：`config::parse` / `config::render` 已提供无 filesystem side effect 的
        解析/编码边界；`config::load` / `config::write` 仍是 legacy direct fs 调用点；
      - rollback：已有读取 manifest、复制 backup、恢复 output、删除不存在前 output 的基础
        primitive；remove-file 只删除文件或 symlink，且 final component 不跟随 symlink；
      - apply_selected failure rollback：需要恢复 config output，并协调 skills bridge rollback。
-   - 因此第一个 code 步骤不是 `Register(ConfigImportTool)`，而是把
-     `migration::*` / `config::{load,write}` 依赖的 filesystem 操作改成显式 I/O 边界：
-     要么新增能消费 `Granted<ConcreteFsAction>` 的 access primitives，要么让 migration
-     函数接收一个 app-owned access-backed filesystem port；这个 port 不能绕过
-     `ctx.access()`，也不能退回 `FilePolicyExtension`；
+   - 因此下一步 code 不是 `Register(ConfigImportTool)`，而是把 `apply_selected` /
+     `rollback_last_apply` 依赖的多文件副作用改成显式 I/O 边界：要么新增能消费
+     `Granted<ConcreteFsAction>` 的 access primitives，要么让 migration 函数接收一个
+     app-owned access-backed filesystem port；这个 port 不能绕过 `ctx.access()`，也不能
+     退回 `FilePolicyExtension`；
    - `glob.search` / `content.search` 的 kernel-routed 调用已注册为 typed read-family
      path；无 context direct 调用已 fail closed，旧 app-local search helper 已删除；
    - 逐个工具迁移：concrete tool 只解析 payload、调用 `ctx.access()` / `ctx.tool()`、
