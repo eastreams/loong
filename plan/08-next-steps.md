@@ -7,6 +7,34 @@
 每个编号项都是一个最小提交候选。除非某一步明确要求合并，否则不要把相邻步骤塞进同一个
 commit。已完成的步骤从本文件删除，避免后续实现被过期完成线误导。
 
+## 当前交接上下文
+
+当前实现已经完成 session state 合入 `AppContext`，以及标准 CLI 在解析 session 后签发
+context；这两项不再列为待办。下面所有编号项仍未完成；其中步骤 2 的 ownership 决策是
+下一处不能靠机械重命名跨过的架构分叉。
+
+- 本计划中的 runtime owner 是持有 `Arc<Runtime<_>>` 的对象，session owner 是持有某个
+  session-bound `AppContext` 的对象，entry surface 是 CLI/channel/gateway 等入口。`host`
+  只是旧注释里的泛称，不是计划新增的类型或层；不要引入 `Host`、`HostContext` 或
+  `HostRuntime`。
+- channel/gateway 当前仍把 `Option<AppContext>` 依次放进
+  `TurnGatewayExecution -> TurnExecutionService -> CliTurnRuntime`。这里传入的是在具体
+  inbound session 解析前创建的 root context，不是最终 session authority。
+- 不能只把 root context 换成 `Arc<Runtime<_>>` 后在每个 turn 调用 `new_session`：那会重复
+  签发 session token。也不能让 `Runtime` 强持有包含 `AppContext` 的 session，因为
+  `AppContext` 已强持有 runtime，会形成 `Runtime -> Session -> AppContext -> Runtime` 环。
+  不要用 token cache、临时 registry、alias 或 compatibility wrapper 掩盖 owner 缺失。
+- 待确认而非既定的候选形状是：entry surface 强持有 session object，session object 持有
+  `AppContext`，`AppContext` 持有 `Arc<Runtime<_>>`；runtime 如需索引 session，只保存 weak
+  reference。实现前要先确认这个 owner 是否同时适合 CLI route、channel 和 gateway 生命周期。
+- `legacy_display_tool_name` 目前同时参与 conversation/result display、hidden-tool projection、
+  approval、tool search、timeout lookup 和 daemon read model。它属于步骤 4 的 legacy catalog
+  ownership 问题，不能当作普通 helper 单独删除；应在 plane-local descriptor/display source
+  接管这些调用面后随旧语义一起删。
+- workspace 已是 15 个 crate，但多个架构文档仍写 13。该事实修正可以独立于 session
+  ownership 推进，但必须从 `Cargo.toml` / `cargo metadata --no-deps` 推导真实 DAG，并保持
+  `AGENTS.md` 与 `CLAUDE.md` 镜像一致。
+
 1. 继续迁移剩余 legacy side-effect tools：
    - `write` / `edit` 的 context/kernel-routed 调用已走 typed plane；无 context direct
      `write` / `edit` 已 fail closed；
@@ -72,22 +100,25 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
 
 2. 完成 session-owned context authority：
    - 标准 CLI chat/ask bootstrap 已先构造 `Arc<Runtime<_>>`、解析最终 session id，再通过
-     kernel token issuer 构造该 session 的 `AppContext`；channel/gateway 等 outer-runtime
-     surface 仍持有 root `AppContext`，下一步改为持有 runtime 和 app runtime config；
-     invocation 只从 session context cheap-clone 派生 overlay；
+     kernel token issuer 构造该 session 的 `AppContext`；channel/gateway 等 entry surface
+     仍持有 root `AppContext`。下一步不是先改字段类型，而是先确定长期 session owner，随后
+     让 entry surface 持有该 owner 所需状态；invocation 只从 session context cheap-clone
+     派生 overlay；
    - `GovernedSessionMode::AdvisoryOnly` 是权限语义，不是“缺少 context”：advisory session
      也必须由同一个 runtime 构造 `AppContext`，但使用 kernel 签发的 scoped token，至少不能
      获得 `InvokeTool` 或 mutation capabilities；tool execution 由 capability/policy gate 自动
      fail closed，不能继续靠 `ConversationRuntimeBinding::AdvisoryOnly` 分支手动拦截；
-   - 先把 host 的 bootstrap 拆成“构造现有 `Arc<Runtime<_>>`”和“为具体 session 签发 token、
-     构造 `AppContext`”两个真实 ownership 阶段；随后删除 host/root `AppContext`、
+   - runtime bootstrap 与“为具体 session 签发 token、构造 `AppContext`”已经拆开。确认
+     session owner 后，迁移 channel/gateway 和 daemon entry surface，随后删除 entry-level
+     root `AppContext`、
      `Option<AppContext>`、`ConversationRuntimeBinding` 和 provider 的 no-context 对应物，不保留
      空 context、兼容 enum 或 advisory fallback；
    - runtime owner 持有 kernel 和 tool plane，kernel 继续拥有 pack registry 和 token issuer；
      `AppContext` 持有 runtime 引用、当前 pack/token evidence、config 及 session/invocation 的
      不可变 view，child context 仍只能收窄 caps；
    - 完成线：turn/tool/access/policy/provider 从同一个 session-owned context source of truth 读取
-     session、agent、tool view、caps、roots 和 continuity；host 不再把 root context 当作 session；
+     session、agent、tool view、caps、roots 和 continuity；entry surface 不再把 root context
+     当作 session，也不会在每个 turn 重签 session token；
    - 验证：context/session/conversation/provider/tool execution 测试，workspace default/all-feature
      tests、strict clippy、architecture check、`git diff --check`。
 
@@ -97,8 +128,9 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
    - provider source loader 已直接接收 `&AppContext`；`ProviderRuntimeBinding` 只在 prompt
      projection 入口决定 context-bound 或 advisory，不再向具体 loader 传播；workspace guidance
      和 runtime-self 共享唯一的 governed access read/text-normalization boundary；
-   - 当前传入的仍是 host/root context。步骤 2 完成后必须改为 session 持有的 unified context，
-     再删除 advisory/no-context prompt assembly 分支；不能把 host context 当作最终 session API；
+   - 当前传入的仍是 entry-level root context。步骤 2 完成后必须改为 session 持有的
+     unified context，再删除 advisory/no-context prompt assembly 分支；不能把 entry-level
+     root context 当作最终 session API；
    - context-bound 与普通 provider assembly 使用同一 context/access 路径，并同时产出
      `RuntimeSelfContinuity`；删除 no-kernel live-source fallback，而不是再增加 advisory bridge；
    - 删除 `TODO(deprecate-no-kernel-live-source)` 标记对应的旧分支；loader bridge TODO 已随
@@ -161,6 +193,10 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      的 compile/test gate、workspace default/all-feature tests、strict clippy、`git diff --check`。
 
 8. 按 owner 收敛 transitional crates 并更新架构文档：
+    - 先用一个独立文档提交修正当前 workspace 事实：`Cargo.toml` / `cargo metadata --no-deps`
+      显示 15 个 crate，而 `AGENTS.md`、`CLAUDE.md`、`ARCHITECTURE.md`、`docs/RELIABILITY.md`、
+      `docs/design-docs/core-beliefs.md` 和 `docs/design-docs/single-entry-runtime-convergence.md`
+      仍保留 13-crate 描述；修正时同步真实直接依赖边，不能只替换数字；
     - 在 unified runtime 稳定后逐个审计 `loong-cli`、`loong-app-protocol`、`loong-runtime`、
       `loong-plugin-sdk`、`protocol` 和 `bridge-runtime`；每次只合并/删除一个 ownership 明确的
       forwarding shell，不按 crate 行数批量合并；

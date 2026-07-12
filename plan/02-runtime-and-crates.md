@@ -6,10 +6,10 @@
 ## Runtime / Context Ownership
 
 项目已经由 `loong-runtime::Runtime<C>` 持有 kernel 与 typed tool plane；TUI 的 `App` 仍只是
-UI state。CLI、channel、conversation 和 provider host surface 统一持有或借用 owned
-`AppContext`，由它共享 `Arc<Runtime<AppContextFactory>>` 并派生 invocation overlay。
-剩余工作是把 session metadata 正式并入 session-owned context，而不是再引入另一种执行
-context。
+UI state。`AppContext` 已经是 `Arc`-backed cheap-clone handle，session metadata 也已合入
+其中。标准 CLI 会先构造 runtime、解析最终 session，再签发 session-bound `AppContext`；
+channel/gateway 等 entry surface 仍在长期持有迁移期 root context。这是尚未完成的 ownership
+迁移，不代表项目需要一个叫 `Host` 的新层或新 trait。
 
 目标是二核心模型：
 
@@ -29,8 +29,6 @@ context。
 pub struct Runtime<C: ContextFactory> {
     kernel: Kernel<C>,
     tools: ToolPlane<C>,
-    sessions: SessionRuntime,
-    agents: AgentRuntime,
 }
 
 pub struct Context {
@@ -60,6 +58,11 @@ impl ToolInvocation<'_> {
     pub async fn invoke(self, payload: Value) -> Result<Value, ToolError>;
 }
 ```
+
+示例有意不写 session 的 strong owner。`AppContext` 已经强持有 `Arc<Runtime<_>>`；如果
+`Runtime` 再强持有包含 `AppContext` 的 session 对象，就会形成引用环。session owner 最终
+放在 entry surface、独立 session runtime，还是由 runtime 保存 weak index，必须在迁移
+channel/gateway 前明确决定，不能从上述示例臆造一个 registry。
 
 命名不强制叫 `Runtime` / `Context`，但 ownership 必须一致：
 
@@ -91,10 +94,14 @@ impl ToolInvocation<'_> {
 
 后续迁移策略：
 
-1. session 创建时同时创建自己的 `Context`，并把 session id、agent id、initial effective
-   caps、tool namespace view 和 runtime reference 绑定进去。
-2. invocation 通过 `AppContext::for_invocation(...)` 派生同类型 child context；child 只能
+1. entry surface 解析或创建具体 session 后，通过 runtime authority 只签发一次该 session
+   的 `Context`，并把 session id、agent id、initial effective caps、tool namespace view
+   和 runtime reference 绑定进去。
+2. 明确 session context 的 strong owner；runtime 若需要 session lookup，只能采用不会形成
+   `Runtime -> Session -> AppContext -> Runtime` 强引用环的 ownership。
+3. invocation 通过 `AppContext::for_invocation(...)` 派生同类型 child context；child 只能
    收窄 effective capabilities，不能重新签发或放大 authority。
+
 ## Crate 收敛
 
 截至 2026-07-11，workspace 已经是 15 个 crate，而
