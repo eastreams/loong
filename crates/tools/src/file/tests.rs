@@ -1,4 +1,3 @@
-
 #[test]
 fn parse_read_payload_requires_path() {
     let error = FileReadRequest::parse_payload("read".to_owned(), &json!({}))
