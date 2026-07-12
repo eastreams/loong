@@ -348,9 +348,10 @@ where
     }
 }
 
-// TODO(runtime): move this OnceLock into the unified runtime/agent owner once
-// that type exists. The plane is app-owned; this global is only the current
-// bootstrap holder for builtin typed tools.
+// TODO(runtime-owner): remove this lint exception with the global OnceLock.
+// `Runtime<C>` must construct the builtin plane through a fallible bootstrap,
+// so duplicate registrations are returned to the host instead of panicking.
+#[allow(clippy::expect_used)]
 pub(crate) fn app_tool_plane()
 -> &'static dyn ToolPlane<AppContextFactory, Path = ToolPath, InvocationAction = ToolInvocationAction>
 {

@@ -202,6 +202,9 @@ async fn execute_request_via_kernel_tool_registry_with_capabilities(
     outcome.map(|outcome| (outcome, audit))
 }
 
+// TODO(runtime-owner): remove this exception when the test harness receives a
+// fallibly constructed runtime/tool plane instead of the global builtin plane.
+#[allow(clippy::expect_used)]
 async fn execute_request_via_kernel_tool_registry_with_capabilities_result(
     request: ToolCoreRequest,
     config: &ToolRuntimeConfig,
