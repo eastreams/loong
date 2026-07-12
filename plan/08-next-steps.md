@@ -13,7 +13,7 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
    - `edit` 和 `config.import` 仍未迁入 access-backed action 路径，且仍依赖
      `FilePolicyExtension` 的迁移期 guard；
    - `glob.search` / `content.search` 的 kernel-routed 调用已注册为 typed read-family
-     path；无 context legacy adapter fallback 仍有旧 helper 入口，后续应 fail closed 或删除；
+     path；无 context direct 调用已 fail closed，旧 app-local search helper 已删除；
    - 逐个工具迁移：concrete tool 只解析 payload、调用 `ctx.access()` / `ctx.tool()`、
      格式化 typed output；side effect 必须落在 access crate 的 granted action run 边界；
    - 迁移完成后删除 `FilePolicyExtension` 对应旧分支；
