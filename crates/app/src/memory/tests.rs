@@ -1,7 +1,7 @@
 use loong_contracts::MemoryCoreRequest;
 use serde_json::json;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use super::*;
 
@@ -102,8 +102,11 @@ async fn mvp_memory_adapter_routes_through_kernel() {
     use loong_contracts::Capability;
     use loong_kernel::{ExecutionRoute, HarnessKind, Kernel, VerticalPackManifest};
 
-    let (mut kernel, _audit) =
-        Kernel::<crate::context::AppContextFactory>::new_with_in_memory_audit();
+    let audit = Arc::new(loong_kernel::InMemoryAuditSink::default());
+    let mut kernel = Kernel::<crate::context::AppContextFactory>::with_legacy_allow_runtime(
+        Arc::new(loong_kernel::SystemClock),
+        audit,
+    );
 
     kernel.register_core_memory_adapter(KernelMemoryAdapter::new());
     kernel

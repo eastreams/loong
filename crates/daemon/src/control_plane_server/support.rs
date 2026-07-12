@@ -3,7 +3,8 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::atomic::AtomicU64;
 
 use kernel::{
-    CapabilityToken, ExecutionPlane, InMemoryAuditSink, Kernel, PlaneTier, VerticalPackManifest,
+    CapabilityToken, ExecutionPlane, InMemoryAuditSink, Kernel, PlaneTier, SystemClock,
+    VerticalPackManifest,
 };
 use loong_spec::{SpecContextFactory, SpecExecutionContext};
 
@@ -88,9 +89,10 @@ pub(super) struct ControlPlaneTurnEventForwarder {
 
 impl ControlPlaneKernelAuthority {
     pub(super) fn new() -> Result<Self, String> {
-        let kernel_with_audit = Kernel::new_with_in_memory_audit();
-        let mut kernel = kernel_with_audit.0;
-        let audit = kernel_with_audit.1;
+        let audit = Arc::new(InMemoryAuditSink::default());
+        // TODO(control-plane-action): replace `authorize_operation` with a typed
+        // control-plane action, then remove this explicit legacy policy opt-in.
+        let mut kernel = Kernel::with_legacy_allow_runtime(Arc::new(SystemClock), audit.clone());
         let pack = control_plane_pack();
         let register_result = kernel.register_pack(pack.clone());
         register_result
