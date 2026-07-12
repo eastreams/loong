@@ -3283,6 +3283,7 @@ dependencies = [
  "async-trait",
  "loong-contracts",
  "loong-core",
+ "loong-kernel",
  "serde",
  "serde_json",
  "slotmap",

@@ -28,7 +28,7 @@ loong-core → contracts
 additive spine
 loong-core
 ├── loong-plugin-sdk → loong-core
-├── loong-runtime → contracts, loong-core
+├── loong-runtime → contracts, loong-core, kernel
 ├── loong-app-protocol → loong-runtime
 └── loong-cli → loong-app-protocol
 

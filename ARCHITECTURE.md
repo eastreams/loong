@@ -64,7 +64,7 @@ core foundation
 
 additive spine
 - loong-plugin-sdk -> loong-core
-- loong-runtime -> contracts, loong-core
+- loong-runtime -> contracts, loong-core, kernel
 - loong-app-protocol -> loong-runtime
 - loong-cli -> loong-app-protocol
 
@@ -95,7 +95,7 @@ The 13 packages fall into two ownership families:
 |-------|------|
 | `loong-core` | Core action/policy/grant foundation plus sessions, tasks, turns, artifacts, workspace context, and execution lifecycle facts used by the additive spine. |
 | `loong-plugin-sdk` | Plugin contract spine above `loong-core`. Owns the additive plugin-facing contract that `kernel` already consumes. |
-| `loong-runtime` | Runtime ownership spine above `loong-core`. Defines oneshot, interactive, and task-status runtime contracts without yet taking over the shipped bootstrap path. |
+| `loong-runtime` | Runtime ownership spine above `loong-core` and `kernel`. Defines the shared kernel/tool-plane owner plus oneshot, interactive, and task-status runtime contracts while the shipped bootstrap path migrates onto that owner. |
 | `loong-app-protocol` | App-facing task/session/turn protocol built on `loong-runtime`. This is the transitional boundary that `daemon` already consumes directly. |
 | `loong-cli` | First-party CLI shell spine library. Exists as Phase 2 scaffolding; it is not the shipping `loong` binary entrypoint today. |
 | `contracts` | Shared governed-runtime vocabulary: capability tokens, policy/audit types, runtime/tool/memory request-outcome shapes, task state, namespaces, and pack manifests. Zero internal dependencies. |
