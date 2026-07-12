@@ -655,6 +655,115 @@ async fn kernel_routed_file_read_reports_typed_input_error() {
 }
 
 #[tokio::test]
+async fn kernel_routed_glob_search_uses_typed_tool_registry() {
+    let base = unique_temp_dir("loong-glob-search-typed-registry");
+    let root = base.join("root");
+    fs::create_dir_all(root.join("src/nested")).expect("create fixture dirs");
+    fs::write(root.join("src/lib.rs"), "pub fn alpha() {}").expect("write lib");
+    fs::write(root.join("src/nested/mod.rs"), "pub fn beta() {}").expect("write mod");
+
+    let config = ToolRuntimeConfig {
+        file_root: Some(root),
+        ..ToolRuntimeConfig::default()
+    };
+    let request = ToolCoreRequest {
+        tool_name: "glob.search".to_owned(),
+        payload: json!({
+            "pattern": "src/**/*.rs",
+            "max_results": 10
+        }),
+    };
+
+    let (outcome, audit) = execute_request_via_kernel_tool_registry(request, &config)
+        .await
+        .expect("glob.search should execute through typed registry");
+
+    assert_eq!(outcome.status, "ok");
+    assert_eq!(outcome.payload["tool_name"], json!("glob.search"));
+    assert_eq!(outcome.payload["match_count"], json!(2));
+    assert_eq!(
+        outcome.payload["continuation"]["recommended_tool"],
+        json!("read")
+    );
+    let events = audit.snapshot();
+    assert!(events.iter().any(|event| {
+        matches!(
+            &event.kind,
+            loong_kernel::AuditEventKind::ToolInvocation {
+                path_display,
+                outcome: loong_kernel::InvocationOutcome::Completed,
+                ..
+            } if path_display == "glob.search"
+        )
+    }));
+    assert!(!events.iter().any(|event| {
+        matches!(
+            &event.kind,
+            loong_kernel::AuditEventKind::PlaneInvoked {
+                primary_adapter,
+                ..
+            } if primary_adapter.starts_with("legacy:")
+        )
+    }));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[tokio::test]
+async fn kernel_routed_content_search_uses_typed_tool_registry() {
+    let base = unique_temp_dir("loong-content-search-typed-registry");
+    let root = base.join("root");
+    fs::create_dir_all(root.join("src")).expect("create fixture dirs");
+    fs::write(
+        root.join("src/main.rs"),
+        "fn main() {\n    println!(\"hello world\");\n}\n",
+    )
+    .expect("write main");
+
+    let config = ToolRuntimeConfig {
+        file_root: Some(root),
+        ..ToolRuntimeConfig::default()
+    };
+    let request = ToolCoreRequest {
+        tool_name: "content.search".to_owned(),
+        payload: json!({
+            "query": "hello world",
+            "glob": "src/**/*.rs",
+            "max_results": 5
+        }),
+    };
+
+    let (outcome, audit) = execute_request_via_kernel_tool_registry(request, &config)
+        .await
+        .expect("content.search should execute through typed registry");
+
+    assert_eq!(outcome.status, "ok");
+    assert_eq!(outcome.payload["tool_name"], json!("content.search"));
+    assert_eq!(outcome.payload["match_count"], json!(1));
+    assert_eq!(outcome.payload["matches"][0]["path"], json!("src/main.rs"));
+    let events = audit.snapshot();
+    assert!(events.iter().any(|event| {
+        matches!(
+            &event.kind,
+            loong_kernel::AuditEventKind::ToolInvocation {
+                path_display,
+                outcome: loong_kernel::InvocationOutcome::Completed,
+                ..
+            } if path_display == "content.search"
+        )
+    }));
+    assert!(!events.iter().any(|event| {
+        matches!(
+            &event.kind,
+            loong_kernel::AuditEventKind::PlaneInvoked {
+                primary_adapter,
+                ..
+            } if primary_adapter.starts_with("legacy:")
+        )
+    }));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[tokio::test]
 async fn kernel_routed_file_write_uses_typed_tool_registry() {
     let base = unique_temp_dir("loong-file-write-typed-registry");
     let root = base.join("root");

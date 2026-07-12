@@ -360,6 +360,34 @@ pub(crate) fn app_tool_plane()
                 duplicate.is_none(),
                 "duplicate builtin tool path: {duplicate:?}"
             );
+
+            // Legacy read-family discoverable paths keep their own typed
+            // entries so audit path and response metadata do not collapse into
+            // the aggregate `read` surface while fs side effects still move to
+            // access actions.
+            let duplicate = plane
+                .register_with_provenance(
+                    ToolPath::from("glob.search"),
+                    ToolProvenance::Builtin,
+                    loong_tools::file::GlobSearchTool::new("glob.search"),
+                )
+                .err();
+            debug_assert!(
+                duplicate.is_none(),
+                "duplicate builtin tool path: {duplicate:?}"
+            );
+
+            let duplicate = plane
+                .register_with_provenance(
+                    ToolPath::from("content.search"),
+                    ToolProvenance::Builtin,
+                    loong_tools::file::ContentSearchTool::new("content.search"),
+                )
+                .err();
+            debug_assert!(
+                duplicate.is_none(),
+                "duplicate builtin tool path: {duplicate:?}"
+            );
         }
         plane
     })

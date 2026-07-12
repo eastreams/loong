@@ -202,6 +202,8 @@ fn builtin_tool_plane_exposes_registered_file_paths() {
 
     assert!(paths.contains(&ToolPath::from("read")));
     assert!(paths.contains(&ToolPath::from("write")));
+    assert!(paths.contains(&ToolPath::from("glob.search")));
+    assert!(paths.contains(&ToolPath::from("content.search")));
 }
 
 #[tokio::test]
