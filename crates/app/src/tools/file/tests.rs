@@ -714,6 +714,80 @@ async fn kernel_routed_file_write_uses_typed_tool_registry() {
 }
 
 #[tokio::test]
+async fn context_direct_write_uses_typed_tool_registry() {
+    let base = unique_temp_dir("loong-context-direct-write-typed-registry");
+    let root = base.join("root");
+    fs::create_dir_all(&root).expect("create root");
+
+    let config = ToolRuntimeConfig {
+        file_root: Some(root.clone()),
+        ..ToolRuntimeConfig::default()
+    };
+    let mut policy = PolicyPipeline::<AppContextFactory>::new_legacy_allow_fallback()
+        .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
+        .with_policy(FsResolvePathAllowedRootsPolicy);
+    policy.push_policy(FsWriteAllowPolicy);
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let mut kernel = Kernel::<AppContextFactory>::with_policy_runtime(
+        policy,
+        Arc::new(SystemClock),
+        audit.clone(),
+    );
+    let pack = Arc::new(test_pack());
+    kernel
+        .register_pack((*pack).clone())
+        .expect("register pack");
+    let token = kernel
+        .issue_token("test-pack", "test-agent", 60)
+        .expect("issue token");
+    let kernel_ctx = crate::KernelContext {
+        kernel: Arc::new(kernel),
+        pack,
+        token,
+        tool_runtime_config: config.clone(),
+    };
+    let execution_context = kernel_ctx
+        .execution_context(ExecutionPlane::Tool, PlaneTier::Core, None, &config)
+        .expect("build execution context");
+    let request = ToolCoreRequest {
+        tool_name: "write".to_owned(),
+        payload: json!({
+            "path": "typed.txt",
+            "content": "typed"
+        }),
+    };
+
+    let outcome = crate::tools::tool_dispatch::execute_tool_core_with_config_and_context(
+        request,
+        &config,
+        &crate::config::ObservabilityConfig::runtime_default(),
+        &execution_context,
+    )
+    .await
+    .expect("context direct write should execute");
+
+    assert_eq!(outcome.status, "ok");
+    assert_eq!(outcome.payload["tool_name"], json!("write"));
+    assert_eq!(outcome.payload["bytes_written"], json!(5));
+    assert_eq!(
+        fs::read_to_string(root.join("typed.txt")).expect("read written file"),
+        "typed"
+    );
+    let events = audit.snapshot();
+    assert!(events.iter().any(|event| {
+        matches!(
+            &event.kind,
+            loong_kernel::AuditEventKind::ToolInvocation {
+                path_display,
+                outcome: loong_kernel::InvocationOutcome::Completed,
+                ..
+            } if path_display == "write"
+        )
+    }));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[tokio::test]
 async fn kernel_routed_tool_invoke_file_write_uses_typed_tool_registry() {
     let base = unique_temp_dir("loong-tool-invoke-write-typed-registry");
     let root = base.join("root");

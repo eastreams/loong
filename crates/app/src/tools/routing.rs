@@ -82,7 +82,24 @@ pub(super) async fn execute_direct_tool_core_with_context(
         return execute_direct_read_tool_core_with_context(request, config, ctx).await;
     }
 
-    execute_direct_tool_core_with_config(request, config)
+    let routed_request = route_direct_tool_request(request, config)?;
+    let typed_path = plane::ToolPath::from(routed_request.tool_name.clone());
+    match ctx.tool(typed_path) {
+        Ok(invocation) => {
+            let payload = invocation
+                .invoke(routed_request.payload)
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok(ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload,
+            })
+        }
+        Err(loong_contracts::ToolPlaneError::ToolNotFound(_)) => {
+            execute_discoverable_tool_core_with_config(routed_request, config)
+        }
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 async fn execute_direct_read_tool_core_with_context(
