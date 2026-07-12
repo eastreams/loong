@@ -7,10 +7,10 @@ use loong_contracts::{Capability, ExecutionRoute, HarnessKind};
 use loong_kernel::{
     FixedClock, InMemoryAuditSink, Kernel, PolicyPipeline, VerticalPackManifest,
     policy::{
-        FsContentSearchAllowPolicy, FsCopyFileAllowPolicy, FsCreateDirAllAllowPolicy,
-        FsGlobAllowPolicy, FsInspectPathAllowPolicy, FsReadAllowPolicy, FsReadDirAllowPolicy,
-        FsReadFilenameDenyPolicy, FsRemoveFileAllowPolicy, FsRemoveFileAllowedRootsPolicy,
-        FsResolvePathAllowedRootsPolicy, FsWriteAllowPolicy,
+        FsAtomicWriteAllowPolicy, FsContentSearchAllowPolicy, FsCopyFileAllowPolicy,
+        FsCreateDirAllAllowPolicy, FsGlobAllowPolicy, FsInspectPathAllowPolicy, FsReadAllowPolicy,
+        FsReadDirAllowPolicy, FsReadFilenameDenyPolicy, FsRemoveFileAllowPolicy,
+        FsRemoveFileAllowedRootsPolicy, FsResolvePathAllowedRootsPolicy, FsWriteAllowPolicy,
     },
 };
 
@@ -158,6 +158,7 @@ impl TurnTestHarness {
         }
         policy.push_policy(FsReadAllowPolicy);
         policy.push_policy(FsWriteAllowPolicy);
+        policy.push_policy(FsAtomicWriteAllowPolicy);
         policy.push_policy(FsCopyFileAllowPolicy);
         policy.push_policy(FsCreateDirAllAllowPolicy);
         policy.push_policy(FsRemoveFileAllowPolicy);

@@ -217,9 +217,7 @@ pub(crate) async fn execute_tool_core_with_config_and_context(
             "tool.invoke" => tool_lease::execute_tool_invoke_tool_with_config(request, config),
             "config.import"
                 if request.payload.as_object().is_some_and(|payload| {
-                    config_import::config_import_mode_is_context_access_backed(
-                        config_import::config_import_mode(payload),
-                    )
+                    config_import::config_import_payload_is_context_access_backed(payload)
                 }) =>
             {
                 config_import::execute_config_import_tool_with_context(request, ctx).await

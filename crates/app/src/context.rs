@@ -12,10 +12,10 @@ use loong_kernel::{
     InMemoryAuditSink, JsonlAuditSink, Kernel, KernelAccess, KernelInvocationContext,
     PolicyPipeline, SystemClock, VerticalPackManifest,
     policy::{
-        FsContentSearchAllowPolicy, FsCopyFileAllowPolicy, FsCreateDirAllAllowPolicy,
-        FsGlobAllowPolicy, FsInspectPathAllowPolicy, FsReadAllowPolicy, FsReadDirAllowPolicy,
-        FsReadFilenameDenyPolicy, FsRemoveFileAllowPolicy, FsRemoveFileAllowedRootsPolicy,
-        FsResolvePathAllowedRootsPolicy, FsWriteAllowPolicy,
+        FsAtomicWriteAllowPolicy, FsContentSearchAllowPolicy, FsCopyFileAllowPolicy,
+        FsCreateDirAllAllowPolicy, FsGlobAllowPolicy, FsInspectPathAllowPolicy, FsReadAllowPolicy,
+        FsReadDirAllowPolicy, FsReadFilenameDenyPolicy, FsRemoveFileAllowPolicy,
+        FsRemoveFileAllowedRootsPolicy, FsResolvePathAllowedRootsPolicy, FsWriteAllowPolicy,
     },
 };
 use serde_json::Value;
@@ -547,6 +547,7 @@ fn bootstrap_kernel_context_with_audit_sink(
     }
     policy.push_policy(FsReadAllowPolicy);
     policy.push_policy(FsWriteAllowPolicy);
+    policy.push_policy(FsAtomicWriteAllowPolicy);
     policy.push_policy(FsCopyFileAllowPolicy);
     policy.push_policy(FsCreateDirAllAllowPolicy);
     policy.push_policy(FsRemoveFileAllowPolicy);

@@ -62,6 +62,19 @@ pub(super) fn config_import_mode_is_context_access_backed(mode: &str) -> bool {
     )
 }
 
+pub(super) fn config_import_payload_is_context_access_backed(
+    payload: &serde_json::Map<String, Value>,
+) -> bool {
+    let mode = config_import_mode(payload);
+    if mode == "apply_selected" {
+        return !payload
+            .get(APPLY_SKILLS_PLAN_KEY)
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+    }
+    config_import_mode_is_context_access_backed(mode)
+}
+
 pub(super) fn execute_config_import_tool_with_config(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
@@ -324,7 +337,7 @@ pub(super) async fn execute_config_import_tool_with_context(
         .as_object()
         .ok_or_else(|| format!("{CONFIG_IMPORT_TOOL_NAME} payload must be an object"))?;
     let mode = config_import_mode(payload);
-    if !config_import_mode_is_context_access_backed(mode) {
+    if !config_import_payload_is_context_access_backed(payload) {
         return Err(format!(
             "{CONFIG_IMPORT_TOOL_NAME} context-aware access path does not support `{mode}` yet"
         ));
@@ -460,6 +473,43 @@ pub(super) async fn execute_config_import_tool_with_context(
                 "mode": MAP_SKILLS_MODE_KEY,
                 "input_path": input_path.display().to_string(),
                 "result": external_skill_mapping_plan_payload(&mapping),
+            }),
+        });
+    }
+
+    if mode == "apply_selected" {
+        let report = migration::discover_import_sources_with_access(
+            ctx,
+            input_path.as_path(),
+            migration::DiscoveryOptions::default(),
+        )
+        .await?;
+        let summary = migration::plan_import_sources_with_access(ctx, &report).await?;
+        let selection = parse_apply_selection_mode(payload, &summary)?;
+        let output_path = output_path.ok_or_else(|| {
+            format!("{CONFIG_IMPORT_TOOL_NAME} apply_selected mode requires payload.output_path")
+        })?;
+        let result = migration::apply_import_selection_with_access(
+            ctx,
+            &migration::ApplyImportSelection {
+                discovery: report,
+                output_path,
+                mode: selection,
+                apply_skills_plan: false,
+                skills_input_path: None,
+            },
+        )
+        .await?;
+        return Ok(ToolCoreOutcome {
+            status: "ok".to_owned(),
+            payload: json!({
+                "adapter": "core-tools",
+                "tool_name": request.tool_name,
+                "mode": "apply_selected",
+                "input_path": input_path.display().to_string(),
+                "output_path": result.output_path.display().to_string(),
+                APPLY_SKILLS_PLAN_KEY: false,
+                "result": apply_selection_result_payload(&result),
             }),
         });
     }
@@ -1187,6 +1237,65 @@ mod tests {
         assert_eq!(
             fs::read_to_string(&output_path).expect("read restored config"),
             original_body
+        );
+    }
+
+    #[tokio::test]
+    async fn kernel_routed_config_import_apply_selected_without_skills_writes_through_access() {
+        let harness = TurnTestHarness::new();
+        let openclaw_root = harness.temp_dir.join("openclaw-workspace");
+        fs::create_dir_all(&openclaw_root).expect("create openclaw root");
+        fs::write(
+            openclaw_root.join("SOUL.md"),
+            "# Soul\n\nPrefer direct answers and keep OpenClaw style concise.\n",
+        )
+        .expect("write prompt fixture");
+        fs::write(
+            openclaw_root.join("IDENTITY.md"),
+            "# Identity\n\n- role: release copilot\n- tone: steady\n",
+        )
+        .expect("write identity fixture");
+        let output_path = harness.temp_dir.join("generated/loong.toml");
+
+        let outcome = crate::tools::execute_tool(
+            ToolCoreRequest {
+                tool_name: CONFIG_IMPORT_TOOL_NAME.to_owned(),
+                payload: json!({
+                    "mode": "apply_selected",
+                    "input_path": ".",
+                    "output_path": "generated/loong.toml",
+                    "selection_id": "openclaw",
+                    APPLY_SKILLS_PLAN_KEY: false
+                }),
+            },
+            &harness.kernel_ctx,
+        )
+        .await
+        .expect("apply_selected should execute through kernel context");
+
+        let expected_output_path =
+            dunce::canonicalize(&output_path).expect("canonicalize generated config path");
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["mode"], "apply_selected");
+        assert_eq!(
+            outcome.payload["result"]["output_path"],
+            expected_output_path.display().to_string()
+        );
+        assert_eq!(
+            config::parse(
+                fs::read_to_string(&output_path)
+                    .expect("read generated config")
+                    .as_str()
+            )
+            .expect("parse generated config")
+            .memory
+            .profile,
+            MemoryProfile::ProfilePlusWindow
+        );
+        assert!(
+            outcome.payload["result"]["manifest_path"]
+                .as_str()
+                .is_some_and(|path| path.contains(".loong-migration"))
         );
     }
 
