@@ -14,15 +14,16 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      `recommend_primary` / `merge_profiles` / `map_skills` 已通过 `ctx.access()` 读取
      import files、candidate directories、skills artifacts 和可选 output preview config；
      simple `apply` 已通过 `ctx.access()` 读取现有 output config 并写回最终 config；
-     `apply_selected` / `rollback_last_apply` 仍未迁入 access-backed action 路径，且仍依赖
-     `FilePolicyExtension` 的迁移期 guard；
+     `rollback_last_apply` 已通过 `ctx.access()` 读取 manifest 并恢复/删除 output；
+     `apply_selected` 仍未迁入 access-backed action 路径，且仍依赖 `FilePolicyExtension`
+     的迁移期 guard；
    - 不要只把 `config.import` 入口注册进 typed plane 来假装迁移：它调用的
      `migration::*` / `config::load` / `config::write` 当前会直接读写、备份、扫描文件。
      迁移完成线必须先把这些 I/O 抽到 access-backed port 或等价的 granted action run
      边界；
    - `config.import` 的迁移先拆 filesystem primitive，再迁 tool 入口。当前 `loong-access::fs`
-     已有 read/write/copy-file/remove-file/read-dir/glob/content-search/inspect-path/
-     create-dir-all，仍不足以覆盖 import 的全部副作用：
+     已有 read/write/atomic-write/copy-file/remove-file/read-dir/glob/content-search/
+     inspect-path/create-dir-all，仍不足以覆盖 import 的全部副作用：
      - discovery / plan：已有受治理的 file read、一层 directory scan、canonical/path
        metadata 基础；read-only modes 的 context-aware path 已接入；
      - simple apply：已用 access 读取现有 output config、渲染 config、写最终 output
@@ -31,14 +32,14 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
        external skills manifest 迁到 access-backed path；
      - config codec：`config::parse` / `config::render` 已提供无 filesystem side effect 的
        解析/编码边界；`config::load` / `config::write` 仍是 legacy direct fs 调用点；
-     - rollback：已有读取 manifest、复制 backup、恢复 output、删除不存在前 output 的基础
-       primitive；remove-file 只删除文件或 symlink，且 final component 不跟随 symlink；
+     - rollback：kernel-routed `rollback_last_apply` 已用 access 读取 manifest、复制
+       backup、恢复 output，或删除不存在前 output；remove-file 只删除文件或 symlink，且
+       final component 不跟随 symlink；
      - apply_selected failure rollback：需要恢复 config output，并协调 skills bridge rollback。
-   - 因此下一步 code 不是 `Register(ConfigImportTool)`，而是把 `apply_selected` /
-     `rollback_last_apply` 依赖的多文件副作用改成显式 I/O 边界：要么新增能消费
-     `Granted<ConcreteFsAction>` 的 access primitives，要么让 migration 函数接收一个
-     app-owned access-backed filesystem port；这个 port 不能绕过 `ctx.access()`，也不能
-     退回 `FilePolicyExtension`；
+   - 因此下一步 code 不是 `Register(ConfigImportTool)`，而是把 `apply_selected` 依赖的
+     多文件副作用改成显式 I/O 边界：要么新增能消费 `Granted<ConcreteFsAction>` 的
+     access primitives，要么让 migration 函数接收一个 app-owned access-backed filesystem
+     port；这个 port 不能绕过 `ctx.access()`，也不能退回 `FilePolicyExtension`；
    - `glob.search` / `content.search` 的 kernel-routed 调用已注册为 typed read-family
      path；无 context direct 调用已 fail closed，旧 app-local search helper 已删除；
    - 逐个工具迁移：concrete tool 只解析 payload、调用 `ctx.access()` / `ctx.tool()`、
