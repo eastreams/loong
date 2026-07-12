@@ -32,7 +32,7 @@ pub(super) fn ensure_cli_channel_enabled_for_entrypoint(
 ///
 /// This is the highest-level bootstrap used by `chat`/`ask`: it loads the
 /// config, resolves startup session selection, exports runtime
-/// environment variables, bootstraps a fresh app context, and delegates the
+/// environment variables, bootstraps the shared runtime, and delegates the
 /// final session/memory assembly to the lower-level helpers below.
 pub(crate) fn initialize_cli_turn_runtime(
     config_path: Option<&str>,
@@ -56,9 +56,8 @@ pub(crate) fn initialize_cli_turn_runtime(
 ///
 /// Compared with `initialize_cli_turn_runtime`, this skips config loading but
 /// still normalizes the runtime workspace root, optionally exports runtime
-/// environment variables, bootstraps a fresh app context, and then delegates
-/// the final session/memory assembly to
-/// `initialize_cli_turn_runtime_with_loaded_config_and_app_ctx`.
+/// environment variables, bootstraps the shared runtime, and then issues an
+/// app context only after final session selection.
 ///
 /// Use the `_and_app_ctx` variant when the caller must reuse an existing
 /// kernel authority—such as channel-triggered turns—rather than minting a new
@@ -87,18 +86,23 @@ pub(crate) fn initialize_cli_turn_runtime_with_loaded_config(
     if initialize_runtime_environment {
         crate::runtime_env::initialize_runtime_environment(&config, Some(&resolved_path));
     }
-    let app_ctx = crate::context::bootstrap_app_context_with_config(
-        kernel_scope,
-        crate::context::DEFAULT_TOKEN_TTL_S,
-        &config,
-    )?;
-    initialize_cli_turn_runtime_with_loaded_config_and_app_ctx(
+    let runtime = crate::context::bootstrap_runtime_with_config(&config)?;
+    assemble_cli_turn_runtime(
         resolved_path,
         config,
         session_hint,
         options,
-        app_ctx,
         session_requirement,
+        move |config, session_id| {
+            crate::AppContext::new_session(
+                runtime,
+                config,
+                session_id,
+                kernel_scope,
+                loong_contracts::GovernedSessionMode::MutatingCapable,
+                crate::context::DEFAULT_TOKEN_TTL_S,
+            )
+        },
     )
 }
 
@@ -118,6 +122,32 @@ pub(crate) fn initialize_cli_turn_runtime_with_loaded_config_and_app_ctx(
     app_ctx: crate::AppContext,
     session_requirement: CliSessionRequirement,
 ) -> CliResult<CliTurnRuntime> {
+    // TODO(session-owned-context): migrate outer callers to retain Runtime
+    // directly, then delete this inherited host-context entrypoint.
+    assemble_cli_turn_runtime(
+        resolved_path,
+        config,
+        session_hint,
+        options,
+        session_requirement,
+        move |_config, _session_id| Ok(app_ctx),
+    )
+}
+
+/// Shares CLI assembly while preserving the required ownership order:
+/// session selection completes before either runtime-issued or inherited
+/// authority is attached to the resulting `CliTurnRuntime`.
+fn assemble_cli_turn_runtime<F>(
+    resolved_path: PathBuf,
+    config: LoongConfig,
+    session_hint: Option<&str>,
+    options: &CliChatOptions,
+    session_requirement: CliSessionRequirement,
+    build_app_context: F,
+) -> CliResult<CliTurnRuntime>
+where
+    F: FnOnce(&LoongConfig, &str) -> CliResult<crate::AppContext>,
+{
     let effective_bootstrap_mcp_servers = config
         .acp
         .dispatch
@@ -152,6 +182,7 @@ pub(crate) fn initialize_cli_turn_runtime_with_loaded_config_and_app_ctx(
     let (session_id, session_origin) =
         resolve_or_create_cli_runtime_session_id(session_hint, session_requirement, ())?;
 
+    let app_context = build_app_context(&config, session_id.as_str())?;
     let session_address = ConversationSessionAddress::from_session_id(session_id.clone());
     Ok(CliTurnRuntime {
         resolved_path,
@@ -161,7 +192,7 @@ pub(crate) fn initialize_cli_turn_runtime_with_loaded_config_and_app_ctx(
         session_origin,
         session_address,
         turn_coordinator: ConversationTurnCoordinator::new(),
-        app_context: app_ctx,
+        app_context,
         effective_bootstrap_mcp_servers,
         effective_working_directory,
         memory_label,

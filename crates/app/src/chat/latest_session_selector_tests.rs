@@ -112,6 +112,28 @@ fn cli_runtime_resolves_latest_session_selector_to_latest_resumable_root() {
 }
 
 #[test]
+fn cli_runtime_context_is_owned_by_resolved_session() {
+    let (config, memory_config, sqlite_path) = init_chat_test_memory("session-owned-context");
+    let repo = SessionRepository::new(&memory_config).expect("repository");
+    create_root_session(&repo, "selected-session");
+
+    let runtime = initialize_cli_turn_runtime_with_loaded_config(
+        temp_config_path("session-owned-context-config"),
+        config,
+        Some("selected-session"),
+        &CliChatOptions::default(),
+        "cli-runtime-session-context-test",
+        CliSessionRequirement::RequireExplicit,
+        false,
+    )
+    .expect("session-owned runtime");
+
+    assert_eq!(runtime.app_context.session_id, runtime.session_id);
+
+    cleanup_chat_test_memory(&sqlite_path);
+}
+
+#[test]
 fn cli_runtime_latest_session_selector_updates_startup_summary_session_id() {
     let (config, memory_config, sqlite_path) = init_chat_test_memory("latest-summary");
     let repo = SessionRepository::new(&memory_config).expect("repository");

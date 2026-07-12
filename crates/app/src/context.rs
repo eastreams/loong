@@ -158,6 +158,55 @@ impl AppContext {
         })
     }
 
+    /// Constructs authority for one concrete session after its identity is known.
+    ///
+    /// Hosts retain the runtime and call this once when they create or attach to
+    /// a session. Invocation overlays derive from the returned context and must
+    /// not mint replacement session tokens.
+    pub fn new_session(
+        runtime: Arc<Runtime<AppContextFactory>>,
+        config: &LoongConfig,
+        session_id: impl Into<String>,
+        agent_id: &str,
+        session_mode: GovernedSessionMode,
+        ttl_s: u64,
+    ) -> Result<Self, String> {
+        let token = match session_mode {
+            GovernedSessionMode::MutatingCapable => {
+                runtime
+                    .kernel()
+                    .issue_token(EMBEDDED_RUNTIME_PACK_ID, agent_id, ttl_s)
+            }
+            GovernedSessionMode::AdvisoryOnly => {
+                // Advisory sessions may assemble governed read/provider input,
+                // but never receive generic tool invocation or write authority.
+                let allowed_capabilities = BTreeSet::from([
+                    Capability::MemoryRead,
+                    Capability::FilesystemRead,
+                    Capability::NetworkEgress,
+                ]);
+                runtime.kernel().issue_scoped_token(
+                    EMBEDDED_RUNTIME_PACK_ID,
+                    agent_id,
+                    &allowed_capabilities,
+                    ttl_s,
+                )
+            }
+        }
+        .map_err(|error| format!("kernel session token issue failed: {error}"))?;
+        let tool_runtime_config =
+            crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
+
+        Self::new(
+            runtime,
+            token,
+            tool_runtime_config,
+            session_id,
+            crate::tools::runtime_tool_view_from_loong_config(config),
+            session_mode,
+        )
+    }
+
     pub fn child(
         &self,
         session_id: impl Into<String>,
@@ -787,8 +836,8 @@ fn normalize_session_id(session_id: String) -> String {
 /// and public-web capabilities, then issues a long-lived token for the given
 /// `agent_id`.
 ///
-/// Production-facing runtime entrypoints should prefer
-/// `bootstrap_app_context_with_config` so audit retention follows config.
+/// Production hosts should retain `bootstrap_runtime_with_config` and call
+/// `AppContext::new_session` after resolving concrete session identity.
 #[cfg(test)]
 pub(crate) fn bootstrap_test_app_context(agent_id: &str, ttl_s: u64) -> Result<AppContext, String> {
     bootstrap_app_context_with_audit_sink(
@@ -799,11 +848,12 @@ pub(crate) fn bootstrap_test_app_context(agent_id: &str, ttl_s: u64) -> Result<A
     )
 }
 
-/// Bootstrap a governed app context for production-facing runtime entrypoints.
+/// Bootstrap a governed host context for transitional runtime entrypoints.
 ///
-/// This installs the audit sink selected by `config.audit`, registers the embedded runtime
-/// pack plus the core tool/memory adapters and policy pipeline, and issues a
-/// long-lived capability token for `agent_id`.
+/// This installs the audit sink selected by `config.audit`, registers the
+/// embedded runtime pack plus the core tool/memory adapters and policy
+/// pipeline, and issues a long-lived capability token before a concrete
+/// session is known.
 ///
 /// The helper intentionally stays below higher-level runtime initialization: it
 /// does not export `LOONG_*` environment variables, resolve chat session
@@ -994,6 +1044,35 @@ mod tests {
         assert!(
             audit.snapshot().is_empty(),
             "runtime ownership must not mint a host-level token"
+        );
+    }
+
+    #[test]
+    fn advisory_session_context_uses_non_mutating_capabilities() {
+        let audit = Arc::new(InMemoryAuditSink::default());
+        let config = LoongConfig::default();
+        let tool_runtime_config =
+            crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(&config, None);
+        let runtime = bootstrap_runtime_with_audit_sink(audit, &config, &tool_runtime_config)
+            .expect("runtime bootstrap");
+
+        let context = AppContext::new_session(
+            runtime,
+            &config,
+            "advisory-session",
+            "advisory-agent",
+            GovernedSessionMode::AdvisoryOnly,
+            60,
+        )
+        .expect("advisory session context");
+
+        assert_eq!(
+            context.token().allowed_capabilities,
+            BTreeSet::from([
+                Capability::MemoryRead,
+                Capability::FilesystemRead,
+                Capability::NetworkEgress,
+            ])
         );
     }
 

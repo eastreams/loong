@@ -71,9 +71,10 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      `git diff --check`。
 
 2. 完成 session-owned context authority：
-   - host surface 当前仍直接持有 root `AppContext`；下一步改为持有现有 `Arc<Runtime<_>>` 和
-     app runtime config，在 session 创建时通过 kernel 已有的 pack registry/token issuer 构造
-     自己的 `AppContext`，invocation 只从该 session context cheap-clone 派生 overlay；
+   - 标准 CLI chat/ask bootstrap 已先构造 `Arc<Runtime<_>>`、解析最终 session id，再通过
+     kernel token issuer 构造该 session 的 `AppContext`；channel/gateway 等 outer-runtime
+     surface 仍持有 root `AppContext`，下一步改为持有 runtime 和 app runtime config；
+     invocation 只从 session context cheap-clone 派生 overlay；
    - `GovernedSessionMode::AdvisoryOnly` 是权限语义，不是“缺少 context”：advisory session
      也必须由同一个 runtime 构造 `AppContext`，但使用 kernel 签发的 scoped token，至少不能
      获得 `InvokeTool` 或 mutation capabilities；tool execution 由 capability/policy gate 自动
