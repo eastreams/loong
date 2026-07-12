@@ -1120,7 +1120,7 @@ fn approval_attention_summary_json(requests: &[ApprovalRequestView]) -> Value {
 
 #[cfg(feature = "memory-sqlite")]
 fn approval_request_visible_tool_name(tool_name: &str) -> String {
-    crate::tools::user_visible_tool_name(tool_name)
+    crate::tools::legacy_display_tool_name(tool_name)
 }
 
 #[cfg(feature = "memory-sqlite")]

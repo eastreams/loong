@@ -69,7 +69,7 @@ pub(crate) fn collect_active_skills_from_tool_result_text_with_config(
         let Some(tool_result_line) = ToolResultLine::parse(line) else {
             continue;
         };
-        if crate::tools::user_visible_tool_name(tool_result_line.tool_name()) != "read" {
+        if crate::tools::legacy_display_tool_name(tool_result_line.tool_name()) != "read" {
             continue;
         }
         let Some(payload_json) = tool_result_line.payload_summary_json() else {

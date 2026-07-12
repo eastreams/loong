@@ -213,7 +213,7 @@ pub(super) fn summarize_followup_turn(turn: &ProviderTurn) -> FollowupTurnSummar
         .unwrap_or(first);
     let canonical_tool_name =
         crate::tools::canonical_tool_name(intent.tool_name.as_str()).to_owned();
-    let visible_tool_name = crate::tools::user_visible_tool_name(canonical_tool_name.as_str());
+    let visible_tool_name = crate::tools::legacy_display_tool_name(canonical_tool_name.as_str());
     let used_legacy_hidden_tool_wrapper = canonical_tool_name == "tool.invoke";
     let followup_target_tool_id = used_legacy_hidden_tool_wrapper
         .then(|| {
@@ -221,7 +221,7 @@ pub(super) fn summarize_followup_turn(turn: &ProviderTurn) -> FollowupTurnSummar
                 .args_json
                 .get("tool_id")
                 .and_then(Value::as_str)
-                .map(crate::tools::user_visible_tool_name)
+                .map(crate::tools::legacy_display_tool_name)
         })
         .flatten();
 

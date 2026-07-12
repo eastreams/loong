@@ -73,11 +73,11 @@ pub(super) fn execute_tool_search_tool_with_config(
         .map(str::to_owned);
     let visible_requested_exact_tool_id = exact_tool_id
         .as_deref()
-        .map(super::user_visible_tool_name)
+        .map(super::legacy_display_tool_name)
         .or_else(|| {
             requested_exact_tool_id
                 .as_deref()
-                .map(super::user_visible_tool_name)
+                .map(super::legacy_display_tool_name)
         });
 
     let limit = payload
@@ -280,7 +280,7 @@ pub(super) fn search_tool_view_from_payload(
 
                 for tool_name in tool_names.iter().filter_map(Value::as_str) {
                     let canonical_tool_name = canonical_tool_name(tool_name);
-                    let visible_tool_name = super::user_visible_tool_name(canonical_tool_name);
+                    let visible_tool_name = super::legacy_display_tool_name(canonical_tool_name);
 
                     if !normalized_tool_names.contains(&canonical_tool_name.to_owned()) {
                         normalized_tool_names.push(canonical_tool_name.to_owned());

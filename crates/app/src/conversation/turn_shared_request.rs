@@ -96,7 +96,7 @@ pub(crate) fn effective_followup_tool_name(intent: &ToolIntent) -> String {
 
 pub(crate) fn effective_followup_visible_tool_name(intent: &ToolIntent) -> String {
     let canonical_tool_name = effective_followup_tool_name(intent);
-    crate::tools::user_visible_tool_name(canonical_tool_name.as_str())
+    crate::tools::legacy_display_tool_name(canonical_tool_name.as_str())
 }
 
 pub(crate) fn effective_followup_request(intent: &ToolIntent) -> Value {

@@ -127,7 +127,7 @@ fn active_skill_workspace_root_for_tool_payload(
         return None;
     }
 
-    if crate::tools::user_visible_tool_name(canonical_tool_name) != "read" {
+    if crate::tools::legacy_display_tool_name(canonical_tool_name) != "read" {
         return None;
     }
 
@@ -161,7 +161,7 @@ fn visible_skill_workspace_root_for_tool_payload(
         return None;
     }
 
-    if crate::tools::user_visible_tool_name(canonical_tool_name) != "read" {
+    if crate::tools::legacy_display_tool_name(canonical_tool_name) != "read" {
         return None;
     }
 
@@ -203,7 +203,7 @@ fn requested_file_tool_path(
     payload: &serde_json::Value,
 ) -> Option<std::path::PathBuf> {
     let payload_object = payload.as_object()?;
-    if crate::tools::user_visible_tool_name(tool_name) != "read" {
+    if crate::tools::legacy_display_tool_name(tool_name) != "read" {
         return None;
     }
 

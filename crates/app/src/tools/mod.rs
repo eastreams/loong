@@ -138,7 +138,7 @@ pub(crate) use tool_identity::{
 };
 
 pub use tool_identity::{
-    canonical_tool_name, is_known_tool_name, is_known_tool_name_in_view, user_visible_tool_name,
+    canonical_tool_name, is_known_tool_name, is_known_tool_name_in_view, legacy_display_tool_name,
 };
 pub(crate) use tool_lease::{
     ToolInvokeProviderExposure, peek_tool_invoke_request, resolve_tool_invoke_request,

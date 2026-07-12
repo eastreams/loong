@@ -501,7 +501,7 @@ fn visible_tool_names_for_surface(surface: &app::tools::ToolSurfaceState) -> Vec
     let mut visible_tool_names = Vec::new();
 
     for tool_id in &surface.tool_ids {
-        let visible_tool_name = app::tools::user_visible_tool_name(tool_id.as_str());
+        let visible_tool_name = app::tools::legacy_display_tool_name(tool_id.as_str());
         if !visible_tool_names.contains(&visible_tool_name) {
             visible_tool_names.push(visible_tool_name);
         }

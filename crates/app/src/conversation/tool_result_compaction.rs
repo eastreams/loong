@@ -159,7 +159,7 @@ fn normalize_tool_search_diagnostics(diagnostics: &Value) -> Value {
 fn normalize_visible_tool_id_value(value: &Value) -> Value {
     value
         .as_str()
-        .map(crate::tools::user_visible_tool_name)
+        .map(crate::tools::legacy_display_tool_name)
         .map(Value::String)
         .unwrap_or_else(|| value.clone())
 }

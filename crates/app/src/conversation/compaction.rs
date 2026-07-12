@@ -419,7 +419,7 @@ fn render_summary_lines(turn: &WindowTurn) -> Vec<RenderedSummaryLine> {
 fn summarize_tool_result_line_content(content: &str) -> Option<String> {
     let tool_result_line = ToolResultLine::parse(content.trim())?;
     let canonical_tool_name = crate::tools::canonical_tool_name(tool_result_line.tool_name());
-    let visible_tool_name = crate::tools::user_visible_tool_name(canonical_tool_name);
+    let visible_tool_name = crate::tools::legacy_display_tool_name(canonical_tool_name);
     let payload_summary = tool_result_line.payload_summary_str().trim();
     if payload_summary.is_empty() {
         return Some(visible_tool_name);

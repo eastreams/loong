@@ -217,7 +217,7 @@ pub(crate) fn effective_result_tool_name(intent: &ToolIntent) -> String {
     let canonical_tool_name = crate::tools::peek_tool_invoke_request(&request)
         .map(|peeked| peeked.tool_name)
         .unwrap_or_else(|| crate::tools::canonical_tool_name(intent.tool_name.as_str()));
-    crate::tools::user_visible_tool_name(canonical_tool_name)
+    crate::tools::legacy_display_tool_name(canonical_tool_name)
 }
 
 pub(crate) fn effective_denied_tool_name(intent: &ToolIntent) -> String {

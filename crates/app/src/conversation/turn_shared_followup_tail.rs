@@ -518,7 +518,7 @@ fn render_shell_failure_repair_guidance(
     request_summary_request: Option<&Value>,
     tool_failure_reason: &str,
 ) -> Option<String> {
-    if crate::tools::user_visible_tool_name(tool_name) != "bash" {
+    if crate::tools::legacy_display_tool_name(tool_name) != "bash" {
         return None;
     }
 

@@ -39,7 +39,7 @@ pub(super) fn execute_file_write_tool_with_config(
 
     #[cfg(feature = "tool-file")]
     {
-        let tool_name = super::user_visible_tool_name(request.tool_name.as_str());
+        let tool_name = super::legacy_display_tool_name(request.tool_name.as_str());
         let payload = request
             .payload
             .as_object()
@@ -341,7 +341,7 @@ pub(super) fn execute_file_edit_tool_with_config(
     }
     #[cfg(feature = "tool-file")]
     {
-        let tool_name = super::user_visible_tool_name(request.tool_name.as_str());
+        let tool_name = super::legacy_display_tool_name(request.tool_name.as_str());
         let payload = request
             .payload
             .as_object()

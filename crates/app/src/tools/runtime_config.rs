@@ -412,7 +412,7 @@ impl ToolExecutionConfig {
 
 fn tool_timeout_lookup_keys(tool_name: &str) -> Vec<String> {
     let canonical_tool_name = super::canonical_tool_name(tool_name);
-    let visible_tool_name = super::user_visible_tool_name(canonical_tool_name);
+    let visible_tool_name = super::legacy_display_tool_name(canonical_tool_name);
     let mut keys = Vec::new();
 
     for candidate in [

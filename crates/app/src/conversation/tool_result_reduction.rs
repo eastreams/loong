@@ -34,7 +34,7 @@ fn reduce_tool_result_line_for_model(line: &str) -> String {
         return line.to_owned();
     };
     let canonical_tool_name = crate::tools::canonical_tool_name(tool_result_line.tool_name());
-    let visible_tool_name = crate::tools::user_visible_tool_name(canonical_tool_name);
+    let visible_tool_name = crate::tools::legacy_display_tool_name(canonical_tool_name);
     let payload_truncated = tool_result_line.payload_truncated();
     let payload_summary = tool_result_line.payload_summary_str();
 

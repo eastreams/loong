@@ -106,7 +106,7 @@ pub(crate) fn render_tool_input_repair_guidance_from_reason(
 }
 
 pub(crate) fn repair_guidance_visible_tool_name(tool_name: &str) -> String {
-    tools::user_visible_tool_name(tool_name)
+    tools::legacy_display_tool_name(tool_name)
 }
 
 fn render_tool_input_repair_guidance_for_issue(

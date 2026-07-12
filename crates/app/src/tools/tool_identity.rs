@@ -46,11 +46,13 @@ pub(crate) fn required_capabilities_for_tool_name_and_payload(
 ) -> BTreeSet<Capability> {
     let _ = payload;
     let mut caps = BTreeSet::from([Capability::InvokeTool]);
-    let visible_tool_name = user_visible_tool_name(tool_name);
+    let canonical_name = canonical_tool_name(tool_name);
+    let capability_surface_name =
+        direct_tool_name_for_hidden_tool(canonical_name).unwrap_or(canonical_name);
     if tool_requires_network_egress(tool_name) {
         caps.insert(Capability::NetworkEgress);
     }
-    match visible_tool_name.as_str() {
+    match capability_surface_name {
         "read" => {
             caps.insert(Capability::FilesystemRead);
         }
@@ -150,7 +152,7 @@ pub(crate) fn direct_tool_name_for_hidden_tool(raw: &str) -> Option<&'static str
 // TODO(tool-plane-display): this is a legacy display alias bridge for
 // conversation/result surfaces. Do not use it for typed dispatch, policy, or
 // capability ownership; those should read plane/tool metadata directly.
-pub fn user_visible_tool_name(raw: &str) -> String {
+pub fn legacy_display_tool_name(raw: &str) -> String {
     let canonical_name = canonical_tool_name(raw);
 
     if canonical_name == "tool.search" {
@@ -173,7 +175,7 @@ pub fn user_visible_tool_name(raw: &str) -> String {
 
 pub(crate) fn model_visible_tool_name(raw: &str) -> String {
     let canonical_name = canonical_tool_name(raw);
-    user_visible_tool_name(canonical_name)
+    legacy_display_tool_name(canonical_name)
 }
 
 pub(crate) fn is_tool_surface_id(surface_id: &str) -> bool {

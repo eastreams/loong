@@ -19,15 +19,14 @@ pub(super) fn run(
         return shell_policy_ext::authorize_direct_shell_payload(payload, config);
     }
 
-    let visible_tool_name = super::user_visible_tool_name(tool_name);
     // Kernel-routed `read` and `write` are access-backed typed tools now.
     // This preflight belongs only to legacy direct dispatch through
     // `execute_tool_core_with_config`, where write/edit/config.import still
     // need the old file policy guard until those direct entry points disappear.
     // TODO(access-migration): Delete this file branch after the remaining
     // legacy direct file tools move to typed Action/Policy access paths.
-    let is_file_tool =
-        matches!(visible_tool_name.as_str(), "write" | "edit") || tool_name == "config.import";
+    let direct_tool_name = super::direct_tool_name_for_hidden_tool(tool_name).unwrap_or(tool_name);
+    let is_file_tool = matches!(direct_tool_name, "write" | "edit") || tool_name == "config.import";
     if is_file_tool {
         return file_policy_ext::authorize_direct_file_payload(tool_name, payload, config);
     }
