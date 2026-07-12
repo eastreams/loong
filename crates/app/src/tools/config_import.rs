@@ -337,6 +337,15 @@ pub(super) async fn execute_config_import_tool_with_context(
         .as_object()
         .ok_or_else(|| format!("{CONFIG_IMPORT_TOOL_NAME} payload must be an object"))?;
     let mode = config_import_mode(payload);
+    let apply_skills_plan = payload
+        .get(APPLY_SKILLS_PLAN_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if mode == "apply_selected" && apply_skills_plan {
+        return Err(format!(
+            "{CONFIG_IMPORT_TOOL_NAME} apply_selected with apply_skills_plan is not access-backed yet; migrate skills.install/skills.remove first"
+        ));
+    }
     if !config_import_payload_is_context_access_backed(payload) {
         return Err(format!(
             "{CONFIG_IMPORT_TOOL_NAME} context-aware access path does not support `{mode}` yet"
@@ -1296,6 +1305,58 @@ mod tests {
             outcome.payload["result"]["manifest_path"]
                 .as_str()
                 .is_some_and(|path| path.contains(".loong-migration"))
+        );
+    }
+
+    #[tokio::test]
+    async fn kernel_routed_config_import_apply_selected_with_skills_fails_closed() {
+        let harness = TurnTestHarness::new();
+        let openclaw_root = harness.temp_dir.join("openclaw-workspace");
+        fs::create_dir_all(&openclaw_root).expect("create openclaw root");
+        fs::write(
+            openclaw_root.join("SOUL.md"),
+            "# Soul\n\nPrefer direct answers and keep OpenClaw style concise.\n",
+        )
+        .expect("write prompt fixture");
+        fs::write(
+            harness.temp_dir.join("SKILLS.md"),
+            "# Skills\n\n- release-guard\n",
+        )
+        .expect("write skills catalog");
+        fs::create_dir_all(harness.temp_dir.join(".codex/skills/release-guard"))
+            .expect("create skill dir");
+
+        let output_path = harness.temp_dir.join("generated/loong.toml");
+        let error = crate::tools::execute_tool(
+            ToolCoreRequest {
+                tool_name: CONFIG_IMPORT_TOOL_NAME.to_owned(),
+                payload: json!({
+                    "mode": "apply_selected",
+                    "input_path": ".",
+                    "output_path": "generated/loong.toml",
+                    "selection_id": "openclaw",
+                    APPLY_SKILLS_PLAN_KEY: true
+                }),
+            },
+            &harness.kernel_ctx,
+        )
+        .await
+        .expect_err("skills bridge must not fall back to legacy direct side effects");
+
+        assert!(
+            error.contains("apply_selected with apply_skills_plan is not access-backed yet"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            !output_path.exists(),
+            "fail-closed skills bridge must not write config output"
+        );
+        assert!(
+            !harness
+                .temp_dir
+                .join(".loong/skills/release-guard")
+                .exists(),
+            "fail-closed skills bridge must not install managed skills"
         );
     }
 

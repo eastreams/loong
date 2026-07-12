@@ -215,11 +215,11 @@ pub(crate) async fn execute_tool_core_with_config_and_context(
         match canonical_name.as_str() {
             "tool.search" => tool_search::execute_tool_search_tool_with_config(request, config),
             "tool.invoke" => tool_lease::execute_tool_invoke_tool_with_config(request, config),
-            "config.import"
-                if request.payload.as_object().is_some_and(|payload| {
-                    config_import::config_import_payload_is_context_access_backed(payload)
-                }) =>
-            {
+            "config.import" => {
+                // Kernel-routed config.import must fail closed in the
+                // context-aware path. Falling back to the legacy dispatcher
+                // would let unmigrated modes perform direct filesystem side
+                // effects behind the new access/action facade.
                 config_import::execute_config_import_tool_with_context(request, ctx).await
             }
             "read" | "write" | "edit" | "bash" | "web" | "browse" | "memory" => {
