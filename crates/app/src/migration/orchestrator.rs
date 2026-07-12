@@ -346,6 +346,9 @@ pub fn apply_import_selection(
 
     let mut backup_context: Option<(PathBuf, bool)> = None;
     let persist_result = (|| -> CliResult<(PathBuf, PathBuf, PathBuf, Option<PathBuf>)> {
+        // TODO(config-import-access): this block is the apply side-effect
+        // boundary for legacy config.import. Typed migration must move every
+        // create/copy/write/manifest operation here behind ctx.access().
         if request.apply_skills_plan {
             let input_path = request
                 .skills_input_path
@@ -897,6 +900,9 @@ fn build_skills_apply_manifest(
 }
 
 pub fn rollback_last_migration(output_path: &Path) -> CliResult<PathBuf> {
+    // TODO(config-import-access): rollback is also legacy direct filesystem
+    // I/O. Do not route rollback_last_apply through ToolPlane until manifest
+    // reads and restore/remove operations consume access grants.
     let manifest = load_last_migration_manifest(output_path)?;
     let backup_path = PathBuf::from(&manifest.backup_path);
     if manifest.output_preexisted {

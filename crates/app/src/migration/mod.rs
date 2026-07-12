@@ -321,6 +321,9 @@ struct ImportFile {
 }
 
 fn collect_import_files(input_path: &Path) -> CliResult<Vec<ImportFile>> {
+    // TODO(config-import-access): this discovery reader is still legacy direct
+    // filesystem I/O. The typed config.import path must replace it with an
+    // access-backed directory/file reader before the tool enters ToolPlane.
     if input_path.is_file() {
         return read_single_import_file(input_path)
             .map(|file| file.into_iter().collect())

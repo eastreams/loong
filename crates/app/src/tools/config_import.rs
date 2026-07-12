@@ -48,6 +48,10 @@ pub(super) fn execute_config_import_tool_with_config(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
+    // TODO(config-import-access): keep this legacy path out of the typed
+    // ToolPlane until migration filesystem I/O is supplied by ctx.access().
+    // Registering this function as a typed tool would only hide direct reads,
+    // writes, backups, manifests, and skills-bridge rollback behind a new name.
     let payload = request
         .payload
         .as_object()
