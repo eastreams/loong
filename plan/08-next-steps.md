@@ -15,8 +15,9 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      import files、candidate directories、skills artifacts 和可选 output preview config；
      simple `apply` 已通过 `ctx.access()` 读取现有 output config 并写回最终 config；
      `rollback_last_apply` 已通过 `ctx.access()` 读取 manifest 并恢复/删除 output；
-     `apply_selected` 仍未迁入 access-backed action 路径，且仍依赖 `FilePolicyExtension`
-     的迁移期 guard；
+     `apply_selected` 在 `apply_skills_plan=false` 时已通过 `ctx.access()` 创建 state dir、
+     写 backup、写 output config、原子写 import manifest；`apply_skills_plan=true`
+     仍留在 legacy path，且仍依赖 `FilePolicyExtension` 的迁移期 guard；
    - 不要只把 `config.import` 入口注册进 typed plane 来假装迁移：它调用的
      `migration::*` / `config::load` / `config::write` 当前会直接读写、备份、扫描文件。
      迁移完成线必须先把这些 I/O 抽到 access-backed port 或等价的 granted action run
@@ -28,18 +29,20 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
        metadata 基础；read-only modes 的 context-aware path 已接入；
      - simple apply：已用 access 读取现有 output config、渲染 config、写最终 output
        config；不再调用 `config::{load,write}`；
-     - apply_selected：仍需要把创建 state dir、写 backup、写 import manifest、可选写
-       external skills manifest 迁到 access-backed path；
+     - apply_selected：无 skills bridge 的路径已迁入 access；剩余 `apply_skills_plan`
+       需要把 external skills manifest、managed install/remove、失败 rollback 迁到
+       新的 access/tool 调用边界；
      - config codec：`config::parse` / `config::render` 已提供无 filesystem side effect 的
        解析/编码边界；`config::load` / `config::write` 仍是 legacy direct fs 调用点；
      - rollback：kernel-routed `rollback_last_apply` 已用 access 读取 manifest、复制
        backup、恢复 output，或删除不存在前 output；remove-file 只删除文件或 symlink，且
        final component 不跟随 symlink；
-     - apply_selected failure rollback：需要恢复 config output，并协调 skills bridge rollback。
-   - 因此下一步 code 不是 `Register(ConfigImportTool)`，而是把 `apply_selected` 依赖的
-     多文件副作用改成显式 I/O 边界：要么新增能消费 `Granted<ConcreteFsAction>` 的
-     access primitives，要么让 migration 函数接收一个 app-owned access-backed filesystem
-     port；这个 port 不能绕过 `ctx.access()`，也不能退回 `FilePolicyExtension`；
+     - apply_selected failure rollback：无 skills bridge 的 config output restore 已有
+       access-backed path；skills bridge rollback 仍要迁移。
+   - 因此下一步 code 不是 `Register(ConfigImportTool)`，而是把 `apply_selected` 的
+     `apply_skills_plan=true` 路径改成显式边界：external skills install/remove 不能继续
+     作为 migration 内部 direct tool side effect；external skills manifest 写入也不能退回
+     direct atomic write 或 `FilePolicyExtension`；
    - `glob.search` / `content.search` 的 kernel-routed 调用已注册为 typed read-family
      path；无 context direct 调用已 fail closed，旧 app-local search helper 已删除；
    - 逐个工具迁移：concrete tool 只解析 payload、调用 `ctx.access()` / `ctx.tool()`、
