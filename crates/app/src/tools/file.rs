@@ -254,7 +254,7 @@ pub(super) fn execute_file_edit_tool_with_config(
 }
 
 #[cfg(feature = "tool-file")]
-fn emit_file_change_preview(
+pub(super) fn emit_file_change_preview(
     path: &Path,
     kind: ToolFileChangeKind,
     before: Option<&str>,

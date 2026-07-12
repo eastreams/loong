@@ -245,13 +245,6 @@ where
         Ok(())
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "edit migration will attach the file-preview observer through this registration path"
-        )
-    )]
     pub(crate) fn register_with_provenance_and_success_observer<T, F>(
         &mut self,
         path: ToolPath,
@@ -387,6 +380,29 @@ pub(crate) fn app_tool_plane()
                     ToolPath::from("write"),
                     ToolProvenance::Builtin,
                     loong_tools::file::WriteTool::new("write"),
+                )
+                .err();
+            debug_assert!(
+                duplicate.is_none(),
+                "duplicate builtin tool path: {duplicate:?}"
+            );
+
+            let duplicate = plane
+                .register_with_provenance_and_success_observer(
+                    ToolPath::from("edit"),
+                    ToolProvenance::Builtin,
+                    loong_tools::file::EditTool::new("edit"),
+                    |_ctx, output: &loong_tools::file::EditOutput| {
+                        // Preview events are an app-runtime side channel; the
+                        // concrete tool only returns typed before/after data.
+                        crate::tools::file::emit_file_change_preview(
+                            output.path.as_path(),
+                            crate::tools::runtime_events::ToolFileChangeKind::Edit,
+                            Some(output.before.as_str()),
+                            output.after.as_str(),
+                        );
+                        Ok::<(), ToolExecutionError>(())
+                    },
                 )
                 .err();
             debug_assert!(

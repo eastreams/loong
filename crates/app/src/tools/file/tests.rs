@@ -950,6 +950,77 @@ async fn kernel_routed_tool_invoke_file_write_uses_typed_tool_registry() {
 }
 
 #[tokio::test]
+async fn kernel_routed_file_edit_uses_typed_tool_registry_and_preview_observer() {
+    let base = unique_temp_dir("loong-file-edit-typed-registry");
+    let root = base.join("root");
+    fs::create_dir_all(&root).expect("create root");
+    let target = root.join("notes.txt");
+    fs::write(&target, "old line\nshared\n").expect("write fixture");
+
+    let config = ToolRuntimeConfig {
+        file_root: Some(root.clone()),
+        ..ToolRuntimeConfig::default()
+    };
+    let request = make_edit_blocks_request("notes.txt", &[("old line", "new line")]);
+    let sink = Arc::new(RecordingRuntimeSink::default());
+    let runtime_sink: Arc<dyn ToolRuntimeEventSink> = sink.clone();
+
+    let (outcome, audit) = with_tool_runtime_event_sink(
+        runtime_sink,
+        execute_request_via_kernel_tool_registry(request, &config),
+    )
+    .await
+    .expect("file.edit should execute through typed registry");
+
+    assert_eq!(outcome.status, "ok");
+    assert_eq!(outcome.payload["tool_name"], json!("edit"));
+    assert_eq!(outcome.payload["replacements_made"], json!(1));
+    assert_eq!(outcome.payload["edit_blocks_applied"], json!(1));
+    assert_eq!(
+        fs::read_to_string(&target).expect("read edited file"),
+        "new line\nshared\n"
+    );
+
+    let events = lock_runtime_events(&sink);
+    let preview = events.iter().find_map(|event| {
+        if let ToolRuntimeEvent::FileChangePreview(preview) = event {
+            return Some(preview);
+        }
+
+        None
+    });
+    let preview = preview.expect("typed edit should emit preview event");
+    let preview_text = preview.preview.as_deref().unwrap_or_default();
+    assert_eq!(preview.kind, ToolFileChangeKind::Edit);
+    assert_eq!(preview.added_lines, 1);
+    assert_eq!(preview.removed_lines, 1);
+    assert!(preview_text.contains("-old line"));
+    assert!(preview_text.contains("+new line"));
+
+    let events = audit.snapshot();
+    assert!(events.iter().any(|event| {
+        matches!(
+            &event.kind,
+            loong_kernel::AuditEventKind::ToolInvocation {
+                path_display,
+                outcome: loong_kernel::InvocationOutcome::Completed,
+                ..
+            } if path_display == "edit"
+        )
+    }));
+    assert!(!events.iter().any(|event| {
+        matches!(
+            &event.kind,
+            loong_kernel::AuditEventKind::PlaneInvoked {
+                primary_adapter,
+                ..
+            } if primary_adapter.starts_with("legacy:")
+        )
+    }));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[tokio::test]
 async fn kernel_routed_file_write_rejects_path_escape_through_typed_policy() {
     let base = unique_temp_dir("loong-file-write-typed-path-policy");
     let root = base.join("root");
