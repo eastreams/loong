@@ -102,9 +102,10 @@ execution audit 由 `ToolInvocation::invoke(payload)` / granted action run 边�
 - legacy fallback：继续记录 `PlaneInvoked`，直到该 tool 迁入 typed plane；typed 测试不再
   接受 `PlaneInvoked | ToolInvocation` 这种宽松断言。
 
-截至 2026-07-11，`Kernel::grant_tool_invocation` 内部记录部分 deny audit，这是迁移期 helper 行为。目标是
-generic grant 负责所有 action authorization audit；tool invocation execution audit 留在
-`ToolInvocation::invoke(payload)` 的 grant consumption 边界。
+当前 tool invocation 已经通过 `Kernel::grant_action` 请求
+`ToolInvocationAction` grant；不要恢复 `grant_tool_invocation` 这类 tool-specific receipt
+helper。目标仍然是 generic grant 负责所有 action authorization audit；tool invocation
+execution audit 留在 `ToolInvocation::invoke(payload)` 的 grant consumption 边界。
 
 
 ## 当前实现偏差
@@ -122,8 +123,9 @@ generic grant 负责所有 action authorization audit；tool invocation executio
 - `crates/kernel/src/kernel.rs` 已经用 generic `grant_action` 授权 tool invocation action；
   但 `record_tool_invocation` 仍记录 contracts 里的 typed-tool event。目标是让 kernel
   只记录 sink 能理解的通用事件，tool execution outcome 的 schema 归 app runtime。
-- `crates/app/src/tools/mod.rs` 里 typed dispatch、grant、invoke、audit 逻辑还堆在
-  `execute_kernel_tool_request`。目标是 app orchestration 拥有这段边界，但函数应更聚焦。
+- `crates/app/src/tools/mod.rs` 的 `execute_kernel_tool_request` 仍是 legacy envelope
+  ingress。typed branch 已经先走 `AppExecutionContext::tool(...).invoke(...)`；目标是让
+  持有 context 的调用点直接进入该 API，并把 legacy fallback 留在最后的未迁移边界。
 - `crates/app/src/tools/routing.rs` 的 context-aware direct read 已进入
   `ctx.tool("read")?.invoke(...)`，无 context 的 `execute_tool_core_with_config(read)`
   已 fail closed。后续统一 ctx 时可以删除这条 no-context read 入口的过渡错误。

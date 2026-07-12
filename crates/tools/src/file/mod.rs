@@ -1,6 +1,10 @@
 use loong_kernel::access::fs::FsAccessError;
 use serde_json::Value;
 
+// Concrete file tools live here, but filesystem effects do not. Each tool only
+// parses payload, calls ctx.access().fs(), and shapes typed output; read/write,
+// directory traversal, and content search side effects are owned by
+// loong_access::fs through granted fs actions.
 mod edit;
 mod read;
 mod search;

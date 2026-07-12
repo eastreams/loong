@@ -12,6 +12,10 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      `write` / `edit` 已 fail closed；
    - `config.import` 仍未迁入 access-backed action 路径，且仍依赖 `FilePolicyExtension`
      的迁移期 guard；
+   - 不要只把 `config.import` 入口注册进 typed plane 来假装迁移：它调用的
+     `migration::*` / `config::load` / `config::write` 当前会直接读写、备份、扫描文件。
+     迁移完成线必须先把这些 I/O 抽到 access-backed port 或等价的 granted action run
+     边界；
    - `glob.search` / `content.search` 的 kernel-routed 调用已注册为 typed read-family
      path；无 context direct 调用已 fail closed，旧 app-local search helper 已删除；
    - 逐个工具迁移：concrete tool 只解析 payload、调用 `ctx.access()` / `ctx.tool()`、
