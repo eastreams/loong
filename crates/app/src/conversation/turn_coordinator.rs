@@ -64,8 +64,6 @@ mod state;
 #[path = "turn_coordinator/support.rs"]
 mod support;
 
-#[cfg(test)]
-use crate::AppContext;
 use crate::CliResult;
 use crate::acp::{
     AcpConversationTurnEntryDecision, AcpConversationTurnOptions,
@@ -176,9 +174,7 @@ use super::plan_verifier::{
     PlanVerificationContext, PlanVerificationFailureCode, PlanVerificationPolicy,
     PlanVerificationReport, verify_output,
 };
-use super::runtime::{
-    AsyncDelegateSpawnRequest, ConversationRuntime, DefaultConversationRuntime, SessionContext,
-};
+use super::runtime::{AsyncDelegateSpawnRequest, ConversationRuntime, DefaultConversationRuntime};
 use super::runtime_binding::{ConversationRuntimeBinding, OwnedConversationRuntimeBinding};
 use super::safe_lane_failure::{
     SafeLaneFailureCode, SafeLaneFailureRouteDecision, SafeLaneFailureRouteSource,
@@ -200,6 +196,7 @@ use super::turn_budget::{
     EscalatingAttemptBudget, SafeLaneBackpressureBudget, SafeLaneContinuationBudgetDecision,
     SafeLaneFailureRouteReason, SafeLaneReplanBudget,
 };
+use crate::AppContext;
 
 type DefaultTurnRuntime = DefaultConversationRuntime<Box<dyn ConversationContextEngine>>;
 #[cfg(feature = "memory-sqlite")]

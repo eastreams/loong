@@ -6,7 +6,7 @@ use super::support::{
 use super::target::{prepare_conversation_kernel_tool_request, resolve_effective_tool_metadata};
 use super::visibility::provider_tool_denial_reason;
 use super::{
-    AppToolDispatcher, AutonomyTurnBudgetState, ConversationRuntimeBinding, SessionContext,
+    AppContext, AppToolDispatcher, AutonomyTurnBudgetState, ConversationRuntimeBinding,
     SessionStoreConfig, ToolDecisionTelemetry, ToolExecutionKind, ToolExecutionPreflight,
     ToolIntent, ToolPreflightOutcome, TurnResult, effective_denied_tool_name,
 };
@@ -33,7 +33,7 @@ pub(super) struct PreparedToolIntentFailure {
 
 #[derive(Clone, Copy)]
 pub(super) struct ToolIntentPreparationHarness<'a, 'b, D: AppToolDispatcher + ?Sized> {
-    session_context: &'a SessionContext,
+    session_context: &'a AppContext,
     memory_config: &'a SessionStoreConfig,
     app_dispatcher: &'a D,
     binding: ConversationRuntimeBinding<'b>,
@@ -43,7 +43,7 @@ pub(super) struct ToolIntentPreparationHarness<'a, 'b, D: AppToolDispatcher + ?S
 
 impl<'a, 'b, D: AppToolDispatcher + ?Sized> ToolIntentPreparationHarness<'a, 'b, D> {
     pub(super) fn new(
-        session_context: &'a SessionContext,
+        session_context: &'a AppContext,
         memory_config: &'a SessionStoreConfig,
         app_dispatcher: &'a D,
         binding: ConversationRuntimeBinding<'b>,

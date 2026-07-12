@@ -120,6 +120,9 @@ async fn execute_file_read_with_test_context(
         )),
         token,
         config.clone(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )?;
     let execution_context =
         app_ctx.for_invocation(ExecutionPlane::Tool, PlaneTier::Core, None, config)?;
@@ -252,6 +255,9 @@ async fn execute_request_via_kernel_tool_registry_with_capabilities_result(
         )),
         token,
         config.clone(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("test app context");
     let outcome = crate::tools::execute_kernel_tool_request(&app_ctx, request, false).await;
@@ -940,6 +946,9 @@ async fn context_direct_write_uses_typed_tool_registry() {
         )),
         token,
         config.clone(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build app context");
     let execution_context = app_ctx

@@ -234,7 +234,7 @@ impl ConversationRuntime for TraitDefaultToolViewRuntime {
     async fn build_messages(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
+        _app_ctx: &crate::AppContext,
         _include_system_prompt: bool,
         _tool_view: &crate::tools::ToolView,
         _binding: ConversationRuntimeBinding<'_>,
@@ -368,6 +368,7 @@ impl crate::conversation::AsyncDelegateSpawner for LocalChildRuntimeAsyncDelegat
         request: crate::conversation::AsyncDelegateSpawnRequest,
     ) -> Result<(), String> {
         let crate::conversation::AsyncDelegateSpawnRequest {
+            app_ctx,
             child_session_id,
             parent_session_id,
             task,
@@ -417,6 +418,7 @@ impl crate::conversation::AsyncDelegateSpawner for LocalChildRuntimeAsyncDelegat
                 let _ = super::turn_coordinator::run_started_delegate_child_turn_with_runtime(
                     &self.config,
                     runtime.as_ref(),
+                    &app_ctx,
                     &child_session_id_for_spawn,
                     &parent_session_id_for_spawn,
                     label,
@@ -484,16 +486,18 @@ impl ConversationRuntime for ApprovalFinalizationConflictRuntime {
     fn session_context(
         &self,
         config: &LoongConfig,
+        _app_ctx: &crate::AppContext,
         session_id: &str,
         binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<SessionContext> {
+    ) -> CliResult<AppContext> {
         let finalized = self.finalize_request_out_of_band_if_executing()?;
 
         if finalized {
             return Err(self.replay_error.clone());
         }
 
-        self.inner.session_context(config, session_id, binding)
+        self.inner
+            .session_context(config, _app_ctx, session_id, binding)
     }
 
     fn tool_view(
@@ -508,31 +512,25 @@ impl ConversationRuntime for ApprovalFinalizationConflictRuntime {
     async fn build_context(
         &self,
         config: &LoongConfig,
-        session_id: &str,
+        app_ctx: &crate::AppContext,
         include_system_prompt: bool,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<AssembledConversationContext> {
         self.inner
-            .build_context(config, session_id, include_system_prompt, binding)
+            .build_context(config, app_ctx, include_system_prompt, binding)
             .await
     }
 
     async fn build_messages(
         &self,
         config: &LoongConfig,
-        session_id: &str,
+        app_ctx: &crate::AppContext,
         include_system_prompt: bool,
         tool_view: &crate::tools::ToolView,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Vec<Value>> {
         self.inner
-            .build_messages(
-                config,
-                session_id,
-                include_system_prompt,
-                tool_view,
-                binding,
-            )
+            .build_messages(config, app_ctx, include_system_prompt, tool_view, binding)
             .await
     }
 
@@ -1533,7 +1531,7 @@ impl ConversationRuntime for FakeRuntime {
     async fn build_messages(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
+        _app_ctx: &crate::AppContext,
         include_system_prompt: bool,
         tool_view: &crate::tools::ToolView,
         _binding: ConversationRuntimeBinding<'_>,
@@ -1555,14 +1553,14 @@ impl ConversationRuntime for FakeRuntime {
     async fn build_context(
         &self,
         _config: &LoongConfig,
-        session_id: &str,
+        app_ctx: &crate::AppContext,
         include_system_prompt: bool,
         _binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<AssembledConversationContext> {
         self.build_context_calls
             .lock()
             .expect("build context lock")
-            .push((session_id.to_owned(), include_system_prompt));
+            .push((app_ctx.session_id.clone(), include_system_prompt));
         if let Some(error) = self.build_context_error.as_ref() {
             return Err(error.clone());
         }
@@ -1893,6 +1891,9 @@ fn test_app_context_with_memory(agent_id: &str, memory_config: &SessionStoreConf
         )),
         token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build conversation test app context")
 }
@@ -2253,9 +2254,22 @@ fn effective_tool_request(request: &ToolCoreRequest) -> (String, &Value) {
 fn autonomy_runtime_session_context(
     session_id: impl Into<String>,
     config: &LoongConfig,
-) -> SessionContext {
+) -> AppContext {
     let tool_view = crate::tools::runtime_tool_view_from_loong_config(config);
-    SessionContext::root_with_tool_view(session_id, tool_view)
+    crate::test_support::app_context_for_session(session_id, tool_view)
+}
+
+// Context assembly consumes session-owned state; persistence tests mirror the coordinator boundary here.
+fn load_test_session_context<R: ConversationRuntime + ?Sized>(
+    runtime: &R,
+    config: &LoongConfig,
+    app_ctx: &AppContext,
+    session_id: &str,
+    binding: ConversationRuntimeBinding<'_>,
+) -> AppContext {
+    runtime
+        .session_context(config, app_ctx, session_id, binding)
+        .expect("load test session context")
 }
 
 fn write_test_external_skill(
@@ -2274,18 +2288,15 @@ fn write_test_external_skill(
 #[tokio::test]
 async fn default_runtime_supports_injected_context_engine() {
     let runtime = DefaultConversationRuntime::with_context_engine(StubContextEngine);
-    let binding = crate::conversation::ConversationRuntimeBinding::AdvisoryOnly;
+    let binding = ConversationRuntimeBinding::AdvisoryOnly;
+    let config = test_config();
     let tool_view = runtime
-        .tool_view(&test_config(), "session-injected", binding)
+        .tool_view(&config, "session-injected", binding)
         .expect("default runtime tool view");
+    let app_ctx =
+        crate::test_support::app_context_for_session("session-injected", tool_view.clone());
     let messages = runtime
-        .build_messages(
-            &test_config(),
-            "session-injected",
-            true,
-            &tool_view,
-            binding,
-        )
+        .build_messages(&config, &app_ctx, true, &tool_view, binding)
         .await
         .expect("build messages via injected context engine");
 
@@ -2300,18 +2311,15 @@ async fn default_runtime_can_resolve_context_engine_from_registry() {
         .expect("register context engine");
     let runtime = DefaultConversationRuntime::from_engine_id(Some("stub-registry"))
         .expect("resolve context engine from registry");
-    let binding = crate::conversation::ConversationRuntimeBinding::AdvisoryOnly;
+    let binding = ConversationRuntimeBinding::AdvisoryOnly;
+    let config = test_config();
     let tool_view = runtime
-        .tool_view(&test_config(), "session-registry", binding)
+        .tool_view(&config, "session-registry", binding)
         .expect("default runtime tool view");
+    let app_ctx =
+        crate::test_support::app_context_for_session("session-registry", tool_view.clone());
     let messages = runtime
-        .build_messages(
-            &test_config(),
-            "session-registry",
-            true,
-            &tool_view,
-            binding,
-        )
+        .build_messages(&config, &app_ctx, true, &tool_view, binding)
         .await
         .expect("build messages via registry context engine");
 
@@ -2333,8 +2341,9 @@ async fn default_runtime_prefers_configured_context_engine_when_env_not_set() {
     let tool_view = runtime
         .tool_view(&config, "session-config", binding)
         .expect("configured runtime tool view");
+    let app_ctx = crate::test_support::app_context_for_session("session-config", tool_view.clone());
     let messages = runtime
-        .build_messages(&config, "session-config", true, &tool_view, binding)
+        .build_messages(&config, &app_ctx, true, &tool_view, binding)
         .await
         .expect("build messages via configured context engine");
 
@@ -2369,13 +2378,10 @@ async fn default_runtime_applies_turn_middlewares_in_declared_order() {
         ],
     );
     let binding = ConversationRuntimeBinding::AdvisoryOnly;
+    let config = test_config();
+    let app_ctx = autonomy_runtime_session_context("session-turn-middleware-order", &config);
     let assembled = runtime
-        .build_context(
-            &test_config(),
-            "session-turn-middleware-order",
-            true,
-            binding,
-        )
+        .build_context(&config, &app_ctx, true, binding)
         .await
         .expect("build context through turn middleware chain");
 
@@ -2523,9 +2529,10 @@ async fn default_runtime_build_messages_respects_restricted_tool_view() {
     let runtime = DefaultConversationRuntime::default();
     let view = crate::tools::ToolView::from_tool_names(["file.read"]);
     let binding = ConversationRuntimeBinding::AdvisoryOnly;
+    let app_ctx = crate::test_support::app_context_for_session("noop-session", view.clone());
 
     let messages = runtime
-        .build_messages(&test_config(), "noop-session", true, &view, binding)
+        .build_messages(&test_config(), &app_ctx, true, &view, binding)
         .await
         .expect("build messages");
 
@@ -2732,9 +2739,14 @@ fn default_runtime_session_context_uses_persisted_parent_session_id() {
     .expect("create child session");
 
     let runtime = DefaultConversationRuntime::default();
+    let app_ctx = crate::test_support::app_context_for_session(
+        "child-session",
+        crate::tools::runtime_tool_view(),
+    );
     let session_context = runtime
         .session_context(
             &config,
+            &app_ctx,
             "child-session",
             ConversationRuntimeBinding::AdvisoryOnly,
         )
@@ -2761,15 +2773,19 @@ fn default_runtime_session_context_errors_when_session_repository_is_unavailable
     config.memory.sqlite_path = db_path.display().to_string();
 
     let runtime = DefaultConversationRuntime::default();
-    let error = runtime
-        .session_context(
-            &config,
-            "root-session",
-            ConversationRuntimeBinding::AdvisoryOnly,
-        )
-        .expect_err(
-            "session context should fail closed when the session repository is unavailable",
-        );
+    let app_ctx = crate::test_support::app_context_for_session(
+        "root-session",
+        crate::tools::runtime_tool_view(),
+    );
+    let error = match runtime.session_context(
+        &config,
+        &app_ctx,
+        "root-session",
+        ConversationRuntimeBinding::AdvisoryOnly,
+    ) {
+        Ok(_) => panic!("session context should fail closed when repository is unavailable"),
+        Err(error) => error,
+    };
 
     assert!(
         error.contains("open session repository failed"),
@@ -2834,9 +2850,14 @@ fn default_runtime_session_context_uses_persisted_subagent_profile() {
     .expect("append delegate event");
 
     let runtime = DefaultConversationRuntime::default();
+    let app_ctx = crate::test_support::app_context_for_session(
+        "child-session",
+        crate::tools::runtime_tool_view(),
+    );
     let session_context = runtime
         .session_context(
             &config,
+            &app_ctx,
             "child-session",
             ConversationRuntimeBinding::AdvisoryOnly,
         )
@@ -2901,9 +2922,14 @@ fn default_runtime_session_context_derives_subagent_profile_for_legacy_child_wit
     .expect("create child session");
 
     let runtime = DefaultConversationRuntime::default();
+    let app_ctx = crate::test_support::app_context_for_session(
+        "child-session",
+        crate::tools::runtime_tool_view(),
+    );
     let session_context = runtime
         .session_context(
             &config,
+            &app_ctx,
             "child-session",
             ConversationRuntimeBinding::AdvisoryOnly,
         )
@@ -3029,7 +3055,7 @@ fn session_context_keeps_execution_and_contract_in_sync_when_child_contract_is_o
         },
         ..Default::default()
     };
-    let session_context = SessionContext::child(
+    let session_context = crate::test_support::app_context_for_child(
         "child-session",
         "root-session",
         crate::tools::delegate_child_tool_view_for_config(&crate::config::ToolConfig::default()),
@@ -3094,7 +3120,7 @@ fn session_context_with_subagent_execution_preserves_prior_runtime_narrowing() {
         },
         ..Default::default()
     };
-    let session_context = SessionContext::child(
+    let session_context = crate::test_support::app_context_for_child(
         "child-session",
         "root-session",
         crate::tools::delegate_child_tool_view_for_config(&crate::config::ToolConfig::default()),
@@ -3140,7 +3166,7 @@ fn session_context_with_subagent_execution_promotes_execution_runtime_narrowing_
         identity: None,
         profile: None,
     };
-    let session_context = SessionContext::child(
+    let session_context = crate::test_support::app_context_for_child(
         "child-session",
         "root-session",
         crate::tools::delegate_child_tool_view_for_config(&crate::config::ToolConfig::default()),
@@ -3176,7 +3202,7 @@ fn resolved_subagent_contract_uses_effective_runtime_narrowing_over_stale_contra
         },
         ..crate::tools::runtime_config::ToolRuntimeNarrowing::default()
     };
-    let mut session_context = SessionContext::child(
+    let mut session_context = crate::test_support::app_context_for_child(
         "child-session",
         "root-session",
         crate::tools::delegate_child_tool_view_for_config(&crate::config::ToolConfig::default()),
@@ -3267,9 +3293,11 @@ async fn default_runtime_delegates_subagent_lifecycle_to_context_engine_with_ker
 #[tokio::test]
 async fn default_runtime_build_context_applies_system_prompt_addition() {
     let runtime = DefaultConversationRuntime::with_context_engine(StubSystemPromptAdditionEngine);
-    let binding = crate::conversation::ConversationRuntimeBinding::AdvisoryOnly;
+    let binding = ConversationRuntimeBinding::AdvisoryOnly;
+    let config = test_config();
+    let app_ctx = autonomy_runtime_session_context("session-system-addition", &config);
     let assembled = runtime
-        .build_context(&test_config(), "session-system-addition", true, binding)
+        .build_context(&config, &app_ctx, true, binding)
         .await
         .expect("build context with system prompt addition");
 
@@ -3320,10 +3348,13 @@ async fn default_runtime_build_context_merges_delegate_runtime_contract_with_sys
         sample_delegate_runtime_narrowing(),
     );
     let runtime = DefaultConversationRuntime::with_context_engine(StubSystemPromptAdditionEngine);
-    let binding = crate::conversation::ConversationRuntimeBinding::AdvisoryOnly;
+    let binding = ConversationRuntimeBinding::AdvisoryOnly;
+    let app_ctx = autonomy_runtime_session_context(&child_session_id, &config);
+    let session_context =
+        load_test_session_context(&runtime, &config, &app_ctx, &child_session_id, binding);
 
     let assembled = runtime
-        .build_context(&config, &child_session_id, true, binding)
+        .build_context(&config, &session_context, true, binding)
         .await
         .expect("build context with delegate runtime contract");
 
@@ -3376,10 +3407,13 @@ async fn default_runtime_build_context_includes_delegate_profile_guidance_before
         Some(crate::conversation::DelegateBuiltinProfile::Plan),
     );
     let runtime = DefaultConversationRuntime::with_context_engine(StubSystemPromptAdditionEngine);
-    let binding = crate::conversation::ConversationRuntimeBinding::AdvisoryOnly;
+    let binding = ConversationRuntimeBinding::AdvisoryOnly;
+    let app_ctx = autonomy_runtime_session_context(&child_session_id, &config);
+    let session_context =
+        load_test_session_context(&runtime, &config, &app_ctx, &child_session_id, binding);
 
     let assembled = runtime
-        .build_context(&config, &child_session_id, true, binding)
+        .build_context(&config, &session_context, true, binding)
         .await
         .expect("build context with delegate profile guidance");
 
@@ -3437,14 +3471,12 @@ async fn default_runtime_kernel_stage_hydration_still_applies_system_prompt_addi
         "default-runtime-kernel-stage-hydration-tool-view",
         &runtime_config,
     );
+    let binding = ConversationRuntimeBinding::Context(&app_ctx);
+    let session_context =
+        load_test_session_context(&runtime, &config, &app_ctx, &child_session_id, binding);
 
     let assembled = runtime
-        .build_context(
-            &config,
-            &child_session_id,
-            true,
-            ConversationRuntimeBinding::Context(&app_ctx),
-        )
+        .build_context(&config, &session_context, true, binding)
         .await
         .expect("build app context with staged hydration and runtime middlewares");
 
@@ -3499,10 +3531,12 @@ async fn default_runtime_kernel_stage_hydration_still_applies_system_prompt_addi
 async fn default_runtime_build_context_does_not_add_delegate_runtime_contract_for_unpersisted_session()
  {
     let runtime = DefaultConversationRuntime::default();
-    let binding = crate::conversation::ConversationRuntimeBinding::AdvisoryOnly;
+    let binding = ConversationRuntimeBinding::AdvisoryOnly;
+    let config = test_config();
+    let app_ctx = autonomy_runtime_session_context("root-session-no-contract", &config);
 
     let assembled = runtime
-        .build_context(&test_config(), "root-session-no-contract", true, binding)
+        .build_context(&config, &app_ctx, true, binding)
         .await
         .expect("build context for root session");
 
@@ -3534,10 +3568,18 @@ async fn default_runtime_build_context_does_not_add_delegate_runtime_contract_fo
     .expect("create root session");
 
     let runtime = DefaultConversationRuntime::default();
-    let binding = crate::conversation::ConversationRuntimeBinding::AdvisoryOnly;
+    let binding = ConversationRuntimeBinding::AdvisoryOnly;
+    let app_ctx = autonomy_runtime_session_context("root-session-no-contract", &config);
+    let session_context = load_test_session_context(
+        &runtime,
+        &config,
+        &app_ctx,
+        "root-session-no-contract",
+        binding,
+    );
 
     let assembled = runtime
-        .build_context(&config, "root-session-no-contract", true, binding)
+        .build_context(&config, &session_context, true, binding)
         .await
         .expect("build context for persisted root session");
 
@@ -3560,10 +3602,13 @@ async fn default_runtime_build_context_skips_delegate_runtime_contract_for_empty
         crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
     );
     let runtime = DefaultConversationRuntime::default();
-    let binding = crate::conversation::ConversationRuntimeBinding::AdvisoryOnly;
+    let binding = ConversationRuntimeBinding::AdvisoryOnly;
+    let app_ctx = autonomy_runtime_session_context(&child_session_id, &config);
+    let session_context =
+        load_test_session_context(&runtime, &config, &app_ctx, &child_session_id, binding);
 
     let assembled = runtime
-        .build_context(&config, &child_session_id, true, binding)
+        .build_context(&config, &session_context, true, binding)
         .await
         .expect("build context for child session");
 
@@ -3593,10 +3638,13 @@ async fn default_runtime_build_context_uses_effective_private_host_policy_in_del
         },
     );
     let runtime = DefaultConversationRuntime::default();
-    let binding = crate::conversation::ConversationRuntimeBinding::AdvisoryOnly;
+    let binding = ConversationRuntimeBinding::AdvisoryOnly;
+    let app_ctx = autonomy_runtime_session_context(&child_session_id, &config);
+    let session_context =
+        load_test_session_context(&runtime, &config, &app_ctx, &child_session_id, binding);
 
     let assembled = runtime
-        .build_context(&config, &child_session_id, true, binding)
+        .build_context(&config, &session_context, true, binding)
         .await
         .expect("build context for child session");
 
@@ -3630,10 +3678,13 @@ async fn default_runtime_build_context_surfaces_fail_closed_allowlist_intersecti
         },
     );
     let runtime = DefaultConversationRuntime::default();
-    let binding = crate::conversation::ConversationRuntimeBinding::AdvisoryOnly;
+    let binding = ConversationRuntimeBinding::AdvisoryOnly;
+    let app_ctx = autonomy_runtime_session_context(&child_session_id, &config);
+    let session_context =
+        load_test_session_context(&runtime, &config, &app_ctx, &child_session_id, binding);
 
     let assembled = runtime
-        .build_context(&config, &child_session_id, true, binding)
+        .build_context(&config, &session_context, true, binding)
         .await
         .expect("build context for child session");
 
@@ -3672,14 +3723,13 @@ async fn default_runtime_build_context_matches_builtin_summary_projection() {
         .expect("append turn 3 should succeed");
     append_session_turn_direct(&session_id, "assistant", "turn 4", &runtime_config)
         .expect("append turn 4 should succeed");
+    let app_ctx = autonomy_runtime_session_context(&session_id, &config);
+    let binding = ConversationRuntimeBinding::AdvisoryOnly;
+    let session_context =
+        load_test_session_context(&runtime, &config, &app_ctx, &session_id, binding);
 
     let assembled = runtime
-        .build_context(
-            &config,
-            &session_id,
-            true,
-            ConversationRuntimeBinding::AdvisoryOnly,
-        )
+        .build_context(&config, &session_context, true, binding)
         .await
         .expect("build context from default runtime");
     let provider_messages = crate::provider::build_projected_context_for_session_with_binding(
@@ -3744,14 +3794,13 @@ async fn default_runtime_build_context_rehydrates_runtime_self_continuity_when_l
     repo.create_session(root_session)
         .expect("create root session");
     append_runtime_self_continuity_refresh_event(&repo, &session_id, identity_text);
+    let app_ctx = autonomy_runtime_session_context(&session_id, &config);
+    let binding = ConversationRuntimeBinding::AdvisoryOnly;
+    let session_context =
+        load_test_session_context(&runtime, &config, &app_ctx, &session_id, binding);
 
     let assembled = runtime
-        .build_context(
-            &config,
-            &session_id,
-            true,
-            ConversationRuntimeBinding::AdvisoryOnly,
-        )
+        .build_context(&config, &session_context, true, binding)
         .await
         .expect("build context from stored continuity");
 
@@ -3817,14 +3866,13 @@ async fn default_runtime_build_context_rehydrates_delegate_child_runtime_self_co
         &root_session_id,
         identity_text,
     );
+    let app_ctx = autonomy_runtime_session_context(&child_session_id, &config);
+    let binding = ConversationRuntimeBinding::AdvisoryOnly;
+    let session_context =
+        load_test_session_context(&runtime, &config, &app_ctx, &child_session_id, binding);
 
     let assembled = runtime
-        .build_context(
-            &config,
-            &child_session_id,
-            true,
-            ConversationRuntimeBinding::AdvisoryOnly,
-        )
+        .build_context(&config, &session_context, true, binding)
         .await
         .expect("build child context from inherited continuity");
 
@@ -3871,13 +3919,11 @@ async fn default_runtime_build_context_prefers_live_identity_over_stored_runtime
     append_runtime_self_continuity_refresh_event(&repo, &session_id, stored_identity_text);
 
     let app_ctx = test_app_context(&session_id);
+    let binding = ConversationRuntimeBinding::Context(&app_ctx);
+    let session_context =
+        load_test_session_context(&runtime, &config, &app_ctx, &session_id, binding);
     let assembled = runtime
-        .build_context(
-            &config,
-            &session_id,
-            true,
-            ConversationRuntimeBinding::Context(&app_ctx),
-        )
+        .build_context(&config, &session_context, true, binding)
         .await
         .expect("build context with live identity");
 
@@ -3929,13 +3975,11 @@ async fn default_runtime_build_context_rehydrates_missing_session_profile_from_s
     append_runtime_self_continuity_refresh_event(&repo, &session_id, stored_identity_text);
 
     let app_ctx = test_app_context(&session_id);
+    let binding = ConversationRuntimeBinding::Context(&app_ctx);
+    let session_context =
+        load_test_session_context(&runtime, &config, &app_ctx, &session_id, binding);
     let assembled = runtime
-        .build_context(
-            &config,
-            &session_id,
-            true,
-            ConversationRuntimeBinding::Context(&app_ctx),
-        )
+        .build_context(&config, &session_context, true, binding)
         .await
         .expect("build context with live identity and stored profile");
 
@@ -3977,14 +4021,13 @@ async fn default_runtime_build_context_explicit_builtin_system_preserves_profile
     let runtime_config = session_store_config_from_config(&config);
     append_session_turn_direct(&session_id, "assistant", "turn 1", &runtime_config)
         .expect("append turn should succeed");
+    let app_ctx = autonomy_runtime_session_context(&session_id, &config);
+    let binding = ConversationRuntimeBinding::AdvisoryOnly;
+    let session_context =
+        load_test_session_context(&runtime, &config, &app_ctx, &session_id, binding);
 
     let assembled = runtime
-        .build_context(
-            &config,
-            &session_id,
-            true,
-            ConversationRuntimeBinding::AdvisoryOnly,
-        )
+        .build_context(&config, &session_context, true, binding)
         .await
         .expect("build context from default runtime");
     let provider_messages = crate::provider::build_projected_context_for_session_with_binding(
@@ -4113,6 +4156,7 @@ async fn handle_turn_with_runtime_records_runtime_self_continuity_before_compact
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             &session_id,
             "hello",
             ProviderErrorMode::Propagate,
@@ -4173,6 +4217,7 @@ async fn handle_turn_with_runtime_records_task_progress_event() {
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             &session_id,
             "check long-running status surfaces",
             ProviderErrorMode::Propagate,
@@ -4251,6 +4296,7 @@ async fn handle_turn_with_runtime_records_verifying_task_progress_before_complet
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             &session_id,
             "verify before completion",
             ProviderErrorMode::Propagate,
@@ -4342,14 +4388,13 @@ async fn default_runtime_build_context_fail_open_memory_derivation_preserves_rec
         .expect("append turn 2 should succeed");
     append_session_turn_direct(&session_id, "user", "turn 3", &runtime_config)
         .expect("append turn 3 should succeed");
+    let app_ctx = autonomy_runtime_session_context(&session_id, &config);
+    let binding = ConversationRuntimeBinding::AdvisoryOnly;
+    let session_context =
+        load_test_session_context(&runtime, &config, &app_ctx, &session_id, binding);
 
     let assembled = runtime
-        .build_context(
-            &config,
-            &session_id,
-            true,
-            ConversationRuntimeBinding::AdvisoryOnly,
-        )
+        .build_context(&config, &session_context, true, binding)
         .await
         .expect("build context should stay available when memory derivation degrades");
 
@@ -4398,13 +4443,11 @@ async fn default_runtime_kernel_build_context_matches_builtin_summary_projection
 
     let app_ctx =
         test_app_context_with_memory("default-runtime-app-context-summary", &runtime_config);
+    let binding = ConversationRuntimeBinding::Context(&app_ctx);
+    let session_context =
+        load_test_session_context(&runtime, &config, &app_ctx, &session_id, binding);
     let assembled = runtime
-        .build_context(
-            &config,
-            &session_id,
-            true,
-            ConversationRuntimeBinding::Context(&app_ctx),
-        )
+        .build_context(&config, &session_context, true, binding)
         .await
         .expect("build app context from default runtime");
     let provider_messages =
@@ -4437,13 +4480,11 @@ async fn default_runtime_kernel_build_context_preserves_profile_projection() {
 
     let app_ctx =
         test_app_context_with_memory("default-runtime-app-context-profile", &runtime_config);
+    let binding = ConversationRuntimeBinding::Context(&app_ctx);
+    let session_context =
+        load_test_session_context(&runtime, &config, &app_ctx, &session_id, binding);
     let assembled = runtime
-        .build_context(
-            &config,
-            &session_id,
-            true,
-            ConversationRuntimeBinding::Context(&app_ctx),
-        )
+        .build_context(&config, &session_context, true, binding)
         .await
         .expect("build app context from default runtime");
     let provider_messages =
@@ -4489,14 +4530,13 @@ async fn default_runtime_build_context_with_registry_selected_system_keeps_runti
         .expect("append turn 2 should succeed");
     append_session_turn_direct(&session_id, "user", "turn 3", &runtime_config)
         .expect("append turn 3 should succeed");
+    let app_ctx = autonomy_runtime_session_context(&session_id, &config);
+    let binding = ConversationRuntimeBinding::AdvisoryOnly;
+    let session_context =
+        load_test_session_context(&runtime, &config, &app_ctx, &session_id, binding);
 
     let assembled = runtime
-        .build_context(
-            &config,
-            &session_id,
-            true,
-            ConversationRuntimeBinding::AdvisoryOnly,
-        )
+        .build_context(&config, &session_context, true, binding)
         .await
         .expect("build context with registry-selected system");
 
@@ -4562,14 +4602,13 @@ async fn default_runtime_build_context_with_recall_first_system_prioritizes_reca
         .expect("append turn 2 should succeed");
     append_session_turn_direct(&session_id, "user", "turn 3", &runtime_config)
         .expect("append turn 3 should succeed");
+    let app_ctx = autonomy_runtime_session_context(&session_id, &config);
+    let binding = ConversationRuntimeBinding::AdvisoryOnly;
+    let session_context =
+        load_test_session_context(&runtime, &config, &app_ctx, &session_id, binding);
 
     let assembled = runtime
-        .build_context(
-            &config,
-            &session_id,
-            true,
-            ConversationRuntimeBinding::AdvisoryOnly,
-        )
+        .build_context(&config, &session_context, true, binding)
         .await
         .expect("build context with recall-first system");
 
@@ -4634,13 +4673,11 @@ async fn default_runtime_kernel_build_context_emits_context_artifact_annotations
 
     let app_ctx =
         test_app_context_with_memory("default-runtime-app-context-artifacts", &runtime_config);
+    let binding = ConversationRuntimeBinding::Context(&app_ctx);
+    let session_context =
+        load_test_session_context(&runtime, &config, &app_ctx, &session_id, binding);
     let assembled = runtime
-        .build_context(
-            &config,
-            &session_id,
-            true,
-            ConversationRuntimeBinding::Context(&app_ctx),
-        )
+        .build_context(&config, &session_context, true, binding)
         .await
         .expect("build app context from default runtime");
 
@@ -4768,8 +4805,10 @@ async fn default_runtime_prefers_env_context_engine_over_config() {
     let tool_view = runtime
         .tool_view(&config, "session-env-priority", binding)
         .expect("env-selected runtime tool view");
+    let app_ctx =
+        crate::test_support::app_context_for_session("session-env-priority", tool_view.clone());
     let messages = runtime
-        .build_messages(&config, "session-env-priority", true, &tool_view, binding)
+        .build_messages(&config, &app_ctx, true, &tool_view, binding)
         .await
         .expect("build messages via env-selected context engine");
 
@@ -4822,6 +4861,7 @@ async fn handle_turn_with_runtime_success_with_kernel_runs_lifecycle_hooks() {
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "session-1",
             "hello",
             ProviderErrorMode::Propagate,
@@ -4906,6 +4946,7 @@ async fn handle_turn_with_runtime_success_without_kernel_skips_lifecycle_hooks()
     let reply = coordinator
         .handle_turn_with_runtime(
             &test_config(),
+            &test_app_context("advisory-conversation"),
             "session-1-no-kernel",
             "hello",
             ProviderErrorMode::Propagate,
@@ -4976,6 +5017,7 @@ async fn persist_turn_provider_turns_expose_typed_canonical_records() {
     coordinator
         .handle_turn_with_runtime(
             &test_config(),
+            &test_app_context("advisory-conversation"),
             "session-canonical-provider",
             "hello canonical memory",
             ProviderErrorMode::Propagate,
@@ -5028,6 +5070,7 @@ async fn handle_turn_with_runtime_keeps_provider_path_by_default_when_acp_enable
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "telegram:42",
             "hello from channel",
             ProviderErrorMode::Propagate,
@@ -5063,6 +5106,7 @@ async fn handle_turn_with_runtime_routes_explicit_acp_turns_through_acp() {
     let reply = coordinator
         .handle_turn_with_runtime_and_address_and_acp_options(
             &config,
+            &test_app_context("advisory-conversation"),
             &ConversationSessionAddress::from_session_id("telegram:42"),
             "hello from channel",
             ProviderErrorMode::Propagate,
@@ -5196,6 +5240,7 @@ async fn handle_turn_with_observer_routes_explicit_acp_turns_through_acp() {
     let reply = coordinator
         .handle_turn_with_address_and_acp_options_and_ingress_and_observer_with_manager(
             &config,
+            &test_app_context("advisory-conversation"),
             &address,
             "hello from channel",
             ProviderErrorMode::Propagate,
@@ -5261,6 +5306,7 @@ async fn persist_turn_explicit_acp_routing_exposes_typed_canonical_records() {
     let reply = coordinator
         .handle_turn_with_runtime_and_address_and_acp_options(
             &config,
+            &test_app_context("advisory-conversation"),
             &ConversationSessionAddress::from_session_id("telegram:typed-explicit"),
             "hello explicit canonical",
             ProviderErrorMode::Propagate,
@@ -5335,6 +5381,7 @@ async fn handle_turn_with_runtime_merges_additional_acp_bootstrap_mcp_servers_fr
     let reply = coordinator
         .handle_turn_with_runtime_and_address_and_acp_options(
             &config,
+            &test_app_context("advisory-conversation"),
             &ConversationSessionAddress::from_session_id("telegram:4242"),
             "hello with extra bootstrap mcp",
             ProviderErrorMode::Propagate,
@@ -5379,6 +5426,7 @@ async fn handle_turn_with_runtime_applies_acp_turn_provenance_metadata() {
     let reply = coordinator
         .handle_turn_with_runtime_and_address_and_acp_options(
             &config,
+            &test_app_context("advisory-conversation"),
             &ConversationSessionAddress::from_session_id("telegram:4242"),
             "hello with provenance",
             ProviderErrorMode::Propagate,
@@ -5452,6 +5500,7 @@ async fn handle_turn_with_runtime_applies_acp_working_directory_from_options() {
     let reply = coordinator
         .handle_turn_with_runtime_and_address_and_acp_options(
             &config,
+            &test_app_context("advisory-conversation"),
             &ConversationSessionAddress::from_session_id("telegram:4242"),
             "hello with working directory",
             ProviderErrorMode::Propagate,
@@ -5505,6 +5554,7 @@ async fn handle_turn_with_runtime_falls_back_to_dispatch_acp_working_directory()
     let reply = coordinator
         .handle_turn_with_runtime_and_address_and_acp_options(
             &config,
+            &test_app_context("advisory-conversation"),
             &ConversationSessionAddress::from_session_id("telegram:4343"),
             "hello with dispatch working directory",
             ProviderErrorMode::Propagate,
@@ -5555,6 +5605,7 @@ async fn handle_turn_with_runtime_uses_provider_path_when_acp_dispatch_is_disabl
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "telegram:424242",
             "hello provider path",
             ProviderErrorMode::Propagate,
@@ -5597,6 +5648,7 @@ async fn handle_turn_with_runtime_explicit_acp_request_bypasses_dispatch_gate() 
     let reply = coordinator
         .handle_turn_with_runtime_and_address_and_acp_options(
             &config,
+            &test_app_context("advisory-conversation"),
             &ConversationSessionAddress::from_session_id("telegram:424242"),
             "hello explicit acp path",
             ProviderErrorMode::Propagate,
@@ -5628,6 +5680,7 @@ async fn handle_turn_with_runtime_explicit_acp_request_fails_closed_when_acp_is_
     let reply = coordinator
         .handle_turn_with_runtime_and_address_and_acp_options(
             &config,
+            &test_app_context("advisory-conversation"),
             &ConversationSessionAddress::from_session_id("telegram:424242"),
             "hello explicit disabled acp path",
             ProviderErrorMode::InlineMessage,
@@ -5666,6 +5719,7 @@ async fn handle_turn_with_runtime_routes_only_agent_prefixed_sessions_when_confi
     let non_prefixed = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "telegram:600",
             "should stay on provider path",
             ProviderErrorMode::Propagate,
@@ -5679,6 +5733,7 @@ async fn handle_turn_with_runtime_routes_only_agent_prefixed_sessions_when_confi
     let prefixed = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "agent:codex:review-thread",
             "should route through ACP",
             ProviderErrorMode::Propagate,
@@ -5745,6 +5800,7 @@ async fn persist_turn_automatic_acp_routing_exposes_typed_canonical_records() {
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "agent:codex:review-thread",
             "hello automatic canonical",
             ProviderErrorMode::Propagate,
@@ -5808,6 +5864,7 @@ async fn handle_turn_with_runtime_automatic_acp_routing_bypasses_context_engine_
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "agent:codex:review-thread",
             "route automatically through ACP",
             ProviderErrorMode::Propagate,
@@ -5885,6 +5942,7 @@ async fn handle_turn_with_runtime_routes_only_allowed_channels_into_acp() {
     let telegram = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "telegram:100",
             "hello telegram",
             ProviderErrorMode::Propagate,
@@ -5924,6 +5982,7 @@ async fn handle_turn_with_runtime_routes_only_allowed_channels_into_acp() {
     let feishu = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "feishu:oc_123",
             "hello feishu",
             ProviderErrorMode::Propagate,
@@ -5963,6 +6022,7 @@ async fn handle_turn_with_runtime_and_address_routes_structured_channel_scope_in
     let reply = coordinator
         .handle_turn_with_runtime_and_address_and_acp_options(
             &config,
+            &test_app_context("advisory-conversation"),
             &address,
             "hello structured route",
             ProviderErrorMode::Propagate,
@@ -6042,6 +6102,7 @@ async fn handle_turn_with_runtime_and_address_enforces_account_and_thread_dispat
     let allowed_reply = coordinator
         .handle_turn_with_runtime_and_address_and_acp_options(
             &config,
+            &test_app_context("advisory-conversation"),
             &allowed,
             "hello allowed",
             ProviderErrorMode::Propagate,
@@ -6056,6 +6117,7 @@ async fn handle_turn_with_runtime_and_address_enforces_account_and_thread_dispat
     let blocked_reply = coordinator
         .handle_turn_with_runtime_and_address_and_acp_options(
             &config,
+            &test_app_context("advisory-conversation"),
             &blocked,
             "hello blocked",
             ProviderErrorMode::Propagate,
@@ -6112,6 +6174,7 @@ async fn handle_turn_with_runtime_formats_acp_errors_inline_when_requested() {
     let reply = coordinator
         .handle_turn_with_runtime_and_address_and_acp_options(
             &config,
+            &test_app_context("advisory-conversation"),
             &ConversationSessionAddress::from_session_id("feishu:oc_123"),
             "hello from feishu",
             ProviderErrorMode::InlineMessage,
@@ -6157,6 +6220,7 @@ async fn handle_turn_with_runtime_reuses_shared_acp_session_between_turns() {
     let first = coordinator
         .handle_turn_with_runtime_and_address_and_acp_options(
             &config,
+            &test_app_context("advisory-conversation"),
             &ConversationSessionAddress::from_session_id("telegram:4242"),
             "first",
             ProviderErrorMode::Propagate,
@@ -6172,6 +6236,7 @@ async fn handle_turn_with_runtime_reuses_shared_acp_session_between_turns() {
     let second = coordinator
         .handle_turn_with_runtime_and_address_and_acp_options(
             &config,
+            &test_app_context("advisory-conversation"),
             &ConversationSessionAddress::from_session_id("telegram:4242"),
             "second",
             ProviderErrorMode::Propagate,
@@ -6222,6 +6287,7 @@ async fn handle_turn_with_runtime_persists_acp_runtime_events_when_enabled() {
     let reply = coordinator
         .handle_turn_with_runtime_and_address_and_acp_options(
             &config,
+            &test_app_context("advisory-conversation"),
             &ConversationSessionAddress::from_session_id("telegram:777"),
             "hello runtime events",
             ProviderErrorMode::Propagate,
@@ -6331,6 +6397,7 @@ async fn handle_turn_with_runtime_streams_acp_runtime_events_to_external_sink_wi
     let reply = coordinator
         .handle_turn_with_runtime_and_address_and_acp_options(
             &config,
+            &test_app_context("advisory-conversation"),
             &ConversationSessionAddress::from_session_id("telegram:778"),
             "hello external runtime events",
             ProviderErrorMode::Propagate,
@@ -6400,6 +6467,7 @@ async fn handle_turn_with_runtime_streams_and_persists_acp_runtime_events_when_b
     let reply = coordinator
         .handle_turn_with_runtime_and_address_and_acp_options(
             &config,
+            &test_app_context("advisory-conversation"),
             &ConversationSessionAddress::from_session_id("telegram:779"),
             "hello external and persisted runtime events",
             ProviderErrorMode::Propagate,
@@ -6472,6 +6540,7 @@ async fn handle_turn_with_runtime_automatic_acp_uses_injected_manager() {
     let reply = coordinator
         .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             &config,
+            &test_app_context("advisory-conversation"),
             &address,
             "hello injected manager",
             ProviderErrorMode::Propagate,
@@ -6514,6 +6583,7 @@ async fn handle_turn_with_runtime_skips_compaction_when_disabled() {
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "session-no-compact",
             "hello",
             ProviderErrorMode::Propagate,
@@ -6546,6 +6616,7 @@ async fn handle_turn_with_runtime_skips_compaction_below_min_messages() {
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "session-no-compact-threshold",
             "hello",
             ProviderErrorMode::Propagate,
@@ -6579,6 +6650,7 @@ async fn handle_turn_with_runtime_skips_compaction_below_token_threshold() {
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "session-no-compact-token-threshold",
             "hello",
             ProviderErrorMode::Propagate,
@@ -6613,6 +6685,7 @@ async fn handle_turn_with_runtime_compacts_when_token_threshold_reached() {
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "session-compact-token-threshold",
             "hello",
             ProviderErrorMode::Propagate,
@@ -6725,6 +6798,7 @@ async fn handle_turn_with_runtime_flushes_durable_memory_before_compaction() {
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "session-pre-compaction-flush",
             "hello before compaction",
             ProviderErrorMode::Propagate,
@@ -6776,6 +6850,7 @@ async fn handle_turn_with_runtime_does_not_flush_durable_memory_when_compaction_
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "session-pre-compaction-flush-skipped",
             "hello without compaction",
             ProviderErrorMode::Propagate,
@@ -6812,6 +6887,7 @@ async fn handle_turn_with_runtime_compaction_error_is_ignored_when_fail_open() {
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "session-compact-fail-open",
             "hello",
             ProviderErrorMode::Propagate,
@@ -6843,6 +6919,7 @@ async fn handle_turn_with_runtime_compaction_error_propagates_when_fail_closed()
     let error = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "session-compact-fail-closed",
             "hello",
             ProviderErrorMode::Propagate,
@@ -6872,6 +6949,7 @@ async fn handle_turn_with_runtime_persists_turn_checkpoint_events_for_successful
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "session-turn-checkpoint-success",
             "hello",
             ProviderErrorMode::Propagate,
@@ -6942,6 +7020,7 @@ async fn handle_turn_with_runtime_persists_turn_checkpoint_events_for_inline_pro
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "session-turn-checkpoint-inline-error",
             "hello",
             ProviderErrorMode::InlineMessage,
@@ -6993,6 +7072,7 @@ async fn handle_turn_with_runtime_persists_turn_checkpoint_event_for_propagated_
     let error = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "session-turn-checkpoint-propagated-error",
             "hello",
             ProviderErrorMode::Propagate,
@@ -7043,6 +7123,7 @@ async fn handle_turn_with_runtime_persists_failed_turn_checkpoint_when_compactio
     let error = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "session-turn-checkpoint-compaction-failure",
             "hello",
             ProviderErrorMode::Propagate,
@@ -7082,6 +7163,7 @@ async fn handle_turn_with_runtime_propagates_error_without_persisting_reply_turn
     let error = coordinator
         .handle_turn_with_runtime(
             &test_config(),
+            &test_app_context("advisory-conversation"),
             "session-2",
             "hello",
             ProviderErrorMode::Propagate,
@@ -7134,6 +7216,7 @@ async fn handle_turn_with_runtime_inline_mode_returns_synthetic_reply_and_persis
     let output = coordinator
         .handle_turn_with_runtime(
             &test_config(),
+            &test_app_context("advisory-conversation"),
             "session-3",
             "hello",
             ProviderErrorMode::InlineMessage,
@@ -7233,6 +7316,7 @@ async fn handle_turn_with_runtime_tool_turn_uses_natural_language_completion_by_
     let reply = coordinator
         .handle_turn_with_runtime(
             &test_config(),
+            &harness.app_ctx,
             "session-tool",
             "read and summarize note.md",
             ProviderErrorMode::Propagate,
@@ -7328,6 +7412,7 @@ async fn handle_turn_with_runtime_nonterminal_continuation_requests_followup_pro
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "root-session",
             "wait for the delegated session to finish and then summarize it",
             ProviderErrorMode::Propagate,
@@ -7449,6 +7534,7 @@ async fn handle_turn_with_runtime_rejects_done_reply_that_still_requests_more_ev
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "root-session",
             "wait for the delegated session to finish and then summarize it",
             ProviderErrorMode::Propagate,
@@ -7549,6 +7635,7 @@ async fn handle_turn_with_runtime_repairs_done_reply_that_still_requests_more_ev
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "root-session",
             "wait for the delegated session to finish and then summarize it",
             ProviderErrorMode::Propagate,
@@ -7624,6 +7711,7 @@ async fn handle_turn_with_runtime_rejects_done_reply_that_admits_missing_page_ev
     let reply = coordinator
         .handle_turn_with_runtime(
             &test_config(),
+            &harness.app_ctx,
             "session-web-evidence-gap",
             "Summarize this repository and suggest the best next step.",
             ProviderErrorMode::Propagate,
@@ -7676,13 +7764,12 @@ async fn default_runtime_build_context_includes_tool_discovery_delta_from_persis
         .expect("persist discovery event");
 
     let runtime = DefaultConversationRuntime::default();
+    let app_ctx = autonomy_runtime_session_context(session_id, &config);
+    let binding = ConversationRuntimeBinding::AdvisoryOnly;
+    let session_context =
+        load_test_session_context(&runtime, &config, &app_ctx, session_id, binding);
     let assembled = runtime
-        .build_context(
-            &config,
-            session_id,
-            true,
-            ConversationRuntimeBinding::AdvisoryOnly,
-        )
+        .build_context(&config, &session_context, true, binding)
         .await
         .expect("build context");
 
@@ -7737,13 +7824,12 @@ async fn default_runtime_build_context_sanitizes_tool_discovery_delta_advisory_t
         .expect("persist discovery event");
 
     let runtime = DefaultConversationRuntime::default();
+    let app_ctx = autonomy_runtime_session_context(session_id, &config);
+    let binding = ConversationRuntimeBinding::AdvisoryOnly;
+    let session_context =
+        load_test_session_context(&runtime, &config, &app_ctx, session_id, binding);
     let assembled = runtime
-        .build_context(
-            &config,
-            session_id,
-            true,
-            ConversationRuntimeBinding::AdvisoryOnly,
-        )
+        .build_context(&config, &session_context, true, binding)
         .await
         .expect("build context");
     let system_text = assembled.messages[0]["content"]
@@ -7796,13 +7882,17 @@ async fn default_runtime_build_messages_filters_tool_discovery_delta_to_requeste
 
     let runtime = DefaultConversationRuntime::default();
     let requested_tool_view = crate::tools::ToolView::from_tool_names(["bash"]);
+    let app_ctx = autonomy_runtime_session_context(session_id, &config);
+    let binding = ConversationRuntimeBinding::AdvisoryOnly;
+    let session_context =
+        load_test_session_context(&runtime, &config, &app_ctx, session_id, binding);
     let messages = runtime
         .build_messages(
             &config,
-            session_id,
+            &session_context,
             true,
             &requested_tool_view,
-            ConversationRuntimeBinding::AdvisoryOnly,
+            binding,
         )
         .await
         .expect("build messages");
@@ -7865,13 +7955,12 @@ async fn default_runtime_build_context_uses_configured_runtime_tool_view_for_too
         .expect("persist discovery event");
 
     let runtime = DefaultConversationRuntime::default();
+    let app_ctx = autonomy_runtime_session_context(session_id, &config);
+    let binding = ConversationRuntimeBinding::AdvisoryOnly;
+    let session_context =
+        load_test_session_context(&runtime, &config, &app_ctx, session_id, binding);
     let assembled = runtime
-        .build_context(
-            &config,
-            session_id,
-            true,
-            ConversationRuntimeBinding::AdvisoryOnly,
-        )
+        .build_context(&config, &session_context, true, binding)
         .await
         .expect("build context");
     let system_text = assembled.messages[0]["content"]
@@ -7947,13 +8036,11 @@ async fn default_runtime_kernel_build_context_uses_configured_runtime_tool_view_
         &memory_config,
     );
     let runtime = DefaultConversationRuntime::default();
+    let binding = ConversationRuntimeBinding::Context(&app_ctx);
+    let session_context =
+        load_test_session_context(&runtime, &config, &app_ctx, session_id, binding);
     let assembled = runtime
-        .build_context(
-            &config,
-            session_id,
-            true,
-            ConversationRuntimeBinding::Context(&app_ctx),
-        )
+        .build_context(&config, &session_context, true, binding)
         .await
         .expect("build context");
     let system_text = assembled.messages[0]["content"]
@@ -8021,6 +8108,7 @@ async fn handle_turn_with_runtime_includes_same_tool_warning_in_followup_provide
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "session-tool-search-warning",
             "search for the right tool, then read and summarize note.md",
             ProviderErrorMode::Propagate,
@@ -8108,6 +8196,7 @@ async fn handle_turn_with_runtime_continues_direct_tool_chain_after_initial_tool
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "session-direct-chain",
             "read note.md, then save it into response.log",
             ProviderErrorMode::Propagate,
@@ -8228,6 +8317,7 @@ async fn handle_turn_with_runtime_rejects_legacy_tool_invoke_wrapper_and_recover
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "session-invalid-lease-recovery",
             "read note.md",
             ProviderErrorMode::Propagate,
@@ -8310,6 +8400,7 @@ async fn handle_turn_with_runtime_tool_turn_raw_request_skips_second_pass_comple
     let reply = coordinator
         .handle_turn_with_runtime(
             &test_config(),
+            &harness.app_ctx,
             "session-tool-raw",
             "read note.md and show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -8420,6 +8511,7 @@ async fn handle_turn_with_runtime_provider_switch_tool_updates_provider_for_foll
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &harness.app_ctx,
             "session-provider-switch",
             "switch to deepseek and continue",
             ProviderErrorMode::Propagate,
@@ -8482,6 +8574,7 @@ async fn handle_turn_with_runtime_honors_configured_tool_result_summary_limit_on
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &harness.app_ctx,
             "session-fast-limit",
             "read large-note.md and show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -8600,6 +8693,7 @@ async fn handle_turn_with_runtime_persists_fast_lane_tool_batch_event_for_mixed_
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "session-fast-lane-batch-event",
             "inspect the session state and show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -8747,6 +8841,7 @@ async fn handle_turn_with_runtime_fast_lane_batch_persist_failure_surfaces_runti
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "session-fast-lane-batch-persist-failure",
             "inspect the session state and show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -8828,6 +8923,7 @@ async fn handle_turn_with_runtime_honors_configured_tool_result_summary_limit_on
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &harness.app_ctx,
             "session-safe-limit",
             "deploy production safely and show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -8904,6 +9000,7 @@ async fn handle_turn_with_runtime_safe_lane_honors_configured_tool_step_budget()
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "session-safe-budget",
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -8996,6 +9093,9 @@ async fn handle_turn_with_runtime_safe_lane_plan_path_does_not_parallelize_fast_
         )),
         token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build conversation test app context");
 
@@ -9030,6 +9130,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_path_does_not_parallelize_fast_
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "session-safe-fast-lane-gating",
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -9100,6 +9201,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_path_bypasses_turn_step_limit()
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "session-safe-plan",
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -9151,6 +9253,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_persists_runtime_events_when_en
     let _reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "session-safe-events",
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -9279,6 +9382,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_persists_runtime_events_without
     let _reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "session-safe-events-off",
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -9338,6 +9442,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_emits_kernel_runtime_audit_even
     let _reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &harness.app_ctx,
             "session-safe-audit-on",
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -9424,6 +9529,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_emits_kernel_runtime_audit_with
     let _reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &harness.app_ctx,
             "session-safe-audit-off",
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -9525,6 +9631,9 @@ async fn handle_turn_with_runtime_safe_lane_plan_replans_after_transient_tool_fa
         )),
         token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build conversation test app context");
 
@@ -9550,6 +9659,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_replans_after_transient_tool_fa
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &ctx,
             "session-safe-replan",
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -9737,6 +9847,9 @@ async fn handle_turn_with_runtime_safe_lane_backpressure_guard_blocks_retry_stor
         )),
         token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build conversation test app context");
 
@@ -9762,6 +9875,7 @@ async fn handle_turn_with_runtime_safe_lane_backpressure_guard_blocks_retry_stor
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &ctx,
             "session-safe-backpressure",
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -9876,6 +9990,9 @@ async fn handle_turn_with_runtime_safe_lane_verify_non_retryable_failure_skips_r
         )),
         token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build conversation test app context");
 
@@ -9901,6 +10018,7 @@ async fn handle_turn_with_runtime_safe_lane_verify_non_retryable_failure_skips_r
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &ctx,
             "session-safe-verify-nonretryable",
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -10112,6 +10230,9 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_forces_no_replan() 
         )),
         token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build conversation test app context");
 
@@ -10137,6 +10258,7 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_forces_no_replan() 
     let _reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &ctx,
             "session-safe-governor",
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -10345,6 +10467,9 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_requests_extended_h
         )),
         token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build conversation test app context");
 
@@ -10370,6 +10495,7 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_requests_extended_h
     let _ = coordinator
         .handle_turn_with_runtime(
             &config,
+            &ctx,
             "session-safe-governor-window",
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -10529,6 +10655,9 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_does_not_reuse_sqli
         )),
         token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build conversation test app context");
 
@@ -10566,6 +10695,7 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_does_not_reuse_sqli
     let _reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &ctx,
             "session-safe-governor-fallback",
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -10709,6 +10839,9 @@ async fn handle_turn_with_runtime_safe_lane_replans_failed_subgraph_only() {
         )),
         token.clone(),
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build conversation test app context");
 
@@ -10743,6 +10876,7 @@ async fn handle_turn_with_runtime_safe_lane_replans_failed_subgraph_only() {
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &ctx,
             "session-safe-subgraph",
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -10791,6 +10925,7 @@ async fn handle_turn_with_runtime_tool_denial_returns_inline_reply_even_in_propa
     let reply = coordinator
         .handle_turn_with_runtime(
             &test_config(),
+            &test_app_context("advisory-conversation"),
             "session-denied",
             "read note.md",
             ProviderErrorMode::Propagate,
@@ -10849,6 +10984,7 @@ async fn handle_turn_with_runtime_tool_error_returns_natural_language_fallback()
     let reply = coordinator
         .handle_turn_with_runtime(
             &test_config(),
+            &harness.app_ctx,
             "session-tool-error",
             "read note.md",
             ProviderErrorMode::Propagate,
@@ -10908,6 +11044,7 @@ async fn handle_turn_with_runtime_file_read_repair_followup_includes_failed_requ
     let reply = coordinator
         .handle_turn_with_runtime(
             &test_config(),
+            &harness.app_ctx,
             "session-file-read-followup",
             "read the file",
             ProviderErrorMode::Propagate,
@@ -11006,6 +11143,7 @@ async fn handle_turn_with_runtime_repairable_shell_failure_followup_includes_fai
     let reply = coordinator
         .handle_turn_with_runtime(
             &test_config(),
+            &harness.app_ctx,
             "session-shell-followup",
             "say hello in the shell",
             ProviderErrorMode::Propagate,
@@ -11114,6 +11252,7 @@ async fn handle_turn_with_runtime_multi_intent_shell_failure_followup_uses_faile
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &harness.app_ctx,
             "session-shell-followup-multi",
             "say hello in the shell twice",
             ProviderErrorMode::Propagate,
@@ -11171,6 +11310,7 @@ async fn handle_turn_with_runtime_tool_failure_completion_error_uses_raw_reason_
     let reply = coordinator
         .handle_turn_with_runtime(
             &test_config(),
+            &test_app_context("advisory-conversation"),
             "session-denied-fallback",
             "read note.md",
             ProviderErrorMode::Propagate,
@@ -11223,6 +11363,7 @@ async fn handle_turn_with_runtime_repairs_done_reply_that_still_leaks_tool_reque
     let reply = coordinator
         .handle_turn_with_runtime(
             &test_config(),
+            &test_app_context("advisory-conversation"),
             "session-web-markup-repair",
             "Summarize https://github.com/chumyin",
             ProviderErrorMode::Propagate,
@@ -11264,6 +11405,7 @@ async fn handle_turn_with_runtime_repairs_done_reply_that_still_leaks_to_equals_
     let reply = coordinator
         .handle_turn_with_runtime(
             &test_config(),
+            &test_app_context("advisory-conversation"),
             "session-web-to-equals-repair",
             "Summarize https://example.com",
             ProviderErrorMode::Propagate,
@@ -11301,6 +11443,7 @@ async fn handle_turn_with_runtime_accepts_clean_repair_reply_without_followup_ma
     let reply = coordinator
         .handle_turn_with_runtime(
             &test_config(),
+            &test_app_context("advisory-conversation"),
             "session-web-clean-repair-without-marker",
             "Summarize https://example.com",
             ProviderErrorMode::Propagate,
@@ -11344,6 +11487,7 @@ async fn handle_turn_with_runtime_accepts_clean_to_equals_repair_reply_without_f
     let reply = coordinator
         .handle_turn_with_runtime(
             &test_config(),
+            &test_app_context("advisory-conversation"),
             "session-web-clean-to-equals-repair-without-marker",
             "Summarize https://example.com",
             ProviderErrorMode::Propagate,
@@ -11403,6 +11547,7 @@ async fn handle_turn_with_runtime_salvages_browse_repair_wrapper_reply() {
     let reply = coordinator
         .handle_turn_with_runtime(
             &test_config(),
+            &harness.app_ctx,
             "session-browse-repair-salvage",
             "Open https://example.com and summarize it.",
             ProviderErrorMode::Propagate,
@@ -11448,6 +11593,7 @@ async fn handle_turn_with_runtime_direct_core_tool_persists_trust_binding_missin
     let reply = coordinator
         .handle_turn_with_runtime(
             &test_config(),
+            &test_app_context("advisory-conversation"),
             "session-trust-binding",
             "read note.md",
             ProviderErrorMode::Propagate,
@@ -11520,6 +11666,7 @@ async fn handle_turn_with_runtime_inline_provider_error_persists_provider_failov
     let reply = coordinator
         .handle_turn_with_runtime(
             &test_config(),
+            &test_app_context("advisory-conversation"),
             "session-provider-failover-inline",
             "hello",
             ProviderErrorMode::InlineMessage,
@@ -11560,6 +11707,7 @@ async fn handle_turn_with_runtime_propagated_provider_error_persists_provider_fa
     let error = coordinator
         .handle_turn_with_runtime(
             &test_config(),
+            &app_ctx,
             "session-provider-failover-propagated",
             "hello",
             ProviderErrorMode::Propagate,
@@ -11592,6 +11740,7 @@ async fn handle_turn_with_runtime_auth_rejected_provider_error_marks_rejected_tr
     let reply = coordinator
         .handle_turn_with_runtime(
             &test_config(),
+            &test_app_context("advisory-conversation"),
             "session-provider-failover-auth-rejected",
             "hello",
             ProviderErrorMode::InlineMessage,
@@ -11905,7 +12054,7 @@ async fn turn_engine_routes_app_tools_through_dispatcher() {
     impl crate::conversation::AppToolDispatcher for RecordingAppDispatcher {
         async fn execute_app_tool(
             &self,
-            session_context: &crate::conversation::SessionContext,
+            session_context: &crate::AppContext,
             request: ToolCoreRequest,
             _binding: crate::conversation::ConversationRuntimeBinding<'_>,
         ) -> Result<ToolCoreOutcome, String> {
@@ -11936,7 +12085,7 @@ async fn turn_engine_routes_app_tools_through_dispatcher() {
         )],
         raw_meta: Value::Null,
     };
-    let session_context = crate::conversation::SessionContext::root_with_tool_view(
+    let session_context = crate::test_support::app_context_for_session(
         "root-session",
         crate::tools::planned_root_tool_view(),
     );
@@ -12003,7 +12152,7 @@ async fn turn_engine_routes_advisory_only_binding_to_app_dispatcher() {
     impl crate::conversation::AppToolDispatcher for BindingRecordingAppDispatcher {
         async fn execute_app_tool(
             &self,
-            _session_context: &crate::conversation::SessionContext,
+            _session_context: &crate::AppContext,
             request: ToolCoreRequest,
             binding: crate::conversation::ConversationRuntimeBinding<'_>,
         ) -> Result<ToolCoreOutcome, String> {
@@ -12038,7 +12187,7 @@ async fn turn_engine_routes_advisory_only_binding_to_app_dispatcher() {
         )],
         raw_meta: Value::Null,
     };
-    let session_context = crate::conversation::SessionContext::root_with_tool_view(
+    let session_context = crate::test_support::app_context_for_session(
         "root-session",
         crate::tools::planned_root_tool_view(),
     );
@@ -12048,7 +12197,7 @@ async fn turn_engine_routes_advisory_only_binding_to_app_dispatcher() {
             &turn,
             &session_context,
             &dispatcher,
-            crate::conversation::ConversationRuntimeBinding::AdvisoryOnly,
+            ConversationRuntimeBinding::AdvisoryOnly,
             None,
         )
         .await;
@@ -12104,7 +12253,7 @@ async fn turn_engine_advisory_only_binding_denies_sessions_send_before_dispatch(
     impl crate::conversation::AppToolDispatcher for GovernedAppBarrierDispatcher {
         async fn execute_app_tool(
             &self,
-            _session_context: &crate::conversation::SessionContext,
+            _session_context: &crate::AppContext,
             request: ToolCoreRequest,
             _binding: crate::conversation::ConversationRuntimeBinding<'_>,
         ) -> Result<ToolCoreOutcome, String> {
@@ -12143,7 +12292,7 @@ async fn turn_engine_advisory_only_binding_denies_sessions_send_before_dispatch(
         )],
         raw_meta: Value::Null,
     };
-    let session_context = crate::conversation::SessionContext::root_with_tool_view(
+    let session_context = crate::test_support::app_context_for_session(
         "root-session",
         crate::tools::planned_root_tool_view(),
     );
@@ -12153,7 +12302,7 @@ async fn turn_engine_advisory_only_binding_denies_sessions_send_before_dispatch(
             &turn,
             &session_context,
             &dispatcher,
-            crate::conversation::ConversationRuntimeBinding::AdvisoryOnly,
+            ConversationRuntimeBinding::AdvisoryOnly,
             None,
         )
         .await;
@@ -12195,7 +12344,7 @@ async fn turn_engine_requires_governed_approval_before_later_app_intent_executio
     impl crate::conversation::AppToolDispatcher for ApprovalBarrierDispatcher {
         async fn maybe_require_approval_with_binding(
             &self,
-            _session_context: &crate::conversation::SessionContext,
+            _session_context: &crate::AppContext,
             _intent: &crate::conversation::ToolIntent,
             descriptor: &crate::tools::ToolDescriptor,
             _binding: crate::conversation::ConversationRuntimeBinding<'_>,
@@ -12219,7 +12368,7 @@ async fn turn_engine_requires_governed_approval_before_later_app_intent_executio
 
         async fn execute_app_tool(
             &self,
-            _session_context: &crate::conversation::SessionContext,
+            _session_context: &crate::AppContext,
             request: ToolCoreRequest,
             _binding: crate::conversation::ConversationRuntimeBinding<'_>,
         ) -> Result<ToolCoreOutcome, String> {
@@ -12260,7 +12409,7 @@ async fn turn_engine_requires_governed_approval_before_later_app_intent_executio
         ],
         raw_meta: Value::Null,
     };
-    let session_context = crate::conversation::SessionContext::root_with_tool_view(
+    let session_context = crate::test_support::app_context_for_session(
         "root-session",
         crate::tools::planned_root_tool_view(),
     );
@@ -12270,7 +12419,7 @@ async fn turn_engine_requires_governed_approval_before_later_app_intent_executio
             &turn,
             &session_context,
             &dispatcher,
-            crate::conversation::ConversationRuntimeBinding::AdvisoryOnly,
+            ConversationRuntimeBinding::AdvisoryOnly,
             None,
         )
         .await;
@@ -12354,7 +12503,7 @@ async fn governed_runtime_binding_routes_mutating_app_intent_to_approval_on_advi
     impl crate::conversation::AppToolDispatcher for GuardedApprovalDispatcher {
         async fn maybe_require_approval_with_binding(
             &self,
-            _session_context: &crate::conversation::SessionContext,
+            _session_context: &crate::AppContext,
             _intent: &crate::conversation::ToolIntent,
             _descriptor: &crate::tools::ToolDescriptor,
             _binding: crate::conversation::ConversationRuntimeBinding<'_>,
@@ -12374,7 +12523,7 @@ async fn governed_runtime_binding_routes_mutating_app_intent_to_approval_on_advi
 
         async fn execute_app_tool(
             &self,
-            _session_context: &crate::conversation::SessionContext,
+            _session_context: &crate::AppContext,
             request: ToolCoreRequest,
             _binding: crate::conversation::ConversationRuntimeBinding<'_>,
         ) -> Result<ToolCoreOutcome, String> {
@@ -12406,7 +12555,7 @@ async fn governed_runtime_binding_routes_mutating_app_intent_to_approval_on_advi
         )],
         raw_meta: Value::Null,
     };
-    let session_context = crate::conversation::SessionContext::root_with_tool_view(
+    let session_context = crate::test_support::app_context_for_session(
         "root-session",
         crate::tools::planned_root_tool_view(),
     );
@@ -12416,7 +12565,7 @@ async fn governed_runtime_binding_routes_mutating_app_intent_to_approval_on_advi
             &turn,
             &session_context,
             &dispatcher,
-            crate::conversation::ConversationRuntimeBinding::AdvisoryOnly,
+            ConversationRuntimeBinding::AdvisoryOnly,
             None,
             None,
         )
@@ -12481,7 +12630,7 @@ async fn turn_engine_fails_closed_before_kernel_binding_error_for_later_core_int
     impl crate::conversation::AppToolDispatcher for KernelBarrierDispatcher {
         async fn execute_app_tool(
             &self,
-            _session_context: &crate::conversation::SessionContext,
+            _session_context: &crate::AppContext,
             request: ToolCoreRequest,
             _binding: crate::conversation::ConversationRuntimeBinding<'_>,
         ) -> Result<ToolCoreOutcome, String> {
@@ -12522,7 +12671,7 @@ async fn turn_engine_fails_closed_before_kernel_binding_error_for_later_core_int
         ],
         raw_meta: Value::Null,
     };
-    let session_context = crate::conversation::SessionContext::root_with_tool_view(
+    let session_context = crate::test_support::app_context_for_session(
         "root-session",
         crate::tools::planned_root_tool_view(),
     );
@@ -12532,7 +12681,7 @@ async fn turn_engine_fails_closed_before_kernel_binding_error_for_later_core_int
             &turn,
             &session_context,
             &dispatcher,
-            crate::conversation::ConversationRuntimeBinding::AdvisoryOnly,
+            ConversationRuntimeBinding::AdvisoryOnly,
             None,
         )
         .await;
@@ -12579,7 +12728,7 @@ async fn turn_engine_parallel_safe_app_batch_executes_concurrently_in_source_ord
     impl crate::conversation::AppToolDispatcher for ParallelSafeDispatcher {
         async fn execute_app_tool(
             &self,
-            _session_context: &crate::conversation::SessionContext,
+            _session_context: &crate::AppContext,
             request: ToolCoreRequest,
             _binding: crate::conversation::ConversationRuntimeBinding<'_>,
         ) -> Result<ToolCoreOutcome, String> {
@@ -12632,7 +12781,7 @@ async fn turn_engine_parallel_safe_app_batch_executes_concurrently_in_source_ord
         ],
         raw_meta: Value::Null,
     };
-    let session_context = crate::conversation::SessionContext::root_with_tool_view(
+    let session_context = crate::test_support::app_context_for_session(
         "root-session",
         crate::tools::planned_root_tool_view(),
     );
@@ -12642,7 +12791,7 @@ async fn turn_engine_parallel_safe_app_batch_executes_concurrently_in_source_ord
             &turn,
             &session_context,
             &dispatcher,
-            crate::conversation::ConversationRuntimeBinding::AdvisoryOnly,
+            ConversationRuntimeBinding::AdvisoryOnly,
             None,
         )
         .await;
@@ -12716,7 +12865,7 @@ async fn turn_engine_parallel_safe_app_batch_returns_failure_without_waiting_for
     impl crate::conversation::AppToolDispatcher for ParallelFailureDispatcher {
         async fn execute_app_tool(
             &self,
-            _session_context: &crate::conversation::SessionContext,
+            _session_context: &crate::AppContext,
             request: ToolCoreRequest,
             _binding: crate::conversation::ConversationRuntimeBinding<'_>,
         ) -> Result<ToolCoreOutcome, String> {
@@ -12777,7 +12926,7 @@ async fn turn_engine_parallel_safe_app_batch_returns_failure_without_waiting_for
         ],
         raw_meta: Value::Null,
     };
-    let session_context = crate::conversation::SessionContext::root_with_tool_view(
+    let session_context = crate::test_support::app_context_for_session(
         "root-session",
         crate::tools::planned_root_tool_view(),
     );
@@ -12787,7 +12936,7 @@ async fn turn_engine_parallel_safe_app_batch_returns_failure_without_waiting_for
             &turn,
             &session_context,
             &dispatcher,
-            crate::conversation::ConversationRuntimeBinding::AdvisoryOnly,
+            ConversationRuntimeBinding::AdvisoryOnly,
             None,
         )
         .await;
@@ -12843,7 +12992,7 @@ async fn turn_engine_mixed_batch_parallelizes_parallel_safe_segments_without_cro
     impl crate::conversation::AppToolDispatcher for SegmentedParallelDispatcher {
         async fn execute_app_tool(
             &self,
-            _session_context: &crate::conversation::SessionContext,
+            _session_context: &crate::AppContext,
             request: ToolCoreRequest,
             _binding: crate::conversation::ConversationRuntimeBinding<'_>,
         ) -> Result<ToolCoreOutcome, String> {
@@ -12971,7 +13120,7 @@ async fn turn_engine_mixed_batch_parallelizes_parallel_safe_segments_without_cro
         ],
         raw_meta: Value::Null,
     };
-    let session_context = crate::conversation::SessionContext::root_with_tool_view(
+    let session_context = crate::test_support::app_context_for_session(
         "root-session",
         crate::tools::planned_root_tool_view(),
     );
@@ -12981,7 +13130,7 @@ async fn turn_engine_mixed_batch_parallelizes_parallel_safe_segments_without_cro
             &turn,
             &session_context,
             &dispatcher,
-            crate::conversation::ConversationRuntimeBinding::AdvisoryOnly,
+            ConversationRuntimeBinding::AdvisoryOnly,
             None,
         )
         .await;
@@ -13080,7 +13229,7 @@ async fn default_app_tool_dispatcher_executes_session_wait_for_visible_terminal_
     .expect("upsert terminal outcome");
 
     let dispatcher = DefaultAppToolDispatcher::new(memory_config, config.tools.clone());
-    let session_context = SessionContext::root_with_tool_view(
+    let session_context = crate::test_support::app_context_for_session(
         "root-session",
         crate::tools::runtime_tool_view_for_config(&config.tools),
     );
@@ -13095,7 +13244,7 @@ async fn default_app_tool_dispatcher_executes_session_wait_for_visible_terminal_
                     "timeout_ms": 50
                 }),
             },
-            crate::conversation::ConversationRuntimeBinding::AdvisoryOnly,
+            ConversationRuntimeBinding::AdvisoryOnly,
         )
         .await
         .expect("session_wait outcome");
@@ -13138,7 +13287,7 @@ async fn child_session_hidden_session_wait_is_rejected_by_default_dispatcher() {
     .expect("create child session");
 
     let dispatcher = DefaultAppToolDispatcher::new(memory_config, config.tools.clone());
-    let session_context = SessionContext::child(
+    let session_context = crate::test_support::app_context_for_child(
         "child-session",
         "root-session",
         crate::tools::planned_delegate_child_tool_view(),
@@ -13154,7 +13303,7 @@ async fn child_session_hidden_session_wait_is_rejected_by_default_dispatcher() {
                     "timeout_ms": 10
                 }),
             },
-            crate::conversation::ConversationRuntimeBinding::AdvisoryOnly,
+            ConversationRuntimeBinding::AdvisoryOnly,
         )
         .await
         .expect_err("child should not execute hidden session_wait");
@@ -13198,7 +13347,7 @@ async fn child_session_hidden_sessions_send_is_rejected_by_default_dispatcher() 
     .expect("create child session");
 
     let dispatcher = DefaultAppToolDispatcher::new(memory_config, config.tools.clone());
-    let session_context = SessionContext::child(
+    let session_context = crate::test_support::app_context_for_child(
         "child-session",
         "root-session",
         crate::tools::delegate_child_tool_view_for_config(&config.tools),
@@ -13214,7 +13363,7 @@ async fn child_session_hidden_sessions_send_is_rejected_by_default_dispatcher() 
                     "text": "hello"
                 }),
             },
-            crate::conversation::ConversationRuntimeBinding::AdvisoryOnly,
+            ConversationRuntimeBinding::AdvisoryOnly,
         )
         .await
         .expect_err("child should not execute hidden sessions_send");
@@ -13245,7 +13394,7 @@ async fn sessions_send_rejects_unknown_target_session() {
     .expect("create controller root");
 
     let dispatcher = DefaultAppToolDispatcher::with_config(memory_config.clone(), config.clone());
-    let session_context = SessionContext::root_with_tool_view(
+    let session_context = crate::test_support::app_context_for_session(
         "controller-root",
         crate::tools::runtime_tool_view_for_config(&config.tools),
     );
@@ -13300,7 +13449,7 @@ async fn sessions_send_rejects_delegate_child_target() {
     .expect("create child target");
 
     let dispatcher = DefaultAppToolDispatcher::with_config(memory_config.clone(), config.clone());
-    let session_context = SessionContext::root_with_tool_view(
+    let session_context = crate::test_support::app_context_for_session(
         "controller-root",
         crate::tools::runtime_tool_view_for_config(&config.tools),
     );
@@ -13404,6 +13553,7 @@ async fn continue_session_with_runtime_reopens_completed_delegate_child_and_refr
             "session_id": "child-session",
             "input": "continue with the next step"
         }),
+        &test_app_context("session-continue"),
         "root-session",
         &memory_config,
         &config.tools,
@@ -13518,6 +13668,7 @@ async fn continue_session_with_runtime_preserves_prior_terminal_outcome_when_res
             "session_id": "child-session",
             "input": "continue with the next step"
         }),
+        &test_app_context("session-continue"),
         "root-session",
         &memory_config,
         &config.tools,
@@ -13624,6 +13775,7 @@ async fn continue_session_with_runtime_backfills_profile_from_older_delegate_anc
             "session_id": "child-session",
             "input": "continue with the next step"
         }),
+        &test_app_context("session-continue"),
         "root-session",
         &memory_config,
         &config.tools,
@@ -13670,6 +13822,7 @@ async fn continue_session_with_runtime_rejects_running_delegate_child() {
             "session_id": "child-session",
             "input": "continue"
         }),
+        &test_app_context("session-continue"),
         "root-session",
         &memory_config,
         &config.tools,
@@ -13743,6 +13896,7 @@ async fn continue_session_with_runtime_rejects_failed_delegate_child() {
             "session_id": "child-session",
             "input": "continue"
         }),
+        &test_app_context("session-continue"),
         "root-session",
         &memory_config,
         &config.tools,
@@ -13825,6 +13979,7 @@ async fn continue_session_with_runtime_rejects_archived_delegate_child() {
             "session_id": "child-session",
             "input": "continue"
         }),
+        &test_app_context("session-continue"),
         "root-session",
         &memory_config,
         &config.tools,
@@ -13899,6 +14054,7 @@ async fn continue_session_with_runtime_rejects_invalid_timeout_override() {
             "input": "continue",
             "timeout_seconds": "30"
         }),
+        &test_app_context("session-continue"),
         "root-session",
         &memory_config,
         &config.tools,
@@ -13993,6 +14149,7 @@ async fn continue_session_with_runtime_caps_timeout_override_and_persists_contra
             "input": "continue with the next step",
             "timeout_seconds": 45
         }),
+        &test_app_context("session-continue"),
         "root-session",
         &memory_config,
         &config.tools,
@@ -14044,7 +14201,7 @@ async fn default_app_tool_dispatcher_rejects_session_continue_without_runtime_co
     .expect("create child session");
 
     let dispatcher = DefaultAppToolDispatcher::new(memory_config, config.tools.clone());
-    let session_context = SessionContext::root_with_tool_view(
+    let session_context = crate::test_support::app_context_for_session(
         "root-session",
         crate::tools::runtime_tool_view_for_config(&config.tools),
     );
@@ -14059,7 +14216,7 @@ async fn default_app_tool_dispatcher_rejects_session_continue_without_runtime_co
                     "input": "continue"
                 }),
             },
-            crate::conversation::ConversationRuntimeBinding::AdvisoryOnly,
+            ConversationRuntimeBinding::AdvisoryOnly,
         )
         .await
         .expect_err("session_continue without runtime config should fail");
@@ -14125,6 +14282,9 @@ async fn turn_engine_tool_execution_error_is_marked_retryable() {
         )),
         token.clone(),
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build conversation test app context");
 
@@ -14317,6 +14477,9 @@ async fn turn_engine_executes_known_tool_with_kernel() {
         )),
         token.clone(),
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build conversation test app context");
 
@@ -14443,6 +14606,9 @@ async fn turn_engine_truncates_oversized_tool_payload_summary() {
         )),
         token.clone(),
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build conversation test app context");
 
@@ -14578,6 +14744,9 @@ async fn turn_engine_keeps_discovery_shaped_payloads_intact_for_followup_compact
         )),
         token.clone(),
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build conversation test app context");
 
@@ -15447,6 +15616,7 @@ async fn autonomy_policy_telemetry_handle_turn_persists_approval_required_tool_d
     let _reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "session-autonomy-telemetry-guided",
             "install the demo skill",
             ProviderErrorMode::Propagate,
@@ -15510,6 +15680,7 @@ async fn autonomy_policy_telemetry_handle_turn_persists_denied_tool_decision() {
     let _reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "session-autonomy-telemetry-discovery",
             "install the demo skill",
             ProviderErrorMode::Propagate,
@@ -15571,6 +15742,7 @@ async fn autonomy_policy_telemetry_handle_turn_persists_allow_decision_and_tool_
     let _reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "session-autonomy-telemetry-bounded",
             "install the demo skill and show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -15655,6 +15827,9 @@ async fn turn_engine_rejects_legacy_external_skill_invoke_runtime_tool() {
         )),
         token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build conversation test app context");
 
@@ -15666,7 +15841,7 @@ async fn turn_engine_rejects_legacy_external_skill_invoke_runtime_tool() {
         session_store_config_from_config(&config),
         config.clone(),
     );
-    let session_context = crate::conversation::SessionContext::root_with_tool_view(
+    let session_context = crate::test_support::app_context_for_session(
         "s1",
         crate::tools::runtime_tool_view_from_loong_config(&config),
     );
@@ -15742,6 +15917,9 @@ async fn turn_engine_injects_browser_scope_into_kernel_request() {
         )),
         token.clone(),
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build conversation test app context");
 
@@ -15852,6 +16030,9 @@ async fn turn_engine_execute_turn_denied_without_capability() {
         )),
         token.clone(),
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build conversation test app context");
 
@@ -16019,6 +16200,9 @@ fn build_app_context_with_window_turns(
         )),
         token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build conversation test app context");
 
@@ -16111,6 +16295,9 @@ fn build_app_context_with_window_turn_sequence(
         )),
         token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build conversation test app context");
 
@@ -16158,6 +16345,9 @@ fn build_app_context_with_window_error(
         )),
         token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build conversation test app context");
 
@@ -16205,6 +16395,9 @@ fn build_app_context_with_raw_window_payload(
         )),
         token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build conversation test app context");
 
@@ -16252,6 +16445,9 @@ fn build_app_context_with_compaction_conflict(
         )),
         token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build conversation test app context");
 
@@ -16301,6 +16497,9 @@ fn build_app_context_with_incomplete_compaction_snapshot(
         )),
         token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build conversation test app context");
 
@@ -16752,8 +16951,10 @@ async fn build_messages_routes_memory_context_through_kernel_when_context_provid
     let tool_view = runtime
         .tool_view(&config, "session-k-window", binding)
         .expect("kernel window tool view");
+    let session_context =
+        load_test_session_context(&runtime, &config, &ctx, "session-k-window", binding);
     let messages = runtime
-        .build_messages(&config, "session-k-window", true, &tool_view, binding)
+        .build_messages(&config, &session_context, true, &tool_view, binding)
         .await
         .expect("build messages via kernel");
 
@@ -17527,13 +17728,17 @@ async fn persisted_turn_checkpoint_events_survive_reload_without_polluting_promp
     )
     .expect("persist finalized checkpoint");
 
+    let app_ctx = autonomy_runtime_session_context(session_id, &config);
+    let binding = ConversationRuntimeBinding::AdvisoryOnly;
+    let session_context =
+        load_test_session_context(&runtime, &config, &app_ctx, session_id, binding);
     let messages = runtime
         .build_messages(
             &config,
-            session_id,
+            &session_context,
             true,
             &crate::tools::runtime_tool_view_for_config(&config.tools),
-            ConversationRuntimeBinding::AdvisoryOnly,
+            binding,
         )
         .await
         .expect("reload prompt history");
@@ -17777,6 +17982,7 @@ async fn repair_turn_checkpoint_tail_with_runtime_finalizes_pending_checkpoint()
     let outcome = coordinator
         .repair_turn_checkpoint_tail_with_runtime(
             &config,
+            &app_ctx,
             session_id,
             &runtime,
             ConversationRuntimeBinding::Context(&app_ctx),
@@ -17885,6 +18091,7 @@ async fn repair_turn_checkpoint_tail_with_runtime_requires_manual_repair_without
     let outcome = coordinator
         .repair_turn_checkpoint_tail_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             session_id,
             &runtime,
             ConversationRuntimeBinding::AdvisoryOnly,
@@ -18002,6 +18209,7 @@ async fn repair_turn_checkpoint_tail_with_runtime_preserves_safe_lane_override_r
     let outcome = coordinator
         .repair_turn_checkpoint_tail_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             session_id,
             &runtime,
             ConversationRuntimeBinding::AdvisoryOnly,
@@ -18098,6 +18306,7 @@ async fn repair_turn_checkpoint_tail_with_runtime_requires_manual_repair_on_iden
     let outcome = coordinator
         .repair_turn_checkpoint_tail_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             session_id,
             &runtime,
             ConversationRuntimeBinding::AdvisoryOnly,
@@ -18205,6 +18414,7 @@ async fn repair_turn_checkpoint_tail_with_runtime_retries_failed_compaction_only
     let outcome = coordinator
         .repair_turn_checkpoint_tail_with_runtime(
             &config,
+            &app_ctx,
             session_id,
             &runtime,
             ConversationRuntimeBinding::Context(&app_ctx),
@@ -18334,6 +18544,7 @@ async fn repair_turn_checkpoint_tail_rebuilds_original_finalization_context_for_
     let outcome = coordinator
         .repair_turn_checkpoint_tail_with_runtime(
             &config,
+            &app_ctx,
             session_id,
             &runtime,
             ConversationRuntimeBinding::Context(&app_ctx),
@@ -18449,6 +18660,7 @@ async fn repair_turn_checkpoint_tail_prefers_checkpoint_estimate_for_compaction_
     let outcome = coordinator
         .repair_turn_checkpoint_tail_with_runtime(
             &config,
+            &app_ctx,
             session_id,
             &runtime,
             ConversationRuntimeBinding::Context(&app_ctx),
@@ -18561,6 +18773,7 @@ async fn probe_turn_checkpoint_tail_runtime_gate_reports_preparation_content_mis
     let probe = coordinator
         .probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
             &config,
+            &test_app_context("advisory-conversation"),
             session_id,
             limit,
             &runtime,
@@ -18665,6 +18878,7 @@ async fn probe_turn_checkpoint_tail_runtime_gate_returns_none_when_repair_not_ne
     let probe = coordinator
         .probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
             &config,
+            &test_app_context("advisory-conversation"),
             session_id,
             limit,
             &runtime,
@@ -18762,6 +18976,7 @@ async fn probe_turn_checkpoint_tail_runtime_gate_returns_none_for_summary_manual
     let probe = coordinator
         .probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
             &config,
+            &test_app_context("advisory-conversation"),
             session_id,
             limit,
             &runtime,
@@ -18861,6 +19076,7 @@ async fn probe_turn_checkpoint_tail_runtime_gate_returns_none_for_runnable_repai
     let probe = coordinator
         .probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
             &config,
+            &test_app_context("advisory-conversation"),
             session_id,
             limit,
             &runtime,
@@ -18959,6 +19175,7 @@ async fn load_turn_checkpoint_diagnostics_with_runtime_preserves_summary_manual_
     let diagnostics = coordinator
         .load_turn_checkpoint_diagnostics_with_runtime_and_limit(
             &config,
+            &test_app_context("advisory-conversation"),
             session_id,
             12,
             &runtime,
@@ -19082,6 +19299,7 @@ async fn load_turn_checkpoint_diagnostics_with_runtime_preserves_summary_assessm
     let diagnostics = coordinator
         .load_turn_checkpoint_diagnostics_with_runtime_and_limit(
             &config,
+            &test_app_context("advisory-conversation"),
             session_id,
             12,
             &runtime,
@@ -19197,6 +19415,7 @@ async fn load_turn_checkpoint_diagnostics_with_runtime_degrades_build_context_fa
     let diagnostics = coordinator
         .load_turn_checkpoint_diagnostics_with_runtime_and_limit(
             &config,
+            &test_app_context("advisory-conversation"),
             session_id,
             12,
             &runtime,
@@ -19310,6 +19529,7 @@ async fn load_turn_checkpoint_diagnostics_uses_single_kernel_window_snapshot_for
     let diagnostics = coordinator
         .load_turn_checkpoint_diagnostics_with_runtime_and_limit(
             &config,
+            &test_app_context("advisory-conversation"),
             session_id,
             12,
             &runtime,
@@ -19374,6 +19594,7 @@ async fn handle_turn_with_runtime_passes_restricted_tool_view_into_provider_requ
     let reply = coordinator
         .handle_turn_with_runtime(
             &test_config(),
+            &test_app_context("advisory-conversation"),
             "delegate-child-session",
             "hello",
             ProviderErrorMode::Propagate,
@@ -19481,9 +19702,14 @@ async fn handle_turn_with_runtime_child_session_injects_runtime_narrowing_into_k
     .expect("append delegate_started event");
 
     let runtime = DefaultConversationRuntime::default();
+    let base_ctx = crate::test_support::app_context_for_session(
+        "child-session",
+        crate::tools::runtime_tool_view(),
+    );
     let session_context = runtime
         .session_context(
             &config,
+            &base_ctx,
             "child-session",
             ConversationRuntimeBinding::AdvisoryOnly,
         )
@@ -19526,6 +19752,9 @@ async fn handle_turn_with_runtime_child_session_injects_runtime_narrowing_into_k
         )),
         token.clone(),
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build conversation test app context");
 
@@ -19644,9 +19873,14 @@ async fn session_context_uses_persisted_child_tool_view_constraints() {
     .expect("append delegate_started event");
 
     let runtime = DefaultConversationRuntime::default();
+    let app_ctx = crate::test_support::app_context_for_session(
+        "child-session",
+        crate::tools::runtime_tool_view(),
+    );
     let session_context = runtime
         .session_context(
             &config,
+            &app_ctx,
             "child-session",
             ConversationRuntimeBinding::AdvisoryOnly,
         )
@@ -19734,6 +19968,7 @@ async fn session_context_preserves_child_workspace_root_from_delegate_execution_
     let session_context = runtime
         .session_context(
             &config,
+            &app_ctx,
             "child-session",
             ConversationRuntimeBinding::Context(&app_ctx),
         )
@@ -19747,7 +19982,7 @@ async fn session_context_preserves_child_workspace_root_from_delegate_execution_
     let assembled = runtime
         .build_context(
             &config,
-            "child-session",
+            &session_context,
             true,
             ConversationRuntimeBinding::Context(&app_ctx),
         )
@@ -19791,6 +20026,7 @@ async fn default_runtime_root_session_prefers_runtime_workspace_root_over_file_r
     let session_context = runtime
         .session_context(
             &config,
+            &app_ctx,
             "root-session",
             ConversationRuntimeBinding::Context(&app_ctx),
         )
@@ -19808,7 +20044,7 @@ async fn default_runtime_root_session_prefers_runtime_workspace_root_over_file_r
     let assembled = runtime
         .build_context(
             &config,
-            "root-session",
+            &session_context,
             true,
             ConversationRuntimeBinding::Context(&app_ctx),
         )
@@ -19844,9 +20080,14 @@ async fn trait_default_root_session_falls_back_to_configured_file_root() {
     config.tools.runtime_workspace_root = None;
 
     let runtime = TraitDefaultToolViewRuntime;
+    let app_ctx = crate::test_support::app_context_for_session(
+        "root-session",
+        crate::tools::runtime_tool_view(),
+    );
     let session_context = runtime
         .session_context(
             &config,
+            &app_ctx,
             "root-session",
             ConversationRuntimeBinding::AdvisoryOnly,
         )
@@ -19882,9 +20123,14 @@ async fn root_session_ignores_nonexistent_configured_file_root_for_workspace_sco
     config.tools.runtime_workspace_root = None;
 
     let runtime = TraitDefaultToolViewRuntime;
+    let app_ctx = crate::test_support::app_context_for_session(
+        "root-session",
+        crate::tools::runtime_tool_view(),
+    );
     let session_context = runtime
         .session_context(
             &config,
+            &app_ctx,
             "root-session",
             ConversationRuntimeBinding::AdvisoryOnly,
         )
@@ -19908,9 +20154,14 @@ async fn session_context_preserves_child_profile_from_delegate_execution_contrac
         Some(crate::conversation::DelegateBuiltinProfile::Research),
     );
     let runtime = DefaultConversationRuntime::default();
+    let app_ctx = crate::test_support::app_context_for_session(
+        &child_session_id,
+        crate::tools::runtime_tool_view(),
+    );
     let session_context = runtime
         .session_context(
             &config,
+            &app_ctx,
             &child_session_id,
             ConversationRuntimeBinding::AdvisoryOnly,
         )
@@ -19988,9 +20239,14 @@ async fn trait_default_session_context_preserves_delegate_execution_contract() {
     .expect("append delegate_started event");
 
     let runtime = TraitDefaultToolViewRuntime;
+    let app_ctx = crate::test_support::app_context_for_session(
+        "child-session",
+        crate::tools::runtime_tool_view(),
+    );
     let session_context = runtime
         .session_context(
             &config,
+            &app_ctx,
             "child-session",
             ConversationRuntimeBinding::AdvisoryOnly,
         )
@@ -20086,9 +20342,14 @@ async fn session_context_preserves_child_runtime_narrowing_after_many_later_even
     }
 
     let runtime = DefaultConversationRuntime::default();
+    let app_ctx = crate::test_support::app_context_for_session(
+        "child-session",
+        crate::tools::runtime_tool_view(),
+    );
     let session_context = runtime
         .session_context(
             &config,
+            &app_ctx,
             "child-session",
             ConversationRuntimeBinding::AdvisoryOnly,
         )
@@ -20096,6 +20357,7 @@ async fn session_context_preserves_child_runtime_narrowing_after_many_later_even
 
     let runtime_narrowing = session_context
         .runtime_narrowing
+        .as_ref()
         .expect("child runtime narrowing should survive later events");
     assert_eq!(
         runtime_narrowing.web_fetch.allowed_domains,
@@ -20138,9 +20400,14 @@ async fn session_context_merges_persisted_session_policy_runtime_narrowing() {
     .expect("upsert child session tool policy");
 
     let runtime = DefaultConversationRuntime::default();
+    let app_ctx = crate::test_support::app_context_for_session(
+        &child_session_id,
+        crate::tools::runtime_tool_view(),
+    );
     let session_context = runtime
         .session_context(
             &config,
+            &app_ctx,
             &child_session_id,
             ConversationRuntimeBinding::AdvisoryOnly,
         )
@@ -20148,6 +20415,7 @@ async fn session_context_merges_persisted_session_policy_runtime_narrowing() {
 
     let runtime_narrowing = session_context
         .runtime_narrowing
+        .as_ref()
         .expect("effective runtime narrowing");
     assert_eq!(runtime_narrowing.browser.max_sessions, Some(1));
     assert!(runtime_narrowing.web_fetch.enforce_allowed_domains);
@@ -20216,6 +20484,7 @@ async fn handle_turn_with_runtime_executes_session_tools_via_default_dispatcher(
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -20305,6 +20574,7 @@ async fn handle_turn_with_runtime_executes_sessions_send_via_default_dispatcher(
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "controller-root",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -20416,6 +20686,7 @@ async fn handle_turn_with_runtime_requires_approval_before_delegate_execution() 
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "root-session",
             "delegate this task",
             ProviderErrorMode::Propagate,
@@ -20534,6 +20805,7 @@ async fn handle_turn_with_runtime_executes_delegate_via_coordinator() {
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -20693,6 +20965,7 @@ async fn handle_turn_with_runtime_kernel_delegate_calls_subagent_lifecycle_hooks
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -20816,6 +21089,7 @@ async fn handle_turn_with_runtime_delegate_rejects_spawn_when_prepare_subagent_s
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -20906,6 +21180,7 @@ async fn handle_turn_with_runtime_delegate_reports_end_hook_failure_after_child_
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -21055,6 +21330,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_approve_once_preserve
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -21181,6 +21457,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_rejects_core_replay_f
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -21304,6 +21581,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_kernel_replays_previo
     coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -21354,6 +21632,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_kernel_replays_previo
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -21453,6 +21732,7 @@ async fn handle_turn_with_runtime_requires_approval_before_shell_exec_execution(
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "root-session",
             "run the command",
             ProviderErrorMode::Propagate,
@@ -21601,6 +21881,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_replays_shell_exec_fo
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -21735,6 +22016,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_approve_always_reuses
     let approval_reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -21790,6 +22072,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_approve_always_reuses
     let granted_reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -21910,6 +22193,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_deny_does_not_replay_
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -22036,6 +22320,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_approve_always_reuses
     let approval_reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -22099,6 +22384,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_approve_always_reuses
     let granted_reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -22227,6 +22513,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_approve_always_persis
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -22353,6 +22640,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_kernel_replay_surface
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -22463,6 +22751,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_deny_does_not_replay_
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -22556,6 +22845,7 @@ async fn spawn_background_delegate_with_runtime_creates_missing_root_session_sco
 
     let outcome = crate::conversation::spawn_background_delegate_with_runtime(
         &config,
+        &test_app_context("task-root"),
         &runtime,
         "task-root",
         "collect repo health",
@@ -22681,6 +22971,7 @@ async fn spawn_background_delegate_with_runtime_uses_default_timeout_when_omitte
 
     let outcome = crate::conversation::spawn_background_delegate_with_runtime(
         &config,
+        &test_app_context("task-root"),
         &runtime,
         "task-root",
         "sync release checklist",
@@ -22755,6 +23046,7 @@ async fn handle_turn_with_runtime_delegate_async_advisory_only_binding_fails_bef
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -22844,6 +23136,7 @@ async fn handle_turn_with_runtime_delegate_async_advisory_only_binding_still_fai
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -22959,6 +23252,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_keeps_delegate_async_
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -23067,6 +23361,7 @@ async fn handle_turn_with_runtime_delegate_async_queue_failure_rolls_back_child_
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -23156,6 +23451,7 @@ async fn handle_turn_with_runtime_delegate_async_rejects_when_active_child_limit
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -23246,6 +23542,7 @@ async fn handle_turn_with_runtime_executes_delegate_async_via_coordinator_withou
         coordinator
             .handle_turn_with_runtime(
                 &config,
+                &app_ctx,
                 "root-session",
                 "show raw json tool output",
                 ProviderErrorMode::Propagate,
@@ -23428,6 +23725,7 @@ async fn handle_turn_with_runtime_delegate_async_preserves_kernel_binding_in_spa
         coordinator
             .handle_turn_with_runtime(
                 &config,
+                &app_ctx,
                 "root-session",
                 "show raw json tool output",
                 ProviderErrorMode::Propagate,
@@ -23532,6 +23830,7 @@ async fn handle_turn_with_runtime_delegate_async_profile_shapes_child_execution_
         coordinator
             .handle_turn_with_runtime(
                 &config,
+                &app_ctx,
                 "root-session",
                 "show raw json tool output",
                 ProviderErrorMode::Propagate,
@@ -23653,6 +23952,7 @@ async fn handle_turn_with_runtime_delegate_async_projects_queued_event_to_parent
         coordinator
             .handle_turn_with_runtime(
                 &config,
+                &app_ctx,
                 "root-session",
                 "show raw json tool output",
                 ProviderErrorMode::Propagate,
@@ -23757,6 +24057,7 @@ async fn handle_turn_with_runtime_delegate_async_projects_terminal_event_to_pare
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -23867,6 +24168,7 @@ async fn handle_turn_with_runtime_delegate_async_spawn_failure_is_observable_aft
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -24007,6 +24309,7 @@ async fn handle_turn_with_runtime_kernel_delegate_async_spawn_failure_closes_lif
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -24104,6 +24407,7 @@ async fn handle_turn_with_runtime_delegate_async_spawn_panic_is_observable_after
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -24232,6 +24536,7 @@ async fn handle_turn_with_runtime_delegate_async_spawn_failure_persistence_recov
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -24354,6 +24659,7 @@ async fn handle_turn_with_runtime_delegate_child_cannot_reenter_delegate_by_defa
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -24430,6 +24736,7 @@ async fn handle_turn_with_runtime_delegate_supports_worktree_isolation_for_clean
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -24583,6 +24890,7 @@ async fn handle_turn_with_runtime_delegate_async_worktree_isolation_retains_dirt
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -24760,6 +25068,7 @@ async fn handle_turn_with_runtime_delegate_child_cannot_reenter_delegate_async_b
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -24905,6 +25214,7 @@ async fn handle_turn_with_runtime_delegate_child_can_reenter_when_max_depth_allo
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -25009,6 +25319,7 @@ async fn handle_turn_with_runtime_executes_session_wait_via_default_dispatcher()
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "root-session",
             "show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -25088,6 +25399,7 @@ async fn handle_turn_with_runtime_safe_lane_executes_session_tools_via_default_d
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "root-session",
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -25177,6 +25489,7 @@ async fn handle_turn_with_runtime_safe_lane_executes_sessions_send_via_default_d
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "controller-root",
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -25280,6 +25593,7 @@ async fn handle_turn_with_runtime_safe_lane_executes_session_wait_via_default_di
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             "root-session",
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
@@ -25385,6 +25699,7 @@ async fn repair_turn_checkpoint_tail_requires_manual_repair_on_preparation_conte
     let outcome = coordinator
         .repair_turn_checkpoint_tail_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             session_id,
             &runtime,
             ConversationRuntimeBinding::AdvisoryOnly,
@@ -25506,6 +25821,7 @@ async fn repair_turn_checkpoint_tail_requires_manual_repair_on_preparation_conte
     let outcome = coordinator
         .repair_turn_checkpoint_tail_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             session_id,
             &runtime,
             ConversationRuntimeBinding::AdvisoryOnly,
@@ -25627,6 +25943,7 @@ async fn repair_turn_checkpoint_tail_requires_manual_repair_on_malformed_prepara
     let outcome = coordinator
         .repair_turn_checkpoint_tail_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             session_id,
             &runtime,
             ConversationRuntimeBinding::AdvisoryOnly,
@@ -25735,6 +26052,7 @@ async fn repair_turn_checkpoint_tail_with_runtime_persists_failed_after_turn_rep
     let error = coordinator
         .repair_turn_checkpoint_tail_with_runtime(
             &config,
+            &app_ctx,
             session_id,
             &runtime,
             ConversationRuntimeBinding::Context(&app_ctx),
@@ -25850,6 +26168,7 @@ async fn repair_turn_checkpoint_tail_with_runtime_persists_failed_compaction_rep
     let error = coordinator
         .repair_turn_checkpoint_tail_with_runtime(
             &config,
+            &app_ctx,
             session_id,
             &runtime,
             ConversationRuntimeBinding::Context(&app_ctx),
@@ -25963,6 +26282,7 @@ async fn durable_turn_checkpoint_repair_persists_finalized_checkpoint_and_repeat
     let first = coordinator
         .repair_turn_checkpoint_tail_with_runtime(
             &config,
+            &app_ctx,
             session_id,
             &runtime,
             ConversationRuntimeBinding::Context(&app_ctx),
@@ -26009,6 +26329,7 @@ async fn durable_turn_checkpoint_repair_persists_finalized_checkpoint_and_repeat
     let second = coordinator
         .repair_turn_checkpoint_tail_with_runtime(
             &config,
+            &app_ctx,
             session_id,
             &runtime,
             ConversationRuntimeBinding::Context(&app_ctx),
@@ -26117,6 +26438,7 @@ async fn repair_turn_checkpoint_tail_with_runtime_recovers_discovery_followup_ch
     let error = coordinator
         .handle_turn_with_runtime(
             &config,
+            &test_app_context("advisory-conversation"),
             session_id,
             user_input,
             ProviderErrorMode::Propagate,
@@ -26169,6 +26491,7 @@ async fn repair_turn_checkpoint_tail_with_runtime_recovers_discovery_followup_ch
     let repair = coordinator
         .repair_turn_checkpoint_tail_with_runtime(
             &config,
+            &app_ctx,
             session_id,
             &retry_runtime,
             ConversationRuntimeBinding::from_optional_context(Some(&app_ctx)),
@@ -26275,6 +26598,7 @@ async fn durable_turn_checkpoint_repair_persists_failed_terminal_checkpoint_then
     let error = coordinator
         .repair_turn_checkpoint_tail_with_runtime(
             &config,
+            &app_ctx,
             session_id,
             &failing_runtime,
             ConversationRuntimeBinding::Context(&app_ctx),
@@ -26341,6 +26665,7 @@ async fn durable_turn_checkpoint_repair_persists_failed_terminal_checkpoint_then
     let retry = coordinator
         .repair_turn_checkpoint_tail_with_runtime(
             &config,
+            &app_ctx,
             session_id,
             &retry_runtime,
             ConversationRuntimeBinding::Context(&app_ctx),
@@ -26395,6 +26720,7 @@ async fn durable_turn_checkpoint_repair_persists_failed_terminal_checkpoint_then
     let third = coordinator
         .repair_turn_checkpoint_tail_with_runtime(
             &config,
+            &app_ctx,
             session_id,
             &retry_runtime,
             ConversationRuntimeBinding::Context(&app_ctx),
@@ -27346,19 +27672,13 @@ impl ConversationRuntime for DefaultCompactingRuntime {
     async fn build_messages(
         &self,
         config: &LoongConfig,
-        session_id: &str,
+        app_ctx: &crate::AppContext,
         include_system_prompt: bool,
         tool_view: &crate::tools::ToolView,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Vec<Value>> {
         self.context_runtime
-            .build_messages(
-                config,
-                session_id,
-                include_system_prompt,
-                tool_view,
-                binding,
-            )
+            .build_messages(config, app_ctx, include_system_prompt, tool_view, binding)
             .await
     }
 
@@ -27498,6 +27818,7 @@ async fn handle_turn_with_runtime_persists_completed_compaction_checkpoint_when_
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             session_id,
             "latest ask",
             ProviderErrorMode::Propagate,
@@ -27524,13 +27845,22 @@ async fn handle_turn_with_runtime_persists_completed_compaction_checkpoint_when_
         Some(TurnCheckpointProgressStatus::Completed)
     );
 
-    let prompt_messages = DefaultConversationRuntime::default()
+    let prompt_runtime = DefaultConversationRuntime::default();
+    let prompt_binding = ConversationRuntimeBinding::AdvisoryOnly;
+    let prompt_context = load_test_session_context(
+        &prompt_runtime,
+        &config,
+        &app_ctx,
+        session_id,
+        prompt_binding,
+    );
+    let prompt_messages = prompt_runtime
         .build_messages(
             &config,
-            session_id,
+            &prompt_context,
             true,
             &crate::tools::runtime_tool_view_for_config(&config.tools),
-            ConversationRuntimeBinding::AdvisoryOnly,
+            prompt_binding,
         )
         .await
         .expect("load prompt history after compaction");
@@ -27591,6 +27921,7 @@ async fn handle_turn_with_runtime_persists_failed_open_compaction_checkpoint_whe
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             session_id,
             "hello again",
             ProviderErrorMode::Propagate,
@@ -27796,10 +28127,11 @@ fn prompt_compiler_demotes_governed_headings_for_tool_discovery_fragments() {
 async fn default_runtime_build_context_exposes_prompt_fragments() {
     let runtime = DefaultConversationRuntime::default();
     let config = test_config();
+    let app_ctx = autonomy_runtime_session_context("prompt-fragment-runtime-session", &config);
     let assembled = runtime
         .build_context(
             &config,
-            "prompt-fragment-runtime-session",
+            &app_ctx,
             true,
             ConversationRuntimeBinding::AdvisoryOnly,
         )

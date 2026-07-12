@@ -139,6 +139,7 @@ pub(super) fn format_turn_checkpoint_runtime_probe(
 pub(super) async fn load_turn_checkpoint_summary_output(
     turn_coordinator: &ConversationTurnCoordinator,
     config: &LoongConfig,
+    app_ctx: &crate::AppContext,
     session_id: &str,
     limit: usize,
     binding: ConversationRuntimeBinding<'_>,
@@ -148,6 +149,7 @@ pub(super) async fn load_turn_checkpoint_summary_output(
     let diagnostics_future = turn_coordinator
         .load_turn_checkpoint_diagnostics_with_runtime_and_limit(
             config,
+            app_ctx,
             session_id,
             limit,
             runtime_ref,

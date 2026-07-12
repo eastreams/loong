@@ -22,42 +22,14 @@ pub(super) async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         .any(|intent| intent.source.starts_with("provider_"));
     let search_tool_intents = 0usize;
     let discovery_search_turn = false;
-    let malformed_parse_followup_turn =
-        provider_turn_has_malformed_parse_followup_signal(&turn.raw_meta);
     let assistant_preface = turn.assistant_text.clone();
     let textual_tool_parse_followup_signal = provider_turn_has_textual_tool_parse_followup_signal(
         &turn.raw_meta,
         had_tool_intents,
         assistant_preface.as_str(),
     );
-    let supports_provider_turn_followup = followup_chain_active || malformed_parse_followup_turn;
     let lane = preparation.lane_plan.decision.lane;
-    let session_context = match runtime.session_context(config, session_id, binding) {
-        Ok(session_context) => session_context,
-        Err(error) => {
-            let turn_result = TurnResult::non_retryable_tool_error("session_context_failed", error);
-            let tool_events = build_provider_turn_tool_terminal_events(turn, &turn_result, None);
-            let tool_request_summary =
-                summarize_provider_lane_tool_request(turn, &turn_result, None);
-            return ProviderTurnLaneExecution {
-                lane,
-                assistant_preface,
-                provider_usage: provider_turn_usage(turn),
-                had_tool_intents,
-                provider_originated_tool_intents,
-                textual_tool_parse_followup_turn: textual_tool_parse_followup_signal,
-                tool_request_summary,
-                discovery_search_turn,
-                search_tool_intents,
-                malformed_parse_followup_turn,
-                supports_provider_turn_followup,
-                raw_tool_output_requested: preparation.raw_tool_output_requested,
-                turn_result,
-                safe_lane_terminal_route: None,
-                tool_events,
-            };
-        }
-    };
+    let session_context = &preparation.ctx;
     let base_app_dispatcher = DefaultAppToolDispatcher::with_config(
         store::session_store_config_from_memory_config(&config.memory),
         config.clone(),
@@ -86,9 +58,9 @@ pub(super) async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
     );
     let validation = if use_safe_lane_plan_path {
         TurnEngine::with_tool_result_payload_summary_limit(usize::MAX, payload_summary_limit_chars)
-            .validate_turn_in_context(turn, &session_context)
+            .validate_turn_in_context(turn, session_context)
     } else {
-        engine.validate_turn_in_context(turn, &session_context)
+        engine.validate_turn_in_context(turn, session_context)
     };
     let (turn_result, safe_lane_terminal_route, fast_lane_tool_batch_trace) = match validation {
         Ok(TurnValidation::FinalText(text)) => (TurnResult::FinalText(text), None, None),
@@ -100,7 +72,7 @@ pub(super) async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
                 session_id,
                 &preparation.lane_plan.decision,
                 turn,
-                &session_context,
+                session_context,
                 &app_dispatcher,
                 binding,
                 ingress,
@@ -112,7 +84,7 @@ pub(super) async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
             let (result, trace) = engine
                 .execute_turn_in_context_with_trace(
                     turn,
-                    &session_context,
+                    session_context,
                     &app_dispatcher,
                     binding,
                     ingress,

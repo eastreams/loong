@@ -104,6 +104,8 @@ impl ProviderTurnReplyTailPhase {
 
 #[derive(Debug, Clone)]
 pub(super) struct ProviderTurnPreparation {
+    /// Session-owned authority and immutable views shared by every round of this turn.
+    pub(super) ctx: AppContext,
     pub(super) session: ProviderTurnSessionState,
     pub(super) lane_plan: ProviderTurnLanePlan,
     pub(super) raw_tool_output_requested: bool,
@@ -114,6 +116,7 @@ impl ProviderTurnPreparation {
     #[cfg(test)]
     pub(super) fn from_assembled_context(
         config: &LoongConfig,
+        ctx: &AppContext,
         assembled_context: AssembledConversationContext,
         user_input: &str,
         ingress: Option<&ConversationIngressContext>,
@@ -121,6 +124,7 @@ impl ProviderTurnPreparation {
         let turn_id = next_conversation_turn_id();
         Self::from_assembled_context_with_turn_id(
             config,
+            ctx,
             assembled_context,
             user_input,
             turn_id.as_str(),
@@ -130,12 +134,14 @@ impl ProviderTurnPreparation {
 
     pub(super) fn from_assembled_context_with_turn_id(
         config: &LoongConfig,
+        ctx: &AppContext,
         assembled_context: AssembledConversationContext,
         user_input: &str,
         turn_id: &str,
         ingress: Option<&ConversationIngressContext>,
     ) -> Self {
         Self {
+            ctx: ctx.clone(),
             session: ProviderTurnSessionState::from_assembled_context(
                 assembled_context,
                 user_input,
@@ -161,6 +167,7 @@ impl ProviderTurnPreparation {
             .prompt_frame
             .with_turn_ephemeral_messages(followup_tail_messages.as_slice(), None);
         Self {
+            ctx: self.ctx.clone(),
             session: ProviderTurnSessionState {
                 messages,
                 estimated_tokens: None,

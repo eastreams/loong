@@ -89,6 +89,9 @@ async fn execute_tool_core_with_test_context(
         )),
         token,
         config.clone(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )?;
 
     execute_kernel_tool_request(&app_ctx, request, trusted_internal_payload)

@@ -10,7 +10,7 @@ use crate::session::store::{self, SessionStoreConfig};
 use super::super::autonomy_policy::AutonomyTurnBudgetState;
 use super::super::runtime_binding::ConversationRuntimeBinding;
 use super::support::{approval_required_tool_decision, generic_allow_tool_decision};
-use super::{ApprovalRequirement, SessionContext, ToolIntent, ToolPreflightOutcome};
+use super::{AppContext, ApprovalRequirement, ToolIntent, ToolPreflightOutcome};
 
 #[async_trait]
 pub trait AppToolDispatcher: Send + Sync {
@@ -20,7 +20,7 @@ pub trait AppToolDispatcher: Send + Sync {
 
     async fn preflight_tool_intent_with_binding(
         &self,
-        session_context: &SessionContext,
+        session_context: &AppContext,
         intent: &ToolIntent,
         descriptor: &crate::tools::ToolDescriptor,
         binding: ConversationRuntimeBinding<'_>,
@@ -47,7 +47,7 @@ pub trait AppToolDispatcher: Send + Sync {
 
     async fn maybe_require_approval_with_binding(
         &self,
-        session_context: &SessionContext,
+        session_context: &AppContext,
         intent: &ToolIntent,
         descriptor: &crate::tools::ToolDescriptor,
         binding: ConversationRuntimeBinding<'_>,
@@ -58,7 +58,7 @@ pub trait AppToolDispatcher: Send + Sync {
 
     async fn preflight_tool_execution_with_binding(
         &self,
-        _session_context: &SessionContext,
+        _session_context: &AppContext,
         _intent: &ToolIntent,
         request: ToolCoreRequest,
         _descriptor: &crate::tools::ToolDescriptor,
@@ -69,14 +69,14 @@ pub trait AppToolDispatcher: Send + Sync {
 
     async fn execute_app_tool(
         &self,
-        session_context: &SessionContext,
+        session_context: &AppContext,
         request: ToolCoreRequest,
         binding: ConversationRuntimeBinding<'_>,
     ) -> Result<ToolCoreOutcome, String>;
 
     async fn after_tool_execution(
         &self,
-        _session_context: &SessionContext,
+        _session_context: &AppContext,
         _intent: &ToolIntent,
         _intent_sequence: usize,
         _request: &ToolCoreRequest,
@@ -92,7 +92,7 @@ pub struct NoopAppToolDispatcher;
 impl AppToolDispatcher for NoopAppToolDispatcher {
     async fn execute_app_tool(
         &self,
-        _session_context: &SessionContext,
+        _session_context: &AppContext,
         request: ToolCoreRequest,
         _binding: ConversationRuntimeBinding<'_>,
     ) -> Result<ToolCoreOutcome, String> {

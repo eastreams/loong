@@ -4,7 +4,7 @@ use crate::conversation::turn_engine::{ApprovalRequirement, ToolPreflightOutcome
 
 fn effective_tool_config_for_session(
     tool_config: &crate::config::ToolConfig,
-    session_context: &SessionContext,
+    session_context: &AppContext,
 ) -> crate::config::ToolConfig {
     let mut tool_config = tool_config.clone();
     if session_context.parent_session_id.is_some() {
@@ -30,7 +30,7 @@ where
 
     async fn preflight_tool_intent_with_binding(
         &self,
-        session_context: &SessionContext,
+        session_context: &AppContext,
         intent: &ToolIntent,
         descriptor: &crate::tools::ToolDescriptor,
         binding: ConversationRuntimeBinding<'_>,
@@ -49,7 +49,7 @@ where
 
     async fn maybe_require_approval_with_binding(
         &self,
-        session_context: &SessionContext,
+        session_context: &AppContext,
         intent: &ToolIntent,
         descriptor: &crate::tools::ToolDescriptor,
         binding: ConversationRuntimeBinding<'_>,
@@ -61,7 +61,7 @@ where
 
     async fn preflight_tool_execution_with_binding(
         &self,
-        session_context: &SessionContext,
+        session_context: &AppContext,
         intent: &ToolIntent,
         request: loong_contracts::ToolCoreRequest,
         descriptor: &crate::tools::ToolDescriptor,
@@ -80,7 +80,7 @@ where
 
     async fn execute_app_tool(
         &self,
-        session_context: &SessionContext,
+        session_context: &AppContext,
         request: loong_contracts::ToolCoreRequest,
         binding: ConversationRuntimeBinding<'_>,
     ) -> Result<loong_contracts::ToolCoreOutcome, String> {
@@ -100,6 +100,7 @@ where
                         effective_tool_config_for_session(&self.config.tools, session_context);
                     let approval_runtime = CoordinatorApprovalResolutionRuntime::new(
                         self.config,
+                        session_context,
                         self.runtime,
                         self.fallback,
                         binding,
@@ -144,7 +145,7 @@ where
 
     async fn after_tool_execution(
         &self,
-        session_context: &SessionContext,
+        session_context: &AppContext,
         intent: &ToolIntent,
         intent_sequence: usize,
         request: &loong_contracts::ToolCoreRequest,

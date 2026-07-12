@@ -3,6 +3,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 
+use crate::AppContext;
+
 use super::super::runtime_binding::OwnedConversationRuntimeBinding;
 use super::super::subagent::{ConstrainedSubagentExecution, DelegateBuiltinProfile};
 use super::super::{delegate_support, turn_coordinator};
@@ -10,6 +12,8 @@ use super::{LoongConfig, RuntimeSelfContinuity, load_default_conversation_runtim
 
 #[derive(Clone)]
 pub struct AsyncDelegateSpawnRequest {
+    /// Explicit child runtime authority; `binding` remains only for legacy mutation semantics.
+    pub app_ctx: AppContext,
     pub child_session_id: String,
     pub parent_session_id: String,
     pub task: String,
@@ -38,6 +42,7 @@ impl AsyncDelegateSpawnRequest {
 }
 
 pub fn async_delegate_spawn_request_from_serialized_parts(
+    app_ctx: AppContext,
     child_session_id: String,
     parent_session_id: String,
     task: String,
@@ -54,6 +59,7 @@ pub fn async_delegate_spawn_request_from_serialized_parts(
         .transpose()
         .map_err(|error| format!("parse async delegate runtime-self continuity failed: {error}"))?;
     let request = AsyncDelegateSpawnRequest {
+        app_ctx,
         child_session_id,
         parent_session_id,
         task,
@@ -104,6 +110,7 @@ pub async fn execute_async_delegate_spawn_request(
     request: AsyncDelegateSpawnRequest,
 ) -> Result<(), String> {
     let AsyncDelegateSpawnRequest {
+        app_ctx,
         child_session_id,
         parent_session_id,
         task,
@@ -176,6 +183,7 @@ pub async fn execute_async_delegate_spawn_request(
             let _ = turn_coordinator::run_started_delegate_child_turn_with_runtime(
                 config,
                 runtime_ref,
+                &app_ctx,
                 &child_session_id_for_spawn,
                 &parent_session_id_for_spawn,
                 label,

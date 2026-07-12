@@ -6,14 +6,14 @@ use futures_util::stream::{self, StreamExt};
 
 use super::prepare::PreparedToolIntent;
 use super::{
-    AppToolDispatcher, ConversationRuntimeBinding, ConversationTurnObserverHandle,
-    PreparedToolExecutionOutcome, SessionContext, ToolBatchExecutionIntentTrace,
-    ToolBatchExecutionMode, ToolBatchExecutionSegmentTrace, ToolBatchExecutionTrace,
-    ToolOutcomeTraceRecord, TurnEngine, TurnResult, build_denied_tool_outcome_trace_record,
-    build_failure_tool_outcome_trace_record, build_success_tool_outcome_trace_record,
-    build_tool_intent_completed_trace, build_tool_intent_denied_trace,
-    build_tool_intent_failure_trace, elapsed_ms_u64, format_tool_denied_result_line_with_limit,
-    format_tool_result_line_with_limit, observe_peak_in_flight,
+    AppContext, AppToolDispatcher, ConversationRuntimeBinding, ConversationTurnObserverHandle,
+    PreparedToolExecutionOutcome, ToolBatchExecutionIntentTrace, ToolBatchExecutionMode,
+    ToolBatchExecutionSegmentTrace, ToolBatchExecutionTrace, ToolOutcomeTraceRecord, TurnEngine,
+    TurnResult, build_denied_tool_outcome_trace_record, build_failure_tool_outcome_trace_record,
+    build_success_tool_outcome_trace_record, build_tool_intent_completed_trace,
+    build_tool_intent_denied_trace, build_tool_intent_failure_trace, elapsed_ms_u64,
+    format_tool_denied_result_line_with_limit, format_tool_result_line_with_limit,
+    observe_peak_in_flight,
 };
 use crate::tools::ToolSchedulingClass;
 
@@ -118,7 +118,7 @@ impl<'a> ToolBatchHarness<'a> {
         self,
         prepared: &[PreparedToolIntent],
         batch_segments: &[PreparedBatchSegment],
-        session_context: &SessionContext,
+        session_context: &AppContext,
         app_dispatcher: &D,
         binding: ConversationRuntimeBinding<'_>,
         trace: &mut ToolBatchExecutionTrace,
@@ -182,7 +182,7 @@ impl<'a> ToolBatchHarness<'a> {
     async fn execute_prepared_batch_sequential<D: AppToolDispatcher + ?Sized>(
         self,
         prepared: &[PreparedToolIntent],
-        session_context: &SessionContext,
+        session_context: &AppContext,
         app_dispatcher: &D,
         binding: ConversationRuntimeBinding<'_>,
         intent_outcomes: &mut Vec<ToolBatchExecutionIntentTrace>,
@@ -292,7 +292,7 @@ impl<'a> ToolBatchHarness<'a> {
     async fn execute_prepared_batch_in_parallel<D: AppToolDispatcher + ?Sized>(
         self,
         prepared: &[PreparedToolIntent],
-        session_context: &SessionContext,
+        session_context: &AppContext,
         app_dispatcher: &D,
         binding: ConversationRuntimeBinding<'_>,
         intent_outcomes: &mut Vec<ToolBatchExecutionIntentTrace>,

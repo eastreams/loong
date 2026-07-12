@@ -35,6 +35,7 @@ async fn pending_approval_control_turn_bootstraps_once_and_emits_terminal_phases
     let reply = coordinator
         .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             &config,
+            &app_ctx,
             &address,
             "esc",
             ProviderErrorMode::Propagate,
@@ -92,6 +93,8 @@ async fn pending_approval_control_turn_does_not_persist_session_mode_when_resolu
         .display()
         .to_string();
     config.memory.sqlite_path = sqlite_path;
+    let app_ctx =
+        bootstrap_test_app_context("approval-control-session-mode", 60).expect("test app context");
     let repo = SessionRepository::new(&memory_config).expect("repository");
     repo.ensure_session(NewSessionRecord {
         session_id: "root-session".to_owned(),
@@ -131,6 +134,7 @@ async fn pending_approval_control_turn_does_not_persist_session_mode_when_resolu
     let result = coordinator
         .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             &config,
+            &app_ctx,
             &address,
             "auto",
             ProviderErrorMode::Propagate,
@@ -177,6 +181,8 @@ async fn pending_approval_control_turn_resolves_delegate_request_after_yes_confi
         .display()
         .to_string();
     config.memory.sqlite_path = sqlite_path;
+    let app_ctx =
+        bootstrap_test_app_context("approval-control-confirm", 60).expect("test app context");
     let repo = SessionRepository::new(&memory_config).expect("repository");
     repo.ensure_session(NewSessionRecord {
         session_id: "root-session".to_owned(),
@@ -193,6 +199,7 @@ async fn pending_approval_control_turn_resolves_delegate_request_after_yes_confi
     let reply = coordinator
         .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
             &config,
+            &app_ctx,
             &address,
             "yes",
             ProviderErrorMode::Propagate,
@@ -240,6 +247,8 @@ async fn approval_request_resolve_persists_session_mode_on_success() {
         .display()
         .to_string();
     config.memory.sqlite_path = sqlite_path;
+    let app_ctx =
+        bootstrap_test_app_context("approval-session-mode-success", 60).expect("test app context");
     let repo = SessionRepository::new(&memory_config).expect("repository");
     repo.ensure_session(NewSessionRecord {
         session_id: "root-session".to_owned(),
@@ -259,6 +268,7 @@ async fn approval_request_resolve_persists_session_mode_on_success() {
     let fallback = DefaultAppToolDispatcher::new(memory_config.clone(), ToolConfig::default());
     let approval_runtime = CoordinatorApprovalResolutionRuntime::new(
         &config,
+        &app_ctx,
         &runtime,
         &fallback,
         ConversationRuntimeBinding::AdvisoryOnly,
@@ -315,6 +325,8 @@ async fn approval_request_resolve_retries_missing_session_mode_after_approval() 
         .display()
         .to_string();
     config.memory.sqlite_path = sqlite_path;
+    let app_ctx =
+        bootstrap_test_app_context("approval-session-mode-retry", 60).expect("test app context");
     let repo = SessionRepository::new(&memory_config).expect("repository");
     repo.ensure_session(NewSessionRecord {
         session_id: "root-session".to_owned(),
@@ -348,6 +360,7 @@ async fn approval_request_resolve_retries_missing_session_mode_after_approval() 
     let fallback = DefaultAppToolDispatcher::new(memory_config.clone(), ToolConfig::default());
     let approval_runtime = CoordinatorApprovalResolutionRuntime::new(
         &config,
+        &app_ctx,
         &runtime,
         &fallback,
         ConversationRuntimeBinding::AdvisoryOnly,
@@ -435,6 +448,7 @@ async fn core_approval_replay_skips_app_session_context_loading() {
     let fallback = DefaultAppToolDispatcher::new(memory_config.clone(), ToolConfig::default());
     let approval_runtime = CoordinatorApprovalResolutionRuntime::new(
         &config,
+        &app_ctx,
         &runtime,
         &fallback,
         ConversationRuntimeBinding::Context(&app_ctx),

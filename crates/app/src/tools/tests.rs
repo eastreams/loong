@@ -13164,6 +13164,9 @@ fn build_tool_app_context(
         )),
         token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build tool test app context");
 
@@ -13253,6 +13256,9 @@ async fn kernel_tool_adapter_routes_through_kernel() {
         runtime.clone(),
         token.clone(),
         tool_runtime_config.clone(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build app context");
     let execution_context = app_context
@@ -13333,6 +13339,9 @@ async fn kernel_tool_adapter_rejects_reserved_internal_payload_through_kernel_by
         runtime.clone(),
         token.clone(),
         tool_runtime_config.clone(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build app context");
     let execution_context = app_context
@@ -13425,6 +13434,9 @@ async fn web_fetch_through_kernel_requires_network_egress_capability() {
         )),
         token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build web fetch test app context");
     let request = ToolCoreRequest {
@@ -13488,6 +13500,9 @@ async fn web_fetch_through_kernel_exposes_network_egress_to_pre_policy() {
         )),
         token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build web fetch test app context");
     let request = ToolCoreRequest {

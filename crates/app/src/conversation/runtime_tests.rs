@@ -61,7 +61,7 @@ impl ConversationRuntime for SpawnerAwareRuntime {
     async fn build_messages(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
+        _app_ctx: &crate::AppContext,
         _include_system_prompt: bool,
         _tool_view: &ToolView,
         _binding: ConversationRuntimeBinding<'_>,
@@ -131,6 +131,25 @@ fn provider_runtime_binding_maps_kernel_conversation_binding_to_kernel() {
         provider::ProviderRuntimeBinding::Context(app_ctx)
             if std::ptr::eq(app_ctx, &harness.app_ctx)
     ));
+}
+
+#[test]
+fn session_context_uses_explicit_context_without_promoting_advisory_binding() {
+    let harness = TurnTestHarness::new();
+    let runtime = DefaultConversationRuntime::default();
+    let binding = ConversationRuntimeBinding::AdvisoryOnly;
+
+    let session_context = runtime
+        .session_context(
+            &LoongConfig::default(),
+            &harness.app_ctx,
+            "advisory-session",
+            binding,
+        )
+        .expect("explicit runtime authority should construct advisory session state");
+
+    assert_eq!(session_context.session_id, "advisory-session");
+    assert!(binding.context().is_none());
 }
 
 #[test]
@@ -209,6 +228,8 @@ fn hosted_runtime_overrides_async_delegate_spawner_without_changing_background_t
 
 #[test]
 fn async_delegate_spawn_request_round_trips_runtime_self_continuity_json() {
+    let app_ctx = crate::context::bootstrap_test_app_context("async-delegate-round-trip", 60)
+        .expect("test app context");
     let execution = super::super::subagent::ConstrainedSubagentExecution {
         mode: super::super::subagent::ConstrainedSubagentMode::Async,
         isolation: super::super::subagent::ConstrainedSubagentIsolation::Shared,
@@ -235,6 +256,7 @@ fn async_delegate_spawn_request_round_trips_runtime_self_continuity_json() {
         session_profile_projection: Some("delegate profile".to_owned()),
     };
     let request = AsyncDelegateSpawnRequest {
+        app_ctx,
         child_session_id: "child-1".to_owned(),
         parent_session_id: "parent-1".to_owned(),
         task: "investigate".to_owned(),
@@ -251,6 +273,7 @@ fn async_delegate_spawn_request_round_trips_runtime_self_continuity_json() {
         .runtime_self_continuity_json()
         .expect("serialize runtime self continuity");
     let round_tripped = async_delegate_spawn_request_from_serialized_parts(
+        request.app_ctx.clone(),
         request.child_session_id.clone(),
         request.parent_session_id.clone(),
         request.task.clone(),
@@ -291,7 +314,7 @@ async fn hosted_runtime_build_context_delegates_to_inner_runtime() {
         async fn build_context(
             &self,
             _config: &LoongConfig,
-            _session_id: &str,
+            _app_ctx: &crate::AppContext,
             _include_system_prompt: bool,
             _binding: ConversationRuntimeBinding<'_>,
         ) -> CliResult<AssembledConversationContext> {
@@ -321,7 +344,7 @@ async fn hosted_runtime_build_context_delegates_to_inner_runtime() {
         async fn build_messages(
             &self,
             _config: &LoongConfig,
-            _session_id: &str,
+            _app_ctx: &crate::AppContext,
             _include_system_prompt: bool,
             _tool_view: &ToolView,
             _binding: ConversationRuntimeBinding<'_>,
@@ -376,11 +399,15 @@ async fn hosted_runtime_build_context_delegates_to_inner_runtime() {
 
     let config = LoongConfig::default();
     let hosted_runtime = HostedConversationRuntime::new(BuildContextAwareRuntime);
+    let app_ctx = crate::test_support::app_context_for_session(
+        "session-1",
+        crate::tools::runtime_tool_view(),
+    );
 
     let assembled = hosted_runtime
         .build_context(
             &config,
-            "session-1",
+            &app_ctx,
             true,
             ConversationRuntimeBinding::AdvisoryOnly,
         )
@@ -496,10 +523,21 @@ async fn default_runtime_build_context_rehydrates_active_skills() {
         })
         .expect("append active skills event");
 
+    let app_ctx = crate::context::bootstrap_app_context_with_config(session_id, 60, &config)
+        .expect("test app context");
+    let session_context = runtime
+        .session_context(
+            &config,
+            &app_ctx,
+            session_id,
+            ConversationRuntimeBinding::AdvisoryOnly,
+        )
+        .expect("load session context");
+
     let assembled = runtime
         .build_context(
             &config,
-            session_id,
+            &session_context,
             true,
             ConversationRuntimeBinding::AdvisoryOnly,
         )

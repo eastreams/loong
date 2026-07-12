@@ -95,6 +95,9 @@ fn test_app_context_with_memory(
         )),
         token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build chat test app context")
 }
@@ -320,6 +323,9 @@ fn build_app_context_with_window_outcome(
         )),
         token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build chat test app context");
     (ctx, invocations)
@@ -933,9 +939,12 @@ async fn turn_checkpoint_summary_output_accepts_explicit_runtime_binding() {
         &memory_config,
     );
     let coordinator = ConversationTurnCoordinator::new();
+    let advisory_app_ctx =
+        test_app_context_with_memory("chat-binding-turn-checkpoint-advisory-only", &memory_config);
     let advisory_output = load_turn_checkpoint_summary_output(
         &coordinator,
         &config,
+        &advisory_app_ctx,
         "chat-binding-turn-checkpoint-advisory-only",
         96,
         ConversationRuntimeBinding::AdvisoryOnly,
@@ -955,6 +964,7 @@ async fn turn_checkpoint_summary_output_accepts_explicit_runtime_binding() {
     let kernel_output = load_turn_checkpoint_summary_output(
         &coordinator,
         &config,
+        &app_ctx,
         "chat-binding-turn-checkpoint-kernel",
         112,
         ConversationRuntimeBinding::Context(&app_ctx),
@@ -2741,9 +2751,10 @@ async fn manual_compaction_result_applies_and_surfaces_continuity_checkpoint() {
 
     let binding = ConversationRuntimeBinding::Context(&app_ctx);
     let turn_coordinator = ConversationTurnCoordinator::new();
-    let result = load_manual_compaction_result(&config, session_id, &turn_coordinator, binding)
-        .await
-        .expect("manual compaction should succeed");
+    let result =
+        load_manual_compaction_result(&config, &app_ctx, session_id, &turn_coordinator, binding)
+            .await
+            .expect("manual compaction should succeed");
 
     assert_eq!(result.status, ManualCompactionStatus::Applied);
     assert_eq!(result.before_turns, 8);

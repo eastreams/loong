@@ -342,7 +342,7 @@ mod tests {
         async fn build_messages(
             &self,
             _config: &LoongConfig,
-            _session_id: &str,
+            _app_ctx: &crate::AppContext,
             include_system_prompt: bool,
             _tool_view: &crate::tools::ToolView,
             _binding: crate::conversation::ConversationRuntimeBinding<'_>,
@@ -653,6 +653,7 @@ mod tests {
 
         let reply = process_inbound_with_runtime_and_feedback(
             &config,
+            &app_ctx,
             &runtime,
             &message,
             crate::conversation::ConversationRuntimeBinding::Context(&app_ctx),
@@ -722,6 +723,7 @@ mod tests {
 
         let reply = process_inbound_with_runtime_and_feedback(
             &config,
+            &app_ctx,
             &runtime,
             &message,
             crate::conversation::ConversationRuntimeBinding::Context(&app_ctx),

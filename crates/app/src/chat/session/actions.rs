@@ -1153,6 +1153,7 @@ impl ChatSessionSurface {
                                 self.runtime.conversation_binding();
                             let result = ops::load_manual_compaction_result(
                                 &self.runtime.config,
+                                &self.runtime.app_context,
                                 &self.runtime.session_id,
                                 &self.runtime.turn_coordinator,
                                 binding,
@@ -1369,6 +1370,7 @@ impl ChatSessionSurface {
                                                 .turn_coordinator
                                                 .repair_production_turn_checkpoint_tail(
                                                     &self.runtime.config,
+                                                    &self.runtime.app_context,
                                                     &self.runtime.session_id,
                                                     self.runtime.conversation_binding(),
                                                 )

@@ -263,6 +263,7 @@ impl<'a> RuntimeTurnExecutionService<'a> {
                 .turn_coordinator
                 .handle_turn_with_runtime_and_address_and_ingress_and_observer_outcome(
                     &turn_config,
+                    &runtime.app_context,
                     &turn_address,
                     message,
                     provider_error_mode,

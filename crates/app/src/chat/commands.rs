@@ -224,6 +224,7 @@ pub(super) async fn process_cli_chat_input(
             print_turn_checkpoint_summary(
                 &runtime.turn_coordinator,
                 &runtime.config,
+                &runtime.app_context,
                 &runtime.session_id,
                 limit,
                 runtime.conversation_binding(),
@@ -234,6 +235,7 @@ pub(super) async fn process_cli_chat_input(
             print_turn_checkpoint_summary(
                 &runtime.turn_coordinator,
                 &runtime.config,
+                &runtime.app_context,
                 &runtime.session_id,
                 limit,
                 runtime.conversation_binding(),
@@ -256,6 +258,7 @@ pub(super) async fn process_cli_chat_input(
             print_turn_checkpoint_repair(
                 &runtime.turn_coordinator,
                 &runtime.config,
+                &runtime.app_context,
                 &runtime.session_id,
                 runtime.conversation_binding(),
             )

@@ -6,7 +6,6 @@ use loong_contracts::{Capability, ExecutionPlane, PlaneTier};
 #[cfg(feature = "memory-sqlite")]
 use serde_json::json;
 
-use crate::CliResult;
 use crate::config::LoongConfig;
 #[cfg(any(test, feature = "memory-sqlite"))]
 use crate::conversation::ContextCompactionReport;
@@ -19,6 +18,7 @@ use crate::runtime_self_continuity;
 #[cfg(feature = "memory-sqlite")]
 use crate::session::store::SessionStoreConfig;
 use crate::tui_surface::{TuiCalloutTone, TuiMessageSpec, TuiSectionSpec};
+use crate::{AppContext, CliResult};
 
 use super::CliTurnRuntime;
 use super::detect_cli_chat_render_width;
@@ -166,6 +166,7 @@ pub(super) async fn print_manual_compaction(runtime: &CliTurnRuntime) -> CliResu
         let binding = runtime.conversation_binding();
         let result = load_manual_compaction_result(
             &runtime.config,
+            &runtime.app_context,
             &runtime.session_id,
             &runtime.turn_coordinator,
             binding,
@@ -231,6 +232,7 @@ pub(super) async fn print_history(
 #[cfg(feature = "memory-sqlite")]
 pub(super) async fn load_manual_compaction_result(
     config: &LoongConfig,
+    app_ctx: &AppContext,
     session_id: &str,
     turn_coordinator: &ConversationTurnCoordinator,
     binding: ConversationRuntimeBinding<'_>,
@@ -238,7 +240,7 @@ pub(super) async fn load_manual_compaction_result(
     let before_snapshot = load_manual_compaction_window_snapshot(session_id, binding).await?;
     let before_turns = resolve_manual_compaction_turn_count(&before_snapshot);
     let report = turn_coordinator
-        .compact_production_session(config, session_id, binding)
+        .compact_production_session(config, app_ctx, session_id, binding)
         .await?;
     let after_snapshot = load_manual_compaction_window_snapshot(session_id, binding).await?;
     let after_turns = resolve_manual_compaction_turn_count(&after_snapshot);

@@ -100,7 +100,7 @@ pub use prompt_orchestrator::{PromptCompilation, PromptCompiler};
 pub use runtime::{
     AsyncDelegateSpawnRequest, AsyncDelegateSpawner, ContextCompactionPolicySnapshot,
     ContextEngineRuntimeSnapshot, ContextEngineSelection, ContextEngineSelectionSource,
-    ConversationRuntime, DefaultConversationRuntime, HostedConversationRuntime, SessionContext,
+    ConversationRuntime, DefaultConversationRuntime, HostedConversationRuntime,
     TurnMiddlewareRuntimeSnapshot, TurnMiddlewareSelection, TurnMiddlewareSelectionSource,
     async_delegate_spawn_request_from_serialized_parts, collect_context_engine_runtime_snapshot,
     execute_async_delegate_spawn_request, load_default_conversation_runtime,

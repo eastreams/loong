@@ -1,26 +1,34 @@
+#[cfg(test)]
+use super::ToolView;
 use super::{
-    ProviderTurn, SessionContext, ToolView, TurnEngine, TurnFailure, TurnResult, TurnValidation,
+    AppContext, ProviderTurn, TurnEngine, TurnFailure, TurnResult, TurnValidation,
     concealed_provider_tool_denial, effective_visible_tool_name, provider_tool_denial_reason,
-    provider_tool_denial_should_conceal_name, session_context_from_turn, tool_intent_is_visible,
+    provider_tool_denial_should_conceal_name, tool_intent_is_visible,
     tool_intent_skips_provider_exposed_gate,
 };
 use loong_contracts::ToolCoreRequest;
 
 impl TurnEngine {
-    /// Evaluate a provider turn and produce a deterministic result.
-    /// Does NOT execute tools — just validates and gates.
+    #[cfg(test)]
     pub fn evaluate_turn(&self, turn: &ProviderTurn) -> TurnResult {
-        self.evaluate_turn_in_view(turn, &crate::tools::runtime_tool_view())
+        let context = crate::test_support::app_context_for_session(
+            "turn-validation",
+            crate::tools::runtime_tool_view(),
+        );
+        self.evaluate_turn_in_context(turn, &context)
     }
 
+    #[cfg(test)]
     pub fn evaluate_turn_in_view(&self, turn: &ProviderTurn, tool_view: &ToolView) -> TurnResult {
-        self.evaluate_turn_in_context(turn, &session_context_from_turn(turn, tool_view.clone()))
+        let context =
+            crate::test_support::app_context_for_session("turn-validation", tool_view.clone());
+        self.evaluate_turn_in_context(turn, &context)
     }
 
     pub fn evaluate_turn_in_context(
         &self,
         turn: &ProviderTurn,
-        session_context: &SessionContext,
+        session_context: &AppContext,
     ) -> TurnResult {
         match self.validate_turn_in_context(turn, session_context) {
             Ok(TurnValidation::FinalText(text)) => TurnResult::FinalText(text),
@@ -31,26 +39,19 @@ impl TurnEngine {
         }
     }
 
-    /// Validate a provider turn and describe whether tool execution is needed.
-    ///
-    /// This phase is pure: it validates the turn shape and tool budget, but it does
-    /// not make runtime binding decisions about whether a kernel is available.
+    #[cfg(test)]
     pub fn validate_turn(&self, turn: &ProviderTurn) -> Result<TurnValidation, TurnFailure> {
-        self.validate_turn_in_view(turn, &crate::tools::runtime_tool_view())
-    }
-
-    pub fn validate_turn_in_view(
-        &self,
-        turn: &ProviderTurn,
-        tool_view: &ToolView,
-    ) -> Result<TurnValidation, TurnFailure> {
-        self.validate_turn_in_context(turn, &session_context_from_turn(turn, tool_view.clone()))
+        let context = crate::test_support::app_context_for_session(
+            "turn-validation",
+            crate::tools::runtime_tool_view(),
+        );
+        self.validate_turn_in_context(turn, &context)
     }
 
     pub fn validate_turn_in_context(
         &self,
         turn: &ProviderTurn,
-        session_context: &SessionContext,
+        session_context: &AppContext,
     ) -> Result<TurnValidation, TurnFailure> {
         if turn.tool_intents.is_empty() {
             return Ok(TurnValidation::FinalText(turn.assistant_text.clone()));

@@ -14,7 +14,7 @@ const SAFE_LANE_VERIFY_DENY_MARKERS: &[&str] = &[
 
 pub(super) struct SafeLanePlanNodeExecutor<'a> {
     pub(super) tool_intents: &'a [ToolIntent],
-    pub(super) session_context: &'a SessionContext,
+    pub(super) session_context: &'a AppContext,
     pub(super) app_dispatcher: &'a dyn AppToolDispatcher,
     pub(super) binding: ConversationRuntimeBinding<'a>,
     pub(super) ingress: Option<&'a ConversationIngressContext>,
@@ -25,7 +25,7 @@ pub(super) struct SafeLanePlanNodeExecutor<'a> {
 impl<'a> SafeLanePlanNodeExecutor<'a> {
     pub(super) fn new(
         tool_intents: &'a [ToolIntent],
-        session_context: &'a SessionContext,
+        session_context: &'a AppContext,
         app_dispatcher: &'a dyn AppToolDispatcher,
         binding: ConversationRuntimeBinding<'a>,
         ingress: Option<&'a ConversationIngressContext>,
@@ -106,7 +106,7 @@ pub(super) fn parse_tool_node_index(node_id: &str) -> Result<usize, PlanNodeErro
 
 pub(super) async fn execute_single_tool_intent(
     intent: &ToolIntent,
-    session_context: &SessionContext,
+    session_context: &AppContext,
     app_dispatcher: &dyn AppToolDispatcher,
     binding: ConversationRuntimeBinding<'_>,
     ingress: Option<&ConversationIngressContext>,
@@ -159,7 +159,7 @@ pub(super) async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?S
     session_id: &str,
     lane_decision: &LaneDecision,
     turn: &ProviderTurn,
-    session_context: &SessionContext,
+    session_context: &AppContext,
     app_dispatcher: &dyn AppToolDispatcher,
     binding: ConversationRuntimeBinding<'_>,
     ingress: Option<&ConversationIngressContext>,
@@ -558,7 +558,7 @@ pub(super) async fn evaluate_safe_lane_round(
     config: &LoongConfig,
     lane_decision: &LaneDecision,
     turn: &ProviderTurn,
-    session_context: &SessionContext,
+    session_context: &AppContext,
     app_dispatcher: &dyn AppToolDispatcher,
     binding: ConversationRuntimeBinding<'_>,
     ingress: Option<&ConversationIngressContext>,

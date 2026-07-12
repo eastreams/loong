@@ -248,7 +248,7 @@ async fn request_completion_with_raw_fallback_detailed_preserves_state_and_uses_
         async fn build_messages(
             &self,
             _config: &LoongConfig,
-            _session_id: &str,
+            _app_ctx: &crate::AppContext,
             _include_system_prompt: bool,
             _tool_view: &ToolView,
             _binding: ConversationRuntimeBinding<'_>,
@@ -334,7 +334,7 @@ async fn request_completion_with_raw_fallback_detailed_uses_raw_reply_when_compl
         async fn build_messages(
             &self,
             _config: &LoongConfig,
-            _session_id: &str,
+            _app_ctx: &crate::AppContext,
             _include_system_prompt: bool,
             _tool_view: &ToolView,
             _binding: ConversationRuntimeBinding<'_>,
@@ -420,7 +420,7 @@ async fn request_completion_with_raw_fallback_detailed_salvages_glued_tool_reque
         async fn build_messages(
             &self,
             _config: &LoongConfig,
-            _session_id: &str,
+            _app_ctx: &crate::AppContext,
             _include_system_prompt: bool,
             _tool_view: &ToolView,
             _binding: ConversationRuntimeBinding<'_>,

@@ -30,7 +30,7 @@ use super::autonomy_policy::{
     AUTONOMY_POLICY_SOURCE, AutonomyTurnBudgetState, PolicyDecision, PolicyDecisionInput,
     evaluate_policy, render_reason,
 };
-use super::runtime::{SessionContext, load_default_conversation_runtime};
+use super::runtime::load_default_conversation_runtime;
 use super::runtime_binding::ConversationRuntimeBinding;
 use super::turn_observer::{ConversationTurnObserverHandle, ConversationTurnRuntimeEvent};
 
@@ -72,7 +72,6 @@ use dispatcher::GovernedToolPreflight;
 pub use dispatcher::{
     AppToolDispatcher, DefaultAppToolDispatcher, NoopAppToolDispatcher, ToolExecutionPreflight,
 };
-use execute::session_context_from_turn;
 pub use outcome::{
     ApprovalRequirement, ApprovalRequirementKind, ToolPreflightOutcome, ToolResultEnvelope,
     ToolResultPayloadSemantics, TurnFailure, TurnFailureKind, TurnResult, TurnValidation,
@@ -144,7 +143,7 @@ fn approval_request_provenance_ref(binding: ConversationRuntimeBinding<'_>) -> &
 }
 
 fn governed_approval_request_id(
-    session_context: &SessionContext,
+    session_context: &AppContext,
     tool_name: &str,
     intent: &ToolIntent,
 ) -> String {

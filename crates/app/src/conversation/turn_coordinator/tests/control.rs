@@ -98,7 +98,7 @@ impl ConversationRuntime for ApprovalControlRuntime {
     async fn build_messages(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
+        _app_ctx: &crate::AppContext,
         _include_system_prompt: bool,
         _tool_view: &crate::tools::ToolView,
         _binding: ConversationRuntimeBinding<'_>,
@@ -177,16 +177,17 @@ impl ConversationRuntime for CoreReplayRuntime {
     fn session_context(
         &self,
         _config: &LoongConfig,
+        _app_ctx: &crate::AppContext,
         _session_id: &str,
         _binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<SessionContext> {
+    ) -> CliResult<AppContext> {
         Err("session_context should not be called for core approval replay".to_owned())
     }
 
     async fn build_messages(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
+        _app_ctx: &crate::AppContext,
         _include_system_prompt: bool,
         _tool_view: &crate::tools::ToolView,
         _binding: ConversationRuntimeBinding<'_>,
@@ -310,7 +311,7 @@ impl ConversationRuntime for ExplicitSkillActivationRuntime {
     async fn build_messages(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
+        _app_ctx: &crate::AppContext,
         _include_system_prompt: bool,
         _tool_view: &crate::tools::ToolView,
         _binding: ConversationRuntimeBinding<'_>,
@@ -423,10 +424,17 @@ async fn handle_turn_with_runtime_explicit_skill_activation_prefix_injects_skill
     let mut config = LoongConfig::default();
     config.skills.enabled = true;
     config.tools.file_root = Some(workspace_root.display().to_string());
+    let app_ctx = crate::context::bootstrap_app_context_with_config(
+        "session-explicit-skill-activation",
+        60,
+        &config,
+    )
+    .expect("test app context");
 
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
+            &app_ctx,
             "session-explicit-skill-activation",
             "$demo-skill summarize the changelog",
             ProviderErrorMode::Propagate,
@@ -514,6 +522,12 @@ async fn handle_turn_with_runtime_explicit_skill_activation_preserves_observer_s
     config.skills.enabled = true;
     config.tools.file_root = Some(workspace_root.display().to_string());
     config.provider.kind = crate::config::ProviderKind::Anthropic;
+    let app_ctx = crate::context::bootstrap_app_context_with_config(
+        "session-explicit-skill-activation-observer",
+        60,
+        &config,
+    )
+    .expect("test app context");
 
     let observer = Arc::new(RecordingTurnObserver::default());
     let observer_handle: ConversationTurnObserverHandle = observer.clone();
@@ -524,6 +538,7 @@ async fn handle_turn_with_runtime_explicit_skill_activation_preserves_observer_s
     let reply = coordinator
         .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             &config,
+            &app_ctx,
             &address,
             "$demo-skill summarize the changelog",
             ProviderErrorMode::Propagate,
@@ -599,7 +614,7 @@ impl ConversationRuntime for RecordingCompactRuntime {
     async fn build_messages(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
+        _app_ctx: &crate::AppContext,
         _include_system_prompt: bool,
         _tool_view: &crate::tools::ToolView,
         _binding: ConversationRuntimeBinding<'_>,
@@ -691,10 +706,11 @@ impl ConversationRuntime for CompactSessionBuildMessagesRuntime {
     fn session_context(
         &self,
         _config: &LoongConfig,
+        _app_ctx: &crate::AppContext,
         session_id: &str,
         _binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<SessionContext> {
-        Ok(SessionContext::root_with_tool_view(
+    ) -> CliResult<AppContext> {
+        Ok(crate::test_support::app_context_for_session(
             session_id,
             self.session_tool_view.clone(),
         ))
@@ -703,7 +719,7 @@ impl ConversationRuntime for CompactSessionBuildMessagesRuntime {
     async fn build_messages(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
+        _app_ctx: &crate::AppContext,
         include_system_prompt: bool,
         tool_view: &crate::tools::ToolView,
         _binding: ConversationRuntimeBinding<'_>,
@@ -795,7 +811,7 @@ impl ConversationRuntime for ObserverStreamingRuntime {
     async fn build_messages(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
+        _app_ctx: &crate::AppContext,
         _include_system_prompt: bool,
         _tool_view: &crate::tools::ToolView,
         _binding: ConversationRuntimeBinding<'_>,
@@ -878,7 +894,7 @@ impl ConversationRuntime for ObserverFallbackRuntime {
     async fn build_messages(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
+        _app_ctx: &crate::AppContext,
         _include_system_prompt: bool,
         _tool_view: &crate::tools::ToolView,
         _binding: ConversationRuntimeBinding<'_>,

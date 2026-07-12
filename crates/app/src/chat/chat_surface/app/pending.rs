@@ -603,6 +603,7 @@ pub(super) async fn build_command_lines(
             {
                 let result = crate::chat::ops::load_manual_compaction_result(
                     &runtime.config,
+                    &runtime.app_context,
                     &runtime.session_id,
                     &runtime.turn_coordinator,
                     runtime.conversation_binding(),
@@ -698,6 +699,7 @@ pub(super) async fn build_command_lines(
                     .turn_coordinator
                     .load_production_turn_checkpoint_diagnostics_with_limit(
                         &runtime.config,
+                        &runtime.app_context,
                         &runtime.session_id,
                         runtime.config.memory.sliding_window,
                         runtime.conversation_binding(),
@@ -730,6 +732,7 @@ pub(super) async fn build_command_lines(
                     .turn_coordinator
                     .repair_production_turn_checkpoint_tail(
                         &runtime.config,
+                        &runtime.app_context,
                         &runtime.session_id,
                         runtime.conversation_binding(),
                     )

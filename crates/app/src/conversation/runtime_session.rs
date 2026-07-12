@@ -11,9 +11,9 @@ use super::super::subagent::{
     ConstrainedSubagentExecution, ConstrainedSubagentIdentity, ConstrainedSubagentProfile,
     DelegateBuiltinProfile,
 };
-use super::SessionContext;
 #[cfg(feature = "memory-sqlite")]
 use super::active_skills;
+use crate::AppContext;
 #[cfg(feature = "memory-sqlite")]
 use crate::operator::delegate_runtime::{
     derive_subagent_profile_from_lineage, resolve_delegate_child_contract,
@@ -390,12 +390,13 @@ pub(super) fn build_base_tool_view_from_snapshot(
 
 #[cfg(feature = "memory-sqlite")]
 pub(super) fn build_session_context_from_snapshot(
+    app_ctx: &AppContext,
     config: &LoongConfig,
     repo: &SessionRepository,
     session_id: &str,
     base_tool_view: ToolView,
     snapshot: PersistedSessionSnapshot,
-) -> CliResult<SessionContext> {
+) -> CliResult<AppContext> {
     let visible_skill_roots = super::model_visible_skill_roots_from_config(config);
     let tool_view = apply_active_skill_blocked_tools_to_tool_view(
         apply_session_tool_policy_to_tool_view(
@@ -410,11 +411,14 @@ pub(super) fn build_session_context_from_snapshot(
     );
     let mut session_context = match snapshot.parent_session_id.clone() {
         Some(parent_session_id) => {
-            SessionContext::child(snapshot.session_id.clone(), parent_session_id, tool_view)
+            app_ctx.child(snapshot.session_id.clone(), parent_session_id, tool_view)
         }
-        None => {
-            super::root_session_context_from_config(config, snapshot.session_id.clone(), tool_view)
-        }
+        None => super::root_session_context_from_config(
+            app_ctx,
+            config,
+            snapshot.session_id.clone(),
+            tool_view,
+        ),
     };
     if let Some(profile) = snapshot.delegate_profile {
         session_context = session_context.with_profile(profile);
@@ -454,16 +458,18 @@ pub(super) fn build_session_context_from_snapshot(
 
 #[cfg(feature = "memory-sqlite")]
 pub(super) fn load_persisted_session_context(
+    app_ctx: &AppContext,
     config: &LoongConfig,
     session_id: &str,
     tool_view: &ToolView,
-) -> CliResult<Option<SessionContext>> {
+) -> CliResult<Option<AppContext>> {
     let repo = open_session_repository(config)?;
     let snapshot = load_persisted_session_snapshot(&repo, session_id)?;
     let Some(snapshot) = snapshot else {
         return Ok(None);
     };
     let session_context = build_session_context_from_snapshot(
+        app_ctx,
         config,
         &repo,
         session_id,

@@ -75,6 +75,7 @@ impl ConversationTurnCoordinator {
     async fn handle_turn_with_session_and_acp_options_and_ingress(
         &self,
         config: &LoongConfig,
+        app_ctx: &AppContext,
         session_id: &str,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -88,6 +89,7 @@ impl ConversationTurnCoordinator {
         let effective_binding = prepared.1;
         self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
+            app_ctx,
             &address,
             user_input,
             error_mode,
@@ -105,6 +107,7 @@ impl ConversationTurnCoordinator {
     pub(crate) async fn handle_turn_with_address_and_acp_options_and_ingress_and_observer(
         &self,
         config: &LoongConfig,
+        app_ctx: &AppContext,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -115,6 +118,7 @@ impl ConversationTurnCoordinator {
     ) -> CliResult<String> {
         self.handle_turn_with_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
+            app_ctx,
             address,
             user_input,
             error_mode,
@@ -131,6 +135,7 @@ impl ConversationTurnCoordinator {
     pub(crate) async fn handle_turn_with_address_and_acp_options_and_ingress_and_observer_with_manager(
         &self,
         config: &LoongConfig,
+        app_ctx: &AppContext,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -147,6 +152,7 @@ impl ConversationTurnCoordinator {
         let effective_binding = prepared.1;
         self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
+            app_ctx,
             address,
             user_input,
             error_mode,
@@ -164,6 +170,7 @@ impl ConversationTurnCoordinator {
     pub(crate) async fn handle_turn_with_address_and_acp_options_and_observer(
         &self,
         config: &LoongConfig,
+        app_ctx: &AppContext,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -173,6 +180,7 @@ impl ConversationTurnCoordinator {
     ) -> CliResult<String> {
         self.handle_turn_with_address_and_acp_options_and_ingress_and_observer(
             config,
+            app_ctx,
             address,
             user_input,
             error_mode,
@@ -187,6 +195,7 @@ impl ConversationTurnCoordinator {
     pub async fn handle_production_turn_with_address_and_acp_options_and_observer(
         &self,
         config: &LoongConfig,
+        app_ctx: &AppContext,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -196,6 +205,7 @@ impl ConversationTurnCoordinator {
     ) -> CliResult<String> {
         self.handle_production_turn_with_address_and_acp_options_and_observer_with_manager(
             config,
+            app_ctx,
             address,
             user_input,
             error_mode,
@@ -211,6 +221,7 @@ impl ConversationTurnCoordinator {
     pub(crate) async fn handle_production_turn_with_address_and_acp_options_and_observer_with_manager(
         &self,
         config: &LoongConfig,
+        app_ctx: &AppContext,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -222,6 +233,7 @@ impl ConversationTurnCoordinator {
     ) -> CliResult<String> {
         self.handle_turn_with_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
+            app_ctx,
             address,
             user_input,
             error_mode,
@@ -238,6 +250,7 @@ impl ConversationTurnCoordinator {
     pub(crate) async fn handle_turn_with_runtime<R: ConversationRuntime + ?Sized>(
         &self,
         config: &LoongConfig,
+        app_ctx: &AppContext,
         session_id: &str,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -248,6 +261,7 @@ impl ConversationTurnCoordinator {
         Box::pin(
             self.handle_turn_with_runtime_and_session_and_acp_options_and_ingress(
                 config,
+                app_ctx,
                 session_id,
                 user_input,
                 error_mode,
@@ -265,6 +279,7 @@ impl ConversationTurnCoordinator {
     >(
         &self,
         config: &LoongConfig,
+        app_ctx: &AppContext,
         session_id: &str,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -276,6 +291,7 @@ impl ConversationTurnCoordinator {
         let address = ConversationSessionAddress::from_session_id(session_id);
         self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
+            app_ctx,
             &address,
             user_input,
             error_mode,
@@ -295,6 +311,7 @@ impl ConversationTurnCoordinator {
     >(
         &self,
         config: &LoongConfig,
+        app_ctx: &AppContext,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -304,6 +321,7 @@ impl ConversationTurnCoordinator {
     ) -> CliResult<String> {
         self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
+            app_ctx,
             address,
             user_input,
             error_mode,
@@ -323,6 +341,7 @@ impl ConversationTurnCoordinator {
     >(
         &self,
         config: &LoongConfig,
+        app_ctx: &AppContext,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -335,6 +354,7 @@ impl ConversationTurnCoordinator {
     ) -> CliResult<String> {
         self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
+            app_ctx,
             address,
             user_input,
             error_mode,
@@ -354,6 +374,7 @@ impl ConversationTurnCoordinator {
     >(
         &self,
         config: &LoongConfig,
+        app_ctx: &AppContext,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -385,6 +406,7 @@ impl ConversationTurnCoordinator {
 
         self.handle_turn_with_runtime_and_address_and_ingress_and_observer_outcome(
             config,
+            app_ctx,
             address,
             user_input,
             error_mode,
@@ -403,6 +425,7 @@ impl ConversationTurnCoordinator {
     >(
         &self,
         config: &LoongConfig,
+        app_ctx: &AppContext,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -414,6 +437,7 @@ impl ConversationTurnCoordinator {
     ) -> CliResult<String> {
         self.handle_production_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
+            app_ctx,
             address,
             user_input,
             error_mode,
@@ -433,6 +457,7 @@ impl ConversationTurnCoordinator {
     >(
         &self,
         config: &LoongConfig,
+        app_ctx: &AppContext,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -448,6 +473,7 @@ impl ConversationTurnCoordinator {
 
         self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
+            app_ctx,
             address,
             user_input,
             error_mode,

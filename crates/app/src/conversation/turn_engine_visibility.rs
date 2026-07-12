@@ -1,4 +1,4 @@
-use super::{SessionContext, ToolIntent, TurnFailure};
+use super::{AppContext, ToolIntent, TurnFailure};
 
 pub(super) fn effective_visible_tool_name(
     _intent: &ToolIntent,
@@ -37,7 +37,7 @@ pub(super) fn provider_tool_denial_reason(reason: &str, source: &str) -> String 
 }
 
 pub(super) fn tool_intent_is_visible(
-    session_context: &SessionContext,
+    session_context: &AppContext,
     intent: &ToolIntent,
     descriptor: &crate::tools::ToolDescriptor,
 ) -> bool {

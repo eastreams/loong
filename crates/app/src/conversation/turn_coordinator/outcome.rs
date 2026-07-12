@@ -7,6 +7,7 @@ impl ConversationTurnCoordinator {
     >(
         &self,
         config: &LoongConfig,
+        app_ctx: &AppContext,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -22,6 +23,7 @@ impl ConversationTurnCoordinator {
             if let Some(reply) = self
                 .maybe_handle_pending_approval_control_turn(
                     config,
+                    app_ctx,
                     runtime,
                     session_id,
                     user_input,
@@ -36,6 +38,7 @@ impl ConversationTurnCoordinator {
             if let Some(reply) = self
                 .maybe_handle_explicit_skill_activation_control_turn(
                     config,
+                    app_ctx,
                     runtime,
                     session_id,
                     user_input,
@@ -61,17 +64,18 @@ impl ConversationTurnCoordinator {
                 runtime.bootstrap(config, session_id, app_ctx).await?;
             }
 
-            let session_context = runtime.session_context(config, session_id, binding)?;
+            let session_context = runtime.session_context(config, app_ctx, session_id, binding)?;
             let tool_view = session_context.tool_view.clone();
             let visible_ingress = ingress.filter(|value| value.has_contextual_hints());
             emit_turn_ingress_event(runtime, session_id, visible_ingress, binding).await;
 
             let turn_id = next_conversation_turn_id();
             let assembled_context = runtime
-                .build_context(config, session_id, true, binding)
+                .build_context(config, &session_context, true, binding)
                 .await?;
             let preparation = ProviderTurnPreparation::from_assembled_context_with_turn_id(
                 config,
+                &session_context,
                 assembled_context,
                 user_input,
                 turn_id.as_str(),

@@ -846,7 +846,7 @@ async fn execute_turn_checkpoint_heal_action(
     let binding = mvp::conversation::ConversationRuntimeBinding::Context(&app_context);
     let coordinator = mvp::conversation::ConversationTurnCoordinator::new();
     let outcome = coordinator
-        .repair_production_turn_checkpoint_tail(config, session_id, binding)
+        .repair_production_turn_checkpoint_tail(config, &app_context, session_id, binding)
         .await?;
     let source = outcome.source().map(|value| value.as_str()).unwrap_or("-");
     let after_turn_status = outcome.after_turn_status().unwrap_or("-");

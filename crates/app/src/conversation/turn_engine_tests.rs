@@ -98,8 +98,12 @@ fn default_app_tool_dispatcher_scopes_child_sessions_to_self_only_visibility() {
         store::current_session_store_config().clone(),
         ToolConfig::default(),
     );
-    let root = SessionContext::root_with_tool_view("root-session", runtime_tool_view());
-    let child = SessionContext::child("child-session", "root-session", runtime_tool_view());
+    let root = crate::test_support::app_context_for_session("root-session", runtime_tool_view());
+    let child = crate::test_support::app_context_for_child(
+        "child-session",
+        "root-session",
+        runtime_tool_view(),
+    );
 
     assert_eq!(
         dispatcher
@@ -115,25 +119,6 @@ fn default_app_tool_dispatcher_scopes_child_sessions_to_self_only_visibility() {
             .visibility,
         SessionVisibility::SelfOnly
     );
-}
-
-#[test]
-fn session_context_from_turn_uses_first_intent_session_id() {
-    let turn = ProviderTurn {
-        assistant_text: String::new(),
-        tool_intents: vec![ToolIntent {
-            tool_name: "shell.exec".to_owned(),
-            args_json: json!({"command": "echo hello"}),
-            source: "assistant".to_owned(),
-            session_id: "session-from-first-intent".to_owned(),
-            turn_id: "turn-1".to_owned(),
-            tool_call_id: "call-1".to_owned(),
-        }],
-        raw_meta: Value::Null,
-    };
-
-    let session_context = session_context_from_turn(&turn, runtime_tool_view());
-    assert_eq!(session_context.session_id, "session-from-first-intent");
 }
 
 #[test]
@@ -159,7 +144,7 @@ fn validate_turn_in_context_allows_internal_approval_control_resolve_tool() {
         "approval_requests_list",
     ]);
     let session_context =
-        SessionContext::root_with_tool_view("session-approval-control", tool_view);
+        crate::test_support::app_context_for_session("session-approval-control", tool_view);
 
     let validation = TurnEngine::new(4)
         .validate_turn_in_context(&turn, &session_context)
@@ -188,8 +173,10 @@ fn prepare_tool_intent_uses_direct_shell_metadata_for_provider_shell_requests() 
         turn_id: "turn-shell-invoke-trace".to_owned(),
         tool_call_id: "call-shell-invoke-trace".to_owned(),
     };
-    let session_context =
-        SessionContext::root_with_tool_view("session-shell-invoke-trace", runtime_tool_view());
+    let session_context = crate::test_support::app_context_for_session(
+        "session-shell-invoke-trace",
+        runtime_tool_view(),
+    );
     let engine = TurnEngine::new(4);
     let runtime = tokio::runtime::Runtime::new().expect("test runtime");
     let prepared_intent = runtime.block_on(async {
@@ -402,7 +389,7 @@ struct DelayedObservedExecutionDispatcher;
 impl AppToolDispatcher for DelayedObservedExecutionDispatcher {
     async fn execute_app_tool(
         &self,
-        session_context: &SessionContext,
+        session_context: &AppContext,
         request: ToolCoreRequest,
         _binding: ConversationRuntimeBinding<'_>,
     ) -> Result<ToolCoreOutcome, String> {
@@ -434,7 +421,7 @@ struct AfterExecutionSequenceRecordingDispatcher {
 impl AppToolDispatcher for AfterExecutionSequenceRecordingDispatcher {
     async fn execute_app_tool(
         &self,
-        session_context: &SessionContext,
+        session_context: &AppContext,
         request: ToolCoreRequest,
         _binding: ConversationRuntimeBinding<'_>,
     ) -> Result<ToolCoreOutcome, String> {
@@ -464,7 +451,7 @@ impl AppToolDispatcher for AfterExecutionSequenceRecordingDispatcher {
 
     async fn after_tool_execution(
         &self,
-        _session_context: &SessionContext,
+        _session_context: &AppContext,
         intent: &ToolIntent,
         intent_sequence: usize,
         _request: &ToolCoreRequest,
@@ -506,7 +493,7 @@ struct PartiallyFailingObservedExecutionDispatcher;
 impl AppToolDispatcher for PartiallyFailingObservedExecutionDispatcher {
     async fn execute_app_tool(
         &self,
-        session_context: &SessionContext,
+        session_context: &AppContext,
         request: ToolCoreRequest,
         _binding: ConversationRuntimeBinding<'_>,
     ) -> Result<ToolCoreOutcome, String> {
@@ -542,7 +529,7 @@ async fn autonomy_policy_approval_request_is_persisted_for_delegate_async() {
         ..ToolConfig::default()
     };
     let tool_view = runtime_tool_view_for_config(&tool_config);
-    let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
+    let session_context = crate::test_support::app_context_for_session("root-session", tool_view);
     let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
     let app_ctx = test_app_context("turn-engine-governed-approval-delegate-async");
 
@@ -618,7 +605,7 @@ async fn autonomy_policy_approval_request_is_persisted_for_discovered_delegate_a
         ..ToolConfig::default()
     };
     let tool_view = runtime_tool_view_for_config(&tool_config);
-    let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
+    let session_context = crate::test_support::app_context_for_session("root-session", tool_view);
     let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
     let app_ctx = test_app_context("turn-engine-governed-approval-discovered-delegate-async");
 
@@ -687,7 +674,7 @@ async fn auto_mode_requires_approval_for_high_risk_core_tool() {
     let mut tool_config = ToolConfig::default();
     tool_config.consent.default_mode = ToolConsentMode::Auto;
     let tool_view = runtime_tool_view_for_config(&tool_config);
-    let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
+    let session_context = crate::test_support::app_context_for_session("root-session", tool_view);
     let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
     let app_ctx = app_context("turn-engine-config-import-auto");
 
@@ -753,7 +740,7 @@ async fn full_session_consent_skips_approval_for_high_risk_core_tool() {
 
     let tool_config = ToolConfig::default();
     let tool_view = runtime_tool_view_for_config(&tool_config);
-    let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
+    let session_context = crate::test_support::app_context_for_session("root-session", tool_view);
     let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
     let app_ctx = app_context("turn-engine-config-import-full");
 
@@ -802,7 +789,7 @@ async fn autonomy_policy_approval_request_reuses_deterministic_id_for_same_block
         ..ToolConfig::default()
     };
     let tool_view = runtime_tool_view_for_config(&tool_config);
-    let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
+    let session_context = crate::test_support::app_context_for_session("root-session", tool_view);
     let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
     let turn = delegate_async_turn("root-session", "turn-reuse", "call-reuse");
     let app_ctx = test_app_context("turn-engine-governed-approval-reuse");
@@ -884,7 +871,7 @@ async fn autonomy_policy_preapproved_call_executes_without_persisting_request() 
     approved_calls.push(approval_key);
 
     let tool_view = runtime_tool_view_for_config(&tool_config);
-    let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
+    let session_context = crate::test_support::app_context_for_session("root-session", tool_view);
     let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
     let app_ctx = app_context("turn-engine-autonomy-preapproved");
     let turn = skills_policy_get_turn("root-session", "turn-preapproved", "call-preapproved");
@@ -941,7 +928,7 @@ async fn autonomy_policy_predenied_call_returns_policy_denial_without_persisting
     denied_calls.push(denial_key);
 
     let tool_view = runtime_tool_view_for_config(&tool_config);
-    let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
+    let session_context = crate::test_support::app_context_for_session("root-session", tool_view);
     let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
     let app_ctx = app_context("turn-engine-autonomy-predenied");
     let turn = skills_policy_get_turn("root-session", "turn-predenied", "call-predenied");
@@ -994,7 +981,7 @@ async fn governed_tool_approval_request_is_persisted_for_discovered_shell_exec()
     tool_config.approval.mode = GovernedToolApprovalMode::Strict;
     tool_config.consent.default_mode = ToolConsentMode::Prompt;
     let tool_view = runtime_tool_view_for_config(&tool_config);
-    let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
+    let session_context = crate::test_support::app_context_for_session("root-session", tool_view);
     let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
     let app_ctx =
         bootstrap_test_app_context("turn-engine-governed-shell-approval", 60).expect("app context");
@@ -1069,7 +1056,7 @@ async fn governed_tool_approval_request_reuses_deterministic_id_for_same_blocked
     tool_config.consent.default_mode = ToolConsentMode::Prompt;
 
     let tool_view = runtime_tool_view_for_config(&tool_config);
-    let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
+    let session_context = crate::test_support::app_context_for_session("root-session", tool_view);
     let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
     let app_ctx =
         bootstrap_test_app_context("turn-engine-governed-shell-reuse", 60).expect("app context");
@@ -1152,7 +1139,7 @@ async fn autonomy_policy_allowlist_does_not_bypass_prompt_session_consent() {
     approved_calls.push("tool:skills.policy".to_owned());
 
     let tool_view = runtime_tool_view_for_config(&tool_config);
-    let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
+    let session_context = crate::test_support::app_context_for_session("root-session", tool_view);
     let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
     let app_ctx = app_context("turn-engine-autonomy-allowlist-prompt");
     let turn = skills_policy_get_turn(
@@ -1209,7 +1196,7 @@ async fn autonomy_policy_grant_does_not_bypass_prompt_session_consent() {
     tool_config.consent.default_mode = ToolConsentMode::Prompt;
 
     let tool_view = runtime_tool_view_for_config(&tool_config);
-    let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
+    let session_context = crate::test_support::app_context_for_session("root-session", tool_view);
     let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
     let app_ctx = app_context("turn-engine-autonomy-grant-prompt");
     let turn = skills_policy_get_turn(
@@ -1260,8 +1247,10 @@ async fn observed_fast_lane_execution_trace_records_batch_and_segment_metrics() 
         "turn-observed-fast-lane",
         "call-observed-fast-lane",
     );
-    let session_context =
-        SessionContext::root_with_tool_view("session-observed-fast-lane", runtime_tool_view());
+    let session_context = crate::test_support::app_context_for_session(
+        "session-observed-fast-lane",
+        runtime_tool_view(),
+    );
     let dispatcher = DelayedObservedExecutionDispatcher;
     let engine = TurnEngine::with_parallel_tool_execution(8, 512, true, 2);
 
@@ -1322,8 +1311,10 @@ async fn parallel_execution_reports_global_intent_sequence_to_after_tool_executi
         "turn-observed-sequence",
         "call-observed-sequence",
     );
-    let session_context =
-        SessionContext::root_with_tool_view("session-observed-sequence", runtime_tool_view());
+    let session_context = crate::test_support::app_context_for_session(
+        "session-observed-sequence",
+        runtime_tool_view(),
+    );
     let after_calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let dispatcher = AfterExecutionSequenceRecordingDispatcher {
         after_calls: std::sync::Arc::clone(&after_calls),
@@ -1367,7 +1358,7 @@ async fn observed_fast_lane_execution_treats_single_in_flight_batches_as_sequent
         "turn-observed-fast-lane-single",
         "call-observed-fast-lane-single",
     );
-    let session_context = SessionContext::root_with_tool_view(
+    let session_context = crate::test_support::app_context_for_session(
         "session-observed-fast-lane-single",
         runtime_tool_view(),
     );
@@ -1425,8 +1416,10 @@ async fn parallel_execution_records_trace_items_in_intent_order() {
         ],
         raw_meta: json!({}),
     };
-    let session_context =
-        SessionContext::root_with_tool_view("session-observed-trace-order", runtime_tool_view());
+    let session_context = crate::test_support::app_context_for_session(
+        "session-observed-trace-order",
+        runtime_tool_view(),
+    );
     let dispatcher = DelayedObservedExecutionDispatcher;
     let engine = TurnEngine::with_parallel_tool_execution(8, 512, true, 2);
 
@@ -1485,8 +1478,10 @@ async fn parallel_execution_keeps_successful_tool_results_when_one_tool_is_denie
         ],
         raw_meta: json!({}),
     };
-    let session_context =
-        SessionContext::root_with_tool_view("session-observed-partial-denial", runtime_tool_view());
+    let session_context = crate::test_support::app_context_for_session(
+        "session-observed-partial-denial",
+        runtime_tool_view(),
+    );
     let dispatcher = AfterExecutionSequenceRecordingDispatcher {
         after_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
     };
@@ -1551,7 +1546,7 @@ async fn sequential_execution_continues_after_single_tool_denial() {
         ],
         raw_meta: json!({}),
     };
-    let session_context = SessionContext::root_with_tool_view(
+    let session_context = crate::test_support::app_context_for_session(
         "session-observed-sequential-denial",
         runtime_tool_view(),
     );
@@ -1616,7 +1611,7 @@ async fn observed_fast_lane_execution_trace_records_partial_tool_failure_outcome
         "session-observed-partial-failure",
         "turn-observed-partial-failure",
     );
-    let session_context = SessionContext::root_with_tool_view(
+    let session_context = crate::test_support::app_context_for_session(
         "session-observed-partial-failure",
         runtime_tool_view(),
     );
@@ -1762,7 +1757,7 @@ fn continuation_payload_summary_is_compacted_before_low_limit_truncation() {
 
 #[test]
 fn augment_tool_payload_injects_browser_scope_for_browse_request() {
-    let session_context = SessionContext::root_with_tool_view(
+    let session_context = crate::test_support::app_context_for_session(
         "root-session",
         crate::tools::ToolView::from_tool_names(["browse"]),
     );
@@ -1790,7 +1785,7 @@ fn augment_tool_payload_uses_active_skill_root_for_absolute_direct_read_targets(
     std::fs::write(&reference_path, "# Guide\n").expect("write guide");
     let canonical_skill_root = std::fs::canonicalize(&skill_root).expect("canonical skill root");
 
-    let session_context = SessionContext::root_with_tool_view(
+    let session_context = crate::test_support::app_context_for_session(
         "root-session",
         crate::tools::ToolView::from_tool_names(["read"]),
     )
@@ -1823,7 +1818,7 @@ fn augment_tool_payload_uses_visible_skill_root_for_absolute_skill_direct_reads(
     std::fs::write(&skill_path, "# Demo Skill\n").expect("write skill file");
     let canonical_skill_root = std::fs::canonicalize(&skill_root).expect("canonical skill root");
 
-    let session_context = SessionContext::root_with_tool_view(
+    let session_context = crate::test_support::app_context_for_session(
         "root-session",
         crate::tools::ToolView::from_tool_names(["read"]),
     )
@@ -1857,7 +1852,7 @@ fn augment_tool_payload_uses_visible_skill_root_for_absolute_skill_resource_dire
     std::fs::write(&reference_path, "# Guide\n").expect("write guide");
     let canonical_skill_root = std::fs::canonicalize(&skill_root).expect("canonical skill root");
 
-    let session_context = SessionContext::root_with_tool_view(
+    let session_context = crate::test_support::app_context_for_session(
         "root-session",
         crate::tools::ToolView::from_tool_names(["read"]),
     )
@@ -1896,7 +1891,7 @@ fn augment_tool_payload_uses_unique_active_skill_root_for_relative_direct_read_t
     let canonical_first_skill_root =
         std::fs::canonicalize(&first_skill_root).expect("canonical first skill root");
 
-    let session_context = SessionContext::root_with_tool_view(
+    let session_context = crate::test_support::app_context_for_session(
         "root-session",
         crate::tools::ToolView::from_tool_names(["read"]),
     )
@@ -1934,7 +1929,7 @@ fn augment_tool_payload_does_not_guess_when_relative_direct_read_matches_multipl
         .expect("write second guide");
     let expected_workspace_root = workspace_root.display().to_string();
 
-    let session_context = SessionContext::root_with_tool_view(
+    let session_context = crate::test_support::app_context_for_session(
         "root-session",
         crate::tools::ToolView::from_tool_names(["read"]),
     )
@@ -1991,7 +1986,7 @@ fn augment_tool_payload_injects_canonical_task_id_for_task_tools() {
     })
     .expect("append task progress");
 
-    let session_context = SessionContext::root_with_tool_view(
+    let session_context = crate::test_support::app_context_for_session(
         "root-session",
         crate::tools::ToolView::from_tool_names(["task_wait"]),
     );
@@ -2035,7 +2030,7 @@ fn augment_tool_payload_injects_canonical_task_id_for_task_events() {
     })
     .expect("append task progress");
 
-    let session_context = SessionContext::root_with_tool_view(
+    let session_context = crate::test_support::app_context_for_session(
         "root-session",
         crate::tools::ToolView::from_tool_names(["task_events"]),
     );

@@ -221,6 +221,7 @@ fn maybe_compact_context_fails_open_when_runtime_self_continuity_persist_cannot_
     let outcome = runtime_handle.block_on(maybe_compact_context(
         &config,
         &runtime,
+        &app_ctx,
         "delegate:missing-lineage",
         &messages,
         Some(16),
@@ -310,6 +311,7 @@ fn maybe_compact_context_fails_open_when_durable_flush_cannot_write_workspace_ex
     let outcome = runtime_handle.block_on(maybe_compact_context(
         &config,
         &runtime,
+        &app_ctx,
         "session-durable-flush-fail-open",
         &messages,
         Some(16),
@@ -354,7 +356,13 @@ async fn compact_session_uses_session_context_tool_view_and_turn_like_build_flag
     let coordinator = ConversationTurnCoordinator::new();
 
     let report = coordinator
-        .compact_session_with_runtime(&config, "compact-session-build-messages", &runtime, binding)
+        .compact_session_with_runtime(
+            &config,
+            &app_ctx,
+            "compact-session-build-messages",
+            &runtime,
+            binding,
+        )
         .await
         .expect("manual compaction should succeed");
 
@@ -408,7 +416,13 @@ async fn compact_session_skips_when_post_compaction_readback_fails() {
     let coordinator = ConversationTurnCoordinator::new();
 
     let report = coordinator
-        .compact_session_with_runtime(&config, "compact-session-readback-fail", &runtime, binding)
+        .compact_session_with_runtime(
+            &config,
+            &app_ctx,
+            "compact-session-readback-fail",
+            &runtime,
+            binding,
+        )
         .await
         .expect("manual compaction should degrade to skipped");
 

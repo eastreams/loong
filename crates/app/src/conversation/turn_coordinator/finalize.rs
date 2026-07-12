@@ -3,6 +3,7 @@ use super::*;
 pub(super) async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized>(
     config: &LoongConfig,
     runtime: &R,
+    ctx: &AppContext,
     session_id: &str,
     user_input: &str,
     tail_phase: &ProviderTurnReplyTailPhase,
@@ -48,14 +49,14 @@ pub(super) async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized
     }
 
     let after_turn_status = if checkpoint.finalization.runs_after_turn() {
-        if let Some(app_ctx) = binding.context() {
+        if binding.allows_mutation() {
             match runtime
                 .after_turn(
                     session_id,
                     user_input,
                     tail_phase.reply(),
                     tail_phase.after_turn_messages(),
-                    app_ctx,
+                    ctx,
                 )
                 .await
             {
@@ -90,6 +91,7 @@ pub(super) async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized
         match maybe_compact_context(
             config,
             runtime,
+            ctx,
             session_id,
             tail_phase.after_turn_messages(),
             tail_phase.estimated_tokens(),
@@ -210,7 +212,14 @@ pub(super) async fn apply_resolved_provider_turn<R: ConversationRuntime + ?Sized
         ProviderTurnTerminalPhase::ReturnError(_) => None,
     };
     let apply_result = terminal_phase
-        .apply(config, runtime, session_id, user_input, binding)
+        .apply(
+            config,
+            runtime,
+            &preparation.ctx,
+            session_id,
+            user_input,
+            binding,
+        )
         .await;
 
     let completion_observation = match (completion_event, apply_result.is_ok()) {

@@ -8,6 +8,7 @@ impl ConversationTurnCoordinator {
     >(
         &self,
         config: &LoongConfig,
+        app_ctx: &AppContext,
         runtime: &R,
         session_id: &str,
         user_input: &str,
@@ -19,7 +20,7 @@ impl ConversationTurnCoordinator {
             return Ok(None);
         };
 
-        if let Some(app_ctx) = binding.context() {
+        if binding.is_context_bound() {
             runtime.bootstrap(config, session_id, app_ctx).await?;
         }
 
@@ -34,13 +35,14 @@ impl ConversationTurnCoordinator {
         };
 
         observe_turn_phase(observer, ConversationTurnPhaseEvent::preparing());
-        let session_context = runtime.session_context(config, session_id, binding)?;
+        let session_context = runtime.session_context(config, app_ctx, session_id, binding)?;
         let assembled_context = runtime
-            .build_context(config, session_id, true, binding)
+            .build_context(config, &session_context, true, binding)
             .await?;
         let turn_id = next_conversation_turn_id();
         let preparation = ProviderTurnPreparation::from_assembled_context_with_turn_id(
             config,
+            &session_context,
             assembled_context,
             user_input,
             turn_id.as_str(),
@@ -119,6 +121,7 @@ impl ConversationTurnCoordinator {
     >(
         &self,
         config: &LoongConfig,
+        app_ctx: &AppContext,
         runtime: &R,
         session_id: &str,
         user_input: &str,
@@ -140,16 +143,18 @@ impl ConversationTurnCoordinator {
         let followup_request = explicit_activation.followup_request.as_str();
         let turn_id = next_conversation_turn_id();
 
-        if let Some(app_ctx) = binding.context() {
+        if binding.is_context_bound() {
             runtime.bootstrap(config, session_id, app_ctx).await?;
         }
 
         observe_turn_phase(observer, ConversationTurnPhaseEvent::preparing());
+        let session_context = runtime.session_context(config, app_ctx, session_id, binding)?;
         let assembled_context = runtime
-            .build_context(config, session_id, true, binding)
+            .build_context(config, &session_context, true, binding)
             .await?;
         let preparation = ProviderTurnPreparation::from_assembled_context_with_turn_id(
             config,
+            &session_context,
             assembled_context,
             followup_request,
             turn_id.as_str(),

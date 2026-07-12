@@ -40,6 +40,7 @@ impl ContextCompactionReport {
 pub(super) async fn maybe_compact_context<R: ConversationRuntime + ?Sized>(
     config: &LoongConfig,
     runtime: &R,
+    app_ctx: &AppContext,
     session_id: &str,
     messages: &[Value],
     estimated_tokens: Option<usize>,
@@ -58,9 +59,9 @@ pub(super) async fn maybe_compact_context<R: ConversationRuntime + ?Sized>(
     if !should_attempt_compaction {
         return Ok(ContextCompactionOutcome::Skipped);
     }
-    let Some(app_ctx) = binding.context() else {
+    if !binding.allows_mutation() {
         return Ok(ContextCompactionOutcome::Skipped);
-    };
+    }
 
     #[cfg(feature = "memory-sqlite")]
     {
@@ -226,7 +227,7 @@ pub(super) fn ensure_session_exists_for_runtime_self_continuity(
 #[cfg(feature = "memory-sqlite")]
 pub(super) fn effective_runtime_self_continuity_for_session(
     config: &LoongConfig,
-    session_context: &SessionContext,
+    session_context: &AppContext,
 ) -> Option<runtime_self_continuity::RuntimeSelfContinuity> {
     let live_continuity =
         runtime_self_continuity::resolve_runtime_self_continuity_for_config(config);

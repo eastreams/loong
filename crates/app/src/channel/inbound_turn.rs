@@ -116,6 +116,7 @@ fn unix_time_ms_now() -> i64 {
 #[cfg(test)]
 pub(super) async fn process_inbound_with_runtime_and_feedback<R: ConversationRuntime + ?Sized>(
     config: &LoongConfig,
+    app_ctx: &AppContext,
     runtime: &R,
     message: &ChannelInboundMessage,
     binding: ConversationRuntimeBinding<'_>,
@@ -123,6 +124,7 @@ pub(super) async fn process_inbound_with_runtime_and_feedback<R: ConversationRun
 ) -> CliResult<String> {
     process_inbound_with_runtime_and_feedback_and_error_mode(
         config,
+        app_ctx,
         runtime,
         message,
         binding,
@@ -149,6 +151,7 @@ pub async fn process_inbound_with_runtime_and_feedback_and_error_mode<
     R: ConversationRuntime + ?Sized,
 >(
     config: &LoongConfig,
+    app_ctx: &AppContext,
     runtime: &R,
     message: &ChannelInboundMessage,
     binding: ConversationRuntimeBinding<'_>,
@@ -166,6 +169,7 @@ pub async fn process_inbound_with_runtime_and_feedback_and_error_mode<
     let reply = ConversationTurnCoordinator::new()
         .handle_production_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
+            app_ctx,
             &prepared.address,
             &message.text,
             error_mode,

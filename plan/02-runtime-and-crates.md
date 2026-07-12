@@ -95,10 +95,6 @@ impl ToolInvocation<'_> {
    caps、tool namespace view 和 runtime reference 绑定进去。
 2. invocation 通过 `AppContext::for_invocation(...)` 派生同类型 child context；child 只能
    收窄 effective capabilities，不能重新签发或放大 authority。
-3. session metadata 合并完成后，删除仍由 conversation `SessionContext` 重复保存的同源
-   execution state；tool/access/action/policy 始终只观察统一 context 或窄 requirement trait。
-
-
 ## Crate 收敛
 
 截至 2026-07-11，workspace 已经是 15 个 crate，而

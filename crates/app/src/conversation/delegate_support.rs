@@ -14,6 +14,8 @@ use serde_json::Value;
 #[cfg(feature = "memory-sqlite")]
 use tokio::runtime::Handle;
 
+#[cfg(feature = "memory-sqlite")]
+use crate::AppContext;
 use crate::config::LoongConfig;
 #[cfg(feature = "memory-sqlite")]
 use crate::operator::delegate_runtime::next_delegate_child_depth;
@@ -27,7 +29,7 @@ use crate::session::store::SessionStoreConfig;
 use super::announce::{DelegateAnnounceSettings, enqueue_delegate_result_announce};
 #[cfg(feature = "memory-sqlite")]
 use super::runtime::{
-    AsyncDelegateSpawnRequest, AsyncDelegateSpawner, ConversationRuntime, SessionContext,
+    AsyncDelegateSpawnRequest, AsyncDelegateSpawner, ConversationRuntime,
     load_default_conversation_runtime,
 };
 #[cfg(feature = "memory-sqlite")]
@@ -224,7 +226,7 @@ pub(crate) fn enqueue_delegate_result_announce_with_memory_config(
 pub(crate) fn next_delegate_child_depth_for_delegate(
     config: &LoongConfig,
     repo: &SessionRepository,
-    session_context: &SessionContext,
+    session_context: &AppContext,
 ) -> Result<usize, String> {
     next_delegate_child_depth(
         repo,

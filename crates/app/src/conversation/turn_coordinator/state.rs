@@ -373,6 +373,7 @@ impl<'a> ProviderTurnTerminalPhase<'a> {
         self,
         config: &LoongConfig,
         runtime: &R,
+        ctx: &AppContext,
         session_id: &str,
         user_input: &str,
         binding: ConversationRuntimeBinding<'_>,
@@ -383,6 +384,7 @@ impl<'a> ProviderTurnTerminalPhase<'a> {
                 finalize_provider_turn_reply(
                     config,
                     runtime,
+                    ctx,
                     session_id,
                     user_input,
                     &phase.tail_phase,

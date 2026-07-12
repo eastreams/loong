@@ -54,6 +54,9 @@ fn build_provider_failover_test_app_context(
             )),
             token,
             crate::tools::runtime_config::ToolRuntimeConfig::default(),
+            "test-session",
+            crate::tools::runtime_tool_view(),
+            loong_contracts::GovernedSessionMode::MutatingCapable,
         )
         .expect("build provider test app context"),
         audit,

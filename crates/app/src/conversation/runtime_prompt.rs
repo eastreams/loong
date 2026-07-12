@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use crate::AppContext;
 use crate::tools::runtime_config::ToolRuntimeConfig;
 
 use super::super::super::config::LoongConfig;
@@ -10,8 +11,7 @@ use super::super::subagent::DelegateBuiltinProfile;
 use super::active_skills;
 use super::session_runtime::open_session_repository;
 use super::{
-    AssembledConversationContext, PromptFragment, PromptFrameAuthority, PromptLane, SessionContext,
-    provider,
+    AssembledConversationContext, PromptFragment, PromptFrameAuthority, PromptLane, provider,
 };
 
 pub(super) fn provider_runtime_binding(
@@ -27,7 +27,7 @@ pub(super) fn provider_runtime_binding(
 
 pub(super) fn delegate_child_runtime_contract_prompt_summary(
     config: &LoongConfig,
-    session_context: &SessionContext,
+    session_context: &AppContext,
 ) -> Option<String> {
     session_context.parent_session_id.as_ref()?;
     session_context.subagent_runtime_narrowing()?;
@@ -37,7 +37,7 @@ pub(super) fn delegate_child_runtime_contract_prompt_summary(
 }
 
 pub(super) fn delegate_child_profile_prompt_summary(
-    session_context: &SessionContext,
+    session_context: &AppContext,
 ) -> Option<String> {
     let _parent_session_id = session_context.parent_session_id.as_ref()?;
     let profile = session_context.profile?;
@@ -68,7 +68,7 @@ pub(super) fn delegate_child_profile_prompt_summary(
 }
 
 pub(super) fn runtime_self_continuity_prompt_summary(
-    session_context: &SessionContext,
+    session_context: &AppContext,
     live_continuity: Option<&crate::runtime_self_continuity::RuntimeSelfContinuity>,
 ) -> Option<String> {
     let stored_continuity = session_context.runtime_self_continuity.as_ref()?;

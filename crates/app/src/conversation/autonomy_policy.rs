@@ -495,6 +495,9 @@ mod tests {
                 )),
                 token,
                 crate::tools::runtime_config::ToolRuntimeConfig::default(),
+                "test-session",
+                crate::tools::runtime_tool_view(),
+                loong_contracts::GovernedSessionMode::MutatingCapable,
             )
             .expect("build autonomy policy test app context")
         })

@@ -1,9 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
+use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use loong_contracts::{
-    CapabilityToken, ExecutionPlane, InvocationOutcome, PlaneTier, ToolPlaneError,
+    CapabilityToken, ExecutionPlane, GovernedSessionMode, InvocationOutcome, PlaneTier,
+    ToolPlaneError,
 };
 use loong_core::policy::context::{CapabilityContext, ContextFactory};
 use loong_kernel::access::fs::{FsPathPolicyContext, FsResolutionContext};
@@ -26,6 +29,13 @@ use loong_runtime::{
 use serde_json::Value;
 
 use crate::config::{AuditMode, LoongConfig};
+use crate::conversation::{
+    ConstrainedSubagentContractView, ConstrainedSubagentExecution, ConstrainedSubagentIdentity,
+    ConstrainedSubagentProfile, DelegateBuiltinProfile,
+};
+use crate::runtime_self_continuity::RuntimeSelfContinuity;
+use crate::tools::ToolView;
+use crate::tools::runtime_config::ToolRuntimeNarrowing;
 
 /// Default pack identifier used by embedded runtime entry points.
 const EMBEDDED_RUNTIME_PACK_ID: &str = "dev-automation";
@@ -40,16 +50,66 @@ pub const DEFAULT_TOKEN_TTL_S: u64 = 86400;
 /// or narrow capabilities, but can never add authority beyond its parent.
 #[derive(Clone)]
 pub struct AppContext {
-    runtime: Arc<Runtime<AppContextFactory>>,
-    pack: Arc<VerticalPackManifest>,
-    token: Arc<CapabilityToken>,
-    tool_runtime_config: Arc<crate::tools::runtime_config::ToolRuntimeConfig>,
-    effective_capabilities: BTreeSet<Capability>,
-    plane: ExecutionPlane,
-    tier: PlaneTier,
-    request_parameters: Option<Arc<Value>>,
-    fs_resolution_root: Arc<PathBuf>,
-    fs_allowed_roots: Arc<[PathBuf]>,
+    inner: Arc<AppContextInner>,
+}
+
+impl fmt::Debug for AppContext {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Capability tokens are authority-bearing and must never enter debug logs.
+        formatter
+            .debug_struct("AppContext")
+            .field("session_id", &self.session_id)
+            .field("parent_session_id", &self.parent_session_id)
+            .field("plane", &self.plane)
+            .field("tier", &self.tier)
+            .field("session_mode", &self.session_mode)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Storage behind the cheap-clone [`AppContext`] handle.
+///
+/// This type has no independent lifecycle or behavior. It is public only so
+/// Rust's `Deref` contract can preserve direct read access to context fields.
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct AppContextInner {
+    pub(crate) runtime: Arc<Runtime<AppContextFactory>>,
+    pub(crate) pack: Arc<VerticalPackManifest>,
+    pub(crate) token: Arc<CapabilityToken>,
+    pub(crate) tool_runtime_config: Arc<crate::tools::runtime_config::ToolRuntimeConfig>,
+    pub(crate) effective_capabilities: BTreeSet<Capability>,
+    pub(crate) plane: ExecutionPlane,
+    pub(crate) tier: PlaneTier,
+    pub(crate) request_parameters: Option<Arc<Value>>,
+    pub(crate) fs_resolution_root: Arc<PathBuf>,
+    pub(crate) fs_allowed_roots: Arc<[PathBuf]>,
+    pub session_id: String,
+    pub parent_session_id: Option<String>,
+    pub profile: Option<DelegateBuiltinProfile>,
+    pub tool_view: ToolView,
+    pub session_mode: GovernedSessionMode,
+    pub workspace_root: Option<PathBuf>,
+    pub active_skill_roots: Vec<PathBuf>,
+    pub visible_skill_roots: Vec<PathBuf>,
+    pub runtime_narrowing: Option<ToolRuntimeNarrowing>,
+    pub subagent_execution: Option<ConstrainedSubagentExecution>,
+    pub subagent_contract: Option<ConstrainedSubagentContractView>,
+    pub(crate) runtime_self_continuity: Option<RuntimeSelfContinuity>,
+}
+
+impl Deref for AppContext {
+    type Target = AppContextInner;
+
+    fn deref(&self) -> &Self::Target {
+        self.inner.as_ref()
+    }
+}
+
+impl DerefMut for AppContext {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        Arc::make_mut(&mut self.inner)
+    }
 }
 
 impl AppContext {
@@ -57,6 +117,9 @@ impl AppContext {
         runtime: Arc<Runtime<AppContextFactory>>,
         token: CapabilityToken,
         tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig,
+        session_id: impl Into<String>,
+        tool_view: ToolView,
+        session_mode: GovernedSessionMode,
     ) -> Result<Self, String> {
         let pack = runtime
             .kernel()
@@ -65,18 +128,285 @@ impl AppContext {
             .clone();
         let effective_capabilities = token.allowed_capabilities.clone();
         let (fs_resolution_root, fs_allowed_roots) = fs_access_root_view(&tool_runtime_config)?;
+        let session_id = normalize_session_id(session_id.into());
+        let _ = crate::conversation::mailbox_for_session(&session_id);
         Ok(Self {
-            runtime,
-            pack: Arc::new(pack),
-            token: Arc::new(token),
-            tool_runtime_config: Arc::new(tool_runtime_config),
-            effective_capabilities,
-            plane: ExecutionPlane::Runtime,
-            tier: PlaneTier::Core,
-            request_parameters: None,
-            fs_resolution_root: Arc::new(fs_resolution_root),
-            fs_allowed_roots: fs_allowed_roots.into(),
+            inner: Arc::new(AppContextInner {
+                runtime,
+                pack: Arc::new(pack),
+                token: Arc::new(token),
+                tool_runtime_config: Arc::new(tool_runtime_config),
+                effective_capabilities,
+                plane: ExecutionPlane::Runtime,
+                tier: PlaneTier::Core,
+                request_parameters: None,
+                fs_resolution_root: Arc::new(fs_resolution_root),
+                fs_allowed_roots: fs_allowed_roots.into(),
+                session_id,
+                parent_session_id: None,
+                profile: None,
+                tool_view,
+                session_mode,
+                workspace_root: None,
+                active_skill_roots: Vec::new(),
+                visible_skill_roots: Vec::new(),
+                runtime_narrowing: None,
+                subagent_execution: None,
+                subagent_contract: None,
+                runtime_self_continuity: None,
+            }),
         })
+    }
+
+    pub fn child(
+        &self,
+        session_id: impl Into<String>,
+        parent_session_id: impl Into<String>,
+        tool_view: ToolView,
+    ) -> Self {
+        let session_id = normalize_session_id(session_id.into());
+        let parent_session_id = normalize_session_id(parent_session_id.into());
+        let _ = crate::conversation::mailbox_for_session(&session_id);
+        let _ = crate::conversation::mailbox_for_session(&parent_session_id);
+        let mut child = self.clone();
+        let state = Arc::make_mut(&mut child.inner);
+        state.session_id = session_id;
+        state.parent_session_id = Some(parent_session_id);
+        state.profile = None;
+        state.tool_view = tool_view;
+        state.workspace_root = None;
+        state.active_skill_roots.clear();
+        state.visible_skill_roots.clear();
+        state.runtime_narrowing = None;
+        state.subagent_execution = None;
+        state.subagent_contract = None;
+        state.runtime_self_continuity = None;
+        child
+    }
+
+    #[must_use]
+    pub fn for_session(&self, session_id: impl Into<String>, tool_view: ToolView) -> Self {
+        let session_id = normalize_session_id(session_id.into());
+        let _ = crate::conversation::mailbox_for_session(&session_id);
+        let mut session = self.clone();
+        let state = Arc::make_mut(&mut session.inner);
+        state.session_id = session_id;
+        state.parent_session_id = None;
+        state.profile = None;
+        state.tool_view = tool_view;
+        state.workspace_root = None;
+        state.active_skill_roots.clear();
+        state.visible_skill_roots.clear();
+        state.runtime_narrowing = None;
+        state.subagent_execution = None;
+        state.subagent_contract = None;
+        state.runtime_self_continuity = None;
+        session
+    }
+
+    #[must_use]
+    pub fn with_workspace_root(mut self, workspace_root: PathBuf) -> Self {
+        self.workspace_root = Some(workspace_root);
+        self
+    }
+
+    #[must_use]
+    pub fn with_active_skill_roots(mut self, active_skill_roots: Vec<PathBuf>) -> Self {
+        self.active_skill_roots = active_skill_roots
+            .into_iter()
+            .map(|path| std::fs::canonicalize(&path).unwrap_or(path))
+            .collect();
+        self
+    }
+
+    #[must_use]
+    pub fn with_visible_skill_roots(mut self, visible_skill_roots: Vec<PathBuf>) -> Self {
+        self.visible_skill_roots = visible_skill_roots
+            .into_iter()
+            .map(|path| std::fs::canonicalize(&path).unwrap_or(path))
+            .collect();
+        self
+    }
+
+    #[must_use]
+    pub fn with_profile(mut self, profile: DelegateBuiltinProfile) -> Self {
+        self.profile = Some(profile);
+        self
+    }
+
+    #[must_use]
+    pub fn with_runtime_narrowing(mut self, runtime_narrowing: ToolRuntimeNarrowing) -> Self {
+        if !runtime_narrowing.is_empty() {
+            self.runtime_narrowing = Some(runtime_narrowing.clone());
+            let contract = self.subagent_contract.take().unwrap_or_default();
+            self.subagent_contract = Some(contract.with_runtime_narrowing(runtime_narrowing));
+            self.synchronize_runtime_narrowing_views();
+        }
+        self
+    }
+
+    #[must_use]
+    pub fn with_subagent_execution(
+        mut self,
+        subagent_execution: ConstrainedSubagentExecution,
+    ) -> Self {
+        let existing_contract = self.subagent_contract.take();
+        let existing_workspace_root = self.workspace_root.clone();
+        let existing_identity = existing_contract
+            .as_ref()
+            .and_then(ConstrainedSubagentContractView::resolved_identity)
+            .cloned();
+        let existing_profile = existing_contract
+            .as_ref()
+            .and_then(|contract| contract.profile);
+        let existing_runtime_narrowing = existing_contract
+            .as_ref()
+            .map(|contract| contract.runtime_narrowing.clone())
+            .filter(|runtime_narrowing| !runtime_narrowing.is_empty());
+        let mut subagent_execution = subagent_execution.with_resolved_profile();
+        if subagent_execution.identity.is_none()
+            && let Some(identity) = existing_identity
+        {
+            subagent_execution.identity = Some(identity);
+        }
+        let mut merged_contract = subagent_execution.contract_view();
+        if merged_contract.profile.is_none()
+            && let Some(profile) = existing_profile
+        {
+            merged_contract = merged_contract.with_profile(profile);
+        }
+        if merged_contract.runtime_narrowing.is_empty()
+            && let Some(runtime_narrowing) = existing_runtime_narrowing
+        {
+            merged_contract = merged_contract.with_runtime_narrowing(runtime_narrowing);
+        }
+        if self.workspace_root.is_none() {
+            self.workspace_root = subagent_execution
+                .workspace_root
+                .clone()
+                .or(existing_workspace_root);
+        }
+        self.subagent_contract = Some(merged_contract);
+        self.subagent_execution = Some(subagent_execution);
+        self.synchronize_runtime_narrowing_views();
+        self
+    }
+
+    #[must_use]
+    pub fn with_subagent_profile(mut self, subagent_profile: ConstrainedSubagentProfile) -> Self {
+        if let Some(subagent_execution) = self.subagent_execution.as_mut() {
+            subagent_execution.profile = Some(subagent_profile);
+        }
+        let contract = self.subagent_contract.take().unwrap_or_default();
+        self.subagent_contract = Some(contract.with_profile(subagent_profile));
+        self.synchronize_runtime_narrowing_views();
+        self
+    }
+
+    #[must_use]
+    pub fn with_subagent_identity(
+        mut self,
+        subagent_identity: ConstrainedSubagentIdentity,
+    ) -> Self {
+        if subagent_identity.is_empty() {
+            return self;
+        }
+        if let Some(subagent_execution) = self.subagent_execution.as_mut() {
+            subagent_execution.identity = Some(subagent_identity.clone());
+        }
+        let contract = self.subagent_contract.take().unwrap_or_default();
+        self.subagent_contract = Some(contract.with_identity(subagent_identity));
+        self.synchronize_runtime_narrowing_views();
+        self
+    }
+
+    pub fn resolved_runtime_narrowing(&self) -> Option<&ToolRuntimeNarrowing> {
+        self.resolve_runtime_narrowing_ref()
+    }
+
+    pub fn resolved_subagent_profile(&self) -> Option<ConstrainedSubagentProfile> {
+        self.subagent_execution
+            .as_ref()
+            .map(ConstrainedSubagentExecution::resolved_profile)
+            .or_else(|| {
+                self.subagent_contract
+                    .as_ref()
+                    .and_then(ConstrainedSubagentContractView::resolved_profile)
+            })
+    }
+
+    pub fn resolved_subagent_identity(&self) -> Option<&ConstrainedSubagentIdentity> {
+        self.subagent_execution
+            .as_ref()
+            .and_then(|execution| execution.identity.as_ref())
+            .or_else(|| {
+                self.subagent_contract
+                    .as_ref()
+                    .and_then(ConstrainedSubagentContractView::resolved_identity)
+            })
+    }
+
+    pub fn resolved_subagent_contract(&self) -> Option<ConstrainedSubagentContractView> {
+        let mut contract = self
+            .subagent_execution
+            .as_ref()
+            .map(ConstrainedSubagentExecution::contract_view)
+            .or(self.subagent_contract.clone())?;
+        if let Some(stored_contract) = self.subagent_contract.as_ref()
+            && contract.profile.is_none()
+            && let Some(profile) = stored_contract.profile
+        {
+            contract = contract.with_profile(profile);
+        }
+        if let Some(runtime_narrowing) = self.resolved_runtime_narrowing().cloned() {
+            contract = contract.with_runtime_narrowing(runtime_narrowing);
+        }
+        (!contract.is_empty()).then_some(contract)
+    }
+
+    pub fn subagent_runtime_narrowing(&self) -> Option<&ToolRuntimeNarrowing> {
+        self.resolved_runtime_narrowing()
+    }
+
+    #[must_use]
+    pub(crate) fn with_runtime_self_continuity(
+        mut self,
+        runtime_self_continuity: RuntimeSelfContinuity,
+    ) -> Self {
+        if !runtime_self_continuity.is_empty() {
+            self.runtime_self_continuity = Some(runtime_self_continuity);
+        }
+        self
+    }
+
+    fn synchronize_runtime_narrowing_views(&mut self) {
+        let resolved = self.resolve_runtime_narrowing_ref().cloned();
+        let execution_narrowing = resolved.clone().unwrap_or_default();
+        self.runtime_narrowing = resolved;
+        if let Some(execution) = self.subagent_execution.as_mut() {
+            execution.runtime_narrowing = execution_narrowing.clone();
+        }
+        if let Some(contract) = self.subagent_contract.as_mut() {
+            contract.runtime_narrowing = execution_narrowing;
+        }
+    }
+
+    fn resolve_runtime_narrowing_ref(&self) -> Option<&ToolRuntimeNarrowing> {
+        self.runtime_narrowing
+            .as_ref()
+            .filter(|narrowing| !narrowing.is_empty())
+            .or_else(|| {
+                self.subagent_execution
+                    .as_ref()
+                    .map(|execution| &execution.runtime_narrowing)
+                    .filter(|narrowing| !narrowing.is_empty())
+            })
+            .or_else(|| {
+                self.subagent_contract
+                    .as_ref()
+                    .map(|contract| &contract.runtime_narrowing)
+                    .filter(|narrowing| !narrowing.is_empty())
+            })
     }
 
     pub fn pack_id(&self) -> &str {
@@ -154,16 +484,30 @@ impl AppContext {
 
         let (fs_resolution_root, fs_allowed_roots) = fs_access_root_view(tool_runtime_config)?;
         Ok(Self {
-            runtime: self.runtime.clone(),
-            pack: self.pack.clone(),
-            token: self.token.clone(),
-            tool_runtime_config: Arc::new(tool_runtime_config.clone()),
-            effective_capabilities,
-            plane,
-            tier,
-            request_parameters: request_parameters.cloned().map(Arc::new),
-            fs_resolution_root: Arc::new(fs_resolution_root),
-            fs_allowed_roots: fs_allowed_roots.into(),
+            inner: Arc::new(AppContextInner {
+                runtime: self.runtime.clone(),
+                pack: self.pack.clone(),
+                token: self.token.clone(),
+                tool_runtime_config: Arc::new(tool_runtime_config.clone()),
+                effective_capabilities,
+                plane,
+                tier,
+                request_parameters: request_parameters.cloned().map(Arc::new),
+                fs_resolution_root: Arc::new(fs_resolution_root),
+                fs_allowed_roots: fs_allowed_roots.into(),
+                session_id: self.session_id.clone(),
+                parent_session_id: self.parent_session_id.clone(),
+                profile: self.profile,
+                tool_view: self.tool_view.clone(),
+                session_mode: self.session_mode,
+                workspace_root: self.workspace_root.clone(),
+                active_skill_roots: self.active_skill_roots.clone(),
+                visible_skill_roots: self.visible_skill_roots.clone(),
+                runtime_narrowing: self.runtime_narrowing.clone(),
+                subagent_execution: self.subagent_execution.clone(),
+                subagent_contract: self.subagent_contract.clone(),
+                runtime_self_continuity: self.runtime_self_continuity.clone(),
+            }),
         })
     }
 
@@ -428,6 +772,15 @@ fn canonicalize_or_fallback(path: PathBuf) -> Result<PathBuf, String> {
     Ok(crate::tools::normalize_without_fs(&path))
 }
 
+fn normalize_session_id(session_id: String) -> String {
+    let trimmed = session_id.trim();
+    if trimmed.is_empty() {
+        "default".to_owned()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
 /// Bootstrap a minimal in-memory kernel suitable for tests.
 ///
 /// Registers a default pack manifest with the embedded runtime tool, memory, filesystem,
@@ -522,7 +875,14 @@ fn bootstrap_app_context_with_audit_sink(
         .issue_token(EMBEDDED_RUNTIME_PACK_ID, agent_id, ttl_s)
         .map_err(|e| format!("kernel token issue failed: {e}"))?;
 
-    AppContext::new(runtime, token, tool_rt)
+    AppContext::new(
+        runtime,
+        token,
+        tool_rt,
+        agent_id,
+        crate::tools::runtime_tool_view_from_loong_config(config),
+        GovernedSessionMode::MutatingCapable,
+    )
 }
 
 // Keep production-selected and test-injected audit sinks on one runtime construction path.
@@ -657,6 +1017,9 @@ mod tests {
             runtime,
             token,
             crate::tools::runtime_config::ToolRuntimeConfig::default(),
+            "test-session",
+            crate::tools::runtime_tool_view(),
+            loong_contracts::GovernedSessionMode::MutatingCapable,
         ) {
             Ok(_) => panic!("unregistered token pack must not construct an app context"),
             Err(error) => error,

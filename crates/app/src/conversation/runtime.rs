@@ -12,7 +12,6 @@ use super::context_engine::{
     ContextEngineMetadata, ConversationContextEngine, DefaultContextEngine,
 };
 use super::context_engine_registry::resolve_context_engine;
-use super::mailbox_for_session;
 use super::prompt_orchestrator::seed_prompt_fragments_from_context;
 use super::prompt_orchestrator::sync_prompt_fragments_into_context;
 use super::runtime_binding::ConversationRuntimeBinding;
@@ -43,7 +42,6 @@ mod runtime_trait;
 mod runtime_turn_middleware;
 #[path = "runtime_session.rs"]
 mod session_runtime;
-pub use runtime_context::SessionContext;
 use runtime_context::{model_visible_skill_roots_from_config, root_session_context_from_config};
 #[cfg(feature = "memory-sqlite")]
 use runtime_delegate::DefaultAsyncDelegateSpawner;
@@ -76,6 +74,7 @@ use session_runtime::{
     load_persisted_session_context, load_persisted_session_snapshot, open_session_repository,
 };
 
+use crate::AppContext;
 #[cfg(test)]
 use crate::tools::runtime_config::ToolRuntimeNarrowing;
 #[cfg(test)]
@@ -135,7 +134,7 @@ where
     async fn build_context_for_tool_view(
         &self,
         config: &LoongConfig,
-        session_context: &SessionContext,
+        session_context: &AppContext,
         include_system_prompt: bool,
         requested_tool_view: &ToolView,
         binding: ConversationRuntimeBinding<'_>,

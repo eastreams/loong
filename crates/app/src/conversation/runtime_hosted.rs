@@ -9,7 +9,7 @@ use super::super::runtime_binding::ConversationRuntimeBinding;
 use super::{
     AssembledConversationContext, AsyncDelegateSpawner, BoxedDefaultConversationRuntime,
     ContextEngineBootstrapResult, ContextEngineIngestResult, ConversationRuntime, LoongConfig,
-    ProviderTurn, SessionContext, ToolView, load_default_conversation_runtime,
+    ProviderTurn, ToolView, load_default_conversation_runtime,
 };
 #[cfg(feature = "memory-sqlite")]
 use crate::session::store;
@@ -78,10 +78,12 @@ where
     fn session_context(
         &self,
         config: &LoongConfig,
+        app_ctx: &AppContext,
         session_id: &str,
         binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<SessionContext> {
-        self.inner.session_context(config, session_id, binding)
+    ) -> CliResult<AppContext> {
+        self.inner
+            .session_context(config, app_ctx, session_id, binding)
     }
 
     fn tool_view(
@@ -136,31 +138,25 @@ where
     async fn build_context(
         &self,
         config: &LoongConfig,
-        session_id: &str,
+        ctx: &AppContext,
         include_system_prompt: bool,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<AssembledConversationContext> {
         self.inner
-            .build_context(config, session_id, include_system_prompt, binding)
+            .build_context(config, ctx, include_system_prompt, binding)
             .await
     }
 
     async fn build_messages(
         &self,
         config: &LoongConfig,
-        session_id: &str,
+        ctx: &AppContext,
         include_system_prompt: bool,
         tool_view: &ToolView,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Vec<Value>> {
         self.inner
-            .build_messages(
-                config,
-                session_id,
-                include_system_prompt,
-                tool_view,
-                binding,
-            )
+            .build_messages(config, ctx, include_system_prompt, tool_view, binding)
             .await
     }
 

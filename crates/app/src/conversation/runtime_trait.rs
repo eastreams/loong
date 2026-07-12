@@ -18,7 +18,7 @@ use super::super::context_engine::{
 use super::super::runtime_binding::ConversationRuntimeBinding;
 use super::{
     AsyncDelegateSpawner, DefaultAsyncDelegateSpawner, DefaultConversationRuntime, LoongConfig,
-    ProviderTurn, SessionContext, ToolView, apply_active_skill_blocked_tools_to_tool_view,
+    ProviderTurn, ToolView, apply_active_skill_blocked_tools_to_tool_view,
     apply_session_tool_policy_to_tool_view, build_base_tool_view_from_snapshot,
     build_session_context_from_snapshot, load_persisted_session_context,
     load_persisted_session_snapshot, open_session_repository, provider_runtime_binding,
@@ -30,20 +30,21 @@ pub trait ConversationRuntime: Send + Sync {
     fn session_context(
         &self,
         config: &LoongConfig,
+        app_ctx: &AppContext,
         session_id: &str,
         binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<SessionContext> {
+    ) -> CliResult<AppContext> {
         let tool_view = self.tool_view(config, session_id, binding)?;
 
         #[cfg(feature = "memory-sqlite")]
         if let Some(session_context) =
-            load_persisted_session_context(config, session_id, &tool_view)?
+            load_persisted_session_context(app_ctx, config, session_id, &tool_view)?
         {
             return Ok(session_context);
         }
 
         Ok(root_session_context_from_config(
-            config, session_id, tool_view,
+            app_ctx, config, session_id, tool_view,
         ))
     }
 
@@ -94,26 +95,19 @@ pub trait ConversationRuntime: Send + Sync {
     async fn build_context(
         &self,
         config: &LoongConfig,
-        session_id: &str,
+        ctx: &AppContext,
         include_system_prompt: bool,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<AssembledConversationContext> {
-        let session_context = self.session_context(config, session_id, binding)?;
-        self.build_messages(
-            config,
-            session_id,
-            include_system_prompt,
-            &session_context.tool_view,
-            binding,
-        )
-        .await
-        .map(AssembledConversationContext::from_messages)
+        self.build_messages(config, ctx, include_system_prompt, &ctx.tool_view, binding)
+            .await
+            .map(AssembledConversationContext::from_messages)
     }
 
     async fn build_messages(
         &self,
         config: &LoongConfig,
-        session_id: &str,
+        ctx: &AppContext,
         include_system_prompt: bool,
         tool_view: &ToolView,
         binding: ConversationRuntimeBinding<'_>,
@@ -244,9 +238,10 @@ where
     fn session_context(
         &self,
         config: &LoongConfig,
+        app_ctx: &AppContext,
         session_id: &str,
         _binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<SessionContext> {
+    ) -> CliResult<AppContext> {
         #[cfg(feature = "memory-sqlite")]
         {
             let repo = open_session_repository(config)?;
@@ -256,6 +251,7 @@ where
 
             if let Some(snapshot) = snapshot {
                 return build_session_context_from_snapshot(
+                    app_ctx,
                     config,
                     &repo,
                     session_id,
@@ -265,6 +261,7 @@ where
             }
 
             Ok(root_session_context_from_config(
+                app_ctx,
                 config,
                 session_id,
                 base_tool_view,
@@ -275,7 +272,7 @@ where
         {
             let tool_view = self.tool_view(config, session_id, _binding)?;
             Ok(root_session_context_from_config(
-                config, session_id, tool_view,
+                app_ctx, config, session_id, tool_view,
             ))
         }
     }
@@ -343,16 +340,15 @@ where
     async fn build_context(
         &self,
         config: &LoongConfig,
-        session_id: &str,
+        ctx: &AppContext,
         include_system_prompt: bool,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<AssembledConversationContext> {
-        let session_context = self.session_context(config, session_id, binding)?;
         self.build_context_for_tool_view(
             config,
-            &session_context,
+            ctx,
             include_system_prompt,
-            &session_context.tool_view,
+            &ctx.tool_view,
             binding,
         )
         .await
@@ -361,21 +357,14 @@ where
     async fn build_messages(
         &self,
         config: &LoongConfig,
-        session_id: &str,
+        ctx: &AppContext,
         include_system_prompt: bool,
         tool_view: &ToolView,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Vec<Value>> {
-        let session_context = self.session_context(config, session_id, binding)?;
-        self.build_context_for_tool_view(
-            config,
-            &session_context,
-            include_system_prompt,
-            tool_view,
-            binding,
-        )
-        .await
-        .map(|assembled| assembled.messages)
+        self.build_context_for_tool_view(config, ctx, include_system_prompt, tool_view, binding)
+            .await
+            .map(|assembled| assembled.messages)
     }
 
     async fn request_completion(

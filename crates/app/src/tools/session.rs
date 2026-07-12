@@ -839,6 +839,7 @@ struct SessionContinueRequest {
 #[cfg(feature = "memory-sqlite")]
 pub(crate) async fn continue_session_with_runtime<R: ConversationRuntime + ?Sized>(
     payload: Value,
+    app_ctx: &crate::AppContext,
     current_session_id: &str,
     memory_config: &SessionStoreConfig,
     tool_config: &ToolConfig,
@@ -956,6 +957,7 @@ pub(crate) async fn continue_session_with_runtime<R: ConversationRuntime + ?Size
             let mut outcome = run_started_delegate_child_turn_with_runtime(
                 app_config,
                 runtime,
+                app_ctx,
                 &child_session_id,
                 &parent_session_id,
                 child_label.clone(),

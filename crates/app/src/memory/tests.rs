@@ -146,6 +146,9 @@ async fn mvp_memory_adapter_routes_through_kernel() {
         runtime.clone(),
         token.clone(),
         tool_runtime_config.clone(),
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("build app context");
     let execution_context = app_context

@@ -63,9 +63,11 @@ impl DetachedDelegateChildPayload {
 
     fn into_spawn_request(
         self,
+        app_ctx: app::AppContext,
         binding: app::conversation::OwnedConversationRuntimeBinding,
     ) -> CliResult<app::conversation::AsyncDelegateSpawnRequest> {
         app::conversation::async_delegate_spawn_request_from_serialized_parts(
+            app_ctx,
             self.child_session_id,
             self.parent_session_id,
             self.task,
@@ -182,8 +184,25 @@ pub async fn run_detached_delegate_child_cli(
     let (resolved_path, config) = app::config::load(Some(config_path))?;
     app::runtime_env::initialize_runtime_environment(&config, Some(&resolved_path));
 
-    let binding = owned_binding_from_detached_payload(payload.binding, &config)?;
-    let spawn_request = payload.into_spawn_request(binding)?;
+    // AppContext is process-local authority and is deliberately absent from
+    // the serialized payload. Rebuild it at this process boundary, then keep
+    // the legacy binding as a separate mutation-mode signal.
+    let mut app_context = app::context::bootstrap_app_context_with_config(
+        DETACHED_DELEGATE_CHILD_CONTEXT_SCOPE,
+        app::context::DEFAULT_TOKEN_TTL_S,
+        &config,
+    )?;
+    let binding = match payload.binding {
+        DetachedDelegateChildBinding::Context => {
+            app_context.session_mode = loong_contracts::GovernedSessionMode::MutatingCapable;
+            app::conversation::OwnedConversationRuntimeBinding::with_context(app_context.clone())
+        }
+        DetachedDelegateChildBinding::AdvisoryOnly => {
+            app_context.session_mode = loong_contracts::GovernedSessionMode::AdvisoryOnly;
+            app::conversation::OwnedConversationRuntimeBinding::AdvisoryOnly
+        }
+    };
+    let spawn_request = payload.into_spawn_request(app_context, binding)?;
 
     app::conversation::execute_async_delegate_spawn_request(&config, spawn_request).await?;
 
@@ -276,28 +295,6 @@ fn propagate_detached_delegate_child_environment(command: &mut std::process::Com
 
         if let Some(env_value) = env_value {
             command.env(env_key, env_value);
-        }
-    }
-}
-
-fn owned_binding_from_detached_payload(
-    binding: DetachedDelegateChildBinding,
-    config: &app::config::LoongConfig,
-) -> CliResult<app::conversation::OwnedConversationRuntimeBinding> {
-    match binding {
-        DetachedDelegateChildBinding::Context => {
-            let app_context = app::context::bootstrap_app_context_with_config(
-                DETACHED_DELEGATE_CHILD_CONTEXT_SCOPE,
-                app::context::DEFAULT_TOKEN_TTL_S,
-                config,
-            )?;
-            let owned_binding =
-                app::conversation::OwnedConversationRuntimeBinding::with_context(app_context);
-            Ok(owned_binding)
-        }
-        DetachedDelegateChildBinding::AdvisoryOnly => {
-            let owned_binding = app::conversation::OwnedConversationRuntimeBinding::AdvisoryOnly;
-            Ok(owned_binding)
         }
     }
 }

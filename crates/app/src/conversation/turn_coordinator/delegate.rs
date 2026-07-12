@@ -5,7 +5,7 @@ use crate::conversation::delegate_support;
 pub(crate) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
     config: &LoongConfig,
     runtime: &R,
-    session_context: &SessionContext,
+    session_context: &AppContext,
     payload: Value,
     binding: ConversationRuntimeBinding<'_>,
 ) -> Result<loong_contracts::ToolCoreOutcome, String> {
@@ -76,6 +76,7 @@ pub(crate) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
             let outcome = run_started_delegate_child_turn_with_runtime(
                 config,
                 runtime,
+                session_context,
                 &child_session_id,
                 &session_context.session_id,
                 child_label,
@@ -111,7 +112,7 @@ pub(crate) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
 async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
     config: &LoongConfig,
     runtime: &R,
-    session_context: &SessionContext,
+    session_context: &AppContext,
     delegate_request: crate::tools::delegate::DelegateRequest,
     binding: ConversationRuntimeBinding<'_>,
 ) -> Result<loong_contracts::ToolCoreOutcome, String> {
@@ -151,7 +152,7 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
 async fn enqueue_background_task_with_runtime<R: ConversationRuntime + ?Sized>(
     config: &LoongConfig,
     runtime: &R,
-    session_context: &SessionContext,
+    session_context: &AppContext,
     delegate_request: crate::tools::delegate::DelegateRequest,
     binding: ConversationRuntimeBinding<'_>,
 ) -> Result<loong_contracts::ToolCoreOutcome, String> {
@@ -227,7 +228,7 @@ struct PreparedAsyncDelegateEnqueue {
 async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
     config: &LoongConfig,
     runtime: &R,
-    session_context: &SessionContext,
+    session_context: &AppContext,
     delegate_request: crate::tools::delegate::DelegateRequest,
     binding: ConversationRuntimeBinding<'_>,
     owner_kind: Option<crate::conversation::ConstrainedSubagentOwnerKind>,
@@ -305,6 +306,7 @@ async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
     )
     .await;
     let request = AsyncDelegateSpawnRequest {
+        app_ctx: session_context.clone(),
         child_session_id: child_session_id.clone(),
         parent_session_id: session_context.session_id.clone(),
         task: delegate_request.task,
@@ -342,6 +344,7 @@ async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
 #[cfg(feature = "memory-sqlite")]
 pub async fn spawn_background_delegate_with_runtime<R: ConversationRuntime + ?Sized>(
     config: &LoongConfig,
+    app_ctx: &AppContext,
     runtime: &R,
     session_id: &str,
     task: &str,
@@ -350,7 +353,7 @@ pub async fn spawn_background_delegate_with_runtime<R: ConversationRuntime + ?Si
     timeout_seconds: Option<u64>,
     binding: ConversationRuntimeBinding<'_>,
 ) -> Result<loong_contracts::ToolCoreOutcome, String> {
-    let session_context = runtime.session_context(config, session_id, binding)?;
+    let session_context = runtime.session_context(config, app_ctx, session_id, binding)?;
     let mut delegate_payload = json!({
         "task": task,
     });
@@ -384,6 +387,7 @@ pub async fn spawn_background_delegate_with_runtime<R: ConversationRuntime + ?Si
 #[cfg(not(feature = "memory-sqlite"))]
 pub async fn spawn_background_delegate_with_runtime<R: ConversationRuntime + ?Sized>(
     _config: &LoongConfig,
+    _app_ctx: &AppContext,
     _runtime: &R,
     _session_id: &str,
     _task: &str,
@@ -399,7 +403,7 @@ pub async fn spawn_background_delegate_with_runtime<R: ConversationRuntime + ?Si
 pub(crate) async fn execute_delegate_async_tool<R: ConversationRuntime + ?Sized>(
     config: &LoongConfig,
     runtime: &R,
-    session_context: &SessionContext,
+    session_context: &AppContext,
     payload: Value,
     binding: ConversationRuntimeBinding<'_>,
 ) -> Result<loong_contracts::ToolCoreOutcome, String> {
@@ -417,7 +421,7 @@ pub(crate) async fn execute_delegate_async_tool<R: ConversationRuntime + ?Sized>
 pub(crate) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
     _config: &LoongConfig,
     _runtime: &R,
-    _session_context: &SessionContext,
+    _session_context: &AppContext,
     _payload: Value,
     _binding: ConversationRuntimeBinding<'_>,
 ) -> Result<loong_contracts::ToolCoreOutcome, String> {
@@ -428,7 +432,7 @@ pub(crate) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
 pub(crate) async fn execute_delegate_async_tool<R: ConversationRuntime + ?Sized>(
     _config: &LoongConfig,
     _runtime: &R,
-    _session_context: &SessionContext,
+    _session_context: &AppContext,
     _payload: Value,
     _binding: ConversationRuntimeBinding<'_>,
 ) -> Result<loong_contracts::ToolCoreOutcome, String> {
@@ -441,6 +445,7 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
 >(
     config: &LoongConfig,
     runtime: &R,
+    app_ctx: &AppContext,
     child_session_id: &str,
     parent_session_id: &str,
     child_label: Option<String>,
@@ -457,6 +462,7 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
     let child_coordinator = ConversationTurnCoordinator::new();
     let child_turn_future = child_coordinator.handle_turn_with_runtime(
         config,
+        app_ctx,
         child_session_id,
         user_input,
         ProviderErrorMode::Propagate,

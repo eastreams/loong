@@ -78,7 +78,7 @@ impl DefaultAppToolDispatcher {
 
     pub(super) fn effective_tool_config_for_session(
         &self,
-        session_context: &SessionContext,
+        session_context: &AppContext,
     ) -> ToolConfig {
         let mut tool_config = self.tool_config.clone();
         if session_context.parent_session_id.is_some() {
@@ -90,7 +90,7 @@ impl DefaultAppToolDispatcher {
     #[cfg(feature = "memory-sqlite")]
     fn effective_tool_view_for_session(
         &self,
-        session_context: &SessionContext,
+        session_context: &AppContext,
     ) -> Result<ToolView, String> {
         let repo = SessionRepository::new(&self.memory_config)?;
         if let Some(session) = repo.load_session(&session_context.session_id)? {
@@ -130,7 +130,7 @@ impl DefaultAppToolDispatcher {
     #[cfg(not(feature = "memory-sqlite"))]
     fn effective_tool_view_for_session(
         &self,
-        session_context: &SessionContext,
+        session_context: &AppContext,
     ) -> Result<ToolView, String> {
         let _ = session_context;
         Ok(runtime_tool_view_for_config(&self.tool_config))
@@ -139,7 +139,7 @@ impl DefaultAppToolDispatcher {
     #[cfg(feature = "memory-sqlite")]
     async fn execute_sessions_send(
         &self,
-        session_context: &SessionContext,
+        session_context: &AppContext,
         payload: serde_json::Value,
     ) -> Result<ToolCoreOutcome, String> {
         let app_config = self
@@ -160,7 +160,7 @@ impl DefaultAppToolDispatcher {
     #[cfg(feature = "memory-sqlite")]
     fn lineage_root_session_id(
         repo: &SessionRepository,
-        session_context: &SessionContext,
+        session_context: &AppContext,
     ) -> Result<String, String> {
         let session_graph = OperatorSessionGraph::new(repo);
         session_graph.effective_lineage_root_session_id(
@@ -191,7 +191,7 @@ impl DefaultAppToolDispatcher {
 
     #[cfg(feature = "memory-sqlite")]
     fn approval_request_payload_json(
-        session_context: &SessionContext,
+        session_context: &AppContext,
         intent: &ToolIntent,
         descriptor: &crate::tools::ToolDescriptor,
         approval_request_id: &str,
@@ -230,7 +230,7 @@ impl DefaultAppToolDispatcher {
     #[cfg(feature = "memory-sqlite")]
     fn persist_approval_request(
         &self,
-        session_context: &SessionContext,
+        session_context: &AppContext,
         intent: &ToolIntent,
         descriptor: &crate::tools::ToolDescriptor,
         approval_key: &str,
@@ -287,7 +287,7 @@ impl DefaultAppToolDispatcher {
     #[cfg(feature = "memory-sqlite")]
     fn has_approval_grant(
         &self,
-        session_context: &SessionContext,
+        session_context: &AppContext,
         approval_key: &str,
     ) -> Result<bool, String> {
         let repo = SessionRepository::new(&self.memory_config)?;
@@ -303,7 +303,7 @@ impl DefaultAppToolDispatcher {
     #[cfg(feature = "memory-sqlite")]
     fn maybe_require_governed_tool_approval_with_binding(
         &self,
-        session_context: &SessionContext,
+        session_context: &AppContext,
         intent: &ToolIntent,
         descriptor: &crate::tools::ToolDescriptor,
         binding: ConversationRuntimeBinding<'_>,
@@ -382,7 +382,7 @@ impl DefaultAppToolDispatcher {
     #[cfg(not(feature = "memory-sqlite"))]
     fn maybe_require_governed_tool_approval_with_binding(
         &self,
-        session_context: &SessionContext,
+        session_context: &AppContext,
         intent: &ToolIntent,
         descriptor: &crate::tools::ToolDescriptor,
         binding: ConversationRuntimeBinding<'_>,
@@ -411,7 +411,7 @@ impl DefaultAppToolDispatcher {
     fn ensure_governed_tool_session_scope(
         &self,
         repo: &SessionRepository,
-        session_context: &SessionContext,
+        session_context: &AppContext,
     ) -> Result<String, String> {
         let session_kind = if session_context.parent_session_id.is_some() {
             SessionKind::DelegateChild
@@ -432,7 +432,7 @@ impl DefaultAppToolDispatcher {
     #[cfg(feature = "memory-sqlite")]
     fn governed_app_tool_preflight(
         &self,
-        session_context: &SessionContext,
+        session_context: &AppContext,
         intent: &ToolIntent,
         descriptor: &crate::tools::ToolDescriptor,
         binding: ConversationRuntimeBinding<'_>,
@@ -518,7 +518,7 @@ impl DefaultAppToolDispatcher {
     #[cfg(feature = "memory-sqlite")]
     fn governed_shell_tool_preflight(
         &self,
-        session_context: &SessionContext,
+        session_context: &AppContext,
         intent: &ToolIntent,
         request: &ToolCoreRequest,
         descriptor: &crate::tools::ToolDescriptor,
@@ -663,7 +663,7 @@ impl DefaultAppToolDispatcher {
     #[cfg(feature = "memory-sqlite")]
     fn governed_tool_preflight(
         &self,
-        session_context: &SessionContext,
+        session_context: &AppContext,
         intent: &ToolIntent,
         request: &ToolCoreRequest,
         descriptor: &crate::tools::ToolDescriptor,
@@ -702,7 +702,7 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
 
     async fn preflight_tool_intent_with_binding(
         &self,
-        session_context: &SessionContext,
+        session_context: &AppContext,
         intent: &ToolIntent,
         descriptor: &crate::tools::ToolDescriptor,
         binding: ConversationRuntimeBinding<'_>,
@@ -871,7 +871,7 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
 
     async fn maybe_require_approval_with_binding(
         &self,
-        session_context: &SessionContext,
+        session_context: &AppContext,
         intent: &ToolIntent,
         descriptor: &crate::tools::ToolDescriptor,
         binding: ConversationRuntimeBinding<'_>,
@@ -980,7 +980,7 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
 
     async fn preflight_tool_execution_with_binding(
         &self,
-        session_context: &SessionContext,
+        session_context: &AppContext,
         intent: &ToolIntent,
         request: ToolCoreRequest,
         descriptor: &crate::tools::ToolDescriptor,
@@ -1041,7 +1041,7 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
 
     async fn execute_app_tool(
         &self,
-        session_context: &SessionContext,
+        session_context: &AppContext,
         request: ToolCoreRequest,
         binding: ConversationRuntimeBinding<'_>,
     ) -> Result<ToolCoreOutcome, String> {
@@ -1072,6 +1072,7 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
             let runtime = load_default_conversation_runtime(app_config.as_ref())?;
             return crate::tools::continue_session_with_runtime(
                 request.payload,
+                session_context,
                 &session_context.session_id,
                 &self.memory_config,
                 &effective_tool_config,

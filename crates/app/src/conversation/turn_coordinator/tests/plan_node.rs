@@ -18,8 +18,10 @@ async fn execute_single_tool_intent_advisory_only_binding_reports_no_app_context
         turn_id: "turn-direct-core".to_owned(),
         tool_call_id: "call-direct-core".to_owned(),
     };
-    let session_context =
-        SessionContext::root_with_tool_view("root-session", crate::tools::planned_root_tool_view());
+    let session_context = crate::test_support::app_context_for_session(
+        "root-session",
+        crate::tools::planned_root_tool_view(),
+    );
     let error = execute_single_tool_intent(
         &intent,
         &session_context,
@@ -54,8 +56,10 @@ async fn execute_single_tool_intent_marks_repairable_file_read_failure_retryable
         turn_id: "turn-file-read-plan-node".to_owned(),
         tool_call_id: "call-file-read-plan-node".to_owned(),
     };
-    let session_context =
-        SessionContext::root_with_tool_view("root-session", crate::tools::planned_root_tool_view());
+    let session_context = crate::test_support::app_context_for_session(
+        "root-session",
+        crate::tools::planned_root_tool_view(),
+    );
 
     let error = execute_single_tool_intent(
         &intent,
@@ -92,8 +96,10 @@ async fn execute_single_tool_intent_marks_repairable_shell_preflight_failure_ret
         turn_id: "turn-shell-plan-node".to_owned(),
         tool_call_id: "call-shell-plan-node".to_owned(),
     };
-    let session_context =
-        SessionContext::root_with_tool_view("root-session", crate::tools::planned_root_tool_view());
+    let session_context = crate::test_support::app_context_for_session(
+        "root-session",
+        crate::tools::planned_root_tool_view(),
+    );
 
     let error = execute_single_tool_intent(
         &intent,

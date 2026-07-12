@@ -150,6 +150,7 @@ pub(crate) async fn continue_session_with_runtime<
     R: crate::conversation::ConversationRuntime + ?Sized,
 >(
     payload: Value,
+    app_ctx: &crate::AppContext,
     current_session_id: &str,
     memory_config: &SessionStoreConfig,
     tool_config: &ToolConfig,
@@ -159,6 +160,7 @@ pub(crate) async fn continue_session_with_runtime<
 ) -> Result<ToolCoreOutcome, String> {
     session::continue_session_with_runtime(
         payload,
+        app_ctx,
         current_session_id,
         memory_config,
         tool_config,

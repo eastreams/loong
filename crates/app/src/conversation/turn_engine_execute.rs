@@ -59,60 +59,50 @@ async fn execute_tool_intent_via_kernel(
         })
 }
 
-pub(super) fn session_context_from_turn(
-    turn: &ProviderTurn,
-    tool_view: ToolView,
-) -> SessionContext {
-    let session_id = turn
-        .tool_intents
-        .first()
-        .map(|intent| intent.session_id.as_str())
-        .unwrap_or("default");
-    SessionContext::root_with_tool_view(session_id, tool_view)
-}
-
 impl TurnEngine {
     fn tool_batch_harness(&self) -> ToolBatchHarness<'_> {
         ToolBatchHarness::new(self)
     }
 
     pub async fn execute_turn(&self, turn: &ProviderTurn, app_ctx: &AppContext) -> TurnResult {
-        self.execute_turn_in_view(
+        let session_id = turn
+            .tool_intents
+            .first()
+            .map(|intent| intent.session_id.as_str())
+            .unwrap_or(app_ctx.session_id.as_str());
+        let session_context = app_ctx.for_session(session_id, runtime_tool_view());
+        self.execute_turn_in_context(
             turn,
-            &runtime_tool_view(),
-            ConversationRuntimeBinding::Context(app_ctx),
+            &session_context,
+            &DefaultAppToolDispatcher::runtime(),
+            ConversationRuntimeBinding::Context(&session_context),
+            None,
         )
         .await
     }
 
+    #[cfg(test)]
     pub async fn execute_turn_in_view(
         &self,
         turn: &ProviderTurn,
         tool_view: &ToolView,
         binding: ConversationRuntimeBinding<'_>,
     ) -> TurnResult {
+        let Some(app_ctx) = binding.context() else {
+            return TurnResult::policy_denied("app_context_required", "app_context_required");
+        };
+        let session_id = turn
+            .tool_intents
+            .first()
+            .map(|intent| intent.session_id.as_str())
+            .unwrap_or(app_ctx.session_id.as_str());
+        let session_context = app_ctx.for_session(session_id, tool_view.clone());
         self.execute_turn_in_context(
             turn,
-            &session_context_from_turn(turn, tool_view.clone()),
+            &session_context,
             &DefaultAppToolDispatcher::runtime(),
-            binding,
+            ConversationRuntimeBinding::Context(&session_context),
             None,
-        )
-        .await
-    }
-
-    pub async fn execute_turn_with_ingress(
-        &self,
-        turn: &ProviderTurn,
-        binding: ConversationRuntimeBinding<'_>,
-        ingress: Option<&ConversationIngressContext>,
-    ) -> TurnResult {
-        self.execute_turn_in_context(
-            turn,
-            &session_context_from_turn(turn, runtime_tool_view()),
-            &DefaultAppToolDispatcher::runtime(),
-            binding,
-            ingress,
         )
         .await
     }
@@ -120,7 +110,7 @@ impl TurnEngine {
     pub async fn execute_turn_in_context<D: AppToolDispatcher + ?Sized>(
         &self,
         turn: &ProviderTurn,
-        session_context: &SessionContext,
+        session_context: &AppContext,
         app_dispatcher: &D,
         binding: ConversationRuntimeBinding<'_>,
         ingress: Option<&ConversationIngressContext>,
@@ -140,7 +130,7 @@ impl TurnEngine {
     pub(crate) async fn execute_turn_in_context_with_trace<D: AppToolDispatcher + ?Sized>(
         &self,
         turn: &ProviderTurn,
-        session_context: &SessionContext,
+        session_context: &AppContext,
         app_dispatcher: &D,
         binding: ConversationRuntimeBinding<'_>,
         ingress: Option<&ConversationIngressContext>,
@@ -217,7 +207,7 @@ impl TurnEngine {
         &self,
         intent: &ToolIntent,
         intent_sequence: usize,
-        session_context: &SessionContext,
+        session_context: &AppContext,
         app_dispatcher: &D,
         binding: ConversationRuntimeBinding<'_>,
         budget_state: &AutonomyTurnBudgetState,
@@ -240,7 +230,7 @@ impl TurnEngine {
     pub(super) async fn execute_prepared_tool_intent<D: AppToolDispatcher + ?Sized>(
         &self,
         prepared_intent: &PreparedToolIntent,
-        session_context: &SessionContext,
+        session_context: &AppContext,
         app_dispatcher: &D,
         binding: ConversationRuntimeBinding<'_>,
         observer: Option<&ConversationTurnObserverHandle>,
@@ -334,7 +324,7 @@ mod execution_tests {
     impl AppToolDispatcher for MissingProviderAppToolDispatcher {
         async fn execute_app_tool(
             &self,
-            _session_context: &SessionContext,
+            _session_context: &AppContext,
             request: ToolCoreRequest,
             _binding: ConversationRuntimeBinding<'_>,
         ) -> Result<ToolCoreOutcome, String> {
@@ -370,7 +360,8 @@ mod execution_tests {
                 "test_allow",
             ),
         };
-        let session_context = SessionContext::root_with_tool_view(session_id, runtime_tool_view());
+        let session_context =
+            crate::test_support::app_context_for_session(session_id, runtime_tool_view());
 
         let result = TurnEngine::new(4)
             .execute_prepared_tool_intent(

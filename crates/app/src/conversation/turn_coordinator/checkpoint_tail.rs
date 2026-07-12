@@ -4,14 +4,20 @@ use crate::conversation::session_history;
 #[cfg(feature = "memory-sqlite")]
 pub(super) async fn repair_turn_checkpoint_tail_entry<R: ConversationRuntime + ?Sized>(
     config: &LoongConfig,
+    app_ctx: &AppContext,
     runtime: &R,
     session_id: &str,
     entry: &session_history::TurnCheckpointLatestEntry,
     binding: ConversationRuntimeBinding<'_>,
 ) -> CliResult<TurnCheckpointTailRepairOutcome> {
+    let session_context = runtime.session_context(config, app_ctx, session_id, binding)?;
     let summary = &entry.summary;
     let (action, repair_plan, resume_input) = match load_turn_checkpoint_tail_runtime_eligibility(
-        config, runtime, session_id, entry, binding,
+        config,
+        runtime,
+        &session_context,
+        entry,
+        binding,
     )
     .await?
     {
@@ -50,7 +56,7 @@ pub(super) async fn repair_turn_checkpoint_tail_entry<R: ConversationRuntime + ?
         restore_analytics_turn_checkpoint_progress_status(repair_plan.compaction_status());
 
     if repair_plan.should_run_after_turn() {
-        let Some(app_ctx) = binding.context() else {
+        if !binding.allows_mutation() {
             after_turn_status = TurnCheckpointProgressStatus::Skipped;
             if repair_plan.should_run_compaction() {
                 compaction_status = TurnCheckpointProgressStatus::Skipped;
@@ -74,14 +80,14 @@ pub(super) async fn repair_turn_checkpoint_tail_entry<R: ConversationRuntime + ?
                 after_turn_status,
                 compaction_status,
             ));
-        };
+        }
         match runtime
             .after_turn(
                 session_id,
                 resume_input.user_input(),
                 resume_input.assistant_reply(),
                 resume_input.messages(),
-                app_ctx,
+                &session_context,
             )
             .await
         {
@@ -118,6 +124,7 @@ pub(super) async fn repair_turn_checkpoint_tail_entry<R: ConversationRuntime + ?
         match maybe_compact_context(
             config,
             runtime,
+            &session_context,
             session_id,
             resume_input.messages(),
             resume_input.estimated_tokens(),
@@ -179,13 +186,21 @@ pub(super) async fn probe_turn_checkpoint_tail_runtime_gate_entry<
     R: ConversationRuntime + ?Sized,
 >(
     config: &LoongConfig,
+    app_ctx: &AppContext,
     runtime: &R,
     session_id: &str,
     entry: &session_history::TurnCheckpointLatestEntry,
     binding: ConversationRuntimeBinding<'_>,
 ) -> CliResult<Option<TurnCheckpointTailRepairRuntimeProbe>> {
-    match load_turn_checkpoint_tail_runtime_eligibility(config, runtime, session_id, entry, binding)
-        .await?
+    let session_context = runtime.session_context(config, app_ctx, session_id, binding)?;
+    match load_turn_checkpoint_tail_runtime_eligibility(
+        config,
+        runtime,
+        &session_context,
+        entry,
+        binding,
+    )
+    .await?
     {
         TurnCheckpointTailRuntimeEligibility::Manual {
             action,
@@ -208,10 +223,11 @@ pub(super) async fn load_turn_checkpoint_tail_runtime_eligibility<
 >(
     config: &LoongConfig,
     runtime: &R,
-    session_id: &str,
+    session_context: &AppContext,
     entry: &session_history::TurnCheckpointLatestEntry,
     binding: ConversationRuntimeBinding<'_>,
 ) -> CliResult<TurnCheckpointTailRuntimeEligibility> {
+    let session_id = session_context.session_id.as_str();
     let summary = &entry.summary;
     let recovery = TurnCheckpointRecoveryAssessment::from_summary(summary);
     let action = recovery.action();
@@ -233,7 +249,7 @@ pub(super) async fn load_turn_checkpoint_tail_runtime_eligibility<
 
     let repair_plan = build_turn_checkpoint_repair_plan(summary);
     let assembled = match runtime
-        .build_context(config, session_id, true, binding)
+        .build_context(config, session_context, true, binding)
         .await
     {
         Ok(assembled) => assembled,
@@ -270,6 +286,7 @@ pub(super) async fn probe_turn_checkpoint_tail_runtime_gate_entry_with_limit<
     R: ConversationRuntime + ?Sized,
 >(
     config: &LoongConfig,
+    app_ctx: &AppContext,
     runtime: &R,
     session_id: &str,
     limit: usize,
@@ -281,6 +298,8 @@ pub(super) async fn probe_turn_checkpoint_tail_runtime_gate_entry_with_limit<
     else {
         return Ok(None);
     };
-    probe_turn_checkpoint_tail_runtime_gate_entry(config, runtime, session_id, &entry, binding)
-        .await
+    probe_turn_checkpoint_tail_runtime_gate_entry(
+        config, app_ctx, runtime, session_id, &entry, binding,
+    )
+    .await
 }

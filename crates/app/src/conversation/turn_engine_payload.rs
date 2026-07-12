@@ -5,7 +5,7 @@ use crate::session::store::SessionStoreConfig;
 use crate::task_progress::resolve_canonical_task_id_for_session;
 use loong_contracts::{KernelError, ToolPlaneError};
 
-use super::{AugmentedToolPayload, SessionContext};
+use super::{AppContext, AugmentedToolPayload};
 
 pub(crate) fn render_kernel_error_reason(error: &KernelError) -> String {
     #[allow(clippy::wildcard_enum_match_arm)]
@@ -21,7 +21,7 @@ pub(crate) fn render_kernel_error_reason(error: &KernelError) -> String {
 pub(super) fn augment_tool_payload_for_kernel(
     canonical_tool_name: &str,
     payload: serde_json::Value,
-    session_context: &SessionContext,
+    session_context: &AppContext,
     memory_config: &SessionStoreConfig,
 ) -> AugmentedToolPayload {
     let nested_browser_scope_required = if canonical_tool_name == "tool.invoke" {
@@ -89,7 +89,7 @@ pub(super) fn augment_tool_payload_for_kernel(
 fn inject_active_skill_workspace_root_context_trusted(
     canonical_tool_name: &str,
     payload: serde_json::Value,
-    session_context: &SessionContext,
+    session_context: &AppContext,
     preserve_existing_internal_context: bool,
 ) -> AugmentedToolPayload {
     let workspace_root = active_skill_workspace_root_for_tool_payload(
@@ -121,7 +121,7 @@ fn inject_active_skill_workspace_root_context_trusted(
 fn active_skill_workspace_root_for_tool_payload(
     canonical_tool_name: &str,
     payload: &serde_json::Value,
-    session_context: &SessionContext,
+    session_context: &AppContext,
 ) -> Option<std::path::PathBuf> {
     if session_context.active_skill_roots.is_empty() {
         return None;
@@ -155,7 +155,7 @@ fn active_skill_workspace_root_for_tool_payload(
 fn visible_skill_workspace_root_for_tool_payload(
     canonical_tool_name: &str,
     payload: &serde_json::Value,
-    session_context: &SessionContext,
+    session_context: &AppContext,
 ) -> Option<std::path::PathBuf> {
     if session_context.visible_skill_roots.is_empty() {
         return None;
@@ -251,7 +251,7 @@ fn inject_task_scope_field(payload: serde_json::Value, task_id: &str) -> serde_j
 }
 
 fn resolve_canonical_task_id_for_runtime(
-    session_context: &SessionContext,
+    session_context: &AppContext,
     memory_config: &SessionStoreConfig,
 ) -> String {
     #[cfg(feature = "memory-sqlite")]
@@ -269,7 +269,7 @@ fn resolve_canonical_task_id_for_runtime(
 
 fn inject_runtime_narrowing_context_trusted(
     payload: serde_json::Value,
-    session_context: &SessionContext,
+    session_context: &AppContext,
     preserve_existing_internal_context: bool,
 ) -> AugmentedToolPayload {
     let Some(runtime_narrowing) = session_context.resolved_runtime_narrowing() else {
@@ -313,7 +313,7 @@ fn inject_runtime_narrowing_context_trusted(
 
 fn inject_workspace_root_context_trusted(
     payload: serde_json::Value,
-    session_context: &SessionContext,
+    session_context: &AppContext,
     preserve_existing_internal_context: bool,
 ) -> AugmentedToolPayload {
     let Some(workspace_root) = session_context.workspace_root.as_ref() else {

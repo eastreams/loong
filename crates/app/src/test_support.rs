@@ -18,8 +18,8 @@ use loong_runtime::runtime::Runtime;
 
 use crate::context::{AppContext, AppContextFactory};
 use crate::conversation::{
-    ConversationRuntimeBinding, DefaultAppToolDispatcher, ProviderTurn, SessionContext, ToolIntent,
-    TurnEngine, TurnResult,
+    ConversationRuntimeBinding, DefaultAppToolDispatcher, ProviderTurn, ToolIntent, TurnEngine,
+    TurnResult,
 };
 use crate::session::store::SessionStoreConfig;
 use crate::tools::{ToolView, runtime_config::ToolRuntimeConfig};
@@ -33,6 +33,41 @@ pub fn lock_process_env_for_tests() -> MutexGuard<'static, ()> {
     env_lock()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Construct a fully governed context for tests that only need session state.
+///
+/// Production code must receive runtime authority from its host; this fixture
+/// keeps unit tests explicit without recreating kernel setup in every module.
+#[cfg(test)]
+pub(crate) fn app_context_for_session(
+    session_id: impl Into<String>,
+    tool_view: ToolView,
+) -> AppContext {
+    let session_id = session_id.into();
+    crate::context::bootstrap_app_context_with_config(
+        &session_id,
+        60,
+        &crate::config::LoongConfig::default(),
+    )
+    .expect("test app context")
+    .for_session(session_id, tool_view)
+}
+
+#[cfg(test)]
+pub(crate) fn app_context_for_child(
+    session_id: impl Into<String>,
+    parent_session_id: impl Into<String>,
+    tool_view: ToolView,
+) -> AppContext {
+    let session_id = session_id.into();
+    crate::context::bootstrap_app_context_with_config(
+        &session_id,
+        60,
+        &crate::config::LoongConfig::default(),
+    )
+    .expect("test app context")
+    .child(session_id, parent_session_id, tool_view)
 }
 
 /// Monotonic counter for unique harness IDs (avoids temp dir collisions).
@@ -219,6 +254,9 @@ impl TurnTestHarness {
             )),
             token,
             tool_config,
+            "test-session",
+            tool_view.clone(),
+            loong_contracts::GovernedSessionMode::MutatingCapable,
         )
         .expect("test app context should be valid");
 
@@ -235,8 +273,9 @@ impl TurnTestHarness {
     /// Execute a provider turn through the full TurnEngine path.
     #[allow(dead_code)]
     pub async fn execute(&self, turn: &ProviderTurn) -> TurnResult {
-        let session_context =
-            SessionContext::root_with_tool_view("test-session", self.tool_view.clone());
+        let session_context = self
+            .app_ctx
+            .for_session("test-session", self.tool_view.clone());
         let dispatcher = DefaultAppToolDispatcher::new(
             self.memory_config.clone(),
             crate::config::ToolConfig::default(),

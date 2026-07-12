@@ -565,6 +565,7 @@ pub async fn run_cli_ask(
         .turn_coordinator
         .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             &turn_config,
+            &runtime.app_context,
             &runtime.session_address,
             input,
             ProviderErrorMode::InlineMessage,

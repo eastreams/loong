@@ -12,6 +12,7 @@ use crate::tools::ToolExecutionKind;
 #[cfg(feature = "memory-sqlite")]
 pub(super) struct CoordinatorApprovalResolutionRuntime<'a, R: ?Sized> {
     config: &'a LoongConfig,
+    app_ctx: &'a crate::AppContext,
     runtime: &'a R,
     fallback: &'a DefaultAppToolDispatcher,
     binding: ConversationRuntimeBinding<'a>,
@@ -31,12 +32,14 @@ where
 {
     pub(super) fn new(
         config: &'a LoongConfig,
+        app_ctx: &'a crate::AppContext,
         runtime: &'a R,
         fallback: &'a DefaultAppToolDispatcher,
         binding: ConversationRuntimeBinding<'a>,
     ) -> Self {
         Self {
             config,
+            app_ctx,
             runtime,
             fallback,
             binding,
@@ -214,23 +217,22 @@ where
         let replay_request = self.replay_request(approval_request)?;
 
         match replay_request.execution_kind {
-            crate::tools::ToolExecutionKind::Core => {
-                let app_ctx = self
-                    .binding
-                    .context()
-                    .ok_or_else(|| "no_app_context".to_owned())?;
-                crate::tools::execute_kernel_tool_request(
-                    app_ctx,
-                    replay_request.request,
-                    replay_request.trusted_internal_context,
-                )
-                .await
-                .map_err(|error| error.to_string())
-            }
+            crate::tools::ToolExecutionKind::Core => crate::tools::execute_kernel_tool_request(
+                self.app_ctx,
+                replay_request.request,
+                replay_request.trusted_internal_context,
+            )
+            .await
+            .map_err(|error| error.to_string()),
             crate::tools::ToolExecutionKind::App => {
                 let session_context = self
                     .runtime
-                    .session_context(self.config, &approval_request.session_id, self.binding)
+                    .session_context(
+                        self.config,
+                        self.app_ctx,
+                        &approval_request.session_id,
+                        self.binding,
+                    )
                     .map_err(|error| {
                         format!("load approval request session context failed: {error}")
                     })?;

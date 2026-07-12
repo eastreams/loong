@@ -3,6 +3,11 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::sync::Mutex as StdMutex;
 
+// Preparation tests need authority-bearing context, but do not exercise context bootstrap itself.
+fn provider_turn_test_context() -> AppContext {
+    bootstrap_test_app_context("provider-turn-preparation", 60).expect("test app context")
+}
+
 #[test]
 fn provider_turn_session_state_appends_user_input_and_keeps_estimate() {
     let session = ProviderTurnSessionState::from_assembled_context(
@@ -156,6 +161,7 @@ fn provider_turn_followup_preparation_preserves_stable_prefix_hash_and_updates_t
     };
     let preparation = ProviderTurnPreparation::from_assembled_context(
         &LoongConfig::default(),
+        &provider_turn_test_context(),
         assembled,
         "use the recent result",
         None,
@@ -235,6 +241,7 @@ fn provider_turn_followup_preparation_retains_original_tail_across_multiple_foll
     };
     let preparation = ProviderTurnPreparation::from_assembled_context(
         &LoongConfig::default(),
+        &provider_turn_test_context(),
         assembled,
         "use the recent result",
         None,
@@ -296,6 +303,7 @@ fn provider_turn_preparation_derives_lane_plan_and_raw_mode() {
 
     let preparation = ProviderTurnPreparation::from_assembled_context(
         &config,
+        &provider_turn_test_context(),
         AssembledConversationContext::from_messages(vec![serde_json::json!({
             "role": "system",
             "content": "sys"
@@ -359,7 +367,7 @@ impl ConversationRuntime for MissingToolContinuationRuntime {
     async fn build_messages(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
+        _app_ctx: &crate::AppContext,
         _include_system_prompt: bool,
         _tool_view: &crate::tools::ToolView,
         _binding: ConversationRuntimeBinding<'_>,
@@ -432,6 +440,7 @@ fn provider_continuation_test_preparation(
 ) -> ProviderTurnPreparation {
     ProviderTurnPreparation::from_assembled_context(
         config,
+        &provider_turn_test_context(),
         AssembledConversationContext::from_messages(vec![json!({
             "role": "system",
             "content": "sys"
@@ -759,6 +768,7 @@ fn provider_turn_continue_phase_checkpoint_captures_continue_branch_kernel_shape
     let config = LoongConfig::default();
     let preparation = ProviderTurnPreparation::from_assembled_context(
         &config,
+        &provider_turn_test_context(),
         AssembledConversationContext::from_messages(vec![serde_json::json!({
             "role": "system",
             "content": "sys"
@@ -985,6 +995,7 @@ fn reload_followup_provider_config_reads_provider_switch_wrapped_by_tool_invoke(
 fn provider_turn_continue_phase_checkpoint_keeps_direct_reply_without_followup() {
     let preparation = ProviderTurnPreparation::from_assembled_context(
         &LoongConfig::default(),
+        &provider_turn_test_context(),
         AssembledConversationContext::from_messages(vec![serde_json::json!({
             "role": "system",
             "content": "sys"
@@ -1070,6 +1081,7 @@ fn resolved_provider_turn_checkpoint_preserves_safe_lane_route_provenance() {
             )),
             preparation: ProviderTurnPreparation::from_assembled_context(
                 &config,
+                &provider_turn_test_context(),
                 AssembledConversationContext::from_messages(vec![serde_json::json!({
                     "role": "system",
                     "content": "sys"
@@ -1179,6 +1191,7 @@ fn resolved_provider_turn_checkpoint_keeps_inline_provider_error_terminal_shape(
             )),
             preparation: ProviderTurnPreparation::from_assembled_context(
                 &LoongConfig::default(),
+                &provider_turn_test_context(),
                 AssembledConversationContext::from_messages(vec![serde_json::json!({
                     "role": "system",
                     "content": "sys"
@@ -1225,6 +1238,7 @@ fn resolved_provider_turn_checkpoint_marks_return_error_finalization() {
             identity: None,
             preparation: ProviderTurnPreparation::from_assembled_context(
                 &LoongConfig::default(),
+                &provider_turn_test_context(),
                 AssembledConversationContext::from_messages(vec![serde_json::json!({
                     "role": "system",
                     "content": "sys"
@@ -1276,6 +1290,7 @@ fn resolved_provider_turn_terminal_phase_builds_reply_tail_and_checkpoint() {
             identity: Some(TurnCheckpointIdentity::from_turn("say hello", "done")),
             preparation: ProviderTurnPreparation::from_assembled_context(
                 &LoongConfig::default(),
+                &provider_turn_test_context(),
                 AssembledConversationContext::from_messages(vec![serde_json::json!({
                     "role": "system",
                     "content": "sys"
@@ -1337,6 +1352,7 @@ fn resolved_provider_turn_terminal_phase_preserves_return_error_checkpoint() {
             identity: None,
             preparation: ProviderTurnPreparation::from_assembled_context(
                 &LoongConfig::default(),
+                &provider_turn_test_context(),
                 AssembledConversationContext::from_messages(vec![serde_json::json!({
                     "role": "system",
                     "content": "sys"
@@ -1369,6 +1385,7 @@ fn resolved_provider_turn_terminal_phase_preserves_return_error_checkpoint() {
 fn provider_turn_request_terminal_phase_builds_inline_provider_error_reply() {
     let preparation = ProviderTurnPreparation::from_assembled_context(
         &LoongConfig::default(),
+        &provider_turn_test_context(),
         AssembledConversationContext::from_messages(vec![serde_json::json!({
             "role": "system",
             "content": "sys"
@@ -1409,6 +1426,7 @@ fn provider_turn_request_terminal_phase_builds_inline_provider_error_reply() {
 fn provider_turn_request_terminal_phase_builds_return_error_without_reply_identity() {
     let preparation = ProviderTurnPreparation::from_assembled_context(
         &LoongConfig::default(),
+        &provider_turn_test_context(),
         AssembledConversationContext::from_messages(vec![serde_json::json!({
             "role": "system",
             "content": "sys"

@@ -273,6 +273,7 @@ async fn execute_create_command(
     let binding = mvp::conversation::ConversationRuntimeBinding::Context(&app_context);
     let queued = mvp::conversation::spawn_background_delegate_with_runtime(
         config,
+        &app_context,
         &runtime,
         current_session_id,
         task,
