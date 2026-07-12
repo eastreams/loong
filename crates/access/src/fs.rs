@@ -14,7 +14,7 @@ pub mod remove;
 
 pub use access::{FsAccess, FsAccessError, FsReadOutput, FsWriteOutput};
 pub use action::{
-    FsAction, FsContentSearchAction, FsContentSearchOptions, FsCopyFileAction,
+    FsAction, FsAtomicWriteAction, FsContentSearchAction, FsContentSearchOptions, FsCopyFileAction,
     FsCreateDirAllAction, FsGlobAction, FsInspectPathAction, FsReadAction, FsReadDirAction,
     FsRemoveFileAction, FsResolvePathAction, FsWriteAction, FsWriteOptions,
 };

@@ -13,9 +13,9 @@ use thiserror::Error;
 use super::{
     FsResolutionContext,
     action::{
-        FsContentSearchAction, FsContentSearchOptions, FsCopyFileAction, FsCreateDirAllAction,
-        FsGlobAction, FsInspectPathAction, FsReadAction, FsReadDirAction, FsRemoveFileAction,
-        FsResolvePathAction, FsWriteAction, FsWriteOptions,
+        FsAtomicWriteAction, FsContentSearchAction, FsContentSearchOptions, FsCopyFileAction,
+        FsCreateDirAllAction, FsGlobAction, FsInspectPathAction, FsReadAction, FsReadDirAction,
+        FsRemoveFileAction, FsResolvePathAction, FsWriteAction, FsWriteOptions,
     },
     content_search::FsContentSearchOutput,
     copy::FsCopyFileOutput,
@@ -107,6 +107,36 @@ where
         let path = resolve_grant.granted.run(self.ctx).await?;
 
         let action = FsWriteAction::new(path, bytes.into(), options);
+        let grant = self
+            .policy_engine
+            .grant(self.ctx, action)
+            .await
+            .map_err(AuthorizationError::from)
+            .map_err(FsAccessError::Authorization)?;
+        grant.granted.run(self.ctx).await
+    }
+
+    /// Atomically write bytes through path-resolution policy and write policy.
+    ///
+    /// This is for manifests and rollback records where a failed write must not
+    /// leave the previous target truncated. The final replacement still happens
+    /// inside access after policy grants the concrete action.
+    pub async fn write_file_atomically(
+        self,
+        path: impl AsRef<Path>,
+        bytes: impl Into<Vec<u8>>,
+        options: FsWriteOptions,
+    ) -> Result<FsWriteOutput, FsAccessError> {
+        let resolve_action = FsResolvePathAction::resolve(path, self.ctx.fs_resolution_root())?;
+        let resolve_grant = self
+            .policy_engine
+            .grant(self.ctx, resolve_action)
+            .await
+            .map_err(AuthorizationError::from)
+            .map_err(FsAccessError::Authorization)?;
+        let path = resolve_grant.granted.run(self.ctx).await?;
+
+        let action = FsAtomicWriteAction::new(path, bytes.into(), options);
         let grant = self
             .policy_engine
             .grant(self.ctx, action)
@@ -406,6 +436,86 @@ where
             .map_err(|source| FsAccessError::WriteFile {
                 path: path.clone(),
                 source,
+            })?;
+
+        Ok(FsWriteOutput {
+            path,
+            bytes_written: action.bytes().len(),
+            overwritten,
+        })
+    }
+}
+
+/// Execute an already-authorized atomic fs write.
+///
+/// This consumes `Granted<FsAtomicWriteAction>` so manifest-style replacement
+/// cannot be performed with an ungranted target path.
+#[async_trait]
+impl<Cx> Action<Cx> for FsAtomicWriteAction
+where
+    Cx: Sync,
+{
+    type Output = FsWriteOutput;
+    type Error = FsAccessError;
+
+    async fn run(granted: Granted<Self>, _ctx: &Cx) -> Result<Self::Output, Self::Error> {
+        let action = granted.into_action();
+        let path = action.path().to_path_buf();
+        let options = action.options();
+
+        if symlink_metadata_is_symlink(&path)? {
+            return Err(FsAccessError::RefuseSymlink { path });
+        }
+        if path.is_dir() {
+            return Err(FsAccessError::PathIsDirectory { path });
+        }
+        if options.create_dirs
+            && let Some(parent) = path.parent()
+        {
+            std::fs::create_dir_all(parent).map_err(|source| {
+                FsAccessError::CreateParentDirectory {
+                    path: parent.to_path_buf(),
+                    source,
+                }
+            })?;
+        }
+
+        let overwritten = path
+            .try_exists()
+            .map_err(|source| FsAccessError::InspectPath {
+                path: path.clone(),
+                source,
+            })?;
+        if overwritten && !options.overwrite {
+            return Err(FsAccessError::FileExistsRequiresOverwrite { path });
+        }
+
+        let parent = path.parent().unwrap_or(Path::new("."));
+        let mut staged = tempfile::NamedTempFile::new_in(parent).map_err(|source| {
+            FsAccessError::OpenWriteFile {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        staged
+            .as_file_mut()
+            .write_all(action.bytes())
+            .map_err(|source| FsAccessError::WriteFile {
+                path: path.clone(),
+                source,
+            })?;
+        staged
+            .as_file_mut()
+            .sync_all()
+            .map_err(|source| FsAccessError::WriteFile {
+                path: path.clone(),
+                source,
+            })?;
+        staged
+            .persist(&path)
+            .map_err(|error| FsAccessError::WriteFile {
+                path: path.clone(),
+                source: error.error,
             })?;
 
         Ok(FsWriteOutput {

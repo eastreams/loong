@@ -195,6 +195,67 @@ impl ActionMeta for FsWriteAction {
     }
 }
 
+/// Typed action for atomically replacing one governed filesystem path.
+///
+/// This is separate from `FsWriteAction` because migration manifests and
+/// rollback records need a stronger failure mode: stage bytes next to the
+/// target, then replace the target only after the staged file is complete.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsAtomicWriteAction {
+    path: GrantedPath,
+    bytes: Vec<u8>,
+    options: FsWriteOptions,
+}
+
+impl FsAtomicWriteAction {
+    #[must_use]
+    pub fn new(path: GrantedPath, bytes: Vec<u8>, options: FsWriteOptions) -> Self {
+        Self {
+            path,
+            bytes,
+            options,
+        }
+    }
+
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        self.path.as_path()
+    }
+
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        self.bytes.as_slice()
+    }
+
+    #[must_use]
+    pub fn options(&self) -> FsWriteOptions {
+        self.options
+    }
+}
+
+impl ActionMeta for FsAtomicWriteAction {
+    fn metadata(&self) -> ActionMetadata<'_> {
+        ActionMetadata {
+            kind: "fs.atomic_write",
+            operation: Cow::Borrowed("write_file_atomically"),
+            required_capabilities: Cow::Borrowed(&FS_WRITE_REQUIRED_CAPABILITIES),
+        }
+    }
+
+    fn audit_resource(&self) -> Option<Cow<'_, str>> {
+        Some(self.path.as_path().display().to_string().into())
+    }
+
+    fn payload(&self) -> Cow<'_, Value> {
+        Cow::Owned(json!({
+            "path": self.path.as_path().display().to_string(),
+            "byte_count": self.bytes.len(),
+            "create_dirs": self.options.create_dirs,
+            "overwrite": self.options.overwrite,
+        }))
+    }
+}
+
 /// Typed action for copying bytes between two governed filesystem paths.
 ///
 /// Copy is modeled as one action instead of `read_file` plus app-side
@@ -612,6 +673,7 @@ impl ActionMeta for FsContentSearchAction {
 pub enum FsAction {
     Read(FsReadAction),
     Write(FsWriteAction),
+    AtomicWrite(FsAtomicWriteAction),
     CopyFile(FsCopyFileAction),
     CreateDirAll(FsCreateDirAllAction),
     RemoveFile(FsRemoveFileAction),
@@ -630,6 +692,15 @@ impl FsAction {
     #[must_use]
     pub fn write_file(path: GrantedPath, bytes: Vec<u8>, options: FsWriteOptions) -> Self {
         Self::Write(FsWriteAction::new(path, bytes, options))
+    }
+
+    #[must_use]
+    pub fn write_file_atomically(
+        path: GrantedPath,
+        bytes: Vec<u8>,
+        options: FsWriteOptions,
+    ) -> Self {
+        Self::AtomicWrite(FsAtomicWriteAction::new(path, bytes, options))
     }
 
     #[must_use]
@@ -691,6 +762,7 @@ impl ActionMeta for FsAction {
         match self {
             Self::Read(action) => action.metadata(),
             Self::Write(action) => action.metadata(),
+            Self::AtomicWrite(action) => action.metadata(),
             Self::CopyFile(action) => action.metadata(),
             Self::CreateDirAll(action) => action.metadata(),
             Self::RemoveFile(action) => action.metadata(),
@@ -705,6 +777,7 @@ impl ActionMeta for FsAction {
         match self {
             Self::Read(action) => action.audit_resource(),
             Self::Write(action) => action.audit_resource(),
+            Self::AtomicWrite(action) => action.audit_resource(),
             Self::CopyFile(action) => action.audit_resource(),
             Self::CreateDirAll(action) => action.audit_resource(),
             Self::RemoveFile(action) => action.audit_resource(),
@@ -719,6 +792,7 @@ impl ActionMeta for FsAction {
         match self {
             Self::Read(action) => action.payload(),
             Self::Write(action) => action.payload(),
+            Self::AtomicWrite(action) => action.payload(),
             Self::CopyFile(action) => action.payload(),
             Self::CreateDirAll(action) => action.payload(),
             Self::RemoveFile(action) => action.payload(),

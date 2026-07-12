@@ -5,7 +5,7 @@ use crate::{kernel::Kernel, policy::PolicyPipeline};
 
 pub mod fs {
     pub use loong_access::fs::{
-        FsAccess, FsAccessError, FsContentSearchAction, FsContentSearchMatch,
+        FsAccess, FsAccessError, FsAtomicWriteAction, FsContentSearchAction, FsContentSearchMatch,
         FsContentSearchOptions, FsContentSearchOutput, FsCopyFileAction, FsCopyFileOutput,
         FsCreateDirAllAction, FsCreateDirAllOutput, FsGlobAction, FsGlobOutput,
         FsInspectPathAction, FsInspectPathOutput, FsPathKind, FsPathMatch, FsPathPolicyContext,
