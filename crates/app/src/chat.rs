@@ -108,7 +108,7 @@ use crate::conversation::DefaultConversationRuntime;
 
 pub(crate) use self::boot::{
     initialize_cli_turn_runtime, initialize_cli_turn_runtime_with_loaded_config,
-    initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx,
+    initialize_cli_turn_runtime_with_loaded_config_and_app_ctx,
 };
 
 use super::config::{self, ConversationConfig, LoongConfig};
@@ -305,7 +305,7 @@ pub(crate) struct CliTurnRuntime {
     pub(crate) session_origin: CliRuntimeSessionOrigin,
     pub(crate) session_address: ConversationSessionAddress,
     pub(crate) turn_coordinator: ConversationTurnCoordinator,
-    pub(crate) kernel_context: crate::KernelContext,
+    pub(crate) app_context: crate::AppContext,
     pub(crate) effective_bootstrap_mcp_servers: Vec<String>,
     pub(crate) effective_working_directory: Option<PathBuf>,
     pub(crate) memory_label: String,
@@ -315,7 +315,7 @@ pub(crate) struct CliTurnRuntime {
 
 impl CliTurnRuntime {
     pub(crate) fn conversation_binding(&self) -> ConversationRuntimeBinding<'_> {
-        ConversationRuntimeBinding::kernel(&self.kernel_context)
+        ConversationRuntimeBinding::Context(&self.app_context)
     }
 }
 

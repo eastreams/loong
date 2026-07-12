@@ -64,9 +64,9 @@ mod state;
 #[path = "turn_coordinator/support.rs"]
 mod support;
 
-use crate::CliResult;
 #[cfg(test)]
-use crate::KernelContext;
+use crate::AppContext;
+use crate::CliResult;
 use crate::acp::{
     AcpConversationTurnEntryDecision, AcpConversationTurnOptions,
     consume_finalized_acp_conversation_turn, evaluate_acp_conversation_turn_entry_for_address,
@@ -281,7 +281,7 @@ use loong_kernel::mailbox::{AgentPath, InterAgentMessage, MailboxContent};
 pub struct ConversationTurnCoordinator;
 
 const PRODUCTION_CONVERSATION_RUNTIME_REQUIRES_KERNEL_BINDING: &str =
-    "production conversation runtime requires kernel-bound execution";
+    "production conversation runtime requires context-bound execution";
 pub use self::compact::ContextCompactionReport;
 
 #[allow(dead_code)]

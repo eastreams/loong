@@ -2,7 +2,7 @@ use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 use loong_runtime::tool_plane::ToolPath;
 use serde_json::Value;
 
-use crate::context::AppExecutionContext;
+use crate::context::AppContext;
 
 use super::{
     BASH_EXEC_TOOL_NAME, ToolView, canonical_tool_name, execute_discoverable_tool_core_with_config,
@@ -65,14 +65,14 @@ pub(super) fn execute_direct_tool_core_with_config(
 ) -> Result<ToolCoreOutcome, String> {
     if request.tool_name == "read" {
         // Validate the direct-read surface before failing closed; actual read
-        // execution needs AppExecutionContext so it can enter typed access.
+        // execution needs AppContext so it can enter typed access.
         let (_read_route, _direct_request) = route_direct_read_request_for_kernel(request, config)?;
         return Err("read requires kernel access context".to_owned());
     }
     if request.tool_name == "write" {
         // Validate the direct-write payload before failing closed. The write
         // side effect is migrated to the typed app plane and must enter through
-        // AppExecutionContext so it can request ToolInvocationAction and fs
+        // AppContext so it can request ToolInvocationAction and fs
         // write grants.
         let _direct_request = route_direct_tool_request(request, config)?;
         return Err("write requires kernel access context".to_owned());
@@ -85,7 +85,7 @@ pub(super) fn execute_direct_tool_core_with_config(
 pub(super) async fn execute_direct_tool_core_with_context(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
-    ctx: &AppExecutionContext<'_>,
+    ctx: &AppContext,
 ) -> Result<ToolCoreOutcome, String> {
     if request.tool_name == "read" {
         return execute_direct_read_tool_core_with_context(request, config, ctx).await;
@@ -114,7 +114,7 @@ pub(super) async fn execute_direct_tool_core_with_context(
 async fn execute_direct_read_tool_core_with_context(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
-    ctx: &AppExecutionContext<'_>,
+    ctx: &AppContext,
 ) -> Result<ToolCoreOutcome, String> {
     // Preserve direct-read normalization (path priority, glob alias handling)
     // before dispatching through the typed aggregate tool.

@@ -23,8 +23,8 @@ impl ConversationTurnCoordinator {
         runtime: &R,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<ContextCompactionReport> {
-        if let Some(kernel_ctx) = binding.kernel_context() {
-            runtime.bootstrap(config, session_id, kernel_ctx).await?;
+        if let Some(app_ctx) = binding.context() {
+            runtime.bootstrap(config, session_id, app_ctx).await?;
         }
 
         let session_context = runtime.session_context(config, session_id, binding)?;

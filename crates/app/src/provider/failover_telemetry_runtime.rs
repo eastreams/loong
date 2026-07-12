@@ -171,10 +171,10 @@ pub(super) fn record_provider_failover_audit_event(
     );
     record_provider_failover_metrics(&event);
 
-    let Some(ctx) = binding.kernel_context() else {
+    let Some(ctx) = binding.context() else {
         return;
     };
-    let _ = ctx.runtime.kernel().record_audit_event(
+    let _ = ctx.runtime().kernel().record_audit_event(
         Some(ctx.agent_id()),
         AuditEventKind::ProviderFailover {
             pack_id: ctx.pack_id().to_owned(),

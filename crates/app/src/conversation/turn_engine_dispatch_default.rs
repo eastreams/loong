@@ -1048,7 +1048,7 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
         let canonical_tool_name = crate::tools::canonical_tool_name(request.tool_name.as_str());
         let effective_tool_view = self.effective_tool_view_for_session(session_context)?;
         let descriptor = tool_catalog().descriptor(canonical_tool_name);
-        let has_kernel_context = binding.kernel_context().is_some();
+        let has_app_context = binding.context().is_some();
 
         if let Some(descriptor) = descriptor
             && descriptor.execution_kind == ToolExecutionKind::App
@@ -1082,8 +1082,8 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
             .await;
         }
 
-        if requires_kernel_binding && !has_kernel_context {
-            return Err("app_tool_denied: no_kernel_context".to_owned());
+        if requires_kernel_binding && !has_app_context {
+            return Err("app_tool_denied: no_app_context".to_owned());
         }
 
         if canonical_tool_name == "session_wait" {

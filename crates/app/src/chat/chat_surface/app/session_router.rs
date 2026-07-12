@@ -180,12 +180,12 @@ impl SessionRouter {
         let session_id = match session_hint {
             Some(session_id) => session_id.to_owned(),
             None => {
-                crate::chat::initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
+                crate::chat::initialize_cli_turn_runtime_with_loaded_config_and_app_ctx(
                     self.active_runtime().resolved_path.clone(),
                     self.active_runtime().config.clone(),
                     None,
                     &preserved_options,
-                    self.active_runtime().kernel_context.clone(),
+                    self.active_runtime().app_context.clone(),
                     session_requirement,
                 )?
                 .session_id

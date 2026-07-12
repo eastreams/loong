@@ -1,7 +1,7 @@
 use super::test_utils::*;
 use super::*;
 use crate::config::ToolConfig;
-use crate::context::bootstrap_test_kernel_context;
+use crate::context::bootstrap_test_app_context;
 use crate::test_utils::unique_temp_dir;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -252,9 +252,8 @@ fn tool_registry_re_exposes_session_mutation_tools_when_runtime_policy_allows_th
 #[test]
 fn tool_registry_and_snapshot_use_typed_read_summary() {
     let config = runtime_config::ToolRuntimeConfig::default();
-    let kernel_ctx =
-        bootstrap_test_kernel_context("typed-read-metadata", 60).expect("bootstrap context");
-    let runtime = Some(kernel_ctx.runtime.as_ref());
+    let app_ctx = bootstrap_test_app_context("typed-read-metadata", 60).expect("bootstrap context");
+    let runtime = Some(app_ctx.runtime());
     let registry = tool_registry_with_config(runtime, Some(&config));
     let read = registry
         .iter()
@@ -557,10 +556,9 @@ fn delegate_child_tool_view_can_allow_shell_when_enabled() {
 #[test]
 fn provider_tool_definitions_are_stable_and_cover_direct_surface() {
     let config = runtime_config::ToolRuntimeConfig::default();
-    let kernel_ctx =
-        bootstrap_test_kernel_context("provider-tool-metadata", 60).expect("bootstrap context");
-    let defs =
-        provider_tool_definitions_with_config(Some(kernel_ctx.runtime.as_ref()), Some(&config));
+    let app_ctx =
+        bootstrap_test_app_context("provider-tool-metadata", 60).expect("bootstrap context");
+    let defs = provider_tool_definitions_with_config(Some(app_ctx.runtime()), Some(&config));
     let expected_names = vec!["bash", "browse", "edit", "read", "web", "write"];
     assert_eq!(defs.len(), expected_names.len());
 
@@ -2037,7 +2035,7 @@ fn direct_read_prioritizes_path_over_incidental_search_fields() {
 }
 
 #[test]
-fn direct_read_glob_alias_requires_kernel_context() {
+fn direct_read_glob_alias_requires_app_context() {
     let root = unique_temp_dir("loong-direct-read-glob-alias");
     std::fs::create_dir_all(root.join("docs")).expect("create docs dir");
     std::fs::write(root.join("AGENTS.md"), "agent guidance").expect("write AGENTS fixture");
@@ -2058,13 +2056,13 @@ fn direct_read_glob_alias_requires_kernel_context() {
         },
         &config,
     )
-    .expect_err("glob alias direct read should require kernel context");
+    .expect_err("glob alias direct read should require app context");
 
     assert_eq!(error, "read requires kernel access context");
 }
 
 #[test]
-fn direct_read_path_mode_requires_kernel_context_after_dropping_incidental_search_fields() {
+fn direct_read_path_mode_requires_app_context_after_dropping_incidental_search_fields() {
     let root = unique_temp_dir("loong-direct-read-path-priority");
     std::fs::create_dir_all(&root).expect("create read-priority root");
     std::fs::write(root.join("CLAUDE.md"), "claude guidance").expect("write CLAUDE fixture");
@@ -2085,13 +2083,13 @@ fn direct_read_path_mode_requires_kernel_context_after_dropping_incidental_searc
         },
         &config,
     )
-    .expect_err("path-priority direct read requires kernel context");
+    .expect_err("path-priority direct read requires app context");
 
     assert_eq!(error, "read requires kernel access context");
 }
 
 #[test]
-fn direct_write_requires_kernel_context_without_writing_file() {
+fn direct_write_requires_app_context_without_writing_file() {
     let root = unique_temp_dir("loong-direct-write");
     std::fs::create_dir_all(&root).expect("create direct-write root");
     let config = test_tool_runtime_config(&root).into_inner();
@@ -2106,14 +2104,14 @@ fn direct_write_requires_kernel_context_without_writing_file() {
         },
         &config,
     )
-    .expect_err("direct write should require kernel context");
+    .expect_err("direct write should require app context");
 
     assert_eq!(error, "write requires kernel access context");
     assert!(!root.join("notes.txt").exists());
 }
 
 #[test]
-fn discoverable_search_requires_kernel_context_without_reading_files() {
+fn discoverable_search_requires_app_context_without_reading_files() {
     let root = unique_temp_dir("loong-direct-search");
     std::fs::create_dir_all(&root).expect("create search root");
     std::fs::write(root.join("notes.txt"), "needle").expect("write search fixture");
@@ -2126,7 +2124,7 @@ fn discoverable_search_requires_kernel_context_without_reading_files() {
         },
         &config,
     )
-    .expect_err("glob.search should require kernel context");
+    .expect_err("glob.search should require app context");
     let content_error = execute_tool_core_with_config(
         ToolCoreRequest {
             tool_name: "content.search".to_owned(),
@@ -2134,7 +2132,7 @@ fn discoverable_search_requires_kernel_context_without_reading_files() {
         },
         &config,
     )
-    .expect_err("content.search should require kernel context");
+    .expect_err("content.search should require app context");
 
     assert_eq!(glob_error, "glob.search requires kernel access context");
     assert_eq!(
@@ -2165,7 +2163,7 @@ fn direct_edit_requires_kernel_access_context() {
         },
         &config,
     )
-    .expect_err("direct edit should require kernel context");
+    .expect_err("direct edit should require app context");
 
     assert_eq!(error, "edit requires kernel access context");
     assert_eq!(
@@ -2282,8 +2280,8 @@ fn tool_search_respects_visible_tool_ids_from_runtime_context() {
     std::fs::create_dir_all(&root).expect("create fixture root");
 
     let config = test_tool_runtime_config(root.clone());
-    let kernel_ctx =
-        bootstrap_test_kernel_context("tool-search-visible-filter", 60).expect("bootstrap context");
+    let app_ctx =
+        bootstrap_test_app_context("tool-search-visible-filter", 60).expect("bootstrap context");
     let request = ToolCoreRequest {
         tool_name: "tool.search".to_owned(),
         payload: json!({
@@ -2296,11 +2294,7 @@ fn tool_search_respects_visible_tool_ids_from_runtime_context() {
         }),
     };
     let outcome = with_trusted_internal_tool_payload(|| {
-        tool_search::execute_tool_search_tool_with_config(
-            Some(kernel_ctx.runtime.as_ref()),
-            request,
-            &config,
-        )
+        tool_search::execute_tool_search_tool_with_config(Some(app_ctx.runtime()), request, &config)
     })
     .expect("tool search should succeed");
 
@@ -2346,8 +2340,8 @@ fn tool_search_uses_typed_write_metadata() {
     std::fs::create_dir_all(&root).expect("create fixture root");
 
     let config = test_tool_runtime_config(root.clone());
-    let kernel_ctx =
-        bootstrap_test_kernel_context("tool-search-write-metadata", 60).expect("bootstrap context");
+    let app_ctx =
+        bootstrap_test_app_context("tool-search-write-metadata", 60).expect("bootstrap context");
     let request = ToolCoreRequest {
         tool_name: "tool.search".to_owned(),
         payload: json!({
@@ -2360,11 +2354,7 @@ fn tool_search_uses_typed_write_metadata() {
         }),
     };
     let outcome = with_trusted_internal_tool_payload(|| {
-        tool_search::execute_tool_search_tool_with_config(
-            Some(kernel_ctx.runtime.as_ref()),
-            request,
-            &config,
-        )
+        tool_search::execute_tool_search_tool_with_config(Some(app_ctx.runtime()), request, &config)
     })
     .expect("tool search should succeed");
 
@@ -3290,10 +3280,9 @@ fn provider_tool_definitions_with_config_keeps_direct_surface_when_feishu_runtim
         integration: crate::config::FeishuIntegrationConfig::default(),
     });
 
-    let kernel_ctx = bootstrap_test_kernel_context("feishu-provider-tool-metadata", 60)
-        .expect("bootstrap context");
-    let defs =
-        provider_tool_definitions_with_config(Some(kernel_ctx.runtime.as_ref()), Some(&config));
+    let app_ctx =
+        bootstrap_test_app_context("feishu-provider-tool-metadata", 60).expect("bootstrap context");
+    let defs = provider_tool_definitions_with_config(Some(app_ctx.runtime()), Some(&config));
     let names = defs
         .iter()
         .filter_map(|item| item.get("function"))
@@ -13134,10 +13123,10 @@ impl CoreToolAdapter<crate::context::AppContextFactory> for SharedTestToolAdapte
     }
 }
 
-fn build_tool_kernel_context(
+fn build_tool_app_context(
     audit: Arc<InMemoryAuditSink>,
     capabilities: BTreeSet<Capability>,
-) -> (KernelContext, Arc<Mutex<Vec<ToolCoreRequest>>>) {
+) -> (AppContext, Arc<Mutex<Vec<ToolCoreRequest>>>) {
     let clock = Arc::new(FixedClock::new(1_700_000_000));
     let mut kernel = Kernel::with_legacy_allow_runtime(clock, audit);
 
@@ -13170,15 +13159,16 @@ fn build_tool_kernel_context(
         .issue_token("test-pack", "test-agent", 3600)
         .expect("issue token");
 
-    let ctx = KernelContext {
-        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+    let ctx = AppContext::new(
+        Arc::new(loong_runtime::runtime::Runtime::new(
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
         pack,
         token,
-        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
-    };
+        crate::tools::runtime_config::ToolRuntimeConfig::default(),
+    )
+    .expect("build tool test app context");
 
     (ctx, invocations)
 }
@@ -13187,7 +13177,7 @@ fn build_tool_kernel_context(
 async fn tool_call_through_kernel_records_audit() {
     let audit = Arc::new(InMemoryAuditSink::default());
     let (ctx, invocations) =
-        build_tool_kernel_context(audit.clone(), BTreeSet::from([Capability::InvokeTool]));
+        build_tool_app_context(audit.clone(), BTreeSet::from([Capability::InvokeTool]));
 
     let request = ToolCoreRequest {
         tool_name: "echo".to_owned(),
@@ -13257,21 +13247,26 @@ async fn kernel_tool_adapter_routes_through_kernel() {
         "tool_name": &request.tool_name,
         "payload": &request.payload,
     });
-    let runtime = loong_runtime::runtime::Runtime::new(
+    let runtime = Arc::new(loong_runtime::runtime::Runtime::new(
         kernel,
         crate::tools::plane::test_builtin_tool_plane(),
-    );
-    let execution_context = crate::context::AppExecutionContext::new(
-        &runtime,
-        &pack,
-        &token,
-        runtime.kernel().now_epoch_s(),
-        loong_contracts::ExecutionPlane::Tool,
-        loong_contracts::PlaneTier::Core,
-        Some(&tool_policy_params),
-        &crate::tools::runtime_config::ToolRuntimeConfig::default(),
+    ));
+    let tool_runtime_config = crate::tools::runtime_config::ToolRuntimeConfig::default();
+    let app_context = crate::context::AppContext::new(
+        runtime.clone(),
+        Arc::new(pack),
+        token.clone(),
+        tool_runtime_config.clone(),
     )
-    .expect("build tool execution context");
+    .expect("build app context");
+    let execution_context = app_context
+        .for_invocation(
+            loong_contracts::ExecutionPlane::Tool,
+            loong_contracts::PlaneTier::Core,
+            Some(&tool_policy_params),
+            &tool_runtime_config,
+        )
+        .expect("build tool execution context");
     let err = runtime
         .kernel()
         .execute_tool_core("test-pack", &token, &caps, None, request, execution_context)
@@ -13333,21 +13328,26 @@ async fn kernel_tool_adapter_rejects_reserved_internal_payload_through_kernel_by
         "tool_name": &request.tool_name,
         "payload": &request.payload,
     });
-    let runtime = loong_runtime::runtime::Runtime::new(
+    let runtime = Arc::new(loong_runtime::runtime::Runtime::new(
         kernel,
         crate::tools::plane::test_builtin_tool_plane(),
-    );
-    let execution_context = crate::context::AppExecutionContext::new(
-        &runtime,
-        &pack,
-        &token,
-        runtime.kernel().now_epoch_s(),
-        loong_contracts::ExecutionPlane::Tool,
-        loong_contracts::PlaneTier::Core,
-        Some(&tool_policy_params),
-        &crate::tools::runtime_config::ToolRuntimeConfig::default(),
+    ));
+    let tool_runtime_config = crate::tools::runtime_config::ToolRuntimeConfig::default();
+    let app_context = crate::context::AppContext::new(
+        runtime.clone(),
+        Arc::new(pack),
+        token.clone(),
+        tool_runtime_config.clone(),
     )
-    .expect("build tool execution context");
+    .expect("build app context");
+    let execution_context = app_context
+        .for_invocation(
+            loong_contracts::ExecutionPlane::Tool,
+            loong_contracts::PlaneTier::Core,
+            Some(&tool_policy_params),
+            &tool_runtime_config,
+        )
+        .expect("build tool execution context");
     let err = runtime
         .kernel()
         .execute_tool_core("test-pack", &token, &caps, None, request, execution_context)
@@ -13365,7 +13365,7 @@ async fn tool_call_through_kernel_denied_without_capability() {
     let audit = Arc::new(InMemoryAuditSink::default());
     // Grant MemoryRead only — InvokeTool is missing.
     let (ctx, _invocations) =
-        build_tool_kernel_context(audit, BTreeSet::from([Capability::MemoryRead]));
+        build_tool_app_context(audit, BTreeSet::from([Capability::MemoryRead]));
 
     let request = ToolCoreRequest {
         tool_name: "echo".to_owned(),
@@ -13423,15 +13423,16 @@ async fn web_fetch_through_kernel_requires_network_egress_capability() {
         "issued token should include network egress before we remove it for the test"
     );
 
-    let ctx = KernelContext {
-        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+    let ctx = AppContext::new(
+        Arc::new(loong_runtime::runtime::Runtime::new(
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        token: token.clone(),
-        pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
-        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
-    };
+        Arc::new(crate::context::pack_manifest_from_token(&token)),
+        token,
+        crate::tools::runtime_config::ToolRuntimeConfig::default(),
+    )
+    .expect("build web fetch test app context");
     let request = ToolCoreRequest {
         tool_name: "web.fetch".to_owned(),
         payload: json!({"url": "https://example.com"}),
@@ -13486,15 +13487,16 @@ async fn web_fetch_through_kernel_exposes_network_egress_to_pre_policy() {
         .issue_token("test-pack", "test-agent", 3600)
         .expect("issue token");
 
-    let ctx = KernelContext {
-        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+    let ctx = AppContext::new(
+        Arc::new(loong_runtime::runtime::Runtime::new(
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        token: token.clone(),
-        pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
-        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
-    };
+        Arc::new(crate::context::pack_manifest_from_token(&token)),
+        token,
+        crate::tools::runtime_config::ToolRuntimeConfig::default(),
+    )
+    .expect("build web fetch test app context");
     let request = ToolCoreRequest {
         tool_name: "web.fetch".to_owned(),
         payload: json!({"url": "https://example.com"}),

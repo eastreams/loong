@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 use crate::{
-    CliResult, KernelContext,
+    AppContext, CliResult,
     acp::{AcpSessionManager, AcpTurnEventSink, AcpTurnProvenance},
     agent_runtime::{
         AgentTurnMode, AgentTurnRequest, AgentTurnResult, TurnExecutionOptions,
@@ -35,7 +35,7 @@ impl TurnGatewayProvenance {
 pub struct TurnGatewayExecution<'a> {
     pub resolved_path: PathBuf,
     pub config: LoongConfig,
-    pub kernel_ctx: Option<KernelContext>,
+    pub app_ctx: Option<AppContext>,
     pub acp_manager: Option<Arc<AcpSessionManager>>,
     pub event_sink: Option<&'a dyn AcpTurnEventSink>,
     pub initialize_runtime_environment: bool,
@@ -92,8 +92,8 @@ pub async fn run_turn_gateway(
     request: TurnGatewayRequest,
 ) -> CliResult<AgentTurnResult> {
     let mut turn_service = TurnExecutionService::new(execution.resolved_path, execution.config);
-    if let Some(kernel_ctx) = execution.kernel_ctx {
-        turn_service = turn_service.with_kernel_ctx(kernel_ctx);
+    if let Some(app_ctx) = execution.app_ctx {
+        turn_service = turn_service.with_app_ctx(app_ctx);
     }
     if let Some(acp_manager) = execution.acp_manager {
         turn_service = turn_service.with_acp_manager(acp_manager);

@@ -112,7 +112,7 @@ pub enum ConstrainedSubagentControlScope {
 #[serde(rename_all = "snake_case")]
 pub enum ConstrainedSubagentRuntimeBinding {
     Direct,
-    KernelBound,
+    ContextBound,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -404,7 +404,7 @@ impl ConstrainedSubagentContractView {
             child_tool_allowlist: execution.child_tool_allowlist.clone(),
             runtime_narrowing: execution.runtime_narrowing.clone(),
             runtime_binding: Some(if execution.kernel_bound {
-                ConstrainedSubagentRuntimeBinding::KernelBound
+                ConstrainedSubagentRuntimeBinding::ContextBound
             } else {
                 ConstrainedSubagentRuntimeBinding::Direct
             }),
@@ -808,7 +808,7 @@ mod tests {
                 allow_shell_in_child: Some(true),
                 child_tool_allowlist: vec!["read".to_owned(), "shell.exec".to_owned()],
                 runtime_narrowing,
-                runtime_binding: Some(ConstrainedSubagentRuntimeBinding::KernelBound),
+                runtime_binding: Some(ConstrainedSubagentRuntimeBinding::ContextBound),
             }
         );
     }

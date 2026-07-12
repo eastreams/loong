@@ -2,7 +2,7 @@
 use std::collections::BTreeSet;
 
 #[cfg(feature = "memory-sqlite")]
-use loong_contracts::Capability;
+use loong_contracts::{Capability, ExecutionPlane, PlaneTier};
 #[cfg(feature = "memory-sqlite")]
 use serde_json::json;
 
@@ -264,9 +264,9 @@ async fn load_manual_compaction_window_snapshot(
 ) -> CliResult<ManualCompactionWindowSnapshot> {
     const MAX_MANUAL_COMPACTION_WINDOW_TURNS: usize = 512;
 
-    let kernel_ctx = binding
-        .kernel_context()
-        .ok_or_else(|| "manual compaction requires a kernel-bound session".to_owned())?;
+    let app_ctx = binding
+        .context()
+        .ok_or_else(|| "manual compaction requires a context-bound session".to_owned())?;
     let caps = BTreeSet::from([Capability::MemoryRead]);
     let request = loong_contracts::MemoryCoreRequest {
         operation: memory::MEMORY_OP_WINDOW.to_owned(),
@@ -276,13 +276,18 @@ async fn load_manual_compaction_window_snapshot(
             "allow_extended_limit": true,
         }),
     };
-    let execution_context = kernel_ctx.memory_core_execution_context()?;
-    let outcome = kernel_ctx
-        .runtime
+    let execution_context = app_ctx.for_invocation(
+        ExecutionPlane::Memory,
+        PlaneTier::Core,
+        None,
+        app_ctx.tool_runtime_config(),
+    )?;
+    let outcome = app_ctx
+        .runtime()
         .kernel()
         .execute_memory_core(
-            kernel_ctx.pack_id(),
-            &kernel_ctx.token,
+            app_ctx.pack_id(),
+            app_ctx.token(),
             &caps,
             None,
             request,
@@ -431,16 +436,21 @@ pub(super) async fn load_history_lines(
     binding: ConversationRuntimeBinding<'_>,
     memory_config: &SessionStoreConfig,
 ) -> CliResult<Vec<String>> {
-    if let Some(ctx) = binding.kernel_context() {
+    if let Some(ctx) = binding.context() {
         let request = memory::build_window_request(session_id, limit);
         let caps = BTreeSet::from([Capability::MemoryRead]);
-        let execution_context = ctx.memory_core_execution_context()?;
+        let execution_context = ctx.for_invocation(
+            ExecutionPlane::Memory,
+            PlaneTier::Core,
+            None,
+            ctx.tool_runtime_config(),
+        )?;
         let outcome = ctx
-            .runtime
+            .runtime()
             .kernel()
             .execute_memory_core(
                 ctx.pack_id(),
-                &ctx.token,
+                ctx.token(),
                 &caps,
                 None,
                 request,

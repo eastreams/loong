@@ -311,12 +311,12 @@ impl<'a, 'b, D: AppToolDispatcher + ?Sized> ToolIntentPreparationHarness<'a, 'b,
             ToolExecutionKind::App => descriptor.requires_kernel_binding(),
         };
 
-        if requires_kernel_binding && self.binding.kernel_context().is_none() {
-            let turn_result = TurnResult::policy_denied("no_kernel_context", "no_kernel_context");
+        if requires_kernel_binding && self.binding.context().is_none() {
+            let turn_result = TurnResult::policy_denied("no_app_context", "no_app_context");
             let denial_decision = ToolDecisionTelemetry::deny(
                 effective_tool_name.as_str(),
-                "no_kernel_context",
-                "no_kernel_context",
+                "no_app_context",
+                "no_app_context",
             );
 
             return Err(PreparedToolIntentFailure {

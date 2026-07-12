@@ -7,9 +7,9 @@ use std::sync::Arc;
 use axum::{Router, routing::post};
 
 #[cfg(feature = "channel-feishu")]
-use crate::CliResult;
+use crate::AppContext;
 #[cfg(feature = "channel-feishu")]
-use crate::KernelContext;
+use crate::CliResult;
 #[cfg(feature = "channel-feishu")]
 use crate::channel::{
     ChannelOutboundTarget, ChannelServeStopHandle, FeishuChannelSendRequest,
@@ -129,7 +129,7 @@ pub(super) async fn run_feishu_channel(
     default_account_source: ChannelDefaultAccountSelectionSource,
     bind_override: Option<&str>,
     path_override: Option<&str>,
-    kernel_ctx: KernelContext,
+    app_ctx: AppContext,
     runtime: Arc<ChannelOperationRuntimeTracker>,
     stop: ChannelServeStopHandle,
 ) -> CliResult<()> {
@@ -140,7 +140,7 @@ pub(super) async fn run_feishu_channel(
             resolved_path,
             selected_by_default,
             default_account_source,
-            kernel_ctx,
+            app_ctx,
             runtime,
             stop,
         ))
@@ -171,7 +171,7 @@ pub(super) async fn run_feishu_channel(
         resolved_path.to_path_buf(),
         resolved,
         adapter,
-        kernel_ctx,
+        app_ctx,
         runtime,
     );
     let app = build_feishu_webhook_router(state, path.as_str());
@@ -224,7 +224,7 @@ pub(in crate::channel) async fn build_gateway_feishu_ingress_router(
     config: &LoongConfig,
     resolved: &ResolvedFeishuChannelConfig,
     resolved_path: &Path,
-    kernel_ctx: KernelContext,
+    app_ctx: AppContext,
     runtime: Arc<ChannelOperationRuntimeTracker>,
 ) -> CliResult<Router> {
     let mut adapter = FeishuAdapter::new(resolved)?;
@@ -235,7 +235,7 @@ pub(in crate::channel) async fn build_gateway_feishu_ingress_router(
         resolved_path.to_path_buf(),
         resolved,
         adapter,
-        kernel_ctx,
+        app_ctx,
         runtime,
     );
     Ok(build_feishu_webhook_router(state, path.as_str()))

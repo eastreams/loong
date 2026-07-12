@@ -210,7 +210,7 @@ pub(crate) async fn execute_explicit_acp_turn_gateway_request(
     let execution = loong_app::turn_gateway::TurnGatewayExecution {
         resolved_path,
         config,
-        kernel_ctx: None,
+        app_ctx: None,
         acp_manager: Some(acp_manager),
         event_sink,
         initialize_runtime_environment: false,

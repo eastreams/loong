@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 use crate::config::LoongConfig;
 use crate::tools::ToolView;
-use crate::{CliResult, KernelContext};
+use crate::{AppContext, CliResult};
 
 use super::context_engine::{
     AssembledConversationContext, ContextArtifactDescriptor, ContextArtifactKind,
@@ -123,7 +123,7 @@ pub trait ConversationTurnMiddleware: Send + Sync {
         &self,
         _config: &LoongConfig,
         _session_id: &str,
-        _kernel_ctx: &KernelContext,
+        _app_ctx: &AppContext,
     ) -> CliResult<()> {
         Ok(())
     }
@@ -132,7 +132,7 @@ pub trait ConversationTurnMiddleware: Send + Sync {
         &self,
         _session_id: &str,
         _message: &Value,
-        _kernel_ctx: &KernelContext,
+        _app_ctx: &AppContext,
     ) -> CliResult<()> {
         Ok(())
     }
@@ -156,7 +156,7 @@ pub trait ConversationTurnMiddleware: Send + Sync {
         _user_input: &str,
         _assistant_reply: &str,
         _messages: &[Value],
-        _kernel_ctx: &KernelContext,
+        _app_ctx: &AppContext,
     ) -> CliResult<()> {
         Ok(())
     }
@@ -166,7 +166,7 @@ pub trait ConversationTurnMiddleware: Send + Sync {
         _config: &LoongConfig,
         _session_id: &str,
         _messages: &[Value],
-        _kernel_ctx: &KernelContext,
+        _app_ctx: &AppContext,
     ) -> CliResult<()> {
         Ok(())
     }
@@ -175,7 +175,7 @@ pub trait ConversationTurnMiddleware: Send + Sync {
         &self,
         _parent_session_id: &str,
         _subagent_session_id: &str,
-        _kernel_ctx: &KernelContext,
+        _app_ctx: &AppContext,
     ) -> CliResult<()> {
         Ok(())
     }
@@ -184,7 +184,7 @@ pub trait ConversationTurnMiddleware: Send + Sync {
         &self,
         _parent_session_id: &str,
         _subagent_session_id: &str,
-        _kernel_ctx: &KernelContext,
+        _app_ctx: &AppContext,
     ) -> CliResult<()> {
         Ok(())
     }
@@ -320,7 +320,7 @@ fn apply_tool_view_to_system_prompt(
 ) {
     seed_prompt_fragments_from_context(assembled);
 
-    let runtime = binding.kernel_context().map(|ctx| ctx.runtime.as_ref());
+    let runtime = binding.context().map(AppContext::runtime);
     let capability_snapshot = crate::tools::capability_snapshot_for_view(runtime, tool_view);
     let capability_fragment_index = assembled
         .prompt_fragments
@@ -421,20 +421,18 @@ where
         &self,
         config: &LoongConfig,
         session_id: &str,
-        kernel_ctx: &KernelContext,
+        app_ctx: &AppContext,
     ) -> CliResult<()> {
-        self.as_ref()
-            .bootstrap(config, session_id, kernel_ctx)
-            .await
+        self.as_ref().bootstrap(config, session_id, app_ctx).await
     }
 
     async fn ingest(
         &self,
         session_id: &str,
         message: &Value,
-        kernel_ctx: &KernelContext,
+        app_ctx: &AppContext,
     ) -> CliResult<()> {
-        self.as_ref().ingest(session_id, message, kernel_ctx).await
+        self.as_ref().ingest(session_id, message, app_ctx).await
     }
 
     async fn transform_context(
@@ -466,16 +464,10 @@ where
         user_input: &str,
         assistant_reply: &str,
         messages: &[Value],
-        kernel_ctx: &KernelContext,
+        app_ctx: &AppContext,
     ) -> CliResult<()> {
         self.as_ref()
-            .after_turn(
-                session_id,
-                user_input,
-                assistant_reply,
-                messages,
-                kernel_ctx,
-            )
+            .after_turn(session_id, user_input, assistant_reply, messages, app_ctx)
             .await
     }
 
@@ -484,10 +476,10 @@ where
         config: &LoongConfig,
         session_id: &str,
         messages: &[Value],
-        kernel_ctx: &KernelContext,
+        app_ctx: &AppContext,
     ) -> CliResult<()> {
         self.as_ref()
-            .compact_context(config, session_id, messages, kernel_ctx)
+            .compact_context(config, session_id, messages, app_ctx)
             .await
     }
 
@@ -495,10 +487,10 @@ where
         &self,
         parent_session_id: &str,
         subagent_session_id: &str,
-        kernel_ctx: &KernelContext,
+        app_ctx: &AppContext,
     ) -> CliResult<()> {
         self.as_ref()
-            .prepare_subagent_spawn(parent_session_id, subagent_session_id, kernel_ctx)
+            .prepare_subagent_spawn(parent_session_id, subagent_session_id, app_ctx)
             .await
     }
 
@@ -506,10 +498,10 @@ where
         &self,
         parent_session_id: &str,
         subagent_session_id: &str,
-        kernel_ctx: &KernelContext,
+        app_ctx: &AppContext,
     ) -> CliResult<()> {
         self.as_ref()
-            .on_subagent_ended(parent_session_id, subagent_session_id, kernel_ctx)
+            .on_subagent_ended(parent_session_id, subagent_session_id, app_ctx)
             .await
     }
 }
@@ -592,7 +584,7 @@ mod tests {
                 assembled,
                 &runtime_tool_view,
                 &requested_tool_view,
-                ConversationRuntimeBinding::advisory_only(),
+                ConversationRuntimeBinding::AdvisoryOnly,
             )
             .await
             .expect("system prompt addition middleware should succeed");
@@ -604,7 +596,7 @@ mod tests {
                 assembled,
                 &runtime_tool_view,
                 &requested_tool_view,
-                ConversationRuntimeBinding::advisory_only(),
+                ConversationRuntimeBinding::AdvisoryOnly,
             )
             .await
             .expect("tool view middleware should succeed");
@@ -687,7 +679,7 @@ mod tests {
                 assembled,
                 &runtime_tool_view,
                 &runtime_tool_view,
-                ConversationRuntimeBinding::advisory_only(),
+                ConversationRuntimeBinding::AdvisoryOnly,
             )
             .await
             .expect("system prompt addition middleware should succeed");

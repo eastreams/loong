@@ -163,7 +163,7 @@ fn build_delegate_child_execution(
     identity: Option<ConstrainedSubagentIdentity>,
     execution_policy: &DelegateChildExecutionPolicy,
 ) -> ConstrainedSubagentExecution {
-    let kernel_bound = binding.is_kernel_bound();
+    let kernel_bound = binding.is_context_bound();
     let profile = ConstrainedSubagentProfile::for_child_depth(
         next_child_depth,
         config.tools.delegate.max_depth,
@@ -731,7 +731,7 @@ mod tests {
         };
         let seed = build_delegate_child_lifecycle_seed(
             &config,
-            ConversationRuntimeBinding::advisory_only(),
+            ConversationRuntimeBinding::AdvisoryOnly,
             ConstrainedSubagentMode::Async,
             1,
             0,
@@ -767,7 +767,7 @@ mod tests {
         };
         let seed = build_delegate_child_lifecycle_seed(
             &config,
-            ConversationRuntimeBinding::advisory_only(),
+            ConversationRuntimeBinding::AdvisoryOnly,
             ConstrainedSubagentMode::Inline,
             1,
             0,

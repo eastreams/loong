@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, path::Path};
 
 use crate::{
-    CliResult, KernelContext,
+    AppContext, CliResult,
     acp::AcpConversationTurnOptions,
     config::LoongConfig,
     conversation::{
@@ -196,14 +196,14 @@ pub async fn process_inbound_with_provider(
     config: &LoongConfig,
     resolved_path: Option<&Path>,
     message: &ChannelInboundMessage,
-    kernel_ctx: &KernelContext,
+    app_ctx: &AppContext,
     feedback_policy: ChannelTurnFeedbackPolicy,
 ) -> CliResult<String> {
     process_inbound_with_provider_and_error_mode_and_retry_progress(
         config,
         resolved_path,
         message,
-        kernel_ctx,
+        app_ctx,
         feedback_policy,
         ProviderErrorMode::Propagate,
         None,
@@ -226,7 +226,7 @@ pub async fn process_inbound_with_provider_and_error_mode_and_retry_progress(
     config: &LoongConfig,
     resolved_path: Option<&Path>,
     message: &ChannelInboundMessage,
-    kernel_ctx: &KernelContext,
+    app_ctx: &AppContext,
     feedback_policy: ChannelTurnFeedbackPolicy,
     error_mode: ProviderErrorMode,
     retry_progress: crate::provider::ProviderRetryProgressCallback,
@@ -235,7 +235,7 @@ pub async fn process_inbound_with_provider_and_error_mode_and_retry_progress(
         config,
         resolved_path,
         message,
-        kernel_ctx,
+        app_ctx,
         feedback_policy,
         error_mode,
         retry_progress,
@@ -258,7 +258,7 @@ pub async fn process_inbound_with_provider_and_error_mode(
     config: &LoongConfig,
     resolved_path: Option<&Path>,
     message: &ChannelInboundMessage,
-    kernel_ctx: &KernelContext,
+    app_ctx: &AppContext,
     feedback_policy: ChannelTurnFeedbackPolicy,
     error_mode: ProviderErrorMode,
     retry_progress: crate::provider::ProviderRetryProgressCallback,
@@ -294,7 +294,7 @@ pub async fn process_inbound_with_provider_and_error_mode(
             let execution = crate::turn_gateway::TurnGatewayExecution {
                 resolved_path: resolved_path.map(Path::to_path_buf).unwrap_or_default(),
                 config: turn_config,
-                kernel_ctx: Some(kernel_ctx.clone()),
+                app_ctx: Some(app_ctx.clone()),
                 acp_manager: None,
                 event_sink: None,
                 initialize_runtime_environment: true,

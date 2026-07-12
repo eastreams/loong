@@ -26,7 +26,7 @@ impl TurnEngine {
             Ok(TurnValidation::FinalText(text)) => TurnResult::FinalText(text),
             Err(failure) => TurnResult::ToolDenied(failure),
             Ok(TurnValidation::ToolExecutionRequired) => {
-                TurnResult::policy_denied("kernel_context_required", "kernel_context_required")
+                TurnResult::policy_denied("app_context_required", "app_context_required")
             }
         }
     }

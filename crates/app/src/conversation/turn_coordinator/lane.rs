@@ -128,8 +128,8 @@ pub(super) async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
             persist_fast_lane_tool_trace(runtime, session_id, trace, binding)
                 .await
                 .is_err();
-        if trace_persist_failed && let Some(ctx) = binding.kernel_context() {
-            let _ = ctx.runtime.kernel().record_audit_event(
+        if trace_persist_failed && let Some(ctx) = binding.context() {
+            let _ = ctx.runtime().kernel().record_audit_event(
                 Some(ctx.agent_id()),
                 AuditEventKind::PlaneInvoked {
                     pack_id: ctx.pack_id().to_owned(),
@@ -148,8 +148,8 @@ pub(super) async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
             && emit_fast_lane_tool_batch_event(runtime, session_id, trace, binding)
                 .await
                 .is_err();
-        if batch_event_failed && let Some(ctx) = binding.kernel_context() {
-            let _ = ctx.runtime.kernel().record_audit_event(
+        if batch_event_failed && let Some(ctx) = binding.context() {
+            let _ = ctx.runtime().kernel().record_audit_event(
                 Some(ctx.agent_id()),
                 AuditEventKind::PlaneInvoked {
                     pack_id: ctx.pack_id().to_owned(),

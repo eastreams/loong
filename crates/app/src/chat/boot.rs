@@ -32,7 +32,7 @@ pub(super) fn ensure_cli_channel_enabled_for_entrypoint(
 ///
 /// This is the highest-level bootstrap used by `chat`/`ask`: it loads the
 /// config, resolves startup session selection, exports runtime
-/// environment variables, bootstraps a fresh kernel context, and delegates the
+/// environment variables, bootstraps a fresh app context, and delegates the
 /// final session/memory assembly to the lower-level helpers below.
 pub(crate) fn initialize_cli_turn_runtime(
     config_path: Option<&str>,
@@ -56,11 +56,11 @@ pub(crate) fn initialize_cli_turn_runtime(
 ///
 /// Compared with `initialize_cli_turn_runtime`, this skips config loading but
 /// still normalizes the runtime workspace root, optionally exports runtime
-/// environment variables, bootstraps a fresh kernel context, and then delegates
+/// environment variables, bootstraps a fresh app context, and then delegates
 /// the final session/memory assembly to
-/// `initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx`.
+/// `initialize_cli_turn_runtime_with_loaded_config_and_app_ctx`.
 ///
-/// Use the `_and_kernel_ctx` variant when the caller must reuse an existing
+/// Use the `_and_app_ctx` variant when the caller must reuse an existing
 /// kernel authority—such as channel-triggered turns—rather than minting a new
 /// token for the same logical operation.
 pub(crate) fn initialize_cli_turn_runtime_with_loaded_config(
@@ -87,17 +87,17 @@ pub(crate) fn initialize_cli_turn_runtime_with_loaded_config(
     if initialize_runtime_environment {
         crate::runtime_env::initialize_runtime_environment(&config, Some(&resolved_path));
     }
-    let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
+    let app_ctx = crate::context::bootstrap_app_context_with_config(
         kernel_scope,
         crate::context::DEFAULT_TOKEN_TTL_S,
         &config,
     )?;
-    initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
+    initialize_cli_turn_runtime_with_loaded_config_and_app_ctx(
         resolved_path,
         config,
         session_hint,
         options,
-        kernel_ctx,
+        app_ctx,
         session_requirement,
     )
 }
@@ -108,14 +108,14 @@ pub(crate) fn initialize_cli_turn_runtime_with_loaded_config(
 /// This helper resolves ACP defaults, prepares memory/sqlite state, derives the
 /// effective session id/address, and constructs the `CliTurnRuntime`. It
 /// deliberately does not mutate process environment variables or bootstrap a
-/// new kernel context; callers use it when those concerns were already handled
+/// new app context; callers use it when those concerns were already handled
 /// by an outer runtime surface.
-pub(crate) fn initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
+pub(crate) fn initialize_cli_turn_runtime_with_loaded_config_and_app_ctx(
     resolved_path: PathBuf,
     config: LoongConfig,
     session_hint: Option<&str>,
     options: &CliChatOptions,
-    kernel_ctx: crate::KernelContext,
+    app_ctx: crate::AppContext,
     session_requirement: CliSessionRequirement,
 ) -> CliResult<CliTurnRuntime> {
     let effective_bootstrap_mcp_servers = config
@@ -161,7 +161,7 @@ pub(crate) fn initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
         session_origin,
         session_address,
         turn_coordinator: ConversationTurnCoordinator::new(),
-        kernel_context: kernel_ctx,
+        app_context: app_ctx,
         effective_bootstrap_mcp_servers,
         effective_working_directory,
         memory_label,
@@ -199,7 +199,7 @@ fn resolve_or_create_cli_runtime_session_id(
 #[cfg(all(test, not(feature = "memory-sqlite")))]
 mod tests {
     use super::*;
-    use crate::context::bootstrap_test_kernel_context;
+    use crate::context::bootstrap_test_app_context;
     use std::path::PathBuf;
 
     #[test]
@@ -252,14 +252,13 @@ mod tests {
 
     #[test]
     fn cli_runtime_bootstrap_rejects_implicit_startup_without_sqlite() {
-        let kernel_ctx =
-            bootstrap_test_kernel_context("cli-runtime-no-sqlite", 60).expect("kernel context");
-        let result = initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
+        let app_ctx = bootstrap_test_app_context("cli-runtime-no-sqlite", 60).expect("app context");
+        let result = initialize_cli_turn_runtime_with_loaded_config_and_app_ctx(
             PathBuf::from("/tmp/loong.toml"),
             LoongConfig::default(),
             None,
             &CliChatOptions::default(),
-            kernel_ctx,
+            app_ctx,
             CliSessionRequirement::AllowImplicitDefault,
         );
 

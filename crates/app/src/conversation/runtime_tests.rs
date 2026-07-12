@@ -117,7 +117,7 @@ impl ConversationRuntime for SpawnerAwareRuntime {
 #[test]
 fn provider_runtime_binding_maps_advisory_only_conversation_binding() {
     assert!(matches!(
-        provider_runtime_binding(ConversationRuntimeBinding::advisory_only()),
+        provider_runtime_binding(ConversationRuntimeBinding::AdvisoryOnly),
         provider::ProviderRuntimeBinding::AdvisoryOnly
     ));
 }
@@ -127,9 +127,9 @@ fn provider_runtime_binding_maps_kernel_conversation_binding_to_kernel() {
     let harness = TurnTestHarness::new();
 
     assert!(matches!(
-        provider_runtime_binding(ConversationRuntimeBinding::kernel(&harness.kernel_ctx)),
-        provider::ProviderRuntimeBinding::Kernel(kernel_ctx)
-            if std::ptr::eq(kernel_ctx, &harness.kernel_ctx)
+        provider_runtime_binding(ConversationRuntimeBinding::Context(&harness.app_ctx)),
+        provider::ProviderRuntimeBinding::Context(app_ctx)
+            if std::ptr::eq(app_ctx, &harness.app_ctx)
     ));
 }
 
@@ -244,7 +244,7 @@ fn async_delegate_spawn_request_round_trips_runtime_self_continuity_json() {
         execution: execution.clone(),
         runtime_self_continuity: Some(continuity.clone()),
         timeout_seconds: 30,
-        binding: OwnedConversationRuntimeBinding::advisory_only(),
+        binding: OwnedConversationRuntimeBinding::AdvisoryOnly,
     };
 
     let encoded = request
@@ -260,7 +260,7 @@ fn async_delegate_spawn_request_round_trips_runtime_self_continuity_json() {
         execution,
         encoded,
         request.timeout_seconds,
-        OwnedConversationRuntimeBinding::advisory_only(),
+        OwnedConversationRuntimeBinding::AdvisoryOnly,
     )
     .expect("round-trip async delegate request");
 
@@ -501,7 +501,7 @@ async fn default_runtime_build_context_rehydrates_active_skills() {
             &config,
             session_id,
             true,
-            ConversationRuntimeBinding::advisory_only(),
+            ConversationRuntimeBinding::AdvisoryOnly,
         )
         .await
         .expect("build context");
@@ -586,7 +586,7 @@ async fn default_runtime_tool_view_excludes_active_skill_blocked_tools() {
         .tool_view(
             &config,
             session_id,
-            ConversationRuntimeBinding::advisory_only(),
+            ConversationRuntimeBinding::AdvisoryOnly,
         )
         .expect("runtime tool view");
 

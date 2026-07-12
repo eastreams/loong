@@ -16,7 +16,7 @@ use loong_kernel::{
 };
 use loong_runtime::runtime::Runtime;
 
-use crate::context::{AppContextFactory, KernelContext};
+use crate::context::{AppContext, AppContextFactory};
 use crate::conversation::{
     ConversationRuntimeBinding, DefaultAppToolDispatcher, ProviderTurn, SessionContext, ToolIntent,
     TurnEngine, TurnResult,
@@ -106,7 +106,7 @@ impl FakeProviderBuilder {
 #[allow(dead_code)]
 pub struct TurnTestHarness {
     pub engine: TurnEngine,
-    pub kernel_ctx: KernelContext,
+    pub app_ctx: AppContext,
     pub audit: Arc<InMemoryAuditSink>,
     pub temp_dir: PathBuf,
     memory_config: SessionStoreConfig,
@@ -213,20 +213,21 @@ impl TurnTestHarness {
             .issue_token("test-pack", "test-agent", 3600)
             .expect("issue token");
 
-        let ctx = KernelContext {
-            runtime: Arc::new(Runtime::new(
+        let ctx = AppContext::new(
+            Arc::new(Runtime::new(
                 kernel,
                 crate::tools::plane::builtin_tool_plane()
                     .expect("builtin tool registration should succeed"),
             )),
             pack,
             token,
-            tool_runtime_config: tool_config,
-        };
+            tool_config,
+        )
+        .expect("test app context should be valid");
 
         Self {
             engine: TurnEngine::new(1),
-            kernel_ctx: ctx,
+            app_ctx: ctx,
             audit,
             temp_dir,
             memory_config,
@@ -248,7 +249,7 @@ impl TurnTestHarness {
                 turn,
                 &session_context,
                 &dispatcher,
-                ConversationRuntimeBinding::kernel(&self.kernel_ctx),
+                ConversationRuntimeBinding::Context(&self.app_ctx),
                 None,
             )
             .await

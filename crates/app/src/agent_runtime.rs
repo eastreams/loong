@@ -10,7 +10,7 @@ use crate::CliResult;
 use crate::acp::{AcpTurnEventSink, AcpTurnProvenance, JsonlAcpTurnEventSink};
 use crate::chat::{
     CliChatOptions, initialize_cli_turn_runtime, initialize_cli_turn_runtime_with_loaded_config,
-    initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx,
+    initialize_cli_turn_runtime_with_loaded_config_and_app_ctx,
 };
 use crate::config::load as load_config;
 use crate::conversation::{
@@ -101,7 +101,7 @@ pub struct AgentRuntime;
 pub struct TurnExecutionService {
     resolved_path: PathBuf,
     config: crate::config::LoongConfig,
-    kernel_ctx: Option<crate::KernelContext>,
+    app_ctx: Option<crate::AppContext>,
     acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
     initialize_runtime_environment: bool,
 }
@@ -297,14 +297,14 @@ impl TurnExecutionService {
         Self {
             resolved_path,
             config,
-            kernel_ctx: None,
+            app_ctx: None,
             acp_manager: None,
             initialize_runtime_environment: true,
         }
     }
 
-    pub fn with_kernel_ctx(mut self, kernel_ctx: crate::KernelContext) -> Self {
-        self.kernel_ctx = Some(kernel_ctx);
+    pub fn with_app_ctx(mut self, app_ctx: crate::AppContext) -> Self {
+        self.app_ctx = Some(app_ctx);
         self
     }
 
@@ -330,7 +330,7 @@ impl TurnExecutionService {
     ) -> Pin<Box<dyn Future<Output = CliResult<AgentTurnResult>> + Send + 'a>> {
         let resolved_path = self.resolved_path.clone();
         let config = self.config.clone();
-        let kernel_ctx = self.kernel_ctx.clone();
+        let app_ctx = self.app_ctx.clone();
         let acp_manager = self.acp_manager.clone();
         let cli_options = cli_chat_options_for_turn_request(request, &options);
         let event_sink = options.event_sink;
@@ -342,13 +342,13 @@ impl TurnExecutionService {
         let initialize_runtime_environment = self.initialize_runtime_environment;
 
         Box::pin(async move {
-            let cli_runtime = match kernel_ctx {
-                Some(kernel_ctx) => initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
+            let cli_runtime = match app_ctx {
+                Some(app_ctx) => initialize_cli_turn_runtime_with_loaded_config_and_app_ctx(
                     resolved_path,
                     config,
                     session_hint,
                     &cli_options,
-                    kernel_ctx,
+                    app_ctx,
                     crate::chat::CliSessionRequirement::AllowImplicitDefault,
                 )?,
                 None => initialize_cli_turn_runtime_with_loaded_config(

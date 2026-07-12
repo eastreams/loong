@@ -21,7 +21,7 @@ use tool_search::searchable_entry_from_provider_definition;
 #[cfg(test)]
 use tool_search::{runtime_discoverable_tool_entries, runtime_tool_search_entries};
 
-use crate::KernelContext;
+use crate::AppContext;
 use provider_schema::{tool_metadata_definition_for_view, typed_tool_spec_for_descriptor};
 #[cfg(test)]
 use routing::{
@@ -369,30 +369,30 @@ pub(crate) fn resolve_installable_skill_id(root: &Path) -> Result<String, String
 /// Legacy requests are dispatched via `kernel.execute_tool_core`; typed tools
 /// should enter through the app-owned tool plane instead.
 // TODO(tool-plane): delete this legacy ToolCoreRequest/ToolCoreOutcome envelope
-// after every app runtime caller holds AppExecutionContext and invokes tools via
+// after every app runtime caller holds AppContext and invokes tools via
 // ctx.tool(path)?.invoke(...). Typed tools must not add new behavior here.
 pub async fn execute_tool(
     request: ToolCoreRequest,
-    kernel_ctx: &KernelContext,
+    app_ctx: &AppContext,
 ) -> Result<ToolCoreOutcome, String> {
     let request = prepare_kernel_tool_request(
         request,
-        &kernel_ctx.token.allowed_capabilities,
-        Some(kernel_ctx.token.token_id.as_str()),
+        &app_ctx.token().allowed_capabilities,
+        Some(app_ctx.token().token_id.as_str()),
         None,
         None,
     );
-    execute_kernel_tool_request(kernel_ctx, request, false)
+    execute_kernel_tool_request(app_ctx, request, false)
         .await
         .map_err(|e| format!("{e}"))
 }
 
-// TODO(tool-plane): collapse this bridge into AppExecutionContext::tool(...)
+// TODO(tool-plane): collapse this bridge into AppContext::tool(...)
 // call sites. During migration this legacy envelope ingress first attempts the
 // app-owned typed plane through ctx.tool(path)?.invoke(payload), then falls back
 // to the legacy kernel adapter plane only for tools that are not registered yet.
 pub(crate) async fn execute_kernel_tool_request(
-    ctx: &KernelContext,
+    ctx: &AppContext,
     request: ToolCoreRequest,
     trusted_internal_payload: bool,
 ) -> Result<ToolCoreOutcome, loong_kernel::KernelError> {
@@ -404,7 +404,7 @@ pub(crate) async fn execute_kernel_tool_request(
     let execute = async {
         let effective_config = tool_dispatch::effective_tool_runtime_config_for_payload(
             &request.payload,
-            &ctx.tool_runtime_config,
+            ctx.tool_runtime_config(),
         )
         .map_err(|error| {
             loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(error))
@@ -416,7 +416,7 @@ pub(crate) async fn execute_kernel_tool_request(
             "payload": &request.payload,
         });
         let execution_context = ctx
-            .execution_context(
+            .for_invocation(
                 loong_contracts::ExecutionPlane::Tool,
                 loong_contracts::PlaneTier::Core,
                 Some(&tool_policy_params),
@@ -461,7 +461,7 @@ pub(crate) async fn execute_kernel_tool_request(
             match execution_context.tool(typed_path) {
                 Ok(invocation) => {
                     // `tool.invoke` is only an invocation envelope here; trusted
-                    // overlays shape the AppExecutionContext and should not leak
+                    // overlays shape the AppContext and should not leak
                     // into concrete typed tool payload parsing.
                     let mut typed_payload = effective_request.payload;
                     if let Some(body) = typed_payload.as_object_mut() {
@@ -515,11 +515,11 @@ pub(crate) async fn execute_kernel_tool_request(
 
         let caps = required_capabilities_for_request(&request);
         let outcome = ctx
-            .runtime
+            .runtime()
             .kernel()
             .execute_tool_core(
                 ctx.pack_id(),
-                &ctx.token,
+                ctx.token(),
                 &caps,
                 None,
                 request,

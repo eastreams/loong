@@ -128,10 +128,8 @@ execution audit 留在 `ToolInvocation::invoke(payload)` 的 grant consumption �
   但 `record_tool_invocation` 仍记录 contracts 里的 typed-tool event。目标是让 kernel
   只记录 sink 能理解的通用事件，tool execution outcome 的 schema 归 app runtime。
 - `crates/app/src/tools/mod.rs` 的 `execute_kernel_tool_request` 仍是 legacy envelope
-  ingress。typed branch 已经先走 `AppExecutionContext::tool(...).invoke(...)`；目标是让
+  ingress。typed branch 已经先走 `AppContext::tool(...).invoke(...)`；目标是让
   持有 context 的调用点直接进入该 API，并把 legacy fallback 留在最后的未迁移边界。
 - `crates/app/src/tools/routing.rs` 的 context-aware direct read 已进入
   `ctx.tool("read")?.invoke(...)`，无 context 的 `execute_tool_core_with_config(read)`
   已 fail closed。后续统一 ctx 时可以删除这条 no-context read 入口的过渡错误。
-- `KernelContext` 仍是 app/runtime surface 中传播 kernel binding 的过渡类型。相关代码用
-  `TODO(deprecate-kernel-context)` 标记；目标是 unified runtime/context 接管这层状态。

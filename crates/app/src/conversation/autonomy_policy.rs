@@ -90,7 +90,7 @@ pub fn evaluate_policy(input: PolicyDecisionInput<'_>) -> PolicyDecision {
         };
     }
 
-    if input.snapshot.requires_kernel_binding && !input.binding.is_kernel_bound() {
+    if input.snapshot.requires_kernel_binding && !input.binding.is_context_bound() {
         return PolicyDecision::Deny {
             rule_id: "autonomy_policy_requires_kernel_binding",
             reason_code: BINDING_MISSING_CODE,
@@ -315,7 +315,7 @@ pub fn render_reason(
             snapshot.profile.as_str()
         ),
         BINDING_MISSING_CODE => format!(
-            "autonomy policy denied `{tool_name}`: `{}` requires kernel-bound execution for `{}`",
+            "autonomy policy denied `{tool_name}`: `{}` requires context-bound execution for `{}`",
             snapshot.profile.as_str(),
             action_class.as_str()
         ),
@@ -329,7 +329,7 @@ pub fn render_reason(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::KernelContext;
+    use crate::AppContext;
     use crate::config::AutonomyProfile;
     use crate::tools::runtime_config::AutonomyPolicySnapshot;
     use loong_contracts::{Capability, ExecutionRoute, HarnessKind};
@@ -344,7 +344,7 @@ mod tests {
         let input = PolicyDecisionInput {
             snapshot: &snapshot,
             action_class: CapabilityActionClass::CapabilityInstall,
-            binding: ConversationRuntimeBinding::advisory_only(),
+            binding: ConversationRuntimeBinding::AdvisoryOnly,
             budget: &budget,
         };
 
@@ -377,7 +377,7 @@ mod tests {
         let input = PolicyDecisionInput {
             snapshot: &snapshot,
             action_class: CapabilityActionClass::TopologyExpand,
-            binding: ConversationRuntimeBinding::advisory_only(),
+            binding: ConversationRuntimeBinding::AdvisoryOnly,
             budget: &budget,
         };
 
@@ -414,7 +414,7 @@ mod tests {
         let input = PolicyDecisionInput {
             snapshot: &snapshot,
             action_class: CapabilityActionClass::CapabilityInstall,
-            binding: ConversationRuntimeBinding::kernel(kernel_context_placeholder()),
+            binding: ConversationRuntimeBinding::Context(app_context_placeholder()),
             budget: &budget,
         };
 
@@ -451,7 +451,7 @@ mod tests {
         let input = PolicyDecisionInput {
             snapshot: &snapshot,
             action_class: CapabilityActionClass::SessionMutation,
-            binding: ConversationRuntimeBinding::advisory_only(),
+            binding: ConversationRuntimeBinding::AdvisoryOnly,
             budget: &budget,
         };
 
@@ -466,8 +466,8 @@ mod tests {
         );
     }
 
-    fn kernel_context_placeholder() -> &'static KernelContext {
-        static HOLDER: std::sync::OnceLock<KernelContext> = std::sync::OnceLock::new();
+    fn app_context_placeholder() -> &'static AppContext {
+        static HOLDER: std::sync::OnceLock<AppContext> = std::sync::OnceLock::new();
         HOLDER.get_or_init(|| {
             let audit = Arc::new(InMemoryAuditSink::default());
             let clock = Arc::new(FixedClock::new(1_700_000_000));
@@ -488,15 +488,16 @@ mod tests {
             let token = kernel
                 .issue_token("autonomy-policy-test-pack", "autonomy-policy-agent", 60)
                 .expect("issue token");
-            KernelContext {
-                runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+            AppContext::new(
+                Arc::new(loong_runtime::runtime::Runtime::new(
                     kernel,
                     crate::tools::plane::test_builtin_tool_plane(),
                 )),
-                token: token.clone(),
-                pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
-                tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
-            }
+                Arc::new(crate::context::pack_manifest_from_token(&token)),
+                token,
+                crate::tools::runtime_config::ToolRuntimeConfig::default(),
+            )
+            .expect("build autonomy policy test app context")
         })
     }
 }

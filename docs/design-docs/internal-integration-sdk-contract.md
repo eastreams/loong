@@ -77,7 +77,7 @@ Every mature family should expose:
 Internal descriptor layers should increasingly be able to answer support facts
 such as:
 
-- whether the surface supports kernel-bound mutation
+- whether the surface supports context-bound governed mutation
 - whether it supports approval round-trips
 - whether it may participate in bounded autonomous acquisition
 

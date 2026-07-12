@@ -30,11 +30,11 @@ the fastest mental model.
 
 | Helper | Location | Owns | Deliberately does **not** own |
 | --- | --- | --- | --- |
-| `bootstrap_kernel_context_with_config` | `crates/app/src/context.rs` | audit sink selection, MVP pack registration, tool/memory adapter registration, policy extensions, capability token issuance | process env export, session selection, channel/conversation state |
-| `initialize_runtime_environment` | `crates/app/src/runtime_env.rs` | `LOONG_*` env export, runtime singleton/cache initialization | kernel bootstrap, session selection, durable turn state |
-| `initialize_cli_turn_runtime` | `crates/app/src/chat.rs` | config load, runtime env export, fresh kernel bootstrap, implicit default session allowance | channel-owned kernel reuse, ACP manager reuse |
-| `initialize_cli_turn_runtime_with_loaded_config` | `crates/app/src/chat.rs` | runtime assembly from an already loaded config, fresh kernel bootstrap | config reload from disk, kernel/ACP reuse from an outer host |
-| `initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx` | `crates/app/src/chat.rs` | ACP defaults, memory/sqlite prep, session id/address derivation, task-scope derivation, `CliTurnRuntime` assembly | env export, fresh kernel bootstrap |
+| `bootstrap_app_context_with_config` | `crates/app/src/context.rs` | audit sink selection, MVP pack registration, tool/memory adapter registration, policy extensions, capability token issuance | process env export, session selection, channel/conversation state |
+| `initialize_runtime_environment` | `crates/app/src/runtime_env.rs` | `LOONG_*` env export, runtime singleton/cache initialization | app-context bootstrap, session selection, durable turn state |
+| `initialize_cli_turn_runtime` | `crates/app/src/chat.rs` | config load, runtime env export, fresh app-context bootstrap, implicit default session allowance | channel-owned app-context reuse, ACP manager reuse |
+| `initialize_cli_turn_runtime_with_loaded_config` | `crates/app/src/chat.rs` | runtime assembly from an already loaded config, fresh app-context bootstrap | config reload from disk, kernel/ACP reuse from an outer host |
+| `initialize_cli_turn_runtime_with_loaded_config_and_app_ctx` | `crates/app/src/chat.rs` | ACP defaults, memory/sqlite prep, session id/address derivation, task-scope derivation, `CliTurnRuntime` assembly | env export, fresh app-context bootstrap |
 | `load_runtime_turn_config` | `crates/app/src/agent_runtime.rs` | provider-facing config refresh for long-lived hosts | channel account re-resolution, full runtime rebuild |
 | `reload_channel_turn_config` | `crates/app/src/channel/dispatch.rs` | channel turn-time provider refresh | serve-loop account selection, serve runtime mutation |
 
@@ -45,8 +45,8 @@ the fastest mental model.
 | Transitional CLI shell / additive spine | `crates/daemon/src/turn_cli.rs` → `run_chat_cli`, `run_ask_cli`, `run_turn_run_cli`; contracts in `crates/loong-app-protocol` and `crates/loong-runtime` | delegates to the normal CLI chat/ask helpers today | names the target contract surface and keeps migration pressure visible, but does not yet own the live bootstrap path |
 | CLI chat / ask | `crates/app/src/chat.rs` → `run_cli_chat`, `run_cli_ask` | `initialize_cli_turn_runtime`, `AgentRuntime`, conversation runtime | owns the full user-facing runtime shell, can fall back to implicit/default session |
 | Generic agent runtime | `crates/app/src/agent_runtime.rs` → `run_turn`, `run_turn_with_loaded_config`, `run_turn_with_loaded_config_and_acp_manager` | chat runtime assembly + provider/ACP execution | transport-neutral wrapper used by multiple outer surfaces |
-| Long-running channel serve | `crates/app/src/channel/commands/serve.rs` and `channel/runtime/serve.rs` | `initialize_runtime_environment`, `bootstrap_kernel_context_with_config` | owns serve-loop kernel authority and singleton runtime slot tracking |
-| Channel inbound message bridge | `crates/app/src/channel/dispatch.rs` → `process_inbound_with_provider` | channel-owned `kernel_ctx`, `initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx`, `AgentRuntime` | reuses an already bootstrapped kernel because the outer serve loop already owns it |
+| Long-running channel serve | `crates/app/src/channel/commands/serve.rs` and `channel/runtime/serve.rs` | `initialize_runtime_environment`, `bootstrap_app_context_with_config` | owns serve-loop governance authority and singleton runtime slot tracking |
+| Channel inbound message bridge | `crates/app/src/channel/dispatch.rs` → `process_inbound_with_provider` | channel-owned `app_ctx`, `initialize_cli_turn_runtime_with_loaded_config_and_app_ctx`, `AgentRuntime` | reuses an already bootstrapped kernel because the outer serve loop already owns it |
 | Gateway HTTP turn | `crates/daemon/src/gateway/api_turn.rs` → `handle_turn` | loaded config snapshot, shared ACP manager, `AgentRuntime::run_turn_with_loaded_config_and_acp_manager` | always executes as an ACP turn; no interactive runtime shell |
 | Control plane turn submit | `crates/daemon/src/control_plane_server.rs` → `/turn/submit` path + `ControlPlaneTurnRuntime` | loaded config snapshot, shared ACP manager, per-turn registry, `AgentRuntime::run_turn_with_loaded_config_and_acp_manager` | turn execution only exists when the control plane was launched with a concrete config |
 | Daemon task/turn CLI | `crates/daemon/src/task_execution.rs` → `run_turn_cli`, `execute_daemon_task_with_supervisor` | kernel task supervisor + embedded harness + `AgentRuntime` | deliberately routes turns through the same task/harness lane the daemon uses for generic task execution |
@@ -78,8 +78,8 @@ run_cli_chat / run_cli_ask
   -> initialize_cli_turn_runtime
   -> initialize_cli_turn_runtime_with_loaded_config
   -> initialize_runtime_environment
-  -> bootstrap_kernel_context_with_config
-  -> initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx
+  -> bootstrap_app_context_with_config
+  -> initialize_cli_turn_runtime_with_loaded_config_and_app_ctx
   -> AgentRuntime / ConversationTurnCoordinator
 ```
 
@@ -104,13 +104,13 @@ channel webhook/socket receive
   -> process_inbound_with_provider
   -> reload_channel_turn_config
   -> resolve_channel_acp_turn_hints
-  -> initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx
+  -> initialize_cli_turn_runtime_with_loaded_config_and_app_ctx
   -> AgentRuntime::run_turn_with_runtime_...
 ```
 
 Important distinction:
 
-- the outer channel serve loop already owns the governed `kernel_ctx`
+- the outer channel serve loop already owns the governed `app_ctx`
 - the inbound bridge must **reuse** that authority instead of minting another
   kernel token for each message
 
@@ -165,7 +165,7 @@ This is the path to read when the question is not “how does chat work?” but
 | --- | --- | --- |
 | why a CLI/chat turn picked the wrong session | `crates/app/src/chat.rs` | `agent_runtime.rs`, `session_*` helpers |
 | why ACP is or is not used for a turn | `crates/app/src/agent_runtime.rs` | `channel/dispatch.rs`, `control_plane_server.rs`, `gateway/api_turn.rs` |
-| why a channel message reused or did not reuse kernel authority | `crates/app/src/channel/dispatch.rs` | `chat.rs`, `context.rs` |
+| why a channel message reused or did not reuse governance authority | `crates/app/src/channel/dispatch.rs` | `chat.rs`, `context.rs` |
 | why gateway/control-plane turns behave differently from chat | `gateway/api_turn.rs` or `control_plane_server.rs` | `agent_runtime.rs` |
 | why a daemon task path differs from direct chat execution | `daemon/src/task_execution.rs` | `agent_runtime.rs`, `chat.rs` |
 | why background task creation uses a detached runtime | `daemon/src/tasks_cli.rs` | `conversation` runtime implementations |
@@ -175,8 +175,8 @@ This is the path to read when the question is not “how does chat work?” but
 When adding a new surface, decide these questions explicitly before writing the
 code:
 
-1. **Does this surface already own kernel authority?**
-   - If yes, prefer reusing `initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx`
+1. **Does this surface already own governance authority?**
+   - If yes, prefer reusing `initialize_cli_turn_runtime_with_loaded_config_and_app_ctx`
    - If no, bootstrap fresh authority through the higher-level chat helpers
 
 2. **Does this surface need to share ACP manager ownership across turns?**

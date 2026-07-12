@@ -976,7 +976,7 @@ impl ToolRuntimeConfig {
             lines.push(format!(
                 "- child runtime binding: {}",
                 match runtime_binding {
-                    ConstrainedSubagentRuntimeBinding::KernelBound => "kernel-bound",
+                    ConstrainedSubagentRuntimeBinding::ContextBound => "context-bound",
                     ConstrainedSubagentRuntimeBinding::Direct => "direct",
                 }
             ));

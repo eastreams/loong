@@ -48,14 +48,14 @@ pub(super) async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized
     }
 
     let after_turn_status = if checkpoint.finalization.runs_after_turn() {
-        if let Some(kernel_ctx) = binding.kernel_context() {
+        if let Some(app_ctx) = binding.context() {
             match runtime
                 .after_turn(
                     session_id,
                     user_input,
                     tail_phase.reply(),
                     tail_phase.after_turn_messages(),
-                    kernel_ctx,
+                    app_ctx,
                 )
                 .await
             {

@@ -12,7 +12,7 @@ use serde_json::json;
 
 use crate::config::normalize_channel_account_id;
 use crate::{
-    CliResult, KernelContext, config::ChannelDefaultAccountSelectionSource, config::LoongConfig,
+    AppContext, CliResult, config::ChannelDefaultAccountSelectionSource, config::LoongConfig,
     config::ResolvedLineChannelConfig,
 };
 
@@ -65,7 +65,7 @@ pub(super) struct LineServeState {
     resolved_path: PathBuf,
     resolved: ResolvedLineChannelConfig,
     channel_secret: String,
-    kernel_ctx: Arc<KernelContext>,
+    app_ctx: Arc<AppContext>,
     runtime: Arc<ChannelOperationRuntimeTracker>,
 }
 
@@ -74,7 +74,7 @@ impl LineServeState {
         config: &LoongConfig,
         resolved_path: &Path,
         resolved: &ResolvedLineChannelConfig,
-        kernel_ctx: KernelContext,
+        app_ctx: AppContext,
         runtime: Arc<ChannelOperationRuntimeTracker>,
     ) -> CliResult<Self> {
         let channel_secret = resolved.channel_secret().ok_or_else(|| {
@@ -86,7 +86,7 @@ impl LineServeState {
             resolved_path: resolved_path.to_path_buf(),
             resolved: resolved.clone(),
             channel_secret,
-            kernel_ctx: Arc::new(kernel_ctx),
+            app_ctx: Arc::new(app_ctx),
             runtime,
         })
     }
@@ -153,13 +153,13 @@ pub(super) async fn run_line_channel(
     default_account_source: ChannelDefaultAccountSelectionSource,
     bind_override: Option<&str>,
     path_override: Option<&str>,
-    kernel_ctx: KernelContext,
+    app_ctx: AppContext,
     runtime: Arc<ChannelOperationRuntimeTracker>,
     stop: ChannelServeStopHandle,
 ) -> CliResult<()> {
     let bind = resolve_line_bind(bind_override)?;
     let path = resolve_line_path(path_override);
-    let state = LineServeState::new(config, resolved_path, resolved, kernel_ctx, runtime)?;
+    let state = LineServeState::new(config, resolved_path, resolved, app_ctx, runtime)?;
     let router = build_line_webhook_router(state, path.as_str());
 
     println!(
@@ -203,10 +203,10 @@ pub(in crate::channel) fn build_gateway_line_ingress_router(
     config: &LoongConfig,
     resolved: &ResolvedLineChannelConfig,
     resolved_path: &Path,
-    kernel_ctx: KernelContext,
+    app_ctx: AppContext,
     runtime: Arc<ChannelOperationRuntimeTracker>,
 ) -> CliResult<Router> {
-    let state = LineServeState::new(config, resolved_path, resolved, kernel_ctx, runtime)?;
+    let state = LineServeState::new(config, resolved_path, resolved, app_ctx, runtime)?;
     let path = gateway_line_ingress_path(resolved);
     Ok(build_line_webhook_router(state, path.as_str()))
 }
@@ -229,7 +229,7 @@ pub(super) async fn run_line_channel_with_context(
         validate_line_security_config,
         stop,
         initialize_runtime_environment,
-        move |context, kernel_ctx, runtime, stop| {
+        move |context, app_ctx, runtime, stop| {
             Box::pin(async move {
                 let route = context.route.clone();
                 let resolved_path = context.resolved_path.clone();
@@ -244,7 +244,7 @@ pub(super) async fn run_line_channel_with_context(
                     route.default_account_source,
                     bind_override.as_deref(),
                     path_override.as_deref(),
-                    kernel_ctx,
+                    app_ctx,
                     runtime,
                     stop,
                 )
@@ -519,7 +519,7 @@ async fn process_line_event(
             &state.config,
             Some(state.resolved_path.as_path()),
             &channel_message,
-            state.kernel_ctx.as_ref(),
+            state.app_ctx.as_ref(),
             ChannelTurnFeedbackPolicy::final_trace_significant(),
         )
         .await
@@ -632,7 +632,7 @@ async fn ensure_line_success(response: reqwest::Response) -> CliResult<()> {
 mod tests {
     use super::*;
     use crate::channel::runtime::state::start_channel_operation_runtime_tracker_for_test;
-    use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_test_kernel_context};
+    use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_test_app_context};
     use axum::body::to_bytes;
     use axum::http::HeaderValue;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -671,15 +671,15 @@ mod tests {
         )
         .await
         .expect("start line runtime tracker");
-        let kernel_ctx = bootstrap_test_kernel_context("line-serve-test", DEFAULT_TOKEN_TTL_S)
-            .expect("bootstrap line kernel context");
+        let app_ctx = bootstrap_test_app_context("line-serve-test", DEFAULT_TOKEN_TTL_S)
+            .expect("bootstrap line app context");
         let resolved = test_resolved_line_config();
 
         LineServeState::new(
             &LoongConfig::default(),
             Path::new("/tmp/loong.toml"),
             &resolved,
-            kernel_ctx,
+            app_ctx,
             runtime.into(),
         )
         .expect("build line serve state")

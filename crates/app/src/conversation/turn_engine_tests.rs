@@ -1,4 +1,4 @@
-use crate::context::bootstrap_test_kernel_context;
+use crate::context::bootstrap_test_app_context;
 use std::fs;
 use std::time::Duration;
 
@@ -25,13 +25,12 @@ fn isolated_memory_config(test_name: &str) -> SessionStoreConfig {
     }
 }
 
-fn test_kernel_context(agent_id: &str) -> KernelContext {
-    crate::context::bootstrap_test_kernel_context(agent_id, 60)
-        .expect("bootstrap test kernel context")
+fn test_app_context(agent_id: &str) -> AppContext {
+    crate::context::bootstrap_test_app_context(agent_id, 60).expect("bootstrap test app context")
 }
 
-fn kernel_context(agent_id: &str) -> KernelContext {
-    test_kernel_context(agent_id)
+fn app_context(agent_id: &str) -> AppContext {
+    test_app_context(agent_id)
 }
 
 #[test]
@@ -201,7 +200,7 @@ fn prepare_tool_intent_uses_direct_shell_metadata_for_provider_shell_requests() 
                 0,
                 &session_context,
                 &DefaultAppToolDispatcher::runtime(),
-                ConversationRuntimeBinding::kernel(&harness.kernel_ctx),
+                ConversationRuntimeBinding::Context(&harness.app_ctx),
                 &autonomy_budget_state,
                 None,
             )
@@ -545,14 +544,14 @@ async fn autonomy_policy_approval_request_is_persisted_for_delegate_async() {
     let tool_view = runtime_tool_view_for_config(&tool_config);
     let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
     let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
-    let kernel_ctx = test_kernel_context("turn-engine-governed-approval-delegate-async");
+    let app_ctx = test_app_context("turn-engine-governed-approval-delegate-async");
 
     let result = TurnEngine::new(4)
         .execute_turn_in_context(
             &delegate_async_turn("root-session", "turn-1", "call-1"),
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
+            ConversationRuntimeBinding::Context(&app_ctx),
             None,
         )
         .await;
@@ -621,14 +620,14 @@ async fn autonomy_policy_approval_request_is_persisted_for_discovered_delegate_a
     let tool_view = runtime_tool_view_for_config(&tool_config);
     let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
     let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
-    let kernel_ctx = test_kernel_context("turn-engine-governed-approval-discovered-delegate-async");
+    let app_ctx = test_app_context("turn-engine-governed-approval-discovered-delegate-async");
 
     let result = TurnEngine::new(4)
         .execute_turn_in_context(
             &discovered_delegate_async_turn("root-session", "turn-discovered", "call-discovered"),
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
+            ConversationRuntimeBinding::Context(&app_ctx),
             None,
         )
         .await;
@@ -690,7 +689,7 @@ async fn auto_mode_requires_approval_for_high_risk_core_tool() {
     let tool_view = runtime_tool_view_for_config(&tool_config);
     let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
     let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
-    let kernel_ctx = kernel_context("turn-engine-config-import-auto");
+    let app_ctx = app_context("turn-engine-config-import-auto");
 
     let result = TurnEngine::new(4)
         .execute_turn_in_context(
@@ -703,7 +702,7 @@ async fn auto_mode_requires_approval_for_high_risk_core_tool() {
             ),
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
+            ConversationRuntimeBinding::Context(&app_ctx),
             None,
         )
         .await;
@@ -756,7 +755,7 @@ async fn full_session_consent_skips_approval_for_high_risk_core_tool() {
     let tool_view = runtime_tool_view_for_config(&tool_config);
     let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
     let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
-    let kernel_ctx = kernel_context("turn-engine-config-import-full");
+    let app_ctx = app_context("turn-engine-config-import-full");
 
     let result = TurnEngine::new(4)
         .execute_turn_in_context(
@@ -769,7 +768,7 @@ async fn full_session_consent_skips_approval_for_high_risk_core_tool() {
             ),
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
+            ConversationRuntimeBinding::Context(&app_ctx),
             None,
         )
         .await;
@@ -806,14 +805,14 @@ async fn autonomy_policy_approval_request_reuses_deterministic_id_for_same_block
     let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
     let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
     let turn = delegate_async_turn("root-session", "turn-reuse", "call-reuse");
-    let kernel_ctx = test_kernel_context("turn-engine-governed-approval-reuse");
+    let app_ctx = test_app_context("turn-engine-governed-approval-reuse");
 
     let first = TurnEngine::new(4)
         .execute_turn_in_context(
             &turn,
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
+            ConversationRuntimeBinding::Context(&app_ctx),
             None,
         )
         .await;
@@ -822,7 +821,7 @@ async fn autonomy_policy_approval_request_reuses_deterministic_id_for_same_block
             &turn,
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
+            ConversationRuntimeBinding::Context(&app_ctx),
             None,
         )
         .await;
@@ -887,7 +886,7 @@ async fn autonomy_policy_preapproved_call_executes_without_persisting_request() 
     let tool_view = runtime_tool_view_for_config(&tool_config);
     let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
     let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
-    let kernel_ctx = kernel_context("turn-engine-autonomy-preapproved");
+    let app_ctx = app_context("turn-engine-autonomy-preapproved");
     let turn = skills_policy_get_turn("root-session", "turn-preapproved", "call-preapproved");
 
     let result = TurnEngine::new(4)
@@ -895,7 +894,7 @@ async fn autonomy_policy_preapproved_call_executes_without_persisting_request() 
             &turn,
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
+            ConversationRuntimeBinding::Context(&app_ctx),
             None,
         )
         .await;
@@ -944,7 +943,7 @@ async fn autonomy_policy_predenied_call_returns_policy_denial_without_persisting
     let tool_view = runtime_tool_view_for_config(&tool_config);
     let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
     let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
-    let kernel_ctx = kernel_context("turn-engine-autonomy-predenied");
+    let app_ctx = app_context("turn-engine-autonomy-predenied");
     let turn = skills_policy_get_turn("root-session", "turn-predenied", "call-predenied");
 
     let result = TurnEngine::new(4)
@@ -952,7 +951,7 @@ async fn autonomy_policy_predenied_call_returns_policy_denial_without_persisting
             &turn,
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
+            ConversationRuntimeBinding::Context(&app_ctx),
             None,
         )
         .await;
@@ -997,8 +996,8 @@ async fn governed_tool_approval_request_is_persisted_for_discovered_shell_exec()
     let tool_view = runtime_tool_view_for_config(&tool_config);
     let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
     let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
-    let kernel_ctx = bootstrap_test_kernel_context("turn-engine-governed-shell-approval", 60)
-        .expect("kernel context");
+    let app_ctx =
+        bootstrap_test_app_context("turn-engine-governed-shell-approval", 60).expect("app context");
 
     let result = TurnEngine::new(4)
         .execute_turn_in_context(
@@ -1009,7 +1008,7 @@ async fn governed_tool_approval_request_is_persisted_for_discovered_shell_exec()
             ),
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
+            ConversationRuntimeBinding::Context(&app_ctx),
             None,
         )
         .await;
@@ -1072,8 +1071,8 @@ async fn governed_tool_approval_request_reuses_deterministic_id_for_same_blocked
     let tool_view = runtime_tool_view_for_config(&tool_config);
     let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
     let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
-    let kernel_ctx = bootstrap_test_kernel_context("turn-engine-governed-shell-reuse", 60)
-        .expect("kernel context");
+    let app_ctx =
+        bootstrap_test_app_context("turn-engine-governed-shell-reuse", 60).expect("app context");
     let turn = discovered_shell_exec_turn("root-session", "turn-reuse", "call-reuse");
 
     let first = TurnEngine::new(4)
@@ -1081,7 +1080,7 @@ async fn governed_tool_approval_request_reuses_deterministic_id_for_same_blocked
             &turn,
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
+            ConversationRuntimeBinding::Context(&app_ctx),
             None,
         )
         .await;
@@ -1090,7 +1089,7 @@ async fn governed_tool_approval_request_reuses_deterministic_id_for_same_blocked
             &turn,
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
+            ConversationRuntimeBinding::Context(&app_ctx),
             None,
         )
         .await;
@@ -1155,7 +1154,7 @@ async fn autonomy_policy_allowlist_does_not_bypass_prompt_session_consent() {
     let tool_view = runtime_tool_view_for_config(&tool_config);
     let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
     let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
-    let kernel_ctx = kernel_context("turn-engine-autonomy-allowlist-prompt");
+    let app_ctx = app_context("turn-engine-autonomy-allowlist-prompt");
     let turn = skills_policy_get_turn(
         "root-session",
         "turn-autonomy-allowlist-prompt",
@@ -1167,7 +1166,7 @@ async fn autonomy_policy_allowlist_does_not_bypass_prompt_session_consent() {
             &turn,
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
+            ConversationRuntimeBinding::Context(&app_ctx),
             None,
         )
         .await;
@@ -1212,7 +1211,7 @@ async fn autonomy_policy_grant_does_not_bypass_prompt_session_consent() {
     let tool_view = runtime_tool_view_for_config(&tool_config);
     let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
     let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
-    let kernel_ctx = kernel_context("turn-engine-autonomy-grant-prompt");
+    let app_ctx = app_context("turn-engine-autonomy-grant-prompt");
     let turn = skills_policy_get_turn(
         "root-session",
         "turn-autonomy-grant-prompt",
@@ -1224,7 +1223,7 @@ async fn autonomy_policy_grant_does_not_bypass_prompt_session_consent() {
             &turn,
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
+            ConversationRuntimeBinding::Context(&app_ctx),
             None,
         )
         .await;
@@ -1271,7 +1270,7 @@ async fn observed_fast_lane_execution_trace_records_batch_and_segment_metrics() 
             &turn,
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::advisory_only(),
+            ConversationRuntimeBinding::AdvisoryOnly,
             None,
             None,
         )
@@ -1336,7 +1335,7 @@ async fn parallel_execution_reports_global_intent_sequence_to_after_tool_executi
             &turn,
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::advisory_only(),
+            ConversationRuntimeBinding::AdvisoryOnly,
             None,
             None,
         )
@@ -1380,7 +1379,7 @@ async fn observed_fast_lane_execution_treats_single_in_flight_batches_as_sequent
             &turn,
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::advisory_only(),
+            ConversationRuntimeBinding::AdvisoryOnly,
             None,
             None,
         )
@@ -1436,7 +1435,7 @@ async fn parallel_execution_records_trace_items_in_intent_order() {
             &turn,
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::advisory_only(),
+            ConversationRuntimeBinding::AdvisoryOnly,
             None,
             None,
         )
@@ -1498,7 +1497,7 @@ async fn parallel_execution_keeps_successful_tool_results_when_one_tool_is_denie
             &turn,
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::advisory_only(),
+            ConversationRuntimeBinding::AdvisoryOnly,
             None,
             None,
         )
@@ -1567,7 +1566,7 @@ async fn sequential_execution_continues_after_single_tool_denial() {
             &turn,
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::advisory_only(),
+            ConversationRuntimeBinding::AdvisoryOnly,
             None,
             None,
         )
@@ -1629,7 +1628,7 @@ async fn observed_fast_lane_execution_trace_records_partial_tool_failure_outcome
             &turn,
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::advisory_only(),
+            ConversationRuntimeBinding::AdvisoryOnly,
             None,
             None,
         )

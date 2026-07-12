@@ -13,14 +13,14 @@ const DETACHED_DELEGATE_CHILD_COMMAND: &str = "delegate-child-run";
 const DETACHED_DELEGATE_CHILD_CONFIG_ARG: &str = "--config-path";
 const DETACHED_DELEGATE_CHILD_PAYLOAD_ARG: &str = "--payload-file";
 const DETACHED_DELEGATE_CHILD_EXECUTABLE_ENV: &str = "CARGO_BIN_EXE_loong";
-const DETACHED_DELEGATE_CHILD_KERNEL_SCOPE: &str = "delegate-child-worker";
+const DETACHED_DELEGATE_CHILD_CONTEXT_SCOPE: &str = "delegate-child-worker";
 const DETACHED_DELEGATE_CHILD_PASSTHROUGH_ENV_KEYS: &[&str] = &["LOONG_CONFIG_PATH", "LOONG_HOME"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum DetachedDelegateChildBinding {
-    Kernel,
-    Direct,
+    Context,
+    AdvisoryOnly,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,10 +39,10 @@ struct DetachedDelegateChildPayload {
 
 impl DetachedDelegateChildPayload {
     fn from_request(request: &app::conversation::AsyncDelegateSpawnRequest) -> Self {
-        let binding = if request.binding.is_kernel_bound() {
-            DetachedDelegateChildBinding::Kernel
+        let binding = if request.binding.is_context_bound() {
+            DetachedDelegateChildBinding::Context
         } else {
-            DetachedDelegateChildBinding::Direct
+            DetachedDelegateChildBinding::AdvisoryOnly
         };
 
         Self {
@@ -285,18 +285,18 @@ fn owned_binding_from_detached_payload(
     config: &app::config::LoongConfig,
 ) -> CliResult<app::conversation::OwnedConversationRuntimeBinding> {
     match binding {
-        DetachedDelegateChildBinding::Kernel => {
-            let kernel_context = app::context::bootstrap_kernel_context_with_config(
-                DETACHED_DELEGATE_CHILD_KERNEL_SCOPE,
+        DetachedDelegateChildBinding::Context => {
+            let app_context = app::context::bootstrap_app_context_with_config(
+                DETACHED_DELEGATE_CHILD_CONTEXT_SCOPE,
                 app::context::DEFAULT_TOKEN_TTL_S,
                 config,
             )?;
             let owned_binding =
-                app::conversation::OwnedConversationRuntimeBinding::kernel(kernel_context);
+                app::conversation::OwnedConversationRuntimeBinding::with_context(app_context);
             Ok(owned_binding)
         }
-        DetachedDelegateChildBinding::Direct => {
-            let owned_binding = app::conversation::OwnedConversationRuntimeBinding::advisory_only();
+        DetachedDelegateChildBinding::AdvisoryOnly => {
+            let owned_binding = app::conversation::OwnedConversationRuntimeBinding::AdvisoryOnly;
             Ok(owned_binding)
         }
     }

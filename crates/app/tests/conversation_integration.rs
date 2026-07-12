@@ -51,8 +51,8 @@ fn harness_builds_with_invoke_tool_capability() {
     let harness = TurnTestHarness::new();
     assert!(
         harness
-            .kernel_ctx
-            .token
+            .app_ctx
+            .token()
             .allowed_capabilities
             .contains(&Capability::InvokeTool)
     );

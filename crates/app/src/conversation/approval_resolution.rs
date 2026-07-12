@@ -44,7 +44,7 @@ where
     }
 
     fn can_replay_approved_request(&self) -> bool {
-        self.binding.is_kernel_bound()
+        self.binding.is_context_bound()
     }
 
     fn replay_shell_request(
@@ -215,12 +215,12 @@ where
 
         match replay_request.execution_kind {
             crate::tools::ToolExecutionKind::Core => {
-                let kernel_ctx = self
+                let app_ctx = self
                     .binding
-                    .kernel_context()
-                    .ok_or_else(|| "no_kernel_context".to_owned())?;
+                    .context()
+                    .ok_or_else(|| "no_app_context".to_owned())?;
                 crate::tools::execute_kernel_tool_request(
-                    kernel_ctx,
+                    app_ctx,
                     replay_request.request,
                     replay_request.trusted_internal_context,
                 )

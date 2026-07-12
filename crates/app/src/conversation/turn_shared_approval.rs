@@ -367,7 +367,7 @@ fn approval_prompt_view_from_requirement(
 ) -> ApprovalPromptView {
     let marker = match requirement.kind {
         ApprovalRequirementKind::GovernedTool => ApprovalPromptMarker::ToolApprovalRequired,
-        ApprovalRequirementKind::KernelContextRequired => ApprovalPromptMarker::ApprovalRequired,
+        ApprovalRequirementKind::AppContextRequired => ApprovalPromptMarker::ApprovalRequired,
     };
     let locale = approval_prompt_locale_from_text(
         join_non_empty_lines(&[assistant_preface, requirement.reason.as_str()]).as_str(),

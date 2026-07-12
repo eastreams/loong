@@ -330,7 +330,7 @@ pub(super) fn execute_config_import_tool_with_config(
 
 pub(super) async fn execute_config_import_tool_with_context(
     request: ToolCoreRequest,
-    ctx: &crate::context::AppExecutionContext<'_>,
+    ctx: &crate::context::AppContext,
 ) -> Result<ToolCoreOutcome, String> {
     let payload = request
         .payload
@@ -793,7 +793,7 @@ fn load_or_default_config(path: Option<&Path>) -> Result<LoongConfig, String> {
 }
 
 async fn load_or_default_config_with_access(
-    ctx: &crate::context::AppExecutionContext<'_>,
+    ctx: &crate::context::AppContext,
     path: Option<&Path>,
 ) -> Result<LoongConfig, String> {
     let Some(path) = path else {
@@ -827,7 +827,7 @@ async fn load_or_default_config_with_access(
 // Use governed inspect for response path normalization too; otherwise the
 // context-aware plan path would report raw payload paths while reads use access.
 async fn resolve_path_with_access(
-    ctx: &crate::context::AppExecutionContext<'_>,
+    ctx: &crate::context::AppContext,
     path: &Path,
 ) -> Result<PathBuf, String> {
     ctx.access()
@@ -1033,10 +1033,10 @@ mod tests {
                     "input_path": "."
                 }),
             },
-            &harness.kernel_ctx,
+            &harness.app_ctx,
         )
         .await
-        .expect("config.import plan should execute through kernel context");
+        .expect("config.import plan should execute through app context");
 
         assert_eq!(outcome.status, "ok");
         assert_eq!(outcome.payload["mode"], "plan");
@@ -1067,7 +1067,7 @@ mod tests {
                     "input_path": "."
                 }),
             },
-            &harness.kernel_ctx,
+            &harness.app_ctx,
         )
         .await
         .expect_err("missing read capability should deny config.import plan");
@@ -1097,10 +1097,10 @@ mod tests {
                     "input_path": "."
                 }),
             },
-            &harness.kernel_ctx,
+            &harness.app_ctx,
         )
         .await
-        .expect("config.import map_skills should execute through kernel context");
+        .expect("config.import map_skills should execute through app context");
 
         assert_eq!(outcome.status, "ok");
         assert_eq!(outcome.payload["mode"], MAP_SKILLS_MODE_KEY);
@@ -1132,10 +1132,10 @@ mod tests {
                     "force": true
                 }),
             },
-            &harness.kernel_ctx,
+            &harness.app_ctx,
         )
         .await
-        .expect("config.import apply should execute through kernel context");
+        .expect("config.import apply should execute through app context");
 
         assert_eq!(outcome.status, "ok");
         assert_eq!(outcome.payload["mode"], "apply");
@@ -1186,7 +1186,7 @@ mod tests {
                     "force": true
                 }),
             },
-            &harness.kernel_ctx,
+            &harness.app_ctx,
         )
         .await
         .expect_err("missing write capability should deny config.import apply");
@@ -1236,10 +1236,10 @@ mod tests {
                     "output_path": "loong.toml"
                 }),
             },
-            &harness.kernel_ctx,
+            &harness.app_ctx,
         )
         .await
-        .expect("rollback should execute through kernel context");
+        .expect("rollback should execute through app context");
 
         assert_eq!(outcome.status, "ok");
         assert_eq!(outcome.payload["mode"], "rollback_last_apply");
@@ -1277,10 +1277,10 @@ mod tests {
                     APPLY_SKILLS_PLAN_KEY: false
                 }),
             },
-            &harness.kernel_ctx,
+            &harness.app_ctx,
         )
         .await
-        .expect("apply_selected should execute through kernel context");
+        .expect("apply_selected should execute through app context");
 
         let expected_output_path =
             dunce::canonicalize(&output_path).expect("canonicalize generated config path");
@@ -1338,7 +1338,7 @@ mod tests {
                     APPLY_SKILLS_PLAN_KEY: true
                 }),
             },
-            &harness.kernel_ctx,
+            &harness.app_ctx,
         )
         .await
         .expect_err("skills bridge must not fall back to legacy direct side effects");
@@ -1404,7 +1404,7 @@ mod tests {
                     "output_path": "loong.toml"
                 }),
             },
-            &harness.kernel_ctx,
+            &harness.app_ctx,
         )
         .await
         .expect_err("missing write capability should deny rollback");
@@ -1462,7 +1462,7 @@ mod tests {
                     "output_path": "loong.toml"
                 }),
             },
-            &harness.kernel_ctx,
+            &harness.app_ctx,
         )
         .await
         .expect_err("missing read capability should deny rollback manifest read");

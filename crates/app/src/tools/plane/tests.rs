@@ -7,14 +7,18 @@ use loong_runtime::tool_plane::{ToolInvocationAction, ToolPath, ToolPlane};
 use serde_json::json;
 
 use super::ToolInvocationAllowPolicy;
-use crate::context::{AppContextFactory, bootstrap_test_kernel_context};
+use crate::context::{AppContextFactory, bootstrap_test_app_context};
 
 #[tokio::test]
 async fn app_policy_allows_registered_tool_invocation_after_capability_gate() {
-    let kernel_context =
-        bootstrap_test_kernel_context("test-agent", 60).expect("bootstrap context");
-    let execution_context = kernel_context
-        .memory_core_execution_context()
+    let ctx = bootstrap_test_app_context("test-agent", 60).expect("bootstrap context");
+    let execution_context = ctx
+        .for_invocation(
+            loong_contracts::ExecutionPlane::Tool,
+            loong_contracts::PlaneTier::Core,
+            None,
+            ctx.tool_runtime_config(),
+        )
         .expect("build execution context");
     let mut policy = PolicyPipeline::<AppContextFactory>::new();
     policy.push_policy(ToolInvocationAllowPolicy);

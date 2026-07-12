@@ -31,10 +31,10 @@ fn build_observer_tool_runtime_event_sink(
 
 async fn execute_tool_intent_via_kernel(
     request: ToolCoreRequest,
-    kernel_ctx: &KernelContext,
+    app_ctx: &AppContext,
     trusted_internal_context: bool,
 ) -> Result<ToolCoreOutcome, TurnFailure> {
-    crate::tools::execute_kernel_tool_request(kernel_ctx, request, trusted_internal_context)
+    crate::tools::execute_kernel_tool_request(app_ctx, request, trusted_internal_context)
         .await
         .map_err(|error| {
             if let KernelError::ToolPlane(ToolPlaneError::Execution(reason)) = &error
@@ -76,15 +76,11 @@ impl TurnEngine {
         ToolBatchHarness::new(self)
     }
 
-    pub async fn execute_turn(
-        &self,
-        turn: &ProviderTurn,
-        kernel_ctx: &KernelContext,
-    ) -> TurnResult {
+    pub async fn execute_turn(&self, turn: &ProviderTurn, app_ctx: &AppContext) -> TurnResult {
         self.execute_turn_in_view(
             turn,
             &runtime_tool_view(),
-            ConversationRuntimeBinding::kernel(kernel_ctx),
+            ConversationRuntimeBinding::Context(app_ctx),
         )
         .await
     }
@@ -251,15 +247,15 @@ impl TurnEngine {
     ) -> PreparedToolExecutionOutcome {
         match prepared_intent.execution_kind {
             ToolExecutionKind::Core => {
-                let Some(kernel_ctx) = binding.kernel_context() else {
+                let Some(app_ctx) = binding.context() else {
                     return PreparedToolExecutionOutcome::Interrupted(TurnResult::policy_denied(
-                        "no_kernel_context",
-                        "no_kernel_context",
+                        "no_app_context",
+                        "no_app_context",
                     ));
                 };
                 let execution = execute_tool_intent_via_kernel(
                     prepared_intent.request.clone(),
-                    kernel_ctx,
+                    app_ctx,
                     prepared_intent.trusted_internal_context,
                 );
                 let outcome = match observer {
@@ -381,7 +377,7 @@ mod execution_tests {
                 &prepared_intent,
                 &session_context,
                 &MissingProviderAppToolDispatcher,
-                ConversationRuntimeBinding::advisory_only(),
+                ConversationRuntimeBinding::AdvisoryOnly,
                 None,
             )
             .await;

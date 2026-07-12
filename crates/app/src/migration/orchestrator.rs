@@ -191,7 +191,7 @@ pub fn discover_import_sources(
 }
 
 pub(crate) async fn discover_import_sources_with_access(
-    ctx: &crate::context::AppExecutionContext<'_>,
+    ctx: &crate::context::AppContext,
     search_root: &Path,
     options: DiscoveryOptions,
 ) -> CliResult<DiscoveryReport> {
@@ -248,7 +248,7 @@ pub fn plan_import_sources(report: &DiscoveryReport) -> CliResult<DiscoveryPlanS
 }
 
 pub(crate) async fn plan_import_sources_with_access(
-    ctx: &crate::context::AppExecutionContext<'_>,
+    ctx: &crate::context::AppContext,
     report: &DiscoveryReport,
 ) -> CliResult<DiscoveryPlanSummary> {
     let mut plans = Vec::new();
@@ -338,7 +338,7 @@ pub fn merge_profile_sources(report: &DiscoveryReport) -> CliResult<MergedProfil
 }
 
 pub(crate) async fn merge_profile_sources_with_access(
-    ctx: &crate::context::AppExecutionContext<'_>,
+    ctx: &crate::context::AppContext,
     report: &DiscoveryReport,
 ) -> CliResult<MergedProfilePlan> {
     if report.sources.is_empty() {
@@ -593,7 +593,7 @@ pub fn apply_import_selection(
 }
 
 pub(crate) async fn apply_import_selection_with_access(
-    ctx: &crate::context::AppExecutionContext<'_>,
+    ctx: &crate::context::AppContext,
     request: &ApplyImportSelection,
 ) -> CliResult<ApplyImportSelectionResult> {
     if request.apply_skills_plan {
@@ -1136,7 +1136,7 @@ fn restore_output_from_backup(
 }
 
 async fn restore_output_from_backup_with_access(
-    ctx: &crate::context::AppExecutionContext<'_>,
+    ctx: &crate::context::AppContext,
     output_path: &Path,
     backup_path: &Path,
     output_preexisted: bool,
@@ -1205,7 +1205,7 @@ fn remove_config_output_path(output_path: &Path) -> CliResult<()> {
 }
 
 async fn finalize_apply_import_selection_failure_with_access(
-    ctx: &crate::context::AppExecutionContext<'_>,
+    ctx: &crate::context::AppContext,
     error: String,
     output_path: &Path,
     backup_context: Option<&(PathBuf, bool)>,
@@ -1341,7 +1341,7 @@ pub fn rollback_last_migration(output_path: &Path) -> CliResult<PathBuf> {
 }
 
 pub(crate) async fn rollback_last_migration_with_access(
-    ctx: &crate::context::AppExecutionContext<'_>,
+    ctx: &crate::context::AppContext,
     output_path: &Path,
 ) -> CliResult<PathBuf> {
     let manifest = load_last_migration_manifest_with_access(ctx, output_path).await?;
@@ -1423,7 +1423,7 @@ fn load_last_migration_manifest(output_path: &Path) -> CliResult<ImportApplyMani
 }
 
 async fn load_last_migration_manifest_with_access(
-    ctx: &crate::context::AppExecutionContext<'_>,
+    ctx: &crate::context::AppContext,
     output_path: &Path,
 ) -> CliResult<ImportApplyManifest> {
     let state_dir = migration_state_dir(output_path);
@@ -1502,7 +1502,7 @@ fn collect_candidate_directories(
 }
 
 pub(super) async fn collect_candidate_directories_with_access(
-    ctx: &crate::context::AppExecutionContext<'_>,
+    ctx: &crate::context::AppContext,
     search_root: &FsInspectPathOutput,
     options: &DiscoveryOptions,
 ) -> CliResult<Vec<PathBuf>> {
@@ -1715,7 +1715,7 @@ fn load_or_default_config(path: Option<&Path>) -> CliResult<crate::config::Loong
 }
 
 async fn load_or_default_config_with_access(
-    ctx: &crate::context::AppExecutionContext<'_>,
+    ctx: &crate::context::AppContext,
     path: Option<&Path>,
 ) -> CliResult<crate::config::LoongConfig> {
     let Some(path) = path else {

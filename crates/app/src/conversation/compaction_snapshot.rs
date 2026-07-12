@@ -2,14 +2,14 @@
 use std::collections::BTreeSet;
 
 #[cfg(feature = "memory-sqlite")]
-use loong_contracts::Capability;
+use loong_contracts::{Capability, ExecutionPlane, PlaneTier};
 #[cfg(feature = "memory-sqlite")]
 use serde_json::json;
 
 #[cfg(feature = "memory-sqlite")]
 use crate::memory;
 #[cfg(feature = "memory-sqlite")]
-use crate::{CliResult, KernelContext};
+use crate::{AppContext, CliResult};
 
 #[cfg(feature = "memory-sqlite")]
 const MAX_COMPACTION_WINDOW_TURNS: usize = 512;
@@ -39,18 +39,17 @@ impl CompactionSessionSnapshot {
 #[cfg(feature = "memory-sqlite")]
 pub(crate) async fn load_compaction_session_snapshot(
     session_id: &str,
-    kernel_ctx: &KernelContext,
+    app_ctx: &AppContext,
 ) -> CliResult<CompactionSessionSnapshot> {
-    let window_snapshot = load_compaction_window_snapshot(session_id, kernel_ctx).await?;
+    let window_snapshot = load_compaction_window_snapshot(session_id, app_ctx).await?;
     if window_snapshot.is_complete() {
         return Ok(window_snapshot);
     }
 
-    let transcript_snapshot =
-        match load_compaction_transcript_snapshot(session_id, kernel_ctx).await {
-            Ok(snapshot) => snapshot,
-            Err(_error) => return Ok(window_snapshot),
-        };
+    let transcript_snapshot = match load_compaction_transcript_snapshot(session_id, app_ctx).await {
+        Ok(snapshot) => snapshot,
+        Err(_error) => return Ok(window_snapshot),
+    };
     if !transcript_snapshot.is_complete()
         || transcript_snapshot.turn_count < window_snapshot.turn_count
     {
@@ -63,7 +62,7 @@ pub(crate) async fn load_compaction_session_snapshot(
 #[cfg(feature = "memory-sqlite")]
 async fn load_compaction_window_snapshot(
     session_id: &str,
-    kernel_ctx: &KernelContext,
+    app_ctx: &AppContext,
 ) -> CliResult<CompactionSessionSnapshot> {
     let mut request = memory::build_window_request(session_id, MAX_COMPACTION_WINDOW_TURNS);
     let Some(payload) = request.payload.as_object_mut() else {
@@ -71,13 +70,18 @@ async fn load_compaction_window_snapshot(
     };
     payload.insert("allow_extended_limit".to_owned(), json!(true));
     let caps = BTreeSet::from([Capability::MemoryRead]);
-    let execution_context = kernel_ctx.memory_core_execution_context()?;
-    let outcome = kernel_ctx
-        .runtime
+    let execution_context = app_ctx.for_invocation(
+        ExecutionPlane::Memory,
+        PlaneTier::Core,
+        None,
+        app_ctx.tool_runtime_config(),
+    )?;
+    let outcome = app_ctx
+        .runtime()
         .kernel()
         .execute_memory_core(
-            kernel_ctx.pack_id(),
-            &kernel_ctx.token,
+            app_ctx.pack_id(),
+            app_ctx.token(),
             &caps,
             None,
             request,
@@ -101,18 +105,23 @@ async fn load_compaction_window_snapshot(
 #[cfg(feature = "memory-sqlite")]
 async fn load_compaction_transcript_snapshot(
     session_id: &str,
-    kernel_ctx: &KernelContext,
+    app_ctx: &AppContext,
 ) -> CliResult<CompactionSessionSnapshot> {
     let request =
         memory::build_transcript_request(session_id, DEFAULT_COMPACTION_TRANSCRIPT_PAGE_SIZE);
     let caps = BTreeSet::from([Capability::MemoryRead]);
-    let execution_context = kernel_ctx.memory_core_execution_context()?;
-    let outcome = kernel_ctx
-        .runtime
+    let execution_context = app_ctx.for_invocation(
+        ExecutionPlane::Memory,
+        PlaneTier::Core,
+        None,
+        app_ctx.tool_runtime_config(),
+    )?;
+    let outcome = app_ctx
+        .runtime()
         .kernel()
         .execute_memory_core(
-            kernel_ctx.pack_id(),
-            &kernel_ctx.token,
+            app_ctx.pack_id(),
+            app_ctx.token(),
             &caps,
             None,
             request,

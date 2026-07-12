@@ -29,8 +29,8 @@ async fn pending_approval_control_turn_bootstraps_once_and_emits_terminal_phases
 
     let acp_options = AcpConversationTurnOptions::automatic();
     let address = ConversationSessionAddress::from_session_id("root-session");
-    let kernel_ctx = crate::context::bootstrap_test_kernel_context("approval-control-observer", 60)
-        .expect("kernel context");
+    let app_ctx = crate::context::bootstrap_test_app_context("approval-control-observer", 60)
+        .expect("app context");
 
     let reply = coordinator
         .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
@@ -40,7 +40,7 @@ async fn pending_approval_control_turn_bootstraps_once_and_emits_terminal_phases
             ProviderErrorMode::Propagate,
             &runtime,
             &acp_options,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
+            ConversationRuntimeBinding::Context(&app_ctx),
             None,
             Some(observer_handle),
             None,
@@ -136,7 +136,7 @@ async fn pending_approval_control_turn_does_not_persist_session_mode_when_resolu
             ProviderErrorMode::Propagate,
             &runtime,
             &acp_options,
-            ConversationRuntimeBinding::advisory_only(),
+            ConversationRuntimeBinding::AdvisoryOnly,
             None,
             None,
             None,
@@ -198,7 +198,7 @@ async fn pending_approval_control_turn_resolves_delegate_request_after_yes_confi
             ProviderErrorMode::Propagate,
             &runtime,
             &acp_options,
-            ConversationRuntimeBinding::advisory_only(),
+            ConversationRuntimeBinding::AdvisoryOnly,
             None,
             None,
             None,
@@ -261,7 +261,7 @@ async fn approval_request_resolve_persists_session_mode_on_success() {
         &config,
         &runtime,
         &fallback,
-        ConversationRuntimeBinding::advisory_only(),
+        ConversationRuntimeBinding::AdvisoryOnly,
     );
     let outcome = crate::tools::approval::execute_approval_tool_with_runtime_support(
         loong_contracts::ToolCoreRequest {
@@ -350,7 +350,7 @@ async fn approval_request_resolve_retries_missing_session_mode_after_approval() 
         &config,
         &runtime,
         &fallback,
-        ConversationRuntimeBinding::advisory_only(),
+        ConversationRuntimeBinding::AdvisoryOnly,
     );
     let outcome = crate::tools::approval::execute_approval_tool_with_runtime_support(
         loong_contracts::ToolCoreRequest {
@@ -431,14 +431,13 @@ async fn core_approval_replay_skips_app_session_context_loading() {
         .load_approval_request("apr-core-replay")
         .expect("load approval request")
         .expect("approval request row");
-    let kernel_ctx =
-        bootstrap_test_kernel_context("approval-core-replay", 60).expect("kernel context");
+    let app_ctx = bootstrap_test_app_context("approval-core-replay", 60).expect("app context");
     let fallback = DefaultAppToolDispatcher::new(memory_config.clone(), ToolConfig::default());
     let approval_runtime = CoordinatorApprovalResolutionRuntime::new(
         &config,
         &runtime,
         &fallback,
-        ConversationRuntimeBinding::kernel(&kernel_ctx),
+        ConversationRuntimeBinding::Context(&app_ctx),
     );
 
     let error = approval_runtime

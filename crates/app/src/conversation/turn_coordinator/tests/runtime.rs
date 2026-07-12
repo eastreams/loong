@@ -18,7 +18,7 @@ async fn handle_turn_with_observer_uses_streaming_request_and_emits_live_events(
             ProviderErrorMode::Propagate,
             &runtime,
             &acp_options,
-            ConversationRuntimeBinding::advisory_only(),
+            ConversationRuntimeBinding::AdvisoryOnly,
             None,
             Some(observer_handle),
             None,
@@ -82,7 +82,7 @@ async fn handle_turn_with_observer_falls_back_when_streaming_events_are_unsuppor
             ProviderErrorMode::Propagate,
             &runtime,
             &acp_options,
-            ConversationRuntimeBinding::advisory_only(),
+            ConversationRuntimeBinding::AdvisoryOnly,
             None,
             Some(observer_handle),
             None,
@@ -150,7 +150,7 @@ async fn handle_turn_with_observer_emits_lifecycle_for_explicit_acp_inline_messa
             ProviderErrorMode::InlineMessage,
             &runtime,
             &acp_options,
-            ConversationRuntimeBinding::advisory_only(),
+            ConversationRuntimeBinding::AdvisoryOnly,
             None,
             Some(observer_handle),
             None,
@@ -217,7 +217,7 @@ async fn handle_turn_with_ingress_and_observer_marks_failed_when_runtime_bootstr
             "say hello",
             ProviderErrorMode::Propagate,
             &acp_options,
-            ConversationRuntimeBinding::advisory_only(),
+            ConversationRuntimeBinding::AdvisoryOnly,
             None,
             Some(observer_handle),
             None,
@@ -255,7 +255,7 @@ async fn handle_turn_with_observer_marks_failed_when_runtime_bootstrap_fails() {
             "say hello",
             ProviderErrorMode::Propagate,
             &acp_options,
-            ConversationRuntimeBinding::advisory_only(),
+            ConversationRuntimeBinding::AdvisoryOnly,
             None,
             Some(observer_handle),
             None,
@@ -294,7 +294,7 @@ async fn handle_production_turn_with_observer_rejects_advisory_only_binding_befo
             "say hello",
             ProviderErrorMode::Propagate,
             &acp_options,
-            ConversationRuntimeBinding::advisory_only(),
+            ConversationRuntimeBinding::AdvisoryOnly,
             Some(observer_handle),
             None,
             None,
@@ -340,7 +340,7 @@ async fn handle_production_turn_with_runtime_rejects_advisory_only_binding_befor
             ProviderErrorMode::Propagate,
             &runtime,
             &acp_options,
-            ConversationRuntimeBinding::advisory_only(),
+            ConversationRuntimeBinding::AdvisoryOnly,
             None,
             Some(observer_handle),
         )
@@ -381,7 +381,7 @@ async fn compact_production_session_rejects_advisory_only_binding_before_runtime
         .compact_production_session(
             &config,
             "maintenance-session",
-            ConversationRuntimeBinding::advisory_only(),
+            ConversationRuntimeBinding::AdvisoryOnly,
         )
         .await;
     let error = result.expect_err("advisory-only production maintenance binding should fail");
@@ -403,7 +403,7 @@ async fn repair_production_turn_checkpoint_tail_rejects_advisory_only_binding_be
         .repair_production_turn_checkpoint_tail(
             &config,
             "maintenance-session",
-            ConversationRuntimeBinding::advisory_only(),
+            ConversationRuntimeBinding::AdvisoryOnly,
         )
         .await;
     let error = result.expect_err("advisory-only production maintenance binding should fail");
@@ -427,7 +427,7 @@ async fn load_production_turn_checkpoint_diagnostics_rejects_advisory_only_bindi
             &config,
             "maintenance-session",
             limit,
-            ConversationRuntimeBinding::advisory_only(),
+            ConversationRuntimeBinding::AdvisoryOnly,
         )
         .await;
     let error = result.expect_err("advisory-only production maintenance binding should fail");

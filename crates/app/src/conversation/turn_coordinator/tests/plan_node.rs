@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn execute_single_tool_intent_advisory_only_binding_reports_no_kernel_context() {
+async fn execute_single_tool_intent_advisory_only_binding_reports_no_app_context() {
     let (tool_name, args_json) = crate::tools::synthesize_test_provider_tool_call_with_scope(
         "file.read",
         json!({
@@ -24,15 +24,15 @@ async fn execute_single_tool_intent_advisory_only_binding_reports_no_kernel_cont
         &intent,
         &session_context,
         &crate::conversation::NoopAppToolDispatcher,
-        ConversationRuntimeBinding::advisory_only(),
+        ConversationRuntimeBinding::AdvisoryOnly,
         None,
         2_048,
     )
     .await
-    .expect_err("direct core execution should fail closed without kernel context");
+    .expect_err("direct core execution should fail closed without app context");
 
     assert_eq!(error.kind, PlanNodeErrorKind::PolicyDenied);
-    assert_eq!(error.message, "no_kernel_context");
+    assert_eq!(error.message, "no_app_context");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -61,7 +61,7 @@ async fn execute_single_tool_intent_marks_repairable_file_read_failure_retryable
         &intent,
         &session_context,
         &DefaultAppToolDispatcher::runtime(),
-        ConversationRuntimeBinding::kernel(&harness.kernel_ctx),
+        ConversationRuntimeBinding::Context(&harness.app_ctx),
         None,
         2_048,
     )
@@ -99,7 +99,7 @@ async fn execute_single_tool_intent_marks_repairable_shell_preflight_failure_ret
         &intent,
         &session_context,
         &DefaultAppToolDispatcher::runtime(),
-        ConversationRuntimeBinding::kernel(&harness.kernel_ctx),
+        ConversationRuntimeBinding::Context(&harness.app_ctx),
         None,
         2_048,
     )

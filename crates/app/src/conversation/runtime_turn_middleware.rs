@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use crate::{CliResult, KernelContext};
+use crate::{AppContext, CliResult};
 
 use super::super::context_engine::{AssembledConversationContext, ConversationContextEngine};
 use super::super::runtime_binding::ConversationRuntimeBinding;
@@ -22,10 +22,10 @@ where
         &self,
         config: &LoongConfig,
         session_id: &str,
-        kernel_ctx: &KernelContext,
+        app_ctx: &AppContext,
     ) -> CliResult<()> {
         for middleware in &self.turn_middlewares {
-            middleware.bootstrap(config, session_id, kernel_ctx).await?;
+            middleware.bootstrap(config, session_id, app_ctx).await?;
         }
         Ok(())
     }
@@ -34,10 +34,10 @@ where
         &self,
         session_id: &str,
         message: &Value,
-        kernel_ctx: &KernelContext,
+        app_ctx: &AppContext,
     ) -> CliResult<()> {
         for middleware in &self.turn_middlewares {
-            middleware.ingest(session_id, message, kernel_ctx).await?;
+            middleware.ingest(session_id, message, app_ctx).await?;
         }
         Ok(())
     }
@@ -74,17 +74,11 @@ where
         user_input: &str,
         assistant_reply: &str,
         messages: &[Value],
-        kernel_ctx: &KernelContext,
+        app_ctx: &AppContext,
     ) -> CliResult<()> {
         for middleware in &self.turn_middlewares {
             middleware
-                .after_turn(
-                    session_id,
-                    user_input,
-                    assistant_reply,
-                    messages,
-                    kernel_ctx,
-                )
+                .after_turn(session_id, user_input, assistant_reply, messages, app_ctx)
                 .await?;
         }
         Ok(())
@@ -95,11 +89,11 @@ where
         config: &LoongConfig,
         session_id: &str,
         messages: &[Value],
-        kernel_ctx: &KernelContext,
+        app_ctx: &AppContext,
     ) -> CliResult<()> {
         for middleware in &self.turn_middlewares {
             middleware
-                .compact_context(config, session_id, messages, kernel_ctx)
+                .compact_context(config, session_id, messages, app_ctx)
                 .await?;
         }
         Ok(())
@@ -109,11 +103,11 @@ where
         &self,
         parent_session_id: &str,
         subagent_session_id: &str,
-        kernel_ctx: &KernelContext,
+        app_ctx: &AppContext,
     ) -> CliResult<()> {
         for middleware in &self.turn_middlewares {
             middleware
-                .prepare_subagent_spawn(parent_session_id, subagent_session_id, kernel_ctx)
+                .prepare_subagent_spawn(parent_session_id, subagent_session_id, app_ctx)
                 .await?;
         }
         Ok(())
@@ -123,11 +117,11 @@ where
         &self,
         parent_session_id: &str,
         subagent_session_id: &str,
-        kernel_ctx: &KernelContext,
+        app_ctx: &AppContext,
     ) -> CliResult<()> {
         for middleware in &self.turn_middlewares {
             middleware
-                .on_subagent_ended(parent_session_id, subagent_session_id, kernel_ctx)
+                .on_subagent_ended(parent_session_id, subagent_session_id, app_ctx)
                 .await?;
         }
         Ok(())

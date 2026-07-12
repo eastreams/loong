@@ -19,8 +19,8 @@ impl ConversationTurnCoordinator {
             return Ok(None);
         };
 
-        if let Some(kernel_ctx) = binding.kernel_context() {
-            runtime.bootstrap(config, session_id, kernel_ctx).await?;
+        if let Some(app_ctx) = binding.context() {
+            runtime.bootstrap(config, session_id, app_ctx).await?;
         }
 
         let memory_config = store::session_store_config_from_memory_config(&config.memory);
@@ -140,8 +140,8 @@ impl ConversationTurnCoordinator {
         let followup_request = explicit_activation.followup_request.as_str();
         let turn_id = next_conversation_turn_id();
 
-        if let Some(kernel_ctx) = binding.kernel_context() {
-            runtime.bootstrap(config, session_id, kernel_ctx).await?;
+        if let Some(app_ctx) = binding.context() {
+            runtime.bootstrap(config, session_id, app_ctx).await?;
         }
 
         observe_turn_phase(observer, ConversationTurnPhaseEvent::preparing());

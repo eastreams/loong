@@ -113,17 +113,17 @@ async fn execute_file_read_with_test_context(
     let token = kernel
         .issue_token("test-pack", "test-agent", 60)
         .map_err(|error| format!("issue token failed: {error}"))?;
-    let kernel_ctx = crate::KernelContext {
-        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+    let app_ctx = crate::AppContext::new(
+        Arc::new(loong_runtime::runtime::Runtime::new(
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
         pack,
         token,
-        tool_runtime_config: config.clone(),
-    };
+        config.clone(),
+    )?;
     let execution_context =
-        kernel_ctx.execution_context(ExecutionPlane::Tool, PlaneTier::Core, None, config)?;
+        app_ctx.for_invocation(ExecutionPlane::Tool, PlaneTier::Core, None, config)?;
     let _ = config;
     let tool = RegisteredTool::<AppContextFactory>::from_tool(
         ToolProvenance::Compatibility,
@@ -248,16 +248,17 @@ async fn execute_request_via_kernel_tool_registry_with_capabilities_result(
     let token = kernel
         .issue_token("test-pack", "test-agent", 60)
         .expect("issue test token");
-    let kernel_ctx = crate::KernelContext {
-        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+    let app_ctx = crate::AppContext::new(
+        Arc::new(loong_runtime::runtime::Runtime::new(
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
         pack,
         token,
-        tool_runtime_config: config.clone(),
-    };
-    let outcome = crate::tools::execute_kernel_tool_request(&kernel_ctx, request, false).await;
+        config.clone(),
+    )
+    .expect("test app context");
+    let outcome = crate::tools::execute_kernel_tool_request(&app_ctx, request, false).await;
     (outcome, audit)
 }
 
@@ -938,17 +939,18 @@ async fn context_direct_write_uses_typed_tool_registry() {
     let token = kernel
         .issue_token("test-pack", "test-agent", 60)
         .expect("issue token");
-    let kernel_ctx = crate::KernelContext {
-        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+    let app_ctx = crate::AppContext::new(
+        Arc::new(loong_runtime::runtime::Runtime::new(
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
         pack,
         token,
-        tool_runtime_config: config.clone(),
-    };
-    let execution_context = kernel_ctx
-        .execution_context(ExecutionPlane::Tool, PlaneTier::Core, None, &config)
+        config.clone(),
+    )
+    .expect("build app context");
+    let execution_context = app_ctx
+        .for_invocation(ExecutionPlane::Tool, PlaneTier::Core, None, &config)
         .expect("build execution context");
     let request = ToolCoreRequest {
         tool_name: "write".to_owned(),

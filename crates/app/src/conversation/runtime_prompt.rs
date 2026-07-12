@@ -18,12 +18,10 @@ pub(super) fn provider_runtime_binding(
     binding: ConversationRuntimeBinding<'_>,
 ) -> provider::ProviderRuntimeBinding<'_> {
     match binding {
-        ConversationRuntimeBinding::Kernel(kernel_ctx) => {
-            provider::ProviderRuntimeBinding::kernel(kernel_ctx)
+        ConversationRuntimeBinding::Context(app_ctx) => {
+            provider::ProviderRuntimeBinding::Context(app_ctx)
         }
-        ConversationRuntimeBinding::AdvisoryOnly => {
-            provider::ProviderRuntimeBinding::advisory_only()
-        }
+        ConversationRuntimeBinding::AdvisoryOnly => provider::ProviderRuntimeBinding::AdvisoryOnly,
     }
 }
 

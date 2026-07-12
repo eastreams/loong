@@ -207,9 +207,9 @@ fn maybe_compact_context_fails_open_when_runtime_self_continuity_persist_cannot_
     config.conversation.compact_trigger_estimated_tokens = Some(1);
     config.conversation.compact_fail_open = true;
 
-    let kernel_ctx = bootstrap_test_kernel_context("turn-coordinator-compaction", 3600)
-        .expect("bootstrap kernel context");
-    let binding = ConversationRuntimeBinding::from_optional_kernel_context(Some(&kernel_ctx));
+    let app_ctx = bootstrap_test_app_context("turn-coordinator-compaction", 3600)
+        .expect("bootstrap app context");
+    let binding = ConversationRuntimeBinding::from_optional_context(Some(&app_ctx));
     let runtime_handle = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -296,9 +296,9 @@ fn maybe_compact_context_fails_open_when_durable_flush_cannot_write_workspace_ex
     )
     .expect("append second assistant turn");
 
-    let kernel_ctx = bootstrap_test_kernel_context("turn-coordinator-compaction", 3600)
-        .expect("bootstrap kernel context");
-    let binding = ConversationRuntimeBinding::from_optional_kernel_context(Some(&kernel_ctx));
+    let app_ctx = bootstrap_test_app_context("turn-coordinator-compaction", 3600)
+        .expect("bootstrap app context");
+    let binding = ConversationRuntimeBinding::from_optional_context(Some(&app_ctx));
     let runtime_handle = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -348,9 +348,9 @@ async fn compact_session_uses_session_context_tool_view_and_turn_like_build_flag
 
     let expected_tool_view = crate::tools::ToolView::from_tool_names(["status.inspect"]);
     let runtime = CompactSessionBuildMessagesRuntime::new(expected_tool_view.clone(), false);
-    let kernel_ctx = bootstrap_test_kernel_context("compact-session-build-messages", 3600)
-        .expect("bootstrap kernel context");
-    let binding = ConversationRuntimeBinding::from_optional_kernel_context(Some(&kernel_ctx));
+    let app_ctx = bootstrap_test_app_context("compact-session-build-messages", 3600)
+        .expect("bootstrap app context");
+    let binding = ConversationRuntimeBinding::from_optional_context(Some(&app_ctx));
     let coordinator = ConversationTurnCoordinator::new();
 
     let report = coordinator
@@ -402,9 +402,9 @@ async fn compact_session_skips_when_post_compaction_readback_fails() {
         crate::tools::ToolView::from_tool_names(["status.inspect"]),
         true,
     );
-    let kernel_ctx = bootstrap_test_kernel_context("compact-session-readback-fail", 3600)
-        .expect("bootstrap kernel context");
-    let binding = ConversationRuntimeBinding::from_optional_kernel_context(Some(&kernel_ctx));
+    let app_ctx = bootstrap_test_app_context("compact-session-readback-fail", 3600)
+        .expect("bootstrap app context");
+    let binding = ConversationRuntimeBinding::from_optional_context(Some(&app_ctx));
     let coordinator = ConversationTurnCoordinator::new();
 
     let report = coordinator

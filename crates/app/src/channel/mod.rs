@@ -386,8 +386,8 @@ mod tests {
         ) -> CliResult<crate::conversation::ProviderTurn> {
             self.request_turn_kernel_bindings
                 .lock()
-                .expect("request turn kernel binding log")
-                .push(binding.is_kernel_bound());
+                .expect("request turn context binding log")
+                .push(binding.is_context_bound());
 
             let mut request_turn_calls = self
                 .request_turn_calls
@@ -648,14 +648,14 @@ mod tests {
             },
         };
         let runtime = ChannelTraceRuntime::default();
-        let kernel_ctx = crate::context::bootstrap_test_kernel_context("channel-test", 60)
-            .expect("bootstrap test kernel context");
+        let app_ctx = crate::context::bootstrap_test_app_context("channel-test", 60)
+            .expect("bootstrap test app context");
 
         let reply = process_inbound_with_runtime_and_feedback(
             &config,
             &runtime,
             &message,
-            crate::conversation::ConversationRuntimeBinding::kernel(&kernel_ctx),
+            crate::conversation::ConversationRuntimeBinding::Context(&app_ctx),
             ChannelTurnFeedbackPolicy::final_trace_significant(),
         )
         .await
@@ -676,7 +676,7 @@ mod tests {
         let request_turn_kernel_bindings = runtime
             .request_turn_kernel_bindings
             .lock()
-            .expect("request turn kernel binding log");
+            .expect("request turn context binding log");
         assert_eq!(request_turn_kernel_bindings.as_slice(), &[true]);
     }
 
@@ -717,14 +717,14 @@ mod tests {
             },
         };
         let runtime = ChannelTraceRuntime::default();
-        let kernel_ctx = crate::context::bootstrap_test_kernel_context("channel-test", 60)
-            .expect("bootstrap test kernel context");
+        let app_ctx = crate::context::bootstrap_test_app_context("channel-test", 60)
+            .expect("bootstrap test app context");
 
         let reply = process_inbound_with_runtime_and_feedback(
             &config,
             &runtime,
             &message,
-            crate::conversation::ConversationRuntimeBinding::kernel(&kernel_ctx),
+            crate::conversation::ConversationRuntimeBinding::Context(&app_ctx),
             ChannelTurnFeedbackPolicy::disabled(),
         )
         .await

@@ -328,11 +328,15 @@ for the shorter public contributor docs entrypoint.
 
 ### Recipe: Add a Tool
 
-1. Create `crates/app/src/tools/your_tool.rs`
-2. Add a handler function: `pub fn execute_your_tool(request: ToolCoreRequest) -> Result<ToolCoreOutcome, String>`
-3. Add a match arm in `execute_tool_core()` in `crates/app/src/tools/mod.rs`
-4. The tool automatically routes through the kernel when `KernelContext` is present (policy + audit)
-5. Add tests — the kernel integration is already wired via `MvpToolAdapter`
+1. Implement the concrete tool and its typed input/output in `crates/tools`; implement
+   `ToolImpl<C>` using only the narrow context traits the tool requires.
+2. Register one plane-local path and the concrete tool in `crates/app/src/tools/plane.rs`.
+3. Invoke it through `ctx.tool(path)?.invoke(payload).await`; this boundary automatically
+   performs capability narrowing, kernel grant, dispatch, and audit.
+4. Add concrete tool tests in `crates/tools` and registration/governance tests in `crates/app`.
+
+Do not add a `ToolCoreRequest` match arm for a typed tool. That path is only the migration
+boundary for tools that have not moved to the typed plane yet.
 
 ### Recipe: Add a Channel
 
@@ -340,7 +344,7 @@ for the shorter public contributor docs entrypoint.
 2. Implement the `ChannelAdapter` trait (`name`, `receive_batch`, `send_message`)
 3. Add a `run_your_channel()` function in `crates/app/src/channel/mod.rs` that:
    - Loads config
-   - Calls `bootstrap_kernel_context_with_config("channel-your-channel", DEFAULT_TOKEN_TTL_S, &config)`
+   - Calls `bootstrap_app_context_with_config("channel-your-channel", DEFAULT_TOKEN_TTL_S, &config)`
    - Loops: receive messages → `process_inbound_with_provider(config, msg, Some(&ctx))` → send reply
 4. Wire the subcommand in `crates/daemon/src/main.rs`
 5. Add a feature flag in `crates/app/Cargo.toml`

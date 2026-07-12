@@ -1,5 +1,5 @@
 use super::*;
-use crate::KernelContext;
+use crate::AppContext;
 use crate::config::{LoongConfig, ProviderConfig, ReasoningEffort};
 use crate::provider::rate_limit::RateLimitObservation;
 use crate::test_utils::ScopedEnv;
@@ -24,9 +24,9 @@ const OPENAI_AUTH_ENV_KEYS: &[&str] = &[
 ];
 const VOLCENGINE_AUTH_ENV_KEYS: &[&str] = &["ARK_API_KEY"];
 
-fn build_provider_failover_test_kernel_context(
+fn build_provider_failover_test_app_context(
     agent_id: &str,
-) -> (KernelContext, Arc<InMemoryAuditSink>) {
+) -> (AppContext, Arc<InMemoryAuditSink>) {
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_321));
     let mut kernel = Kernel::with_legacy_allow_runtime(clock, audit.clone());
@@ -49,15 +49,16 @@ fn build_provider_failover_test_kernel_context(
         .issue_token("provider-test-pack", agent_id, 3_600)
         .expect("issue test token");
     (
-        KernelContext {
-            runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+        AppContext::new(
+            Arc::new(loong_runtime::runtime::Runtime::new(
                 kernel,
                 crate::tools::plane::test_builtin_tool_plane(),
             )),
             pack,
             token,
-            tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
-        },
+            crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        )
+        .expect("build provider test app context"),
         audit,
     )
 }
@@ -491,7 +492,7 @@ async fn request_turn_auto_model_rejects_missing_volcengine_credentials_before_t
             "role": "user",
             "content": "ping"
         })],
-        ProviderRuntimeBinding::advisory_only(),
+        ProviderRuntimeBinding::AdvisoryOnly,
     )
     .await
     .expect_err("auto-model requests should fail on missing managed credentials before transport");
@@ -628,7 +629,7 @@ async fn request_completion_auto_model_falls_forward_to_next_auth_profile_after_
             "role": "user",
             "content": "ping"
         })],
-        ProviderRuntimeBinding::advisory_only(),
+        ProviderRuntimeBinding::AdvisoryOnly,
     )
     .await
     .expect("request should succeed with the next auth profile after catalog auth failure");
@@ -1685,7 +1686,7 @@ async fn opencode_zen_claude_route_skips_oauth_only_profiles_before_request_disp
             "role": "user",
             "content": "ping"
         })],
-        ProviderRuntimeBinding::advisory_only(),
+        ProviderRuntimeBinding::AdvisoryOnly,
     )
     .await
     .expect("opencode claude route should succeed with api key profile");
@@ -1772,7 +1773,7 @@ fn http_request_contains_header(request: &str, expected_name: &str, expected_val
 #[test]
 fn turn_body_includes_tool_schema_and_auto_choice() {
     let config = test_config(ProviderConfig::default());
-    let (kernel_ctx, _audit) = build_provider_failover_test_kernel_context("tool-schema-agent");
+    let (app_ctx, _audit) = build_provider_failover_test_app_context("tool-schema-agent");
 
     let body = build_turn_request_body(
         &config,
@@ -1780,7 +1781,7 @@ fn turn_body_includes_tool_schema_and_auto_choice() {
         "model-latest",
         CompletionPayloadMode::default_for(&config.provider),
         true,
-        &crate::tools::provider_tool_definitions(Some(kernel_ctx.runtime.as_ref())),
+        &crate::tools::provider_tool_definitions(Some(app_ctx.runtime())),
     );
     let tools = body
         .get("tools")
@@ -2981,7 +2982,7 @@ async fn request_turn_streaming_rejects_unsupported_transport_modes() {
             "role": "user",
             "content": "turn ping"
         })],
-        ProviderRuntimeBinding::advisory_only(),
+        ProviderRuntimeBinding::AdvisoryOnly,
         None,
     )
     .await
@@ -3361,7 +3362,7 @@ async fn responses_completion_falls_back_to_chat_completions_for_compatible_endp
             "role": "user",
             "content": "ping"
         })],
-        ProviderRuntimeBinding::advisory_only(),
+        ProviderRuntimeBinding::AdvisoryOnly,
     )
     .await
     .expect("compatible responses transport should retry chat-completions automatically");
@@ -3445,7 +3446,7 @@ async fn responses_turn_falls_back_to_chat_completions_for_compatible_endpoints(
             "role": "user",
             "content": "turn ping"
         })],
-        ProviderRuntimeBinding::advisory_only(),
+        ProviderRuntimeBinding::AdvisoryOnly,
     )
     .await
     .expect("turn requests should retry chat-completions when Responses is rejected");
@@ -3514,7 +3515,7 @@ async fn responses_turn_does_not_fallback_for_generic_gateway_failures() {
             "role": "user",
             "content": "turn ping"
         })],
-        ProviderRuntimeBinding::advisory_only(),
+        ProviderRuntimeBinding::AdvisoryOnly,
     )
     .await
     .expect_err("generic gateway failures should stay on the same transport and eventually fail");
@@ -3576,7 +3577,7 @@ async fn routed_google_requests_do_not_retry_responses_fallback_logic() {
             "role": "user",
             "content": "ping"
         })],
-        ProviderRuntimeBinding::advisory_only(),
+        ProviderRuntimeBinding::AdvisoryOnly,
     )
     .await
     .expect_err("google routed request should fail without a duplicate fallback retry");
@@ -3644,7 +3645,7 @@ fn model_request_error_omits_status_code_for_transport_failures() {
 
 #[test]
 fn provider_failover_audit_event_records_structured_payload() {
-    let (kernel_ctx, audit) = build_provider_failover_test_kernel_context("provider-agent");
+    let (app_ctx, audit) = build_provider_failover_test_app_context("provider-agent");
     let snapshot = ProviderFailoverSnapshot {
         reason: ProviderFailoverReason::RateLimited,
         stage: ProviderFailoverStage::StatusFailure,
@@ -3665,7 +3666,7 @@ fn provider_failover_audit_event_records_structured_payload() {
     };
 
     record_provider_failover_audit_event(
-        ProviderRuntimeBinding::kernel(&kernel_ctx),
+        ProviderRuntimeBinding::Context(&app_ctx),
         &provider,
         &snapshot,
         true,
@@ -3741,8 +3742,8 @@ fn provider_failover_audit_event_records_structured_payload() {
 }
 
 #[test]
-fn provider_failover_audit_event_is_noop_without_kernel_context() {
-    let (_kernel_ctx, audit) = build_provider_failover_test_kernel_context("provider-agent");
+fn provider_failover_audit_event_is_noop_without_app_context() {
+    let (_app_ctx, audit) = build_provider_failover_test_app_context("provider-agent");
     let snapshot = ProviderFailoverSnapshot {
         reason: ProviderFailoverReason::TransportFailure,
         stage: ProviderFailoverStage::TransportFailure,
@@ -3756,7 +3757,7 @@ fn provider_failover_audit_event_is_noop_without_kernel_context() {
     let before = audit.snapshot().len();
 
     record_provider_failover_audit_event(
-        ProviderRuntimeBinding::advisory_only(),
+        ProviderRuntimeBinding::AdvisoryOnly,
         &provider,
         &snapshot,
         false,
@@ -3771,7 +3772,7 @@ fn provider_failover_audit_event_is_noop_without_kernel_context() {
 }
 
 #[test]
-fn provider_failover_metrics_record_even_without_kernel_context() {
+fn provider_failover_metrics_record_even_without_app_context() {
     let before = provider_failover_metrics_snapshot();
     let snapshot = ProviderFailoverSnapshot {
         reason: ProviderFailoverReason::TransportFailure,
@@ -3785,7 +3786,7 @@ fn provider_failover_metrics_record_even_without_kernel_context() {
     let provider = ProviderConfig::default();
 
     record_provider_failover_audit_event(
-        ProviderRuntimeBinding::advisory_only(),
+        ProviderRuntimeBinding::AdvisoryOnly,
         &provider,
         &snapshot,
         false,
@@ -3844,7 +3845,7 @@ fn provider_failover_metrics_track_continue_path() {
     };
 
     record_provider_failover_audit_event(
-        ProviderRuntimeBinding::advisory_only(),
+        ProviderRuntimeBinding::AdvisoryOnly,
         &provider,
         &snapshot,
         true,
@@ -4383,7 +4384,7 @@ fn request_across_model_candidates_preserves_first_cooldown_trigger_across_auth_
         .block_on(async {
             request_failover_runtime::request_across_model_candidates(
                 &provider,
-                ProviderRuntimeBinding::advisory_only(),
+                ProviderRuntimeBinding::AdvisoryOnly,
                 &auth_profiles,
                 None,
                 &["model-a".to_owned(), "model-b".to_owned()],
@@ -4500,7 +4501,7 @@ fn request_across_model_candidates_upgrades_to_later_rate_limit_hint() {
         .block_on(async {
             request_failover_runtime::request_across_model_candidates(
                 &provider,
-                ProviderRuntimeBinding::advisory_only(),
+                ProviderRuntimeBinding::AdvisoryOnly,
                 &auth_profiles,
                 None,
                 &["model-a".to_owned(), "model-b".to_owned()],

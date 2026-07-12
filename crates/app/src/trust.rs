@@ -111,9 +111,9 @@ pub(crate) fn delegate_child_trust_event(
 
 /// Build the additive trust envelope for a missing runtime binding.
 ///
-/// `provenance_ref` is usually `"kernel"` for kernel-bound sessions. The
+/// `provenance_ref` is usually `"kernel"` for context-bound sessions. The
 /// legacy evidence label `"direct"` identifies advisory-only bindings that
-/// reached a core-only path without kernel context; changing persisted trust
+/// reached a core-only path without app context; changing persisted trust
 /// vocabulary is separate from renaming the runtime binding API.
 pub(crate) fn runtime_binding_missing_trust_event(
     session_id: &str,
@@ -128,7 +128,7 @@ pub(crate) fn runtime_binding_missing_trust_event(
         trust_state_hint: TrustStateHint::Rejected,
         provenance_kind: TrustProvenanceKind::RuntimeBinding,
         provenance_ref: provenance_ref.to_owned(),
-        reason_code: "no_kernel_context".to_owned(),
+        reason_code: "no_app_context".to_owned(),
         evidence_ref: format!("session:{session_id}"),
     }
 }

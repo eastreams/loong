@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
+use crate::AppContext;
 use crate::CliResult;
-use crate::KernelContext;
-use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context_with_config};
+use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_app_context_with_config};
 
 #[cfg(any(
     feature = "channel-plugin-bridge",
@@ -92,7 +92,7 @@ where
     V: FnOnce(&R) -> CliResult<()>,
     F: for<'a> FnOnce(
         &'a ChannelCommandContext<R>,
-        KernelContext,
+        AppContext,
         Arc<ChannelOperationRuntimeTracker>,
         ChannelServeStopHandle,
     ) -> ChannelCommandFuture<'a>,
@@ -104,7 +104,7 @@ where
             Some(context.resolved_path.as_path()),
         );
     }
-    let kernel_ctx = bootstrap_kernel_context_with_config(
+    let app_ctx = bootstrap_app_context_with_config(
         spec.family.runtime.serve_bootstrap_agent_id,
         DEFAULT_TOKEN_TTL_S,
         &context.config,
@@ -123,7 +123,7 @@ where
         move |runtime, stop| async move {
             let channel_id = spec.family.channel_id();
             context.emit_route_notice(channel_id);
-            run(&context, kernel_ctx, runtime, stop).await
+            run(&context, app_ctx, runtime, stop).await
         },
     )
     .await

@@ -67,7 +67,7 @@ pub fn run_migrate_cli(options: MigrateCommandOptions) -> CliResult<()> {
 async fn run_migrate_cli_async(options: MigrateCommandOptions) -> CliResult<()> {
     validate_migrate_cli_options(&options)?;
     let config = load_migrate_cli_runtime_config(&options)?;
-    let kernel_ctx = mvp::context::bootstrap_kernel_context_with_config(
+    let app_ctx = mvp::context::bootstrap_app_context_with_config(
         "daemon-migrate-cli",
         mvp::context::DEFAULT_TOKEN_TTL_S,
         &config,
@@ -77,7 +77,7 @@ async fn run_migrate_cli_async(options: MigrateCommandOptions) -> CliResult<()> 
             tool_name: "config.import".to_owned(),
             payload: build_migrate_tool_payload(&options),
         },
-        &kernel_ctx,
+        &app_ctx,
     )
     .await
     .map_err(|error| translate_migrate_cli_error(&options, error))?;

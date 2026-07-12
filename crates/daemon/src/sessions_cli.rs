@@ -838,12 +838,12 @@ async fn execute_turn_checkpoint_heal_action(
     config: &mvp::config::LoongConfig,
     session_id: &str,
 ) -> CliResult<Value> {
-    let kernel_context = mvp::context::bootstrap_kernel_context_with_config(
+    let app_context = mvp::context::bootstrap_app_context_with_config(
         "cli-sessions-heal",
         mvp::context::DEFAULT_TOKEN_TTL_S,
         config,
     )?;
-    let binding = mvp::conversation::ConversationRuntimeBinding::kernel(&kernel_context);
+    let binding = mvp::conversation::ConversationRuntimeBinding::Context(&app_context);
     let coordinator = mvp::conversation::ConversationTurnCoordinator::new();
     let outcome = coordinator
         .repair_production_turn_checkpoint_tail(config, session_id, binding)

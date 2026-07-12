@@ -138,7 +138,7 @@ pub fn plan_external_skill_mapping(input_path: &Path) -> ExternalSkillMappingPla
 }
 
 pub(crate) async fn plan_external_skill_mapping_with_access(
-    ctx: &crate::context::AppExecutionContext<'_>,
+    ctx: &crate::context::AppContext,
     input_path: &Path,
 ) -> CliResult<ExternalSkillMappingPlan> {
     let artifacts = detect_external_skill_artifacts_with_access(ctx, input_path).await?;
@@ -196,7 +196,7 @@ pub fn plan_import_from_path(
 }
 
 pub(crate) async fn plan_import_from_path_with_access(
-    ctx: &crate::context::AppExecutionContext<'_>,
+    ctx: &crate::context::AppContext,
     input_path: &Path,
     hint: Option<LegacyClawSource>,
 ) -> CliResult<ImportPlan> {
@@ -305,7 +305,7 @@ pub(crate) fn inspect_import_path(
 }
 
 async fn inspect_import_path_with_access(
-    ctx: &crate::context::AppExecutionContext<'_>,
+    ctx: &crate::context::AppContext,
     input_path: &Path,
     hint: Option<LegacyClawSource>,
 ) -> CliResult<Option<ImportPathInspection>> {
@@ -473,7 +473,7 @@ fn collect_import_files(input_path: &Path) -> CliResult<Vec<ImportFile>> {
 }
 
 async fn collect_import_files_with_access(
-    ctx: &crate::context::AppExecutionContext<'_>,
+    ctx: &crate::context::AppContext,
     input_path: &Path,
 ) -> CliResult<Vec<ImportFile>> {
     let input = inspect_path_with_access(ctx, input_path).await?;
@@ -545,7 +545,7 @@ fn read_single_import_file(path: &Path) -> Result<Option<ImportFile>, std::io::E
 }
 
 async fn read_single_import_file_with_access(
-    ctx: &crate::context::AppExecutionContext<'_>,
+    ctx: &crate::context::AppContext,
     path: &Path,
 ) -> CliResult<Option<ImportFile>> {
     let output = ctx
@@ -782,7 +782,7 @@ fn detect_external_skill_artifacts(input_path: &Path) -> Vec<ExternalSkillArtifa
 }
 
 async fn detect_external_skill_artifacts_with_access(
-    ctx: &crate::context::AppExecutionContext<'_>,
+    ctx: &crate::context::AppContext,
     input_path: &Path,
 ) -> CliResult<Vec<ExternalSkillArtifact>> {
     let mut artifacts = Vec::new();
@@ -841,7 +841,7 @@ fn external_skill_probe_roots(input_path: &Path) -> Vec<PathBuf> {
 }
 
 async fn external_skill_probe_roots_with_access(
-    ctx: &crate::context::AppExecutionContext<'_>,
+    ctx: &crate::context::AppContext,
     input_path: &Path,
 ) -> CliResult<Vec<PathBuf>> {
     let mut roots = BTreeSet::new();
@@ -906,7 +906,7 @@ fn collect_declared_skills(
 }
 
 async fn collect_declared_skills_with_access(
-    ctx: &crate::context::AppExecutionContext<'_>,
+    ctx: &crate::context::AppContext,
     artifacts: &[ExternalSkillArtifact],
     warnings: &mut Vec<String>,
 ) -> Vec<String> {
@@ -982,7 +982,7 @@ fn collect_locked_skills(
 }
 
 async fn collect_locked_skills_with_access(
-    ctx: &crate::context::AppExecutionContext<'_>,
+    ctx: &crate::context::AppContext,
     artifacts: &[ExternalSkillArtifact],
     warnings: &mut Vec<String>,
 ) -> Vec<String> {
@@ -1088,7 +1088,7 @@ fn list_directory_skill_entries(path: &Path, warnings: &mut Vec<String>) -> Vec<
 }
 
 async fn list_directory_skill_entries_with_access(
-    ctx: &crate::context::AppExecutionContext<'_>,
+    ctx: &crate::context::AppContext,
     path: &Path,
     warnings: &mut Vec<String>,
 ) -> Vec<String> {
@@ -1115,10 +1115,7 @@ async fn list_directory_skill_entries_with_access(
     skills.into_iter().collect()
 }
 
-async fn read_text_with_access(
-    ctx: &crate::context::AppExecutionContext<'_>,
-    path: &Path,
-) -> CliResult<String> {
+async fn read_text_with_access(ctx: &crate::context::AppContext, path: &Path) -> CliResult<String> {
     let output = ctx
         .access()
         .fs()
@@ -1130,7 +1127,7 @@ async fn read_text_with_access(
 }
 
 async fn inspect_path_with_access(
-    ctx: &crate::context::AppExecutionContext<'_>,
+    ctx: &crate::context::AppContext,
     path: &Path,
 ) -> CliResult<loong_kernel::access::fs::FsInspectPathOutput> {
     ctx.access()

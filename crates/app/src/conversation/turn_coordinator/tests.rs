@@ -1,7 +1,7 @@
 use super::compact::persist_runtime_self_continuity_for_compaction;
 use super::*;
 use crate::config::ToolConfig;
-use crate::context::bootstrap_test_kernel_context;
+use crate::context::bootstrap_test_app_context;
 use crate::conversation::delegate_support::{
     finalize_async_delegate_spawn_failure, finalize_async_delegate_spawn_failure_with_recovery,
     finalize_delegate_child_terminal_with_recovery,

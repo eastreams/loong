@@ -168,7 +168,7 @@ async fn persist_and_ingest_turn<R: ConversationRuntime + ?Sized>(
     runtime
         .persist_turn(session_id, role, content, binding)
         .await?;
-    if let Some(kernel_ctx) = binding.kernel_context() {
+    if let Some(app_ctx) = binding.context() {
         runtime
             .ingest(
                 session_id,
@@ -176,7 +176,7 @@ async fn persist_and_ingest_turn<R: ConversationRuntime + ?Sized>(
                     "role": role,
                     "content": content,
                 }),
-                kernel_ctx,
+                app_ctx,
             )
             .await?;
     }

@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 
+use crate::AppContext;
 use crate::CliResult;
-use crate::KernelContext;
 use crate::config::{
     ChannelDefaultAccountSelectionSource, LoongConfig, ResolvedWecomChannelConfig,
 };
@@ -293,7 +293,7 @@ pub(super) async fn run_wecom_channel(
     resolved_path: &std::path::Path,
     selected_by_default: bool,
     default_account_source: ChannelDefaultAccountSelectionSource,
-    kernel_ctx: KernelContext,
+    app_ctx: AppContext,
     runtime: Arc<ChannelOperationRuntimeTracker>,
     stop: ChannelServeStopHandle,
 ) -> CliResult<()> {
@@ -318,7 +318,7 @@ pub(super) async fn run_wecom_channel(
             resolved_path,
             resolved,
             &connection,
-            kernel_ctx.clone(),
+            app_ctx.clone(),
             runtime.clone(),
             stop.clone(),
         )
@@ -359,7 +359,7 @@ async fn run_wecom_serve_session(
     resolved_path: &std::path::Path,
     resolved: &ResolvedWecomChannelConfig,
     connection: &WecomConnectionConfig,
-    kernel_ctx: KernelContext,
+    app_ctx: AppContext,
     runtime: Arc<ChannelOperationRuntimeTracker>,
     stop: ChannelServeStopHandle,
 ) -> CliResult<WecomServeSessionOutcome> {
@@ -370,12 +370,7 @@ async fn run_wecom_serve_session(
     let ping_interval = Duration::from_secs(resolved.ping_interval_s.max(1));
     let mut ping_timer = tokio::time::interval(ping_interval);
     ping_timer.tick().await;
-    let provider_ctx = Arc::new(KernelContext {
-        runtime: kernel_ctx.runtime.clone(),
-        pack: kernel_ctx.pack.clone(),
-        token: kernel_ctx.token.clone(),
-        tool_runtime_config: kernel_ctx.tool_runtime_config.clone(),
-    });
+    let provider_ctx = Arc::new(app_ctx.clone());
     let access_policy = build_wecom_access_policy(resolved);
 
     loop {
@@ -870,7 +865,7 @@ mod tests {
 
     use crate::channel::ChannelPlatform;
     use crate::config::ProviderConfig;
-    use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_test_kernel_context};
+    use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_test_app_context};
     use crate::test_utils::{ScopedEnv, unique_temp_dir};
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1501,8 +1496,8 @@ mod tests {
             .await
             .expect("start runtime tracker"),
         );
-        let kernel_ctx = bootstrap_test_kernel_context("wecom-channel-test", DEFAULT_TOKEN_TTL_S)
-            .expect("bootstrap kernel context");
+        let app_ctx = bootstrap_test_app_context("wecom-channel-test", DEFAULT_TOKEN_TTL_S)
+            .expect("bootstrap app context");
         let stop = ChannelServeStopHandle::new();
         let stop_for_task = stop.clone();
         let config_for_task = config.clone();
@@ -1514,7 +1509,7 @@ mod tests {
                 resolved_path.as_path(),
                 &resolved_for_task,
                 &connection,
-                kernel_ctx,
+                app_ctx,
                 runtime_for_task,
                 stop_for_task,
             )
@@ -1594,9 +1589,8 @@ mod tests {
             .await
             .expect("start runtime tracker"),
         );
-        let kernel_ctx =
-            bootstrap_test_kernel_context("wecom-channel-test-denied", DEFAULT_TOKEN_TTL_S)
-                .expect("bootstrap kernel context");
+        let app_ctx = bootstrap_test_app_context("wecom-channel-test-denied", DEFAULT_TOKEN_TTL_S)
+            .expect("bootstrap app context");
         let stop = ChannelServeStopHandle::new();
         let stop_for_task = stop.clone();
         let config_for_task = config.clone();
@@ -1608,7 +1602,7 @@ mod tests {
                 resolved_path.as_path(),
                 &resolved_for_task,
                 &connection,
-                kernel_ctx,
+                app_ctx,
                 runtime_for_task,
                 stop_for_task,
             )
@@ -1671,9 +1665,9 @@ mod tests {
             .await
             .expect("start reconnect runtime tracker"),
         );
-        let kernel_ctx =
-            bootstrap_test_kernel_context("wecom-channel-test-reconnect", DEFAULT_TOKEN_TTL_S)
-                .expect("bootstrap reconnect kernel context");
+        let app_ctx =
+            bootstrap_test_app_context("wecom-channel-test-reconnect", DEFAULT_TOKEN_TTL_S)
+                .expect("bootstrap reconnect app context");
         let stop = ChannelServeStopHandle::new();
         let stop_for_task = stop.clone();
         let config_for_task = config.clone();
@@ -1686,7 +1680,7 @@ mod tests {
                 resolved_path.as_path(),
                 true,
                 ChannelDefaultAccountSelectionSource::ExplicitDefault,
-                kernel_ctx,
+                app_ctx,
                 runtime_for_task,
                 stop_for_task,
             )

@@ -20,8 +20,8 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, mpsc, oneshot};
 
+use crate::AppContext;
 use crate::CliResult;
-use crate::KernelContext;
 use crate::channel::dispatch::process_inbound_with_provider_and_error_mode_and_retry_progress;
 use crate::channel::feishu::api::{FeishuClient, resources::cards};
 use crate::channel::traits::messaging::{MessageContent, MessageEditApi, MessageSendApi};
@@ -56,7 +56,7 @@ pub(in crate::channel) struct FeishuWebhookState {
     bot_id: Arc<OnceLock<String>>,
     seen_events: Arc<Mutex<RecentIdCache>>,
     seen_ack_reactions: Arc<Mutex<RecentIdCache>>,
-    kernel_ctx: Arc<KernelContext>,
+    app_ctx: Arc<AppContext>,
     runtime: Arc<ChannelOperationRuntimeTracker>,
 }
 
@@ -66,10 +66,10 @@ impl FeishuWebhookState {
         config: LoongConfig,
         resolved: &ResolvedFeishuChannelConfig,
         adapter: FeishuAdapter,
-        kernel_ctx: KernelContext,
+        app_ctx: AppContext,
         runtime: Arc<ChannelOperationRuntimeTracker>,
     ) -> Self {
-        Self::new_with_optional_resolved_path(config, None, resolved, adapter, kernel_ctx, runtime)
+        Self::new_with_optional_resolved_path(config, None, resolved, adapter, app_ctx, runtime)
     }
 
     pub(super) fn new_with_resolved_path(
@@ -77,7 +77,7 @@ impl FeishuWebhookState {
         resolved_path: PathBuf,
         resolved: &ResolvedFeishuChannelConfig,
         adapter: FeishuAdapter,
-        kernel_ctx: KernelContext,
+        app_ctx: AppContext,
         runtime: Arc<ChannelOperationRuntimeTracker>,
     ) -> Self {
         Self::new_with_optional_resolved_path(
@@ -85,7 +85,7 @@ impl FeishuWebhookState {
             Some(resolved_path),
             resolved,
             adapter,
-            kernel_ctx,
+            app_ctx,
             runtime,
         )
     }
@@ -95,7 +95,7 @@ impl FeishuWebhookState {
         resolved_path: Option<PathBuf>,
         resolved: &ResolvedFeishuChannelConfig,
         adapter: FeishuAdapter,
-        kernel_ctx: KernelContext,
+        app_ctx: AppContext,
         runtime: Arc<ChannelOperationRuntimeTracker>,
     ) -> Self {
         let access_policy = ChannelInboundAccessPolicy::from_string_lists(
@@ -119,7 +119,7 @@ impl FeishuWebhookState {
             adapter: Arc::new(Mutex::new(adapter)),
             seen_events: Arc::new(Mutex::new(RecentIdCache::new(2_048))),
             seen_ack_reactions: Arc::new(Mutex::new(RecentIdCache::new(4_096))),
-            kernel_ctx: Arc::new(kernel_ctx),
+            app_ctx: Arc::new(app_ctx),
             runtime,
         }
     }
@@ -816,7 +816,7 @@ async fn handle_feishu_card_callback_event(
         &state.config,
         state.resolved_path.as_deref(),
         &inbound,
-        state.kernel_ctx.as_ref(),
+        state.app_ctx.as_ref(),
         ChannelTurnFeedbackPolicy::disabled(),
     )
     .await
@@ -878,7 +878,7 @@ async fn handle_feishu_inbound_event(
             &state.config,
             state.resolved_path.as_deref(),
             &channel_message,
-            state.kernel_ctx.as_ref(),
+            state.app_ctx.as_ref(),
             ChannelTurnFeedbackPolicy::final_trace_significant(),
             crate::conversation::ProviderErrorMode::InlineMessage,
             retry_status.callback(),

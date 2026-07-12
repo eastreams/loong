@@ -13,7 +13,7 @@ use serde_json::{Map, Value};
 
 use crate::config::normalize_channel_account_id;
 use crate::{
-    CliResult, KernelContext,
+    AppContext, CliResult,
     config::ChannelDefaultAccountSelectionSource,
     config::{ResolvedWebhookChannelConfig, WebhookPayloadFormat},
 };
@@ -71,7 +71,7 @@ pub(super) struct WebhookServeState {
     resolved: ResolvedWebhookChannelConfig,
     expected_auth_header: Option<(HeaderName, HeaderValue)>,
     signing_secret: String,
-    kernel_ctx: Arc<KernelContext>,
+    app_ctx: Arc<AppContext>,
     runtime: Arc<ChannelOperationRuntimeTracker>,
 }
 
@@ -80,7 +80,7 @@ impl WebhookServeState {
         config: &LoongConfig,
         resolved_path: &Path,
         resolved: &ResolvedWebhookChannelConfig,
-        kernel_ctx: KernelContext,
+        app_ctx: AppContext,
         runtime: Arc<ChannelOperationRuntimeTracker>,
     ) -> CliResult<Self> {
         let expected_auth_header = build_webhook_auth_header(resolved)?;
@@ -95,7 +95,7 @@ impl WebhookServeState {
             resolved: resolved.clone(),
             expected_auth_header,
             signing_secret,
-            kernel_ctx: Arc::new(kernel_ctx),
+            app_ctx: Arc::new(app_ctx),
             runtime,
         })
     }
@@ -238,13 +238,13 @@ pub(super) async fn run_webhook_channel(
     default_account_source: ChannelDefaultAccountSelectionSource,
     bind_override: Option<&str>,
     path_override: Option<&str>,
-    kernel_ctx: KernelContext,
+    app_ctx: AppContext,
     runtime: Arc<ChannelOperationRuntimeTracker>,
     stop: ChannelServeStopHandle,
 ) -> CliResult<()> {
     let bind = resolve_webhook_bind(bind_override)?;
     let path = resolve_webhook_path(resolved, path_override)?;
-    let state = WebhookServeState::new(config, resolved_path, resolved, kernel_ctx, runtime)?;
+    let state = WebhookServeState::new(config, resolved_path, resolved, app_ctx, runtime)?;
     let router = build_webhook_router(state, path.as_str());
 
     println!(
@@ -293,10 +293,10 @@ pub(in crate::channel) fn build_gateway_webhook_ingress_router(
     config: &LoongConfig,
     resolved: &ResolvedWebhookChannelConfig,
     resolved_path: &Path,
-    kernel_ctx: KernelContext,
+    app_ctx: AppContext,
     runtime: Arc<ChannelOperationRuntimeTracker>,
 ) -> CliResult<Router> {
-    let state = WebhookServeState::new(config, resolved_path, resolved, kernel_ctx, runtime)?;
+    let state = WebhookServeState::new(config, resolved_path, resolved, app_ctx, runtime)?;
     let path = gateway_webhook_ingress_path(resolved)?;
     Ok(build_webhook_router(state, path.as_str()))
 }
@@ -319,7 +319,7 @@ pub(super) async fn run_webhook_channel_with_context(
         validate_webhook_security_config,
         stop,
         initialize_runtime_environment,
-        move |context, kernel_ctx, runtime, stop| {
+        move |context, app_ctx, runtime, stop| {
             Box::pin(async move {
                 let route = context.route.clone();
                 let resolved_path = context.resolved_path.clone();
@@ -334,7 +334,7 @@ pub(super) async fn run_webhook_channel_with_context(
                     route.default_account_source,
                     bind_override.as_deref(),
                     path_override.as_deref(),
-                    kernel_ctx,
+                    app_ctx,
                     runtime,
                     stop,
                 )
@@ -515,7 +515,7 @@ async fn process_webhook_request(
             &state.config,
             Some(state.resolved_path.as_path()),
             &inbound_message,
-            state.kernel_ctx.as_ref(),
+            state.app_ctx.as_ref(),
             ChannelTurnFeedbackPolicy::final_trace_significant(),
         )
         .await
@@ -680,7 +680,7 @@ mod tests {
     use super::*;
     use crate::channel::runtime::state::start_channel_operation_runtime_tracker_for_test;
     use crate::config::WebhookChannelConfig;
-    use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_test_kernel_context};
+    use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_test_app_context};
     use axum::body::to_bytes;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -724,8 +724,8 @@ mod tests {
         )
         .await
         .expect("start runtime tracker");
-        let kernel_ctx = bootstrap_test_kernel_context("webhook-serve-test", DEFAULT_TOKEN_TTL_S)
-            .expect("bootstrap webhook kernel context");
+        let app_ctx = bootstrap_test_app_context("webhook-serve-test", DEFAULT_TOKEN_TTL_S)
+            .expect("bootstrap webhook app context");
         let mut resolved = test_resolved_webhook_config(WebhookPayloadFormat::JsonText);
         resolved.signing_secret = signing_secret.map(|value| {
             serde_json::from_value(serde_json::json!(value))
@@ -742,7 +742,7 @@ mod tests {
             &LoongConfig::default(),
             std::path::Path::new("/tmp/loong.toml"),
             &resolved,
-            kernel_ctx,
+            app_ctx,
             runtime.into(),
         )
         .expect("build webhook serve state")

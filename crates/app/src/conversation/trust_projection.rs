@@ -18,14 +18,14 @@ pub(super) async fn emit_runtime_binding_trust_event_if_needed<R: ConversationRu
     turn_result: &TurnResult,
     binding: ConversationRuntimeBinding<'_>,
 ) {
-    const NO_KERNEL_CONTEXT_REASON: &str = "no_kernel_context";
+    const NO_KERNEL_CONTEXT_REASON: &str = "no_app_context";
 
     let TurnResult::ToolDenied(failure) = turn_result else {
         return;
     };
-    let missing_kernel_context =
+    let missing_app_context =
         failure.code == NO_KERNEL_CONTEXT_REASON || failure.reason == NO_KERNEL_CONTEXT_REASON;
-    let failure_code = if missing_kernel_context {
+    let failure_code = if missing_app_context {
         Some(NO_KERNEL_CONTEXT_REASON)
     } else {
         None
@@ -34,7 +34,7 @@ pub(super) async fn emit_runtime_binding_trust_event_if_needed<R: ConversationRu
         return;
     };
 
-    let provenance_ref = if binding.is_kernel_bound() {
+    let provenance_ref = if binding.is_context_bound() {
         "kernel"
     } else {
         "direct"
@@ -50,7 +50,7 @@ pub(super) async fn emit_runtime_binding_trust_event_if_needed<R: ConversationRu
     if extracted.is_none() {
         return;
     }
-    let binding_kind = if binding.is_kernel_bound() {
+    let binding_kind = if binding.is_context_bound() {
         "kernel"
     } else {
         "direct"
@@ -96,7 +96,7 @@ pub(super) async fn emit_provider_failover_trust_event_if_needed<
     let model = model_value.and_then(Value::as_str).unwrap_or("unknown");
     let stage_value = provider_failover.get("stage");
     let stage = stage_value.and_then(Value::as_str).unwrap_or("unknown");
-    let provenance_ref = if binding.is_kernel_bound() {
+    let provenance_ref = if binding.is_context_bound() {
         "kernel"
     } else {
         "advisory_only"
@@ -120,7 +120,7 @@ pub(super) async fn emit_provider_failover_trust_event_if_needed<
     if extracted.is_none() {
         return;
     }
-    let binding_kind = if binding.is_kernel_bound() {
+    let binding_kind = if binding.is_context_bound() {
         "kernel"
     } else {
         "direct"

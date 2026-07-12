@@ -52,10 +52,10 @@ fn create_chat_test_root_session(memory_config: &SessionStoreConfig, session_id:
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn test_kernel_context_with_memory(
+fn test_app_context_with_memory(
     agent_id: &str,
     memory_config: &SessionStoreConfig,
-) -> crate::KernelContext {
+) -> crate::AppContext {
     let clock = Arc::new(FixedClock::new(1_700_000_000));
     let audit = Arc::new(InMemoryAuditSink::default());
     let mut kernel = Kernel::with_legacy_allow_runtime(clock, audit);
@@ -88,15 +88,16 @@ fn test_kernel_context_with_memory(
         .issue_token("test-pack-memory", agent_id, 60)
         .expect("issue memory test token");
 
-    crate::KernelContext {
-        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+    crate::AppContext::new(
+        Arc::new(loong_runtime::runtime::Runtime::new(
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
         pack,
         token,
-        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
-    }
+        crate::tools::runtime_config::ToolRuntimeConfig::default(),
+    )
+    .expect("build chat test app context")
 }
 
 #[test]
@@ -270,17 +271,17 @@ impl CoreMemoryAdapter for SharedTestMemoryAdapter {
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn build_kernel_context_with_window_turns(
+fn build_app_context_with_window_turns(
     window_turns: Value,
-) -> (crate::KernelContext, Arc<Mutex<Vec<MemoryCoreRequest>>>) {
-    build_kernel_context_with_window_outcome("ok", window_turns)
+) -> (crate::AppContext, Arc<Mutex<Vec<MemoryCoreRequest>>>) {
+    build_app_context_with_window_outcome("ok", window_turns)
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn build_kernel_context_with_window_outcome(
+fn build_app_context_with_window_outcome(
     status: &str,
     window_turns: Value,
-) -> (crate::KernelContext, Arc<Mutex<Vec<MemoryCoreRequest>>>) {
+) -> (crate::AppContext, Arc<Mutex<Vec<MemoryCoreRequest>>>) {
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
     let mut kernel = Kernel::with_legacy_allow_runtime(clock, audit);
@@ -313,15 +314,16 @@ fn build_kernel_context_with_window_outcome(
         .issue_token("chat-test-pack", "chat-test-agent", 3600)
         .expect("issue token");
 
-    let ctx = crate::KernelContext {
-        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+    let ctx = crate::AppContext::new(
+        Arc::new(loong_runtime::runtime::Runtime::new(
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        token: token.clone(),
-        pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
-        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
-    };
+        Arc::new(crate::context::pack_manifest_from_token(&token)),
+        token,
+        crate::tools::runtime_config::ToolRuntimeConfig::default(),
+    )
+    .expect("build chat test app context");
     (ctx, invocations)
 }
 
@@ -583,7 +585,7 @@ async fn print_history_accepts_explicit_runtime_binding() {
     let advisory_lines = load_history_lines(
         session_id,
         config.memory.sliding_window,
-        ConversationRuntimeBinding::advisory_only(),
+        ConversationRuntimeBinding::AdvisoryOnly,
         &memory_config,
     )
     .await
@@ -593,7 +595,7 @@ async fn print_history_accepts_explicit_runtime_binding() {
         vec!["user: hello".to_owned(), "assistant: world".to_owned()]
     );
 
-    let (kernel_ctx, invocations) = build_kernel_context_with_window_turns(json!([
+    let (app_ctx, invocations) = build_app_context_with_window_turns(json!([
         {
             "role": "user",
             "content": "kernel hello",
@@ -608,11 +610,11 @@ async fn print_history_accepts_explicit_runtime_binding() {
     let kernel_lines = load_history_lines(
         "chat-binding-history-kernel",
         16,
-        ConversationRuntimeBinding::kernel(&kernel_ctx),
+        ConversationRuntimeBinding::Context(&app_ctx),
         &memory_config,
     )
     .await
-    .expect("load history lines with explicit kernel binding");
+    .expect("load history lines with explicit context binding");
     assert_eq!(
         kernel_lines,
         vec![
@@ -638,7 +640,7 @@ async fn print_history_accepts_explicit_runtime_binding() {
 async fn print_history_rejects_non_ok_kernel_memory_outcome() {
     let (_config, memory_config, sqlite_path) = init_chat_test_memory("diagnostics-non-ok");
 
-    let (kernel_ctx, invocations) = build_kernel_context_with_window_outcome(
+    let (app_ctx, invocations) = build_app_context_with_window_outcome(
         "error",
         json!([
             {
@@ -651,7 +653,7 @@ async fn print_history_rejects_non_ok_kernel_memory_outcome() {
     let error = load_history_lines(
         "chat-binding-history-kernel-non-ok",
         16,
-        ConversationRuntimeBinding::kernel(&kernel_ctx),
+        ConversationRuntimeBinding::Context(&app_ctx),
         &memory_config,
     )
     .await
@@ -686,7 +688,7 @@ async fn safe_lane_summary_output_accepts_explicit_runtime_binding() {
         "chat-binding-safe-lane-advisory-only",
         64,
         &config.conversation,
-        ConversationRuntimeBinding::advisory_only(),
+        ConversationRuntimeBinding::AdvisoryOnly,
         &memory_config,
     )
     .await
@@ -700,17 +702,17 @@ async fn safe_lane_summary_output_accepts_explicit_runtime_binding() {
     assert!(advisory_output.contains("failure_code=safe_lane_plan_verify_failed"));
 
     let kernel_payloads = safe_lane_event_payloads();
-    let (kernel_ctx, invocations) =
-        build_kernel_context_with_window_turns(assistant_window_turns(&kernel_payloads));
+    let (app_ctx, invocations) =
+        build_app_context_with_window_turns(assistant_window_turns(&kernel_payloads));
     let kernel_output = load_safe_lane_summary_output(
         "chat-binding-safe-lane-kernel",
         80,
         &config.conversation,
-        ConversationRuntimeBinding::kernel(&kernel_ctx),
+        ConversationRuntimeBinding::Context(&app_ctx),
         &memory_config,
     )
     .await
-    .expect("load safe lane summary via kernel binding");
+    .expect("load safe lane summary via context binding");
     assert!(
         kernel_output.contains("safe_lane_summary session=chat-binding-safe-lane-kernel limit=80")
     );
@@ -745,7 +747,7 @@ async fn fast_lane_summary_output_accepts_explicit_runtime_binding() {
     let advisory_output = load_fast_lane_summary_output(
         "chat-binding-fast-lane-advisory-only",
         72,
-        ConversationRuntimeBinding::advisory_only(),
+        ConversationRuntimeBinding::AdvisoryOnly,
         &memory_config,
     )
     .await
@@ -774,16 +776,16 @@ async fn fast_lane_summary_output_accepts_explicit_runtime_binding() {
         ));
 
     let kernel_payloads = fast_lane_tool_batch_event_payloads();
-    let (kernel_ctx, invocations) =
-        build_kernel_context_with_window_turns(assistant_window_turns(&kernel_payloads));
+    let (app_ctx, invocations) =
+        build_app_context_with_window_turns(assistant_window_turns(&kernel_payloads));
     let kernel_output = load_fast_lane_summary_output(
         "chat-binding-fast-lane-kernel",
         88,
-        ConversationRuntimeBinding::kernel(&kernel_ctx),
+        ConversationRuntimeBinding::Context(&app_ctx),
         &memory_config,
     )
     .await
-    .expect("load fast lane summary via kernel binding");
+    .expect("load fast lane summary via context binding");
     assert!(
         kernel_output.contains("fast_lane_summary session=chat-binding-fast-lane-kernel limit=88")
     );
@@ -830,7 +832,7 @@ async fn fast_lane_summary_output_accepts_legacy_schema_v1_events() {
     let output = load_fast_lane_summary_output(
         "chat-binding-fast-lane-legacy",
         32,
-        ConversationRuntimeBinding::advisory_only(),
+        ConversationRuntimeBinding::AdvisoryOnly,
         &memory_config,
     )
     .await
@@ -938,7 +940,7 @@ async fn turn_checkpoint_summary_output_accepts_explicit_runtime_binding() {
         &config,
         "chat-binding-turn-checkpoint-advisory-only",
         96,
-        ConversationRuntimeBinding::advisory_only(),
+        ConversationRuntimeBinding::AdvisoryOnly,
     )
     .await
     .expect("load turn checkpoint summary via advisory-only binding");
@@ -950,17 +952,17 @@ async fn turn_checkpoint_summary_output_accepts_explicit_runtime_binding() {
     assert!(advisory_output.contains("compaction=skipped"));
 
     let kernel_payloads = turn_checkpoint_event_payloads();
-    let (kernel_ctx, invocations) =
-        build_kernel_context_with_window_turns(assistant_window_turns(&kernel_payloads));
+    let (app_ctx, invocations) =
+        build_app_context_with_window_turns(assistant_window_turns(&kernel_payloads));
     let kernel_output = load_turn_checkpoint_summary_output(
         &coordinator,
         &config,
         "chat-binding-turn-checkpoint-kernel",
         112,
-        ConversationRuntimeBinding::kernel(&kernel_ctx),
+        ConversationRuntimeBinding::Context(&app_ctx),
     )
     .await
-    .expect("load turn checkpoint summary via kernel binding");
+    .expect("load turn checkpoint summary via context binding");
     assert!(kernel_output.contains("turn_checkpoint_summary session=chat-binding-turn-checkpoint-kernel limit=112 checkpoints=2"));
     assert!(kernel_output.contains("state=finalized"));
     assert!(kernel_output.contains("after_turn=completed"));
@@ -2722,7 +2724,7 @@ async fn manual_compaction_result_applies_and_surfaces_continuity_checkpoint() {
     config.conversation.compact_preserve_recent_turns = 2;
 
     let memory_config = SessionStoreConfig::from_memory_config(&config.memory);
-    let kernel_ctx = test_kernel_context_with_memory("chat-manual-compaction", &memory_config);
+    let app_ctx = test_app_context_with_memory("chat-manual-compaction", &memory_config);
     let session_id = "chat-manual-compaction";
 
     for (role, content) in [
@@ -2739,7 +2741,7 @@ async fn manual_compaction_result_applies_and_surfaces_continuity_checkpoint() {
             .expect("seed turns should succeed");
     }
 
-    let binding = ConversationRuntimeBinding::kernel(&kernel_ctx);
+    let binding = ConversationRuntimeBinding::Context(&app_ctx);
     let turn_coordinator = ConversationTurnCoordinator::new();
     let result = load_manual_compaction_result(&config, session_id, &turn_coordinator, binding)
         .await

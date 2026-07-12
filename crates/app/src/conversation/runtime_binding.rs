@@ -1,10 +1,10 @@
 use loong_contracts::GovernedSessionMode;
 
-use crate::KernelContext;
+use crate::AppContext;
 
 #[derive(Clone, Default)]
 pub enum OwnedConversationRuntimeBinding {
-    Kernel(Box<KernelContext>),
+    Context(Box<AppContext>),
     #[default]
     AdvisoryOnly,
 }
@@ -12,141 +12,126 @@ pub enum OwnedConversationRuntimeBinding {
 impl OwnedConversationRuntimeBinding {
     pub fn from_borrowed(binding: ConversationRuntimeBinding<'_>) -> Self {
         match binding {
-            ConversationRuntimeBinding::Kernel(kernel_ctx) => {
-                Self::Kernel(Box::new(kernel_ctx.clone()))
-            }
+            ConversationRuntimeBinding::Context(ctx) => Self::Context(Box::new(ctx.clone())),
             ConversationRuntimeBinding::AdvisoryOnly => Self::AdvisoryOnly,
         }
     }
 
-    pub fn kernel(kernel_ctx: KernelContext) -> Self {
-        Self::Kernel(Box::new(kernel_ctx))
-    }
-
-    pub const fn advisory_only() -> Self {
-        Self::AdvisoryOnly
+    /// Own a context without exposing the boxed enum representation to callers.
+    pub fn with_context(ctx: AppContext) -> Self {
+        Self::Context(Box::new(ctx))
     }
 
     pub fn as_borrowed(&self) -> ConversationRuntimeBinding<'_> {
         match self {
-            Self::Kernel(kernel_ctx) => ConversationRuntimeBinding::Kernel(kernel_ctx.as_ref()),
+            Self::Context(ctx) => ConversationRuntimeBinding::Context(ctx.as_ref()),
             Self::AdvisoryOnly => ConversationRuntimeBinding::AdvisoryOnly,
         }
     }
 
-    pub fn kernel_context(&self) -> Option<&KernelContext> {
+    pub fn context(&self) -> Option<&AppContext> {
         match self {
-            Self::Kernel(kernel_ctx) => Some(kernel_ctx.as_ref()),
+            Self::Context(ctx) => Some(ctx.as_ref()),
             Self::AdvisoryOnly => None,
         }
     }
 
-    pub const fn is_kernel_bound(&self) -> bool {
-        matches!(self, Self::Kernel(_))
+    pub const fn is_context_bound(&self) -> bool {
+        matches!(self, Self::Context(_))
     }
 
     pub const fn session_mode(&self) -> GovernedSessionMode {
         match self {
-            Self::Kernel(_) => GovernedSessionMode::MutatingCapable,
+            Self::Context(_) => GovernedSessionMode::MutatingCapable,
             Self::AdvisoryOnly => GovernedSessionMode::AdvisoryOnly,
         }
     }
 
     pub const fn allows_mutation(&self) -> bool {
-        matches!(self, Self::Kernel(_))
+        matches!(self, Self::Context(_))
     }
 }
 
 #[derive(Clone, Copy, Default)]
 pub enum ConversationRuntimeBinding<'a> {
-    Kernel(&'a KernelContext),
+    Context(&'a AppContext),
     #[default]
     AdvisoryOnly,
 }
 
 impl<'a> ConversationRuntimeBinding<'a> {
-    pub fn from_optional_kernel_context(kernel_ctx: Option<&'a KernelContext>) -> Self {
-        match kernel_ctx {
-            Some(kernel_ctx) => Self::Kernel(kernel_ctx),
+    pub fn from_optional_context(ctx: Option<&'a AppContext>) -> Self {
+        match ctx {
+            Some(ctx) => Self::Context(ctx),
             None => Self::AdvisoryOnly,
         }
     }
 
-    pub fn kernel(kernel_ctx: &'a KernelContext) -> Self {
-        Self::Kernel(kernel_ctx)
-    }
-
-    pub const fn advisory_only() -> Self {
-        Self::AdvisoryOnly
-    }
-
-    pub fn kernel_context(self) -> Option<&'a KernelContext> {
+    pub fn context(self) -> Option<&'a AppContext> {
         match self {
-            Self::Kernel(kernel_ctx) => Some(kernel_ctx),
+            Self::Context(ctx) => Some(ctx),
             Self::AdvisoryOnly => None,
         }
     }
 
-    pub const fn is_kernel_bound(self) -> bool {
-        matches!(self, Self::Kernel(_))
+    pub const fn is_context_bound(self) -> bool {
+        matches!(self, Self::Context(_))
     }
 
     pub const fn session_mode(self) -> GovernedSessionMode {
         match self {
-            Self::Kernel(_) => GovernedSessionMode::MutatingCapable,
+            Self::Context(_) => GovernedSessionMode::MutatingCapable,
             Self::AdvisoryOnly => GovernedSessionMode::AdvisoryOnly,
         }
     }
 
     pub const fn allows_mutation(self) -> bool {
-        matches!(self, Self::Kernel(_))
+        matches!(self, Self::Context(_))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::{ConversationRuntimeBinding, OwnedConversationRuntimeBinding};
 
     #[test]
     fn owned_conversation_runtime_binding_round_trips_kernel_binding() {
-        let kernel_ctx = crate::context::bootstrap_test_kernel_context(
+        let app_ctx = crate::context::bootstrap_test_app_context(
             "owned-conversation-runtime-binding-kernel",
             60,
         )
-        .expect("test kernel context");
+        .expect("test app context");
 
         let owned = OwnedConversationRuntimeBinding::from_borrowed(
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
+            ConversationRuntimeBinding::Context(&app_ctx),
         );
 
-        assert!(owned.is_kernel_bound());
+        assert!(owned.is_context_bound());
         let borrowed = owned.as_borrowed();
-        assert!(borrowed.is_kernel_bound());
+        assert!(borrowed.is_context_bound());
         assert_eq!(
             borrowed.session_mode(),
-            ConversationRuntimeBinding::kernel(&kernel_ctx).session_mode()
+            ConversationRuntimeBinding::Context(&app_ctx).session_mode()
         );
 
         let roundtrip_ctx = owned
-            .kernel_context()
-            .expect("owned kernel binding should expose kernel context");
-        assert_eq!(roundtrip_ctx.token, kernel_ctx.token);
-        assert!(Arc::ptr_eq(&roundtrip_ctx.runtime, &kernel_ctx.runtime));
+            .context()
+            .expect("owned context binding should expose app context");
+        assert_eq!(roundtrip_ctx.token(), app_ctx.token());
+        assert!(std::ptr::eq(roundtrip_ctx.runtime(), app_ctx.runtime()));
     }
 
     #[test]
     fn owned_conversation_runtime_binding_round_trips_advisory_binding() {
         let owned = OwnedConversationRuntimeBinding::from_borrowed(
-            ConversationRuntimeBinding::advisory_only(),
+            ConversationRuntimeBinding::AdvisoryOnly,
         );
 
-        assert!(!owned.is_kernel_bound());
-        assert!(owned.kernel_context().is_none());
+        assert!(!owned.is_context_bound());
+        assert!(owned.context().is_none());
         assert_eq!(
             owned.as_borrowed().session_mode(),
-            ConversationRuntimeBinding::advisory_only().session_mode()
+            ConversationRuntimeBinding::AdvisoryOnly.session_mode()
         );
     }
 }

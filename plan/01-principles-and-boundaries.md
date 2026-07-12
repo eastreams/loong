@@ -66,10 +66,9 @@
   和归属边界。
 - 架构代码要有少量高信号注释，标明边界和意图。注释解释 why，不重复代码，也不写大段
   散文。
-- 对外不再传播 `KernelContext` 作为 app/runtime owner；最终该类型应删除。host
-  surface、conversation、provider、channel、tool orchestration 应拿到统一 runtime 或统一
-  context；“持有 kernel 的 capsule”只是 runtime 内部 governance 组件，迁移完成后也不应
-  以 `KernelContext` 公共类型存在。
+- app/runtime surface 只传播 owned、cheap-clone 的 `AppContext`。kernel authority 是
+  `Runtime` 的内部 governance 组件，不再存在第二套 governance capsule；conversation、
+  provider、channel 和 tool orchestration 共享同一种 concrete context。
 - unified runtime 是 app 运行时 owner：持有 tool plane、session/agent view、runtime config
   snapshot、config -> policy wiring 和每次 invocation context 的构造入口。kernel 不持有
   app tool registry，也不拥有 session/agent/tool namespace。
@@ -131,10 +130,9 @@
   以及 invocation context construction。若直接移动会被 app config/provider/channel
   类型强耦合，可以先在 `loong-app` 内 staging；但 `loong-runtime` 不能长期保留为
   只有宏大名字、没有 runtime owner 职责的过渡壳。
-- `loong-app`：concrete integration layer。它装配 provider/channel/TUI/config/memory 等
-  app 侧适配，调用或构造 unified runtime，但不应继续让各 surface 直接持有
-  `KernelContext`。迁移期间保留 legacy fallback orchestration；最终 tool/session/access
-  调用都应经 unified runtime/context。
+- `loong-app`：concrete integration layer。它定义 `AppContext`，装配
+  provider/channel/TUI/config/memory 等 app 侧适配，并从 unified runtime/context 进入
+  tool/session/access 调用。legacy fallback 只属于尚未迁移工具的末端调用边界。
 - `loong-tools`：concrete builtin tool implementations only。该 crate 不承载
   `ToolImpl`、`RegisteredTool`、registry、plane、policy/action 抽象；它只放
   `ReadTool` 这类具体工具和它们的 input/output 类型及小范围格式化逻辑。concrete

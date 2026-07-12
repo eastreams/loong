@@ -89,7 +89,7 @@ optional `scripts/pre-commit` hook mirrors these cargo gates locally.
 
 ## MVP Channel Invariants
 
-1. **Kernel context is bootstrapped at startup** — the base CLI loop and shipped service-channel runtimes create `KernelContext` before processing messages.
+1. **App context is bootstrapped at startup** — the base CLI loop and shipped service-channel runtimes create one owned `AppContext` before processing messages; invocation-specific state is derived by narrowing that context.
 2. **Memory persistence failures are surfaced** — `persist_turn` errors propagate to the caller, never silently swallowed.
 3. **Provider errors have two modes** — `Propagate` (return error) or `InlineMessage` (synthetic reply). Behavior is explicit per operator or channel surface.
 

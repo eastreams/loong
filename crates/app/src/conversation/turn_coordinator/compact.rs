@@ -58,7 +58,7 @@ pub(super) async fn maybe_compact_context<R: ConversationRuntime + ?Sized>(
     if !should_attempt_compaction {
         return Ok(ContextCompactionOutcome::Skipped);
     }
-    let Some(kernel_ctx) = binding.kernel_context() else {
+    let Some(app_ctx) = binding.context() else {
         return Ok(ContextCompactionOutcome::Skipped);
     };
 
@@ -119,7 +119,7 @@ pub(super) async fn maybe_compact_context<R: ConversationRuntime + ?Sized>(
     }
 
     match runtime
-        .compact_context(config, session_id, messages, kernel_ctx)
+        .compact_context(config, session_id, messages, app_ctx)
         .await
     {
         Ok(()) => Ok(ContextCompactionOutcome::Completed),

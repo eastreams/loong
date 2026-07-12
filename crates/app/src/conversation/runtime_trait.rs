@@ -2,14 +2,14 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use loong_contracts::Capability;
+use loong_contracts::{Capability, ExecutionPlane, PlaneTier};
 use serde_json::Value;
 
 use crate::memory;
 use crate::provider;
 #[cfg(feature = "memory-sqlite")]
 use crate::session::store;
-use crate::{CliResult, KernelContext};
+use crate::{AppContext, CliResult};
 
 use super::super::context_engine::{
     AssembledConversationContext, ContextEngineBootstrapResult, ContextEngineIngestResult,
@@ -77,7 +77,7 @@ pub trait ConversationRuntime: Send + Sync {
         &self,
         _config: &LoongConfig,
         _session_id: &str,
-        _kernel_ctx: &KernelContext,
+        _app_ctx: &AppContext,
     ) -> CliResult<ContextEngineBootstrapResult> {
         Ok(ContextEngineBootstrapResult::default())
     }
@@ -86,7 +86,7 @@ pub trait ConversationRuntime: Send + Sync {
         &self,
         _session_id: &str,
         _message: &Value,
-        _kernel_ctx: &KernelContext,
+        _app_ctx: &AppContext,
     ) -> CliResult<ContextEngineIngestResult> {
         Ok(ContextEngineIngestResult::default())
     }
@@ -202,7 +202,7 @@ pub trait ConversationRuntime: Send + Sync {
         _user_input: &str,
         _assistant_reply: &str,
         _messages: &[Value],
-        _kernel_ctx: &KernelContext,
+        _app_ctx: &AppContext,
     ) -> CliResult<()> {
         Ok(())
     }
@@ -212,7 +212,7 @@ pub trait ConversationRuntime: Send + Sync {
         _config: &LoongConfig,
         _session_id: &str,
         _messages: &[Value],
-        _kernel_ctx: &KernelContext,
+        _app_ctx: &AppContext,
     ) -> CliResult<()> {
         Ok(())
     }
@@ -221,7 +221,7 @@ pub trait ConversationRuntime: Send + Sync {
         &self,
         _parent_session_id: &str,
         _subagent_session_id: &str,
-        _kernel_ctx: &KernelContext,
+        _app_ctx: &AppContext,
     ) -> CliResult<()> {
         Ok(())
     }
@@ -230,7 +230,7 @@ pub trait ConversationRuntime: Send + Sync {
         &self,
         _parent_session_id: &str,
         _subagent_session_id: &str,
-        _kernel_ctx: &KernelContext,
+        _app_ctx: &AppContext,
     ) -> CliResult<()> {
         Ok(())
     }
@@ -314,13 +314,13 @@ where
         &self,
         config: &LoongConfig,
         session_id: &str,
-        kernel_ctx: &KernelContext,
+        app_ctx: &AppContext,
     ) -> CliResult<ContextEngineBootstrapResult> {
         let result = self
             .context_engine
-            .bootstrap(config, session_id, kernel_ctx)
+            .bootstrap(config, session_id, app_ctx)
             .await?;
-        self.run_turn_middlewares_bootstrap(config, session_id, kernel_ctx)
+        self.run_turn_middlewares_bootstrap(config, session_id, app_ctx)
             .await?;
         Ok(result)
     }
@@ -329,13 +329,13 @@ where
         &self,
         session_id: &str,
         message: &Value,
-        kernel_ctx: &KernelContext,
+        app_ctx: &AppContext,
     ) -> CliResult<ContextEngineIngestResult> {
         let result = self
             .context_engine
-            .ingest(session_id, message, kernel_ctx)
+            .ingest(session_id, message, app_ctx)
             .await?;
-        self.run_turn_middlewares_ingest(session_id, message, kernel_ctx)
+        self.run_turn_middlewares_ingest(session_id, message, app_ctx)
             .await?;
         Ok(result)
     }
@@ -498,15 +498,20 @@ where
         content: &str,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<()> {
-        if let Some(ctx) = binding.kernel_context() {
+        if let Some(ctx) = binding.context() {
             let request = memory::build_append_turn_request(session_id, role, content);
             let caps = BTreeSet::from([Capability::MemoryWrite]);
-            let execution_context = ctx.memory_core_execution_context()?;
-            ctx.runtime
+            let execution_context = ctx.for_invocation(
+                ExecutionPlane::Memory,
+                PlaneTier::Core,
+                None,
+                ctx.tool_runtime_config(),
+            )?;
+            ctx.runtime()
                 .kernel()
                 .execute_memory_core(
                     ctx.pack_id(),
-                    &ctx.token,
+                    ctx.token(),
                     &caps,
                     None,
                     request,
@@ -542,23 +547,17 @@ where
         user_input: &str,
         assistant_reply: &str,
         messages: &[Value],
-        kernel_ctx: &KernelContext,
+        app_ctx: &AppContext,
     ) -> CliResult<()> {
         self.context_engine
-            .after_turn(
-                session_id,
-                user_input,
-                assistant_reply,
-                messages,
-                kernel_ctx,
-            )
+            .after_turn(session_id, user_input, assistant_reply, messages, app_ctx)
             .await?;
         self.run_turn_middlewares_after_turn(
             session_id,
             user_input,
             assistant_reply,
             messages,
-            kernel_ctx,
+            app_ctx,
         )
         .await
     }
@@ -568,12 +567,12 @@ where
         config: &LoongConfig,
         session_id: &str,
         messages: &[Value],
-        kernel_ctx: &KernelContext,
+        app_ctx: &AppContext,
     ) -> CliResult<()> {
         self.context_engine
-            .compact_context(config, session_id, messages, kernel_ctx)
+            .compact_context(config, session_id, messages, app_ctx)
             .await?;
-        self.run_turn_middlewares_compact_context(config, session_id, messages, kernel_ctx)
+        self.run_turn_middlewares_compact_context(config, session_id, messages, app_ctx)
             .await
     }
 
@@ -581,15 +580,15 @@ where
         &self,
         parent_session_id: &str,
         subagent_session_id: &str,
-        kernel_ctx: &KernelContext,
+        app_ctx: &AppContext,
     ) -> CliResult<()> {
         self.context_engine
-            .prepare_subagent_spawn(parent_session_id, subagent_session_id, kernel_ctx)
+            .prepare_subagent_spawn(parent_session_id, subagent_session_id, app_ctx)
             .await?;
         self.run_turn_middlewares_prepare_subagent_spawn(
             parent_session_id,
             subagent_session_id,
-            kernel_ctx,
+            app_ctx,
         )
         .await
     }
@@ -598,16 +597,12 @@ where
         &self,
         parent_session_id: &str,
         subagent_session_id: &str,
-        kernel_ctx: &KernelContext,
+        app_ctx: &AppContext,
     ) -> CliResult<()> {
         self.context_engine
-            .on_subagent_ended(parent_session_id, subagent_session_id, kernel_ctx)
+            .on_subagent_ended(parent_session_id, subagent_session_id, app_ctx)
             .await?;
-        self.run_turn_middlewares_on_subagent_ended(
-            parent_session_id,
-            subagent_session_id,
-            kernel_ctx,
-        )
-        .await
+        self.run_turn_middlewares_on_subagent_ended(parent_session_id, subagent_session_id, app_ctx)
+            .await
     }
 }

@@ -6,8 +6,8 @@ use loong_runtime::runtime::Runtime;
 use serde_json::{Value, json};
 
 use super::runtime_binding::ProviderRuntimeBinding;
+use crate::AppContext;
 use crate::CliResult;
-use crate::KernelContext;
 use crate::config::LoongConfig;
 use crate::conversation::{
     ContextArtifactDescriptor, ContextArtifactKind, PromptCompiler, PromptFragment, PromptLane,
@@ -123,7 +123,7 @@ fn build_base_prompt_projection_with_tool_runtime_config(
         return BasePromptProjection::default();
     }
 
-    // TODO(deprecate-no-kernel-live-source): callers without a kernel binding
+    // TODO(deprecate-no-kernel-live-source): callers without a context binding
     // cannot read live workspace/runtime-self files. Keep prompt assembly pure
     // here until every caller provides the unified execution context.
     let (workspace_guidance_model, runtime_self_model) =
@@ -200,7 +200,7 @@ async fn build_base_prompt_projection_with_binding_and_tool_runtime_config(
     };
 
     build_base_prompt_projection_from_prompt_sources(
-        binding.kernel_context().map(|ctx| ctx.runtime.as_ref()),
+        binding.context().map(AppContext::runtime),
         config,
         include_system_prompt,
         tool_view,
@@ -335,7 +335,7 @@ async fn load_workspace_guidance_model_with_binding_and_budget(
     remaining_total_chars: &mut usize,
     binding: ProviderRuntimeBinding<'_>,
 ) -> workspace_guidance::WorkspaceGuidanceModel {
-    let Some(kernel_ctx) = binding.kernel_context() else {
+    let Some(app_ctx) = binding.context() else {
         // TODO(deprecate-no-kernel-live-source): once prompt assembly always
         // has the unified execution context, mark this no-live-source branch
         // deprecated and remove the direct/advisory live-read escape hatch.
@@ -354,7 +354,7 @@ async fn load_workspace_guidance_model_with_binding_and_budget(
             workspace_root,
             &source_path,
             tool_runtime_config,
-            kernel_ctx,
+            app_ctx,
         )
         .await;
         let Some(content) = maybe_content else {
@@ -410,7 +410,7 @@ async fn load_runtime_self_model_with_binding_and_budget(
     remaining_total_chars: &mut usize,
     binding: ProviderRuntimeBinding<'_>,
 ) -> runtime_self::RuntimeSelfModel {
-    let Some(kernel_ctx) = binding.kernel_context() else {
+    let Some(app_ctx) = binding.context() else {
         // TODO(deprecate-no-kernel-live-source): once prompt assembly always
         // has the unified execution context, mark this no-live-source branch
         // deprecated and remove the direct/advisory live-read escape hatch.
@@ -429,7 +429,7 @@ async fn load_runtime_self_model_with_binding_and_budget(
             workspace_root,
             &candidate_path,
             tool_runtime_config,
-            kernel_ctx,
+            app_ctx,
         )
         .await
         else {
@@ -459,13 +459,13 @@ async fn read_runtime_self_source_via_access(
     workspace_root: &Path,
     path: &Path,
     tool_runtime_config: &tools::runtime_config::ToolRuntimeConfig,
-    kernel_ctx: &KernelContext,
+    app_ctx: &AppContext,
 ) -> Option<String> {
     let request_path = workspace_guidance::workspace_source_request_path(workspace_root, path)?;
     let read_runtime_config =
         tool_runtime_config.with_workspace_root_override(workspace_root.to_path_buf());
-    let execution_context = kernel_ctx
-        .execution_context(
+    let execution_context = app_ctx
+        .for_invocation(
             ExecutionPlane::Tool,
             PlaneTier::Core,
             None,
@@ -491,13 +491,13 @@ async fn read_workspace_guidance_source_via_access(
     workspace_root: &Path,
     path: &Path,
     tool_runtime_config: &tools::runtime_config::ToolRuntimeConfig,
-    kernel_ctx: &KernelContext,
+    app_ctx: &AppContext,
 ) -> Option<String> {
     let request_path = workspace_guidance::workspace_source_request_path(workspace_root, path)?;
     let read_runtime_config =
         tool_runtime_config.with_workspace_root_override(workspace_root.to_path_buf());
-    let execution_context = kernel_ctx
-        .execution_context(
+    let execution_context = app_ctx
+        .for_invocation(
             ExecutionPlane::Tool,
             PlaneTier::Core,
             None,
@@ -1275,7 +1275,7 @@ mod tests {
             &config,
             false,
             &crate::tools::runtime_tool_view(),
-            ProviderRuntimeBinding::advisory_only(),
+            ProviderRuntimeBinding::AdvisoryOnly,
             &hydrated,
         )
         .await;
@@ -1386,7 +1386,7 @@ mod tests {
             &config,
             true,
             &crate::tools::runtime_tool_view(),
-            ProviderRuntimeBinding::advisory_only(),
+            ProviderRuntimeBinding::AdvisoryOnly,
             &envelope,
         )
         .await;
@@ -1415,7 +1415,7 @@ mod tests {
 
         config.tools.file_root = Some(harness.temp_dir.display().to_string());
 
-        let binding = ProviderRuntimeBinding::kernel(&harness.kernel_ctx);
+        let binding = ProviderRuntimeBinding::Context(&harness.app_ctx);
         let messages = build_base_messages_with_binding(&config, false, binding).await;
 
         assert!(
@@ -1466,7 +1466,7 @@ mod tests {
 
         config.tools.file_root = Some(harness.temp_dir.display().to_string());
 
-        let binding = ProviderRuntimeBinding::kernel(&harness.kernel_ctx);
+        let binding = ProviderRuntimeBinding::Context(&harness.app_ctx);
         let messages = build_base_messages_with_binding(&config, true, binding).await;
         let system_content = workspace_guidance_system_content(&messages);
 
@@ -1523,7 +1523,7 @@ mod tests {
             .expect("link nested workspace outside root");
         config.tools.file_root = Some(harness.temp_dir.display().to_string());
 
-        let binding = ProviderRuntimeBinding::kernel(&harness.kernel_ctx);
+        let binding = ProviderRuntimeBinding::Context(&harness.app_ctx);
         let messages = build_base_messages_with_binding(&config, true, binding).await;
         let system_content = system_prompt_content(&messages);
 
@@ -1550,7 +1550,7 @@ mod tests {
         config.tools.file_root = Some(decoy_tool_root.display().to_string());
         config.tools.runtime_workspace_root = Some(harness.temp_dir.display().to_string());
 
-        let binding = ProviderRuntimeBinding::kernel(&harness.kernel_ctx);
+        let binding = ProviderRuntimeBinding::Context(&harness.app_ctx);
         let messages = build_base_messages_with_binding(&config, true, binding).await;
         let runtime_self_content = workspace_guidance_system_content(&messages);
 
@@ -1783,7 +1783,7 @@ mod tests {
         config.tools.runtime_self.max_source_chars = 10_000;
         config.tools.runtime_self.max_total_chars = total_budget;
 
-        let binding = ProviderRuntimeBinding::kernel(&harness.kernel_ctx);
+        let binding = ProviderRuntimeBinding::Context(&harness.app_ctx);
         let messages = build_base_messages_with_binding(&config, true, binding).await;
         let system_content = system_prompt_content(&messages);
 
@@ -1818,7 +1818,7 @@ mod tests {
         config.tools.runtime_self.max_source_chars = 10_000;
         config.tools.runtime_self.max_total_chars = total_budget;
 
-        let binding = ProviderRuntimeBinding::kernel(&harness.kernel_ctx);
+        let binding = ProviderRuntimeBinding::Context(&harness.app_ctx);
         let messages = build_base_messages_with_binding(&config, true, binding).await;
         let system_content = system_prompt_content(&messages);
 
@@ -1903,7 +1903,7 @@ mod tests {
         config.tools.runtime_self.max_source_chars = 10_000;
         config.tools.runtime_self.max_total_chars = agents_text.chars().count();
 
-        let binding = ProviderRuntimeBinding::kernel(&harness.kernel_ctx);
+        let binding = ProviderRuntimeBinding::Context(&harness.app_ctx);
         let messages = build_base_messages_with_binding(&config, true, binding).await;
         let system_content = system_prompt_content(&messages);
 
@@ -1931,12 +1931,9 @@ mod tests {
 
         config.tools.file_root = Some(harness.temp_dir.display().to_string());
 
-        let advisory_messages = build_base_messages_with_binding(
-            &config,
-            true,
-            ProviderRuntimeBinding::advisory_only(),
-        )
-        .await;
+        let advisory_messages =
+            build_base_messages_with_binding(&config, true, ProviderRuntimeBinding::AdvisoryOnly)
+                .await;
         let advisory_content = system_prompt_content(&advisory_messages);
         assert!(advisory_content.contains("## Governed Runtime Binding"));
         assert!(advisory_content.contains("session_mode: advisory_only"));
@@ -1945,7 +1942,7 @@ mod tests {
         let mutating_messages = build_base_messages_with_binding(
             &config,
             true,
-            ProviderRuntimeBinding::kernel(&harness.kernel_ctx),
+            ProviderRuntimeBinding::Context(&harness.app_ctx),
         )
         .await;
         let mutating_content = system_prompt_content(&mutating_messages);
@@ -2063,7 +2060,7 @@ mod tests {
         std::fs::write(harness.temp_dir.join("AGENTS.md"), "Keep moving.").expect("write AGENTS");
         config.tools.file_root = Some(harness.temp_dir.display().to_string());
 
-        let binding = ProviderRuntimeBinding::kernel(&harness.kernel_ctx);
+        let binding = ProviderRuntimeBinding::Context(&harness.app_ctx);
         let messages = build_base_messages_with_binding(&config, true, binding).await;
         let content = system_prompt_content(&messages);
 
@@ -2191,7 +2188,7 @@ mod tests {
         let mut config = LoongConfig::default();
         config.tools.file_root = Some(harness.temp_dir.display().to_string());
 
-        let binding = ProviderRuntimeBinding::kernel(&harness.kernel_ctx);
+        let binding = ProviderRuntimeBinding::Context(&harness.app_ctx);
         let messages = build_base_messages_with_binding(&config, true, binding).await;
         let system_content = system_prompt_content(&messages);
 
@@ -2249,7 +2246,7 @@ mod tests {
         config.memory.profile_note = Some(legacy_profile_note.to_owned());
         config.tools.file_root = Some(harness.temp_dir.display().to_string());
 
-        let binding = ProviderRuntimeBinding::kernel(&harness.kernel_ctx);
+        let binding = ProviderRuntimeBinding::Context(&harness.app_ctx);
         let messages = build_base_messages_with_binding(&config, true, binding).await;
         let system_content = system_prompt_content(&messages);
 
@@ -2271,7 +2268,7 @@ mod tests {
         let mut config = LoongConfig::default();
         config.tools.file_root = Some(harness.temp_dir.display().to_string());
 
-        let binding = ProviderRuntimeBinding::kernel(&harness.kernel_ctx);
+        let binding = ProviderRuntimeBinding::Context(&harness.app_ctx);
         let messages = build_base_messages_with_binding(&config, true, binding).await;
         let system_content = system_prompt_content(&messages);
 
@@ -2534,7 +2531,7 @@ mod tests {
         config.tools.file_root = Some(workspace_root.display().to_string());
         config.memory.sqlite_path = db_path.display().to_string();
 
-        let binding = ProviderRuntimeBinding::kernel(&harness.kernel_ctx);
+        let binding = ProviderRuntimeBinding::Context(&harness.app_ctx);
         let projected = build_projected_context_for_session_with_binding(
             &config,
             "durable-recall-identity",
@@ -2712,7 +2709,7 @@ mod tests {
         config.tools.file_root = Some(workspace_root.display().to_string());
         config.memory.sqlite_path = db_path.display().to_string();
 
-        let binding = ProviderRuntimeBinding::kernel(&harness.kernel_ctx);
+        let binding = ProviderRuntimeBinding::Context(&harness.app_ctx);
         let projected = build_projected_context_for_session_with_binding(
             &config,
             "runtime-self-budget-session",

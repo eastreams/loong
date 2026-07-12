@@ -281,12 +281,12 @@ async fn prepare_subagent_spawn_if_kernel_bound<R: ConversationRuntime + ?Sized>
     child_session_id: &str,
     binding: ConversationRuntimeBinding<'_>,
 ) -> Result<(), String> {
-    let Some(kernel_ctx) = binding.kernel_context() else {
+    let Some(app_ctx) = binding.context() else {
         return Ok(());
     };
 
     runtime
-        .prepare_subagent_spawn(parent_session_id, child_session_id, kernel_ctx)
+        .prepare_subagent_spawn(parent_session_id, child_session_id, app_ctx)
         .await
 }
 
@@ -297,12 +297,12 @@ async fn notify_subagent_ended_if_kernel_bound<R: ConversationRuntime + ?Sized>(
     child_session_id: &str,
     binding: ConversationRuntimeBinding<'_>,
 ) -> Result<(), String> {
-    let Some(kernel_ctx) = binding.kernel_context() else {
+    let Some(app_ctx) = binding.context() else {
         return Ok(());
     };
 
     runtime
-        .on_subagent_ended(parent_session_id, child_session_id, kernel_ctx)
+        .on_subagent_ended(parent_session_id, child_session_id, app_ctx)
         .await
 }
 

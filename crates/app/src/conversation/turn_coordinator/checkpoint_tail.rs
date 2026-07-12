@@ -50,7 +50,7 @@ pub(super) async fn repair_turn_checkpoint_tail_entry<R: ConversationRuntime + ?
         restore_analytics_turn_checkpoint_progress_status(repair_plan.compaction_status());
 
     if repair_plan.should_run_after_turn() {
-        let Some(kernel_ctx) = binding.kernel_context() else {
+        let Some(app_ctx) = binding.context() else {
             after_turn_status = TurnCheckpointProgressStatus::Skipped;
             if repair_plan.should_run_compaction() {
                 compaction_status = TurnCheckpointProgressStatus::Skipped;
@@ -81,7 +81,7 @@ pub(super) async fn repair_turn_checkpoint_tail_entry<R: ConversationRuntime + ?
                 resume_input.user_input(),
                 resume_input.assistant_reply(),
                 resume_input.messages(),
-                kernel_ctx,
+                app_ctx,
             )
             .await
         {

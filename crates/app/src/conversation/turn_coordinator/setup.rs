@@ -4,7 +4,7 @@ pub(super) fn require_production_kernel_binding<'a>(
     binding: ConversationRuntimeBinding<'a>,
     observer: Option<&ConversationTurnObserverHandle>,
 ) -> CliResult<ConversationRuntimeBinding<'a>> {
-    if binding.is_kernel_bound() {
+    if binding.is_context_bound() {
         return Ok(binding);
     }
 

@@ -8,7 +8,7 @@ const SAFE_LANE_PLAN_MAX_WALL_TIME_MS: u64 = 30_000;
 const SAFE_LANE_VERIFY_DENY_MARKERS: &[&str] = &[
     "tool_failure",
     "provider_error",
-    "no_kernel_context",
+    "no_app_context",
     "tool_not_found",
 ];
 

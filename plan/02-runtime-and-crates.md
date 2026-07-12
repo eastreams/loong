@@ -6,10 +6,10 @@
 ## Runtime / Context Ownership
 
 项目已经由 `loong-runtime::Runtime<C>` 持有 kernel 与 typed tool plane；TUI 的 `App` 仍只是
-UI state。当前 CLI 链路是
-`SessionRouter -> CliTurnRuntime -> KernelContext -> Arc<Runtime<_>>`。channel/webhook/Feishu/
-QQ bot、`TurnExecutionService`、conversation/provider binding 也在不同地方直接持有或借用
-`KernelContext`。剩余工作是让 session-owned unified context 取代这些 host binding。
+UI state。CLI、channel、conversation 和 provider host surface 统一持有或借用 owned
+`AppContext`，由它共享 `Arc<Runtime<AppContextFactory>>` 并派生 invocation overlay。
+剩余工作是把 session metadata 正式并入 session-owned context，而不是再引入另一种执行
+context。
 
 目标是二核心模型：
 
@@ -63,10 +63,9 @@ impl ToolInvocation<'_> {
 
 命名不强制叫 `Runtime` / `Context`，但 ownership 必须一致：
 
-- `GovernanceRuntime` 可以在迁移期包住截至 2026-07-11 仍存在的 `KernelContext` 字段，但目标是删除
-  `KernelContext` 类型本身。`Runtime` 直接持有 kernel/governance 所需对象，例如
-  `Kernel`、pack/token issuer、audit sink、policy bootstrap 结果；host surface 不再暴露
-  “kernel context” 概念。
+- `Runtime` 直接持有 kernel/governance 所需对象，例如 `Kernel`、tool plane、audit sink
+  和 clock。`AppContext` 共享 runtime、pack、token、runtime config，并以不可变字段保存
+  effective capabilities、plane/tier、request payload 和 fs root view。
 - `Runtime` 持有长期状态和 registries，例如 tool plane、agent/session namespace、
   config snapshot、policy registry bootstrap 结果。
 - `Context` 是 session 绑定的统一 execution context。每个 session 有自己的 `Context`
@@ -90,16 +89,14 @@ impl ToolInvocation<'_> {
 - ordinary tool/action/policy 只依赖 context requirement trait，不依赖 app concrete context。
   具体 runtime/context 类型由 app/runtime 层定义。
 
-迁移策略：
+后续迁移策略：
 
 1. session 创建时同时创建自己的 `Context`，并把 session id、agent id、initial effective
    caps、tool namespace view 和 runtime reference 绑定进去。
-2. `CliTurnRuntime`、`TurnExecutionService`、conversation/provider binding、channel state
-   逐步从 `KernelContext` 改为 `Runtime` / `Context`。
-3. `KernelContext` 在迁移期只允许作为 runtime 内部字段；所有 host surface 都改用
-   `Runtime` / `Context` 后删除该类型，而不是改名留 alias。
-4. 外部调用点不再手动 `kernel_ctx.execution_context(...)`；统一从 session context 或它的
-   child context 进入 tool/access/action/policy。
+2. invocation 通过 `AppContext::for_invocation(...)` 派生同类型 child context；child 只能
+   收窄 effective capabilities，不能重新签发或放大 authority。
+3. session metadata 合并完成后，删除仍由 conversation `SessionContext` 重复保存的同源
+   execution state；tool/access/action/policy 始终只观察统一 context 或窄 requirement trait。
 
 
 ## Crate 收敛

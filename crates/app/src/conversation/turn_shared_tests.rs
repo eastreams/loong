@@ -305,7 +305,7 @@ async fn request_completion_with_raw_fallback_detailed_preserves_state_and_uses_
         &StateOnlyRuntime,
         &LoongConfig::default(),
         &[],
-        ConversationRuntimeBinding::advisory_only(),
+        ConversationRuntimeBinding::AdvisoryOnly,
         "<think>hidden</think>fallback body",
         None,
     )
@@ -391,7 +391,7 @@ async fn request_completion_with_raw_fallback_detailed_uses_raw_reply_when_compl
         &EmptyReplyRuntime,
         &LoongConfig::default(),
         &[],
-        ConversationRuntimeBinding::advisory_only(),
+        ConversationRuntimeBinding::AdvisoryOnly,
         "<think>hidden</think>fallback body",
         None,
     )
@@ -477,7 +477,7 @@ async fn request_completion_with_raw_fallback_detailed_salvages_glued_tool_reque
         &ToolMarkupRuntime,
         &LoongConfig::default(),
         &[],
-        ConversationRuntimeBinding::advisory_only(),
+        ConversationRuntimeBinding::AdvisoryOnly,
         "fallback body",
         None,
     )

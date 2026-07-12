@@ -63,9 +63,9 @@ where
 /// Context capability for tools that need governed access facades.
 ///
 /// Concrete tool implementations live outside `loong-app`, so they cannot rely
-/// on `AppExecutionContext` directly. This trait is the narrow boundary they
-/// need: given the current invocation context, obtain the kernel-defined access
-/// facade and let access/actions perform policy-gated side effects.
+/// on its concrete `AppContext`. This trait is the narrow boundary they need:
+/// given the current invocation context, obtain the kernel-defined access facade
+/// and let access/actions perform policy-gated side effects.
 pub trait KernelAccess<C>
 where
     C: ContextFactory,

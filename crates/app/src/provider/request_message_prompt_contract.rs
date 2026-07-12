@@ -268,7 +268,7 @@ fn render_deferred_tool_text_workflow_section() -> String {
 pub(super) fn render_governed_runtime_binding_section(
     binding: ProviderRuntimeBinding<'_>,
 ) -> String {
-    let kernel_binding = if binding.is_kernel_bound() {
+    let kernel_binding = if binding.is_context_bound() {
         "present"
     } else {
         "absent"

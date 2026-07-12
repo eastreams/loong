@@ -3,9 +3,9 @@ use std::{collections::BTreeSet, path::Path, sync::Arc};
 use axum::Router;
 
 use crate::{
-    CliResult, KernelContext,
+    AppContext, CliResult,
     config::LoongConfig,
-    context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context_with_config},
+    context::{DEFAULT_TOKEN_TTL_S, bootstrap_app_context_with_config},
 };
 
 use super::{
@@ -156,7 +156,7 @@ async fn mount_feishu_gateway_ingress(
             config,
             &resolved,
             resolved_path,
-            bootstrap_channel_kernel_context(
+            bootstrap_channel_app_context(
                 FEISHU_RUNTIME_COMMAND_DESCRIPTOR.serve_bootstrap_agent_id,
                 config,
             )?,
@@ -216,7 +216,7 @@ async fn mount_whatsapp_gateway_ingress(
             config,
             &resolved,
             resolved_path,
-            bootstrap_channel_kernel_context(
+            bootstrap_channel_app_context(
                 WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR.serve_bootstrap_agent_id,
                 config,
             )?,
@@ -275,7 +275,7 @@ async fn mount_line_gateway_ingress(
             config,
             &resolved,
             resolved_path,
-            bootstrap_channel_kernel_context(
+            bootstrap_channel_app_context(
                 LINE_RUNTIME_COMMAND_DESCRIPTOR.serve_bootstrap_agent_id,
                 config,
             )?,
@@ -334,7 +334,7 @@ async fn mount_webhook_gateway_ingress(
             config,
             &resolved,
             resolved_path,
-            bootstrap_channel_kernel_context(
+            bootstrap_channel_app_context(
                 WEBHOOK_RUNTIME_COMMAND_DESCRIPTOR.serve_bootstrap_agent_id,
                 config,
             )?,
@@ -415,11 +415,11 @@ async fn start_gateway_ingress_runtime(
     Ok(Arc::new(runtime))
 }
 
-fn bootstrap_channel_kernel_context(
+fn bootstrap_channel_app_context(
     bootstrap_agent_id: &str,
     config: &LoongConfig,
-) -> CliResult<KernelContext> {
-    bootstrap_kernel_context_with_config(bootstrap_agent_id, DEFAULT_TOKEN_TTL_S, config)
+) -> CliResult<AppContext> {
+    bootstrap_app_context_with_config(bootstrap_agent_id, DEFAULT_TOKEN_TTL_S, config)
 }
 
 pub async fn shutdown_gateway_ingress_runtimes(

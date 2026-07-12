@@ -265,12 +265,12 @@ async fn execute_create_command(
     timeout_seconds: Option<u64>,
 ) -> CliResult<Value> {
     let runtime = build_tasks_create_runtime(config)?;
-    let kernel_context = mvp::context::bootstrap_kernel_context_with_config(
+    let app_context = mvp::context::bootstrap_app_context_with_config(
         "cli-tasks",
         mvp::context::DEFAULT_TOKEN_TTL_S,
         config,
     )?;
-    let binding = mvp::conversation::ConversationRuntimeBinding::kernel(&kernel_context);
+    let binding = mvp::conversation::ConversationRuntimeBinding::Context(&app_context);
     let queued = mvp::conversation::spawn_background_delegate_with_runtime(
         config,
         &runtime,

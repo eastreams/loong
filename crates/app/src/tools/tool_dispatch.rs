@@ -5,7 +5,7 @@ use std::time::Duration;
 use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 use serde_json::Value;
 
-use crate::context::AppExecutionContext;
+use crate::context::AppContext;
 
 use super::*;
 
@@ -149,7 +149,7 @@ pub(crate) fn execute_tool_core_with_config_and_observability(
     result
 }
 
-/// Dispatch a legacy core tool call while preserving the kernel context.
+/// Dispatch a legacy core tool call while preserving the app context.
 ///
 /// This remains for unmigrated adapter paths that still need app-side payload
 /// normalization and runtime narrowing. Migrated tools should enter through
@@ -158,7 +158,7 @@ pub(crate) async fn execute_tool_core_with_config_and_context(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
     observability_config: &crate::config::ObservabilityConfig,
-    ctx: &AppExecutionContext<'_>,
+    ctx: &AppContext,
 ) -> Result<ToolCoreOutcome, String> {
     let requested_tool_name = request.tool_name.clone();
     let canonical_name = canonical_tool_name(request.tool_name.as_str()).to_owned();

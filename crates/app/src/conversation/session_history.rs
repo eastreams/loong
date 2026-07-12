@@ -2,12 +2,11 @@
 use std::collections::BTreeSet;
 
 #[cfg(feature = "memory-sqlite")]
-use loong_contracts::{Capability, MemoryCoreRequest};
+use loong_contracts::{Capability, ExecutionPlane, MemoryCoreRequest, PlaneTier};
 #[cfg(feature = "memory-sqlite")]
 use serde_json::{Value, json};
 
 use crate::CliResult;
-use crate::KernelContext;
 #[cfg(feature = "memory-sqlite")]
 use crate::memory;
 #[cfg(feature = "memory-sqlite")]
@@ -238,26 +237,6 @@ pub async fn load_discovery_first_event_summary(
     .await
 }
 
-pub async fn load_discovery_first_event_summary_with_kernel_context(
-    session_id: &str,
-    limit: usize,
-    kernel_ctx: Option<&KernelContext>,
-    #[cfg(feature = "memory-sqlite")] memory_config: &SessionStoreConfig,
-) -> CliResult<DiscoveryFirstEventSummary> {
-    let binding = kernel_ctx.map_or_else(
-        ConversationRuntimeBinding::advisory_only,
-        ConversationRuntimeBinding::kernel,
-    );
-    load_discovery_first_event_summary(
-        session_id,
-        limit,
-        binding,
-        #[cfg(feature = "memory-sqlite")]
-        memory_config,
-    )
-    .await
-}
-
 pub(crate) async fn load_discovery_first_event_summary_with_binding(
     session_id: &str,
     limit: usize,
@@ -350,7 +329,7 @@ pub(crate) async fn load_assistant_contents_from_session_window_detailed(
     binding: ConversationRuntimeBinding<'_>,
     memory_config: &SessionStoreConfig,
 ) -> Result<Vec<String>, AssistantHistoryLoadError> {
-    if let Some(ctx) = binding.kernel_context() {
+    if let Some(ctx) = binding.context() {
         let request = MemoryCoreRequest {
             operation: memory::MEMORY_OP_WINDOW.to_owned(),
             payload: json!({
@@ -361,14 +340,19 @@ pub(crate) async fn load_assistant_contents_from_session_window_detailed(
         };
         let caps = BTreeSet::from([Capability::MemoryRead]);
         let execution_context = ctx
-            .memory_core_execution_context()
+            .for_invocation(
+                ExecutionPlane::Memory,
+                PlaneTier::Core,
+                None,
+                ctx.tool_runtime_config(),
+            )
             .map_err(AssistantHistoryLoadError::kernel_request_failed)?;
         let outcome = ctx
-            .runtime
+            .runtime()
             .kernel()
             .execute_memory_core(
                 ctx.pack_id(),
-                &ctx.token,
+                ctx.token(),
                 &caps,
                 None,
                 request,

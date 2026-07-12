@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::config::{GovernedToolApprovalMode, SessionVisibility, ToolConfig, ToolConsentMode};
-use crate::context::KernelContext;
+use crate::context::AppContext;
 #[cfg(feature = "memory-sqlite")]
 use crate::operator::approval_runtime::{GovernedToolApprovalRequest, OperatorApprovalRuntime};
 #[cfg(feature = "memory-sqlite")]
@@ -136,7 +136,7 @@ const AUTONOMY_POLICY_ALLOW_REASON_CODE: &str = "autonomy_policy_allow";
 
 #[cfg(feature = "memory-sqlite")]
 fn approval_request_provenance_ref(binding: ConversationRuntimeBinding<'_>) -> &'static str {
-    if binding.is_kernel_bound() {
+    if binding.is_context_bound() {
         return "kernel";
     }
 

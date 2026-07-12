@@ -523,7 +523,7 @@ it only when the direction still matters to source readers.
 Phase 3 added generation tokens, Fault, TaskState FSM, and Namespace as additive types with tests. They are not yet used in production code paths.
 
 Candidates:
-- Issue tokens with membrane scoped to Namespace during `bootstrap_kernel_context`
+- Issue tokens with membrane scoped to Namespace during `bootstrap_app_context_with_config`
 - Use `TaskSupervisor` in spec runner's `execute_task` path for FSM-enforced lifecycle
 - Return `Fault` from kernel dispatch methods alongside `KernelError` for caller-side recovery matching
 - Use generation-based revocation for session rotation (e.g., Telegram channel restart)

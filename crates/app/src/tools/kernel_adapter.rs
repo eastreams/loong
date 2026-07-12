@@ -1,10 +1,11 @@
 use async_trait::async_trait;
 use loong_contracts::ToolPlaneError;
+use loong_core::policy::context::ContextFactory;
 use loong_kernel::{CoreToolAdapter, Kernel, ToolCoreOutcome, ToolCoreRequest};
 
 use super::runtime_config::ToolRuntimeConfig;
 use crate::config::ObservabilityConfig;
-use crate::context::{AppContextFactory, AppExecutionContext};
+use crate::context::AppContextFactory;
 
 pub struct KernelToolAdapter {
     config: Option<ToolRuntimeConfig>,
@@ -86,9 +87,9 @@ impl CoreToolAdapter<AppContextFactory> for KernelToolAdapter {
     async fn execute_core_tool_with_context(
         &self,
         request: ToolCoreRequest,
-        ctx: &AppExecutionContext<'_>,
+        ctx: &<AppContextFactory as ContextFactory>::Cx<'_>,
     ) -> Result<ToolCoreOutcome, ToolPlaneError> {
-        // Migrated tools need the kernel context so protected side effects can
+        // Migrated tools need the app context so protected side effects can
         // run through access modules. The context-free entry point remains only
         // for tools that have not moved yet.
         match &self.config {

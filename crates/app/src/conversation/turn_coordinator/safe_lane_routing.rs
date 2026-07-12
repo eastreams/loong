@@ -22,7 +22,7 @@ impl SafeLaneFailureRoute {
             "kernel_policy_denied"
             | "tool_not_found"
             | "max_tool_steps_exceeded"
-            | "no_kernel_context" => {
+            | "no_app_context" => {
                 return Self::terminal(SafeLaneFailureRouteReason::PolicyDenied);
             }
             "tool_execution_failed" => {

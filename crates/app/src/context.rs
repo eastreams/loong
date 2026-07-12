@@ -33,107 +33,80 @@ const EMBEDDED_RUNTIME_PACK_ID: &str = "dev-automation";
 /// Default token TTL (24 hours) for long-running embedded runtime entry points.
 pub const DEFAULT_TOKEN_TTL_S: u64 = 86400;
 
-/// Kernel execution context for policy-gated embedded runtime operations.
+/// App-owned execution context shared by session, tool, action, and policy paths.
 ///
-/// When present, memory and tool operations route through the kernel's
-/// capability/policy/audit system instead of direct adapter calls.
-///
-/// `pack_id` and `agent_id` are accessed via the embedded `CapabilityToken`
-/// to avoid data divergence.
-///
-/// TODO(deprecate-kernel-context): after the unified session/agent context owns
-/// this state, add `#[deprecated]` here and migrate call sites instead of
-/// threading new `KernelContext` uses.
+/// Long-lived authority is shared through `Arc`; per-invocation state is an
+/// immutable overlay. Deriving a child context can replace invocation metadata
+/// or narrow capabilities, but can never add authority beyond its parent.
 #[derive(Clone)]
-pub struct KernelContext {
-    pub runtime: Arc<Runtime<AppContextFactory>>,
-    pub pack: Arc<VerticalPackManifest>,
-    pub token: CapabilityToken,
-    pub tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig,
+pub struct AppContext {
+    shared: Arc<AppContextShared>,
+    effective_capabilities: BTreeSet<Capability>,
+    plane: ExecutionPlane,
+    tier: PlaneTier,
+    request_parameters: Option<Arc<Value>>,
+    fs_resolution_root: Arc<PathBuf>,
+    fs_allowed_roots: Arc<[PathBuf]>,
 }
 
-impl KernelContext {
+struct AppContextShared {
+    runtime: Arc<Runtime<AppContextFactory>>,
+    pack: Arc<VerticalPackManifest>,
+    token: Arc<CapabilityToken>,
+    tool_runtime_config: Arc<crate::tools::runtime_config::ToolRuntimeConfig>,
+}
+
+impl AppContext {
+    pub fn new(
+        runtime: Arc<Runtime<AppContextFactory>>,
+        pack: Arc<VerticalPackManifest>,
+        token: CapabilityToken,
+        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig,
+    ) -> Result<Self, String> {
+        let effective_capabilities = token.allowed_capabilities.clone();
+        let (fs_resolution_root, fs_allowed_roots) = fs_access_root_view(&tool_runtime_config)?;
+        Ok(Self {
+            shared: Arc::new(AppContextShared {
+                runtime,
+                pack,
+                token: Arc::new(token),
+                tool_runtime_config: Arc::new(tool_runtime_config),
+            }),
+            effective_capabilities,
+            plane: ExecutionPlane::Runtime,
+            tier: PlaneTier::Core,
+            request_parameters: None,
+            fs_resolution_root: Arc::new(fs_resolution_root),
+            fs_allowed_roots: fs_allowed_roots.into(),
+        })
+    }
+
     pub fn pack_id(&self) -> &str {
-        &self.token.pack_id
+        &self.shared.token.pack_id
     }
 
     pub fn agent_id(&self) -> &str {
-        &self.token.agent_id
+        &self.shared.token.agent_id
     }
 
-    pub(crate) fn execution_context<'a>(
-        &'a self,
-        plane: ExecutionPlane,
-        tier: PlaneTier,
-        request_parameters: Option<&'a Value>,
-        tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
-    ) -> Result<AppExecutionContext<'a>, String> {
-        AppExecutionContext::new(
-            self.runtime.as_ref(),
-            self.pack.as_ref(),
-            &self.token,
-            self.runtime.kernel().now_epoch_s(),
-            plane,
-            tier,
-            request_parameters,
-            tool_runtime_config,
-        )
-    }
-
-    pub(crate) fn memory_core_execution_context(&self) -> Result<AppExecutionContext<'_>, String> {
-        self.execution_context(
-            ExecutionPlane::Memory,
-            PlaneTier::Core,
-            None,
-            &self.tool_runtime_config,
-        )
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn pack_manifest_from_token(token: &CapabilityToken) -> VerticalPackManifest {
-    VerticalPackManifest {
-        pack_id: token.pack_id.clone(),
-        domain: "app-context".to_owned(),
-        version: "0.1.0".to_owned(),
-        default_route: ExecutionRoute {
-            harness_kind: HarnessKind::EmbeddedPi,
-            adapter: None,
-        },
-        allowed_connectors: BTreeSet::new(),
-        granted_capabilities: token.allowed_capabilities.clone(),
-        metadata: BTreeMap::new(),
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct AppContextFactory;
-
-impl ContextFactory for AppContextFactory {
-    type Cx<'a> = AppExecutionContext<'a>;
-}
-
-pub struct AppExecutionContext<'a> {
-    runtime: &'a Runtime<AppContextFactory>,
-    pack: &'a VerticalPackManifest,
-    token: &'a CapabilityToken,
-    effective_capabilities: BTreeSet<Capability>,
-    now_epoch_s: u64,
-    plane: ExecutionPlane,
-    tier: PlaneTier,
-    request_parameters: Option<&'a Value>,
-    fs_resolution_root: PathBuf,
-    fs_allowed_roots: Vec<PathBuf>,
-}
-
-impl<'a> AppExecutionContext<'a> {
-    /// Return the runtime that owns every live registry used by this context.
-    ///
-    /// App orchestration may project tool metadata from this owner, but tools
-    /// still enter governed execution through `tool` or `access`.
     #[must_use]
-    pub(crate) fn runtime(&self) -> &'a Runtime<AppContextFactory> {
-        self.runtime
+    pub(crate) fn runtime(&self) -> &Runtime<AppContextFactory> {
+        self.shared.runtime.as_ref()
+    }
+
+    #[must_use]
+    pub(crate) fn pack(&self) -> &VerticalPackManifest {
+        self.shared.pack.as_ref()
+    }
+
+    #[must_use]
+    pub fn token(&self) -> &CapabilityToken {
+        self.shared.token.as_ref()
+    }
+
+    #[must_use]
+    pub(crate) fn tool_runtime_config(&self) -> &crate::tools::runtime_config::ToolRuntimeConfig {
+        self.shared.tool_runtime_config.as_ref()
     }
 
     #[must_use]
@@ -146,22 +119,15 @@ impl<'a> AppExecutionContext<'a> {
         self.tier
     }
 
-    pub(crate) fn new(
-        runtime: &'a Runtime<AppContextFactory>,
-        pack: &'a VerticalPackManifest,
-        token: &'a CapabilityToken,
-        now_epoch_s: u64,
+    pub(crate) fn for_invocation(
+        &self,
         plane: ExecutionPlane,
         tier: PlaneTier,
-        request_parameters: Option<&'a Value>,
+        request_parameters: Option<&Value>,
         tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
     ) -> Result<Self, String> {
-        Self::new_with_effective_capabilities(
-            runtime,
-            pack,
-            token,
-            token.allowed_capabilities.clone(),
-            now_epoch_s,
+        self.for_invocation_with_capabilities(
+            self.effective_capabilities.clone(),
             plane,
             tier,
             request_parameters,
@@ -169,36 +135,39 @@ impl<'a> AppExecutionContext<'a> {
         )
     }
 
-    pub(crate) fn new_with_effective_capabilities(
-        runtime: &'a Runtime<AppContextFactory>,
-        pack: &'a VerticalPackManifest,
-        token: &'a CapabilityToken,
+    pub(crate) fn for_invocation_with_capabilities(
+        &self,
         effective_capabilities: BTreeSet<Capability>,
-        now_epoch_s: u64,
         plane: ExecutionPlane,
         tier: PlaneTier,
-        request_parameters: Option<&'a Value>,
+        request_parameters: Option<&Value>,
         tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
     ) -> Result<Self, String> {
-        if !effective_capabilities.is_subset(&token.allowed_capabilities) {
-            return Err("execution context cannot add capabilities beyond token".to_owned());
+        if !effective_capabilities.is_subset(&self.effective_capabilities) {
+            let missing_capabilities = effective_capabilities
+                .difference(&self.effective_capabilities)
+                .map(|capability| capability.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(format!(
+                "child execution context cannot add capabilities: missing {missing_capabilities}"
+            ));
         }
 
         let (fs_resolution_root, fs_allowed_roots) = fs_access_root_view(tool_runtime_config)?;
-        // Policy reads effective_capabilities so child invocations can narrow
-        // authority while KernelInvocationContext still exposes original token
-        // evidence for audit.
         Ok(Self {
-            runtime,
-            pack,
-            token,
+            shared: Arc::new(AppContextShared {
+                runtime: self.shared.runtime.clone(),
+                pack: self.shared.pack.clone(),
+                token: self.shared.token.clone(),
+                tool_runtime_config: Arc::new(tool_runtime_config.clone()),
+            }),
             effective_capabilities,
-            now_epoch_s,
             plane,
             tier,
-            request_parameters,
-            fs_resolution_root,
-            fs_allowed_roots,
+            request_parameters: request_parameters.cloned().map(Arc::new),
+            fs_resolution_root: Arc::new(fs_resolution_root),
+            fs_allowed_roots: fs_allowed_roots.into(),
         })
     }
 
@@ -219,30 +188,21 @@ impl<'a> AppExecutionContext<'a> {
 
         // Tool-to-tool and tool-to-access paths inherit runtime references but
         // must not regain capabilities removed by the parent context.
-        Ok(Self {
-            runtime: self.runtime,
-            pack: self.pack,
-            token: self.token,
-            effective_capabilities,
-            now_epoch_s: self.now_epoch_s,
-            plane: self.plane,
-            tier: self.tier,
-            request_parameters: self.request_parameters,
-            fs_resolution_root: self.fs_resolution_root.clone(),
-            fs_allowed_roots: self.fs_allowed_roots.clone(),
-        })
+        let mut child = self.clone();
+        child.effective_capabilities = effective_capabilities;
+        Ok(child)
     }
 
     #[must_use]
-    pub(crate) fn access(&self) -> AccessCx<'_, 'a, AppContextFactory> {
+    pub(crate) fn access(&self) -> AccessCx<'_, '_, AppContextFactory> {
         // AccessCx construction is localized at the concrete context boundary.
         // Tool/action code should call ctx.access() rather than rethreading the
         // kernel reference or recreating access facades by hand.
-        AccessCx::new(self.runtime.kernel(), self)
+        AccessCx::new(self.shared.runtime.kernel(), self)
     }
 
-    pub(crate) fn tool(&self, path: ToolPath) -> Result<ToolInvocation<'_, 'a>, ToolPlaneError> {
-        let spec = self.runtime.tools().spec(&path)?;
+    pub(crate) fn tool(&self, path: ToolPath) -> Result<ToolInvocation<'_>, ToolPlaneError> {
+        let spec = self.shared.runtime.tools().spec(&path)?;
         let mut required_capabilities = BTreeSet::from([Capability::InvokeTool]);
         required_capabilities.extend(spec.required_capabilities.iter().copied());
 
@@ -259,14 +219,14 @@ impl<'a> AppExecutionContext<'a> {
 ///
 /// Concrete tool implementations never receive this handle; they only receive
 /// parsed input after `invoke` has paired kernel grant, plane dispatch, and audit.
-pub(crate) struct ToolInvocation<'ctx, 'a> {
-    ctx: &'ctx AppExecutionContext<'a>,
+pub(crate) struct ToolInvocation<'ctx> {
+    ctx: &'ctx AppContext,
     path: ToolPath,
     default_capabilities: BTreeSet<Capability>,
     capability_override: Option<BTreeSet<Capability>>,
 }
 
-impl ToolInvocation<'_, '_> {
+impl ToolInvocation<'_> {
     /// Bind a narrowed capability set before payload dispatch.
     ///
     /// This proves the override cannot add authority before `invoke` builds the
@@ -310,14 +270,10 @@ impl ToolInvocation<'_, '_> {
         let action = ToolInvocationAction::new(self.path, required_capabilities, payload);
         let grant = self
             .ctx
+            .shared
             .runtime
             .kernel()
-            .grant_action(
-                tool_ctx.pack.pack_id.as_str(),
-                tool_ctx.token,
-                action,
-                &tool_ctx,
-            )
+            .grant_action(tool_ctx.pack_id(), tool_ctx.token(), action, &tool_ctx)
             .await?;
         let audit_path = grant.granted.as_ref().path().to_string();
         let audit_caps = grant
@@ -330,13 +286,14 @@ impl ToolInvocation<'_, '_> {
 
         match self
             .ctx
+            .shared
             .runtime
             .tools()
             .invoke(grant.granted, &tool_ctx)
             .await
         {
             Ok(output) => {
-                tool_ctx.runtime.kernel().record_tool_invocation(
+                tool_ctx.shared.runtime.kernel().record_tool_invocation(
                     &tool_ctx,
                     audit_path,
                     &audit_caps,
@@ -361,7 +318,7 @@ impl ToolInvocation<'_, '_> {
                     ToolPlaneError::Execution(reason) => ("execution", reason.clone()),
                     _ => ("tool_plane", error.to_string()),
                 };
-                tool_ctx.runtime.kernel().record_tool_invocation(
+                tool_ctx.shared.runtime.kernel().record_tool_invocation(
                     &tool_ctx,
                     audit_path,
                     &audit_caps,
@@ -376,49 +333,72 @@ impl ToolInvocation<'_, '_> {
     }
 }
 
-impl KernelAccess<AppContextFactory> for AppExecutionContext<'_> {
+impl KernelAccess<AppContextFactory> for AppContext {
     fn access(&self) -> AccessCx<'_, '_, AppContextFactory> {
         // Concrete tools depend on this narrow requirement instead of the app
         // context type. Delegate to the inherent accessor so this concrete
         // context has one AccessCx construction point.
-        AppExecutionContext::access(self)
+        AppContext::access(self)
     }
 }
 
-impl CapabilityContext for AppExecutionContext<'_> {
+impl CapabilityContext for AppContext {
     fn allowed_capabilities(&self) -> BTreeSet<Capability> {
         self.effective_capabilities.clone()
     }
 }
 
-impl KernelInvocationContext for AppExecutionContext<'_> {
+impl KernelInvocationContext for AppContext {
     fn pack(&self) -> &VerticalPackManifest {
-        self.pack
+        self.pack()
     }
 
     fn token(&self) -> &CapabilityToken {
-        self.token
+        self.token()
     }
 
     fn now_epoch_s(&self) -> u64 {
-        self.now_epoch_s
+        self.shared.runtime.kernel().now_epoch_s()
     }
 
     fn request_parameters(&self) -> Option<&Value> {
-        self.request_parameters
+        self.request_parameters.as_deref()
     }
 }
 
-impl FsResolutionContext for AppExecutionContext<'_> {
+impl FsResolutionContext for AppContext {
     fn fs_resolution_root(&self) -> &Path {
         self.fs_resolution_root.as_path()
     }
 }
 
-impl FsPathPolicyContext for AppExecutionContext<'_> {
+impl FsPathPolicyContext for AppContext {
     fn fs_allowed_roots(&self) -> &[PathBuf] {
-        self.fs_allowed_roots.as_slice()
+        self.fs_allowed_roots.as_ref()
     }
+}
+
+#[cfg(test)]
+pub(crate) fn pack_manifest_from_token(token: &CapabilityToken) -> VerticalPackManifest {
+    VerticalPackManifest {
+        pack_id: token.pack_id.clone(),
+        domain: "app-context".to_owned(),
+        version: "0.1.0".to_owned(),
+        default_route: ExecutionRoute {
+            harness_kind: HarnessKind::EmbeddedPi,
+            adapter: None,
+        },
+        allowed_connectors: BTreeSet::new(),
+        granted_capabilities: token.allowed_capabilities.clone(),
+        metadata: BTreeMap::new(),
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AppContextFactory;
+
+impl ContextFactory for AppContextFactory {
+    type Cx<'a> = AppContext;
 }
 
 fn fs_access_root_view(
@@ -477,13 +457,10 @@ fn canonicalize_or_fallback(path: PathBuf) -> Result<PathBuf, String> {
 /// `agent_id`.
 ///
 /// Production-facing runtime entrypoints should prefer
-/// `bootstrap_kernel_context_with_config` so audit retention follows config.
+/// `bootstrap_app_context_with_config` so audit retention follows config.
 #[cfg(test)]
-pub(crate) fn bootstrap_test_kernel_context(
-    agent_id: &str,
-    ttl_s: u64,
-) -> Result<KernelContext, String> {
-    bootstrap_kernel_context_with_audit_sink(
+pub(crate) fn bootstrap_test_app_context(agent_id: &str, ttl_s: u64) -> Result<AppContext, String> {
+    bootstrap_app_context_with_audit_sink(
         agent_id,
         ttl_s,
         Arc::new(InMemoryAuditSink::default()) as Arc<dyn AuditSink>,
@@ -491,7 +468,7 @@ pub(crate) fn bootstrap_test_kernel_context(
     )
 }
 
-/// Bootstrap a governed kernel context for production-facing runtime entrypoints.
+/// Bootstrap a governed app context for production-facing runtime entrypoints.
 ///
 /// This installs the audit sink selected by `config.audit`, registers the embedded runtime
 /// pack plus the core tool/memory adapters and policy pipeline, and issues a
@@ -502,12 +479,12 @@ pub(crate) fn bootstrap_test_kernel_context(
 /// ids, or prepare channel/conversation state. Callers that need those side
 /// effects should compose it with `runtime_env::initialize_runtime_environment`
 /// or a surface-specific bootstrap such as `chat::initialize_cli_turn_runtime`.
-pub fn bootstrap_kernel_context_with_config(
+pub fn bootstrap_app_context_with_config(
     agent_id: &str,
     ttl_s: u64,
     config: &LoongConfig,
-) -> Result<KernelContext, String> {
-    bootstrap_kernel_context_with_audit_sink(agent_id, ttl_s, build_audit_sink(config)?, config)
+) -> Result<AppContext, String> {
+    bootstrap_app_context_with_audit_sink(agent_id, ttl_s, build_audit_sink(config)?, config)
 }
 
 fn build_audit_sink(config: &LoongConfig) -> Result<Arc<dyn AuditSink>, String> {
@@ -540,12 +517,12 @@ fn build_jsonl_audit_sink(config: &LoongConfig) -> Result<Arc<dyn AuditSink>, St
         })
 }
 
-fn bootstrap_kernel_context_with_audit_sink(
+fn bootstrap_app_context_with_audit_sink(
     agent_id: &str,
     ttl_s: u64,
     audit_sink: Arc<dyn AuditSink>,
     config: &LoongConfig,
-) -> Result<KernelContext, String> {
+) -> Result<AppContext, String> {
     let tool_rt = crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
     let mut policy = PolicyPipeline::<AppContextFactory>::new_legacy_allow_fallback()
         .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
@@ -621,12 +598,7 @@ fn bootstrap_kernel_context_with_audit_sink(
     let tools = crate::tools::plane::builtin_tool_plane()
         .map_err(|error| format!("builtin tool registration failed: {error}"))?;
 
-    Ok(KernelContext {
-        runtime: Arc::new(Runtime::new(kernel, tools)),
-        pack,
-        token,
-        tool_runtime_config: tool_rt,
-    })
+    AppContext::new(Arc::new(Runtime::new(kernel, tools)), pack, token, tool_rt)
 }
 
 #[cfg(test)]
@@ -643,7 +615,7 @@ mod tests {
     use crate::test_utils::ScopedEnv;
 
     #[test]
-    fn bootstrap_kernel_context_with_config_writes_jsonl_audit_events() {
+    fn bootstrap_app_context_with_config_writes_jsonl_audit_events() {
         let tempdir = tempdir().expect("tempdir");
         let audit_path = tempdir.path().join("audit").join("events.jsonl");
         let mut config = LoongConfig::default();
@@ -651,7 +623,7 @@ mod tests {
         config.audit.path = audit_path.display().to_string();
         config.audit.retain_in_memory = false;
 
-        let context = bootstrap_kernel_context_with_config("test-agent", 60, &config)
+        let context = bootstrap_app_context_with_config("test-agent", 60, &config)
             .expect("bootstrap with jsonl audit should succeed");
 
         assert_eq!(context.agent_id(), "test-agent");
@@ -669,7 +641,7 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_kernel_context_with_config_writes_fanout_audit_events() {
+    fn bootstrap_app_context_with_config_writes_fanout_audit_events() {
         let tempdir = tempdir().expect("tempdir");
         let audit_path = tempdir.path().join("audit").join("events.jsonl");
         let mut config = LoongConfig::default();
@@ -677,7 +649,7 @@ mod tests {
         config.audit.path = audit_path.display().to_string();
         config.audit.retain_in_memory = true;
 
-        let context = bootstrap_kernel_context_with_config("test-agent", 60, &config)
+        let context = bootstrap_app_context_with_config("test-agent", 60, &config)
             .expect("bootstrap with fanout audit should succeed");
 
         assert_eq!(context.agent_id(), "test-agent");
@@ -695,14 +667,14 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_kernel_context_with_config_grants_network_egress() {
+    fn bootstrap_app_context_with_config_grants_network_egress() {
         let mut config = LoongConfig::default();
         config.audit.mode = AuditMode::InMemory;
 
-        let context = bootstrap_kernel_context_with_config("test-agent", 60, &config)
+        let context = bootstrap_app_context_with_config("test-agent", 60, &config)
             .expect("bootstrap with default config should succeed");
 
-        let allowed_capabilities = &context.token.allowed_capabilities;
+        let allowed_capabilities = &context.token().allowed_capabilities;
 
         assert!(
             allowed_capabilities.contains(&Capability::InvokeTool),
@@ -710,27 +682,24 @@ mod tests {
         );
         assert!(
             allowed_capabilities.contains(&Capability::NetworkEgress),
-            "bootstrap token should grant network egress for kernel-bound web tools"
+            "bootstrap token should grant network egress for context-bound web tools"
         );
     }
 
     #[test]
-    fn new_with_effective_capabilities_updates_policy_caps_without_changing_token() {
-        let context = bootstrap_test_kernel_context("test-agent", 60).expect("bootstrap context");
+    fn invocation_context_updates_policy_caps_without_changing_token() {
+        let context = bootstrap_test_app_context("test-agent", 60).expect("bootstrap context");
         let narrowed = BTreeSet::from([Capability::MemoryRead]);
 
-        let execution_context = AppExecutionContext::new_with_effective_capabilities(
-            context.runtime.as_ref(),
-            context.pack.as_ref(),
-            &context.token,
-            narrowed.clone(),
-            context.runtime.kernel().now_epoch_s(),
-            ExecutionPlane::Memory,
-            PlaneTier::Core,
-            None,
-            &context.tool_runtime_config,
-        )
-        .expect("narrowed execution context should build");
+        let execution_context = context
+            .for_invocation_with_capabilities(
+                narrowed.clone(),
+                ExecutionPlane::Memory,
+                PlaneTier::Core,
+                None,
+                context.tool_runtime_config(),
+            )
+            .expect("narrowed execution context should build");
 
         assert_eq!(execution_context.allowed_capabilities(), narrowed);
         assert!(
@@ -743,20 +712,16 @@ mod tests {
     }
 
     #[test]
-    fn new_with_effective_capabilities_rejects_added_capabilities() {
-        let context = bootstrap_test_kernel_context("test-agent", 60).expect("bootstrap context");
+    fn invocation_context_rejects_added_capabilities() {
+        let context = bootstrap_test_app_context("test-agent", 60).expect("bootstrap context");
         let widened = BTreeSet::from([Capability::MemoryRead, Capability::ControlRead]);
 
-        let error = match AppExecutionContext::new_with_effective_capabilities(
-            context.runtime.as_ref(),
-            context.pack.as_ref(),
-            &context.token,
+        let error = match context.for_invocation_with_capabilities(
             widened,
-            context.runtime.kernel().now_epoch_s(),
             ExecutionPlane::Memory,
             PlaneTier::Core,
             None,
-            &context.tool_runtime_config,
+            context.tool_runtime_config(),
         ) {
             Ok(_) => panic!("execution context must not add capabilities"),
             Err(error) => error,
@@ -764,25 +729,22 @@ mod tests {
 
         assert_eq!(
             error,
-            "execution context cannot add capabilities beyond token"
+            "child execution context cannot add capabilities: missing control_read"
         );
     }
 
     #[test]
     fn narrow_capabilities_rejects_capabilities_removed_by_parent_context() {
-        let context = bootstrap_test_kernel_context("test-agent", 60).expect("bootstrap context");
-        let parent = AppExecutionContext::new_with_effective_capabilities(
-            context.runtime.as_ref(),
-            context.pack.as_ref(),
-            &context.token,
-            BTreeSet::from([Capability::MemoryRead]),
-            context.runtime.kernel().now_epoch_s(),
-            ExecutionPlane::Memory,
-            PlaneTier::Core,
-            None,
-            &context.tool_runtime_config,
-        )
-        .expect("parent execution context should build");
+        let context = bootstrap_test_app_context("test-agent", 60).expect("bootstrap context");
+        let parent = context
+            .for_invocation_with_capabilities(
+                BTreeSet::from([Capability::MemoryRead]),
+                ExecutionPlane::Memory,
+                PlaneTier::Core,
+                None,
+                context.tool_runtime_config(),
+            )
+            .expect("parent execution context should build");
         let child_caps = BTreeSet::from([Capability::MemoryRead, Capability::FilesystemRead]);
 
         let error = match parent.narrow_capabilities(child_caps) {
@@ -799,13 +761,13 @@ mod tests {
     #[cfg(feature = "tool-file")]
     #[tokio::test]
     async fn typed_tool_capability_override_rejects_added_capabilities() {
-        let context = bootstrap_test_kernel_context("test-agent", 60).expect("bootstrap context");
+        let context = bootstrap_test_app_context("test-agent", 60).expect("bootstrap context");
         let execution_context = context
-            .execution_context(
+            .for_invocation(
                 ExecutionPlane::Tool,
                 PlaneTier::Core,
                 None,
-                &context.tool_runtime_config,
+                context.tool_runtime_config(),
             )
             .expect("build execution context");
         let invocation = execution_context
@@ -834,14 +796,14 @@ mod tests {
         fs::write(tempdir.path().join("notes.txt"), "alpha").expect("write fixture");
         let mut config = LoongConfig::default();
         config.tools.file_root = Some(tempdir.path().display().to_string());
-        let context = bootstrap_kernel_context_with_config("test-agent", 60, &config)
+        let context = bootstrap_app_context_with_config("test-agent", 60, &config)
             .expect("bootstrap context");
         let execution_context = context
-            .execution_context(
+            .for_invocation(
                 ExecutionPlane::Tool,
                 PlaneTier::Core,
                 None,
-                &context.tool_runtime_config,
+                context.tool_runtime_config(),
             )
             .expect("build execution context");
         let invocation = execution_context
@@ -864,7 +826,7 @@ mod tests {
 
     #[cfg(feature = "memory-sqlite")]
     #[tokio::test]
-    async fn bootstrap_kernel_context_with_config_ignores_memory_env_overrides() {
+    async fn bootstrap_app_context_with_config_ignores_memory_env_overrides() {
         let tempdir = tempdir().expect("tempdir");
         let sqlite_path = tempdir.path().join("memory.sqlite3");
 
@@ -904,19 +866,24 @@ mod tests {
         config.memory.sqlite_path = sqlite_path.display().to_string();
         config.memory.sliding_window = 2;
 
-        let context = bootstrap_kernel_context_with_config("test-agent", 60, &config)
+        let context = bootstrap_app_context_with_config("test-agent", 60, &config)
             .expect("bootstrap with config should succeed");
         let request = crate::memory::build_read_context_request("kernel-bootstrap-env-session");
         let caps = BTreeSet::from([Capability::MemoryRead]);
         let execution_context = context
-            .memory_core_execution_context()
+            .for_invocation(
+                ExecutionPlane::Memory,
+                PlaneTier::Core,
+                None,
+                context.tool_runtime_config(),
+            )
             .expect("build memory execution context");
         let outcome = context
-            .runtime
+            .runtime()
             .kernel()
             .execute_memory_core(
                 context.pack_id(),
-                &context.token,
+                context.token(),
                 &caps,
                 None,
                 request,

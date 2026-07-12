@@ -80,25 +80,22 @@ inventory.
 - `file.read` / `file.write` / `file.edit` — kernel-mediated core tool
   execution with filesystem capabilities, file policy extension checks,
   execution-layer path sandboxing, and audit events
-- Conversation tool turns — fast-lane and safe-lane inner tool execution now
-  flow through explicit `ConversationRuntimeBinding` (`Kernel` or `Direct`);
-  missing kernel authority fails closed as `no_kernel_context`, and async
-  delegate children inherit parent kernel authority instead of forcing direct
-  mode
+- Conversation tool turns — fast-lane and safe-lane inner tool execution flow
+  through explicit `ConversationRuntimeBinding` (`Context` or `AdvisoryOnly`);
+  missing app execution context fails closed as `no_app_context`, and async
+  delegate children inherit the parent context and its narrowed authority
 - Memory/runtime/context orchestration — the conversation module now carries
   `ConversationRuntimeBinding` end-to-end across runtime, context,
   persistence, turn coordination, loop followup, history, and app-dispatch
-  seams; kernel-bound history readers fail closed on kernel memory-window
+  seams; context-bound history readers fail closed on kernel memory-window
   errors or non-`ok` statuses instead of silently downgrading to direct sqlite
 - Provider request/failover orchestration — provider request entrypoints and
-  failover telemetry now use explicit `ProviderRuntimeBinding` (`Kernel` or
-  `Direct`); failover metrics record in both modes, but kernel-backed audit
-  emission only occurs when provider execution is explicitly kernel-bound
-- Outer integration wrappers — raw optional kernel context is now limited to
-  explicit integration boundaries such as
-  `channel::process_inbound_with_provider`, which normalize into a
-  binding-first runtime seam instead of carrying shadow authority semantics
-  deeper into the runtime
+  failover telemetry use explicit `ProviderRuntimeBinding` (`Context` or
+  `AdvisoryOnly`); failover metrics record in both modes, but governed audit
+  emission only occurs when provider execution has an app context
+- Outer integration wrappers receive the same owned `AppContext` used by CLI,
+  channel, conversation, and provider paths. They derive narrower invocation
+  overlays instead of carrying a second optional authority representation.
 
 #### Plugin Intake And Compatibility
 
@@ -192,15 +189,15 @@ inventory.
 
 Conversation runtime binding:
 
-- `Kernel` means the turn is allowed to call kernel-mediated core tools;
-  `Direct` means conversation orchestration may continue, but kernel-only tool
-  execution must fail closed
+- `Context` carries the unified app context used for governed execution;
+  `AdvisoryOnly` allows conversation orchestration to continue, but governed
+  tool execution must fail closed
 - it removes ambiguity from conversation traits and dispatcher seams where
   `None` previously overloaded "direct mode", "not wired yet", and "forgot to
   pass kernel authority"
-- detached async delegate spawns carry an owned kernel context forward when the
-  parent binding is kernel-bound; direct-mode parents keep direct-mode children
-- kernel-bound history helpers no longer reuse direct sqlite fallback behind
+- detached async delegate spawns carry an owned app context forward when the
+  parent is context-bound; advisory-only parents remain advisory-only
+- context-bound history helpers do not reuse direct sqlite fallback behind
   the caller's back, and diagnostics now surface explicit history load status
   plus normalized error codes
 - user-facing chat diagnostics and the discovery-first session-history path now
@@ -208,7 +205,7 @@ Conversation runtime binding:
 
 Provider runtime binding:
 
-- `Kernel` means failover/audit behavior may emit kernel-backed audit events;
+- `Context` means failover/audit behavior may emit governed audit events;
   `Direct` means provider execution is intentionally running without that
   authority while still recording in-process failover metrics
 - this keeps provider governance explicit without importing conversation-layer

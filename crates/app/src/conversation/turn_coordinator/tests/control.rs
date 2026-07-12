@@ -157,7 +157,7 @@ impl ConversationRuntime for ApprovalControlRuntime {
         &self,
         _config: &LoongConfig,
         _session_id: &str,
-        _kernel_ctx: &KernelContext,
+        _app_ctx: &AppContext,
     ) -> CliResult<crate::conversation::context_engine::ContextEngineBootstrapResult> {
         let mut bootstrap_calls = self
             .bootstrap_calls
@@ -398,7 +398,7 @@ impl ConversationRuntime for ExplicitSkillActivationRuntime {
         &self,
         _config: &LoongConfig,
         _session_id: &str,
-        _kernel_ctx: &KernelContext,
+        _app_ctx: &AppContext,
     ) -> CliResult<crate::conversation::context_engine::ContextEngineBootstrapResult> {
         let mut calls = self.bootstrap_calls.lock().expect("bootstrap lock");
         *calls += 1;
@@ -431,7 +431,7 @@ async fn handle_turn_with_runtime_explicit_skill_activation_prefix_injects_skill
             "$demo-skill summarize the changelog",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::advisory_only(),
+            ConversationRuntimeBinding::AdvisoryOnly,
         )
         .await
         .expect("explicit activation turn should succeed");
@@ -529,7 +529,7 @@ async fn handle_turn_with_runtime_explicit_skill_activation_preserves_observer_s
             ProviderErrorMode::Propagate,
             &runtime,
             &acp_options,
-            ConversationRuntimeBinding::advisory_only(),
+            ConversationRuntimeBinding::AdvisoryOnly,
             None,
             Some(observer_handle),
             None,
@@ -656,7 +656,7 @@ impl ConversationRuntime for RecordingCompactRuntime {
         _config: &LoongConfig,
         _session_id: &str,
         _messages: &[Value],
-        _kernel_ctx: &KernelContext,
+        _app_ctx: &AppContext,
     ) -> CliResult<()> {
         let mut compact_calls = self.compact_calls.lock().expect("compact lock");
         *compact_calls += 1;
@@ -779,7 +779,7 @@ impl ConversationRuntime for CompactSessionBuildMessagesRuntime {
         _config: &LoongConfig,
         _session_id: &str,
         _messages: &[Value],
-        _kernel_ctx: &KernelContext,
+        _app_ctx: &AppContext,
     ) -> CliResult<()> {
         Ok(())
     }
