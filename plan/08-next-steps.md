@@ -17,7 +17,8 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      `rollback_last_apply` 已通过 `ctx.access()` 读取 manifest 并恢复/删除 output；
      `apply_selected` 在 `apply_skills_plan=false` 时已通过 `ctx.access()` 创建 state dir、
      写 backup、写 output config、原子写 import manifest；`apply_skills_plan=true`
-     仍留在 legacy path，且只有这个 skills bridge 分支继续依赖 `FilePolicyExtension`
+     在 kernel-routed path 已 fail closed，不再 fallback 到 legacy direct side effect；
+     只有 direct legacy API/测试路径里的 skills bridge 分支继续依赖 `FilePolicyExtension`
      的迁移期 guard；已迁移的 `config.import` modes 不再走 direct file preflight；
    - 不要只把 `config.import` 入口注册进 typed plane 来假装迁移：它调用的
      `migration::*` / `config::load` / `config::write` 当前会直接读写、备份、扫描文件。
@@ -60,8 +61,10 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
    - 完成线：
      - migrated import 不直接调用 filesystem/network side effect；
      - side effect 只发生在 access crate 的 granted action run 边界；
-     - `FilePolicyExtension` 只覆盖 `apply_selected + apply_skills_plan=true`，并在该分支
-       迁完后删除；
+     - kernel-routed `apply_selected + apply_skills_plan=true` fail closed，直到 skills
+       lifecycle 迁完；
+     - `FilePolicyExtension` 只覆盖 direct legacy `apply_selected + apply_skills_plan=true`，
+       并在该分支迁完后删除；
    - 验证：按迁移工具分别跑对应 app/access 测试，再跑
      `cargo check -p loong-access -p loong-kernel -p loong-app -p loong` 和
      `git diff --check`。
