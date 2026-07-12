@@ -174,6 +174,9 @@ pub(super) fn execute_file_edit_tool_with_config(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
+    // Legacy-only edit path. A typed edit tool must return enough structured
+    // output for the app boundary to emit preview events; do not move this
+    // helper into `loong-tools` or call it from typed plane code.
     #[cfg(not(feature = "tool-file"))]
     {
         let _ = (request, config);
