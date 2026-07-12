@@ -79,6 +79,14 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      自己的 `AppContext`，invocation 只从该 session context cheap-clone 派生 overlay；
    - conversation 另有一份 `SessionContext` 保存 session id、parent、tool view、workspace/skill
      roots、runtime narrowing 和 runtime-self continuity；这是当前剩余的第二个 source of truth；
+   - `GovernedSessionMode::AdvisoryOnly` 是权限语义，不是“缺少 context”：advisory session
+     也必须由同一个 runtime 构造 `AppContext`，但使用 kernel 签发的 scoped token，至少不能
+     获得 `InvokeTool` 或 mutation capabilities；tool execution 由 capability/policy gate 自动
+     fail closed，不能继续靠 `ConversationRuntimeBinding::AdvisoryOnly` 分支手动拦截；
+   - 先把 host 的 bootstrap 拆成“构造现有 `Arc<Runtime<_>>`”和“为具体 session 签发 token、
+     构造 `AppContext`”两个真实 ownership 阶段；随后删除 host/root `AppContext`、
+     `Option<AppContext>`、`ConversationRuntimeBinding` 和 provider 的 no-context 对应物，不保留
+     空 context、兼容 enum 或 advisory fallback；
    - 将 `SessionContext` 的 session/agent metadata、tool namespace view、roots、narrowing 和
      continuity 并入 `AppContext`，随后直接删除 `SessionContext`，不留 alias、wrapper 或
      `Option<session>` 兼容形状；
