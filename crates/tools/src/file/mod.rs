@@ -1,10 +1,12 @@
 use loong_kernel::access::fs::FsAccessError;
 use serde_json::Value;
 
+mod edit;
 mod read;
 mod search;
 mod write;
 
+pub use edit::{EditOutput, EditRequest, EditTool, ExactTextEditBlock};
 pub use read::{FileReadRequest, ReadFileOutput, ReadOutput, ReadRequest, ReadTool};
 pub use search::{
     ContentSearchReadOutput, ContentSearchReadRequest, ContentSearchTool, GlobReadOutput,

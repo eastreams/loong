@@ -163,7 +163,89 @@ fn build_write_output_returns_typed_payload_without_legacy_status() {
         })
     );
 }
+
+#[test]
+fn parse_edit_payload_accepts_exact_blocks() {
+    let parsed = EditRequest::parse_payload(
+        "edit".to_owned(),
+        &json!({
+            "path": "notes.txt",
+            "edits": [
+                {
+                    "old_text": "before",
+                    "newText": "after"
+                }
+            ]
+        }),
+    )
+    .expect("payload should parse");
+
+    assert_eq!(parsed.path, "notes.txt");
+    assert_eq!(
+        parsed.blocks,
+        vec![ExactTextEditBlock {
+            old_text: "before".to_owned(),
+            new_text: "after".to_owned(),
+        }]
+    );
+}
+
+#[test]
+fn apply_edit_blocks_requires_unique_non_overlapping_matches() {
+    let blocks = vec![ExactTextEditBlock {
+        old_text: "hello".to_owned(),
+        new_text: "hi".to_owned(),
+    }];
+
+    let applied =
+        EditTool::apply_exact_edit_blocks("hello world", blocks.as_slice()).expect("edit applies");
+
+    assert_eq!(applied.updated, "hi world");
+    assert_eq!(applied.replacements_made, 1);
+
+    let duplicate_error = EditTool::apply_exact_edit_blocks("hello hello", blocks.as_slice())
+        .expect_err("duplicate old_text should fail");
+    assert_eq!(
+        duplicate_error,
+        "edit_failed: edits[0].old_text matches 2 locations; each edit block must match uniquely in the original file"
+    );
+}
+
+#[test]
+fn build_edit_output_returns_response_without_preview_content() {
+    let output = EditOutput {
+        tool_name: "edit".to_owned(),
+        path: PathBuf::from("notes.txt"),
+        before: "before".to_owned(),
+        after: "after".to_owned(),
+        replacements_made: 1,
+        edit_blocks_applied: 1,
+    };
+
+    let payload: Value = output.into();
+
+    assert_eq!(
+        payload,
+        json!({
+            "adapter": "core-tools",
+            "tool_name": "edit",
+            "path": "notes.txt",
+            "replacements_made": 1,
+            "bytes_written": 5,
+            "edit_blocks_applied": 1,
+            "continuation": {
+                "state": "verify_file_change",
+                "is_terminal": false,
+                "recommended_tool": "read",
+                "recommended_payload": {
+                    "path": "notes.txt"
+                },
+                "note": "If the user still depends on the updated file contents, verify the file before finalizing."
+            }
+        })
+    );
+}
 use super::*;
 use std::path::PathBuf;
 
-use serde_json::json;
+use serde_json::{Value, json};
