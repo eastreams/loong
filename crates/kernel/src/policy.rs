@@ -24,8 +24,8 @@ use loong_core::{
 };
 
 use crate::access::fs::{
-    FsContentSearchAction, FsCreateDirAllAction, FsGlobAction, FsInspectPathAction,
-    FsPathPolicyContext, FsReadAction, FsResolvePathAction, FsWriteAction,
+    FsContentSearchAction, FsCopyFileAction, FsCreateDirAllAction, FsGlobAction,
+    FsInspectPathAction, FsPathPolicyContext, FsReadAction, FsResolvePathAction, FsWriteAction,
 };
 use crate::errors::PolicyError;
 
@@ -480,6 +480,9 @@ pub struct FsReadAllowPolicy;
 pub struct FsWriteAllowPolicy;
 
 #[derive(Debug, Default, Clone, Copy)]
+pub struct FsCopyFileAllowPolicy;
+
+#[derive(Debug, Default, Clone, Copy)]
 pub struct FsCreateDirAllAllowPolicy;
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -618,6 +621,24 @@ where
             decision: PolicyDecision::Allow,
             predicate: Some("fs.write reached terminal allow policy".into()),
             reason: "filesystem write allowed after configured deny policies".into(),
+        }
+    }
+}
+
+#[async_trait]
+impl<C> Policy<C, FsCopyFileAction> for FsCopyFileAllowPolicy
+where
+    C: ContextFactory + Send + Sync,
+{
+    fn name(&self) -> Cow<'static, str> {
+        Cow::Borrowed("fs-copy-file-allow")
+    }
+
+    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &FsCopyFileAction) -> PolicyGrant {
+        PolicyGrant {
+            decision: PolicyDecision::Allow,
+            predicate: Some("fs.copy_file reached terminal allow policy".into()),
+            reason: "filesystem file copy allowed after configured deny policies".into(),
         }
     }
 }

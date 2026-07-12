@@ -12,6 +12,8 @@ use super::path::{GrantedPath, ResolvedPath};
 const FS_RESOLVE_REQUIRED_CAPABILITIES: [Capability; 0] = [];
 const FS_READ_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 const FS_WRITE_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
+const FS_COPY_FILE_REQUIRED_CAPABILITIES: [Capability; 2] =
+    [Capability::FilesystemRead, Capability::FilesystemWrite];
 const FS_CREATE_DIR_ALL_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
 const FS_GLOB_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 const FS_CONTENT_SEARCH_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
@@ -185,6 +187,74 @@ impl ActionMeta for FsWriteAction {
         Cow::Owned(json!({
             "path": self.path.as_path().display().to_string(),
             "byte_count": self.bytes.len(),
+            "create_dirs": self.options.create_dirs,
+            "overwrite": self.options.overwrite,
+        }))
+    }
+}
+
+/// Typed action for copying bytes between two governed filesystem paths.
+///
+/// Copy is modeled as one action instead of `read_file` plus app-side
+/// `write_file` so backup/restore flows do not move file bytes through tool or
+/// migration orchestration code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsCopyFileAction {
+    source: GrantedPath,
+    destination: GrantedPath,
+    options: FsWriteOptions,
+}
+
+impl FsCopyFileAction {
+    #[must_use]
+    pub fn new(source: GrantedPath, destination: GrantedPath, options: FsWriteOptions) -> Self {
+        Self {
+            source,
+            destination,
+            options,
+        }
+    }
+
+    #[must_use]
+    pub fn source_path(&self) -> &Path {
+        self.source.as_path()
+    }
+
+    #[must_use]
+    pub fn destination_path(&self) -> &Path {
+        self.destination.as_path()
+    }
+
+    #[must_use]
+    pub fn options(&self) -> FsWriteOptions {
+        self.options
+    }
+}
+
+impl ActionMeta for FsCopyFileAction {
+    fn metadata(&self) -> ActionMetadata<'_> {
+        ActionMetadata {
+            kind: "fs.copy_file",
+            operation: Cow::Borrowed("copy_file"),
+            required_capabilities: Cow::Borrowed(&FS_COPY_FILE_REQUIRED_CAPABILITIES),
+        }
+    }
+
+    fn audit_resource(&self) -> Option<Cow<'_, str>> {
+        Some(
+            format!(
+                "{} -> {}",
+                self.source.as_path().display(),
+                self.destination.as_path().display()
+            )
+            .into(),
+        )
+    }
+
+    fn payload(&self) -> Cow<'_, Value> {
+        Cow::Owned(json!({
+            "source": self.source.as_path().display().to_string(),
+            "destination": self.destination.as_path().display().to_string(),
             "create_dirs": self.options.create_dirs,
             "overwrite": self.options.overwrite,
         }))
@@ -436,6 +506,7 @@ impl ActionMeta for FsContentSearchAction {
 pub enum FsAction {
     Read(FsReadAction),
     Write(FsWriteAction),
+    CopyFile(FsCopyFileAction),
     CreateDirAll(FsCreateDirAllAction),
     InspectPath(FsInspectPathAction),
     Glob(FsGlobAction),
@@ -451,6 +522,15 @@ impl FsAction {
     #[must_use]
     pub fn write_file(path: GrantedPath, bytes: Vec<u8>, options: FsWriteOptions) -> Self {
         Self::Write(FsWriteAction::new(path, bytes, options))
+    }
+
+    #[must_use]
+    pub fn copy_file(
+        source: GrantedPath,
+        destination: GrantedPath,
+        options: FsWriteOptions,
+    ) -> Self {
+        Self::CopyFile(FsCopyFileAction::new(source, destination, options))
     }
 
     #[must_use]
@@ -493,6 +573,7 @@ impl ActionMeta for FsAction {
         match self {
             Self::Read(action) => action.metadata(),
             Self::Write(action) => action.metadata(),
+            Self::CopyFile(action) => action.metadata(),
             Self::CreateDirAll(action) => action.metadata(),
             Self::InspectPath(action) => action.metadata(),
             Self::Glob(action) => action.metadata(),
@@ -504,6 +585,7 @@ impl ActionMeta for FsAction {
         match self {
             Self::Read(action) => action.audit_resource(),
             Self::Write(action) => action.audit_resource(),
+            Self::CopyFile(action) => action.audit_resource(),
             Self::CreateDirAll(action) => action.audit_resource(),
             Self::InspectPath(action) => action.audit_resource(),
             Self::Glob(action) => action.audit_resource(),
@@ -515,6 +597,7 @@ impl ActionMeta for FsAction {
         match self {
             Self::Read(action) => action.payload(),
             Self::Write(action) => action.payload(),
+            Self::CopyFile(action) => action.payload(),
             Self::CreateDirAll(action) => action.payload(),
             Self::InspectPath(action) => action.payload(),
             Self::Glob(action) => action.payload(),

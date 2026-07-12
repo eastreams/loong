@@ -12,8 +12,8 @@ use loong_kernel::{
     InMemoryAuditSink, JsonlAuditSink, Kernel, KernelAccess, KernelInvocationContext,
     PolicyPipeline, SystemClock, VerticalPackManifest,
     policy::{
-        FsContentSearchAllowPolicy, FsCreateDirAllAllowPolicy, FsGlobAllowPolicy,
-        FsInspectPathAllowPolicy, FsReadAllowPolicy, FsReadFilenameDenyPolicy,
+        FsContentSearchAllowPolicy, FsCopyFileAllowPolicy, FsCreateDirAllAllowPolicy,
+        FsGlobAllowPolicy, FsInspectPathAllowPolicy, FsReadAllowPolicy, FsReadFilenameDenyPolicy,
         FsResolvePathAllowedRootsPolicy, FsWriteAllowPolicy,
     },
 };
@@ -545,6 +545,7 @@ fn bootstrap_kernel_context_with_audit_sink(
     }
     policy.push_policy(FsReadAllowPolicy);
     policy.push_policy(FsWriteAllowPolicy);
+    policy.push_policy(FsCopyFileAllowPolicy);
     policy.push_policy(FsCreateDirAllAllowPolicy);
     policy.push_policy(FsInspectPathAllowPolicy);
     policy.push_policy(FsGlobAllowPolicy);

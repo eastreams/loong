@@ -13,10 +13,12 @@ use thiserror::Error;
 use super::{
     FsResolutionContext,
     action::{
-        FsContentSearchAction, FsContentSearchOptions, FsCreateDirAllAction, FsGlobAction,
-        FsInspectPathAction, FsReadAction, FsResolvePathAction, FsWriteAction, FsWriteOptions,
+        FsContentSearchAction, FsContentSearchOptions, FsCopyFileAction, FsCreateDirAllAction,
+        FsGlobAction, FsInspectPathAction, FsReadAction, FsResolvePathAction, FsWriteAction,
+        FsWriteOptions,
     },
     content_search::FsContentSearchOutput,
+    copy::FsCopyFileOutput,
     directory::FsCreateDirAllOutput,
     error::FsActionError,
     glob::FsGlobOutput,
@@ -103,6 +105,42 @@ where
         let path = resolve_grant.granted.run(self.ctx).await?;
 
         let action = FsWriteAction::new(path, bytes.into(), options);
+        let grant = self
+            .policy_engine
+            .grant(self.ctx, action)
+            .await
+            .map_err(AuthorizationError::from)
+            .map_err(FsAccessError::Authorization)?;
+        grant.granted.run(self.ctx).await
+    }
+
+    /// Copy one file through source/destination path policy and copy policy.
+    pub async fn copy_file(
+        self,
+        source: impl AsRef<Path>,
+        destination: impl AsRef<Path>,
+        options: FsWriteOptions,
+    ) -> Result<FsCopyFileOutput, FsAccessError> {
+        let source_resolve = FsResolvePathAction::resolve(source, self.ctx.fs_resolution_root())?;
+        let source_grant = self
+            .policy_engine
+            .grant(self.ctx, source_resolve)
+            .await
+            .map_err(AuthorizationError::from)
+            .map_err(FsAccessError::Authorization)?;
+        let source = source_grant.granted.run(self.ctx).await?;
+
+        let destination_resolve =
+            FsResolvePathAction::resolve(destination, self.ctx.fs_resolution_root())?;
+        let destination_grant = self
+            .policy_engine
+            .grant(self.ctx, destination_resolve)
+            .await
+            .map_err(AuthorizationError::from)
+            .map_err(FsAccessError::Authorization)?;
+        let destination = destination_grant.granted.run(self.ctx).await?;
+
+        let action = FsCopyFileAction::new(source, destination, options);
         let grant = self
             .policy_engine
             .grant(self.ctx, action)
@@ -456,6 +494,17 @@ pub enum FsAccessError {
     #[error("failed to write file {path}: {source}", path = .path.display())]
     WriteFile {
         path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(
+        "failed to copy file {source_path} to {destination_path}: {source}",
+        source_path = .source_path.display(),
+        destination_path = .destination_path.display()
+    )]
+    CopyFile {
+        source_path: PathBuf,
+        destination_path: PathBuf,
         #[source]
         source: std::io::Error,
     },
