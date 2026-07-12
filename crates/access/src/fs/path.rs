@@ -45,17 +45,18 @@ impl ResolvedPath {
     }
 }
 
-/// Filesystem deletion target prepared with final-component no-follow semantics.
+/// Filesystem entry path prepared with final-component no-follow semantics.
 ///
 /// Ancestor components are canonicalized so policy sees the real parent
-/// location. The final component is appended lexically so removing a symlink
-/// path deletes the link itself, not its target.
+/// location. The final component is appended lexically so entry operations can
+/// decide whether to reject or operate on a terminal symlink without first
+/// following it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::fs) struct ResolvedDeletionPath {
+pub(in crate::fs) struct ResolvedEntryPath {
     path: PathBuf,
 }
 
-impl ResolvedDeletionPath {
+impl ResolvedEntryPath {
     pub(in crate::fs) fn resolve(
         path: impl AsRef<Path>,
         resolution_root: impl AsRef<Path>,

@@ -7,7 +7,7 @@ use loong_contracts::Capability;
 use loong_core::policy::action::{ActionMeta, ActionMetadata};
 use serde_json::{Value, json};
 
-use super::path::{GrantedPath, ResolvedDeletionPath, ResolvedPath};
+use super::path::{GrantedPath, ResolvedEntryPath, ResolvedPath};
 
 const FS_RESOLVE_REQUIRED_CAPABILITIES: [Capability; 0] = [];
 const FS_READ_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
@@ -377,7 +377,7 @@ impl ActionMeta for FsCreateDirAllAction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FsRemoveFileAction {
     raw_path: PathBuf,
-    deletion: ResolvedDeletionPath,
+    deletion: ResolvedEntryPath,
 }
 
 impl FsRemoveFileAction {
@@ -386,7 +386,7 @@ impl FsRemoveFileAction {
         resolution_root: impl AsRef<Path>,
     ) -> Result<Self, super::error::FsActionError> {
         let raw_path = path.as_ref().to_path_buf();
-        let deletion = ResolvedDeletionPath::resolve(&raw_path, resolution_root)?;
+        let deletion = ResolvedEntryPath::resolve(&raw_path, resolution_root)?;
         Ok(Self { raw_path, deletion })
     }
 
@@ -430,7 +430,7 @@ impl ActionMeta for FsRemoveFileAction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FsRemoveDirAllAction {
     raw_path: PathBuf,
-    deletion: ResolvedDeletionPath,
+    deletion: ResolvedEntryPath,
 }
 
 impl FsRemoveDirAllAction {
@@ -439,7 +439,7 @@ impl FsRemoveDirAllAction {
         resolution_root: impl AsRef<Path>,
     ) -> Result<Self, super::error::FsActionError> {
         let raw_path = path.as_ref().to_path_buf();
-        let deletion = ResolvedDeletionPath::resolve(&raw_path, resolution_root)?;
+        let deletion = ResolvedEntryPath::resolve(&raw_path, resolution_root)?;
         Ok(Self { raw_path, deletion })
     }
 
@@ -485,8 +485,8 @@ impl ActionMeta for FsRemoveDirAllAction {
 pub struct FsRenameAction {
     raw_source: PathBuf,
     raw_destination: PathBuf,
-    source: ResolvedDeletionPath,
-    destination: ResolvedDeletionPath,
+    source: ResolvedEntryPath,
+    destination: ResolvedEntryPath,
     options: FsWriteOptions,
 }
 
@@ -499,8 +499,8 @@ impl FsRenameAction {
     ) -> Result<Self, super::error::FsActionError> {
         let raw_source = source.as_ref().to_path_buf();
         let raw_destination = destination.as_ref().to_path_buf();
-        let source = ResolvedDeletionPath::resolve(&raw_source, resolution_root.as_ref())?;
-        let destination = ResolvedDeletionPath::resolve(&raw_destination, resolution_root)?;
+        let source = ResolvedEntryPath::resolve(&raw_source, resolution_root.as_ref())?;
+        let destination = ResolvedEntryPath::resolve(&raw_destination, resolution_root)?;
         Ok(Self {
             raw_source,
             raw_destination,
