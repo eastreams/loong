@@ -55,15 +55,19 @@ pub struct AppContext {
 impl AppContext {
     pub fn new(
         runtime: Arc<Runtime<AppContextFactory>>,
-        pack: Arc<VerticalPackManifest>,
         token: CapabilityToken,
         tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig,
     ) -> Result<Self, String> {
+        let pack = runtime
+            .kernel()
+            .pack_manifest(&token.pack_id)
+            .map_err(|error| format!("app context pack lookup failed: {error}"))?
+            .clone();
         let effective_capabilities = token.allowed_capabilities.clone();
         let (fs_resolution_root, fs_allowed_roots) = fs_access_root_view(&tool_runtime_config)?;
         Ok(Self {
             runtime,
-            pack,
+            pack: Arc::new(pack),
             token: Arc::new(token),
             tool_runtime_config: Arc::new(tool_runtime_config),
             effective_capabilities,
@@ -368,22 +372,6 @@ impl FsPathPolicyContext for AppContext {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn pack_manifest_from_token(token: &CapabilityToken) -> VerticalPackManifest {
-    VerticalPackManifest {
-        pack_id: token.pack_id.clone(),
-        domain: "app-context".to_owned(),
-        version: "0.1.0".to_owned(),
-        default_route: ExecutionRoute {
-            harness_kind: HarnessKind::EmbeddedPi,
-            adapter: None,
-        },
-        allowed_connectors: BTreeSet::new(),
-        granted_capabilities: token.allowed_capabilities.clone(),
-        metadata: BTreeMap::new(),
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct AppContextFactory;
 
@@ -559,10 +547,8 @@ fn bootstrap_app_context_with_audit_sink(
         ]),
         metadata: BTreeMap::new(),
     };
-    let pack = Arc::new(pack);
-
     kernel
-        .register_pack((*pack).clone())
+        .register_pack(pack)
         .map_err(|e| format!("kernel pack registration failed: {e}"))?;
 
     #[cfg(feature = "memory-sqlite")]
@@ -588,7 +574,7 @@ fn bootstrap_app_context_with_audit_sink(
     let tools = crate::tools::plane::builtin_tool_plane()
         .map_err(|error| format!("builtin tool registration failed: {error}"))?;
 
-    AppContext::new(Arc::new(Runtime::new(kernel, tools)), pack, token, tool_rt)
+    AppContext::new(Arc::new(Runtime::new(kernel, tools)), token, tool_rt)
 }
 
 #[cfg(test)]
@@ -603,6 +589,34 @@ mod tests {
     use crate::config::MemoryProfile;
     use crate::memory::runtime_config::MemoryRuntimeConfig;
     use crate::test_utils::ScopedEnv;
+
+    #[test]
+    fn app_context_rejects_token_for_unregistered_pack() {
+        let runtime = Arc::new(Runtime::new(
+            Kernel::<AppContextFactory>::new_without_audit(),
+            crate::tools::plane::test_builtin_tool_plane(),
+        ));
+        let token = CapabilityToken {
+            token_id: "unregistered-pack-token".to_owned(),
+            pack_id: "missing-pack".to_owned(),
+            agent_id: "test-agent".to_owned(),
+            allowed_capabilities: BTreeSet::new(),
+            issued_at_epoch_s: 0,
+            expires_at_epoch_s: 60,
+            generation: 1,
+        };
+
+        let error = match AppContext::new(
+            runtime,
+            token,
+            crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        ) {
+            Ok(_) => panic!("unregistered token pack must not construct an app context"),
+            Err(error) => error,
+        };
+
+        assert!(error.contains("pack not found: missing-pack"));
+    }
 
     #[test]
     fn bootstrap_app_context_with_config_writes_jsonl_audit_events() {

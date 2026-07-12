@@ -30,7 +30,7 @@ fn build_provider_failover_test_app_context(
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_321));
     let mut kernel = Kernel::with_legacy_allow_runtime(clock, audit.clone());
-    let pack = Arc::new(VerticalPackManifest {
+    let pack = VerticalPackManifest {
         pack_id: "provider-test-pack".to_owned(),
         domain: "provider-test".to_owned(),
         version: "0.1.0".to_owned(),
@@ -41,10 +41,8 @@ fn build_provider_failover_test_app_context(
         allowed_connectors: BTreeSet::new(),
         granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
         metadata: BTreeMap::new(),
-    });
-    kernel
-        .register_pack((*pack).clone())
-        .expect("register test pack");
+    };
+    kernel.register_pack(pack).expect("register test pack");
     let token = kernel
         .issue_token("provider-test-pack", agent_id, 3_600)
         .expect("issue test token");
@@ -54,7 +52,6 @@ fn build_provider_failover_test_app_context(
                 kernel,
                 crate::tools::plane::test_builtin_tool_plane(),
             )),
-            pack,
             token,
             crate::tools::runtime_config::ToolRuntimeConfig::default(),
         )

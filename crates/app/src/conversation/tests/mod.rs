@@ -1861,7 +1861,7 @@ fn test_app_context_with_memory(agent_id: &str, memory_config: &SessionStoreConf
     let audit = Arc::new(InMemoryAuditSink::default());
     let mut kernel = Kernel::with_legacy_allow_runtime(clock, audit);
 
-    let pack = Arc::new(VerticalPackManifest {
+    let pack = VerticalPackManifest {
         pack_id: "test-pack-memory".to_owned(),
         domain: "testing".to_owned(),
         version: "0.1.0".to_owned(),
@@ -1872,9 +1872,9 @@ fn test_app_context_with_memory(agent_id: &str, memory_config: &SessionStoreConf
         allowed_connectors: BTreeSet::new(),
         granted_capabilities: BTreeSet::from([Capability::MemoryRead, Capability::MemoryWrite]),
         metadata: BTreeMap::new(),
-    });
+    };
     kernel
-        .register_pack((*pack).clone())
+        .register_pack(pack)
         .expect("register memory test pack");
     kernel
         .register_core_memory_adapter(crate::session::store::session_memory_adapter(memory_config));
@@ -1891,7 +1891,6 @@ fn test_app_context_with_memory(agent_id: &str, memory_config: &SessionStoreConf
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        pack,
         token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
     )
@@ -8995,8 +8994,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_path_does_not_parallelize_fast_
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        Arc::new(crate::context::pack_manifest_from_token(&token)),
-        token.clone(),
+        token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
     )
     .expect("build conversation test app context");
@@ -9525,8 +9523,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_replans_after_transient_tool_fa
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        Arc::new(crate::context::pack_manifest_from_token(&token)),
-        token.clone(),
+        token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
     )
     .expect("build conversation test app context");
@@ -9738,8 +9735,7 @@ async fn handle_turn_with_runtime_safe_lane_backpressure_guard_blocks_retry_stor
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        Arc::new(crate::context::pack_manifest_from_token(&token)),
-        token.clone(),
+        token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
     )
     .expect("build conversation test app context");
@@ -9878,8 +9874,7 @@ async fn handle_turn_with_runtime_safe_lane_verify_non_retryable_failure_skips_r
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        Arc::new(crate::context::pack_manifest_from_token(&token)),
-        token.clone(),
+        token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
     )
     .expect("build conversation test app context");
@@ -10115,8 +10110,7 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_forces_no_replan() 
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        Arc::new(crate::context::pack_manifest_from_token(&token)),
-        token.clone(),
+        token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
     )
     .expect("build conversation test app context");
@@ -10349,8 +10343,7 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_requests_extended_h
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        Arc::new(crate::context::pack_manifest_from_token(&token)),
-        token.clone(),
+        token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
     )
     .expect("build conversation test app context");
@@ -10534,8 +10527,7 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_does_not_reuse_sqli
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        Arc::new(crate::context::pack_manifest_from_token(&token)),
-        token.clone(),
+        token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
     )
     .expect("build conversation test app context");
@@ -10715,7 +10707,6 @@ async fn handle_turn_with_runtime_safe_lane_replans_failed_subgraph_only() {
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        Arc::new(crate::context::pack_manifest_from_token(&token)),
         token.clone(),
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
     )
@@ -14132,7 +14123,6 @@ async fn turn_engine_tool_execution_error_is_marked_retryable() {
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        Arc::new(crate::context::pack_manifest_from_token(&token)),
         token.clone(),
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
     )
@@ -14325,7 +14315,6 @@ async fn turn_engine_executes_known_tool_with_kernel() {
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        Arc::new(crate::context::pack_manifest_from_token(&token)),
         token.clone(),
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
     )
@@ -14452,7 +14441,6 @@ async fn turn_engine_truncates_oversized_tool_payload_summary() {
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        Arc::new(crate::context::pack_manifest_from_token(&token)),
         token.clone(),
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
     )
@@ -14588,7 +14576,6 @@ async fn turn_engine_keeps_discovery_shaped_payloads_intact_for_followup_compact
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        Arc::new(crate::context::pack_manifest_from_token(&token)),
         token.clone(),
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
     )
@@ -15666,8 +15653,7 @@ async fn turn_engine_rejects_legacy_external_skill_invoke_runtime_tool() {
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        Arc::new(crate::context::pack_manifest_from_token(&token)),
-        token.clone(),
+        token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
     )
     .expect("build conversation test app context");
@@ -15754,7 +15740,6 @@ async fn turn_engine_injects_browser_scope_into_kernel_request() {
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        Arc::new(crate::context::pack_manifest_from_token(&token)),
         token.clone(),
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
     )
@@ -15865,7 +15850,6 @@ async fn turn_engine_execute_turn_denied_without_capability() {
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        Arc::new(crate::context::pack_manifest_from_token(&token)),
         token.clone(),
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
     )
@@ -16033,8 +16017,7 @@ fn build_app_context_with_window_turns(
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        Arc::new(crate::context::pack_manifest_from_token(&token)),
-        token.clone(),
+        token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
     )
     .expect("build conversation test app context");
@@ -16126,8 +16109,7 @@ fn build_app_context_with_window_turn_sequence(
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        Arc::new(crate::context::pack_manifest_from_token(&token)),
-        token.clone(),
+        token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
     )
     .expect("build conversation test app context");
@@ -16174,8 +16156,7 @@ fn build_app_context_with_window_error(
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        Arc::new(crate::context::pack_manifest_from_token(&token)),
-        token.clone(),
+        token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
     )
     .expect("build conversation test app context");
@@ -16222,8 +16203,7 @@ fn build_app_context_with_raw_window_payload(
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        Arc::new(crate::context::pack_manifest_from_token(&token)),
-        token.clone(),
+        token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
     )
     .expect("build conversation test app context");
@@ -16270,8 +16250,7 @@ fn build_app_context_with_compaction_conflict(
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        Arc::new(crate::context::pack_manifest_from_token(&token)),
-        token.clone(),
+        token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
     )
     .expect("build conversation test app context");
@@ -16320,8 +16299,7 @@ fn build_app_context_with_incomplete_compaction_snapshot(
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        Arc::new(crate::context::pack_manifest_from_token(&token)),
-        token.clone(),
+        token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
     )
     .expect("build conversation test app context");
@@ -19546,7 +19524,6 @@ async fn handle_turn_with_runtime_child_session_injects_runtime_narrowing_into_k
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        Arc::new(crate::context::pack_manifest_from_token(&token)),
         token.clone(),
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
     )

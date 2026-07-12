@@ -144,7 +144,6 @@ async fn mvp_memory_adapter_routes_through_kernel() {
     let tool_runtime_config = crate::tools::runtime_config::ToolRuntimeConfig::default();
     let app_context = crate::context::AppContext::new(
         runtime.clone(),
-        Arc::new(pack),
         token.clone(),
         tool_runtime_config.clone(),
     )

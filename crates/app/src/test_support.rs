@@ -175,7 +175,7 @@ impl TurnTestHarness {
         let mut kernel =
             Kernel::<AppContextFactory>::with_policy_runtime(policy, clock, audit.clone());
 
-        let pack = Arc::new(VerticalPackManifest {
+        let pack = VerticalPackManifest {
             pack_id: "test-pack".to_owned(),
             domain: "testing".to_owned(),
             version: "0.1.0".to_owned(),
@@ -186,10 +186,8 @@ impl TurnTestHarness {
             allowed_connectors: BTreeSet::new(),
             granted_capabilities: capabilities,
             metadata: BTreeMap::new(),
-        });
-        kernel
-            .register_pack((*pack).clone())
-            .expect("register pack");
+        };
+        kernel.register_pack(pack).expect("register pack");
         crate::tools::register_kernel_tools(
             &mut kernel,
             tool_config.clone(),
@@ -219,7 +217,6 @@ impl TurnTestHarness {
                 crate::tools::plane::builtin_tool_plane()
                     .expect("builtin tool registration should succeed"),
             )),
-            pack,
             token,
             tool_config,
         )

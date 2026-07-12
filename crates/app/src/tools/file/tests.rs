@@ -106,9 +106,9 @@ async fn execute_file_read_with_test_context(
         Arc::new(SystemClock),
         Arc::new(NoopAuditSink),
     );
-    let pack = Arc::new(test_pack());
+    let pack = test_pack();
     kernel
-        .register_pack((*pack).clone())
+        .register_pack(pack)
         .map_err(|error| format!("register pack failed: {error}"))?;
     let token = kernel
         .issue_token("test-pack", "test-agent", 60)
@@ -118,7 +118,6 @@ async fn execute_file_read_with_test_context(
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        pack,
         token,
         config.clone(),
     )?;
@@ -235,10 +234,8 @@ async fn execute_request_via_kernel_tool_registry_with_capabilities_result(
         Arc::new(SystemClock),
         audit.clone(),
     );
-    let pack = Arc::new(test_pack_with_capabilities(capabilities));
-    kernel
-        .register_pack((*pack).clone())
-        .expect("register test pack");
+    let pack = test_pack_with_capabilities(capabilities);
+    kernel.register_pack(pack).expect("register test pack");
     crate::tools::register_kernel_tools(
         &mut kernel,
         config.clone(),
@@ -253,7 +250,6 @@ async fn execute_request_via_kernel_tool_registry_with_capabilities_result(
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        pack,
         token,
         config.clone(),
     )
@@ -932,10 +928,8 @@ async fn context_direct_write_uses_typed_tool_registry() {
         Arc::new(SystemClock),
         audit.clone(),
     );
-    let pack = Arc::new(test_pack());
-    kernel
-        .register_pack((*pack).clone())
-        .expect("register pack");
+    let pack = test_pack();
+    kernel.register_pack(pack).expect("register pack");
     let token = kernel
         .issue_token("test-pack", "test-agent", 60)
         .expect("issue token");
@@ -944,7 +938,6 @@ async fn context_direct_write_uses_typed_tool_registry() {
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        pack,
         token,
         config.clone(),
     )

@@ -13130,7 +13130,7 @@ fn build_tool_app_context(
     let clock = Arc::new(FixedClock::new(1_700_000_000));
     let mut kernel = Kernel::with_legacy_allow_runtime(clock, audit);
 
-    let pack = Arc::new(VerticalPackManifest {
+    let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
         domain: "testing".to_owned(),
         version: "0.1.0".to_owned(),
@@ -13141,10 +13141,8 @@ fn build_tool_app_context(
         allowed_connectors: BTreeSet::new(),
         granted_capabilities: capabilities,
         metadata: BTreeMap::new(),
-    });
-    kernel
-        .register_pack((*pack).clone())
-        .expect("register pack");
+    };
+    kernel.register_pack(pack).expect("register pack");
 
     let invocations = Arc::new(Mutex::new(Vec::new()));
     let adapter = SharedTestToolAdapter {
@@ -13164,7 +13162,6 @@ fn build_tool_app_context(
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        pack,
         token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
     )
@@ -13254,7 +13251,6 @@ async fn kernel_tool_adapter_routes_through_kernel() {
     let tool_runtime_config = crate::tools::runtime_config::ToolRuntimeConfig::default();
     let app_context = crate::context::AppContext::new(
         runtime.clone(),
-        Arc::new(pack),
         token.clone(),
         tool_runtime_config.clone(),
     )
@@ -13335,7 +13331,6 @@ async fn kernel_tool_adapter_rejects_reserved_internal_payload_through_kernel_by
     let tool_runtime_config = crate::tools::runtime_config::ToolRuntimeConfig::default();
     let app_context = crate::context::AppContext::new(
         runtime.clone(),
-        Arc::new(pack),
         token.clone(),
         tool_runtime_config.clone(),
     )
@@ -13428,7 +13423,6 @@ async fn web_fetch_through_kernel_requires_network_egress_capability() {
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        Arc::new(crate::context::pack_manifest_from_token(&token)),
         token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
     )
@@ -13492,7 +13486,6 @@ async fn web_fetch_through_kernel_exposes_network_egress_to_pre_policy() {
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        Arc::new(crate::context::pack_manifest_from_token(&token)),
         token,
         crate::tools::runtime_config::ToolRuntimeConfig::default(),
     )

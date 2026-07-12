@@ -493,7 +493,6 @@ mod tests {
                     kernel,
                     crate::tools::plane::test_builtin_tool_plane(),
                 )),
-                Arc::new(crate::context::pack_manifest_from_token(&token)),
                 token,
                 crate::tools::runtime_config::ToolRuntimeConfig::default(),
             )

@@ -70,9 +70,8 @@ async fn execute_tool_core_with_test_context(
         ]),
         metadata: Default::default(),
     };
-    let pack = Arc::new(pack);
     kernel
-        .register_pack((*pack).clone())
+        .register_pack(pack)
         .map_err(|error| format!("kernel pack registration failed: {error}"))?;
     crate::tools::register_kernel_tools(
         &mut kernel,
@@ -88,7 +87,6 @@ async fn execute_tool_core_with_test_context(
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
         )),
-        pack,
         token,
         config.clone(),
     )?;

@@ -266,7 +266,7 @@ where
     where
         A: ActionMeta + 'static,
     {
-        let pack = self.get_pack(pack_id)?;
+        let pack = self.pack_manifest(pack_id)?;
         let required_capabilities = {
             let metadata = action.metadata();
             metadata
@@ -336,7 +336,7 @@ where
         agent_id: &str,
         ttl_s: u64,
     ) -> Result<CapabilityToken, KernelError> {
-        let pack = self.get_pack(pack_id)?;
+        let pack = self.pack_manifest(pack_id)?;
         let issued_at_epoch_s = self.clock.now_epoch_s();
         let generation = self.event_seq.fetch_add(1, Ordering::Relaxed) + 1;
         let token = CapabilityToken {
@@ -368,7 +368,7 @@ where
         allowed_capabilities: &BTreeSet<Capability>,
         ttl_s: u64,
     ) -> Result<CapabilityToken, KernelError> {
-        let pack = self.get_pack(pack_id)?;
+        let pack = self.pack_manifest(pack_id)?;
         self.assert_pack_grants(pack, allowed_capabilities)?;
         let issued_at_epoch_s = self.clock.now_epoch_s();
         let generation = self.event_seq.fetch_add(1, Ordering::Relaxed) + 1;
@@ -440,7 +440,7 @@ where
         required_capabilities: &BTreeSet<Capability>,
         ctx: &C::Cx<'_>,
     ) -> Result<(), KernelError> {
-        let pack = self.get_pack(pack_id)?;
+        let pack = self.pack_manifest(pack_id)?;
         let now = self
             .authorize_pack_operation(ctx, pack, token, operation, required_capabilities)
             .await?;
@@ -470,7 +470,7 @@ where
         task: TaskIntent,
         ctx: &C::Cx<'_>,
     ) -> Result<KernelDispatch, KernelError> {
-        let pack = self.get_pack(pack_id)?;
+        let pack = self.pack_manifest(pack_id)?;
         let now = self
             .authorize_pack_operation(
                 ctx,
@@ -518,7 +518,7 @@ where
         command: ConnectorCommand,
         ctx: &C::Cx<'_>,
     ) -> Result<ConnectorDispatch, KernelError> {
-        let pack = self.get_pack(pack_id)?;
+        let pack = self.pack_manifest(pack_id)?;
         self.assert_connector_allowed(pack, &command.connector_name)?;
         let now = self
             .authorize_pack_operation(
@@ -581,7 +581,7 @@ where
         command: ConnectorCommand,
         ctx: &C::Cx<'_>,
     ) -> Result<ConnectorDispatch, KernelError> {
-        let pack = self.get_pack(pack_id)?;
+        let pack = self.pack_manifest(pack_id)?;
         self.assert_connector_allowed(pack, &command.connector_name)?;
         let now = self
             .authorize_pack_operation(
@@ -647,7 +647,7 @@ where
         request: RuntimeCoreRequest,
         ctx: &C::Cx<'_>,
     ) -> Result<RuntimeCoreOutcome, KernelError> {
-        let pack = self.get_pack(pack_id)?;
+        let pack = self.pack_manifest(pack_id)?;
         let now = self
             .authorize_pack_operation(ctx, pack, token, &request.action, required_capabilities)
             .await?;
@@ -687,7 +687,7 @@ where
         request: RuntimeExtensionRequest,
         ctx: &C::Cx<'_>,
     ) -> Result<RuntimeExtensionOutcome, KernelError> {
-        let pack = self.get_pack(pack_id)?;
+        let pack = self.pack_manifest(pack_id)?;
         let now = self
             .authorize_pack_operation(ctx, pack, token, &request.action, required_capabilities)
             .await?;
@@ -736,7 +736,7 @@ where
         request: ToolCoreRequest,
         policy_context: C::Cx<'a>,
     ) -> Result<ToolCoreOutcome, KernelError> {
-        let pack = self.get_pack(pack_id)?;
+        let pack = self.pack_manifest(pack_id)?;
         let now = self
             .authorize_pack_operation(
                 &policy_context,
@@ -786,7 +786,7 @@ where
         request: ToolExtensionRequest,
         ctx: &C::Cx<'_>,
     ) -> Result<ToolExtensionOutcome, KernelError> {
-        let pack = self.get_pack(pack_id)?;
+        let pack = self.pack_manifest(pack_id)?;
         let now = self
             .authorize_pack_operation(
                 ctx,
@@ -834,7 +834,7 @@ where
         request: MemoryCoreRequest,
         ctx: &C::Cx<'_>,
     ) -> Result<MemoryCoreOutcome, KernelError> {
-        let pack = self.get_pack(pack_id)?;
+        let pack = self.pack_manifest(pack_id)?;
         let now = self
             .authorize_pack_operation(ctx, pack, token, &request.operation, required_capabilities)
             .await?;
@@ -874,7 +874,7 @@ where
         request: MemoryExtensionRequest,
         ctx: &C::Cx<'_>,
     ) -> Result<MemoryExtensionOutcome, KernelError> {
-        let pack = self.get_pack(pack_id)?;
+        let pack = self.pack_manifest(pack_id)?;
         let now = self
             .authorize_pack_operation(ctx, pack, token, &request.operation, required_capabilities)
             .await?;
@@ -907,7 +907,11 @@ where
         Ok(outcome)
     }
 
-    fn get_pack(&self, pack_id: &str) -> Result<&VerticalPackManifest, KernelError> {
+    /// Resolve the registered manifest that defines a token's pack boundary.
+    ///
+    /// Context constructors use this lookup instead of accepting a second,
+    /// caller-supplied manifest that could disagree with kernel authority.
+    pub fn pack_manifest(&self, pack_id: &str) -> Result<&VerticalPackManifest, KernelError> {
         self.packs
             .get(pack_id)
             .ok_or_else(|| KernelError::PackNotFound(pack_id.to_owned()))
