@@ -12,8 +12,8 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      已 fail closed；
    - `edit` 和 `config.import` 仍未迁入 access-backed action 路径，且仍依赖
      `FilePolicyExtension` 的迁移期 guard；
-   - legacy discoverable `glob.search` / `content.search` 仍有旧 helper 入口；后续要么注册为
-     typed read-family path，要么在 context-aware bridge 中统一进入 `ctx.tool("read")`；
+   - `glob.search` / `content.search` 的 kernel-routed 调用已注册为 typed read-family
+     path；无 context legacy adapter fallback 仍有旧 helper 入口，后续应 fail closed 或删除；
    - 逐个工具迁移：concrete tool 只解析 payload、调用 `ctx.access()` / `ctx.tool()`、
      格式化 typed output；side effect 必须落在 access crate 的 granted action run 边界；
    - 迁移完成后删除 `FilePolicyExtension` 对应旧分支；
