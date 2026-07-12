@@ -265,8 +265,12 @@ async fn execute_create_command(
     timeout_seconds: Option<u64>,
 ) -> CliResult<Value> {
     let runtime = build_tasks_create_runtime(config)?;
-    let runtime_kernel = bootstrap_tasks_runtime_kernel(config)?;
-    let binding = runtime_kernel.conversation_binding();
+    let kernel_context = mvp::context::bootstrap_kernel_context_with_config(
+        "cli-tasks",
+        mvp::context::DEFAULT_TOKEN_TTL_S,
+        config,
+    )?;
+    let binding = mvp::conversation::ConversationRuntimeBinding::kernel(&kernel_context);
     let queued = mvp::conversation::spawn_background_delegate_with_runtime(
         config,
         &runtime,
@@ -305,14 +309,6 @@ async fn execute_create_command(
         "next_steps": next_steps,
     });
     Ok(payload)
-}
-
-fn bootstrap_tasks_runtime_kernel(
-    config: &mvp::config::LoongConfig,
-) -> CliResult<mvp::runtime_bridge::RuntimeKernelOwner> {
-    let agent_id = "cli-tasks";
-    let runtime_kernel = mvp::runtime_bridge::RuntimeKernelOwner::bootstrap(agent_id, config)?;
-    Ok(runtime_kernel)
 }
 
 fn build_tasks_create_runtime(

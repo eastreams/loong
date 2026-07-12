@@ -332,19 +332,6 @@ fn best_effort_task_tool_policy_payload_falls_back_when_session_tools_are_disabl
 }
 
 #[test]
-fn bootstrap_tasks_runtime_kernel_provides_kernel_bound_binding() {
-    let mut config = mvp::config::LoongConfig::default();
-    config.audit.mode = mvp::config::AuditMode::InMemory;
-
-    let runtime_kernel =
-        bootstrap_tasks_runtime_kernel(&config).expect("bootstrap tasks runtime kernel");
-    let binding = runtime_kernel.conversation_binding();
-
-    assert!(binding.is_kernel_bound());
-    assert_eq!(runtime_kernel.kernel_context().agent_id(), "cli-tasks");
-}
-
-#[test]
 fn compose_task_detail_payload_keeps_core_status_truth_when_secondary_lookups_degrade() {
     let session = json!({
         "session_id": "delegate:task-1",

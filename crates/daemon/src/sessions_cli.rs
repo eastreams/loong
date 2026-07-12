@@ -838,8 +838,12 @@ async fn execute_turn_checkpoint_heal_action(
     config: &mvp::config::LoongConfig,
     session_id: &str,
 ) -> CliResult<Value> {
-    let runtime_kernel = bootstrap_sessions_runtime_kernel(config)?;
-    let binding = runtime_kernel.conversation_binding();
+    let kernel_context = mvp::context::bootstrap_kernel_context_with_config(
+        "cli-sessions-heal",
+        mvp::context::DEFAULT_TOKEN_TTL_S,
+        config,
+    )?;
+    let binding = mvp::conversation::ConversationRuntimeBinding::kernel(&kernel_context);
     let coordinator = mvp::conversation::ConversationTurnCoordinator::new();
     let outcome = coordinator
         .repair_production_turn_checkpoint_tail(config, session_id, binding)
@@ -858,14 +862,6 @@ async fn execute_turn_checkpoint_heal_action(
         "after_turn_status": after_turn_status,
         "compaction_status": compaction_status,
     }))
-}
-
-fn bootstrap_sessions_runtime_kernel(
-    config: &mvp::config::LoongConfig,
-) -> CliResult<mvp::runtime_bridge::RuntimeKernelOwner> {
-    let agent_id = "cli-sessions-heal";
-    let runtime_kernel = mvp::runtime_bridge::RuntimeKernelOwner::bootstrap(agent_id, config)?;
-    Ok(runtime_kernel)
 }
 
 fn build_session_heal_plan(

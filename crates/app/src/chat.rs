@@ -305,7 +305,7 @@ pub(crate) struct CliTurnRuntime {
     pub(crate) session_origin: CliRuntimeSessionOrigin,
     pub(crate) session_address: ConversationSessionAddress,
     pub(crate) turn_coordinator: ConversationTurnCoordinator,
-    pub(crate) runtime_kernel: crate::runtime_bridge::RuntimeKernelOwner,
+    pub(crate) kernel_context: crate::KernelContext,
     pub(crate) effective_bootstrap_mcp_servers: Vec<String>,
     pub(crate) effective_working_directory: Option<PathBuf>,
     pub(crate) memory_label: String,
@@ -315,7 +315,7 @@ pub(crate) struct CliTurnRuntime {
 
 impl CliTurnRuntime {
     pub(crate) fn conversation_binding(&self) -> ConversationRuntimeBinding<'_> {
-        self.runtime_kernel.conversation_binding()
+        ConversationRuntimeBinding::kernel(&self.kernel_context)
     }
 }
 

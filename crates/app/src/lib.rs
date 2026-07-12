@@ -18,7 +18,6 @@ pub(crate) mod otel;
 pub mod presentation;
 pub mod prompt;
 pub mod provider;
-pub mod runtime_bridge;
 pub mod runtime_env;
 mod runtime_identity;
 mod runtime_self;

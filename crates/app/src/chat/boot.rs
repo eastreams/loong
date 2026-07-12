@@ -87,9 +87,11 @@ pub(crate) fn initialize_cli_turn_runtime_with_loaded_config(
     if initialize_runtime_environment {
         crate::runtime_env::initialize_runtime_environment(&config, Some(&resolved_path));
     }
-    let runtime_kernel =
-        crate::runtime_bridge::RuntimeKernelOwner::bootstrap(kernel_scope, &config)?;
-    let kernel_ctx = runtime_kernel.cloned_kernel_context();
+    let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
+        kernel_scope,
+        crate::context::DEFAULT_TOKEN_TTL_S,
+        &config,
+    )?;
     initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
         resolved_path,
         config,
@@ -151,8 +153,6 @@ pub(crate) fn initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
         resolve_or_create_cli_runtime_session_id(session_hint, session_requirement, ())?;
 
     let session_address = ConversationSessionAddress::from_session_id(session_id.clone());
-    let runtime_kernel = crate::runtime_bridge::RuntimeKernelOwner::new(kernel_ctx);
-
     Ok(CliTurnRuntime {
         resolved_path,
         config_present: true,
@@ -161,7 +161,7 @@ pub(crate) fn initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
         session_origin,
         session_address,
         turn_coordinator: ConversationTurnCoordinator::new(),
-        runtime_kernel,
+        kernel_context: kernel_ctx,
         effective_bootstrap_mcp_servers,
         effective_working_directory,
         memory_label,

@@ -185,7 +185,7 @@ impl SessionRouter {
                     self.active_runtime().config.clone(),
                     None,
                     &preserved_options,
-                    self.active_runtime().runtime_kernel.cloned_kernel_context(),
+                    self.active_runtime().kernel_context.clone(),
                     session_requirement,
                 )?
                 .session_id
