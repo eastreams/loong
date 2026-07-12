@@ -1505,6 +1505,32 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn build_base_messages_with_binding_denies_linked_nested_workspace_sources() {
+        let harness = TurnTestHarness::new();
+        let outside_dir = tempdir().expect("outside tempdir");
+        let linked_workspace = harness.temp_dir.join("workspace");
+        let outside_agents = outside_dir.path().join("AGENTS.md");
+        let outside_tools = outside_dir.path().join("TOOLS.md");
+        let agents_marker = "outside linked workspace guidance";
+        let tools_marker = "outside linked runtime self";
+        let mut config = LoongConfig::default();
+
+        std::fs::write(&outside_agents, agents_marker).expect("write outside AGENTS");
+        std::fs::write(&outside_tools, tools_marker).expect("write outside TOOLS");
+        std::os::unix::fs::symlink(outside_dir.path(), &linked_workspace)
+            .expect("link nested workspace outside root");
+        config.tools.file_root = Some(harness.temp_dir.display().to_string());
+
+        let binding = ProviderRuntimeBinding::kernel(&harness.kernel_ctx);
+        let messages = build_base_messages_with_binding(&config, true, binding).await;
+        let system_content = system_prompt_content(&messages);
+
+        assert!(!system_content.contains(agents_marker));
+        assert!(!system_content.contains(tools_marker));
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn build_base_messages_with_binding_prefers_runtime_workspace_root_over_file_root() {
         let capabilities = std::collections::BTreeSet::from([

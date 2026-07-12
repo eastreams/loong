@@ -73,7 +73,10 @@ pub const fn import_discovery_workspace_guidance_kinds() -> &'static [WorkspaceG
     IMPORT_DISCOVERY_WORKSPACE_GUIDANCE_KINDS
 }
 
-/// Candidate workspace roots searched for guidance files.
+/// Enumerate workspace roots without observing the filesystem.
+///
+/// Callers that read a candidate must cross a governed filesystem boundary;
+/// candidate discovery must not decide existence or symlink containment.
 pub fn candidate_workspace_roots(
     workspace_root: &Path,
     search_scope: WorkspaceGuidanceSearchScope,
@@ -90,24 +93,16 @@ pub fn candidate_workspace_roots(
         return roots;
     }
 
-    let nested_workspace_root = workspace_root.join("workspace");
-    // Canonical containment rejects a nested workspace symlink that escapes
-    // the active workspace root before any live-source read is attempted.
-    let nested_workspace_inside_root = workspace_root
-        .canonicalize()
-        .ok()
-        .zip(nested_workspace_root.canonicalize().ok())
-        .is_some_and(|(canonical_root, canonical_nested)| {
-            canonical_nested.starts_with(canonical_root)
-        });
-    if nested_workspace_inside_root {
-        roots.push(nested_workspace_root);
-    }
+    roots.push(workspace_root.join("workspace"));
 
     roots
 }
 
-/// Detect workspace-guidance files under the requested search scope.
+/// Detect existing workspace-guidance files for synchronous operator flows.
+///
+/// Runtime prompt assembly must use `workspace_guidance_source_candidates`
+/// and governed fs access instead; this legacy discovery API performs its own
+/// containment checks because it returns only paths that currently exist.
 pub fn detect_workspace_guidance_paths(
     workspace_root: &Path,
     search_scope: WorkspaceGuidanceSearchScope,
@@ -115,12 +110,18 @@ pub fn detect_workspace_guidance_paths(
 ) -> Vec<WorkspaceGuidancePath> {
     let mut detected_paths = Vec::new();
     let search_roots = candidate_workspace_roots(workspace_root, search_scope);
+    let canonical_workspace_root = workspace_root.canonicalize().ok();
 
     for search_root in search_roots {
         for kind in kinds {
             let candidate_path = search_root.join(kind.file_name());
-            let candidate_exists = candidate_path.is_file();
-            if !candidate_exists {
+            let Some(canonical_workspace_root) = canonical_workspace_root.as_ref() else {
+                continue;
+            };
+            let Some(canonical_path) = candidate_path.canonicalize().ok() else {
+                continue;
+            };
+            if !canonical_path.starts_with(canonical_workspace_root) || !canonical_path.is_file() {
                 continue;
             }
 
@@ -137,15 +138,12 @@ pub fn detect_workspace_guidance_paths(
 
 pub fn workspace_guidance_source_candidates(workspace_root: &Path) -> Vec<PathBuf> {
     let search_scope = WorkspaceGuidanceSearchScope::WorkspaceAndNestedWorkspace;
-    let detected_paths = detect_workspace_guidance_paths(
-        workspace_root,
-        search_scope,
-        runtime_prompt_workspace_guidance_kinds(),
-    );
     let mut source_candidates = Vec::new();
 
-    for detected_path in detected_paths {
-        source_candidates.push(detected_path.path);
+    for root in candidate_workspace_roots(workspace_root, search_scope) {
+        for kind in runtime_prompt_workspace_guidance_kinds() {
+            source_candidates.push(root.join(kind.file_name()));
+        }
     }
 
     source_candidates
@@ -165,27 +163,15 @@ pub fn render_workspace_guidance_section(model: &WorkspaceGuidanceModel) -> Opti
     Some(sections.join("\n\n"))
 }
 
-pub fn normalized_workspace_source_path_key(path: &Path) -> String {
-    let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    canonical_path.display().to_string()
-}
-
-pub fn workspace_source_request_path(workspace_root: &Path, path: &Path) -> Option<String> {
-    let path_is_file = path.is_file();
-    if !path_is_file {
-        return None;
-    }
-
-    let canonical_workspace_root = workspace_root.canonicalize().ok()?;
-    let canonical_path = path.canonicalize().ok()?;
-    let path_within_workspace = canonical_path.starts_with(canonical_workspace_root);
-    if !path_within_workspace {
-        return None;
-    }
-
-    let relative_path = path.strip_prefix(workspace_root).ok()?;
-    let request_path = relative_path.to_string_lossy().to_string();
-    Some(request_path)
+/// Convert a generated candidate into the relative path accepted by fs access.
+///
+/// This is deliberately lexical. The subsequent resolve and path-policy
+/// grants own existence, canonicalization, and symlink containment.
+pub fn workspace_source_request_path<'a>(
+    workspace_root: &Path,
+    path: &'a Path,
+) -> Option<&'a Path> {
+    path.strip_prefix(workspace_root).ok()
 }
 
 pub(crate) fn ingest_workspace_guidance_source(
@@ -196,7 +182,7 @@ pub(crate) fn ingest_workspace_guidance_source(
     content: &str,
     tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
 ) -> bool {
-    let path_key = normalized_workspace_source_path_key(path);
+    let path_key = path.to_string_lossy().into_owned();
     let inserted = loaded_paths.insert(path_key);
     if !inserted {
         return false;
@@ -365,8 +351,6 @@ mod tests {
         let workspace_root = temp_dir.path();
         let nested_workspace_root = workspace_root.join("workspace");
 
-        std::fs::create_dir_all(&nested_workspace_root).expect("create nested workspace");
-
         let roots = candidate_workspace_roots(
             workspace_root,
             WorkspaceGuidanceSearchScope::WorkspaceAndNestedWorkspace,
@@ -423,6 +407,28 @@ mod tests {
         assert_eq!(detected_paths[1].path, nested_agents_path);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn detect_workspace_guidance_paths_rejects_linked_nested_workspace_outside_root() {
+        let workspace_dir = tempdir().expect("workspace tempdir");
+        let outside_dir = tempdir().expect("outside tempdir");
+        let workspace_root = workspace_dir.path();
+        let linked_workspace = workspace_root.join("workspace");
+        let outside_agents = outside_dir.path().join("AGENTS.md");
+
+        std::fs::write(&outside_agents, "outside guidance").expect("write outside AGENTS");
+        std::os::unix::fs::symlink(outside_dir.path(), &linked_workspace)
+            .expect("link nested workspace outside root");
+
+        let detected_paths = detect_workspace_guidance_paths(
+            workspace_root,
+            WorkspaceGuidanceSearchScope::WorkspaceAndNestedWorkspace,
+            runtime_prompt_workspace_guidance_kinds(),
+        );
+
+        assert!(detected_paths.is_empty());
+    }
+
     #[test]
     fn render_workspace_guidance_section_renders_agents_entries() {
         let model = WorkspaceGuidanceModel {
@@ -437,17 +443,32 @@ mod tests {
     }
 
     #[test]
-    fn workspace_guidance_source_candidates_ignore_claude_file() {
+    fn workspace_guidance_source_candidates_are_pure_and_include_only_supported_names() {
         let temp_dir = tempdir().expect("tempdir");
         let workspace_root = temp_dir.path();
-        let agents_path = workspace_root.join("AGENTS.md");
-        let claude_path = workspace_root.join("CLAUDE.md");
-
-        std::fs::write(&agents_path, "agents").expect("write AGENTS");
-        std::fs::write(&claude_path, "claude").expect("write CLAUDE");
 
         let source_candidates = workspace_guidance_source_candidates(workspace_root);
 
-        assert_eq!(source_candidates, vec![agents_path]);
+        assert_eq!(
+            source_candidates,
+            vec![
+                workspace_root.join("AGENTS.md"),
+                workspace_root.join("workspace/AGENTS.md"),
+            ]
+        );
+    }
+
+    #[test]
+    fn workspace_source_request_path_is_lexical_and_does_not_require_an_existing_file() {
+        let workspace_root = Path::new("/workspace");
+
+        assert_eq!(
+            workspace_source_request_path(workspace_root, Path::new("/workspace/AGENTS.md")),
+            Some(Path::new("AGENTS.md"))
+        );
+        assert_eq!(
+            workspace_source_request_path(workspace_root, Path::new("/outside/AGENTS.md")),
+            None
+        );
     }
 }
