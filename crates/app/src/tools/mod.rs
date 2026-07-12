@@ -43,7 +43,7 @@ mod feishu;
 #[cfg(feature = "tool-file")]
 mod file;
 mod file_path;
-pub mod file_policy_ext;
+mod file_policy_ext;
 #[cfg(feature = "tool-http")]
 mod http_request;
 mod kernel_adapter;

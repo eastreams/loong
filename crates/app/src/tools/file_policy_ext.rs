@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use loong_contracts::PolicyError;
 
-pub struct FilePolicyExtension {
+struct FilePolicyExtension {
     // Migration bridge only: authorization checks `normalized_allowed_roots`.
     // This root is just the legacy default/display root when config.import
     // receives a relative path without a more specific resolution root.
@@ -14,12 +14,12 @@ pub struct FilePolicyExtension {
 
 impl FilePolicyExtension {
     #[cfg(test)]
-    pub fn new(access_root: Option<PathBuf>) -> Self {
+    fn new(access_root: Option<PathBuf>) -> Self {
         let allowed_roots = access_root.iter().cloned().collect();
         Self::from_roots(allowed_roots, access_root.clone(), access_root)
     }
 
-    pub fn from_runtime_config(rt: &super::runtime_config::ToolRuntimeConfig) -> Self {
+    fn from_runtime_config(rt: &super::runtime_config::ToolRuntimeConfig) -> Self {
         let mut allowed_roots = Vec::new();
 
         if let Some(file_root) = rt.file_root.as_ref() {
