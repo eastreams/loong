@@ -1271,7 +1271,7 @@ async fn observed_fast_lane_execution_trace_records_batch_and_segment_metrics() 
             &turn,
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
             None,
             None,
         )
@@ -1336,7 +1336,7 @@ async fn parallel_execution_reports_global_intent_sequence_to_after_tool_executi
             &turn,
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
             None,
             None,
         )
@@ -1380,7 +1380,7 @@ async fn observed_fast_lane_execution_treats_single_in_flight_batches_as_sequent
             &turn,
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
             None,
             None,
         )
@@ -1436,7 +1436,7 @@ async fn parallel_execution_records_trace_items_in_intent_order() {
             &turn,
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
             None,
             None,
         )
@@ -1498,7 +1498,7 @@ async fn parallel_execution_keeps_successful_tool_results_when_one_tool_is_denie
             &turn,
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
             None,
             None,
         )
@@ -1567,7 +1567,7 @@ async fn sequential_execution_continues_after_single_tool_denial() {
             &turn,
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
             None,
             None,
         )
@@ -1629,7 +1629,7 @@ async fn observed_fast_lane_execution_trace_records_partial_tool_failure_outcome
             &turn,
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
             None,
             None,
         )

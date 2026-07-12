@@ -731,7 +731,7 @@ mod tests {
         };
         let seed = build_delegate_child_lifecycle_seed(
             &config,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
             ConstrainedSubagentMode::Async,
             1,
             0,
@@ -767,7 +767,7 @@ mod tests {
         };
         let seed = build_delegate_child_lifecycle_seed(
             &config,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
             ConstrainedSubagentMode::Inline,
             1,
             0,

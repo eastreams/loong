@@ -344,7 +344,7 @@ mod tests {
         let input = PolicyDecisionInput {
             snapshot: &snapshot,
             action_class: CapabilityActionClass::CapabilityInstall,
-            binding: ConversationRuntimeBinding::direct(),
+            binding: ConversationRuntimeBinding::advisory_only(),
             budget: &budget,
         };
 
@@ -377,7 +377,7 @@ mod tests {
         let input = PolicyDecisionInput {
             snapshot: &snapshot,
             action_class: CapabilityActionClass::TopologyExpand,
-            binding: ConversationRuntimeBinding::direct(),
+            binding: ConversationRuntimeBinding::advisory_only(),
             budget: &budget,
         };
 
@@ -451,7 +451,7 @@ mod tests {
         let input = PolicyDecisionInput {
             snapshot: &snapshot,
             action_class: CapabilityActionClass::SessionMutation,
-            binding: ConversationRuntimeBinding::direct(),
+            binding: ConversationRuntimeBinding::advisory_only(),
             budget: &budget,
         };
 

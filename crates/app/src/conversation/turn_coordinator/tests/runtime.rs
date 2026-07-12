@@ -18,7 +18,7 @@ async fn handle_turn_with_observer_uses_streaming_request_and_emits_live_events(
             ProviderErrorMode::Propagate,
             &runtime,
             &acp_options,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
             None,
             Some(observer_handle),
             None,
@@ -82,7 +82,7 @@ async fn handle_turn_with_observer_falls_back_when_streaming_events_are_unsuppor
             ProviderErrorMode::Propagate,
             &runtime,
             &acp_options,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
             None,
             Some(observer_handle),
             None,
@@ -150,7 +150,7 @@ async fn handle_turn_with_observer_emits_lifecycle_for_explicit_acp_inline_messa
             ProviderErrorMode::InlineMessage,
             &runtime,
             &acp_options,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
             None,
             Some(observer_handle),
             None,
@@ -217,7 +217,7 @@ async fn handle_turn_with_ingress_and_observer_marks_failed_when_runtime_bootstr
             "say hello",
             ProviderErrorMode::Propagate,
             &acp_options,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
             None,
             Some(observer_handle),
             None,
@@ -255,7 +255,7 @@ async fn handle_turn_with_observer_marks_failed_when_runtime_bootstrap_fails() {
             "say hello",
             ProviderErrorMode::Propagate,
             &acp_options,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
             None,
             Some(observer_handle),
             None,
@@ -276,7 +276,8 @@ async fn handle_turn_with_observer_marks_failed_when_runtime_bootstrap_fails() {
 }
 
 #[tokio::test]
-async fn handle_production_turn_with_observer_rejects_direct_binding_before_runtime_bootstrap() {
+async fn handle_production_turn_with_observer_rejects_advisory_only_binding_before_runtime_bootstrap()
+ {
     let mut config = LoongConfig::default();
     config.conversation.context_engine = Some("missing-observer-runtime".to_owned());
 
@@ -293,13 +294,13 @@ async fn handle_production_turn_with_observer_rejects_direct_binding_before_runt
             "say hello",
             ProviderErrorMode::Propagate,
             &acp_options,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
             Some(observer_handle),
             None,
             None,
         )
         .await;
-    let error = result.expect_err("direct production binding should fail");
+    let error = result.expect_err("advisory-only production binding should fail");
 
     assert_eq!(
         error,
@@ -319,7 +320,8 @@ async fn handle_production_turn_with_observer_rejects_direct_binding_before_runt
 }
 
 #[tokio::test]
-async fn handle_production_turn_with_runtime_rejects_direct_binding_before_provider_request() {
+async fn handle_production_turn_with_runtime_rejects_advisory_only_binding_before_provider_request()
+{
     let mut config = LoongConfig::default();
     config.provider.kind = crate::config::ProviderKind::Anthropic;
 
@@ -338,12 +340,12 @@ async fn handle_production_turn_with_runtime_rejects_direct_binding_before_provi
             ProviderErrorMode::Propagate,
             &runtime,
             &acp_options,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
             None,
             Some(observer_handle),
         )
         .await;
-    let error = result.expect_err("direct production binding should fail");
+    let error = result.expect_err("advisory-only production binding should fail");
 
     assert_eq!(
         error,
@@ -370,7 +372,7 @@ async fn handle_production_turn_with_runtime_rejects_direct_binding_before_provi
 }
 
 #[tokio::test]
-async fn compact_production_session_rejects_direct_binding_before_runtime_bootstrap() {
+async fn compact_production_session_rejects_advisory_only_binding_before_runtime_bootstrap() {
     let mut config = LoongConfig::default();
     config.conversation.context_engine = Some("missing-maintenance-runtime".to_owned());
 
@@ -379,10 +381,10 @@ async fn compact_production_session_rejects_direct_binding_before_runtime_bootst
         .compact_production_session(
             &config,
             "maintenance-session",
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await;
-    let error = result.expect_err("direct production maintenance binding should fail");
+    let error = result.expect_err("advisory-only production maintenance binding should fail");
 
     assert_eq!(
         error,
@@ -391,7 +393,8 @@ async fn compact_production_session_rejects_direct_binding_before_runtime_bootst
 }
 
 #[tokio::test]
-async fn repair_production_turn_checkpoint_tail_rejects_direct_binding_before_runtime_bootstrap() {
+async fn repair_production_turn_checkpoint_tail_rejects_advisory_only_binding_before_runtime_bootstrap()
+ {
     let mut config = LoongConfig::default();
     config.conversation.context_engine = Some("missing-maintenance-runtime".to_owned());
 
@@ -400,10 +403,10 @@ async fn repair_production_turn_checkpoint_tail_rejects_direct_binding_before_ru
         .repair_production_turn_checkpoint_tail(
             &config,
             "maintenance-session",
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await;
-    let error = result.expect_err("direct production maintenance binding should fail");
+    let error = result.expect_err("advisory-only production maintenance binding should fail");
 
     assert_eq!(
         error,
@@ -412,7 +415,7 @@ async fn repair_production_turn_checkpoint_tail_rejects_direct_binding_before_ru
 }
 
 #[tokio::test]
-async fn load_production_turn_checkpoint_diagnostics_rejects_direct_binding_before_runtime_bootstrap()
+async fn load_production_turn_checkpoint_diagnostics_rejects_advisory_only_binding_before_runtime_bootstrap()
  {
     let mut config = LoongConfig::default();
     config.conversation.context_engine = Some("missing-maintenance-runtime".to_owned());
@@ -424,10 +427,10 @@ async fn load_production_turn_checkpoint_diagnostics_rejects_direct_binding_befo
             &config,
             "maintenance-session",
             limit,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await;
-    let error = result.expect_err("direct production maintenance binding should fail");
+    let error = result.expect_err("advisory-only production maintenance binding should fail");
 
     assert_eq!(
         error,

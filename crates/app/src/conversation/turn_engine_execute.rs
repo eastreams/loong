@@ -381,7 +381,7 @@ mod execution_tests {
                 &prepared_intent,
                 &session_context,
                 &MissingProviderAppToolDispatcher,
-                ConversationRuntimeBinding::direct(),
+                ConversationRuntimeBinding::advisory_only(),
                 None,
             )
             .await;

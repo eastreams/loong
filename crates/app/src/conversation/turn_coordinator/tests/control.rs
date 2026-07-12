@@ -431,7 +431,7 @@ async fn handle_turn_with_runtime_explicit_skill_activation_prefix_injects_skill
             "$demo-skill summarize the changelog",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("explicit activation turn should succeed");
@@ -529,7 +529,7 @@ async fn handle_turn_with_runtime_explicit_skill_activation_preserves_observer_s
             ProviderErrorMode::Propagate,
             &runtime,
             &acp_options,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
             None,
             Some(observer_handle),
             None,

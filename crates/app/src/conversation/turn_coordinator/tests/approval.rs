@@ -136,7 +136,7 @@ async fn pending_approval_control_turn_does_not_persist_session_mode_when_resolu
             ProviderErrorMode::Propagate,
             &runtime,
             &acp_options,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
             None,
             None,
             None,
@@ -198,7 +198,7 @@ async fn pending_approval_control_turn_resolves_delegate_request_after_yes_confi
             ProviderErrorMode::Propagate,
             &runtime,
             &acp_options,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
             None,
             None,
             None,
@@ -261,7 +261,7 @@ async fn approval_request_resolve_persists_session_mode_on_success() {
         &config,
         &runtime,
         &fallback,
-        ConversationRuntimeBinding::direct(),
+        ConversationRuntimeBinding::advisory_only(),
     );
     let outcome = crate::tools::approval::execute_approval_tool_with_runtime_support(
         loong_contracts::ToolCoreRequest {
@@ -350,7 +350,7 @@ async fn approval_request_resolve_retries_missing_session_mode_after_approval() 
         &config,
         &runtime,
         &fallback,
-        ConversationRuntimeBinding::direct(),
+        ConversationRuntimeBinding::advisory_only(),
     );
     let outcome = crate::tools::approval::execute_approval_tool_with_runtime_support(
         loong_contracts::ToolCoreRequest {

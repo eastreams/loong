@@ -2278,7 +2278,7 @@ fn write_test_external_skill(
 #[tokio::test]
 async fn default_runtime_supports_injected_context_engine() {
     let runtime = DefaultConversationRuntime::with_context_engine(StubContextEngine);
-    let binding = crate::conversation::ConversationRuntimeBinding::direct();
+    let binding = crate::conversation::ConversationRuntimeBinding::advisory_only();
     let tool_view = runtime
         .tool_view(&test_config(), "session-injected", binding)
         .expect("default runtime tool view");
@@ -2304,7 +2304,7 @@ async fn default_runtime_can_resolve_context_engine_from_registry() {
         .expect("register context engine");
     let runtime = DefaultConversationRuntime::from_engine_id(Some("stub-registry"))
         .expect("resolve context engine from registry");
-    let binding = crate::conversation::ConversationRuntimeBinding::direct();
+    let binding = crate::conversation::ConversationRuntimeBinding::advisory_only();
     let tool_view = runtime
         .tool_view(&test_config(), "session-registry", binding)
         .expect("default runtime tool view");
@@ -2333,7 +2333,7 @@ async fn default_runtime_prefers_configured_context_engine_when_env_not_set() {
 
     let runtime =
         load_default_conversation_runtime(&config).expect("resolve context engine from config");
-    let binding = ConversationRuntimeBinding::direct();
+    let binding = ConversationRuntimeBinding::advisory_only();
     let tool_view = runtime
         .tool_view(&config, "session-config", binding)
         .expect("configured runtime tool view");
@@ -2372,7 +2372,7 @@ async fn default_runtime_applies_turn_middlewares_in_declared_order() {
             )),
         ],
     );
-    let binding = ConversationRuntimeBinding::direct();
+    let binding = ConversationRuntimeBinding::advisory_only();
     let assembled = runtime
         .build_context(
             &test_config(),
@@ -2526,7 +2526,7 @@ fn collect_context_engine_runtime_snapshot_reports_turn_middleware_selection() {
 async fn default_runtime_build_messages_respects_restricted_tool_view() {
     let runtime = DefaultConversationRuntime::default();
     let view = crate::tools::ToolView::from_tool_names(["file.read"]);
-    let binding = ConversationRuntimeBinding::direct();
+    let binding = ConversationRuntimeBinding::advisory_only();
 
     let messages = runtime
         .build_messages(&test_config(), "noop-session", true, &view, binding)
@@ -2579,7 +2579,7 @@ fn default_runtime_tool_view_uses_persisted_delegate_child_restrictions() {
         .tool_view(
             &config,
             "child-session",
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .expect("child tool view");
 
@@ -2626,7 +2626,7 @@ fn default_runtime_tool_view_intersects_root_session_with_persisted_tool_policy(
         .tool_view(
             &config,
             "root-session",
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .expect("root tool view");
 
@@ -2654,7 +2654,7 @@ fn default_runtime_tool_view_errors_when_session_repository_is_unavailable() {
         .tool_view(
             &config,
             "root-session",
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .expect_err("tool view should fail closed when the session repository is unavailable");
 
@@ -2694,7 +2694,7 @@ fn default_runtime_tool_view_denies_delegate_for_broken_lineage_child() {
         .tool_view(
             &config,
             "child-session",
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .expect("child tool view");
 
@@ -2740,7 +2740,7 @@ fn default_runtime_session_context_uses_persisted_parent_session_id() {
         .session_context(
             &config,
             "child-session",
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .expect("session context");
 
@@ -2769,7 +2769,7 @@ fn default_runtime_session_context_errors_when_session_repository_is_unavailable
         .session_context(
             &config,
             "root-session",
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .expect_err(
             "session context should fail closed when the session repository is unavailable",
@@ -2842,7 +2842,7 @@ fn default_runtime_session_context_uses_persisted_subagent_profile() {
         .session_context(
             &config,
             "child-session",
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .expect("session context");
 
@@ -2909,7 +2909,7 @@ fn default_runtime_session_context_derives_subagent_profile_for_legacy_child_wit
         .session_context(
             &config,
             "child-session",
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .expect("session context");
 
@@ -2994,7 +2994,7 @@ fn default_runtime_tool_view_respects_persisted_leaf_subagent_profile() {
         .tool_view(
             &config,
             "child-session",
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .expect("child tool view");
 
@@ -3271,7 +3271,7 @@ async fn default_runtime_delegates_subagent_lifecycle_to_context_engine_with_ker
 #[tokio::test]
 async fn default_runtime_build_context_applies_system_prompt_addition() {
     let runtime = DefaultConversationRuntime::with_context_engine(StubSystemPromptAdditionEngine);
-    let binding = crate::conversation::ConversationRuntimeBinding::direct();
+    let binding = crate::conversation::ConversationRuntimeBinding::advisory_only();
     let assembled = runtime
         .build_context(&test_config(), "session-system-addition", true, binding)
         .await
@@ -3324,7 +3324,7 @@ async fn default_runtime_build_context_merges_delegate_runtime_contract_with_sys
         sample_delegate_runtime_narrowing(),
     );
     let runtime = DefaultConversationRuntime::with_context_engine(StubSystemPromptAdditionEngine);
-    let binding = crate::conversation::ConversationRuntimeBinding::direct();
+    let binding = crate::conversation::ConversationRuntimeBinding::advisory_only();
 
     let assembled = runtime
         .build_context(&config, &child_session_id, true, binding)
@@ -3380,7 +3380,7 @@ async fn default_runtime_build_context_includes_delegate_profile_guidance_before
         Some(crate::conversation::DelegateBuiltinProfile::Plan),
     );
     let runtime = DefaultConversationRuntime::with_context_engine(StubSystemPromptAdditionEngine);
-    let binding = crate::conversation::ConversationRuntimeBinding::direct();
+    let binding = crate::conversation::ConversationRuntimeBinding::advisory_only();
 
     let assembled = runtime
         .build_context(&config, &child_session_id, true, binding)
@@ -3503,7 +3503,7 @@ async fn default_runtime_kernel_stage_hydration_still_applies_system_prompt_addi
 async fn default_runtime_build_context_does_not_add_delegate_runtime_contract_for_unpersisted_session()
  {
     let runtime = DefaultConversationRuntime::default();
-    let binding = crate::conversation::ConversationRuntimeBinding::direct();
+    let binding = crate::conversation::ConversationRuntimeBinding::advisory_only();
 
     let assembled = runtime
         .build_context(&test_config(), "root-session-no-contract", true, binding)
@@ -3538,7 +3538,7 @@ async fn default_runtime_build_context_does_not_add_delegate_runtime_contract_fo
     .expect("create root session");
 
     let runtime = DefaultConversationRuntime::default();
-    let binding = crate::conversation::ConversationRuntimeBinding::direct();
+    let binding = crate::conversation::ConversationRuntimeBinding::advisory_only();
 
     let assembled = runtime
         .build_context(&config, "root-session-no-contract", true, binding)
@@ -3564,7 +3564,7 @@ async fn default_runtime_build_context_skips_delegate_runtime_contract_for_empty
         crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
     );
     let runtime = DefaultConversationRuntime::default();
-    let binding = crate::conversation::ConversationRuntimeBinding::direct();
+    let binding = crate::conversation::ConversationRuntimeBinding::advisory_only();
 
     let assembled = runtime
         .build_context(&config, &child_session_id, true, binding)
@@ -3597,7 +3597,7 @@ async fn default_runtime_build_context_uses_effective_private_host_policy_in_del
         },
     );
     let runtime = DefaultConversationRuntime::default();
-    let binding = crate::conversation::ConversationRuntimeBinding::direct();
+    let binding = crate::conversation::ConversationRuntimeBinding::advisory_only();
 
     let assembled = runtime
         .build_context(&config, &child_session_id, true, binding)
@@ -3634,7 +3634,7 @@ async fn default_runtime_build_context_surfaces_fail_closed_allowlist_intersecti
         },
     );
     let runtime = DefaultConversationRuntime::default();
-    let binding = crate::conversation::ConversationRuntimeBinding::direct();
+    let binding = crate::conversation::ConversationRuntimeBinding::advisory_only();
 
     let assembled = runtime
         .build_context(&config, &child_session_id, true, binding)
@@ -3682,7 +3682,7 @@ async fn default_runtime_build_context_matches_builtin_summary_projection() {
             &config,
             &session_id,
             true,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("build context from default runtime");
@@ -3754,7 +3754,7 @@ async fn default_runtime_build_context_rehydrates_runtime_self_continuity_when_l
             &config,
             &session_id,
             true,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("build context from stored continuity");
@@ -3827,7 +3827,7 @@ async fn default_runtime_build_context_rehydrates_delegate_child_runtime_self_co
             &config,
             &child_session_id,
             true,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("build child context from inherited continuity");
@@ -3987,7 +3987,7 @@ async fn default_runtime_build_context_explicit_builtin_system_preserves_profile
             &config,
             &session_id,
             true,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("build context from default runtime");
@@ -4352,7 +4352,7 @@ async fn default_runtime_build_context_fail_open_memory_derivation_preserves_rec
             &config,
             &session_id,
             true,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("build context should stay available when memory derivation degrades");
@@ -4499,7 +4499,7 @@ async fn default_runtime_build_context_with_registry_selected_system_keeps_runti
             &config,
             &session_id,
             true,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("build context with registry-selected system");
@@ -4572,7 +4572,7 @@ async fn default_runtime_build_context_with_recall_first_system_prioritizes_reca
             &config,
             &session_id,
             true,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("build context with recall-first system");
@@ -4770,7 +4770,7 @@ async fn default_runtime_prefers_env_context_engine_over_config() {
 
     let runtime = load_default_conversation_runtime(&config)
         .expect("resolve context engine from env override");
-    let binding = ConversationRuntimeBinding::direct();
+    let binding = ConversationRuntimeBinding::advisory_only();
     let tool_view = runtime
         .tool_view(&config, "session-env-priority", binding)
         .expect("env-selected runtime tool view");
@@ -4805,7 +4805,7 @@ fn conversation_runtime_trait_default_tool_view_includes_runtime_discovered_feis
         .tool_view(
             &config,
             "session-feishu-runtime-tools",
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .expect("trait default tool view");
 
@@ -4916,7 +4916,7 @@ async fn handle_turn_with_runtime_success_without_kernel_skips_lifecycle_hooks()
             "hello",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("handle turn success without kernel");
@@ -4986,7 +4986,7 @@ async fn persist_turn_provider_turns_expose_typed_canonical_records() {
             "hello canonical memory",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("provider turn should succeed");
@@ -5038,7 +5038,7 @@ async fn handle_turn_with_runtime_keeps_provider_path_by_default_when_acp_enable
             "hello from channel",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("default handle_turn should stay on provider path");
@@ -5077,7 +5077,7 @@ async fn handle_turn_with_runtime_routes_explicit_acp_turns_through_acp() {
                 routing_intent: AcpRoutingIntent::Explicit,
                 ..AcpConversationTurnOptions::default()
             },
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("explicit ACP turn should route through ACP");
@@ -5206,7 +5206,7 @@ async fn handle_turn_with_observer_routes_explicit_acp_turns_through_acp() {
             "hello from channel",
             ProviderErrorMode::Propagate,
             &acp_options,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
             None,
             Some(observer_handle),
             None,
@@ -5275,7 +5275,7 @@ async fn persist_turn_explicit_acp_routing_exposes_typed_canonical_records() {
                 routing_intent: AcpRoutingIntent::Explicit,
                 ..AcpConversationTurnOptions::default()
             },
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("explicit ACP turn should succeed");
@@ -5350,7 +5350,7 @@ async fn handle_turn_with_runtime_merges_additional_acp_bootstrap_mcp_servers_fr
                 additional_bootstrap_mcp_servers: Some(extra_servers.as_slice()),
                 ..AcpConversationTurnOptions::default()
             },
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("ACP-routed turn with additional bootstrap MCP servers should succeed");
@@ -5398,7 +5398,7 @@ async fn handle_turn_with_runtime_applies_acp_turn_provenance_metadata() {
                 },
                 ..AcpConversationTurnOptions::default()
             },
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("ACP-routed turn with provenance should succeed");
@@ -5467,7 +5467,7 @@ async fn handle_turn_with_runtime_applies_acp_working_directory_from_options() {
                 working_directory: Some(working_directory.as_path()),
                 ..AcpConversationTurnOptions::default()
             },
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("ACP-routed turn with working directory should succeed");
@@ -5519,7 +5519,7 @@ async fn handle_turn_with_runtime_falls_back_to_dispatch_acp_working_directory()
                 routing_intent: AcpRoutingIntent::Explicit,
                 ..AcpConversationTurnOptions::default()
             },
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("ACP-routed turn should inherit dispatch working directory");
@@ -5565,7 +5565,7 @@ async fn handle_turn_with_runtime_uses_provider_path_when_acp_dispatch_is_disabl
             "hello provider path",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("provider path should remain available when ACP dispatch is disabled");
@@ -5611,7 +5611,7 @@ async fn handle_turn_with_runtime_explicit_acp_request_bypasses_dispatch_gate() 
                 routing_intent: AcpRoutingIntent::Explicit,
                 ..AcpConversationTurnOptions::default()
             },
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("explicit ACP requests should bypass automatic dispatch gating");
@@ -5642,7 +5642,7 @@ async fn handle_turn_with_runtime_explicit_acp_request_fails_closed_when_acp_is_
                 routing_intent: AcpRoutingIntent::Explicit,
                 ..AcpConversationTurnOptions::default()
             },
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("inline mode should synthesize a clear ACP-disabled reply");
@@ -5676,7 +5676,7 @@ async fn handle_turn_with_runtime_routes_only_agent_prefixed_sessions_when_confi
             "should stay on provider path",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("non-prefixed session should stay on provider path");
@@ -5689,7 +5689,7 @@ async fn handle_turn_with_runtime_routes_only_agent_prefixed_sessions_when_confi
             "should route through ACP",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("prefixed session should route through ACP");
@@ -5755,7 +5755,7 @@ async fn persist_turn_automatic_acp_routing_exposes_typed_canonical_records() {
             "hello automatic canonical",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("automatic ACP turn should succeed");
@@ -5818,7 +5818,7 @@ async fn handle_turn_with_runtime_automatic_acp_routing_bypasses_context_engine_
             "route automatically through ACP",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("automatic ACP turn should succeed");
@@ -5895,7 +5895,7 @@ async fn handle_turn_with_runtime_routes_only_allowed_channels_into_acp() {
             "hello telegram",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("telegram session should route through ACP");
@@ -5934,7 +5934,7 @@ async fn handle_turn_with_runtime_routes_only_allowed_channels_into_acp() {
             "hello feishu",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("feishu session should stay on provider path");
@@ -5974,7 +5974,7 @@ async fn handle_turn_with_runtime_and_address_routes_structured_channel_scope_in
             ProviderErrorMode::Propagate,
             &runtime,
             &AcpConversationTurnOptions::automatic(),
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("structured channel address should route through ACP");
@@ -6053,7 +6053,7 @@ async fn handle_turn_with_runtime_and_address_enforces_account_and_thread_dispat
             ProviderErrorMode::Propagate,
             &runtime,
             &AcpConversationTurnOptions::automatic(),
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("thread-bound allowed address should route through ACP");
@@ -6067,7 +6067,7 @@ async fn handle_turn_with_runtime_and_address_enforces_account_and_thread_dispat
             ProviderErrorMode::Propagate,
             &runtime,
             &AcpConversationTurnOptions::automatic(),
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("root conversation should stay on provider path");
@@ -6126,7 +6126,7 @@ async fn handle_turn_with_runtime_formats_acp_errors_inline_when_requested() {
                 routing_intent: AcpRoutingIntent::Explicit,
                 ..AcpConversationTurnOptions::default()
             },
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("ACP inline error mode should synthesize a reply");
@@ -6171,7 +6171,7 @@ async fn handle_turn_with_runtime_reuses_shared_acp_session_between_turns() {
                 routing_intent: AcpRoutingIntent::Explicit,
                 ..AcpConversationTurnOptions::default()
             },
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("first ACP-routed turn");
@@ -6186,7 +6186,7 @@ async fn handle_turn_with_runtime_reuses_shared_acp_session_between_turns() {
                 routing_intent: AcpRoutingIntent::Explicit,
                 ..AcpConversationTurnOptions::default()
             },
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("second ACP-routed turn");
@@ -6236,7 +6236,7 @@ async fn handle_turn_with_runtime_persists_acp_runtime_events_when_enabled() {
                 routing_intent: AcpRoutingIntent::Explicit,
                 ..AcpConversationTurnOptions::default()
             },
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("ACP-routed turn with runtime events should succeed");
@@ -6342,7 +6342,7 @@ async fn handle_turn_with_runtime_streams_acp_runtime_events_to_external_sink_wi
             ProviderErrorMode::Propagate,
             &runtime,
             &acp_options,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("ACP-routed turn with external event sink should succeed");
@@ -6411,7 +6411,7 @@ async fn handle_turn_with_runtime_streams_and_persists_acp_runtime_events_when_b
             ProviderErrorMode::Propagate,
             &runtime,
             &acp_options,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("ACP-routed turn with external sink and persistence should succeed");
@@ -6483,7 +6483,7 @@ async fn handle_turn_with_runtime_automatic_acp_uses_injected_manager() {
             ProviderErrorMode::Propagate,
             &runtime,
             &acp_options,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
             None,
             None,
             None,
@@ -6524,7 +6524,7 @@ async fn handle_turn_with_runtime_skips_compaction_when_disabled() {
             "hello",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("handle turn success");
@@ -6556,7 +6556,7 @@ async fn handle_turn_with_runtime_skips_compaction_below_min_messages() {
             "hello",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("handle turn success");
@@ -6589,7 +6589,7 @@ async fn handle_turn_with_runtime_skips_compaction_below_token_threshold() {
             "hello",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("handle turn success");
@@ -7004,7 +7004,7 @@ async fn handle_turn_with_runtime_persists_turn_checkpoint_event_for_propagated_
             "hello",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect_err("propagated provider error should still persist checkpoint event");
@@ -7093,7 +7093,7 @@ async fn handle_turn_with_runtime_propagates_error_without_persisting_reply_turn
             "hello",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect_err("propagate mode should return error");
@@ -7145,7 +7145,7 @@ async fn handle_turn_with_runtime_inline_mode_returns_synthetic_reply_and_persis
             "hello",
             ProviderErrorMode::InlineMessage,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("inline mode should return synthetic reply");
@@ -7339,7 +7339,7 @@ async fn handle_turn_with_runtime_nonterminal_continuation_requests_followup_pro
             "wait for the delegated session to finish and then summarize it",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("continuation followup turn should succeed");
@@ -7460,7 +7460,7 @@ async fn handle_turn_with_runtime_rejects_done_reply_that_still_requests_more_ev
             "wait for the delegated session to finish and then summarize it",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("continuation done-gate turn should succeed");
@@ -7560,7 +7560,7 @@ async fn handle_turn_with_runtime_repairs_done_reply_that_still_requests_more_ev
             "wait for the delegated session to finish and then summarize it",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("continuation done-repair turn should succeed");
@@ -7688,7 +7688,7 @@ async fn default_runtime_build_context_includes_tool_discovery_delta_from_persis
             &config,
             session_id,
             true,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("build context");
@@ -7749,7 +7749,7 @@ async fn default_runtime_build_context_sanitizes_tool_discovery_delta_advisory_t
             &config,
             session_id,
             true,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("build context");
@@ -7809,7 +7809,7 @@ async fn default_runtime_build_messages_filters_tool_discovery_delta_to_requeste
             session_id,
             true,
             &requested_tool_view,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("build messages");
@@ -7877,7 +7877,7 @@ async fn default_runtime_build_context_uses_configured_runtime_tool_view_for_too
             &config,
             session_id,
             true,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("build context");
@@ -8611,7 +8611,7 @@ async fn handle_turn_with_runtime_persists_fast_lane_tool_batch_event_for_mixed_
             "inspect the session state and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("mixed fast-lane batch turn should succeed");
@@ -8915,7 +8915,7 @@ async fn handle_turn_with_runtime_safe_lane_honors_configured_tool_step_budget()
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("safe lane should execute with the internal step budget");
@@ -9111,7 +9111,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_path_bypasses_turn_step_limit()
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("safe lane plan path should return inline tool error");
@@ -9162,7 +9162,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_persists_runtime_events_when_en
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("safe lane plan should produce a reply");
@@ -9290,7 +9290,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_persists_runtime_events_without
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("safe lane plan should produce a reply");
@@ -10802,7 +10802,7 @@ async fn handle_turn_with_runtime_tool_denial_returns_inline_reply_even_in_propa
             "read note.md",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("tool denial should still return inline assistant text");
@@ -11182,7 +11182,7 @@ async fn handle_turn_with_runtime_tool_failure_completion_error_uses_raw_reason_
             "read note.md",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("fallback should still return assistant text");
@@ -11234,7 +11234,7 @@ async fn handle_turn_with_runtime_repairs_done_reply_that_still_leaks_tool_reque
             "Summarize https://github.com/chumyin",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("repairable markup leak should still return a clean reply");
@@ -11275,7 +11275,7 @@ async fn handle_turn_with_runtime_repairs_done_reply_that_still_leaks_to_equals_
             "Summarize https://example.com",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("repairable to= leak should still return a clean reply");
@@ -11312,7 +11312,7 @@ async fn handle_turn_with_runtime_accepts_clean_repair_reply_without_followup_ma
             "Summarize https://example.com",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("clean repair reply without a marker should be accepted");
@@ -11355,7 +11355,7 @@ async fn handle_turn_with_runtime_accepts_clean_to_equals_repair_reply_without_f
             "Summarize https://example.com",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("clean to= repair reply without a marker should be accepted");
@@ -11459,14 +11459,14 @@ async fn handle_turn_with_runtime_direct_core_tool_persists_trust_binding_missin
             "read note.md",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
-        .expect("direct binding fallback should still return assistant text");
+        .expect("advisory-only binding fallback should still return assistant text");
 
     assert!(
         reply.contains("no_kernel_context"),
-        "expected direct binding denial, got: {reply}"
+        "expected advisory-only binding denial, got: {reply}"
     );
 
     let persisted = runtime.persisted.lock().expect("persisted lock").clone();
@@ -11531,7 +11531,7 @@ async fn handle_turn_with_runtime_inline_provider_error_persists_provider_failov
             "hello",
             ProviderErrorMode::InlineMessage,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("inline provider error should still return assistant text");
@@ -11603,7 +11603,7 @@ async fn handle_turn_with_runtime_auth_rejected_provider_error_marks_rejected_tr
             "hello",
             ProviderErrorMode::InlineMessage,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("inline provider error should still return assistant text");
@@ -11997,7 +11997,7 @@ async fn turn_engine_routes_app_tools_through_dispatcher() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn turn_engine_routes_direct_binding_to_app_dispatcher() {
+async fn turn_engine_routes_advisory_only_binding_to_app_dispatcher() {
     use async_trait::async_trait;
     use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 
@@ -12055,7 +12055,7 @@ async fn turn_engine_routes_direct_binding_to_app_dispatcher() {
             &turn,
             &session_context,
             &dispatcher,
-            crate::conversation::ConversationRuntimeBinding::direct(),
+            crate::conversation::ConversationRuntimeBinding::advisory_only(),
             None,
         )
         .await;
@@ -12074,7 +12074,7 @@ async fn turn_engine_routes_direct_binding_to_app_dispatcher() {
                     .as_str()
                     .expect("payload summary should be text")
                     .contains("\"binding_scope\":\"direct\""),
-                "expected direct binding payload in output, got: {text}"
+                "expected advisory-only binding payload in output, got: {text}"
             );
         }
         other @ TurnResult::NeedsApproval(_)
@@ -12098,7 +12098,7 @@ async fn turn_engine_routes_direct_binding_to_app_dispatcher() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn turn_engine_direct_binding_denies_sessions_send_before_dispatch() {
+async fn turn_engine_advisory_only_binding_denies_sessions_send_before_dispatch() {
     use async_trait::async_trait;
     use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 
@@ -12160,7 +12160,7 @@ async fn turn_engine_direct_binding_denies_sessions_send_before_dispatch() {
             &turn,
             &session_context,
             &dispatcher,
-            crate::conversation::ConversationRuntimeBinding::direct(),
+            crate::conversation::ConversationRuntimeBinding::advisory_only(),
             None,
         )
         .await;
@@ -12277,7 +12277,7 @@ async fn turn_engine_requires_governed_approval_before_later_app_intent_executio
             &turn,
             &session_context,
             &dispatcher,
-            crate::conversation::ConversationRuntimeBinding::direct(),
+            crate::conversation::ConversationRuntimeBinding::advisory_only(),
             None,
         )
         .await;
@@ -12423,7 +12423,7 @@ async fn governed_runtime_binding_routes_mutating_app_intent_to_approval_on_advi
             &turn,
             &session_context,
             &dispatcher,
-            crate::conversation::ConversationRuntimeBinding::direct(),
+            crate::conversation::ConversationRuntimeBinding::advisory_only(),
             None,
             None,
         )
@@ -12539,7 +12539,7 @@ async fn turn_engine_fails_closed_before_kernel_binding_error_for_later_core_int
             &turn,
             &session_context,
             &dispatcher,
-            crate::conversation::ConversationRuntimeBinding::direct(),
+            crate::conversation::ConversationRuntimeBinding::advisory_only(),
             None,
         )
         .await;
@@ -12649,7 +12649,7 @@ async fn turn_engine_parallel_safe_app_batch_executes_concurrently_in_source_ord
             &turn,
             &session_context,
             &dispatcher,
-            crate::conversation::ConversationRuntimeBinding::direct(),
+            crate::conversation::ConversationRuntimeBinding::advisory_only(),
             None,
         )
         .await;
@@ -12794,7 +12794,7 @@ async fn turn_engine_parallel_safe_app_batch_returns_failure_without_waiting_for
             &turn,
             &session_context,
             &dispatcher,
-            crate::conversation::ConversationRuntimeBinding::direct(),
+            crate::conversation::ConversationRuntimeBinding::advisory_only(),
             None,
         )
         .await;
@@ -12988,7 +12988,7 @@ async fn turn_engine_mixed_batch_parallelizes_parallel_safe_segments_without_cro
             &turn,
             &session_context,
             &dispatcher,
-            crate::conversation::ConversationRuntimeBinding::direct(),
+            crate::conversation::ConversationRuntimeBinding::advisory_only(),
             None,
         )
         .await;
@@ -13102,7 +13102,7 @@ async fn default_app_tool_dispatcher_executes_session_wait_for_visible_terminal_
                     "timeout_ms": 50
                 }),
             },
-            crate::conversation::ConversationRuntimeBinding::direct(),
+            crate::conversation::ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("session_wait outcome");
@@ -13161,7 +13161,7 @@ async fn child_session_hidden_session_wait_is_rejected_by_default_dispatcher() {
                     "timeout_ms": 10
                 }),
             },
-            crate::conversation::ConversationRuntimeBinding::direct(),
+            crate::conversation::ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect_err("child should not execute hidden session_wait");
@@ -13221,7 +13221,7 @@ async fn child_session_hidden_sessions_send_is_rejected_by_default_dispatcher() 
                     "text": "hello"
                 }),
             },
-            crate::conversation::ConversationRuntimeBinding::direct(),
+            crate::conversation::ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect_err("child should not execute hidden sessions_send");
@@ -13416,7 +13416,7 @@ async fn continue_session_with_runtime_reopens_completed_delegate_child_and_refr
         &config.tools,
         &config,
         &runtime,
-        ConversationRuntimeBinding::direct(),
+        ConversationRuntimeBinding::advisory_only(),
     )
     .await
     .expect("session_continue should succeed");
@@ -13530,7 +13530,7 @@ async fn continue_session_with_runtime_preserves_prior_terminal_outcome_when_res
         &config.tools,
         &config,
         &runtime,
-        ConversationRuntimeBinding::direct(),
+        ConversationRuntimeBinding::advisory_only(),
     )
     .await
     .expect("session_continue should return an error outcome");
@@ -13636,7 +13636,7 @@ async fn continue_session_with_runtime_backfills_profile_from_older_delegate_anc
         &config.tools,
         &config,
         &runtime,
-        ConversationRuntimeBinding::direct(),
+        ConversationRuntimeBinding::advisory_only(),
     )
     .await
     .expect("session_continue should succeed");
@@ -13682,7 +13682,7 @@ async fn continue_session_with_runtime_rejects_running_delegate_child() {
         &config.tools,
         &config,
         &runtime,
-        ConversationRuntimeBinding::direct(),
+        ConversationRuntimeBinding::advisory_only(),
     )
     .await
     .expect_err("running child must be rejected");
@@ -13755,7 +13755,7 @@ async fn continue_session_with_runtime_rejects_failed_delegate_child() {
         &config.tools,
         &config,
         &runtime,
-        ConversationRuntimeBinding::direct(),
+        ConversationRuntimeBinding::advisory_only(),
     )
     .await
     .expect_err("failed child must be rejected");
@@ -13837,7 +13837,7 @@ async fn continue_session_with_runtime_rejects_archived_delegate_child() {
         &config.tools,
         &config,
         &runtime,
-        ConversationRuntimeBinding::direct(),
+        ConversationRuntimeBinding::advisory_only(),
     )
     .await
     .expect_err("archived child must be rejected");
@@ -13911,7 +13911,7 @@ async fn continue_session_with_runtime_rejects_invalid_timeout_override() {
         &config.tools,
         &config,
         &runtime,
-        ConversationRuntimeBinding::direct(),
+        ConversationRuntimeBinding::advisory_only(),
     )
     .await
     .expect_err("invalid timeout override must be rejected");
@@ -14005,7 +14005,7 @@ async fn continue_session_with_runtime_caps_timeout_override_and_persists_contra
         &config.tools,
         &config,
         &runtime,
-        ConversationRuntimeBinding::direct(),
+        ConversationRuntimeBinding::advisory_only(),
     )
     .await
     .expect("session_continue should succeed");
@@ -14066,7 +14066,7 @@ async fn default_app_tool_dispatcher_rejects_session_continue_without_runtime_co
                     "input": "continue"
                 }),
             },
-            crate::conversation::ConversationRuntimeBinding::direct(),
+            crate::conversation::ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect_err("session_continue without runtime config should fail");
@@ -15381,7 +15381,7 @@ async fn autonomy_policy_turn_engine_advisory_binding_denies_session_mutation_be
         raw_meta: Value::Null,
     };
     let engine = TurnEngine::new(5);
-    let binding = ConversationRuntimeBinding::direct();
+    let binding = ConversationRuntimeBinding::advisory_only();
     let result = engine
         .execute_turn_in_context(&turn, &session_context, &dispatcher, binding, None)
         .await;
@@ -15926,7 +15926,7 @@ async fn turn_engine_persists_tool_lifecycle_events() {
         "turn-1",
         "call-1",
         &decision,
-        ConversationRuntimeBinding::direct(),
+        ConversationRuntimeBinding::advisory_only(),
     )
     .await
     .expect("persist decision");
@@ -15937,7 +15937,7 @@ async fn turn_engine_persists_tool_lifecycle_events() {
         "turn-1",
         "call-1",
         &outcome,
-        ConversationRuntimeBinding::direct(),
+        ConversationRuntimeBinding::advisory_only(),
     )
     .await
     .expect("persist outcome");
@@ -16036,8 +16036,8 @@ fn build_kernel_context_with_window_turns(
 }
 
 #[test]
-fn conversation_runtime_binding_direct_reports_no_kernel_context() {
-    let binding = crate::conversation::ConversationRuntimeBinding::Direct;
+fn conversation_runtime_binding_advisory_only_reports_no_kernel_context() {
+    let binding = crate::conversation::ConversationRuntimeBinding::AdvisoryOnly;
 
     assert!(!binding.is_kernel_bound());
     assert!(binding.kernel_context().is_none());
@@ -16053,8 +16053,8 @@ fn conversation_runtime_binding_kernel_exposes_bound_context() {
 }
 
 #[test]
-fn governed_runtime_binding_direct_alias_is_advisory_only_and_non_mutating() {
-    let binding = crate::conversation::ConversationRuntimeBinding::Direct;
+fn conversation_runtime_binding_advisory_only_is_non_mutating() {
+    let binding = crate::conversation::ConversationRuntimeBinding::AdvisoryOnly;
 
     assert_eq!(
         binding.session_mode(),
@@ -17045,7 +17045,7 @@ async fn load_turn_checkpoint_event_summary_direct_read_failure_uses_neutral_err
     let error = load_turn_checkpoint_event_summary(
         "session-direct-read-error",
         8,
-        ConversationRuntimeBinding::direct(),
+        ConversationRuntimeBinding::advisory_only(),
         &mem_config,
     )
     .await
@@ -17113,11 +17113,11 @@ async fn load_discovery_first_event_summary_accepts_explicit_runtime_binding() {
     let direct_summary = load_discovery_first_event_summary(
         "session-discovery-first-direct",
         32,
-        ConversationRuntimeBinding::direct(),
+        ConversationRuntimeBinding::advisory_only(),
         &mem_config,
     )
     .await
-    .expect("load discovery-first summary via direct binding");
+    .expect("load discovery-first summary via advisory-only binding");
     assert_eq!(direct_summary.search_round_events, 1);
     assert_eq!(direct_summary.followup_requested_events, 1);
     assert_eq!(direct_summary.followup_result_events, 1);
@@ -17296,11 +17296,11 @@ async fn load_fast_lane_tool_batch_event_summary_accepts_explicit_runtime_bindin
     let direct_summary = load_fast_lane_tool_batch_event_summary(
         "session-fast-lane-batch-summary-direct",
         40,
-        ConversationRuntimeBinding::direct(),
+        ConversationRuntimeBinding::advisory_only(),
         &mem_config,
     )
     .await
-    .expect("load fast-lane batch summary via direct binding");
+    .expect("load fast-lane batch summary via advisory-only binding");
     assert_eq!(direct_summary.batch_events, 1);
     assert_eq!(direct_summary.latest_schema_version, Some(2));
     assert_eq!(direct_summary.latest_total_intents, Some(5));
@@ -17451,11 +17451,11 @@ async fn load_prompt_frame_event_summary_accepts_explicit_runtime_binding() {
     let direct_summary = load_prompt_frame_event_summary(
         "session-prompt-frame-summary-direct",
         40,
-        ConversationRuntimeBinding::direct(),
+        ConversationRuntimeBinding::advisory_only(),
         &mem_config,
     )
     .await
-    .expect("load prompt-frame summary via direct binding");
+    .expect("load prompt-frame summary via advisory-only binding");
     assert_eq!(direct_summary.snapshot_events, 1);
     assert_eq!(direct_summary.initial_snapshot_events, 1);
     assert_eq!(direct_summary.followup_snapshot_events, 0);
@@ -17625,7 +17625,7 @@ async fn persisted_turn_checkpoint_events_survive_reload_without_polluting_promp
             session_id,
             true,
             &crate::tools::runtime_tool_view_for_config(&config.tools),
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("reload prompt history");
@@ -17756,7 +17756,7 @@ async fn load_turn_checkpoint_event_summary_reads_recovery_state_from_sqlite_his
     let summary = load_turn_checkpoint_event_summary(
         session_id,
         32,
-        ConversationRuntimeBinding::direct(),
+        ConversationRuntimeBinding::advisory_only(),
         &mem_config,
     )
     .await
@@ -17980,7 +17980,7 @@ async fn repair_turn_checkpoint_tail_with_runtime_requires_manual_repair_without
             &config,
             session_id,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("repair should fail closed when identity is missing");
@@ -18097,7 +18097,7 @@ async fn repair_turn_checkpoint_tail_with_runtime_preserves_safe_lane_override_r
             &config,
             session_id,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("repair should downgrade to manual inspection");
@@ -18193,7 +18193,7 @@ async fn repair_turn_checkpoint_tail_with_runtime_requires_manual_repair_on_iden
             &config,
             session_id,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("repair should fail closed on mismatched visible tail");
@@ -18657,7 +18657,7 @@ async fn probe_turn_checkpoint_tail_runtime_gate_reports_preparation_content_mis
             session_id,
             limit,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("runtime probe should succeed")
@@ -18761,7 +18761,7 @@ async fn probe_turn_checkpoint_tail_runtime_gate_returns_none_when_repair_not_ne
             session_id,
             limit,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("not-needed probe should succeed");
@@ -18858,7 +18858,7 @@ async fn probe_turn_checkpoint_tail_runtime_gate_returns_none_for_summary_manual
             session_id,
             limit,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("summary-manual probe should succeed");
@@ -18957,7 +18957,7 @@ async fn probe_turn_checkpoint_tail_runtime_gate_returns_none_for_runnable_repai
             session_id,
             limit,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("runnable probe should succeed");
@@ -19055,7 +19055,7 @@ async fn load_turn_checkpoint_diagnostics_with_runtime_preserves_summary_manual_
             session_id,
             12,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("diagnostics should load");
@@ -19178,7 +19178,7 @@ async fn load_turn_checkpoint_diagnostics_with_runtime_preserves_summary_assessm
             session_id,
             12,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("diagnostics should load");
@@ -19293,7 +19293,7 @@ async fn load_turn_checkpoint_diagnostics_with_runtime_degrades_build_context_fa
             session_id,
             12,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("diagnostics should degrade instead of failing");
@@ -19471,7 +19471,7 @@ async fn handle_turn_with_runtime_passes_restricted_tool_view_into_provider_requ
             "hello",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("handle turn success");
@@ -19578,7 +19578,7 @@ async fn handle_turn_with_runtime_child_session_injects_runtime_narrowing_into_k
         .session_context(
             &config,
             "child-session",
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .expect("load child session context");
     assert_eq!(
@@ -19741,7 +19741,7 @@ async fn session_context_uses_persisted_child_tool_view_constraints() {
         .session_context(
             &config,
             "child-session",
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .expect("load child session context");
 
@@ -19943,7 +19943,7 @@ async fn trait_default_root_session_falls_back_to_configured_file_root() {
         .session_context(
             &config,
             "root-session",
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .expect("load trait-default root session context");
     let expected_file_root = dunce::canonicalize(&file_root).unwrap_or_else(|_| file_root.clone());
@@ -19981,7 +19981,7 @@ async fn root_session_ignores_nonexistent_configured_file_root_for_workspace_sco
         .session_context(
             &config,
             "root-session",
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .expect("load root session context with missing file root");
 
@@ -20007,7 +20007,7 @@ async fn session_context_preserves_child_profile_from_delegate_execution_contrac
         .session_context(
             &config,
             &child_session_id,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .expect("load child session context");
 
@@ -20087,7 +20087,7 @@ async fn trait_default_session_context_preserves_delegate_execution_contract() {
         .session_context(
             &config,
             "child-session",
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .expect("load child session context");
 
@@ -20185,7 +20185,7 @@ async fn session_context_preserves_child_runtime_narrowing_after_many_later_even
         .session_context(
             &config,
             "child-session",
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .expect("load child session context");
 
@@ -20237,7 +20237,7 @@ async fn session_context_merges_persisted_session_policy_runtime_narrowing() {
         .session_context(
             &config,
             &child_session_id,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .expect("load child session context");
 
@@ -20315,7 +20315,7 @@ async fn handle_turn_with_runtime_executes_session_tools_via_default_dispatcher(
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("handle turn success");
@@ -21154,7 +21154,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_approve_once_preserve
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("approval resolve reply");
@@ -21280,7 +21280,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_rejects_core_replay_f
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("advisory denial should still return a reply payload");
@@ -21403,7 +21403,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_kernel_replays_previo
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &direct_runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("direct approval resolve reply");
@@ -22009,7 +22009,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_deny_does_not_replay_
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("shell approval deny reply");
@@ -22326,7 +22326,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_approve_always_persis
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("approval resolve reply");
@@ -22562,7 +22562,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_deny_does_not_replay_
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("approval deny reply");
@@ -22657,7 +22657,7 @@ async fn spawn_background_delegate_with_runtime_creates_missing_root_session_sco
         Some("health-check".to_owned()),
         None,
         Some(42),
-        ConversationRuntimeBinding::direct(),
+        ConversationRuntimeBinding::advisory_only(),
     )
     .await
     .expect("background task should queue successfully");
@@ -22782,7 +22782,7 @@ async fn spawn_background_delegate_with_runtime_uses_default_timeout_when_omitte
         None,
         None,
         None,
-        ConversationRuntimeBinding::direct(),
+        ConversationRuntimeBinding::advisory_only(),
     )
     .await
     .expect("background task should queue successfully");
@@ -22801,7 +22801,8 @@ async fn spawn_background_delegate_with_runtime_uses_default_timeout_when_omitte
 
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
-async fn handle_turn_with_runtime_delegate_async_direct_binding_fails_before_persisting_approval() {
+async fn handle_turn_with_runtime_delegate_async_advisory_only_binding_fails_before_persisting_approval()
+ {
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-delegate-async", "direct-preflight-denied")
@@ -22853,7 +22854,7 @@ async fn handle_turn_with_runtime_delegate_async_direct_binding_fails_before_per
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("delegate_async direct denial reply");
@@ -22888,7 +22889,8 @@ async fn handle_turn_with_runtime_delegate_async_direct_binding_fails_before_per
 
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
-async fn handle_turn_with_runtime_delegate_async_direct_binding_still_fails_when_preapproved() {
+async fn handle_turn_with_runtime_delegate_async_advisory_only_binding_still_fails_when_preapproved()
+ {
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-delegate-async", "direct-preapproved-denied")
@@ -22941,7 +22943,7 @@ async fn handle_turn_with_runtime_delegate_async_direct_binding_still_fails_when
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("delegate_async preapproved direct denial reply");
@@ -23056,7 +23058,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_keeps_delegate_async_
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("approval resolve direct denial reply");
@@ -25109,7 +25111,7 @@ async fn handle_turn_with_runtime_executes_session_wait_via_default_dispatcher()
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("handle turn success");
@@ -25188,7 +25190,7 @@ async fn handle_turn_with_runtime_safe_lane_executes_session_tools_via_default_d
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("safe-lane handle turn success");
@@ -25380,7 +25382,7 @@ async fn handle_turn_with_runtime_safe_lane_executes_session_wait_via_default_di
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("safe-lane handle turn success");
@@ -25483,7 +25485,7 @@ async fn repair_turn_checkpoint_tail_requires_manual_repair_on_preparation_conte
             &config,
             session_id,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("context drift should downgrade to manual repair");
@@ -25604,7 +25606,7 @@ async fn repair_turn_checkpoint_tail_requires_manual_repair_on_preparation_conte
             &config,
             session_id,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("content drift should downgrade to manual repair");
@@ -25725,7 +25727,7 @@ async fn repair_turn_checkpoint_tail_requires_manual_repair_on_malformed_prepara
             &config,
             session_id,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("malformed preparation should downgrade to manual repair");
@@ -26081,7 +26083,7 @@ async fn durable_turn_checkpoint_repair_persists_finalized_checkpoint_and_repeat
     let summary_after_first = load_turn_checkpoint_event_summary(
         session_id,
         32,
-        ConversationRuntimeBinding::direct(),
+        ConversationRuntimeBinding::advisory_only(),
         &mem_config,
     )
     .await
@@ -26132,7 +26134,7 @@ async fn durable_turn_checkpoint_repair_persists_finalized_checkpoint_and_repeat
     let summary_after_second = load_turn_checkpoint_event_summary(
         session_id,
         32,
-        ConversationRuntimeBinding::direct(),
+        ConversationRuntimeBinding::advisory_only(),
         &mem_config,
     )
     .await
@@ -26226,7 +26228,7 @@ async fn repair_turn_checkpoint_tail_with_runtime_recovers_discovery_followup_ch
     let summary_after_failure = load_turn_checkpoint_event_summary(
         session_id,
         32,
-        ConversationRuntimeBinding::direct(),
+        ConversationRuntimeBinding::advisory_only(),
         &mem_config,
     )
     .await
@@ -26398,7 +26400,7 @@ async fn durable_turn_checkpoint_repair_persists_failed_terminal_checkpoint_then
     let summary_after_failure = load_turn_checkpoint_event_summary(
         session_id,
         32,
-        ConversationRuntimeBinding::direct(),
+        ConversationRuntimeBinding::advisory_only(),
         &mem_config,
     )
     .await
@@ -26467,7 +26469,7 @@ async fn durable_turn_checkpoint_repair_persists_failed_terminal_checkpoint_then
     let summary_after_retry = load_turn_checkpoint_event_summary(
         session_id,
         32,
-        ConversationRuntimeBinding::direct(),
+        ConversationRuntimeBinding::advisory_only(),
         &mem_config,
     )
     .await
@@ -26898,7 +26900,7 @@ async fn default_context_engine_advisory_context_includes_governed_runtime_bindi
             &config,
             "default-context-engine-advisory",
             true,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("assemble advisory context");
@@ -27632,7 +27634,7 @@ async fn handle_turn_with_runtime_persists_completed_compaction_checkpoint_when_
             session_id,
             true,
             &crate::tools::runtime_tool_view_for_config(&config.tools),
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("load prompt history after compaction");
@@ -27903,7 +27905,7 @@ async fn default_runtime_build_context_exposes_prompt_fragments() {
             &config,
             "prompt-fragment-runtime-session",
             true,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("build context");

@@ -574,22 +574,22 @@ fn concurrent_cli_host_exits_when_shutdown_is_requested() {
 async fn print_history_accepts_explicit_runtime_binding() {
     let (config, memory_config, sqlite_path) = init_chat_test_memory("diagnostics");
 
-    let session_id = "chat-binding-history-direct";
+    let session_id = "chat-binding-history-advisory-only";
     store::append_session_turn_direct(session_id, "user", "hello", &memory_config)
         .expect("persist user turn");
     store::append_session_turn_direct(session_id, "assistant", "world", &memory_config)
         .expect("persist assistant turn");
 
-    let direct_lines = load_history_lines(
+    let advisory_lines = load_history_lines(
         session_id,
         config.memory.sliding_window,
-        ConversationRuntimeBinding::direct(),
+        ConversationRuntimeBinding::advisory_only(),
         &memory_config,
     )
     .await
-    .expect("load history lines with explicit direct binding");
+    .expect("load history lines with explicit advisory-only binding");
     assert_eq!(
-        direct_lines,
+        advisory_lines,
         vec!["user: hello".to_owned(), "assistant: world".to_owned()]
     );
 
@@ -676,27 +676,28 @@ async fn print_history_rejects_non_ok_kernel_memory_outcome() {
 async fn safe_lane_summary_output_accepts_explicit_runtime_binding() {
     let (config, memory_config, sqlite_path) = init_chat_test_memory("safe-lane-output");
 
-    let direct_payloads = safe_lane_event_payloads();
+    let advisory_payloads = safe_lane_event_payloads();
     append_assistant_payloads(
-        "chat-binding-safe-lane-direct",
-        &direct_payloads,
+        "chat-binding-safe-lane-advisory-only",
+        &advisory_payloads,
         &memory_config,
     );
-    let direct_output = load_safe_lane_summary_output(
-        "chat-binding-safe-lane-direct",
+    let advisory_output = load_safe_lane_summary_output(
+        "chat-binding-safe-lane-advisory-only",
         64,
         &config.conversation,
-        ConversationRuntimeBinding::direct(),
+        ConversationRuntimeBinding::advisory_only(),
         &memory_config,
     )
     .await
-    .expect("load safe lane summary via direct binding");
+    .expect("load safe lane summary via advisory-only binding");
     assert!(
-        direct_output.contains("safe_lane_summary session=chat-binding-safe-lane-direct limit=64")
+        advisory_output
+            .contains("safe_lane_summary session=chat-binding-safe-lane-advisory-only limit=64")
     );
-    assert!(direct_output.contains("round_started=1"));
-    assert!(direct_output.contains("verify_failed=1"));
-    assert!(direct_output.contains("failure_code=safe_lane_plan_verify_failed"));
+    assert!(advisory_output.contains("round_started=1"));
+    assert!(advisory_output.contains("verify_failed=1"));
+    assert!(advisory_output.contains("failure_code=safe_lane_plan_verify_failed"));
 
     let kernel_payloads = safe_lane_event_payloads();
     let (kernel_ctx, invocations) =
@@ -735,39 +736,40 @@ async fn safe_lane_summary_output_accepts_explicit_runtime_binding() {
 async fn fast_lane_summary_output_accepts_explicit_runtime_binding() {
     let (_config, memory_config, sqlite_path) = init_chat_test_memory("fast-lane-output");
 
-    let direct_payloads = fast_lane_tool_batch_event_payloads();
+    let advisory_payloads = fast_lane_tool_batch_event_payloads();
     append_assistant_payloads(
-        "chat-binding-fast-lane-direct",
-        &direct_payloads,
+        "chat-binding-fast-lane-advisory-only",
+        &advisory_payloads,
         &memory_config,
     );
-    let direct_output = load_fast_lane_summary_output(
-        "chat-binding-fast-lane-direct",
+    let advisory_output = load_fast_lane_summary_output(
+        "chat-binding-fast-lane-advisory-only",
         72,
-        ConversationRuntimeBinding::direct(),
+        ConversationRuntimeBinding::advisory_only(),
         &memory_config,
     )
     .await
-    .expect("load fast lane summary via direct binding");
+    .expect("load fast lane summary via advisory-only binding");
     assert!(
-        direct_output.contains("fast_lane_summary session=chat-binding-fast-lane-direct limit=72")
+        advisory_output
+            .contains("fast_lane_summary session=chat-binding-fast-lane-advisory-only limit=72")
     );
-    assert!(direct_output.contains("batch_events=1"));
-    assert!(direct_output.contains("total_intents=5"));
-    assert!(direct_output.contains("parallel_safe_intents=4"));
-    assert!(direct_output.contains(
+    assert!(advisory_output.contains("batch_events=1"));
+    assert!(advisory_output.contains("total_intents=5"));
+    assert!(advisory_output.contains("parallel_safe_intents=4"));
+    assert!(advisory_output.contains(
             "aggregate_batches parallel_enabled=1 parallel_only=0 mixed=1 sequential_only=0 without_segments=0"
         ));
-    assert!(direct_output.contains(
+    assert!(advisory_output.contains(
             "aggregate_execution configured_max_in_flight_avg=2.000 configured_max_in_flight_max=2 configured_max_in_flight_samples=1 observed_peak_in_flight_avg=2.000 observed_peak_in_flight_max=2 observed_peak_in_flight_samples=1 degraded_parallel_segments=0"
         ));
-    assert!(direct_output.contains(
+    assert!(advisory_output.contains(
             "aggregate_latency observed_wall_time_ms_avg=34.000 observed_wall_time_ms_max=34 observed_wall_time_ms_samples=1"
         ));
-    assert!(direct_output.contains(
+    assert!(advisory_output.contains(
             "latest_batch total_intents=5 parallel_enabled=true max_in_flight=2 observed_peak_in_flight=2 observed_wall_time_ms=34 parallel_safe_intents=4 serial_only_intents=1 parallel_segments=2 sequential_segments=1"
         ));
-    assert!(direct_output.contains(
+    assert!(advisory_output.contains(
             "latest_segments=0:parallel_safe/parallel/2[peak=2 wall_ms=14],1:serial_only/sequential/1[peak=1 wall_ms=8],2:parallel_safe/parallel/2[peak=2 wall_ms=12]"
         ));
 
@@ -828,7 +830,7 @@ async fn fast_lane_summary_output_accepts_legacy_schema_v1_events() {
     let output = load_fast_lane_summary_output(
         "chat-binding-fast-lane-legacy",
         32,
-        ConversationRuntimeBinding::direct(),
+        ConversationRuntimeBinding::advisory_only(),
         &memory_config,
     )
     .await
@@ -924,28 +926,28 @@ fn format_fast_lane_summary_includes_window_aggregates() {
 async fn turn_checkpoint_summary_output_accepts_explicit_runtime_binding() {
     let (config, memory_config, sqlite_path) = init_chat_test_memory("turn-checkpoint-output");
 
-    let direct_payloads = turn_checkpoint_event_payloads();
+    let advisory_payloads = turn_checkpoint_event_payloads();
     append_assistant_payloads(
-        "chat-binding-turn-checkpoint-direct",
-        &direct_payloads,
+        "chat-binding-turn-checkpoint-advisory-only",
+        &advisory_payloads,
         &memory_config,
     );
     let coordinator = ConversationTurnCoordinator::new();
-    let direct_output = load_turn_checkpoint_summary_output(
+    let advisory_output = load_turn_checkpoint_summary_output(
         &coordinator,
         &config,
-        "chat-binding-turn-checkpoint-direct",
+        "chat-binding-turn-checkpoint-advisory-only",
         96,
-        ConversationRuntimeBinding::direct(),
+        ConversationRuntimeBinding::advisory_only(),
     )
     .await
-    .expect("load turn checkpoint summary via direct binding");
-    assert!(direct_output.contains(
-        "turn_checkpoint_summary session=chat-binding-turn-checkpoint-direct limit=96 checkpoints=2"
+    .expect("load turn checkpoint summary via advisory-only binding");
+    assert!(advisory_output.contains(
+        "turn_checkpoint_summary session=chat-binding-turn-checkpoint-advisory-only limit=96 checkpoints=2"
     ));
-    assert!(direct_output.contains("state=finalized"));
-    assert!(direct_output.contains("after_turn=completed"));
-    assert!(direct_output.contains("compaction=skipped"));
+    assert!(advisory_output.contains("state=finalized"));
+    assert!(advisory_output.contains("after_turn=completed"));
+    assert!(advisory_output.contains("compaction=skipped"));
 
     let kernel_payloads = turn_checkpoint_event_payloads();
     let (kernel_ctx, invocations) =

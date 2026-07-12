@@ -21,7 +21,9 @@ pub(super) fn provider_runtime_binding(
         ConversationRuntimeBinding::Kernel(kernel_ctx) => {
             provider::ProviderRuntimeBinding::kernel(kernel_ctx)
         }
-        ConversationRuntimeBinding::Direct => provider::ProviderRuntimeBinding::advisory_only(),
+        ConversationRuntimeBinding::AdvisoryOnly => {
+            provider::ProviderRuntimeBinding::advisory_only()
+        }
     }
 }
 

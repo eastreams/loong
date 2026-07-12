@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn execute_single_tool_intent_direct_binding_reports_no_kernel_context() {
+async fn execute_single_tool_intent_advisory_only_binding_reports_no_kernel_context() {
     let (tool_name, args_json) = crate::tools::synthesize_test_provider_tool_call_with_scope(
         "file.read",
         json!({
@@ -24,7 +24,7 @@ async fn execute_single_tool_intent_direct_binding_reports_no_kernel_context() {
         &intent,
         &session_context,
         &crate::conversation::NoopAppToolDispatcher,
-        ConversationRuntimeBinding::direct(),
+        ConversationRuntimeBinding::advisory_only(),
         None,
         2_048,
     )

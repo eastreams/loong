@@ -402,7 +402,7 @@ async fn cli_runtime_latest_session_selector_drives_history_loads() {
     let history_lines = load_history_lines(
         &runtime.session_id,
         32,
-        ConversationRuntimeBinding::direct(),
+        ConversationRuntimeBinding::advisory_only(),
         &memory_config,
     )
     .await

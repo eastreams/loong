@@ -6,7 +6,7 @@ use crate::KernelContext;
 pub enum OwnedConversationRuntimeBinding {
     Kernel(Box<KernelContext>),
     #[default]
-    Direct,
+    AdvisoryOnly,
 }
 
 impl OwnedConversationRuntimeBinding {
@@ -15,7 +15,7 @@ impl OwnedConversationRuntimeBinding {
             ConversationRuntimeBinding::Kernel(kernel_ctx) => {
                 Self::Kernel(Box::new(kernel_ctx.clone()))
             }
-            ConversationRuntimeBinding::Direct => Self::Direct,
+            ConversationRuntimeBinding::AdvisoryOnly => Self::AdvisoryOnly,
         }
     }
 
@@ -24,20 +24,20 @@ impl OwnedConversationRuntimeBinding {
     }
 
     pub const fn advisory_only() -> Self {
-        Self::Direct
+        Self::AdvisoryOnly
     }
 
     pub fn as_borrowed(&self) -> ConversationRuntimeBinding<'_> {
         match self {
             Self::Kernel(kernel_ctx) => ConversationRuntimeBinding::Kernel(kernel_ctx.as_ref()),
-            Self::Direct => ConversationRuntimeBinding::Direct,
+            Self::AdvisoryOnly => ConversationRuntimeBinding::AdvisoryOnly,
         }
     }
 
     pub fn kernel_context(&self) -> Option<&KernelContext> {
         match self {
             Self::Kernel(kernel_ctx) => Some(kernel_ctx.as_ref()),
-            Self::Direct => None,
+            Self::AdvisoryOnly => None,
         }
     }
 
@@ -48,7 +48,7 @@ impl OwnedConversationRuntimeBinding {
     pub const fn session_mode(&self) -> GovernedSessionMode {
         match self {
             Self::Kernel(_) => GovernedSessionMode::MutatingCapable,
-            Self::Direct => GovernedSessionMode::AdvisoryOnly,
+            Self::AdvisoryOnly => GovernedSessionMode::AdvisoryOnly,
         }
     }
 
@@ -61,14 +61,14 @@ impl OwnedConversationRuntimeBinding {
 pub enum ConversationRuntimeBinding<'a> {
     Kernel(&'a KernelContext),
     #[default]
-    Direct,
+    AdvisoryOnly,
 }
 
 impl<'a> ConversationRuntimeBinding<'a> {
     pub fn from_optional_kernel_context(kernel_ctx: Option<&'a KernelContext>) -> Self {
         match kernel_ctx {
             Some(kernel_ctx) => Self::Kernel(kernel_ctx),
-            None => Self::Direct,
+            None => Self::AdvisoryOnly,
         }
     }
 
@@ -77,17 +77,13 @@ impl<'a> ConversationRuntimeBinding<'a> {
     }
 
     pub const fn advisory_only() -> Self {
-        Self::Direct
-    }
-
-    pub const fn direct() -> Self {
-        Self::Direct
+        Self::AdvisoryOnly
     }
 
     pub fn kernel_context(self) -> Option<&'a KernelContext> {
         match self {
             Self::Kernel(kernel_ctx) => Some(kernel_ctx),
-            Self::Direct => None,
+            Self::AdvisoryOnly => None,
         }
     }
 
@@ -98,7 +94,7 @@ impl<'a> ConversationRuntimeBinding<'a> {
     pub const fn session_mode(self) -> GovernedSessionMode {
         match self {
             Self::Kernel(_) => GovernedSessionMode::MutatingCapable,
-            Self::Direct => GovernedSessionMode::AdvisoryOnly,
+            Self::AdvisoryOnly => GovernedSessionMode::AdvisoryOnly,
         }
     }
 

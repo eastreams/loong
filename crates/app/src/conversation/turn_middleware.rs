@@ -592,7 +592,7 @@ mod tests {
                 assembled,
                 &runtime_tool_view,
                 &requested_tool_view,
-                ConversationRuntimeBinding::direct(),
+                ConversationRuntimeBinding::advisory_only(),
             )
             .await
             .expect("system prompt addition middleware should succeed");
@@ -604,7 +604,7 @@ mod tests {
                 assembled,
                 &runtime_tool_view,
                 &requested_tool_view,
-                ConversationRuntimeBinding::direct(),
+                ConversationRuntimeBinding::advisory_only(),
             )
             .await
             .expect("tool view middleware should succeed");
@@ -687,7 +687,7 @@ mod tests {
                 assembled,
                 &runtime_tool_view,
                 &runtime_tool_view,
-                ConversationRuntimeBinding::direct(),
+                ConversationRuntimeBinding::advisory_only(),
             )
             .await
             .expect("system prompt addition middleware should succeed");

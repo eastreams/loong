@@ -245,7 +245,7 @@ pub async fn load_discovery_first_event_summary_with_kernel_context(
     #[cfg(feature = "memory-sqlite")] memory_config: &SessionStoreConfig,
 ) -> CliResult<DiscoveryFirstEventSummary> {
     let binding = kernel_ctx.map_or_else(
-        ConversationRuntimeBinding::direct,
+        ConversationRuntimeBinding::advisory_only,
         ConversationRuntimeBinding::kernel,
     );
     load_discovery_first_event_summary(

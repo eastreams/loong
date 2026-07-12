@@ -115,9 +115,9 @@ impl ConversationRuntime for SpawnerAwareRuntime {
 }
 
 #[test]
-fn provider_runtime_binding_maps_direct_conversation_binding_to_advisory_only() {
+fn provider_runtime_binding_maps_advisory_only_conversation_binding() {
     assert!(matches!(
-        provider_runtime_binding(ConversationRuntimeBinding::direct()),
+        provider_runtime_binding(ConversationRuntimeBinding::advisory_only()),
         provider::ProviderRuntimeBinding::AdvisoryOnly
     ));
 }
@@ -382,7 +382,7 @@ async fn hosted_runtime_build_context_delegates_to_inner_runtime() {
             &config,
             "session-1",
             true,
-            ConversationRuntimeBinding::Direct,
+            ConversationRuntimeBinding::AdvisoryOnly,
         )
         .await
         .expect("delegated build_context");
@@ -412,7 +412,7 @@ fn load_hosted_default_conversation_runtime_keeps_default_async_spawner_only() {
 
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
-async fn hosted_runtime_persist_turn_uses_explicit_memory_config_for_direct_binding() {
+async fn hosted_runtime_persist_turn_uses_explicit_memory_config_for_advisory_only_binding() {
     let root = unique_temp_dir("hosted-runtime-explicit-memory");
     let sqlite_path = root.join("explicit-memory.db");
     let memory_config =
@@ -434,7 +434,7 @@ async fn hosted_runtime_persist_turn_uses_explicit_memory_config_for_direct_bind
             session_id,
             "assistant",
             "persist via explicit memory config",
-            ConversationRuntimeBinding::Direct,
+            ConversationRuntimeBinding::AdvisoryOnly,
         )
         .await
         .expect("persist hosted runtime turn");
@@ -501,7 +501,7 @@ async fn default_runtime_build_context_rehydrates_active_skills() {
             &config,
             session_id,
             true,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::advisory_only(),
         )
         .await
         .expect("build context");
@@ -583,7 +583,11 @@ async fn default_runtime_tool_view_excludes_active_skill_blocked_tools() {
         .expect("append active skills event");
 
     let tool_view = runtime
-        .tool_view(&config, session_id, ConversationRuntimeBinding::direct())
+        .tool_view(
+            &config,
+            session_id,
+            ConversationRuntimeBinding::advisory_only(),
+        )
         .expect("runtime tool view");
 
     assert!(
