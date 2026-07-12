@@ -363,31 +363,23 @@ pub(crate) fn app_tool_plane()
         // `read` is the aggregate typed facade; provider aliases such as
         // `file.read` canonicalize to this path before plane lookup.
         {
-            let duplicate = plane
+            plane
                 .register_with_provenance(
                     ToolPath::from("read"),
                     ToolProvenance::Builtin,
                     loong_tools::file::ReadTool::new("read"),
                 )
-                .err();
-            debug_assert!(
-                duplicate.is_none(),
-                "duplicate builtin tool path: {duplicate:?}"
-            );
+                .expect("builtin typed tool path `read` must be unique");
 
-            let duplicate = plane
+            plane
                 .register_with_provenance(
                     ToolPath::from("write"),
                     ToolProvenance::Builtin,
                     loong_tools::file::WriteTool::new("write"),
                 )
-                .err();
-            debug_assert!(
-                duplicate.is_none(),
-                "duplicate builtin tool path: {duplicate:?}"
-            );
+                .expect("builtin typed tool path `write` must be unique");
 
-            let duplicate = plane
+            plane
                 .register_with_provenance_and_success_observer(
                     ToolPath::from("edit"),
                     ToolProvenance::Builtin,
@@ -404,39 +396,27 @@ pub(crate) fn app_tool_plane()
                         Ok::<(), ToolExecutionError>(())
                     },
                 )
-                .err();
-            debug_assert!(
-                duplicate.is_none(),
-                "duplicate builtin tool path: {duplicate:?}"
-            );
+                .expect("builtin typed tool path `edit` must be unique");
 
             // Legacy read-family discoverable paths keep their own typed
             // entries so audit path and response metadata do not collapse into
             // the aggregate `read` surface while fs side effects still move to
             // access actions.
-            let duplicate = plane
+            plane
                 .register_with_provenance(
                     ToolPath::from("glob.search"),
                     ToolProvenance::Builtin,
                     loong_tools::file::GlobSearchTool::new("glob.search"),
                 )
-                .err();
-            debug_assert!(
-                duplicate.is_none(),
-                "duplicate builtin tool path: {duplicate:?}"
-            );
+                .expect("builtin typed tool path `glob.search` must be unique");
 
-            let duplicate = plane
+            plane
                 .register_with_provenance(
                     ToolPath::from("content.search"),
                     ToolProvenance::Builtin,
                     loong_tools::file::ContentSearchTool::new("content.search"),
                 )
-                .err();
-            debug_assert!(
-                duplicate.is_none(),
-                "duplicate builtin tool path: {duplicate:?}"
-            );
+                .expect("builtin typed tool path `content.search` must be unique");
         }
         plane
     })
