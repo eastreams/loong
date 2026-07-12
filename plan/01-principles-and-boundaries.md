@@ -8,8 +8,11 @@
 - 敢于破坏性改动。替代边界确认后，直接迁移调用点并删除被替代入口；不保留 alias、
   proxy 或长期 fallback。避免会模糊 ownership 的 root re-export；清晰的 domain module
   re-export 可以接受，例如 `loong_access::fs::{FsAccess, FsReadAction}`，但需保持导出路径唯一。
-- concrete unified `Context` 类型由 runtime/app 层定义。kernel/access/policy/tool 只通过
-  `ContextFactory` 和小的 context requirement trait 观察它。
+- concrete unified `Context<'a>` 类型由 runtime/app 层定义。kernel/access/policy/tool 只通过
+  `ContextFactory` 和小的 context requirement trait 观察它。目标 concrete 名称固定为
+  `Context<'a>`，对应 GAT marker 固定为 `RuntimeContextFactory`；旧 `AppContext`、
+  `AppContextInner`、`AppContextFactory` 必须从代码、测试、注释和文档彻底删除，不保留
+  alias 或 re-export。
 - tool/access/policy 共享同一个 session-level `Context` source of truth。`AccessCx` 这类
   从 `Context` 派生的 concrete facade 可以存在；旧 `ToolCoreContext` 是删除目标。
 - 副作用 only access can do。已经迁入 Access-Action-Policy 路径的 tool/helper/adapter/kernel
@@ -66,22 +69,23 @@
   和归属边界。
 - 架构代码要有少量高信号注释，标明边界和意图。注释解释 why，不重复代码，也不写大段
   散文。
-- app/runtime surface 只传播 owned、cheap-clone 的 `AppContext`。kernel authority 是
-  `Runtime` 的内部 governance 组件，不再存在第二套 governance capsule；conversation、
-  provider、channel 和 tool orchestration 共享同一种 concrete context。
+- app/runtime surface 长期拥有 `Runtime` 与 `Session`；一次 turn/tool/action 只传播借用型
+  `Context<'a>`。kernel authority 是 `Runtime` 的内部 governance 组件，不再存在第二套
+  governance capsule；conversation、provider、channel 和 tool orchestration 共享同一种
+  concrete context 类型。
 - unified runtime 是 app 运行时 owner：持有 tool plane、session/agent view、runtime config
   snapshot、config -> policy wiring 和每次 invocation context 的构造入口。kernel 不持有
   app tool registry，也不拥有 session/agent/tool namespace。
-- 运行时从两个核心派生：一个所有 agent/session 都挂载其上的主体 `Runtime`，加一个统一
-  `Context`。每个 session 都有自己的 `Context` 状态实例，所有 session 使用同一个 concrete
-  context 类型，类比 Linux `task_struct`。
+- `Runtime` 是一个治理域内唯一的运行主体；`Session` 是挂在 runtime 下的 agent/task
+  实例，拥有 session authority、identity 和 lifecycle state；`Context<'a>` 是某个 Session
+  在一次执行中的统一投影。Session 不持有 Context，registry 也不存 invocation Context。
 - 统一的是 source-of-truth execution context，不是禁止具体 facade/view 类型。`AccessCx`
   这种从 `Context` 派生出的 concrete Cx 很有必要；它可以承载 domain API 和窄依赖，但不能
   拥有独立 runtime、capability、policy 或 audit 状态。
-- 一次 tool/action invocation 使用同一个 `Context` 类型的本次 invocation view。它持有 runtime
-  reference、本次 invocation 绑定的 session/agent、effective allowed caps、request payload、plane/tier 和
-  fs root 等小 view。tool->tool 调用必须构造同类型 child context 来缩窄 caps，而不是复用
-  父 context 或直接传 token。
+- 一次 tool/action invocation 使用同一个 `Context<'a>` 类型的本次 invocation view。它借用
+  runtime 与 session，并携带 effective allowed caps、request payload、plane/tier 和 fs root
+  等 execution overlay。tool->tool 调用必须构造同类型 child context 来缩窄 caps，而不是
+  复用父 context 或直接传 token。
 - tool invocation 的普通调用入口是 `ctx.tool(path)?.invoke(payload).await`。`ctx.tool(path)`
   返回 `Result<ToolInvocation<'_>, ToolLookupError>`：它只做 plane-local path 解析/entry lookup，
   不做 grant、不 parse payload。返回的 invocation handle 借用 `&ctx`，绑定 resolved entry、
@@ -130,7 +134,8 @@
   以及 invocation context construction。若直接移动会被 app config/provider/channel
   类型强耦合，可以先在 `loong-app` 内 staging；但 `loong-runtime` 不能长期保留为
   只有宏大名字、没有 runtime owner 职责的过渡壳。
-- `loong-app`：concrete integration layer。它定义 `AppContext`，装配
+- `loong-app`：concrete integration layer。它定义 `Context<'a>`、`RuntimeContextFactory`
+  和 session/execution overlay 的装配，连接
   provider/channel/TUI/config/memory 等 app 侧适配，并从 unified runtime/context 进入
   tool/session/access 调用。legacy fallback 只属于尚未迁移工具的末端调用边界。
 - `loong-tools`：concrete builtin tool implementations only。该 crate 不承载

@@ -128,7 +128,8 @@ execution audit 留在 `ToolInvocation::invoke(payload)` 的 grant consumption �
   但 `record_tool_invocation` 仍记录 contracts 里的 typed-tool event。目标是让 kernel
   只记录 sink 能理解的通用事件，tool execution outcome 的 schema 归 app runtime。
 - `crates/app/src/tools/mod.rs` 的 `execute_kernel_tool_request` 仍是 legacy envelope
-  ingress。typed branch 已经先走 `AppContext::tool(...).invoke(...)`；目标是让
+  ingress。typed branch 目前先走旧 `AppContext::tool(...).invoke(...)`；目标是随 concrete
+  context 迁移改成 `Context::tool(...).invoke(...)`，并让
   持有 context 的调用点直接进入该 API，并把 legacy fallback 留在最后的未迁移边界。
 - `crates/app/src/tools/routing.rs` 的 context-aware direct read 已进入
   `ctx.tool("read")?.invoke(...)`，无 context 的 `execute_tool_core_with_config(read)`

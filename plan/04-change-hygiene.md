@@ -75,9 +75,10 @@
      - `crates/kernel/src/access.rs`：`KernelAccess<C>` 的注释必须讲清它为什么在 kernel
        而不是 core/access：它返回 kernel-defined `AccessCx`，并给 concrete tools 一个
        不依赖 app concrete context 的窄 context requirement。
-     - `crates/app/src/context.rs`：`AppContext::access()` / `KernelAccess` impl
+     - `crates/app/src/context.rs`：目标 `Context::access()` / `KernelAccess` impl
        附近要讲清 `AccessCx::new(...)` 只应出现在 concrete context 的 `access()` 实现里；
        普通 tool/action 调用点应使用 `ctx.access()`，不要恢复 `kernel.access(ctx)`。
+       迁移完成后注释中也不能残留 `AppContext` / `AppContextFactory` 旧名称；
      - `crates/app/src/tools/plane.rs`：注释必须讲清 `loong-app::tools::plane`
        owns typed plane，kernel 不持有 typed registry；plane 按 path resolve，不按 payload claim；
        `invoke` 消费 `Granted<ToolInvocationAction>`，所以它是 granted primitive；普通调用

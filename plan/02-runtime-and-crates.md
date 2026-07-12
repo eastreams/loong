@@ -1,29 +1,30 @@
 # plan: Runtime / Context / Crate 收敛
 
-本文件定义 runtime/context 二核心模型，以及 crate 收敛策略。它解释 owner 和依赖方向；
+本文件定义 runtime/session/context 分层，以及 crate 收敛策略。它解释 owner 和依赖方向；
 具体实现顺序见 `08-next-steps.md`。
 
 ## Runtime / Context Ownership
 
 项目已经由 `loong-runtime::Runtime<C>` 持有 kernel 与 typed tool plane；TUI 的 `App` 仍只是
-UI state。`AppContext` 已经是 `Arc`-backed cheap-clone handle，session metadata 也已合入
-其中。标准 CLI 会先构造 runtime、解析最终 session，再签发 session-bound `AppContext`；
-channel/gateway 等 entry surface 仍在长期持有迁移期 root context。这是尚未完成的 ownership
-迁移，不代表项目需要一个叫 `Host` 的新层或新 trait。
+UI state。当前代码的 `AppContext` / `AppContextInner` / `AppContextFactory` 是迁移期旧形状：
+它把 session authority、runtime owner 和 invocation overlay 塞进一个 `Arc`-backed COW
+对象。标准 CLI 已经先解析 session 再签发 authority，但 channel/gateway 仍长期持有这个旧
+root context。目标不是继续修补旧类型，而是彻底替换为下面固定的命名与 ownership。
 
-目标是二核心模型：
+目标分层：
 
-- `Runtime`：主体。所有 agent/session/tool plane/config/policy bootstrap/governance state
-  都挂在它下面。
-- `Context`：统一执行上下文。每个 session 有自己的 `Context` 状态实例；tool/action/policy
-  都通过该 concrete context 类型或它派生出的 facade 观察本次执行状态。
+- `Runtime`：一个治理域内唯一的 runtime owner，持有 kernel、tool plane 和长期 registries。
+- `Session`：一个 agent/task 实例，拥有 session identity、authority 和 lifecycle state；它不
+  持有 invocation context，也不把 runtime authority 复制成第二份 capsule。
+- `Context<'a>`：Session 在一次 turn/tool/action/policy 执行中的统一借用投影。所有 session
+  使用同一个 concrete context 类型，child context 只替换或收窄 execution overlay。
 
 `Runtime` 的 concrete owner 放在 `loong-runtime`，但统一 context 的 concrete 类型仍由 app
 定义。`loong-runtime::Runtime<C>` 只通过 `ContextFactory` 泛型认识 context，因此不依赖
-`loong-app`；app 使用 `Runtime<AppContextFactory>`。这同时允许 runtime 固定拥有
+`loong-app`；app 使用 `Runtime<RuntimeContextFactory>`。这同时允许 runtime 固定拥有
 `Kernel<C>` 与 `ToolPlane<C>`，而不会把 app config/session concrete types 下沉到基础 crate。
 
-目标形状示意。示例类型名用于表达 ownership，不要求最终代码逐字使用这些名字：
+目标名称是硬约束，不是示意：
 
 ```rust
 pub struct Runtime<C: ContextFactory> {
@@ -31,55 +32,71 @@ pub struct Runtime<C: ContextFactory> {
     tools: ToolPlane<C>,
 }
 
-pub struct Context {
-    runtime: Arc<Runtime<AppContextFactory>>,
-    session: SessionId,
-    agent: AgentId,
-    allowed_caps: CapabilitySet,
-    view: ContextView,
+pub struct Session {
+    id: SessionId,
+    authority: SessionAuthority,
+    state: SessionState,
 }
 
-impl Context {
+pub struct Context<'a> {
+    runtime: &'a Runtime<RuntimeContextFactory>,
+    session: &'a Session,
+    execution: ExecutionOverlay<'a>,
+}
+
+pub struct RuntimeContextFactory;
+
+impl loong_core::policy::context::ContextFactory for RuntimeContextFactory {
+    type Cx<'a> = Context<'a>;
+}
+
+impl<'session> Context<'session> {
     pub fn access(&self) -> AccessCx<'_>;
-    pub fn tool(&self, path: ToolPlanePath) -> Result<ToolInvocation<'_>, ToolLookupError>;
-    pub fn child_with_caps(&self, allowed_caps: CapabilitySet) -> Self;
+    pub fn tool(
+        &self,
+        path: ToolPlanePath,
+    ) -> Result<ToolInvocation<'_, 'session>, ToolLookupError>;
+    pub fn child_with_caps(&self, allowed_caps: BTreeSet<Capability>) -> Context<'session>;
 }
 
-pub struct ToolInvocation<'ctx> {
-    ctx: &'ctx Context,
+pub struct ToolInvocation<'ctx, 'session> {
+    ctx: &'ctx Context<'session>,
     resolved: ResolvedToolEntry,
-    caps_override: Option<CapabilitySet>,
+    caps_override: Option<BTreeSet<Capability>>,
     trusted_overlay: TrustedInvocationOverlay,
 }
 
-impl ToolInvocation<'_> {
-    pub fn with_capabilities_override(self, caps: CapabilitySet) -> Result<Self, ToolLookupError>;
+impl<'ctx, 'session> ToolInvocation<'ctx, 'session> {
+    pub fn with_capabilities_override(
+        self,
+        caps: BTreeSet<Capability>,
+    ) -> Result<Self, ToolLookupError>;
     pub fn with_trusted_overlay(self, overlay: TrustedInvocationOverlay) -> Self;
     pub async fn invoke(self, payload: Value) -> Result<Value, ToolError>;
 }
 ```
 
-示例有意不写 session 的 strong owner。`AppContext` 已经强持有 `Arc<Runtime<_>>`；如果
-`Runtime` 再强持有包含 `AppContext` 的 session 对象，就会形成引用环。session owner 最终
-放在 entry surface、独立 session runtime，还是由 runtime 保存 weak index，必须在迁移
-channel/gateway 前明确决定，不能从上述示例臆造一个 registry。
+Session 的具体 strong owner 仍需结合 detached task 与 structured concurrency 决定；可以是
+runtime scope、entry surface 或 supervised task。这个决策不能改变上述边界：Session 不存
+`Context`，Context 借用 Runtime + Session，detached task 若需 `'static` 就持有真正的
+runtime/session owner，并在 future 内构造 `Context<'_>`。
 
-命名不强制叫 `Runtime` / `Context`，但 ownership 必须一致：
+命名与 ownership 约束：
 
 - `Runtime` 直接持有 kernel/governance 所需对象，例如 `Kernel`、tool plane、audit sink
-  和 clock。`AppContext` 共享 runtime、pack、token、runtime config，并以不可变字段保存
-  effective capabilities、plane/tier、request payload 和 fs root view。
+  和 clock；它不持有 invocation Context。
 - `Runtime` 持有长期状态和 registries，例如 tool plane、agent/session namespace、
   config snapshot、policy registry bootstrap 结果。
-- `Context` 是 session 绑定的统一 execution context。每个 session 有自己的 `Context`
-  实例；所有 session 的 context 类型相同。它提供 `ctx.access()` 和
+- `Session` 是 agent/task 的生命周期主体；Context 只借用它需要暴露给本次执行的 authority
+  与 view，不拥有 mailbox、task supervisor 或可变 registry。
+- `Context<'a>` 是 session 绑定的统一 execution context。它提供 `ctx.access()` 和
   `ctx.tool(path)?.invoke(payload).await`；它不是裸 kernel reference，也不是 TUI state。
 - `AccessCx`、后续可能的 tool invocation facade、fs facade 等都可以是具体类型。它们的
   构造入口来自 `Context`，例如 `ctx.access()`；它们只能借用/引用 `Context` 和 runtime
   内部治理对象，不能成为新的 source-of-truth context。
-- `Context` 应该是 cheap-clone 的 owned view：共享 runtime/session state 用 `Arc` 或 id，
-  本次 invocation 的 overlay（如 `allowed_caps`、plane/tier、request payload）作为不可变
-  字段替换。这样避免“owned ctx 没法复制”和“ref ctx 中途没法覆盖”的两难。
+- `Context<'a>` 不使用 `Arc<AppContextInner>`、`DerefMut` 或 `Arc::make_mut`。稳定数据从
+  Runtime/Session 借用；只有“通常继承、偶尔覆盖”的 execution overlay 才按字段选择借用、
+  `Cow` 或 owned value，不能把 `Arc` 或 `Cow` 铺满整个 Context。
 - `ctx.tool(path)` 返回 `Result`，因为 plane-local path 解析、registry lookup 或 tool
   visibility 可能失败。它只返回一个 resolved invocation handle；不做 grant、不 parse payload。
 - `ToolInvocation::invoke(payload)` 构造同类型 child context 时继承父 runtime/session/agent
@@ -94,13 +111,14 @@ channel/gateway 前明确决定，不能从上述示例臆造一个 registry。
 
 后续迁移策略：
 
-1. entry surface 解析或创建具体 session 后，通过 runtime authority 只签发一次该 session
-   的 `Context`，并把 session id、agent id、initial effective caps、tool namespace view
-   和 runtime reference 绑定进去。
-2. 明确 session context 的 strong owner；runtime 若需要 session lookup，只能采用不会形成
-   `Runtime -> Session -> AppContext -> Runtime` 强引用环的 ownership。
-3. invocation 通过 `AppContext::for_invocation(...)` 派生同类型 child context；child 只能
-   收窄 effective capabilities，不能重新签发或放大 authority。
+1. entry surface 解析或创建具体 session 后，通过 runtime authority 只签发一次该 Session
+   的 authority；Session owner 保存它，不能每 turn 重新签发。
+2. 明确 Session 的 strong owner 和 cancellation/join/registry removal 语义。lifetime 只约束
+   Context 的借用有效性，不替代 Session 的业务 lifecycle。
+3. 每次 execution 从 `&Runtime + &Session` 构造 `Context<'a>`；tool->tool/action child Context
+   只能收窄 effective capabilities，不能重新签发或放大 authority。
+4. 破坏性删除 `AppContext`、`AppContextInner`、`AppContextFactory` 及其 constructors；不得
+   保留 type alias、deprecated wrapper、root re-export 或同义 compatibility helper。
 
 ## Crate 收敛
 
