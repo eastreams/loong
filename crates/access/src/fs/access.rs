@@ -13,10 +13,11 @@ use thiserror::Error;
 use super::{
     FsResolutionContext,
     action::{
-        FsContentSearchAction, FsContentSearchOptions, FsGlobAction, FsInspectPathAction,
-        FsReadAction, FsResolvePathAction, FsWriteAction, FsWriteOptions,
+        FsContentSearchAction, FsContentSearchOptions, FsCreateDirAllAction, FsGlobAction,
+        FsInspectPathAction, FsReadAction, FsResolvePathAction, FsWriteAction, FsWriteOptions,
     },
     content_search::FsContentSearchOutput,
+    directory::FsCreateDirAllOutput,
     error::FsActionError,
     glob::FsGlobOutput,
     inspect::FsInspectPathOutput,
@@ -102,6 +103,30 @@ where
         let path = resolve_grant.granted.run(self.ctx).await?;
 
         let action = FsWriteAction::new(path, bytes.into(), options);
+        let grant = self
+            .policy_engine
+            .grant(self.ctx, action)
+            .await
+            .map_err(AuthorizationError::from)
+            .map_err(FsAccessError::Authorization)?;
+        grant.granted.run(self.ctx).await
+    }
+
+    /// Create a directory tree through path-resolution policy and write policy.
+    pub async fn create_dir_all(
+        self,
+        path: impl AsRef<Path>,
+    ) -> Result<FsCreateDirAllOutput, FsAccessError> {
+        let resolve_action = FsResolvePathAction::resolve(path, self.ctx.fs_resolution_root())?;
+        let resolve_grant = self
+            .policy_engine
+            .grant(self.ctx, resolve_action)
+            .await
+            .map_err(AuthorizationError::from)
+            .map_err(FsAccessError::Authorization)?;
+        let path = resolve_grant.granted.run(self.ctx).await?;
+
+        let action = FsCreateDirAllAction::new(path);
         let grant = self
             .policy_engine
             .grant(self.ctx, action)
@@ -406,6 +431,12 @@ pub enum FsAccessError {
     },
     #[error("failed to create parent directory {path}: {source}", path = .path.display())]
     CreateParentDirectory {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to create directory {path}: {source}", path = .path.display())]
+    CreateDirectory {
         path: PathBuf,
         #[source]
         source: std::io::Error,

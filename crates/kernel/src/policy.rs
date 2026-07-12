@@ -24,8 +24,8 @@ use loong_core::{
 };
 
 use crate::access::fs::{
-    FsContentSearchAction, FsGlobAction, FsInspectPathAction, FsPathPolicyContext, FsReadAction,
-    FsResolvePathAction, FsWriteAction,
+    FsContentSearchAction, FsCreateDirAllAction, FsGlobAction, FsInspectPathAction,
+    FsPathPolicyContext, FsReadAction, FsResolvePathAction, FsWriteAction,
 };
 use crate::errors::PolicyError;
 
@@ -480,6 +480,9 @@ pub struct FsReadAllowPolicy;
 pub struct FsWriteAllowPolicy;
 
 #[derive(Debug, Default, Clone, Copy)]
+pub struct FsCreateDirAllAllowPolicy;
+
+#[derive(Debug, Default, Clone, Copy)]
 pub struct FsInspectPathAllowPolicy;
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -615,6 +618,24 @@ where
             decision: PolicyDecision::Allow,
             predicate: Some("fs.write reached terminal allow policy".into()),
             reason: "filesystem write allowed after configured deny policies".into(),
+        }
+    }
+}
+
+#[async_trait]
+impl<C> Policy<C, FsCreateDirAllAction> for FsCreateDirAllAllowPolicy
+where
+    C: ContextFactory + Send + Sync,
+{
+    fn name(&self) -> Cow<'static, str> {
+        Cow::Borrowed("fs-create-dir-all-allow")
+    }
+
+    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &FsCreateDirAllAction) -> PolicyGrant {
+        PolicyGrant {
+            decision: PolicyDecision::Allow,
+            predicate: Some("fs.create_dir_all reached terminal allow policy".into()),
+            reason: "filesystem directory creation allowed after configured deny policies".into(),
         }
     }
 }

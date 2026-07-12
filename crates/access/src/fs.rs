@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 pub mod access;
 pub mod action;
 pub mod content_search;
+pub mod directory;
 pub mod error;
 pub mod glob;
 pub mod inspect;
@@ -10,10 +11,11 @@ pub mod path;
 
 pub use access::{FsAccess, FsAccessError, FsReadOutput, FsWriteOutput};
 pub use action::{
-    FsAction, FsContentSearchAction, FsContentSearchOptions, FsGlobAction, FsInspectPathAction,
-    FsReadAction, FsResolvePathAction, FsWriteAction, FsWriteOptions,
+    FsAction, FsContentSearchAction, FsContentSearchOptions, FsCreateDirAllAction, FsGlobAction,
+    FsInspectPathAction, FsReadAction, FsResolvePathAction, FsWriteAction, FsWriteOptions,
 };
 pub use content_search::{FsContentSearchMatch, FsContentSearchOutput};
+pub use directory::FsCreateDirAllOutput;
 pub use error::FsActionError;
 pub use glob::{FsGlobOutput, FsPathKind, FsPathMatch};
 pub use inspect::FsInspectPathOutput;

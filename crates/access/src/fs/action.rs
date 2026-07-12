@@ -12,6 +12,7 @@ use super::path::{GrantedPath, ResolvedPath};
 const FS_RESOLVE_REQUIRED_CAPABILITIES: [Capability; 0] = [];
 const FS_READ_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 const FS_WRITE_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
+const FS_CREATE_DIR_ALL_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
 const FS_GLOB_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 const FS_CONTENT_SEARCH_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 const FS_INSPECT_PATH_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
@@ -186,6 +187,48 @@ impl ActionMeta for FsWriteAction {
             "byte_count": self.bytes.len(),
             "create_dirs": self.options.create_dirs,
             "overwrite": self.options.overwrite,
+        }))
+    }
+}
+
+/// Typed action for creating one governed directory tree.
+///
+/// Directory creation is a write side effect, so the action declares
+/// `FilesystemWrite` and can only run after path resolution has produced a
+/// `GrantedPath`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsCreateDirAllAction {
+    path: GrantedPath,
+}
+
+impl FsCreateDirAllAction {
+    #[must_use]
+    pub fn new(path: GrantedPath) -> Self {
+        Self { path }
+    }
+
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        self.path.as_path()
+    }
+}
+
+impl ActionMeta for FsCreateDirAllAction {
+    fn metadata(&self) -> ActionMetadata<'_> {
+        ActionMetadata {
+            kind: "fs.create_dir_all",
+            operation: Cow::Borrowed("create_dir_all"),
+            required_capabilities: Cow::Borrowed(&FS_CREATE_DIR_ALL_REQUIRED_CAPABILITIES),
+        }
+    }
+
+    fn audit_resource(&self) -> Option<Cow<'_, str>> {
+        Some(self.path.as_path().display().to_string().into())
+    }
+
+    fn payload(&self) -> Cow<'_, Value> {
+        Cow::Owned(json!({
+            "path": self.path.as_path().display().to_string(),
         }))
     }
 }
@@ -393,6 +436,7 @@ impl ActionMeta for FsContentSearchAction {
 pub enum FsAction {
     Read(FsReadAction),
     Write(FsWriteAction),
+    CreateDirAll(FsCreateDirAllAction),
     InspectPath(FsInspectPathAction),
     Glob(FsGlobAction),
     ContentSearch(FsContentSearchAction),
@@ -407,6 +451,11 @@ impl FsAction {
     #[must_use]
     pub fn write_file(path: GrantedPath, bytes: Vec<u8>, options: FsWriteOptions) -> Self {
         Self::Write(FsWriteAction::new(path, bytes, options))
+    }
+
+    #[must_use]
+    pub fn create_dir_all(path: GrantedPath) -> Self {
+        Self::CreateDirAll(FsCreateDirAllAction::new(path))
     }
 
     #[must_use]
@@ -444,6 +493,7 @@ impl ActionMeta for FsAction {
         match self {
             Self::Read(action) => action.metadata(),
             Self::Write(action) => action.metadata(),
+            Self::CreateDirAll(action) => action.metadata(),
             Self::InspectPath(action) => action.metadata(),
             Self::Glob(action) => action.metadata(),
             Self::ContentSearch(action) => action.metadata(),
@@ -454,6 +504,7 @@ impl ActionMeta for FsAction {
         match self {
             Self::Read(action) => action.audit_resource(),
             Self::Write(action) => action.audit_resource(),
+            Self::CreateDirAll(action) => action.audit_resource(),
             Self::InspectPath(action) => action.audit_resource(),
             Self::Glob(action) => action.audit_resource(),
             Self::ContentSearch(action) => action.audit_resource(),
@@ -464,6 +515,7 @@ impl ActionMeta for FsAction {
         match self {
             Self::Read(action) => action.payload(),
             Self::Write(action) => action.payload(),
+            Self::CreateDirAll(action) => action.payload(),
             Self::InspectPath(action) => action.payload(),
             Self::Glob(action) => action.payload(),
             Self::ContentSearch(action) => action.payload(),

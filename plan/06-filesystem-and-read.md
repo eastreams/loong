@@ -14,8 +14,8 @@
 2. `PolicyPipeline` 对 `FsResolvePathAction` 做 typed policy 决策。allowed roots 来自
    `FsPathPolicyContext::fs_allowed_roots()`，是 policy input，不塞进 action；
    path escape 由 kernel policy deny，denial 进入 `PolicyReport`。
-3. 只有 granted resolve action 的 `run` 能 mint `GrantedPath`。下游 read/search/glob/
-   inspect action 只能接收 `GrantedPath`，不能接收 raw path 或普通 `PathBuf`。
+3. 只有 granted resolve action 的 `run` 能 mint `GrantedPath`。下游 read/write/create-dir/
+   search/glob/inspect action 只能接收 `GrantedPath`，不能接收 raw path 或普通 `PathBuf`。
 
 核心类型：
 
@@ -57,9 +57,10 @@ grant.granted.run(ctx).await
   action 携带 access 准备好的 resolved path facts；policy 只基于这些 facts 表达
   workspace root、file root、path escape、symlink escape 等路径权限，并从 context view
   读取 allowed roots。
-- `FsReadAction` / `FsContentSearchAction` / `FsGlobAction` / `FsInspectPathAction`：允许对一个
-  已经治理过的 `GrantedPath` 执行具体读取、内容搜索、路径枚举或路径元数据观察。
-  它们仍然各自声明 capability 和 payload，因为泄漏面不同。
+- `FsReadAction` / `FsWriteAction` / `FsCreateDirAllAction` / `FsContentSearchAction` /
+  `FsGlobAction` / `FsInspectPathAction`：允许对一个已经治理过的 `GrantedPath`
+  执行具体读写、目录创建、内容搜索、路径枚举或路径元数据观察。它们仍然各自声明
+  capability 和 payload，因为副作用和泄漏面不同。
 
 `FsResolvePathAction::run` 不再重新 canonicalize，也不读取文件内容。它只消费
 `Granted<FsResolvePathAction>` 并把 policy 已接受的 resolved facts 变成 `GrantedPath`。
@@ -82,10 +83,10 @@ workspace 外部。nested root 必须 canonicalize 后仍位于 canonical worksp
 - 任何会执行 `file.read` / `read { path }` 的 app runtime、test harness、helper
   都必须显式注册 `FsResolvePathAction` 的 allowed-roots policy 和 `FsReadAction`
   的 terminal allow policy。否则 typed read 应该 fail closed，而不是被 fallback 放过。
-- `FsInspectPathAction` / `FsGlobAction` / `FsContentSearchAction` 的 terminal allow policy
-  已经在 app/bootstrap 注册。kernel/context-aware `read { pattern/glob/query }` 会走
-  typed tool/policy path；无 context 的 legacy read 入口 fail closed，不能执行 read
-  side effect。
+- `FsCreateDirAllAction` / `FsInspectPathAction` / `FsGlobAction` /
+  `FsContentSearchAction` 的 terminal allow policy 已经在 app/bootstrap 注册。
+  kernel/context-aware `read { pattern/glob/query }` 会走 typed tool/policy path；
+  无 context 的 legacy read 入口 fail closed，不能执行 read side effect。
 
 ## `file.read` 迁移状态
 
