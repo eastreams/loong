@@ -2390,6 +2390,7 @@ fn audit_event_pack_id(kind: &AuditEventKind) -> Option<&str> {
         AuditEventKind::TaskDispatched { pack_id, .. }
         | AuditEventKind::ConnectorInvoked { pack_id, .. }
         | AuditEventKind::PlaneInvoked { pack_id, .. }
+        | AuditEventKind::ToolInvocation { pack_id, .. }
         | AuditEventKind::SecurityScanEvaluated { pack_id, .. }
         | AuditEventKind::PluginTrustEvaluated { pack_id, .. }
         | AuditEventKind::ToolSearchEvaluated { pack_id, .. }
@@ -2565,6 +2566,7 @@ fn triage_event_label(kind: &AuditEventKind) -> Option<&'static str> {
         | AuditEventKind::TaskDispatched { .. }
         | AuditEventKind::ConnectorInvoked { .. }
         | AuditEventKind::PlaneInvoked { .. }
+        | AuditEventKind::ToolInvocation { .. }
         | AuditEventKind::SecurityScanEvaluated { .. }
         | AuditEventKind::PluginTrustEvaluated { .. }
         | AuditEventKind::ToolSearchEvaluated { .. } => None,
@@ -2579,6 +2581,7 @@ fn audit_event_kind_label(kind: &AuditEventKind) -> &'static str {
         AuditEventKind::TaskDispatched { .. } => "TaskDispatched",
         AuditEventKind::ConnectorInvoked { .. } => "ConnectorInvoked",
         AuditEventKind::PlaneInvoked { .. } => "PlaneInvoked",
+        AuditEventKind::ToolInvocation { .. } => "ToolInvocation",
         AuditEventKind::SecurityScanEvaluated { .. } => "SecurityScanEvaluated",
         AuditEventKind::PluginTrustEvaluated { .. } => "PluginTrustEvaluated",
         AuditEventKind::ToolSearchEvaluated { .. } => "ToolSearchEvaluated",
@@ -2628,6 +2631,15 @@ fn format_audit_event_detail(kind: &AuditEventKind) -> String {
         } => format!(
             "pack_id={} plane={:?} tier={:?} adapter={} operation={}",
             pack_id, plane, tier, primary_adapter, operation
+        ),
+        AuditEventKind::ToolInvocation {
+            pack_id,
+            path_display,
+            required_capabilities,
+            outcome,
+        } => format!(
+            "pack_id={} path={} required_capabilities={required_capabilities:?} outcome={outcome:?}",
+            pack_id, path_display
         ),
         AuditEventKind::SecurityScanEvaluated {
             pack_id,
@@ -2866,3 +2878,7 @@ fn format_top_rollup(counts: &BTreeMap<String, usize>, limit: usize) -> String {
 #[cfg(test)]
 #[path = "audit_cli_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "audit_cli_tool_invocation_tests.rs"]
+mod tool_invocation_tests;
