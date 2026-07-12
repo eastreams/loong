@@ -25,6 +25,10 @@ pub use orchestrator::{
     PrimarySourceRecommendation, apply_import_selection, discover_import_sources,
     merge_profile_sources, plan_import_sources, recommend_primary_source, rollback_last_migration,
 };
+pub(crate) use orchestrator::{
+    discover_import_sources_with_access, merge_profile_sources_with_access,
+    plan_import_sources_with_access,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LegacyClawSource {
@@ -132,7 +136,7 @@ pub fn plan_external_skill_mapping(input_path: &Path) -> ExternalSkillMappingPla
     }
 }
 
-async fn plan_external_skill_mapping_with_access(
+pub(crate) async fn plan_external_skill_mapping_with_access(
     ctx: &crate::context::AppExecutionContext<'_>,
     input_path: &Path,
 ) -> CliResult<ExternalSkillMappingPlan> {
@@ -296,6 +300,17 @@ pub(crate) fn inspect_import_path(
 ) -> CliResult<Option<ImportPathInspection>> {
     let external_skill_artifacts = detect_external_skill_artifacts(input_path);
     let files = collect_import_files(input_path)?;
+    inspect_loaded_import_path(input_path, hint, files, external_skill_artifacts)
+}
+
+async fn inspect_import_path_with_access(
+    ctx: &crate::context::AppExecutionContext<'_>,
+    input_path: &Path,
+    hint: Option<LegacyClawSource>,
+) -> CliResult<Option<ImportPathInspection>> {
+    let external_skill_artifacts =
+        detect_external_skill_artifacts_with_access(ctx, input_path).await?;
+    let files = collect_import_files_with_access(ctx, input_path).await?;
     inspect_loaded_import_path(input_path, hint, files, external_skill_artifacts)
 }
 

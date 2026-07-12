@@ -6,6 +6,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use loong_kernel::access::fs::{FsInspectPathOutput, FsPathKind};
 use serde::{Deserialize, Serialize};
 
 use crate::CliResult;
@@ -13,7 +14,7 @@ use crate::CliResult;
 use super::{
     LegacyClawSource, MergedProfilePlan, ProfileEntryLane, ProfileMergeEntry,
     apply_external_skill_mapping, apply_import_plan, inspect_import_path, merge_profile_entries,
-    plan_external_skill_mapping, plan_import_from_path,
+    plan_external_skill_mapping, plan_import_from_path, plan_import_from_path_with_access,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,10 +190,71 @@ pub fn discover_import_sources(
     Ok(DiscoveryReport { sources })
 }
 
+pub(crate) async fn discover_import_sources_with_access(
+    ctx: &crate::context::AppExecutionContext<'_>,
+    search_root: &Path,
+    options: DiscoveryOptions,
+) -> CliResult<DiscoveryReport> {
+    let root = super::inspect_path_with_access(ctx, search_root).await?;
+    if root.kind.is_none() {
+        return Err(format!(
+            "discovery root does not exist: {}",
+            search_root.display()
+        ));
+    }
+
+    let mut sources = Vec::new();
+    for candidate in collect_candidate_directories_with_access(ctx, &root, &options).await? {
+        let Some(inspection) =
+            super::inspect_import_path_with_access(ctx, candidate.as_path(), None).await?
+        else {
+            continue;
+        };
+        sources.push(DiscoveredImportSource {
+            source: inspection.source,
+            source_id: String::new(),
+            confidence_score: score_discovered_source(&inspection),
+            found_files: inspection.found_files,
+            path: candidate,
+        });
+    }
+
+    sources.sort_by(|left, right| {
+        right
+            .confidence_score
+            .cmp(&left.confidence_score)
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    assign_discovery_source_ids(&mut sources);
+
+    Ok(DiscoveryReport { sources })
+}
+
 pub fn plan_import_sources(report: &DiscoveryReport) -> CliResult<DiscoveryPlanSummary> {
     let mut plans = Vec::new();
     for source in &report.sources {
         let plan = plan_import_from_path(&source.path, Some(source.source))?;
+        plans.push(PlannedImportSource {
+            source: source.source,
+            source_id: source.source_id.clone(),
+            input_path: source.path.clone(),
+            confidence_score: source.confidence_score,
+            prompt_addendum_present: plan.system_prompt_addendum.is_some(),
+            profile_note_present: plan.profile_note.is_some(),
+            warning_count: plan.warnings.len(),
+        });
+    }
+    Ok(DiscoveryPlanSummary { plans })
+}
+
+pub(crate) async fn plan_import_sources_with_access(
+    ctx: &crate::context::AppExecutionContext<'_>,
+    report: &DiscoveryReport,
+) -> CliResult<DiscoveryPlanSummary> {
+    let mut plans = Vec::new();
+    for source in &report.sources {
+        let plan =
+            plan_import_from_path_with_access(ctx, &source.path, Some(source.source)).await?;
         plans.push(PlannedImportSource {
             source: source.source,
             source_id: source.source_id.clone(),
@@ -270,6 +332,48 @@ pub fn merge_profile_sources(report: &DiscoveryReport) -> CliResult<MergedProfil
     let mut merged = merge_profile_entries(&entries)?;
     if merged.prompt_owner_source_id.is_none() {
         let summary = plan_import_sources(report)?;
+        merged.prompt_owner_source_id = Some(recommend_primary_source(&summary)?.source_id);
+    }
+    Ok(merged)
+}
+
+pub(crate) async fn merge_profile_sources_with_access(
+    ctx: &crate::context::AppExecutionContext<'_>,
+    report: &DiscoveryReport,
+) -> CliResult<MergedProfilePlan> {
+    if report.sources.is_empty() {
+        return Err("cannot merge profiles from an empty discovery report".to_owned());
+    }
+
+    let mut entries = Vec::new();
+    for source in &report.sources {
+        let plan =
+            plan_import_from_path_with_access(ctx, &source.path, Some(source.source)).await?;
+        let source_id = source.source_id.clone();
+
+        if let Some(prompt_addendum) = plan.system_prompt_addendum.as_deref() {
+            entries.push(ProfileMergeEntry {
+                lane: ProfileEntryLane::Prompt,
+                canonical_text: prompt_addendum.trim().to_owned(),
+                source_id: source_id.clone(),
+                source_confidence: source.confidence_score,
+                entry_confidence: 1,
+                slot_key: None,
+            });
+        }
+
+        if let Some(profile_note) = plan.profile_note.as_deref() {
+            entries.extend(parse_profile_merge_entries(
+                profile_note,
+                &source_id,
+                source.confidence_score,
+            ));
+        }
+    }
+
+    let mut merged = merge_profile_entries(&entries)?;
+    if merged.prompt_owner_source_id.is_none() {
+        let summary = plan_import_sources_with_access(ctx, report).await?;
         merged.prompt_owner_source_id = Some(recommend_primary_source(&summary)?.source_id);
     }
     Ok(merged)
@@ -990,6 +1094,37 @@ fn collect_candidate_directories(
             let path = entry.path();
             if path.is_dir() {
                 push_candidate(&mut candidates, &mut seen, path);
+            }
+        }
+    }
+
+    Ok(candidates)
+}
+
+pub(super) async fn collect_candidate_directories_with_access(
+    ctx: &crate::context::AppExecutionContext<'_>,
+    search_root: &FsInspectPathOutput,
+    options: &DiscoveryOptions,
+) -> CliResult<Vec<PathBuf>> {
+    let mut seen = BTreeSet::new();
+    let mut candidates = Vec::new();
+    push_candidate(&mut candidates, &mut seen, search_root.path.clone());
+
+    if options.include_child_directories && search_root.kind == Some(FsPathKind::Directory) {
+        let entries = ctx
+            .access()
+            .fs()
+            .read_dir(search_root.path.as_path(), 10_000)
+            .await
+            .map_err(|error| {
+                format!(
+                    "failed to read discovery root {}: {error}",
+                    search_root.path.display()
+                )
+            })?;
+        for entry in entries.entries {
+            if entry.kind == FsPathKind::Directory {
+                push_candidate(&mut candidates, &mut seen, entry.path);
             }
         }
     }

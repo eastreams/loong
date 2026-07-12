@@ -44,6 +44,21 @@ pub(super) fn config_import_mode_requires_write_value(payload: &Value) -> bool {
     config_import_mode_requires_write_object(payload)
 }
 
+// Only these modes are safe to route through the context-aware read path today:
+// they read import inputs and optional preview config, but do not write backups,
+// manifests, output config, or skills bridge rollback state.
+pub(super) fn config_import_mode_is_context_read_only(mode: &str) -> bool {
+    matches!(
+        mode,
+        "plan"
+            | "discover"
+            | "plan_many"
+            | "recommend_primary"
+            | "merge_profiles"
+            | MAP_SKILLS_MODE_KEY
+    )
+}
+
 pub(super) fn execute_config_import_tool_with_config(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
@@ -297,7 +312,7 @@ pub(super) fn execute_config_import_tool_with_config(
     })
 }
 
-pub(super) async fn execute_config_import_plan_tool_with_context(
+pub(super) async fn execute_config_import_read_only_tool_with_context(
     request: ToolCoreRequest,
     ctx: &crate::context::AppExecutionContext<'_>,
 ) -> Result<ToolCoreOutcome, String> {
@@ -306,9 +321,9 @@ pub(super) async fn execute_config_import_plan_tool_with_context(
         .as_object()
         .ok_or_else(|| format!("{CONFIG_IMPORT_TOOL_NAME} payload must be an object"))?;
     let mode = config_import_mode(payload);
-    if mode != "plan" {
+    if !config_import_mode_is_context_read_only(mode) {
         return Err(format!(
-            "{CONFIG_IMPORT_TOOL_NAME} context-aware access path only supports `plan`, got `{mode}`"
+            "{CONFIG_IMPORT_TOOL_NAME} context-aware access path does not support `{mode}` yet"
         ));
     }
 
@@ -335,6 +350,90 @@ pub(super) async fn execute_config_import_plan_tool_with_context(
         .map(parse_source_hint)
         .transpose()?
         .flatten();
+
+    if mode == "discover" {
+        let report = migration::discover_import_sources_with_access(
+            ctx,
+            input_path.as_path(),
+            migration::DiscoveryOptions::default(),
+        )
+        .await?;
+        return Ok(ToolCoreOutcome {
+            status: "ok".to_owned(),
+            payload: json!({
+                "adapter": "core-tools",
+                "tool_name": request.tool_name,
+                "mode": "discover",
+                "input_path": input_path.display().to_string(),
+                "sources": report
+                    .sources
+                    .iter()
+                    .map(discovered_source_payload)
+                    .collect::<Vec<_>>(),
+            }),
+        });
+    }
+
+    if matches!(mode, "plan_many" | "recommend_primary") {
+        let report = migration::discover_import_sources_with_access(
+            ctx,
+            input_path.as_path(),
+            migration::DiscoveryOptions::default(),
+        )
+        .await?;
+        let summary = migration::plan_import_sources_with_access(ctx, &report).await?;
+        let recommendation = migration::recommend_primary_source(&summary).ok();
+        return Ok(ToolCoreOutcome {
+            status: "ok".to_owned(),
+            payload: json!({
+                "adapter": "core-tools",
+                "tool_name": request.tool_name,
+                "mode": mode,
+                "input_path": input_path.display().to_string(),
+                "plans": summary.plans.iter().map(planned_source_payload).collect::<Vec<_>>(),
+                "recommendation": recommendation.as_ref().map(primary_recommendation_payload),
+            }),
+        });
+    }
+
+    if mode == "merge_profiles" {
+        let report = migration::discover_import_sources_with_access(
+            ctx,
+            input_path.as_path(),
+            migration::DiscoveryOptions::default(),
+        )
+        .await?;
+        let summary = migration::plan_import_sources_with_access(ctx, &report).await?;
+        let recommendation = migration::recommend_primary_source(&summary).ok();
+        let merged = migration::merge_profile_sources_with_access(ctx, &report).await?;
+        return Ok(ToolCoreOutcome {
+            status: "ok".to_owned(),
+            payload: json!({
+                "adapter": "core-tools",
+                "tool_name": request.tool_name,
+                "mode": "merge_profiles",
+                "input_path": input_path.display().to_string(),
+                "plans": summary.plans.iter().map(planned_source_payload).collect::<Vec<_>>(),
+                "recommendation": recommendation.as_ref().map(primary_recommendation_payload),
+                "result": merged_profile_plan_payload(&merged),
+            }),
+        });
+    }
+
+    if mode == MAP_SKILLS_MODE_KEY {
+        let mapping =
+            migration::plan_external_skill_mapping_with_access(ctx, input_path.as_path()).await?;
+        return Ok(ToolCoreOutcome {
+            status: "ok".to_owned(),
+            payload: json!({
+                "adapter": "core-tools",
+                "tool_name": request.tool_name,
+                "mode": MAP_SKILLS_MODE_KEY,
+                "input_path": input_path.display().to_string(),
+                "result": external_skill_mapping_plan_payload(&mapping),
+            }),
+        });
+    }
 
     let plan =
         migration::plan_import_from_path_with_access(ctx, input_path.as_path(), hint).await?;
@@ -843,6 +942,39 @@ mod tests {
         assert!(
             error.contains("FilesystemRead") || error.contains("filesystem_read"),
             "unexpected denial: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn kernel_routed_config_import_map_skills_uses_access_backed_reader() {
+        let harness = TurnTestHarness::new();
+        fs::write(
+            harness.temp_dir.join("SKILLS.md"),
+            "# Skills\n\n- custom/skill-a\n",
+        )
+        .expect("write skills catalog");
+        fs::create_dir_all(harness.temp_dir.join(".codex/skills/release-guard"))
+            .expect("create skill dir");
+
+        let outcome = crate::tools::execute_tool(
+            ToolCoreRequest {
+                tool_name: CONFIG_IMPORT_TOOL_NAME.to_owned(),
+                payload: json!({
+                    "mode": "map_skills",
+                    "input_path": "."
+                }),
+            },
+            &harness.kernel_ctx,
+        )
+        .await
+        .expect("config.import map_skills should execute through kernel context");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["mode"], MAP_SKILLS_MODE_KEY);
+        assert_eq!(outcome.payload["result"]["artifact_count"], 2);
+        assert_eq!(
+            outcome.payload["result"]["resolved_skills"],
+            json!(["custom/skill-a", "release-guard"])
         );
     }
 }
