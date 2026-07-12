@@ -297,6 +297,69 @@ pub(super) fn execute_config_import_tool_with_config(
     })
 }
 
+pub(super) async fn execute_config_import_plan_tool_with_context(
+    request: ToolCoreRequest,
+    ctx: &crate::context::AppExecutionContext<'_>,
+) -> Result<ToolCoreOutcome, String> {
+    let payload = request
+        .payload
+        .as_object()
+        .ok_or_else(|| format!("{CONFIG_IMPORT_TOOL_NAME} payload must be an object"))?;
+    let mode = config_import_mode(payload);
+    if mode != "plan" {
+        return Err(format!(
+            "{CONFIG_IMPORT_TOOL_NAME} context-aware access path only supports `plan`, got `{mode}`"
+        ));
+    }
+
+    let input_path = payload
+        .get("input_path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("{CONFIG_IMPORT_TOOL_NAME} requires payload.input_path"))?;
+    let input_path = resolve_path_with_access(ctx, Path::new(input_path)).await?;
+    let output_path = payload
+        .get("output_path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    let output_path = match output_path {
+        Some(path) => Some(resolve_path_with_access(ctx, path.as_path()).await?),
+        None => None,
+    };
+    let hint = payload
+        .get("source")
+        .and_then(Value::as_str)
+        .map(parse_source_hint)
+        .transpose()?
+        .flatten();
+
+    let plan =
+        migration::plan_import_from_path_with_access(ctx, input_path.as_path(), hint).await?;
+    let mut merged_config = load_or_default_config_with_access(ctx, output_path.as_deref()).await?;
+    migration::apply_import_plan(&mut merged_config, &plan);
+    let config_toml = config::render(&merged_config)?;
+
+    Ok(ToolCoreOutcome {
+        status: "ok".to_owned(),
+        payload: json!({
+            "adapter": "core-tools",
+            "tool_name": request.tool_name,
+            "mode": mode,
+            "source": plan.source.as_id(),
+            "input_path": input_path.display().to_string(),
+            "output_path": output_path.as_ref().map(|path| path.display().to_string()),
+            "config_written": false,
+            "warnings": plan.warnings,
+            "config_preview": config_preview_payload(&merged_config),
+            "config_toml": config_toml,
+            "next_step": null,
+        }),
+    })
+}
+
 fn discovered_source_payload(source: &migration::DiscoveredImportSource) -> Value {
     json!({
         "source_id": source.source_id,
@@ -497,6 +560,52 @@ fn load_or_default_config(path: Option<&Path>) -> Result<LoongConfig, String> {
     Ok(config)
 }
 
+async fn load_or_default_config_with_access(
+    ctx: &crate::context::AppExecutionContext<'_>,
+    path: Option<&Path>,
+) -> Result<LoongConfig, String> {
+    let Some(path) = path else {
+        return Ok(LoongConfig::default());
+    };
+    let inspection = ctx
+        .access()
+        .fs()
+        .inspect_path(path)
+        .await
+        .map_err(|error| error.to_string())?;
+    if inspection.kind.is_none() {
+        return Ok(LoongConfig::default());
+    }
+
+    let output = ctx
+        .access()
+        .fs()
+        .read_file(path)
+        .await
+        .map_err(|error| error.to_string())?;
+    let raw = String::from_utf8(output.bytes).map_err(|error| {
+        format!(
+            "failed to decode config {} as UTF-8: {error}",
+            output.path.display()
+        )
+    })?;
+    config::parse(raw.as_str())
+}
+
+// Use governed inspect for response path normalization too; otherwise the
+// context-aware plan path would report raw payload paths while reads use access.
+async fn resolve_path_with_access(
+    ctx: &crate::context::AppExecutionContext<'_>,
+    path: &Path,
+) -> Result<PathBuf, String> {
+    ctx.access()
+        .fs()
+        .inspect_path(path)
+        .await
+        .map(|output| output.path)
+        .map_err(|error| error.to_string())
+}
+
 fn config_preview_payload(config: &LoongConfig) -> Value {
     json!({
         "prompt_pack_id": config
@@ -632,10 +741,15 @@ fn split_existing_ancestor(path: &Path) -> Result<(PathBuf, Vec<OsString>), Stri
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use loong_contracts::{Capability, ToolCoreRequest};
+    use serde_json::json;
+
     use super::*;
+    use crate::test_support::TurnTestHarness;
     use crate::tools::runtime_config::ToolRuntimeConfig;
 
     fn unique_temp_dir(prefix: &str) -> PathBuf {
@@ -662,5 +776,73 @@ mod tests {
         assert!(error.starts_with("policy_denied: "));
         assert!(error.contains("escapes configured file root"));
         let _ = fs::remove_dir_all(base);
+    }
+
+    #[tokio::test]
+    async fn kernel_routed_config_import_plan_uses_access_backed_reader() {
+        let harness = TurnTestHarness::new();
+        fs::write(
+            harness.temp_dir.join("SOUL.md"),
+            "# Soul\n\nPrefer direct answers and keep OpenClaw style concise.\n",
+        )
+        .expect("write prompt fixture");
+        fs::write(
+            harness.temp_dir.join("IDENTITY.md"),
+            "# Identity\n\n- role: release copilot\n",
+        )
+        .expect("write profile fixture");
+
+        let outcome = crate::tools::execute_tool(
+            ToolCoreRequest {
+                tool_name: CONFIG_IMPORT_TOOL_NAME.to_owned(),
+                payload: json!({
+                    "mode": "plan",
+                    "source": "openclaw",
+                    "input_path": "."
+                }),
+            },
+            &harness.kernel_ctx,
+        )
+        .await
+        .expect("config.import plan should execute through kernel context");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["mode"], "plan");
+        assert_eq!(outcome.payload["source"], "openclaw");
+        assert_eq!(outcome.payload["config_written"], false);
+        assert!(
+            outcome.payload["config_preview"]["profile_note"]
+                .as_str()
+                .is_some_and(|note| note.contains("release copilot"))
+        );
+    }
+
+    #[tokio::test]
+    async fn kernel_routed_config_import_plan_requires_filesystem_read_capability() {
+        let harness = TurnTestHarness::with_capabilities(BTreeSet::from([Capability::InvokeTool]));
+        fs::write(
+            harness.temp_dir.join("SOUL.md"),
+            "# Soul\n\nPrefer direct answers.\n",
+        )
+        .expect("write prompt fixture");
+
+        let error = crate::tools::execute_tool(
+            ToolCoreRequest {
+                tool_name: CONFIG_IMPORT_TOOL_NAME.to_owned(),
+                payload: json!({
+                    "mode": "plan",
+                    "source": "openclaw",
+                    "input_path": "."
+                }),
+            },
+            &harness.kernel_ctx,
+        )
+        .await
+        .expect_err("missing read capability should deny config.import plan");
+
+        assert!(
+            error.contains("FilesystemRead") || error.contains("filesystem_read"),
+            "unexpected denial: {error}"
+        );
     }
 }
