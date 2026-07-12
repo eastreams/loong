@@ -180,6 +180,25 @@ impl FilePolicyExtension {
             return raw_paths;
         }
 
+        let mode = payload
+            .get("mode")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("plan");
+        let apply_skills_plan = payload
+            .get("apply_skills_plan")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+
+        // Only the legacy skills bridge still performs config.import filesystem
+        // side effects outside ctx.access(). Migrated modes must not depend on
+        // this preflight; their path policy lives on the typed access/action
+        // route.
+        if mode != "apply_selected" || !apply_skills_plan {
+            return raw_paths;
+        }
+
         let input_path = trimmed_non_empty_path(payload.get("input_path"));
         if let Some(input_path) = input_path {
             raw_paths.push(input_path);
@@ -277,9 +296,10 @@ pub(crate) fn authorize_direct_file_payload(
     payload: &serde_json::Map<String, serde_json::Value>,
     rt: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<(), String> {
-    // Migration-only guard for legacy config.import. Migrated file tools must
-    // fail closed without context or enter through ctx.tool(...).invoke(...)
-    // and fs access grants; do not add typed-tool policy here.
+    // Migration-only guard for config.import's remaining legacy skills bridge.
+    // Migrated file tools must fail closed without context or enter through
+    // ctx.tool(...).invoke(...) and fs access grants; do not add typed-tool
+    // policy here.
 
     let policy = FilePolicyExtension::from_runtime_config(rt);
     policy
@@ -293,36 +313,13 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn config_import_sandbox_uses_input_path_key() {
-        let root_dir = tempfile::tempdir().expect("tempdir");
-        let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
-        // input_path escapes the root — must be denied
-        let payload = json!({"input_path": "../../etc/passwd"});
-        let payload = payload.as_object().expect("object payload");
-        assert!(matches!(
-            ext.authorize_file_payload("config.import", payload)
-                .unwrap_err(),
-            PolicyError::ExtensionDenied { .. }
-        ));
-    }
-
-    #[test]
-    fn config_import_within_root_allowed() {
-        let root_dir = tempfile::tempdir().expect("tempdir");
-        let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
-        let payload = json!({"input_path": "subdir/config.toml"});
-        let payload = payload.as_object().expect("object payload");
-        assert!(ext.authorize_file_payload("config.import", payload).is_ok());
-    }
-
-    #[test]
-    fn config_import_apply_checks_output_path() {
+    fn legacy_config_import_skills_bridge_checks_input_path() {
         let root_dir = tempfile::tempdir().expect("tempdir");
         let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
         let payload = json!({
-            "mode": "apply",
-            "input_path": "subdir/config.toml",
-            "output_path": "../../etc/passwd"
+            "mode": "apply_selected",
+            "apply_skills_plan": true,
+            "input_path": "../../etc/passwd"
         });
         let payload = payload.as_object().expect("object payload");
         assert!(matches!(
@@ -333,11 +330,52 @@ mod tests {
     }
 
     #[test]
-    fn config_import_plan_checks_trimmed_output_preview_path() {
+    fn legacy_config_import_skills_bridge_within_root_allowed() {
+        let root_dir = tempfile::tempdir().expect("tempdir");
+        let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
+        let payload = json!({
+            "mode": "apply_selected",
+            "apply_skills_plan": true,
+            "input_path": "subdir/config.toml"
+        });
+        let payload = payload.as_object().expect("object payload");
+        assert!(ext.authorize_file_payload("config.import", payload).is_ok());
+    }
+
+    #[test]
+    fn migrated_config_import_apply_does_not_use_legacy_file_policy() {
+        let root_dir = tempfile::tempdir().expect("tempdir");
+        let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
+        let payload = json!({
+            "mode": "apply",
+            "input_path": "subdir/config.toml",
+            "output_path": "../../etc/passwd"
+        });
+        let payload = payload.as_object().expect("object payload");
+        assert!(ext.authorize_file_payload("config.import", payload).is_ok());
+    }
+
+    #[test]
+    fn migrated_config_import_plan_does_not_use_legacy_file_policy() {
         let root_dir = tempfile::tempdir().expect("tempdir");
         let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
         let payload = json!({
             "mode": "plan",
+            "input_path": "subdir/config.toml",
+            "output_path": " ../../etc/passwd "
+        });
+        let payload = payload.as_object().expect("object payload");
+        let result = ext.authorize_file_payload("config.import", payload);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn legacy_config_import_skills_bridge_checks_trimmed_output_path() {
+        let root_dir = tempfile::tempdir().expect("tempdir");
+        let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
+        let payload = json!({
+            "mode": "apply_selected",
+            "apply_skills_plan": true,
             "input_path": "subdir/config.toml",
             "output_path": " ../../etc/passwd "
         });
@@ -394,7 +432,8 @@ mod tests {
             ..crate::tools::runtime_config::ToolRuntimeConfig::default()
         };
         let payload_value = json!({
-            "mode": "apply",
+            "mode": "apply_selected",
+            "apply_skills_plan": true,
             "input_path": "legacy-config.toml",
             "output_path": "../outside.toml"
         });
