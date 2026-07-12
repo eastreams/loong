@@ -71,16 +71,20 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      `git diff --check`。
 
 2. 完成 runtime owner 与 session-owned unified context：
-   - 当前 private `AppContextShared` 实际承担 runtime owner，但 host surface 仍直接持有
-     `AppContext`，conversation 另有一份 `SessionContext` 保存 session id、parent、tool view、
-     workspace/skill roots、runtime narrowing 和 runtime-self continuity；这是两个 source of truth；
-   - 把长期共享对象提升为显式 runtime owner，由 CLI/channel/daemon host 持有；session 创建时
-     构造一次自己的 `AppContext`，invocation 只从该 session context cheap-clone 派生 overlay；
+   - `loong_runtime::Runtime<AppContextFactory>` 已是 kernel 与 tool plane 的唯一 runtime owner，
+     不再引入 app wrapper 或第二个 runtime 类型；原 `AppContextShared` 只是混装 runtime、pack、
+     token 和 config 的无语义容器，已删除，`AppContext` 直接表达各字段的 ownership；
+   - host surface 当前仍直接持有 root `AppContext`；下一步改为持有现有 `Arc<Runtime<_>>` 和
+     app runtime config，在 session 创建时通过 kernel 已有的 pack registry/token issuer 构造
+     自己的 `AppContext`，invocation 只从该 session context cheap-clone 派生 overlay；
+   - conversation 另有一份 `SessionContext` 保存 session id、parent、tool view、workspace/skill
+     roots、runtime narrowing 和 runtime-self continuity；这是当前剩余的第二个 source of truth；
    - 将 `SessionContext` 的 session/agent metadata、tool namespace view、roots、narrowing 和
      continuity 并入 `AppContext`，随后直接删除 `SessionContext`，不留 alias、wrapper 或
      `Option<session>` 兼容形状；
-   - runtime owner 持有 kernel、tool plane、pack/token/config 等长期 authority；`AppContext`
-     只持有共享 owner 与当前 session/invocation 的不可变 view，child context 仍只能收窄 caps；
+   - runtime owner 持有 kernel 和 tool plane，kernel 继续拥有 pack registry 和 token issuer；
+     `AppContext` 持有 runtime 引用、当前 pack/token evidence、config 及 session/invocation 的
+     不可变 view，child context 仍只能收窄 caps；
    - 完成线：turn/tool/access/policy/provider 从同一个 session-owned context source of truth 读取
      session、agent、tool view、caps、roots 和 continuity；host 不再把 root context 当作 session；
    - 验证：context/session/conversation/provider/tool execution 测试，workspace default/all-feature

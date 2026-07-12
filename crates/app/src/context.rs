@@ -40,20 +40,16 @@ pub const DEFAULT_TOKEN_TTL_S: u64 = 86400;
 /// or narrow capabilities, but can never add authority beyond its parent.
 #[derive(Clone)]
 pub struct AppContext {
-    shared: Arc<AppContextShared>,
+    runtime: Arc<Runtime<AppContextFactory>>,
+    pack: Arc<VerticalPackManifest>,
+    token: Arc<CapabilityToken>,
+    tool_runtime_config: Arc<crate::tools::runtime_config::ToolRuntimeConfig>,
     effective_capabilities: BTreeSet<Capability>,
     plane: ExecutionPlane,
     tier: PlaneTier,
     request_parameters: Option<Arc<Value>>,
     fs_resolution_root: Arc<PathBuf>,
     fs_allowed_roots: Arc<[PathBuf]>,
-}
-
-struct AppContextShared {
-    runtime: Arc<Runtime<AppContextFactory>>,
-    pack: Arc<VerticalPackManifest>,
-    token: Arc<CapabilityToken>,
-    tool_runtime_config: Arc<crate::tools::runtime_config::ToolRuntimeConfig>,
 }
 
 impl AppContext {
@@ -66,12 +62,10 @@ impl AppContext {
         let effective_capabilities = token.allowed_capabilities.clone();
         let (fs_resolution_root, fs_allowed_roots) = fs_access_root_view(&tool_runtime_config)?;
         Ok(Self {
-            shared: Arc::new(AppContextShared {
-                runtime,
-                pack,
-                token: Arc::new(token),
-                tool_runtime_config: Arc::new(tool_runtime_config),
-            }),
+            runtime,
+            pack,
+            token: Arc::new(token),
+            tool_runtime_config: Arc::new(tool_runtime_config),
             effective_capabilities,
             plane: ExecutionPlane::Runtime,
             tier: PlaneTier::Core,
@@ -82,31 +76,31 @@ impl AppContext {
     }
 
     pub fn pack_id(&self) -> &str {
-        &self.shared.token.pack_id
+        &self.token.pack_id
     }
 
     pub fn agent_id(&self) -> &str {
-        &self.shared.token.agent_id
+        &self.token.agent_id
     }
 
     #[must_use]
     pub(crate) fn runtime(&self) -> &Runtime<AppContextFactory> {
-        self.shared.runtime.as_ref()
+        self.runtime.as_ref()
     }
 
     #[must_use]
     pub(crate) fn pack(&self) -> &VerticalPackManifest {
-        self.shared.pack.as_ref()
+        self.pack.as_ref()
     }
 
     #[must_use]
     pub fn token(&self) -> &CapabilityToken {
-        self.shared.token.as_ref()
+        self.token.as_ref()
     }
 
     #[must_use]
     pub(crate) fn tool_runtime_config(&self) -> &crate::tools::runtime_config::ToolRuntimeConfig {
-        self.shared.tool_runtime_config.as_ref()
+        self.tool_runtime_config.as_ref()
     }
 
     #[must_use]
@@ -156,12 +150,10 @@ impl AppContext {
 
         let (fs_resolution_root, fs_allowed_roots) = fs_access_root_view(tool_runtime_config)?;
         Ok(Self {
-            shared: Arc::new(AppContextShared {
-                runtime: self.shared.runtime.clone(),
-                pack: self.shared.pack.clone(),
-                token: self.shared.token.clone(),
-                tool_runtime_config: Arc::new(tool_runtime_config.clone()),
-            }),
+            runtime: self.runtime.clone(),
+            pack: self.pack.clone(),
+            token: self.token.clone(),
+            tool_runtime_config: Arc::new(tool_runtime_config.clone()),
             effective_capabilities,
             plane,
             tier,
@@ -198,11 +190,11 @@ impl AppContext {
         // AccessCx construction is localized at the concrete context boundary.
         // Tool/action code should call ctx.access() rather than rethreading the
         // kernel reference or recreating access facades by hand.
-        AccessCx::new(self.shared.runtime.kernel(), self)
+        AccessCx::new(self.runtime.kernel(), self)
     }
 
     pub(crate) fn tool(&self, path: ToolPath) -> Result<ToolInvocation<'_>, ToolPlaneError> {
-        let spec = self.shared.runtime.tools().spec(&path)?;
+        let spec = self.runtime.tools().spec(&path)?;
         let mut required_capabilities = BTreeSet::from([Capability::InvokeTool]);
         required_capabilities.extend(spec.required_capabilities.iter().copied());
 
@@ -270,7 +262,6 @@ impl ToolInvocation<'_> {
         let action = ToolInvocationAction::new(self.path, required_capabilities, payload);
         let grant = self
             .ctx
-            .shared
             .runtime
             .kernel()
             .grant_action(tool_ctx.pack_id(), tool_ctx.token(), action, &tool_ctx)
@@ -286,14 +277,13 @@ impl ToolInvocation<'_> {
 
         match self
             .ctx
-            .shared
             .runtime
             .tools()
             .invoke(grant.granted, &tool_ctx)
             .await
         {
             Ok(output) => {
-                tool_ctx.shared.runtime.kernel().record_tool_invocation(
+                tool_ctx.runtime.kernel().record_tool_invocation(
                     &tool_ctx,
                     audit_path,
                     &audit_caps,
@@ -318,7 +308,7 @@ impl ToolInvocation<'_> {
                     ToolPlaneError::Execution(reason) => ("execution", reason.clone()),
                     _ => ("tool_plane", error.to_string()),
                 };
-                tool_ctx.shared.runtime.kernel().record_tool_invocation(
+                tool_ctx.runtime.kernel().record_tool_invocation(
                     &tool_ctx,
                     audit_path,
                     &audit_caps,
@@ -358,7 +348,7 @@ impl KernelInvocationContext for AppContext {
     }
 
     fn now_epoch_s(&self) -> u64 {
-        self.shared.runtime.kernel().now_epoch_s()
+        self.runtime.kernel().now_epoch_s()
     }
 
     fn request_parameters(&self) -> Option<&Value> {
