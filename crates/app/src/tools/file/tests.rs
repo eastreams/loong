@@ -12,8 +12,8 @@ use loong_core::tool::{RegisteredTool, ToolProvenance};
 use loong_kernel::{
     InMemoryAuditSink, Kernel, NoopAuditSink, PolicyPipeline, SystemClock, VerticalPackManifest,
     policy::{
-        FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsReadAllowPolicy, FsReadFilenameDenyPolicy,
-        FsResolvePathAllowedRootsPolicy, FsWriteAllowPolicy,
+        FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsPathAllowedRootsPolicy, FsReadAllowPolicy,
+        FsReadFilenameDenyPolicy, FsResolvePathAllowPolicy, FsWriteAllowPolicy,
     },
 };
 use loong_tools::file::ReadTool;
@@ -90,7 +90,8 @@ async fn execute_file_read_with_test_context(
 ) -> Result<ToolCoreOutcome, String> {
     let mut policy = PolicyPipeline::<AppContextFactory>::new_legacy_allow_fallback()
         .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
-        .with_policy(FsResolvePathAllowedRootsPolicy);
+        .with_policy(FsResolvePathAllowPolicy::target())
+        .with_policy(FsPathAllowedRootsPolicy::target());
     if !config.fs.deny_read_filenames.is_empty() {
         policy.push_policy(FsReadFilenameDenyPolicy::new(
             config.fs.deny_read_filenames.clone(),
@@ -216,7 +217,8 @@ async fn execute_request_via_kernel_tool_registry_with_capabilities_result(
     let audit = Arc::new(InMemoryAuditSink::default());
     let mut policy = PolicyPipeline::<AppContextFactory>::new_legacy_allow_fallback()
         .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
-        .with_policy(FsResolvePathAllowedRootsPolicy);
+        .with_policy(FsResolvePathAllowPolicy::target())
+        .with_policy(FsPathAllowedRootsPolicy::target());
     if !config.fs.deny_read_filenames.is_empty() {
         policy.push_policy(FsReadFilenameDenyPolicy::new(
             config.fs.deny_read_filenames.clone(),
@@ -915,7 +917,8 @@ async fn context_direct_write_uses_typed_tool_registry() {
     };
     let mut policy = PolicyPipeline::<AppContextFactory>::new_legacy_allow_fallback()
         .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
-        .with_policy(FsResolvePathAllowedRootsPolicy);
+        .with_policy(FsResolvePathAllowPolicy::target())
+        .with_policy(FsPathAllowedRootsPolicy::target());
     policy.push_policy(FsWriteAllowPolicy);
     let audit = Arc::new(InMemoryAuditSink::default());
     let mut kernel = Kernel::<AppContextFactory>::with_policy_runtime(

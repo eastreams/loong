@@ -38,24 +38,18 @@ async fn fs_rename_path_moves_directory_after_grants() {
     fs::remove_dir_all(base).ok();
 }
 
-#[tokio::test]
-async fn fs_rename_action_uses_no_follow_paths() {
-    let workspace_root = PathBuf::from("/workspace");
-    let ctx = FsAccessPolicyContext::new(&workspace_root);
-    let action = FsRenameAction::resolve(
-        "incoming/demo-skill",
-        "managed/demo-skill",
-        ctx.fs_resolution_root(),
+#[test]
+fn fs_rename_action_uses_granted_entry_paths() {
+    let action = FsRenameAction::new(
+        GrantedEntryPath::new(PathBuf::from("/workspace/incoming/demo-skill")),
+        GrantedEntryPath::new(PathBuf::from("/workspace/managed/demo-skill")),
         FsWriteOptions {
             create_dirs: true,
             overwrite: false,
         },
-    )
-    .expect("rename path resolution should prepare action");
+    );
     let metadata = action.metadata();
 
-    assert_eq!(action.raw_source(), Path::new("incoming/demo-skill"));
-    assert_eq!(action.raw_destination(), Path::new("managed/demo-skill"));
     assert_eq!(
         action.source_path(),
         Path::new("/workspace/incoming/demo-skill")
@@ -71,10 +65,8 @@ async fn fs_rename_action_uses_no_follow_paths() {
         [Capability::FilesystemWrite]
     );
     let expected_payload = serde_json::json!({
-        "source": "incoming/demo-skill",
-        "destination": "managed/demo-skill",
-        "source_path": "/workspace/incoming/demo-skill",
-        "destination_path": "/workspace/managed/demo-skill",
+        "source": "/workspace/incoming/demo-skill",
+        "destination": "/workspace/managed/demo-skill",
         "create_dirs": true,
         "overwrite": false,
     });

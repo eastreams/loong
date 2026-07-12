@@ -5,38 +5,76 @@ use std::{
 
 use super::error::FsActionError;
 
-/// Resolved filesystem path facts prepared inside the access boundary.
-///
-/// This value deliberately does not decide authorization. It records the
-/// canonicalized candidate path so the kernel's typed policy can compare it
-/// with the current context's allowed roots.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::fs) struct ResolvedPath {
-    path: PathBuf,
+mod sealed {
+    pub trait Sealed {}
 }
 
-impl ResolvedPath {
-    pub(in crate::fs) fn resolve(
-        path: impl AsRef<Path>,
-        resolution_root: impl AsRef<Path>,
-    ) -> Result<Self, FsActionError> {
-        let raw = path.as_ref();
-        if raw.as_os_str().is_empty() {
-            return Err(FsActionError::EmptyPath);
+/// Marker for target-following path resolution.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TargetPath;
+
+/// Marker for final-component no-follow path resolution.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EntryPath;
+
+impl sealed::Sealed for TargetPath {}
+impl sealed::Sealed for EntryPath {}
+
+/// Sealed path-resolution semantics carried through the fs typestate chain.
+///
+/// This is public only because it bounds public generic action types. External
+/// code cannot implement it, and normal callers use the concrete path aliases.
+#[doc(hidden)]
+pub trait FsPathMode: sealed::Sealed + Send + Sync + 'static {
+    const NAME: &'static str;
+    const RESOLVE_OPERATION: &'static str;
+    const AUTHORIZE_OPERATION: &'static str;
+    const FOLLOWS_FINAL_COMPONENT: bool;
+}
+
+impl FsPathMode for TargetPath {
+    const NAME: &'static str = "target";
+    const RESOLVE_OPERATION: &'static str = "resolve_target_path";
+    const AUTHORIZE_OPERATION: &'static str = "authorize_target_path";
+    const FOLLOWS_FINAL_COMPONENT: bool = true;
+}
+
+impl FsPathMode for EntryPath {
+    const NAME: &'static str = "entry";
+    const RESOLVE_OPERATION: &'static str = "resolve_entry_path";
+    const AUTHORIZE_OPERATION: &'static str = "authorize_entry_path";
+    const FOLLOWS_FINAL_COMPONENT: bool = false;
+}
+
+/// Resolved path facts produced by running a granted resolve action.
+///
+/// Resolution does not imply authorization. `FsPathAction` consumes this
+/// unforgeable value so policy can decide whether the resolved path is allowed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedFsPath<M> {
+    requested: PathBuf,
+    path: PathBuf,
+    _mode: std::marker::PhantomData<fn() -> M>,
+}
+
+impl<M> ResolvedFsPath<M> {
+    pub(in crate::fs) fn new(requested: PathBuf, path: PathBuf) -> Self {
+        Self {
+            requested,
+            path,
+            _mode: std::marker::PhantomData,
         }
-
-        let resolution_root = resolve_existing_or_missing_path(resolution_root.as_ref())?;
-        let combined = if raw.is_absolute() {
-            raw.to_path_buf()
-        } else {
-            resolution_root.join(raw)
-        };
-        let path = resolve_existing_or_missing_path(&combined)?;
-
-        Ok(Self { path })
     }
 
-    pub(in crate::fs) fn path(&self) -> &Path {
+    #[must_use]
+    pub fn requested_path(&self) -> &Path {
+        &self.requested
+    }
+
+    #[must_use]
+    pub fn path(&self) -> &Path {
         &self.path
     }
 
@@ -45,71 +83,33 @@ impl ResolvedPath {
     }
 }
 
-/// Filesystem entry path prepared with final-component no-follow semantics.
-///
-/// Ancestor components are canonicalized so policy sees the real parent
-/// location. The final component is appended lexically so entry operations can
-/// decide whether to reject or operate on a terminal symlink without first
-/// following it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::fs) struct ResolvedEntryPath {
-    path: PathBuf,
-}
+/// Target-following resolved path facts.
+pub type ResolvedPath = ResolvedFsPath<TargetPath>;
 
-impl ResolvedEntryPath {
-    pub(in crate::fs) fn resolve(
-        path: impl AsRef<Path>,
-        resolution_root: impl AsRef<Path>,
-    ) -> Result<Self, FsActionError> {
-        let raw = path.as_ref();
-        if raw.as_os_str().is_empty() {
-            return Err(FsActionError::EmptyPath);
-        }
+/// Final-component no-follow resolved path facts.
+pub type ResolvedEntryPath = ResolvedFsPath<EntryPath>;
 
-        let resolution_root = resolve_existing_or_missing_path(resolution_root.as_ref())?;
-        let combined = if raw.is_absolute() {
-            raw.to_path_buf()
-        } else {
-            resolution_root.join(raw)
-        };
-        let normalized = normalize_without_fs(&combined);
-        let file_name = normalized
-            .file_name()
-            .map(std::ffi::OsStr::to_owned)
-            .ok_or_else(|| FsActionError::MissingFileName {
-                path: normalized.clone(),
-            })?;
-        let parent = normalized
-            .parent()
-            .ok_or_else(|| FsActionError::MissingExistingAncestor {
-                path: normalized.clone(),
-            })?;
-        let mut resolved = resolve_existing_or_missing_path(parent)?;
-        resolved.push(file_name);
-
-        Ok(Self {
-            path: dunce::simplified(&resolved).to_path_buf(),
-        })
-    }
-
-    pub(in crate::fs) fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-/// Filesystem path produced by governed path resolution.
+/// Filesystem path produced by governed path authorization.
 ///
 /// Downstream fs actions accept this value instead of raw paths so their
-/// constructors prove that path resolution policy has already run. Only the fs
-/// module can mint one; callers get it by executing `FsResolvePathAction`.
+/// constructors prove that resolve and path policy have already run. Only the
+/// fs module can mint one.
+///
+/// This authorizes the path observed during resolution; it does not pin the
+/// underlying inode. A descriptor-relative backend is still required to close
+/// races where another actor replaces a path between authorization and use.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GrantedPath {
+pub struct GrantedFsPath<M> {
     path: PathBuf,
+    _mode: std::marker::PhantomData<fn() -> M>,
 }
 
-impl GrantedPath {
+impl<M> GrantedFsPath<M> {
     pub(in crate::fs) fn new(path: PathBuf) -> Self {
-        Self { path }
+        Self {
+            path,
+            _mode: std::marker::PhantomData,
+        }
     }
 
     #[must_use]
@@ -123,10 +123,65 @@ impl GrantedPath {
     }
 }
 
-impl AsRef<Path> for GrantedPath {
+impl<M> AsRef<Path> for GrantedFsPath<M> {
     fn as_ref(&self) -> &Path {
         self.as_path()
     }
+}
+
+/// Governed target-following path used by content and directory operations.
+pub type GrantedPath = GrantedFsPath<TargetPath>;
+
+/// Governed entry path used by unlink and rename operations.
+pub type GrantedEntryPath = GrantedFsPath<EntryPath>;
+
+pub(in crate::fs) fn resolve_target_path(
+    path: &Path,
+    resolution_root: &Path,
+) -> Result<PathBuf, FsActionError> {
+    if path.as_os_str().is_empty() {
+        return Err(FsActionError::EmptyPath);
+    }
+
+    let resolution_root = resolve_existing_or_missing_path(resolution_root)?;
+    let combined = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        resolution_root.join(path)
+    };
+    resolve_existing_or_missing_path(&combined)
+}
+
+pub(in crate::fs) fn resolve_entry_path(
+    path: &Path,
+    resolution_root: &Path,
+) -> Result<PathBuf, FsActionError> {
+    if path.as_os_str().is_empty() {
+        return Err(FsActionError::EmptyPath);
+    }
+
+    let resolution_root = resolve_existing_or_missing_path(resolution_root)?;
+    let combined = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        resolution_root.join(path)
+    };
+    let normalized = normalize_without_fs(&combined);
+    let file_name = normalized
+        .file_name()
+        .map(std::ffi::OsStr::to_owned)
+        .ok_or_else(|| FsActionError::MissingFileName {
+            path: normalized.clone(),
+        })?;
+    let parent = normalized
+        .parent()
+        .ok_or_else(|| FsActionError::MissingExistingAncestor {
+            path: normalized.clone(),
+        })?;
+    let mut resolved = resolve_existing_or_missing_path(parent)?;
+    resolved.push(file_name);
+
+    Ok(dunce::simplified(&resolved).to_path_buf())
 }
 
 fn resolve_existing_or_missing_path(path: &Path) -> Result<PathBuf, FsActionError> {

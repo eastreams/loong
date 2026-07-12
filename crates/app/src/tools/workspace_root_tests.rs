@@ -6,8 +6,8 @@ use loong_contracts::{Capability, ExecutionRoute, HarnessKind, ToolCoreOutcome, 
 use loong_kernel::{
     Kernel, NoopAuditSink, PolicyPipeline, SystemClock, VerticalPackManifest,
     policy::{
-        FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsReadAllowPolicy, FsReadFilenameDenyPolicy,
-        FsResolvePathAllowedRootsPolicy, FsWriteAllowPolicy,
+        FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsPathAllowedRootsPolicy, FsReadAllowPolicy,
+        FsReadFilenameDenyPolicy, FsResolvePathAllowPolicy, FsWriteAllowPolicy,
     },
 };
 use serde_json::json;
@@ -39,7 +39,10 @@ async fn execute_tool_core_with_test_context(
     let mut policy =
         PolicyPipeline::<crate::context::AppContextFactory>::new_legacy_allow_fallback()
             .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
-            .with_policy(FsResolvePathAllowedRootsPolicy);
+            .with_policy(FsResolvePathAllowPolicy::target())
+            .with_policy(FsResolvePathAllowPolicy::entry())
+            .with_policy(FsPathAllowedRootsPolicy::target())
+            .with_policy(FsPathAllowedRootsPolicy::entry());
     if !config.fs.deny_read_filenames.is_empty() {
         policy.push_policy(FsReadFilenameDenyPolicy::new(
             config.fs.deny_read_filenames.clone(),

@@ -20,7 +20,7 @@ where
 
     async fn run(granted: Granted<Self>, _ctx: &Cx) -> Result<Self::Output, Self::Error> {
         let action = granted.into_action();
-        let path = action.deletion_path().to_path_buf();
+        let path = action.path().to_path_buf();
         let metadata = match std::fs::symlink_metadata(&path) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -30,10 +30,7 @@ where
                 });
             }
             Err(source) => {
-                return Err(FsAccessError::InspectPath {
-                    path: path.clone(),
-                    source,
-                });
+                return Err(FsAccessError::InspectPath { path, source });
             }
         };
 

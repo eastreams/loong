@@ -5,19 +5,7 @@ async fn fs_action_wraps_read_action() {
     let kernel = FsAccessTestKernel::default();
     let workspace_root = PathBuf::from("/workspace");
     let ctx = FsAccessPolicyContext::new(&workspace_root);
-    let path = kernel
-        .policy_engine()
-        .grant(
-            &ctx,
-            FsResolvePathAction::resolve("notes.md", ctx.fs_resolution_root())
-                .expect("path resolution should prepare action"),
-        )
-        .await
-        .expect("policy should grant path resolution")
-        .granted
-        .run(&ctx)
-        .await
-        .expect("granted path resolution should run");
+    let path = grant_target_path(&kernel, &ctx, "notes.md").await;
     let action = FsAction::read_file(path);
     let metadata = action.metadata();
 
@@ -63,19 +51,7 @@ async fn fs_read_execution_boundary_consumes_granted_action() {
     fs::create_dir_all(workspace_root.join("notes")).expect("create notes dir");
     fs::write(workspace_root.join("notes/todo.md"), "hello").expect("write note");
     let ctx = FsAccessPolicyContext::new(&workspace_root);
-    let path = kernel
-        .policy_engine()
-        .grant(
-            &ctx,
-            FsResolvePathAction::resolve("notes/todo.md", ctx.fs_resolution_root())
-                .expect("path resolution should prepare action"),
-        )
-        .await
-        .expect("policy should grant path resolution")
-        .granted
-        .run(&ctx)
-        .await
-        .expect("granted path resolution should run");
+    let path = grant_target_path(&kernel, &ctx, "notes/todo.md").await;
     let action = FsReadAction::new(path);
     let grant = kernel
         .policy_engine()

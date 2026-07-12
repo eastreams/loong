@@ -38,32 +38,8 @@ async fn fs_copy_file_action_uses_granted_paths() {
     let kernel = FsAccessTestKernel::default();
     let workspace_root = PathBuf::from("/workspace");
     let ctx = FsAccessPolicyContext::new(&workspace_root);
-    let source = kernel
-        .policy_engine()
-        .grant(
-            &ctx,
-            FsResolvePathAction::resolve("source.txt", ctx.fs_resolution_root())
-                .expect("source path resolution should prepare action"),
-        )
-        .await
-        .expect("policy should grant source path resolution")
-        .granted
-        .run(&ctx)
-        .await
-        .expect("granted source path resolution should run");
-    let destination = kernel
-        .policy_engine()
-        .grant(
-            &ctx,
-            FsResolvePathAction::resolve("backup/source.txt", ctx.fs_resolution_root())
-                .expect("destination path resolution should prepare action"),
-        )
-        .await
-        .expect("policy should grant destination path resolution")
-        .granted
-        .run(&ctx)
-        .await
-        .expect("granted destination path resolution should run");
+    let source = grant_target_path(&kernel, &ctx, "source.txt").await;
+    let destination = grant_target_path(&kernel, &ctx, "backup/source.txt").await;
     let action = FsCopyFileAction::new(
         source,
         destination,
@@ -99,32 +75,8 @@ async fn fs_action_wraps_copy_file_action() {
     let kernel = FsAccessTestKernel::default();
     let workspace_root = PathBuf::from("/workspace");
     let ctx = FsAccessPolicyContext::new(&workspace_root);
-    let source = kernel
-        .policy_engine()
-        .grant(
-            &ctx,
-            FsResolvePathAction::resolve("source.txt", ctx.fs_resolution_root())
-                .expect("source path resolution should prepare action"),
-        )
-        .await
-        .expect("policy should grant source path resolution")
-        .granted
-        .run(&ctx)
-        .await
-        .expect("granted source path resolution should run");
-    let destination = kernel
-        .policy_engine()
-        .grant(
-            &ctx,
-            FsResolvePathAction::resolve("backup/source.txt", ctx.fs_resolution_root())
-                .expect("destination path resolution should prepare action"),
-        )
-        .await
-        .expect("policy should grant destination path resolution")
-        .granted
-        .run(&ctx)
-        .await
-        .expect("granted destination path resolution should run");
+    let source = grant_target_path(&kernel, &ctx, "source.txt").await;
+    let destination = grant_target_path(&kernel, &ctx, "backup/source.txt").await;
     let action = FsAction::copy_file(
         source,
         destination,

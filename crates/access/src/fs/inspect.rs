@@ -25,10 +25,7 @@ where
             Ok(metadata) => FsPathKind::from_file_type(metadata.file_type()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
             Err(source) => {
-                return Err(FsAccessError::InspectPath {
-                    path: path.clone(),
-                    source,
-                });
+                return Err(FsAccessError::InspectPath { path, source });
             }
         };
 

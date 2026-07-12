@@ -80,16 +80,14 @@ async fn fs_remove_file_removes_final_symlink_without_deleting_target() {
     fs::remove_dir_all(base).ok();
 }
 
-#[tokio::test]
-async fn fs_remove_file_action_uses_deletion_path() {
-    let workspace_root = PathBuf::from("/workspace");
-    let ctx = FsAccessPolicyContext::new(&workspace_root);
-    let action = FsRemoveFileAction::resolve("logs/old.txt", ctx.fs_resolution_root())
-        .expect("remove path resolution should prepare action");
+#[test]
+fn fs_remove_file_action_uses_granted_entry_path() {
+    let action = FsRemoveFileAction::new(GrantedEntryPath::new(PathBuf::from(
+        "/workspace/logs/old.txt",
+    )));
     let metadata = action.metadata();
 
-    assert_eq!(action.raw_path(), Path::new("logs/old.txt"));
-    assert_eq!(action.deletion_path(), Path::new("/workspace/logs/old.txt"));
+    assert_eq!(action.path(), Path::new("/workspace/logs/old.txt"));
     assert_eq!(metadata.kind, "fs.remove_file");
     assert_eq!(metadata.operation, "remove_file");
     assert_eq!(
@@ -97,8 +95,7 @@ async fn fs_remove_file_action_uses_deletion_path() {
         [Capability::FilesystemWrite]
     );
     let expected_payload = serde_json::json!({
-        "path": "logs/old.txt",
-        "deletion_path": "/workspace/logs/old.txt",
+        "path": "/workspace/logs/old.txt",
     });
     assert_eq!(action.payload().as_ref(), &expected_payload);
 
@@ -152,16 +149,14 @@ async fn fs_remove_dir_all_removes_directory_tree_after_grants() {
     fs::remove_dir_all(base).ok();
 }
 
-#[tokio::test]
-async fn fs_remove_dir_all_action_uses_deletion_path() {
-    let workspace_root = PathBuf::from("/workspace");
-    let ctx = FsAccessPolicyContext::new(&workspace_root);
-    let action = FsRemoveDirAllAction::resolve("managed/demo", ctx.fs_resolution_root())
-        .expect("remove dir path resolution should prepare action");
+#[test]
+fn fs_remove_dir_all_action_uses_granted_entry_path() {
+    let action = FsRemoveDirAllAction::new(GrantedEntryPath::new(PathBuf::from(
+        "/workspace/managed/demo",
+    )));
     let metadata = action.metadata();
 
-    assert_eq!(action.raw_path(), Path::new("managed/demo"));
-    assert_eq!(action.deletion_path(), Path::new("/workspace/managed/demo"));
+    assert_eq!(action.path(), Path::new("/workspace/managed/demo"));
     assert_eq!(metadata.kind, "fs.remove_dir_all");
     assert_eq!(metadata.operation, "remove_dir_all");
     assert_eq!(
@@ -169,8 +164,7 @@ async fn fs_remove_dir_all_action_uses_deletion_path() {
         [Capability::FilesystemWrite]
     );
     let expected_payload = serde_json::json!({
-        "path": "managed/demo",
-        "deletion_path": "/workspace/managed/demo",
+        "path": "/workspace/managed/demo",
     });
     assert_eq!(action.payload().as_ref(), &expected_payload);
 

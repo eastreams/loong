@@ -23,11 +23,11 @@ use super::{
     access::{FsAccess, FsAccessError},
     action::{
         FsAction, FsAtomicWriteAction, FsContentSearchAction, FsContentSearchOptions,
-        FsCopyFileAction, FsCreateDirAllAction, FsGlobAction, FsInspectPathAction, FsReadAction,
-        FsReadDirAction, FsRemoveDirAllAction, FsRemoveFileAction, FsRenameAction,
+        FsCopyFileAction, FsCreateDirAllAction, FsGlobAction, FsInspectPathAction, FsPathAction,
+        FsReadAction, FsReadDirAction, FsRemoveDirAllAction, FsRemoveFileAction, FsRenameAction,
         FsResolvePathAction, FsWriteAction, FsWriteOptions,
     },
-    path::GrantedPath,
+    path::{GrantedEntryPath, GrantedPath},
     remove::FsRemoveFileKind,
 };
 
@@ -144,6 +144,37 @@ impl Kernel<FsAccessTestContextFactory> for FsAccessTestKernel {
     fn policy_engine(&self) -> &Self::PolicyEngine {
         &self.policy
     }
+}
+
+// Target-path action tests intentionally exercise the production resolve ->
+// path protocol instead of minting the crate-private typestate directly. Keep
+// that protocol in one test helper rather than duplicating it in every module.
+async fn grant_target_path(
+    kernel: &FsAccessTestKernel,
+    ctx: &FsAccessPolicyContext,
+    path: impl AsRef<Path>,
+) -> GrantedPath {
+    let resolved = kernel
+        .policy_engine()
+        .grant(
+            ctx,
+            FsResolvePathAction::target(path, ctx.fs_resolution_root()),
+        )
+        .await
+        .expect("test policy should grant target path resolution")
+        .granted
+        .run(ctx)
+        .await
+        .expect("granted target resolve action should run");
+    kernel
+        .policy_engine()
+        .grant(ctx, FsPathAction::new(resolved))
+        .await
+        .expect("test policy should grant target path")
+        .granted
+        .run(ctx)
+        .await
+        .expect("granted target path action should run")
 }
 
 struct FsAccessToolCx<'a> {

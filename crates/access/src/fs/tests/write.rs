@@ -37,19 +37,7 @@ async fn fs_write_action_uses_granted_path() {
     let kernel = FsAccessTestKernel::default();
     let workspace_root = PathBuf::from("/workspace");
     let ctx = FsAccessPolicyContext::new(&workspace_root);
-    let path = kernel
-        .policy_engine()
-        .grant(
-            &ctx,
-            FsResolvePathAction::resolve("notes.md", ctx.fs_resolution_root())
-                .expect("path resolution should prepare action"),
-        )
-        .await
-        .expect("policy should grant path resolution")
-        .granted
-        .run(&ctx)
-        .await
-        .expect("granted path resolution should run");
+    let path = grant_target_path(&kernel, &ctx, "notes.md").await;
     let action = FsWriteAction::new(
         path,
         b"hello".to_vec(),
@@ -146,19 +134,7 @@ async fn fs_atomic_write_action_uses_granted_path() {
     let kernel = FsAccessTestKernel::default();
     let workspace_root = PathBuf::from("/workspace");
     let ctx = FsAccessPolicyContext::new(&workspace_root);
-    let path = kernel
-        .policy_engine()
-        .grant(
-            &ctx,
-            FsResolvePathAction::resolve("manifest.json", ctx.fs_resolution_root())
-                .expect("path resolution should prepare action"),
-        )
-        .await
-        .expect("policy should grant path resolution")
-        .granted
-        .run(&ctx)
-        .await
-        .expect("granted path resolution should run");
+    let path = grant_target_path(&kernel, &ctx, "manifest.json").await;
     let action = FsAtomicWriteAction::new(
         path,
         b"hello".to_vec(),
@@ -190,19 +166,7 @@ async fn fs_action_wraps_atomic_write_action() {
     let kernel = FsAccessTestKernel::default();
     let workspace_root = PathBuf::from("/workspace");
     let ctx = FsAccessPolicyContext::new(&workspace_root);
-    let path = kernel
-        .policy_engine()
-        .grant(
-            &ctx,
-            FsResolvePathAction::resolve("manifest.json", ctx.fs_resolution_root())
-                .expect("path resolution should prepare action"),
-        )
-        .await
-        .expect("policy should grant path resolution")
-        .granted
-        .run(&ctx)
-        .await
-        .expect("granted path resolution should run");
+    let path = grant_target_path(&kernel, &ctx, "manifest.json").await;
     let action = FsAction::write_file_atomically(
         path,
         b"hello".to_vec(),
@@ -233,19 +197,7 @@ async fn fs_action_wraps_write_action() {
     let kernel = FsAccessTestKernel::default();
     let workspace_root = PathBuf::from("/workspace");
     let ctx = FsAccessPolicyContext::new(&workspace_root);
-    let path = kernel
-        .policy_engine()
-        .grant(
-            &ctx,
-            FsResolvePathAction::resolve("notes.md", ctx.fs_resolution_root())
-                .expect("path resolution should prepare action"),
-        )
-        .await
-        .expect("policy should grant path resolution")
-        .granted
-        .run(&ctx)
-        .await
-        .expect("granted path resolution should run");
+    let path = grant_target_path(&kernel, &ctx, "notes.md").await;
     let action = FsAction::write_file(
         path,
         b"hello".to_vec(),

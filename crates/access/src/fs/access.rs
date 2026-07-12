@@ -14,9 +14,9 @@ use super::{
     FsResolutionContext,
     action::{
         FsAtomicWriteAction, FsContentSearchAction, FsContentSearchOptions, FsCopyFileAction,
-        FsCreateDirAllAction, FsGlobAction, FsInspectPathAction, FsReadAction, FsReadDirAction,
-        FsRemoveDirAllAction, FsRemoveFileAction, FsRenameAction, FsResolvePathAction,
-        FsWriteAction, FsWriteOptions,
+        FsCreateDirAllAction, FsGlobAction, FsInspectPathAction, FsPathAction, FsReadAction,
+        FsReadDirAction, FsRemoveDirAllAction, FsRemoveFileAction, FsRenameAction,
+        FsResolvePathAction, FsWriteAction, FsWriteOptions,
     },
     content_search::FsContentSearchOutput,
     copy::FsCopyFileOutput,
@@ -24,7 +24,7 @@ use super::{
     error::FsActionError,
     glob::FsGlobOutput,
     inspect::FsInspectPathOutput,
-    path::GrantedPath,
+    path::{FsPathMode, GrantedEntryPath, GrantedFsPath, GrantedPath},
     read_dir::FsReadDirOutput,
     remove::FsRemoveFileOutput,
     remove_dir::FsRemoveDirAllOutput,
@@ -57,6 +57,66 @@ where
     pub fn new(policy_engine: &'a P, ctx: &'a C::Cx<'ctx>) -> Self {
         Self { policy_engine, ctx }
     }
+
+    /// Run the mandatory resolve and path-policy stages for a target path.
+    ///
+    /// Keeping this chain inside access prevents individual operations from
+    /// accidentally skipping either grant while keeping both stages visible as
+    /// distinct typed actions to policy.
+    async fn grant_target_path(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<GrantedPath, FsAccessError> {
+        self.grant_path(FsResolvePathAction::target(
+            path,
+            self.ctx.fs_resolution_root(),
+        ))
+        .await
+    }
+
+    /// Resolve and authorize a final-component no-follow entry path.
+    async fn grant_entry_path(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<GrantedEntryPath, FsAccessError> {
+        self.grant_path(FsResolvePathAction::entry(
+            path,
+            self.ctx.fs_resolution_root(),
+        ))
+        .await
+    }
+
+    // Keep the two mandatory grants in one implementation so new fs
+    // operations cannot accidentally authorize resolved facts in a different
+    // order or omit one of the stages.
+    async fn grant_path<M>(
+        &self,
+        resolve: FsResolvePathAction<M>,
+    ) -> Result<GrantedFsPath<M>, FsAccessError>
+    where
+        M: FsPathMode,
+    {
+        let resolved = self
+            .policy_engine
+            .grant(self.ctx, resolve)
+            .await
+            .map_err(AuthorizationError::from)
+            .map_err(FsAccessError::Authorization)?
+            .granted
+            .run(self.ctx)
+            .await?;
+        let path_action = FsPathAction::new(resolved);
+        let path = self
+            .policy_engine
+            .grant(self.ctx, path_action)
+            .await
+            .map_err(AuthorizationError::from)
+            .map_err(FsAccessError::Authorization)?
+            .granted
+            .run(self.ctx)
+            .await?;
+        Ok(path)
+    }
 }
 
 impl<'a, 'ctx, C, P> FsAccess<'a, 'ctx, C, P>
@@ -65,20 +125,13 @@ where
     P: PolicyEngine<C>,
     C::Cx<'ctx>: FsResolutionContext,
 {
-    /// Read a file through path-resolution policy and read policy.
+    /// Read a file through resolution, path authorization, and read policy.
     ///
-    /// Access prepares the resolved-path facts because that requires
-    /// filesystem observation. Kernel policy decides whether those facts are
-    /// allowed, and only the granted resolve action can mint `GrantedPath`.
+    /// A granted resolve action prepares filesystem facts; kernel path policy
+    /// decides whether those facts are allowed; only then can `FsReadAction`
+    /// receive a `GrantedPath` and perform the file read.
     pub async fn read_file(self, path: impl AsRef<Path>) -> Result<FsReadOutput, FsAccessError> {
-        let resolve_action = FsResolvePathAction::resolve(path, self.ctx.fs_resolution_root())?;
-        let resolve_grant = self
-            .policy_engine
-            .grant(self.ctx, resolve_action)
-            .await
-            .map_err(AuthorizationError::from)
-            .map_err(FsAccessError::Authorization)?;
-        let path = resolve_grant.granted.run(self.ctx).await?;
+        let path = self.grant_target_path(path).await?;
 
         let action = FsReadAction::new(path);
         let grant = self
@@ -90,7 +143,7 @@ where
         grant.granted.run(self.ctx).await
     }
 
-    /// Write bytes through path-resolution policy and write policy.
+    /// Write bytes through resolution, path authorization, and write policy.
     ///
     /// This only prepares the access-backed primitive. App write/edit tools
     /// still own payload parsing and response/audit preview until they migrate.
@@ -100,14 +153,7 @@ where
         bytes: impl Into<Vec<u8>>,
         options: FsWriteOptions,
     ) -> Result<FsWriteOutput, FsAccessError> {
-        let resolve_action = FsResolvePathAction::resolve(path, self.ctx.fs_resolution_root())?;
-        let resolve_grant = self
-            .policy_engine
-            .grant(self.ctx, resolve_action)
-            .await
-            .map_err(AuthorizationError::from)
-            .map_err(FsAccessError::Authorization)?;
-        let path = resolve_grant.granted.run(self.ctx).await?;
+        let path = self.grant_target_path(path).await?;
 
         let action = FsWriteAction::new(path, bytes.into(), options);
         let grant = self
@@ -119,7 +165,7 @@ where
         grant.granted.run(self.ctx).await
     }
 
-    /// Atomically write bytes through path-resolution policy and write policy.
+    /// Atomically write through resolution, path authorization, and write policy.
     ///
     /// This is for manifests and rollback records where a failed write must not
     /// leave the previous target truncated. The final replacement still happens
@@ -130,14 +176,7 @@ where
         bytes: impl Into<Vec<u8>>,
         options: FsWriteOptions,
     ) -> Result<FsWriteOutput, FsAccessError> {
-        let resolve_action = FsResolvePathAction::resolve(path, self.ctx.fs_resolution_root())?;
-        let resolve_grant = self
-            .policy_engine
-            .grant(self.ctx, resolve_action)
-            .await
-            .map_err(AuthorizationError::from)
-            .map_err(FsAccessError::Authorization)?;
-        let path = resolve_grant.granted.run(self.ctx).await?;
+        let path = self.grant_target_path(path).await?;
 
         let action = FsAtomicWriteAction::new(path, bytes.into(), options);
         let grant = self
@@ -156,24 +195,8 @@ where
         destination: impl AsRef<Path>,
         options: FsWriteOptions,
     ) -> Result<FsCopyFileOutput, FsAccessError> {
-        let source_resolve = FsResolvePathAction::resolve(source, self.ctx.fs_resolution_root())?;
-        let source_grant = self
-            .policy_engine
-            .grant(self.ctx, source_resolve)
-            .await
-            .map_err(AuthorizationError::from)
-            .map_err(FsAccessError::Authorization)?;
-        let source = source_grant.granted.run(self.ctx).await?;
-
-        let destination_resolve =
-            FsResolvePathAction::resolve(destination, self.ctx.fs_resolution_root())?;
-        let destination_grant = self
-            .policy_engine
-            .grant(self.ctx, destination_resolve)
-            .await
-            .map_err(AuthorizationError::from)
-            .map_err(FsAccessError::Authorization)?;
-        let destination = destination_grant.granted.run(self.ctx).await?;
+        let source = self.grant_target_path(source).await?;
+        let destination = self.grant_target_path(destination).await?;
 
         let action = FsCopyFileAction::new(source, destination, options);
         let grant = self
@@ -185,19 +208,12 @@ where
         grant.granted.run(self.ctx).await
     }
 
-    /// Create a directory tree through path-resolution policy and write policy.
+    /// Create a directory tree through resolution, path, and write policy.
     pub async fn create_dir_all(
         self,
         path: impl AsRef<Path>,
     ) -> Result<FsCreateDirAllOutput, FsAccessError> {
-        let resolve_action = FsResolvePathAction::resolve(path, self.ctx.fs_resolution_root())?;
-        let resolve_grant = self
-            .policy_engine
-            .grant(self.ctx, resolve_action)
-            .await
-            .map_err(AuthorizationError::from)
-            .map_err(FsAccessError::Authorization)?;
-        let path = resolve_grant.granted.run(self.ctx).await?;
+        let path = self.grant_target_path(path).await?;
 
         let action = FsCreateDirAllAction::new(path);
         let grant = self
@@ -218,7 +234,9 @@ where
         self,
         path: impl AsRef<Path>,
     ) -> Result<FsRemoveFileOutput, FsAccessError> {
-        let action = FsRemoveFileAction::resolve(path, self.ctx.fs_resolution_root())?;
+        let path = self.grant_entry_path(path).await?;
+
+        let action = FsRemoveFileAction::new(path);
         let grant = self
             .policy_engine
             .grant(self.ctx, action)
@@ -236,7 +254,9 @@ where
         self,
         path: impl AsRef<Path>,
     ) -> Result<FsRemoveDirAllOutput, FsAccessError> {
-        let action = FsRemoveDirAllAction::resolve(path, self.ctx.fs_resolution_root())?;
+        let path = self.grant_entry_path(path).await?;
+
+        let action = FsRemoveDirAllAction::new(path);
         let grant = self
             .policy_engine
             .grant(self.ctx, action)
@@ -257,8 +277,10 @@ where
         destination: impl AsRef<Path>,
         options: FsWriteOptions,
     ) -> Result<FsRenameOutput, FsAccessError> {
-        let action =
-            FsRenameAction::resolve(source, destination, self.ctx.fs_resolution_root(), options)?;
+        let source = self.grant_entry_path(source).await?;
+        let destination = self.grant_entry_path(destination).await?;
+
+        let action = FsRenameAction::new(source, destination, options);
         let grant = self
             .policy_engine
             .grant(self.ctx, action)
@@ -268,7 +290,7 @@ where
         grant.granted.run(self.ctx).await
     }
 
-    /// Inspect one path through path-resolution policy and inspect policy.
+    /// Inspect one path through resolution, path, and inspect policy.
     ///
     /// This is for callers that need existence or file-kind observations before
     /// a later access-backed operation. It intentionally reports only metadata,
@@ -277,14 +299,7 @@ where
         self,
         path: impl AsRef<Path>,
     ) -> Result<FsInspectPathOutput, FsAccessError> {
-        let resolve_action = FsResolvePathAction::resolve(path, self.ctx.fs_resolution_root())?;
-        let resolve_grant = self
-            .policy_engine
-            .grant(self.ctx, resolve_action)
-            .await
-            .map_err(AuthorizationError::from)
-            .map_err(FsAccessError::Authorization)?;
-        let path = resolve_grant.granted.run(self.ctx).await?;
+        let path = self.grant_target_path(path).await?;
 
         let action = FsInspectPathAction::new(path);
         let grant = self
@@ -308,14 +323,7 @@ where
         include_directories: bool,
         max_results: usize,
     ) -> Result<FsGlobOutput, FsAccessError> {
-        let resolve_action = FsResolvePathAction::resolve(root, self.ctx.fs_resolution_root())?;
-        let resolve_grant = self
-            .policy_engine
-            .grant(self.ctx, resolve_action)
-            .await
-            .map_err(AuthorizationError::from)
-            .map_err(FsAccessError::Authorization)?;
-        let root = resolve_grant.granted.run(self.ctx).await?;
+        let root = self.grant_target_path(root).await?;
 
         let action = FsGlobAction::new(root, pattern, include_directories, max_results);
         let grant = self
@@ -337,14 +345,7 @@ where
         root: impl AsRef<Path>,
         max_entries: usize,
     ) -> Result<FsReadDirOutput, FsAccessError> {
-        let resolve_action = FsResolvePathAction::resolve(root, self.ctx.fs_resolution_root())?;
-        let resolve_grant = self
-            .policy_engine
-            .grant(self.ctx, resolve_action)
-            .await
-            .map_err(AuthorizationError::from)
-            .map_err(FsAccessError::Authorization)?;
-        let root = resolve_grant.granted.run(self.ctx).await?;
+        let root = self.grant_target_path(root).await?;
 
         let action = FsReadDirAction::new(root, max_entries);
         let grant = self
@@ -367,14 +368,7 @@ where
         query: impl Into<String>,
         options: FsContentSearchOptions,
     ) -> Result<FsContentSearchOutput, FsAccessError> {
-        let resolve_action = FsResolvePathAction::resolve(root, self.ctx.fs_resolution_root())?;
-        let resolve_grant = self
-            .policy_engine
-            .grant(self.ctx, resolve_action)
-            .await
-            .map_err(AuthorizationError::from)
-            .map_err(FsAccessError::Authorization)?;
-        let root = resolve_grant.granted.run(self.ctx).await?;
+        let root = self.grant_target_path(root).await?;
 
         let action = FsContentSearchAction::new(root, query, options);
         let grant = self
@@ -387,23 +381,37 @@ where
     }
 }
 
-/// Mint a governed path from an already-authorized resolution action.
-///
-/// Canonicalization already happened when access prepared the action facts.
-/// `run` deliberately just consumes the grant and turns accepted facts into
-/// `GrantedPath`, the only public input accepted by concrete fs side-effect
-/// actions.
+/// Resolve one path only after policy grants the observation action.
 #[async_trait]
-impl<Cx> Action<Cx> for FsResolvePathAction
+impl<Cx, M> Action<Cx> for FsResolvePathAction<M>
 where
     Cx: Sync,
+    M: FsPathMode,
 {
-    type Output = GrantedPath;
+    type Output = super::path::ResolvedFsPath<M>;
     type Error = FsActionError;
 
     async fn run(granted: Granted<Self>, _ctx: &Cx) -> Result<Self::Output, Self::Error> {
-        let action = granted.into_action();
-        Ok(action.into_granted_path())
+        granted.into_action().resolve()
+    }
+}
+
+/// Mint a governed path from facts accepted by path policy.
+///
+/// This stage performs no filesystem observation. It only consumes the path
+/// authorization grant and preserves target/entry typestate for the concrete
+/// operation action.
+#[async_trait]
+impl<Cx, M> Action<Cx> for FsPathAction<M>
+where
+    Cx: Sync,
+    M: FsPathMode,
+{
+    type Output = GrantedFsPath<M>;
+    type Error = FsActionError;
+
+    async fn run(granted: Granted<Self>, _ctx: &Cx) -> Result<Self::Output, Self::Error> {
+        Ok(granted.into_action().into_granted_path())
     }
 }
 
@@ -605,7 +613,7 @@ fn open_write_target(path: &Path, overwrite: bool) -> Result<std::fs::File, FsAc
 
 /// Bytes returned by a governed fs read.
 ///
-/// `path` is the canonical path actually read, suitable for response metadata
+/// `path` is the resolved path actually read, suitable for response metadata
 /// and audit output.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FsReadOutput {

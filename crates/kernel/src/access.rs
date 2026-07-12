@@ -8,11 +8,12 @@ pub mod fs {
         FsAccess, FsAccessError, FsAtomicWriteAction, FsContentSearchAction, FsContentSearchMatch,
         FsContentSearchOptions, FsContentSearchOutput, FsCopyFileAction, FsCopyFileOutput,
         FsCreateDirAllAction, FsCreateDirAllOutput, FsGlobAction, FsGlobOutput,
-        FsInspectPathAction, FsInspectPathOutput, FsPathKind, FsPathMatch, FsPathPolicyContext,
-        FsReadAction, FsReadDirAction, FsReadDirEntry, FsReadDirOutput, FsReadOutput,
-        FsRemoveDirAllAction, FsRemoveDirAllOutput, FsRemoveFileAction, FsRemoveFileKind,
-        FsRemoveFileOutput, FsRenameAction, FsRenameOutput, FsResolutionContext,
-        FsResolvePathAction, FsWriteAction, FsWriteOptions, FsWriteOutput,
+        FsInspectPathAction, FsInspectPathOutput, FsPathAction, FsPathKind, FsPathMatch,
+        FsPathPolicyContext, FsReadAction, FsReadDirAction, FsReadDirEntry, FsReadDirOutput,
+        FsReadOutput, FsRemoveDirAllAction, FsRemoveDirAllOutput, FsRemoveFileAction,
+        FsRemoveFileKind, FsRemoveFileOutput, FsRenameAction, FsRenameOutput, FsResolutionContext,
+        FsResolvePathAction, FsWriteAction, FsWriteOptions, FsWriteOutput, GrantedEntryPath,
+        GrantedPath, ResolvedEntryPath, ResolvedPath,
     };
 }
 

@@ -49,19 +49,7 @@ async fn fs_create_dir_all_action_uses_granted_path() {
     let kernel = FsAccessTestKernel::default();
     let workspace_root = PathBuf::from("/workspace");
     let ctx = FsAccessPolicyContext::new(&workspace_root);
-    let path = kernel
-        .policy_engine()
-        .grant(
-            &ctx,
-            FsResolvePathAction::resolve("state", ctx.fs_resolution_root())
-                .expect("path resolution should prepare action"),
-        )
-        .await
-        .expect("policy should grant path resolution")
-        .granted
-        .run(&ctx)
-        .await
-        .expect("granted path resolution should run");
+    let path = grant_target_path(&kernel, &ctx, "state").await;
     let action = FsCreateDirAllAction::new(path);
     let metadata = action.metadata();
 
@@ -83,19 +71,7 @@ async fn fs_action_wraps_create_dir_all_action() {
     let kernel = FsAccessTestKernel::default();
     let workspace_root = PathBuf::from("/workspace");
     let ctx = FsAccessPolicyContext::new(&workspace_root);
-    let path = kernel
-        .policy_engine()
-        .grant(
-            &ctx,
-            FsResolvePathAction::resolve("state", ctx.fs_resolution_root())
-                .expect("path resolution should prepare action"),
-        )
-        .await
-        .expect("policy should grant path resolution")
-        .granted
-        .run(&ctx)
-        .await
-        .expect("granted path resolution should run");
+    let path = grant_target_path(&kernel, &ctx, "state").await;
     let action = FsAction::create_dir_all(path);
     let metadata = action.metadata();
 

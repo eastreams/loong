@@ -53,19 +53,7 @@ async fn fs_inspect_path_action_uses_granted_path() {
     let kernel = FsAccessTestKernel::default();
     let workspace_root = PathBuf::from("/workspace");
     let ctx = FsAccessPolicyContext::new(&workspace_root);
-    let path = kernel
-        .policy_engine()
-        .grant(
-            &ctx,
-            FsResolvePathAction::resolve("notes.md", ctx.fs_resolution_root())
-                .expect("path resolution should prepare action"),
-        )
-        .await
-        .expect("policy should grant path resolution")
-        .granted
-        .run(&ctx)
-        .await
-        .expect("granted path resolution should run");
+    let path = grant_target_path(&kernel, &ctx, "notes.md").await;
     let action = FsInspectPathAction::new(path);
     let metadata = action.metadata();
 
@@ -87,19 +75,7 @@ async fn fs_action_wraps_inspect_path_action() {
     let kernel = FsAccessTestKernel::default();
     let workspace_root = PathBuf::from("/workspace");
     let ctx = FsAccessPolicyContext::new(&workspace_root);
-    let path = kernel
-        .policy_engine()
-        .grant(
-            &ctx,
-            FsResolvePathAction::resolve("notes.md", ctx.fs_resolution_root())
-                .expect("path resolution should prepare action"),
-        )
-        .await
-        .expect("policy should grant path resolution")
-        .granted
-        .run(&ctx)
-        .await
-        .expect("granted path resolution should run");
+    let path = grant_target_path(&kernel, &ctx, "notes.md").await;
     let action = FsAction::inspect_path(path);
     let metadata = action.metadata();
 

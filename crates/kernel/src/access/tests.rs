@@ -13,9 +13,9 @@ use loong_core::{
 use super::AccessCx;
 use crate::access::fs::{FsAccessError, FsPathPolicyContext, FsResolutionContext};
 use crate::policy::{
-    FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsReadAllowPolicy, FsReadDirAllowPolicy,
-    FsRemoveDirAllAllowPolicy, FsRemoveDirAllAllowedRootsPolicy, FsRemoveFileAllowPolicy,
-    FsRemoveFileAllowedRootsPolicy, FsResolvePathAllowedRootsPolicy,
+    FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsPathAllowedRootsPolicy, FsReadAllowPolicy,
+    FsReadDirAllowPolicy, FsRemoveDirAllAllowPolicy, FsRemoveFileAllowPolicy, FsRenameAllowPolicy,
+    FsResolvePathAllowPolicy,
 };
 
 #[derive(Debug, Clone)]
@@ -172,7 +172,7 @@ async fn access_context_grants_content_search_with_explicit_fs_policy() {
 }
 
 #[tokio::test]
-async fn fs_path_escape_is_reported_as_path_resolution_policy_denial() {
+async fn fs_path_escape_is_reported_as_path_authorization_policy_denial() {
     let kernel = kernel_with_fs_path_policy();
     let base = tempfile_dir("loong-kernel-access-path-policy");
     let workspace_root = base.join("workspace");
@@ -204,9 +204,9 @@ async fn fs_path_escape_is_reported_as_path_resolution_policy_denial() {
     assert!(
         report.evaluations.iter().any(|evaluation| {
             evaluation.policy_stage == "action"
-                && evaluation.source.policy_name == "fs-resolve-path-allowed-roots"
+                && evaluation.source.policy_name == "fs-path-allowed-roots"
         }),
-        "expected fs resolve path policy evaluation in report: {report:?}"
+        "expected fs path policy evaluation in report: {report:?}"
     );
 
     std::fs::remove_dir_all(base).ok();
@@ -248,9 +248,9 @@ async fn fs_remove_file_denies_ancestor_symlink_escape() {
     assert!(
         report.evaluations.iter().any(|evaluation| {
             evaluation.policy_stage == "action"
-                && evaluation.source.policy_name == "fs-remove-file-allowed-roots"
+                && evaluation.source.policy_name == "fs-path-allowed-roots"
         }),
-        "expected fs remove path policy evaluation in report: {report:?}"
+        "expected fs path policy evaluation in report: {report:?}"
     );
     assert_eq!(
         std::fs::read_to_string(outside_file).expect("read outside file"),
@@ -296,9 +296,9 @@ async fn fs_remove_dir_all_denies_ancestor_symlink_escape() {
     assert!(
         report.evaluations.iter().any(|evaluation| {
             evaluation.policy_stage == "action"
-                && evaluation.source.policy_name == "fs-remove-dir-all-allowed-roots"
+                && evaluation.source.policy_name == "fs-path-allowed-roots"
         }),
-        "expected fs recursive remove path policy evaluation in report: {report:?}"
+        "expected fs path policy evaluation in report: {report:?}"
     );
     assert_eq!(
         std::fs::read_to_string(outside_file).expect("read outside file"),
@@ -308,14 +308,69 @@ async fn fs_remove_dir_all_denies_ancestor_symlink_escape() {
     std::fs::remove_dir_all(base).ok();
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn fs_rename_path_denies_destination_ancestor_symlink_escape() {
+    let kernel = kernel_with_fs_path_policy();
+    let base = tempfile_dir("loong-kernel-access-rename-symlink-policy");
+    let workspace_root = base.join("workspace");
+    let outside_root = base.join("outside");
+    std::fs::create_dir_all(workspace_root.join("incoming/demo")).expect("create source dir");
+    std::fs::create_dir_all(&outside_root).expect("create outside root");
+    std::fs::write(workspace_root.join("incoming/demo/SKILL.md"), "new")
+        .expect("write source file");
+    create_symlink(&outside_root, &workspace_root.join("outside-link")).expect("create symlink");
+    let ctx = AccessToolCx::new(&kernel, &workspace_root);
+
+    let error = ctx
+        .access()
+        .fs()
+        .rename_path(
+            "incoming/demo",
+            "outside-link/demo",
+            loong_access::fs::FsWriteOptions {
+                create_dirs: true,
+                overwrite: false,
+            },
+        )
+        .await
+        .expect_err("destination ancestor symlink escape should be denied by path policy");
+
+    let FsAccessError::Authorization(AuthorizationError::PolicyGrant(PolicyGrantError::Denied {
+        report,
+        reason,
+    })) = error
+    else {
+        panic!("expected rename path policy denial, got {error:?}");
+    };
+
+    assert!(
+        reason.contains("escapes allowed filesystem roots"),
+        "unexpected denial reason: {reason}"
+    );
+    assert!(
+        report.evaluations.iter().any(|evaluation| {
+            evaluation.policy_stage == "action"
+                && evaluation.source.policy_name == "fs-path-allowed-roots"
+        }),
+        "expected fs path policy evaluation in report: {report:?}"
+    );
+    assert!(workspace_root.join("incoming/demo/SKILL.md").exists());
+    assert!(!outside_root.join("demo").exists());
+
+    std::fs::remove_dir_all(base).ok();
+}
+
 fn kernel_with_fs_path_policy() -> crate::Kernel<AccessCxContextFactory> {
     let policy = crate::PolicyPipeline::<AccessCxContextFactory>::new()
-        .with_policy(FsResolvePathAllowedRootsPolicy)
-        .with_policy(FsRemoveFileAllowedRootsPolicy)
-        .with_policy(FsRemoveDirAllAllowedRootsPolicy)
+        .with_policy(FsResolvePathAllowPolicy::target())
+        .with_policy(FsResolvePathAllowPolicy::entry())
+        .with_policy(FsPathAllowedRootsPolicy::target())
+        .with_policy(FsPathAllowedRootsPolicy::entry())
         .with_policy(FsReadAllowPolicy)
         .with_policy(FsRemoveFileAllowPolicy)
         .with_policy(FsRemoveDirAllAllowPolicy)
+        .with_policy(FsRenameAllowPolicy)
         .with_policy(FsGlobAllowPolicy)
         .with_policy(FsReadDirAllowPolicy)
         .with_policy(FsContentSearchAllowPolicy);

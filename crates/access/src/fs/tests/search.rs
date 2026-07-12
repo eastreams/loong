@@ -41,19 +41,7 @@ async fn fs_glob_action_uses_granted_path_root() {
     let kernel = FsAccessTestKernel::default();
     let workspace_root = PathBuf::from("/workspace");
     let ctx = FsAccessPolicyContext::new(&workspace_root);
-    let path = kernel
-        .policy_engine()
-        .grant(
-            &ctx,
-            FsResolvePathAction::resolve("src", ctx.fs_resolution_root())
-                .expect("path resolution should prepare action"),
-        )
-        .await
-        .expect("policy should grant path resolution")
-        .granted
-        .run(&ctx)
-        .await
-        .expect("granted path resolution should run");
+    let path = grant_target_path(&kernel, &ctx, "src").await;
     let action = FsGlobAction::new(path, "**/*.rs", true, 50);
     let metadata = action.metadata();
 
@@ -153,19 +141,7 @@ async fn fs_read_dir_action_uses_granted_path_root() {
     let kernel = FsAccessTestKernel::default();
     let workspace_root = PathBuf::from("/workspace");
     let ctx = FsAccessPolicyContext::new(&workspace_root);
-    let path = kernel
-        .policy_engine()
-        .grant(
-            &ctx,
-            FsResolvePathAction::resolve("src", ctx.fs_resolution_root())
-                .expect("path resolution should prepare action"),
-        )
-        .await
-        .expect("policy should grant path resolution")
-        .granted
-        .run(&ctx)
-        .await
-        .expect("granted path resolution should run");
+    let path = grant_target_path(&kernel, &ctx, "src").await;
     let action = FsReadDirAction::new(path, 25);
     let metadata = action.metadata();
 
@@ -252,19 +228,7 @@ async fn fs_content_search_action_uses_granted_path_root() {
     let kernel = FsAccessTestKernel::default();
     let workspace_root = PathBuf::from("/workspace");
     let ctx = FsAccessPolicyContext::new(&workspace_root);
-    let path = kernel
-        .policy_engine()
-        .grant(
-            &ctx,
-            FsResolvePathAction::resolve("src", ctx.fs_resolution_root())
-                .expect("path resolution should prepare action"),
-        )
-        .await
-        .expect("policy should grant path resolution")
-        .granted
-        .run(&ctx)
-        .await
-        .expect("granted path resolution should run");
+    let path = grant_target_path(&kernel, &ctx, "src").await;
     let action = FsContentSearchAction::new(
         path,
         "needle",
