@@ -104,3 +104,109 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
    - 验证：`cargo test -p loong-kernel policy`、`cargo test -p loong-app workspace_root_tests`、
      `cargo test -p loong-app file_read`、`cargo check -p loong-app -p loong-kernel`、
      `git diff --check`。
+
+4. 完成 unified Context 传播并删除 `KernelContext`：
+   - 在步骤 1 的 runtime owner 落地后，让 session 创建并持有统一 concrete context；所有
+     session 使用同一 context 类型，本次 invocation 的 caps/plane/tier/trusted overlay 通过
+     cheap-clone child context 收窄，不修改共享 context；
+   - 依次迁移 `SessionRouter`、`CliTurnRuntime`、`TurnExecutionService`、conversation/provider
+     binding、channel/webhook state 和 TUI runtime 持有者，不再手工调用
+     `kernel_ctx.execution_context(...)`；
+   - `RuntimeKernelOwner` 没有独立职责后直接删除；最后删除 `KernelContext` 类型、optional-kernel
+     roundtrip 和 `TODO(deprecate-kernel-context)`，不保留 alias 或同形 wrapper；
+   - 完成线：每个 session 都能从自己的 context 进入 `ctx.access()` / `ctx.tool(...)`；host
+     surface 不再传播 kernel binding；仓库中不存在 `KernelContext` / `RuntimeKernelOwner`；
+   - 验证：context、session、conversation、channel 和 TUI 的定向测试，workspace default/
+     all-feature tests、strict clippy、architecture check、`git diff --check`。
+
+5. 将 provider/runtime-self live-source 读取迁入 governed access：
+   - `AGENTS.md` / `TOOLS.md` / `IDENTITY.md` 等 source discovery 只产生候选路径；内容读取统一
+     使用 session context 派生的 fs access，不能保留 provider 内部 direct read loop；
+   - kernel-bound 与普通 provider assembly 使用同一 context/access 路径，并同时产出
+     `RuntimeSelfContinuity`；删除 no-kernel live-source fallback，而不是再增加 advisory bridge；
+   - 删除 `TODO(deprecate-no-kernel-live-source)` 和
+     `TODO(deprecate-provider-live-source-bridge)` 标记对应的旧分支；
+   - 完成线：runtime-self 文件内容只在 granted fs action 中读取；provider 只消费读取结果并
+     构造 prompt projection；typed path 有 generic action audit，但没有伪造 tool invocation audit；
+   - 验证：provider request-message、context-engine、workspace-guidance、runtime-self continuity
+     测试，以及 `cargo check -p loong-access -p loong-app -p loong`、`git diff --check`。
+
+6. 收敛 ToolPlane ingress、catalog 与 display ownership：
+   - 所有持有 unified context 的调用点直接使用 `ctx.tool(path)?.invoke(payload).await`；删除
+     `execute_kernel_tool_request` 中只为 typed path 搬运 legacy envelope 的 bridge；
+   - concrete tool descriptor 由 tool 实现提供，plane 在注册/list 时组合 path + descriptor；拆除
+     app 全局 static catalog 中属于 concrete tool 的重复 metadata；
+   - display name 由 plane-local path 的稳定 formatter 产生；删除 `file.read -> read` 这类 legacy
+     display alias helper。真实 alias 若将来需要，必须作为 plane registration 语义单独设计；
+   - 剩余工具完成步骤 2 的迁移后，删除 `ToolCoreRequest` / `ToolCoreOutcome` typed bridge、
+     `Kernel::execute_tool_core` 调用面、`LegacyToolPlane` 和 adapter traits；
+   - 完成线：新增 builtin tool 只需要 concrete `ToolImpl` 和一次 registration；typed dispatch、
+     prompt catalog、search metadata 不再要求修改手写 match/helper；
+   - 验证：tool plane/registry/catalog/search tests、每个 migrated tool 的调用测试、workspace
+     default/all-feature tests、strict clippy、`git diff --check`。
+
+7. 把 tool execution audit 从 contracts/kernel 收回 runtime owner：
+   - `Kernel::grant` 继续强制记录 generic action authorization audit，包括 caps、policy report、
+     allow/deny 和 grant id；这部分不能下沉到 ToolPlane 或 concrete tool；
+   - grant 消费后的 tool completed/failed/input-error 由 `ToolInvocation::invoke` 在 app/runtime
+     ownership 下强制记录。concrete `ToolImpl` 不获得裸 audit API；
+   - 从 contracts/kernel 删除 tool-specific `AuditEventKind::ToolInvocation` 和
+     `record_tool_invocation` schema；sink 只接收 generic envelope，app runtime payload 只保存
+     stable path display、grant id 和 execution outcome；
+   - legacy `PlaneInvoked` 随步骤 6 的 legacy plane 一起删除，不保留 typed/legacy 宽松双断言；
+   - 完成线：deny 只由 generic grant audit 表达；grant 后 outcome 只记录一次；tool registry key
+     和 route/fallback 语义不进入 contracts/kernel；
+   - 验证：kernel grant audit、app typed tool completed/failed/input-error、daemon audit rendering
+     测试，以及 workspace default/all-feature tests、strict clippy、`git diff --check`。
+
+8. 收敛 Kernel/Policy contract 与 registration metadata：
+   - 从 concrete `Kernel<C>` 提取调用方真正需要的稳定 governance trait；trait 只暴露 grant、
+     token/pack boundary 和 audit authority，不暴露 typed tool registry 或 app runtime state；
+   - `RegisteredPolicy` / `RegisteredAnyPolicy` 统一携带 registration metadata，至少明确注册来源、
+     顺序和时间信息；metadata 供 report/audit 使用，不参与 policy dispatch key；
+   - legacy caller 清空后直接删除旧 `authorize_operation`、legacy kernel auth、legacy policy error
+     和对应 helper；届时移除 `TODO(deprecate-legacy-kernel-auth)`、
+     `TODO(deprecate-legacy-policy-error)`，不要只加 alias；
+   - 完成线：新调用方只依赖稳定 governance trait 或 `PolicyEngine`；typed/any policy 的 report
+     都能关联 registration metadata；仓库没有旧 authorization API 的 production caller；
+   - 验证：kernel policy/grant/audit tests、all policy report ordering tests、workspace
+     default/all-feature tests、strict clippy、architecture check、`git diff --check`。
+
+9. 用 descriptor-relative fs backend 关闭 pathname TOCTOU：
+   - 先记录跨平台 backend 决策并评估成熟库；优先采用经过验证的 descriptor-relative/
+     capability-based filesystem primitive，不手写一套未经审计的 syscall wrapper；
+   - path resolution 与 allowed-roots policy 仍是独立 action，但 `GrantedFsPath` 必须携带或引用
+     后端可消费的稳定目录/对象能力，最终 read/write/remove/rename 不再按已授权 `PathBuf`
+     重新解析 pathname；
+   - target-following 与 final-component no-follow 语义必须继续由类型区分；Windows/Unix 无法提供
+     完全相同保证时，差异要在 backend contract 和测试中显式表达，不能静默退回旧路径操作；
+   - 完成线：authorization 与最终 side effect 使用同一受约束 handle/descriptor chain；并发替换
+     symlink 或 ancestor 不能把操作重定向到 allowed roots 外；
+   - 验证：access/kernel path policy tests、并发 symlink/rename race regression tests、各支持平台
+     的 compile/test gate、workspace default/all-feature tests、strict clippy、`git diff --check`。
+
+10. 按 owner 收敛 transitional crates 并更新架构文档：
+    - 在 unified runtime 稳定后逐个审计 `loong-cli`、`loong-app-protocol`、`loong-runtime`、
+      `loong-plugin-sdk`、`protocol` 和 `bridge-runtime`；每次只合并/删除一个 ownership 明确的
+      forwarding shell，不按 crate 行数批量合并；
+    - 先修正 kernel -> plugin-sdk 的反向依赖：kernel 所需 contracts 下沉到真正的 leaf，SDK
+      只保留 plugin author-facing API；再处理 CLI/protocol/runtime transitional spine；
+    - 每个 crate 变更同步更新 workspace dependencies、feature matrix、architecture checks、
+      `AGENTS.md` / `CLAUDE.md` 镜像、crate DAG 和 public/release docs；
+    - 完成线：没有只转发类型/函数的 phase spine 或 compatibility facade；workspace DAG 与文档
+      一致且无 dependency cycle；`loong-runtime` 要么成为真实 runtime owner，要么该名字被删除；
+    - 验证：受影响 crate 的定向测试、`cargo metadata` DAG 检查、architecture check、workspace
+      default/all-feature tests、strict clippy、`git diff --check`。
+
+## Code TODO 对照
+
+代码里的迁移 TODO 必须能映射到上面的执行步骤；对应步骤完成时删除 TODO 和旧分支：
+
+- `TODO(runtime-owner)` -> 步骤 1；
+- `TODO(config-import-access)` / `TODO(access-migration)` -> 步骤 2；
+- `TODO(deprecate-kernel-context)` -> 步骤 4；
+- `TODO(deprecate-no-kernel-live-source)` /
+  `TODO(deprecate-provider-live-source-bridge)` -> 步骤 5；
+- `TODO(tool-plane)` / `TODO(tool-plane-display)` / `TODO(tool-catalog-owner)` -> 步骤 6；
+- `TODO(kernel-contract)` / `TODO(policy-registration-metadata)` /
+  `TODO(deprecate-legacy-kernel-auth)` / `TODO(deprecate-legacy-policy-error)` -> 步骤 8。
