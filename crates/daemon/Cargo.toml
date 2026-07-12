@@ -89,7 +89,7 @@ chrono.workspace = true
 sha2.workspace = true
 semver.workspace = true
 ed25519-dalek.workspace = true
-dunce = "1"
+dunce.workspace = true
 tracing.workspace = true
 tracing-log.workspace = true
 tracing-subscriber.workspace = true
@@ -100,7 +100,7 @@ wait-timeout = "0.2"
 qrcode = { version = "0.14", default-features = false }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true
 loong-spec = { package = "loong-spec", version = "0.1.2-alpha.1", path = "../spec", features = ["test-hooks"] }
 syn = { version = "2", features = ["full", "visit"] }
 tower = { version = "0.5", features = ["util"] }
