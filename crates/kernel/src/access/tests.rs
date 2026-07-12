@@ -14,7 +14,8 @@ use super::AccessCx;
 use crate::access::fs::{FsAccessError, FsPathPolicyContext, FsResolutionContext};
 use crate::policy::{
     FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsReadAllowPolicy, FsReadDirAllowPolicy,
-    FsRemoveFileAllowPolicy, FsRemoveFileAllowedRootsPolicy, FsResolvePathAllowedRootsPolicy,
+    FsRemoveDirAllAllowPolicy, FsRemoveDirAllAllowedRootsPolicy, FsRemoveFileAllowPolicy,
+    FsRemoveFileAllowedRootsPolicy, FsResolvePathAllowedRootsPolicy,
 };
 
 #[derive(Debug, Clone)]
@@ -259,12 +260,62 @@ async fn fs_remove_file_denies_ancestor_symlink_escape() {
     std::fs::remove_dir_all(base).ok();
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn fs_remove_dir_all_denies_ancestor_symlink_escape() {
+    let kernel = kernel_with_fs_path_policy();
+    let base = tempfile_dir("loong-kernel-access-remove-dir-symlink-policy");
+    let workspace_root = base.join("workspace");
+    let outside_root = base.join("outside");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    std::fs::create_dir_all(outside_root.join("tree")).expect("create outside tree");
+    let outside_file = outside_root.join("tree/secret.txt");
+    std::fs::write(&outside_file, "secret").expect("write outside file");
+    create_symlink(&outside_root, &workspace_root.join("outside-link")).expect("create symlink");
+    let ctx = AccessToolCx::new(&kernel, &workspace_root);
+
+    let error = ctx
+        .access()
+        .fs()
+        .remove_dir_all("outside-link/tree")
+        .await
+        .expect_err("ancestor symlink escape should be denied by recursive removal policy");
+
+    let FsAccessError::Authorization(AuthorizationError::PolicyGrant(PolicyGrantError::Denied {
+        report,
+        reason,
+    })) = error
+    else {
+        panic!("expected remove-dir path policy denial, got {error:?}");
+    };
+
+    assert!(
+        reason.contains("escapes allowed filesystem roots"),
+        "unexpected denial reason: {reason}"
+    );
+    assert!(
+        report.evaluations.iter().any(|evaluation| {
+            evaluation.policy_stage == "action"
+                && evaluation.source.policy_name == "fs-remove-dir-all-allowed-roots"
+        }),
+        "expected fs recursive remove path policy evaluation in report: {report:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(outside_file).expect("read outside file"),
+        "secret"
+    );
+
+    std::fs::remove_dir_all(base).ok();
+}
+
 fn kernel_with_fs_path_policy() -> crate::Kernel<AccessCxContextFactory> {
     let policy = crate::PolicyPipeline::<AccessCxContextFactory>::new()
         .with_policy(FsResolvePathAllowedRootsPolicy)
         .with_policy(FsRemoveFileAllowedRootsPolicy)
+        .with_policy(FsRemoveDirAllAllowedRootsPolicy)
         .with_policy(FsReadAllowPolicy)
         .with_policy(FsRemoveFileAllowPolicy)
+        .with_policy(FsRemoveDirAllAllowPolicy)
         .with_policy(FsGlobAllowPolicy)
         .with_policy(FsReadDirAllowPolicy)
         .with_policy(FsContentSearchAllowPolicy);

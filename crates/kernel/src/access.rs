@@ -10,8 +10,9 @@ pub mod fs {
         FsCreateDirAllAction, FsCreateDirAllOutput, FsGlobAction, FsGlobOutput,
         FsInspectPathAction, FsInspectPathOutput, FsPathKind, FsPathMatch, FsPathPolicyContext,
         FsReadAction, FsReadDirAction, FsReadDirEntry, FsReadDirOutput, FsReadOutput,
-        FsRemoveFileAction, FsRemoveFileKind, FsRemoveFileOutput, FsRenameAction, FsRenameOutput,
-        FsResolutionContext, FsResolvePathAction, FsWriteAction, FsWriteOptions, FsWriteOutput,
+        FsRemoveDirAllAction, FsRemoveDirAllOutput, FsRemoveFileAction, FsRemoveFileKind,
+        FsRemoveFileOutput, FsRenameAction, FsRenameOutput, FsResolutionContext,
+        FsResolvePathAction, FsWriteAction, FsWriteOptions, FsWriteOutput,
     };
 }
 

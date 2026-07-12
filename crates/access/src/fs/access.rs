@@ -15,7 +15,8 @@ use super::{
     action::{
         FsAtomicWriteAction, FsContentSearchAction, FsContentSearchOptions, FsCopyFileAction,
         FsCreateDirAllAction, FsGlobAction, FsInspectPathAction, FsReadAction, FsReadDirAction,
-        FsRemoveFileAction, FsRenameAction, FsResolvePathAction, FsWriteAction, FsWriteOptions,
+        FsRemoveDirAllAction, FsRemoveFileAction, FsRenameAction, FsResolvePathAction,
+        FsWriteAction, FsWriteOptions,
     },
     content_search::FsContentSearchOutput,
     copy::FsCopyFileOutput,
@@ -26,6 +27,7 @@ use super::{
     path::GrantedPath,
     read_dir::FsReadDirOutput,
     remove::FsRemoveFileOutput,
+    remove_dir::FsRemoveDirAllOutput,
     rename::FsRenameOutput,
 };
 
@@ -217,6 +219,24 @@ where
         path: impl AsRef<Path>,
     ) -> Result<FsRemoveFileOutput, FsAccessError> {
         let action = FsRemoveFileAction::resolve(path, self.ctx.fs_resolution_root())?;
+        let grant = self
+            .policy_engine
+            .grant(self.ctx, action)
+            .await
+            .map_err(AuthorizationError::from)
+            .map_err(FsAccessError::Authorization)?;
+        grant.granted.run(self.ctx).await
+    }
+
+    /// Recursively remove one governed directory tree.
+    ///
+    /// This operation is intentionally distinct from `remove_file`: recursive
+    /// deletion has a larger blast radius and refuses final-component symlinks.
+    pub async fn remove_dir_all(
+        self,
+        path: impl AsRef<Path>,
+    ) -> Result<FsRemoveDirAllOutput, FsAccessError> {
+        let action = FsRemoveDirAllAction::resolve(path, self.ctx.fs_resolution_root())?;
         let grant = self
             .policy_engine
             .grant(self.ctx, action)
@@ -664,6 +684,8 @@ pub enum FsAccessError {
     },
     #[error("path {path} is a directory, not a file", path = .path.display())]
     PathIsDirectory { path: PathBuf },
+    #[error("path {path} is not a directory", path = .path.display())]
+    PathIsNotDirectory { path: PathBuf },
     #[error("refusing to write through symlink {path}", path = .path.display())]
     RefuseSymlink { path: PathBuf },
     #[error("file {path} already exists; overwrite is required", path = .path.display())]
@@ -706,6 +728,12 @@ pub enum FsAccessError {
     },
     #[error("failed to remove file {path}: {source}", path = .path.display())]
     RemoveFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to remove directory {path}: {source}", path = .path.display())]
+    RemoveDirectory {
         path: PathBuf,
         #[source]
         source: std::io::Error,

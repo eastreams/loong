@@ -16,6 +16,7 @@ const FS_COPY_FILE_REQUIRED_CAPABILITIES: [Capability; 2] =
     [Capability::FilesystemRead, Capability::FilesystemWrite];
 const FS_CREATE_DIR_ALL_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
 const FS_REMOVE_FILE_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
+const FS_REMOVE_DIR_ALL_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
 const FS_RENAME_PATH_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
 const FS_GLOB_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 const FS_READ_DIR_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
@@ -421,6 +422,59 @@ impl ActionMeta for FsRemoveFileAction {
     }
 }
 
+/// Typed action for removing one governed directory tree.
+///
+/// Like file removal, this uses final-component no-follow path facts. The run
+/// boundary refuses symlinks so recursive deletion cannot leave the governed
+/// tree through a final symlink.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsRemoveDirAllAction {
+    raw_path: PathBuf,
+    deletion: ResolvedDeletionPath,
+}
+
+impl FsRemoveDirAllAction {
+    pub(in crate::fs) fn resolve(
+        path: impl AsRef<Path>,
+        resolution_root: impl AsRef<Path>,
+    ) -> Result<Self, super::error::FsActionError> {
+        let raw_path = path.as_ref().to_path_buf();
+        let deletion = ResolvedDeletionPath::resolve(&raw_path, resolution_root)?;
+        Ok(Self { raw_path, deletion })
+    }
+
+    #[must_use]
+    pub fn raw_path(&self) -> &Path {
+        &self.raw_path
+    }
+
+    #[must_use]
+    pub fn deletion_path(&self) -> &Path {
+        self.deletion.path()
+    }
+}
+
+impl ActionMeta for FsRemoveDirAllAction {
+    fn metadata(&self) -> ActionMetadata<'_> {
+        ActionMetadata {
+            kind: "fs.remove_dir_all",
+            operation: Cow::Borrowed("remove_dir_all"),
+            required_capabilities: Cow::Borrowed(&FS_REMOVE_DIR_ALL_REQUIRED_CAPABILITIES),
+        }
+    }
+
+    fn audit_resource(&self) -> Option<Cow<'_, str>> {
+        Some(self.deletion_path().display().to_string().into())
+    }
+
+    fn payload(&self) -> Cow<'_, Value> {
+        Cow::Owned(json!({
+            "path": self.raw_path.display().to_string(),
+            "deletion_path": self.deletion_path().display().to_string(),
+        }))
+    }
+}
+
 /// Typed action for renaming one governed filesystem path.
 ///
 /// Rename uses final-component no-follow facts for both source and
@@ -771,6 +825,7 @@ pub enum FsAction {
     CopyFile(FsCopyFileAction),
     CreateDirAll(FsCreateDirAllAction),
     RemoveFile(FsRemoveFileAction),
+    RemoveDirAll(FsRemoveDirAllAction),
     Rename(FsRenameAction),
     InspectPath(FsInspectPathAction),
     Glob(FsGlobAction),
@@ -815,6 +870,11 @@ impl FsAction {
     #[must_use]
     pub fn remove_file(action: FsRemoveFileAction) -> Self {
         Self::RemoveFile(action)
+    }
+
+    #[must_use]
+    pub fn remove_dir_all(action: FsRemoveDirAllAction) -> Self {
+        Self::RemoveDirAll(action)
     }
 
     #[must_use]
@@ -866,6 +926,7 @@ impl ActionMeta for FsAction {
             Self::CopyFile(action) => action.metadata(),
             Self::CreateDirAll(action) => action.metadata(),
             Self::RemoveFile(action) => action.metadata(),
+            Self::RemoveDirAll(action) => action.metadata(),
             Self::Rename(action) => action.metadata(),
             Self::InspectPath(action) => action.metadata(),
             Self::Glob(action) => action.metadata(),
@@ -882,6 +943,7 @@ impl ActionMeta for FsAction {
             Self::CopyFile(action) => action.audit_resource(),
             Self::CreateDirAll(action) => action.audit_resource(),
             Self::RemoveFile(action) => action.audit_resource(),
+            Self::RemoveDirAll(action) => action.audit_resource(),
             Self::Rename(action) => action.audit_resource(),
             Self::InspectPath(action) => action.audit_resource(),
             Self::Glob(action) => action.audit_resource(),
@@ -898,6 +960,7 @@ impl ActionMeta for FsAction {
             Self::CopyFile(action) => action.payload(),
             Self::CreateDirAll(action) => action.payload(),
             Self::RemoveFile(action) => action.payload(),
+            Self::RemoveDirAll(action) => action.payload(),
             Self::Rename(action) => action.payload(),
             Self::InspectPath(action) => action.payload(),
             Self::Glob(action) => action.payload(),

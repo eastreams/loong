@@ -26,7 +26,7 @@ use loong_core::{
 use crate::access::fs::{
     FsAtomicWriteAction, FsContentSearchAction, FsCopyFileAction, FsCreateDirAllAction,
     FsGlobAction, FsInspectPathAction, FsPathPolicyContext, FsReadAction, FsReadDirAction,
-    FsRemoveFileAction, FsRenameAction, FsResolvePathAction, FsWriteAction,
+    FsRemoveDirAllAction, FsRemoveFileAction, FsRenameAction, FsResolvePathAction, FsWriteAction,
 };
 use crate::errors::PolicyError;
 
@@ -493,6 +493,9 @@ pub struct FsCreateDirAllAllowPolicy;
 pub struct FsRemoveFileAllowPolicy;
 
 #[derive(Debug, Default, Clone, Copy)]
+pub struct FsRemoveDirAllAllowPolicy;
+
+#[derive(Debug, Default, Clone, Copy)]
 pub struct FsRenameAllowPolicy;
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -512,6 +515,9 @@ pub struct FsResolvePathAllowedRootsPolicy;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct FsRemoveFileAllowedRootsPolicy;
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct FsRemoveDirAllAllowedRootsPolicy;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct FsRenameAllowedRootsPolicy;
@@ -581,6 +587,43 @@ where
         PolicyGrant {
             decision: PolicyDecision::Deny,
             predicate: Some("fs remove path must start with an allowed root".into()),
+            reason: format!(
+                "filesystem path {} escapes allowed filesystem roots [{}]",
+                action.deletion_path().display(),
+                display_path_list(allowed_roots)
+            )
+            .into(),
+        }
+    }
+}
+
+/// Default fs recursive directory removal containment policy.
+///
+/// Recursive deletion uses final-component no-follow path facts and must stay
+/// inside governed roots before the terminal remove-dir policy can allow it.
+#[async_trait]
+impl<C> Policy<C, FsRemoveDirAllAction> for FsRemoveDirAllAllowedRootsPolicy
+where
+    C: ContextFactory + Send + Sync,
+    for<'a> C::Cx<'a>: FsPathPolicyContext,
+{
+    fn name(&self) -> Cow<'static, str> {
+        Cow::Borrowed("fs-remove-dir-all-allowed-roots")
+    }
+
+    async fn grant(&self, ctx: &C::Cx<'_>, action: &FsRemoveDirAllAction) -> PolicyGrant {
+        let allowed_roots = ctx.fs_allowed_roots();
+        if resolved_path_starts_with_allowed_root(action.deletion_path(), allowed_roots) {
+            return PolicyGrant {
+                decision: PolicyDecision::Allow,
+                predicate: Some("fs remove directory path starts with an allowed root".into()),
+                reason: "fs remove directory path is within allowed roots".into(),
+            };
+        }
+
+        PolicyGrant {
+            decision: PolicyDecision::Deny,
+            predicate: Some("fs remove directory path must start with an allowed root".into()),
             reason: format!(
                 "filesystem path {} escapes allowed filesystem roots [{}]",
                 action.deletion_path().display(),
@@ -794,6 +837,24 @@ where
             decision: PolicyDecision::Allow,
             predicate: Some("fs.remove_file reached terminal allow policy".into()),
             reason: "filesystem file removal allowed after configured deny policies".into(),
+        }
+    }
+}
+
+#[async_trait]
+impl<C> Policy<C, FsRemoveDirAllAction> for FsRemoveDirAllAllowPolicy
+where
+    C: ContextFactory + Send + Sync,
+{
+    fn name(&self) -> Cow<'static, str> {
+        Cow::Borrowed("fs-remove-dir-all-allow")
+    }
+
+    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &FsRemoveDirAllAction) -> PolicyGrant {
+        PolicyGrant {
+            decision: PolicyDecision::Allow,
+            predicate: Some("fs.remove_dir_all reached terminal allow policy".into()),
+            reason: "filesystem directory removal allowed after configured deny policies".into(),
         }
     }
 }
