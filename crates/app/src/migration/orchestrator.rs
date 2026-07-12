@@ -597,6 +597,10 @@ pub(crate) async fn apply_import_selection_with_access(
     request: &ApplyImportSelection,
 ) -> CliResult<ApplyImportSelectionResult> {
     if request.apply_skills_plan {
+        // TODO(config-import-access): migrate skills.install/skills.remove
+        // first. Calling the legacy bridge from this access-backed path would
+        // hide direct filesystem side effects behind a migrated config.import
+        // entrypoint.
         return Err("apply_selected with apply_skills_plan is not access-backed yet".to_owned());
     }
 
@@ -858,6 +862,9 @@ fn bridge_installable_skills(
     input_path: &Path,
     mapping: &super::ExternalSkillMappingPlan,
 ) -> CliResult<Vec<InstalledSkill>> {
+    // TODO(config-import-access): legacy-only bridge. The access-backed
+    // config.import path must invoke a migrated skills lifecycle boundary
+    // instead of calling this direct ToolCoreOutcome helper.
     let installable_roots = collect_installable_external_skill_roots(mapping)?;
     if installable_roots.is_empty() {
         return Ok(Vec::new());
