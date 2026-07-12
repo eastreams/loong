@@ -457,12 +457,26 @@ pub(crate) fn bootstrap_test_app_context(agent_id: &str, ttl_s: u64) -> Result<A
 /// ids, or prepare channel/conversation state. Callers that need those side
 /// effects should compose it with `runtime_env::initialize_runtime_environment`
 /// or a surface-specific bootstrap such as `chat::initialize_cli_turn_runtime`.
+// TODO(session-owned-context): delete this host/root-context bootstrap after
+// runtime owners construct one AppContext per concrete session.
 pub fn bootstrap_app_context_with_config(
     agent_id: &str,
     ttl_s: u64,
     config: &LoongConfig,
 ) -> Result<AppContext, String> {
     bootstrap_app_context_with_audit_sink(agent_id, ttl_s, build_audit_sink(config)?, config)
+}
+
+/// Bootstrap the long-lived runtime authority shared by app sessions.
+///
+/// This constructs the configured kernel and tool plane without issuing a
+/// session token or inventing a host-level context. Hosts should retain the
+/// returned runtime and construct `AppContext` values for concrete sessions.
+pub fn bootstrap_runtime_with_config(
+    config: &LoongConfig,
+) -> Result<Arc<Runtime<AppContextFactory>>, String> {
+    let tool_rt = crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
+    bootstrap_runtime_with_audit_sink(build_audit_sink(config)?, config, &tool_rt)
 }
 
 fn build_audit_sink(config: &LoongConfig) -> Result<Arc<dyn AuditSink>, String> {
@@ -502,6 +516,21 @@ fn bootstrap_app_context_with_audit_sink(
     config: &LoongConfig,
 ) -> Result<AppContext, String> {
     let tool_rt = crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
+    let runtime = bootstrap_runtime_with_audit_sink(audit_sink, config, &tool_rt)?;
+    let token = runtime
+        .kernel()
+        .issue_token(EMBEDDED_RUNTIME_PACK_ID, agent_id, ttl_s)
+        .map_err(|e| format!("kernel token issue failed: {e}"))?;
+
+    AppContext::new(runtime, token, tool_rt)
+}
+
+// Keep production-selected and test-injected audit sinks on one runtime construction path.
+fn bootstrap_runtime_with_audit_sink(
+    audit_sink: Arc<dyn AuditSink>,
+    config: &LoongConfig,
+    tool_rt: &crate::tools::runtime_config::ToolRuntimeConfig,
+) -> Result<Arc<Runtime<AppContextFactory>>, String> {
     let mut policy = PolicyPipeline::<AppContextFactory>::new_legacy_allow_fallback()
         .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
         .with_policy(FsResolvePathAllowPolicy::target())
@@ -570,13 +599,7 @@ fn bootstrap_app_context_with_audit_sink(
 
     let tools = crate::tools::plane::builtin_tool_plane()
         .map_err(|error| format!("builtin tool registration failed: {error}"))?;
-    let runtime = Arc::new(Runtime::new(kernel, tools));
-    let token = runtime
-        .kernel()
-        .issue_token(EMBEDDED_RUNTIME_PACK_ID, agent_id, ttl_s)
-        .map_err(|e| format!("kernel token issue failed: {e}"))?;
-
-    AppContext::new(runtime, token, tool_rt)
+    Ok(Arc::new(Runtime::new(kernel, tools)))
 }
 
 #[cfg(test)]
@@ -591,6 +614,28 @@ mod tests {
     use crate::config::MemoryProfile;
     use crate::memory::runtime_config::MemoryRuntimeConfig;
     use crate::test_utils::ScopedEnv;
+
+    #[test]
+    fn runtime_bootstrap_does_not_issue_a_host_token() {
+        let audit = Arc::new(InMemoryAuditSink::default());
+        let config = LoongConfig::default();
+        let tool_rt =
+            crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(&config, None);
+
+        let runtime = bootstrap_runtime_with_audit_sink(audit.clone(), &config, &tool_rt)
+            .expect("runtime bootstrap");
+
+        assert!(
+            runtime
+                .kernel()
+                .pack_manifest(EMBEDDED_RUNTIME_PACK_ID)
+                .is_ok()
+        );
+        assert!(
+            audit.snapshot().is_empty(),
+            "runtime ownership must not mint a host-level token"
+        );
+    }
 
     #[test]
     fn app_context_rejects_token_for_unregistered_pack() {

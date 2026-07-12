@@ -185,6 +185,7 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
 代码里的迁移 TODO 必须能映射到上面的执行步骤；对应步骤完成时删除 TODO 和旧分支：
 
 - `TODO(config-import-access)` / `TODO(access-migration)` -> 步骤 1；
+- `TODO(session-owned-context)` -> 步骤 2；
 - `TODO(deprecate-no-kernel-live-source)` -> 步骤 3；
 - `TODO(tool-plane)` / `TODO(tool-plane-display)` / `TODO(tool-catalog-owner)` -> 步骤 4；
 - `TODO(kernel-contract)` / `TODO(deprecate-legacy-kernel-auth)` /
