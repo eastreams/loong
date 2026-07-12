@@ -507,7 +507,7 @@ fn dispatch_tool_request(
         #[cfg(feature = "tool-file")]
         "write" => Err("write requires kernel access context".to_owned()),
         #[cfg(feature = "tool-file")]
-        "edit" => file::execute_file_edit_tool_with_config(request, config),
+        "edit" => Err("edit requires kernel access context".to_owned()),
         #[cfg(feature = "tool-file")]
         "glob.search" => Err("glob.search requires kernel access context".to_owned()),
         #[cfg(feature = "tool-file")]

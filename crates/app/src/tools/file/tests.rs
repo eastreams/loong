@@ -1,10 +1,12 @@
 use std::collections::BTreeSet;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use loong_contracts::{
-    Capability, ExecutionPlane, ExecutionRoute, HarnessKind, PlaneTier, ToolCoreRequest,
+    Capability, ExecutionPlane, ExecutionRoute, HarnessKind, PlaneTier, ToolCoreOutcome,
+    ToolCoreRequest,
 };
 use loong_core::tool::{RegisteredTool, ToolProvenance};
 use loong_kernel::{
@@ -19,6 +21,7 @@ use serde_json::json;
 
 use super::*;
 use crate::context::AppContextFactory;
+use crate::tools::file_path::resolve_safe_file_path_with_config;
 use crate::tools::runtime_config::ToolRuntimeConfig;
 use crate::tools::runtime_events::{
     ToolFileChangeKind, ToolRuntimeEvent, ToolRuntimeEventSink, with_tool_runtime_event_sink,
@@ -1168,207 +1171,6 @@ fn make_edit_blocks_request(path: &str, edits: &[(&str, &str)]) -> ToolCoreReque
     }
 }
 
-fn make_camel_case_edit_blocks_request(path: &str, edits: &[(&str, &str)]) -> ToolCoreRequest {
-    let edit_blocks = edits
-        .iter()
-        .map(|(old, new)| {
-            json!({
-                "oldText": old,
-                "newText": new,
-            })
-        })
-        .collect::<Vec<_>>();
-    ToolCoreRequest {
-        tool_name: "file.edit".to_owned(),
-        payload: json!({
-            "path": path,
-            "edits": edit_blocks,
-        }),
-    }
-}
-
-#[test]
-fn file_edit_single_match_succeeds() {
-    let base = unique_temp_dir("loong-file-edit-single");
-    let root = base.join("root");
-    fs::create_dir_all(&root).expect("create root");
-    let target = root.join("file.txt");
-    fs::write(&target, "hello world").expect("write");
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root),
-        ..ToolRuntimeConfig::default()
-    };
-    let result = execute_file_edit_tool_with_config(
-        make_edit_blocks_request("file.txt", &[("hello", "hi")]),
-        &config,
-    );
-    assert!(result.is_ok(), "unexpected error: {result:?}");
-    let outcome = result.unwrap();
-    assert_eq!(outcome.status, "ok");
-    assert_eq!(outcome.payload["replacements_made"], 1);
-    assert_eq!(fs::read_to_string(&target).unwrap(), "hi world");
-    let _ = fs::remove_dir_all(base);
-}
-
-#[test]
-fn file_edit_no_match_errors() {
-    let base = unique_temp_dir("loong-file-edit-nomatch");
-    let root = base.join("root");
-    fs::create_dir_all(&root).expect("create root");
-    fs::write(root.join("file.txt"), "hello world").expect("write");
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root),
-        ..ToolRuntimeConfig::default()
-    };
-    let err = execute_file_edit_tool_with_config(
-        make_edit_blocks_request("file.txt", &[("nothere", "x")]),
-        &config,
-    )
-    .expect_err("should fail");
-    assert!(err.contains("old_text not found"), "got: {err}");
-    let _ = fs::remove_dir_all(base);
-}
-
-#[test]
-fn file_edit_multiple_match_errors() {
-    let base = unique_temp_dir("loong-file-edit-multi");
-    let root = base.join("root");
-    fs::create_dir_all(&root).expect("create root");
-    fs::write(root.join("file.txt"), "a\na\n").expect("write");
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root),
-        ..ToolRuntimeConfig::default()
-    };
-    let err = execute_file_edit_tool_with_config(
-        make_edit_blocks_request("file.txt", &[("a", "b")]),
-        &config,
-    )
-    .expect_err("should fail");
-    assert!(err.contains("matches 2 locations"), "got: {err}");
-    let _ = fs::remove_dir_all(base);
-}
-
-#[test]
-fn file_edit_emits_change_preview_event() {
-    let base = unique_temp_dir("loong-file-edit-preview");
-    let root = base.join("root");
-    fs::create_dir_all(&root).expect("create root");
-    let target = root.join("file.txt");
-    fs::write(&target, "old line\nshared\n").expect("write original file");
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root),
-        ..ToolRuntimeConfig::default()
-    };
-    let request = make_edit_blocks_request("file.txt", &[("old line", "new line")]);
-    let sink = Arc::new(RecordingRuntimeSink::default());
-    let runtime_sink: Arc<dyn ToolRuntimeEventSink> = sink.clone();
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("current-thread runtime");
-
-    let outcome = runtime.block_on(with_tool_runtime_event_sink(runtime_sink, async {
-        execute_file_edit_tool_with_config(request, &config)
-    }));
-    let outcome = outcome.expect("file.edit should succeed");
-    let events = lock_runtime_events(&sink);
-    let preview = events.iter().find_map(|event| {
-        if let ToolRuntimeEvent::FileChangePreview(preview) = event {
-            return Some(preview);
-        }
-
-        None
-    });
-    let preview = preview.expect("file.edit should emit change preview");
-    let preview_text = preview.preview.as_deref().unwrap_or_default();
-
-    assert_eq!(outcome.status, "ok");
-    assert_eq!(preview.kind, ToolFileChangeKind::Edit);
-    assert_eq!(preview.added_lines, 1);
-    assert_eq!(preview.removed_lines, 1);
-    assert!(preview_text.contains("-old line"));
-    assert!(preview_text.contains("+new line"));
-}
-
-#[test]
-fn file_edit_exact_edit_blocks_apply_multiple_replacements() {
-    let base = unique_temp_dir("loongclaw-file-edit-blocks");
-    let root = base.join("root");
-    fs::create_dir_all(&root).expect("create root");
-    let target = root.join("file.txt");
-    fs::write(&target, "alpha\nbeta\ngamma\n").expect("write");
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root),
-        ..ToolRuntimeConfig::default()
-    };
-    let result = execute_file_edit_tool_with_config(
-        make_edit_blocks_request("file.txt", &[("alpha", "ALPHA"), ("gamma", "GAMMA")]),
-        &config,
-    );
-    assert!(result.is_ok(), "unexpected error: {result:?}");
-    let outcome = result.unwrap();
-    assert_eq!(outcome.status, "ok");
-    assert_eq!(outcome.payload["replacements_made"], 2);
-    assert_eq!(outcome.payload["edit_blocks_applied"], 2);
-    let resolved_target = resolve_safe_file_path_with_config("file.txt", &config)
-        .expect("resolved target path")
-        .display()
-        .to_string();
-    assert_eq!(outcome.payload["continuation"]["recommended_tool"], "read");
-    assert_eq!(
-        outcome.payload["continuation"]["recommended_payload"]["path"],
-        resolved_target
-    );
-    assert_eq!(fs::read_to_string(&target).unwrap(), "ALPHA\nbeta\nGAMMA\n");
-    let _ = fs::remove_dir_all(base);
-}
-
-#[test]
-fn file_edit_exact_edit_blocks_reject_non_unique_matches() {
-    let base = unique_temp_dir("loongclaw-file-edit-blocks-non-unique");
-    let root = base.join("root");
-    fs::create_dir_all(&root).expect("create root");
-    fs::write(root.join("file.txt"), "dup\ndup\n").expect("write");
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root),
-        ..ToolRuntimeConfig::default()
-    };
-    let err = execute_file_edit_tool_with_config(
-        make_edit_blocks_request("file.txt", &[("dup", "only once")]),
-        &config,
-    )
-    .expect_err("non-unique block should fail");
-    assert!(err.contains("matches 2 locations"), "got: {err}");
-    let _ = fs::remove_dir_all(base);
-}
-
-#[test]
-fn file_edit_exact_edit_blocks_accept_camel_case_aliases() {
-    let base = unique_temp_dir("loongclaw-file-edit-blocks-camel");
-    let root = base.join("root");
-    fs::create_dir_all(&root).expect("create root");
-    let target = root.join("file.txt");
-    fs::write(&target, "hello world").expect("write");
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root),
-        ..ToolRuntimeConfig::default()
-    };
-    let result = execute_file_edit_tool_with_config(
-        make_camel_case_edit_blocks_request("file.txt", &[("hello", "hi")]),
-        &config,
-    );
-    assert!(result.is_ok(), "unexpected error: {result:?}");
-    assert_eq!(fs::read_to_string(&target).unwrap(), "hi world");
-    let _ = fs::remove_dir_all(base);
-}
-
 #[test]
 fn summarize_file_change_preview_preserves_shared_middle_lines_when_appending_tail() {
     let before_lines = vec!["old line".to_owned(), "shared".to_owned()];
@@ -1387,53 +1189,4 @@ fn summarize_file_change_preview_preserves_shared_middle_lines_when_appending_ta
     assert!(preview.contains("-old line"), "preview: {preview}");
     assert!(preview.contains("+new line"), "preview: {preview}");
     assert!(preview.contains("+extra"), "preview: {preview}");
-}
-
-#[test]
-fn file_edit_empty_old_string_errors() {
-    let base = unique_temp_dir("loong-file-edit-empty");
-    let root = base.join("root");
-    fs::create_dir_all(&root).expect("create root");
-    fs::write(root.join("file.txt"), "hello").expect("write");
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root),
-        ..ToolRuntimeConfig::default()
-    };
-    let err = execute_file_edit_tool_with_config(
-        make_edit_blocks_request("file.txt", &[("", "x")]),
-        &config,
-    )
-    .expect_err("should fail");
-    assert!(err.contains("old_text must not be empty"), "got: {err}");
-    let _ = fs::remove_dir_all(base);
-}
-
-#[cfg(unix)]
-#[test]
-fn file_edit_rejects_path_escape() {
-    let base = unique_temp_dir("loong-file-edit-escape");
-    let root = base.join("root");
-    let outside = base.join("outside");
-    fs::create_dir_all(&root).expect("create root");
-    fs::create_dir_all(&outside).expect("create outside");
-
-    let outside_file = outside.join("secret.txt");
-    fs::write(&outside_file, "secret content here").expect("write outside");
-    let link = root.join("escape-link");
-    assert!(create_symlink(&outside_file, &link).is_ok());
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root),
-        ..ToolRuntimeConfig::default()
-    };
-    let err = execute_file_edit_tool_with_config(
-        make_edit_blocks_request("escape-link", &[("secret", "pwned")]),
-        &config,
-    )
-    .expect_err("escape denied");
-
-    assert!(err.starts_with("policy_denied: "));
-    assert!(err.contains("escapes configured file root"));
-    let _ = fs::remove_dir_all(base);
 }

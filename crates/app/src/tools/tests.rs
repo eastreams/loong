@@ -2128,13 +2128,13 @@ fn discoverable_search_requires_kernel_context_without_reading_files() {
 }
 
 #[test]
-fn direct_edit_executes_without_hopping_through_hidden_file_edit() {
+fn direct_edit_requires_kernel_access_context() {
     let root = unique_temp_dir("loong-direct-edit");
     std::fs::create_dir_all(&root).expect("create direct-edit root");
     std::fs::write(root.join("notes.txt"), "alpha\nbeta\n").expect("write edit fixture");
     let config = test_tool_runtime_config(&root).into_inner();
 
-    let outcome = execute_tool_core_with_config(
+    let error = execute_tool_core_with_config(
         ToolCoreRequest {
             tool_name: "edit".to_owned(),
             payload: json!({
@@ -2149,12 +2149,12 @@ fn direct_edit_executes_without_hopping_through_hidden_file_edit() {
         },
         &config,
     )
-    .expect("direct edit should execute");
+    .expect_err("direct edit should require kernel context");
 
-    assert_eq!(outcome.payload["tool_name"], "edit");
+    assert_eq!(error, "edit requires kernel access context");
     assert_eq!(
         std::fs::read_to_string(root.join("notes.txt")).unwrap(),
-        "alpha\ngamma\n"
+        "alpha\nbeta\n"
     );
 }
 

@@ -19,15 +19,13 @@ pub(super) fn run(
         return shell_policy_ext::authorize_direct_shell_payload(payload, config);
     }
 
-    // Kernel-routed `read` and `write` are access-backed typed tools now. This
+    // Kernel-routed file tools are access-backed typed tools now. This
     // preflight belongs only to legacy direct dispatch through
-    // `execute_tool_core_with_config`, where edit/config.import still need the
-    // old file policy guard until those direct entry points disappear.
+    // `execute_tool_core_with_config`, where config.import still needs the old
+    // file policy guard until it migrates to typed access.
     // TODO(access-migration): Delete this file branch after the remaining
     // legacy direct file tools move to typed Action/Policy access paths.
-    let direct_tool_name = super::direct_tool_name_for_hidden_tool(tool_name).unwrap_or(tool_name);
-    let is_file_tool = direct_tool_name == "edit" || tool_name == "config.import";
-    if is_file_tool {
+    if tool_name == "config.import" {
         return file_policy_ext::authorize_direct_file_payload(tool_name, payload, config);
     }
 
@@ -80,7 +78,7 @@ mod tests {
     }
 
     #[test]
-    fn run_reuses_shared_file_policy_escape_guard_for_unmigrated_edit() {
+    fn run_does_not_apply_file_policy_preflight_to_migrated_edit() {
         let root = unique_temp_dir("direct-policy-preflight");
         let config = runtime_config::ToolRuntimeConfig {
             file_root: Some(root),
@@ -95,20 +93,7 @@ mod tests {
             }),
         };
 
-        let error = run(&request, &config).expect_err("escaped file path should be denied");
-
-        assert!(
-            error.starts_with("policy_denied: "),
-            "expected policy_denied prefix, got: {error}"
-        );
-        assert!(
-            error.contains("policy extension file-policy denied request"),
-            "expected shared file policy prefix, got: {error}"
-        );
-        assert!(
-            error.contains("escapes file root"),
-            "expected shared file policy denial, got: {error}"
-        );
+        assert!(run(&request, &config).is_ok());
     }
 
     #[test]

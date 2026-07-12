@@ -182,28 +182,18 @@ impl FilePolicyExtension {
         let tool_name = super::canonical_tool_name(tool_name);
         let mut raw_paths = Vec::new();
 
-        if tool_name == "config.import" {
-            let input_path = trimmed_non_empty_path(payload.get("input_path"));
-            if let Some(input_path) = input_path {
-                raw_paths.push(input_path);
-            }
-
-            let output_path = trimmed_non_empty_path(payload.get("output_path"));
-            if let Some(output_path) = output_path {
-                raw_paths.push(output_path);
-            }
-
+        if tool_name != "config.import" {
             return raw_paths;
         }
 
-        let root_path = trimmed_non_empty_path(payload.get("root"));
-        if let Some(root_path) = root_path {
-            raw_paths.push(root_path);
+        let input_path = trimmed_non_empty_path(payload.get("input_path"));
+        if let Some(input_path) = input_path {
+            raw_paths.push(input_path);
         }
 
-        let raw_path = trimmed_non_empty_path(payload.get("path"));
-        if let Some(raw_path) = raw_path {
-            raw_paths.push(raw_path);
+        let output_path = trimmed_non_empty_path(payload.get("output_path"));
+        if let Some(output_path) = output_path {
+            raw_paths.push(output_path);
         }
 
         raw_paths
@@ -293,10 +283,9 @@ pub(crate) fn authorize_direct_file_payload(
     payload: &serde_json::Map<String, serde_json::Value>,
     rt: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<(), String> {
-    // Migration-only guard for legacy direct file tools that have not moved to
-    // Access-Action-Policy yet. Do not add typed-tool policy here; migrated
-    // read/write paths must fail closed without context or enter through
-    // ctx.tool(...).invoke(...) and fs access grants.
+    // Migration-only guard for legacy config.import. Migrated file tools must
+    // fail closed without context or enter through ctx.tool(...).invoke(...)
+    // and fs access grants; do not add typed-tool policy here.
 
     let policy = FilePolicyExtension::from_runtime_config(rt);
     policy
@@ -308,23 +297,6 @@ pub(crate) fn authorize_direct_file_payload(
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn allows_path_within_root() {
-        let root_dir = tempfile::tempdir().expect("tempdir");
-        let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
-        let payload = json!({"path": "src/main.rs"});
-        let payload = payload.as_object().expect("object payload");
-        assert!(ext.authorize_file_payload("file.edit", payload).is_ok());
-    }
-
-    #[test]
-    fn no_path_check_when_file_root_is_none() {
-        let ext = FilePolicyExtension::new(None);
-        let payload = json!({"path": "../../etc/passwd"});
-        let payload = payload.as_object().expect("object payload");
-        assert!(ext.authorize_file_payload("file.edit", payload).is_ok());
-    }
 
     #[test]
     fn config_import_sandbox_uses_input_path_key() {
