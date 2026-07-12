@@ -568,13 +568,15 @@ fn bootstrap_app_context_with_audit_sink(
     crate::tools::register_kernel_tools(&mut kernel, tool_rt.clone(), config.observability.clone())
         .map_err(|e| format!("kernel tool registration failed: {e}"))?;
 
-    let token = kernel
-        .issue_token(EMBEDDED_RUNTIME_PACK_ID, agent_id, ttl_s)
-        .map_err(|e| format!("kernel token issue failed: {e}"))?;
     let tools = crate::tools::plane::builtin_tool_plane()
         .map_err(|error| format!("builtin tool registration failed: {error}"))?;
+    let runtime = Arc::new(Runtime::new(kernel, tools));
+    let token = runtime
+        .kernel()
+        .issue_token(EMBEDDED_RUNTIME_PACK_ID, agent_id, ttl_s)
+        .map_err(|e| format!("kernel token issue failed: {e}"))?;
 
-    AppContext::new(Arc::new(Runtime::new(kernel, tools)), token, tool_rt)
+    AppContext::new(runtime, token, tool_rt)
 }
 
 #[cfg(test)]
