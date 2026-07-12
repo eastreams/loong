@@ -9005,14 +9005,14 @@ async fn handle_turn_with_runtime_safe_lane_plan_path_does_not_parallelize_fast_
             assistant_text: "Executing deployment checks.".to_owned(),
             tool_intents: vec![
                 provider_tool_intent(
-                    "file.read",
+                    "memory",
                     json!({"path": "first.md"}),
                     "session-safe-fast-lane-gating",
                     "turn-safe-fast-lane-gating",
                     "call-safe-fast-lane-gating-1",
                 ),
                 provider_tool_intent(
-                    "file.read",
+                    "memory",
                     json!({"path": "second.md"}),
                     "session-safe-fast-lane-gating",
                     "turn-safe-fast-lane-gating",
@@ -9530,7 +9530,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_replans_after_transient_tool_fa
         Ok(ProviderTurn {
             assistant_text: "Running checks.".to_owned(),
             tool_intents: vec![provider_tool_intent(
-                "file.read",
+                "memory",
                 json!({"path": "note.md"}),
                 "session-safe-replan",
                 "turn-safe-replan",
@@ -9739,7 +9739,7 @@ async fn handle_turn_with_runtime_safe_lane_backpressure_guard_blocks_retry_stor
         Ok(ProviderTurn {
             assistant_text: "Running checks.".to_owned(),
             tool_intents: vec![provider_tool_intent(
-                "file.read",
+                "memory",
                 json!({"path": "note.md"}),
                 "session-safe-backpressure",
                 "turn-safe-backpressure",
@@ -9875,7 +9875,7 @@ async fn handle_turn_with_runtime_safe_lane_verify_non_retryable_failure_skips_r
         Ok(ProviderTurn {
             assistant_text: "Running checks.".to_owned(),
             tool_intents: vec![provider_tool_intent(
-                "file.read",
+                "memory",
                 json!({"path": "note.md"}),
                 "session-safe-verify-nonretryable",
                 "turn-safe-verify-nonretryable",
@@ -10108,7 +10108,7 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_forces_no_replan() 
         Ok(ProviderTurn {
             assistant_text: "Running checks.".to_owned(),
             tool_intents: vec![provider_tool_intent(
-                "file.read",
+                "memory",
                 json!({"path": "note.md"}),
                 "session-safe-governor",
                 "turn-safe-governor",
@@ -10533,7 +10533,7 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_does_not_reuse_sqli
         Ok(ProviderTurn {
             assistant_text: "Running checks.".to_owned(),
             tool_intents: vec![provider_tool_intent(
-                "file.read",
+                "memory",
                 json!({"path": "note.md"}),
                 "session-safe-governor-fallback",
                 "turn-safe-governor-fallback",
@@ -10697,14 +10697,14 @@ async fn handle_turn_with_runtime_safe_lane_replans_failed_subgraph_only() {
             assistant_text: "Running checks.".to_owned(),
             tool_intents: vec![
                 provider_tool_intent(
-                    "file.read",
+                    "memory",
                     json!({"path": "note.md"}),
                     "session-safe-subgraph",
                     "turn-safe-subgraph",
                     "call-safe-subgraph-1",
                 ),
                 provider_tool_intent(
-                    "file.read",
+                    "memory",
                     json!({"path": "checklist.md"}),
                     "session-safe-subgraph",
                     "turn-safe-subgraph",
@@ -14108,7 +14108,7 @@ async fn turn_engine_tool_execution_error_is_marked_retryable() {
     let turn = ProviderTurn {
         assistant_text: "".to_owned(),
         tool_intents: vec![provider_tool_intent(
-            "file.read",
+            "memory",
             json!({"path": "test.txt"}),
             "s1",
             "t1",
@@ -14297,7 +14297,7 @@ async fn turn_engine_executes_known_tool_with_kernel() {
     let turn = ProviderTurn {
         assistant_text: "".to_owned(),
         tool_intents: vec![provider_tool_intent(
-            "file.read",
+            "memory",
             json!({"path": "test.txt"}),
             "s1",
             "t1",
@@ -14317,11 +14317,11 @@ async fn turn_engine_executes_known_tool_with_kernel() {
             let envelope: Value =
                 serde_json::from_str(payload).expect("tool result envelope should be json");
             assert!(
-                payload.contains("\"tool\":\"read\""),
+                payload.contains("\"tool\":\"memory\""),
                 "expected echoed tool payload in output, got: {text}"
             );
             assert_eq!(envelope["status"], "ok");
-            assert_eq!(envelope["tool"], "read");
+            assert_eq!(envelope["tool"], "memory");
             assert_eq!(envelope["tool_call_id"], "c1");
             assert_eq!(envelope["payload_truncated"], false);
             assert!(
@@ -14420,7 +14420,7 @@ async fn turn_engine_truncates_oversized_tool_payload_summary() {
     let turn = ProviderTurn {
         assistant_text: "".to_owned(),
         tool_intents: vec![provider_tool_intent(
-            "file.read",
+            "memory",
             json!({"path": "test.txt"}),
             "s1",
             "t1",
@@ -14440,7 +14440,7 @@ async fn turn_engine_truncates_oversized_tool_payload_summary() {
             let envelope: Value =
                 serde_json::from_str(payload).expect("tool result envelope should be json");
 
-            assert_eq!(envelope["tool"], "read");
+            assert_eq!(envelope["tool"], "memory");
             assert_eq!(envelope["tool_call_id"], "c-large");
             assert_eq!(envelope["payload_truncated"], true);
             assert!(
@@ -14552,7 +14552,7 @@ async fn turn_engine_keeps_discovery_shaped_payloads_intact_for_followup_compact
     let turn = ProviderTurn {
         assistant_text: "".to_owned(),
         tool_intents: vec![provider_tool_intent(
-            "file.read",
+            "memory",
             json!({"path": "README.md"}),
             "s1",
             "t1",
@@ -14571,7 +14571,7 @@ async fn turn_engine_keeps_discovery_shaped_payloads_intact_for_followup_compact
             let envelope: Value =
                 serde_json::from_str(payload).expect("tool result envelope should be json");
 
-            assert_eq!(envelope["tool"], "read");
+            assert_eq!(envelope["tool"], "memory");
             assert_eq!(envelope["tool_call_id"], "c-search-large");
             assert_eq!(envelope["payload_semantics"], json!("discovery_result"));
             assert_eq!(envelope["payload_truncated"], false);
@@ -15834,7 +15834,9 @@ async fn turn_engine_execute_turn_denied_without_capability() {
     match result {
         TurnResult::FinalText(text) => {
             assert!(
-                text.contains("kernel_policy_denied") && text.contains("capability InvokeTool"),
+                text.contains("kernel_policy_denied")
+                    && text.contains("invoke_tool")
+                    && text.contains("filesystem_read"),
                 "expected local tool denial line for missing capability, got: {text}"
             );
         }
@@ -19749,12 +19751,15 @@ async fn session_context_preserves_child_workspace_root_from_delegate_execution_
     })
     .expect("append delegate_started event");
 
+    let kernel_ctx =
+        crate::context::bootstrap_kernel_context_with_config("child-session", 60, &config)
+            .expect("bootstrap child workspace kernel context");
     let runtime = DefaultConversationRuntime::default();
     let session_context = runtime
         .session_context(
             &config,
             "child-session",
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .expect("load child session context");
     let restored_workspace_root = session_context
@@ -19768,7 +19773,7 @@ async fn session_context_preserves_child_workspace_root_from_delegate_execution_
             &config,
             "child-session",
             true,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
         .expect("build child context from workspace-root override");
@@ -19804,12 +19809,15 @@ async fn default_runtime_root_session_prefers_runtime_workspace_root_over_file_r
     config.tools.file_root = Some(fallback_root.display().to_string());
     config.tools.runtime_workspace_root = Some(workspace_root.display().to_string());
 
+    let kernel_ctx =
+        crate::context::bootstrap_kernel_context_with_config("root-session", 60, &config)
+            .expect("bootstrap root workspace kernel context");
     let runtime = DefaultConversationRuntime::default();
     let session_context = runtime
         .session_context(
             &config,
             "root-session",
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .expect("load root session context");
     let expected_workspace_root =
@@ -19827,7 +19835,7 @@ async fn default_runtime_root_session_prefers_runtime_workspace_root_over_file_r
             &config,
             "root-session",
             true,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
         .expect("build root context from runtime workspace root");

@@ -236,7 +236,10 @@ async fn integ_missing_capability_denies_tool() {
         .build();
     let result = harness.execute(&turn).await;
 
-    assert_final_tool_error_contains(result, &["kernel_policy_denied", "capability"]);
+    assert_final_tool_error_contains(
+        result,
+        &["kernel_policy_denied", "invoke_tool", "filesystem_read"],
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
