@@ -4,6 +4,7 @@ use std::{
 };
 
 use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loong_kernel::access::fs::FsWriteOptions;
 use serde_json::{Value, json};
 
 use crate::{
@@ -44,10 +45,10 @@ pub(super) fn config_import_mode_requires_write_value(payload: &Value) -> bool {
     config_import_mode_requires_write_object(payload)
 }
 
-// Only these modes are safe to route through the context-aware read path today:
-// they read import inputs and optional preview config, but do not write backups,
-// manifests, output config, or skills bridge rollback state.
-pub(super) fn config_import_mode_is_context_read_only(mode: &str) -> bool {
+// Only these modes are safe to route through the context-aware access path
+// today. `apply` writes the output config through fs access; apply_selected and
+// rollback still need governed backup/manifest/restore work before joining.
+pub(super) fn config_import_mode_is_context_access_backed(mode: &str) -> bool {
     matches!(
         mode,
         "plan"
@@ -56,6 +57,7 @@ pub(super) fn config_import_mode_is_context_read_only(mode: &str) -> bool {
             | "recommend_primary"
             | "merge_profiles"
             | MAP_SKILLS_MODE_KEY
+            | "apply"
     )
 }
 
@@ -312,7 +314,7 @@ pub(super) fn execute_config_import_tool_with_config(
     })
 }
 
-pub(super) async fn execute_config_import_read_only_tool_with_context(
+pub(super) async fn execute_config_import_tool_with_context(
     request: ToolCoreRequest,
     ctx: &crate::context::AppExecutionContext<'_>,
 ) -> Result<ToolCoreOutcome, String> {
@@ -321,7 +323,7 @@ pub(super) async fn execute_config_import_read_only_tool_with_context(
         .as_object()
         .ok_or_else(|| format!("{CONFIG_IMPORT_TOOL_NAME} payload must be an object"))?;
     let mode = config_import_mode(payload);
-    if !config_import_mode_is_context_read_only(mode) {
+    if !config_import_mode_is_context_access_backed(mode) {
         return Err(format!(
             "{CONFIG_IMPORT_TOOL_NAME} context-aware access path does not support `{mode}` yet"
         ));
@@ -350,6 +352,11 @@ pub(super) async fn execute_config_import_read_only_tool_with_context(
         .map(parse_source_hint)
         .transpose()?
         .flatten();
+
+    let force = payload
+        .get("force")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
     if mode == "discover" {
         let report = migration::discover_import_sources_with_access(
@@ -431,6 +438,51 @@ pub(super) async fn execute_config_import_read_only_tool_with_context(
                 "mode": MAP_SKILLS_MODE_KEY,
                 "input_path": input_path.display().to_string(),
                 "result": external_skill_mapping_plan_payload(&mapping),
+            }),
+        });
+    }
+
+    if mode == "apply" {
+        let output_path = output_path.ok_or_else(|| {
+            format!("{CONFIG_IMPORT_TOOL_NAME} apply mode requires payload.output_path")
+        })?;
+        let plan =
+            migration::plan_import_from_path_with_access(ctx, input_path.as_path(), hint).await?;
+        let mut merged_config =
+            load_or_default_config_with_access(ctx, Some(output_path.as_path())).await?;
+        migration::apply_import_plan(&mut merged_config, &plan);
+        let config_toml = config::render(&merged_config)?;
+        let written = ctx
+            .access()
+            .fs()
+            .write_file(
+                output_path.as_path(),
+                config_toml.clone().into_bytes(),
+                FsWriteOptions {
+                    create_dirs: true,
+                    overwrite: force,
+                },
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        return Ok(ToolCoreOutcome {
+            status: "ok".to_owned(),
+            payload: json!({
+                "adapter": "core-tools",
+                "tool_name": request.tool_name,
+                "mode": "apply",
+                "source": plan.source.as_id(),
+                "input_path": input_path.display().to_string(),
+                "output_path": written.path.display().to_string(),
+                "config_written": true,
+                "warnings": plan.warnings,
+                "config_preview": config_preview_payload(&merged_config),
+                "config_toml": config_toml,
+                "next_step": format!(
+                    "{} chat --config {}",
+                    config::active_cli_command_name(),
+                    written.path.display()
+                ),
             }),
         });
     }
@@ -976,5 +1028,92 @@ mod tests {
             outcome.payload["result"]["resolved_skills"],
             json!(["custom/skill-a", "release-guard"])
         );
+    }
+
+    #[tokio::test]
+    async fn kernel_routed_config_import_apply_writes_through_access() {
+        let harness = TurnTestHarness::new();
+        fs::write(
+            harness.temp_dir.join("SOUL.md"),
+            "# Soul\n\nPrefer direct answers and keep OpenClaw style concise.\n",
+        )
+        .expect("write prompt fixture");
+        let output_path = harness.temp_dir.join("generated/loong.toml");
+
+        let outcome = crate::tools::execute_tool(
+            ToolCoreRequest {
+                tool_name: CONFIG_IMPORT_TOOL_NAME.to_owned(),
+                payload: json!({
+                    "mode": "apply",
+                    "source": "openclaw",
+                    "input_path": ".",
+                    "output_path": "generated/loong.toml",
+                    "force": true
+                }),
+            },
+            &harness.kernel_ctx,
+        )
+        .await
+        .expect("config.import apply should execute through kernel context");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["mode"], "apply");
+        assert_eq!(outcome.payload["config_written"], true);
+        let expected_output_path =
+            dunce::canonicalize(&output_path).expect("canonicalize generated config path");
+        assert_eq!(
+            outcome.payload["output_path"],
+            expected_output_path.display().to_string()
+        );
+        let raw = fs::read_to_string(output_path).expect("read generated config");
+        assert!(raw.contains("prompt_pack_id = \"loong-core-v1\""));
+        let loaded = config::parse(raw.as_str()).expect("parse generated config");
+        assert_eq!(
+            loaded.cli.prompt_pack_id(),
+            Some(crate::prompt::DEFAULT_PROMPT_PACK_ID)
+        );
+        assert!(
+            loaded
+                .cli
+                .system_prompt_addendum
+                .as_deref()
+                .is_some_and(|addendum| addendum.contains("Loong style concise")),
+            "unexpected generated config: {raw}"
+        );
+    }
+
+    #[tokio::test]
+    async fn kernel_routed_config_import_apply_requires_filesystem_write_capability() {
+        let harness = TurnTestHarness::with_capabilities(BTreeSet::from([
+            Capability::InvokeTool,
+            Capability::FilesystemRead,
+        ]));
+        fs::write(
+            harness.temp_dir.join("SOUL.md"),
+            "# Soul\n\nPrefer direct answers.\n",
+        )
+        .expect("write prompt fixture");
+
+        let error = crate::tools::execute_tool(
+            ToolCoreRequest {
+                tool_name: CONFIG_IMPORT_TOOL_NAME.to_owned(),
+                payload: json!({
+                    "mode": "apply",
+                    "source": "openclaw",
+                    "input_path": ".",
+                    "output_path": "generated/loong.toml",
+                    "force": true
+                }),
+            },
+            &harness.kernel_ctx,
+        )
+        .await
+        .expect_err("missing write capability should deny config.import apply");
+
+        assert!(
+            error.contains("FilesystemWrite") || error.contains("filesystem_write"),
+            "unexpected denial: {error}"
+        );
+        assert!(!harness.temp_dir.join("generated/loong.toml").exists());
     }
 }
