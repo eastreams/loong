@@ -138,16 +138,14 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
    - 验证：kernel grant audit、app typed tool completed/failed/input-error、daemon audit rendering
      测试，以及 workspace default/all-feature tests、strict clippy、`git diff --check`。
 
-7. 收敛 Kernel/Policy contract 与 registration metadata：
+7. 收敛 Kernel/Policy contract：
    - 从 concrete `Kernel<C>` 提取调用方真正需要的稳定 governance trait；trait 只暴露 grant、
      token/pack boundary 和 audit authority，不暴露 typed tool registry 或 app runtime state；
-   - `RegisteredPolicy` / `RegisteredAnyPolicy` 统一携带 registration metadata，至少明确注册来源、
-     顺序和时间信息；metadata 供 report/audit 使用，不参与 policy dispatch key；
    - legacy caller 清空后直接删除旧 `authorize_operation`、legacy kernel auth、legacy policy error
      和对应 helper；届时移除 `TODO(deprecate-legacy-kernel-auth)`、
      `TODO(deprecate-legacy-policy-error)`，不要只加 alias；
-   - 完成线：新调用方只依赖稳定 governance trait 或 `PolicyEngine`；typed/any policy 的 report
-     都能关联 registration metadata；仓库没有旧 authorization API 的 production caller；
+   - 完成线：新调用方只依赖稳定 governance trait 或 `PolicyEngine`；仓库没有旧
+     authorization API 的 production caller；
    - 验证：kernel policy/grant/audit tests、all policy report ordering tests、workspace
      default/all-feature tests、strict clippy、architecture check、`git diff --check`。
 
@@ -186,5 +184,5 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
 - `TODO(deprecate-no-kernel-live-source)` /
   `TODO(deprecate-provider-live-source-bridge)` -> 步骤 4；
 - `TODO(tool-plane)` / `TODO(tool-plane-display)` / `TODO(tool-catalog-owner)` -> 步骤 5；
-- `TODO(kernel-contract)` / `TODO(policy-registration-metadata)` /
-  `TODO(deprecate-legacy-kernel-auth)` / `TODO(deprecate-legacy-policy-error)` -> 步骤 7。
+- `TODO(kernel-contract)` / `TODO(deprecate-legacy-kernel-auth)` /
+  `TODO(deprecate-legacy-policy-error)` -> 步骤 7。
