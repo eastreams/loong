@@ -153,6 +153,23 @@ pub fn plan_import_from_path(
     hint: Option<LegacyClawSource>,
 ) -> CliResult<ImportPlan> {
     let files = collect_import_files(input_path)?;
+    plan_import_from_loaded_files(
+        input_path,
+        hint,
+        files,
+        build_external_skill_warnings(input_path),
+    )
+}
+
+// Pure planning over already-loaded migration files. The access-backed
+// config.import path will reuse this boundary after it obtains file contents
+// through governed fs access instead of direct filesystem reads.
+fn plan_import_from_loaded_files(
+    input_path: &Path,
+    hint: Option<LegacyClawSource>,
+    files: Vec<ImportFile>,
+    external_skill_warnings: Vec<String>,
+) -> CliResult<ImportPlan> {
     let source = hint.unwrap_or_else(|| detect_source(input_path, &files));
     let mut prompt_blocks = Vec::new();
     let mut profile_blocks = Vec::new();
@@ -196,9 +213,7 @@ pub fn plan_import_from_path(
         }
     }
 
-    for warning in build_external_skill_warnings(input_path) {
-        warnings.push(warning);
-    }
+    warnings.extend(external_skill_warnings);
 
     if prompt_blocks.is_empty()
         && profile_blocks.is_empty()
@@ -242,6 +257,18 @@ pub(crate) fn inspect_import_path(
 ) -> CliResult<Option<ImportPathInspection>> {
     let external_skill_artifacts = detect_external_skill_artifacts(input_path);
     let files = collect_import_files(input_path)?;
+    inspect_loaded_import_path(input_path, hint, files, external_skill_artifacts)
+}
+
+// Pure inspection over already-loaded discovery facts. Access-backed discovery
+// should feed this function instead of copying the prompt/profile counting
+// rules into a second path.
+fn inspect_loaded_import_path(
+    input_path: &Path,
+    hint: Option<LegacyClawSource>,
+    files: Vec<ImportFile>,
+    external_skill_artifacts: Vec<ExternalSkillArtifact>,
+) -> CliResult<Option<ImportPathInspection>> {
     if files.is_empty() && external_skill_artifacts.is_empty() {
         return Ok(None);
     }
