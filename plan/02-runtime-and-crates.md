@@ -5,11 +5,11 @@
 
 ## Runtime / Context Ownership
 
-截至 2026-07-11，项目没有真正的 app-level runtime owner。TUI 的 `App` 是 UI state；
-观察到的链路是
-`SessionRouter -> CliTurnRuntime -> RuntimeKernelOwner -> KernelContext -> Arc<Kernel<_>>`。
-channel/webhook/Feishu/QQ bot、`TurnExecutionService`、conversation/provider binding 也在
-不同地方直接持有或借用 `KernelContext`。这些是待迁移现状。
+项目已经由 `loong-runtime::Runtime<C>` 持有 kernel 与 typed tool plane；TUI 的 `App` 仍只是
+UI state。当前 CLI 链路是
+`SessionRouter -> CliTurnRuntime -> KernelContext -> Arc<Runtime<_>>`。channel/webhook/Feishu/
+QQ bot、`TurnExecutionService`、conversation/provider binding 也在不同地方直接持有或借用
+`KernelContext`。剩余工作是让 session-owned unified context 取代这些 host binding。
 
 目标是二核心模型：
 
@@ -92,20 +92,13 @@ impl ToolInvocation<'_> {
 
 迁移策略：
 
-1. 新增统一 runtime owner，并给它一个高信号注释：它是 app runtime owner，不是 kernel
-   wrapper，不是 TUI state。
-2. `loong-runtime` 接管 generic `ToolPlane<C>` storage/path/action primitive；builtin concrete
-   tool 仍由 app bootstrap 注册，registration error 由 runtime 构造返回，不在全局
-   `OnceLock` 中 panic。
-3. 把 `RuntimeKernelOwner` 并入或替换为 runtime owner。它现在只包 `KernelContext`，统一
-   runtime 出现后没有独立边界价值。
-4. session 创建时同时创建自己的 `Context`，并把 session id、agent id、initial effective
+1. session 创建时同时创建自己的 `Context`，并把 session id、agent id、initial effective
    caps、tool namespace view 和 runtime reference 绑定进去。
-5. `CliTurnRuntime`、`TurnExecutionService`、conversation/provider binding、channel state
+2. `CliTurnRuntime`、`TurnExecutionService`、conversation/provider binding、channel state
    逐步从 `KernelContext` 改为 `Runtime` / `Context`。
-6. `KernelContext` 在迁移期只允许作为 runtime 内部字段；所有 host surface 都改用
+3. `KernelContext` 在迁移期只允许作为 runtime 内部字段；所有 host surface 都改用
    `Runtime` / `Context` 后删除该类型，而不是改名留 alias。
-7. 外部调用点不再手动 `kernel_ctx.execution_context(...)`；统一从 session context 或它的
+4. 外部调用点不再手动 `kernel_ctx.execution_context(...)`；统一从 session context 或它的
    child context 进入 tool/access/action/policy。
 
 

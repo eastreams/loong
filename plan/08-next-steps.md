@@ -91,10 +91,10 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
    - 依次迁移 `SessionRouter`、`CliTurnRuntime`、`TurnExecutionService`、conversation/provider
      binding、channel/webhook state 和 TUI runtime 持有者，不再手工调用
      `kernel_ctx.execution_context(...)`；
-   - `RuntimeKernelOwner` 没有独立职责后直接删除；最后删除 `KernelContext` 类型、optional-kernel
-     roundtrip 和 `TODO(deprecate-kernel-context)`，不保留 alias 或同形 wrapper；
+   - 最后删除 `KernelContext` 类型、optional-kernel roundtrip 和
+     `TODO(deprecate-kernel-context)`，不保留 alias 或同形 wrapper；
    - 完成线：每个 session 都能从自己的 context 进入 `ctx.access()` / `ctx.tool(...)`；host
-     surface 不再传播 kernel binding；仓库中不存在 `KernelContext` / `RuntimeKernelOwner`；
+     surface 不再传播 kernel binding；仓库中不存在 `KernelContext`；
    - 验证：context、session、conversation、channel 和 TUI 的定向测试，workspace default/
      all-feature tests、strict clippy、architecture check、`git diff --check`。
 
