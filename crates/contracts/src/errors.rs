@@ -1,6 +1,7 @@
 use thiserror::Error;
 
 use crate::contracts::{Capability, HarnessKind};
+use crate::tool_types::{ToolExecutionError, ToolInputError};
 
 #[non_exhaustive]
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -99,8 +100,19 @@ pub enum ToolPlaneError {
     ExtensionNotFound(String),
     #[error("no default core tool adapter is configured")]
     NoDefaultCoreAdapter,
+    #[error(transparent)]
+    Input(#[from] ToolInputError),
     #[error("tool execution failed: {0}")]
     Execution(String),
+}
+
+impl From<ToolExecutionError> for ToolPlaneError {
+    fn from(error: ToolExecutionError) -> Self {
+        match error {
+            ToolExecutionError::Input(input_error) => Self::Input(input_error),
+            ToolExecutionError::Execution { reason } => Self::Execution(reason),
+        }
+    }
 }
 
 #[non_exhaustive]

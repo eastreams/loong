@@ -344,6 +344,7 @@ impl ToolInvocation<'_, '_> {
                     ToolPlaneError::NoDefaultCoreAdapter => {
                         ("no_default_core_adapter", error.to_string())
                     }
+                    ToolPlaneError::Input(input_error) => ("input_error", input_error.to_string()),
                     ToolPlaneError::Execution(reason) => ("execution", reason.clone()),
                     _ => ("tool_plane", error.to_string()),
                 };

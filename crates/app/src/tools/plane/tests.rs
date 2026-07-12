@@ -274,7 +274,11 @@ async fn app_tool_plane_registered_path_reports_tool_input_error() {
         .await
         .expect_err("invalid registered tool input must fail");
 
-    assert!(matches!(error, ToolPlaneError::Execution(reason) if reason.contains("message")));
+    assert!(matches!(
+        error,
+        ToolPlaneError::Input(loong_contracts::ToolInputError::MissingField { field })
+            if field == "message"
+    ));
     assert_eq!(executions.load(Ordering::Relaxed), 0);
 }
 

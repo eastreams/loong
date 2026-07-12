@@ -7,8 +7,7 @@ use std::{
 
 use async_trait::async_trait;
 use loong_contracts::{
-    Capability, PolicyDecision, PolicyGrant, ToolExecutionError, ToolInputError, ToolPlaneError,
-    ToolSpec,
+    Capability, PolicyDecision, PolicyGrant, ToolExecutionError, ToolPlaneError, ToolSpec,
 };
 use loong_core::{
     policy::grant::Granted,
@@ -345,7 +344,7 @@ where
             .tool
             .invoke(ctx, payload)
             .await
-            .map_err(|error| ToolPlaneError::Execution(tool_execution_error_reason(error)))
+            .map_err(ToolPlaneError::from)
     }
 }
 
@@ -425,16 +424,17 @@ pub(crate) fn app_tool_plane()
 // Boundary conversion: legacy kernel/app error surfaces still carry plain
 // strings, but policy-denial detection depends on preserving prefixes such as
 // `policy_denied:` instead of formatting the whole error display.
+#[cfg(test)]
 pub(crate) fn tool_execution_error_reason(error: ToolExecutionError) -> String {
     match error {
         ToolExecutionError::Input(input_error) => match input_error {
-            ToolInputError::MissingField { field } => {
+            loong_contracts::ToolInputError::MissingField { field } => {
                 format!("missing tool input field `{field}`")
             }
-            ToolInputError::InvalidField { field, reason } => {
+            loong_contracts::ToolInputError::InvalidField { field, reason } => {
                 format!("invalid tool input field `{field}`: {reason}")
             }
-            ToolInputError::InvalidPayload { reason } => reason,
+            loong_contracts::ToolInputError::InvalidPayload { reason } => reason,
             unknown => unknown.to_string(),
         },
         ToolExecutionError::Execution { reason } => reason,

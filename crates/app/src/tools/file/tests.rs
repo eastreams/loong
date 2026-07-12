@@ -152,11 +152,47 @@ async fn execute_request_via_kernel_tool_registry(
     .await
 }
 
+async fn execute_request_via_kernel_tool_registry_result(
+    request: ToolCoreRequest,
+    config: &ToolRuntimeConfig,
+) -> (
+    Result<ToolCoreOutcome, loong_kernel::KernelError>,
+    Arc<InMemoryAuditSink>,
+) {
+    execute_request_via_kernel_tool_registry_with_capabilities_result(
+        request,
+        config,
+        BTreeSet::from([
+            Capability::InvokeTool,
+            Capability::FilesystemRead,
+            Capability::FilesystemWrite,
+        ]),
+    )
+    .await
+}
+
 async fn execute_request_via_kernel_tool_registry_with_capabilities(
     request: ToolCoreRequest,
     config: &ToolRuntimeConfig,
     capabilities: BTreeSet<Capability>,
 ) -> Result<(ToolCoreOutcome, Arc<InMemoryAuditSink>), loong_kernel::KernelError> {
+    let (outcome, audit) = execute_request_via_kernel_tool_registry_with_capabilities_result(
+        request,
+        config,
+        capabilities,
+    )
+    .await;
+    outcome.map(|outcome| (outcome, audit))
+}
+
+async fn execute_request_via_kernel_tool_registry_with_capabilities_result(
+    request: ToolCoreRequest,
+    config: &ToolRuntimeConfig,
+    capabilities: BTreeSet<Capability>,
+) -> (
+    Result<ToolCoreOutcome, loong_kernel::KernelError>,
+    Arc<InMemoryAuditSink>,
+) {
     let audit = Arc::new(InMemoryAuditSink::default());
     let mut policy = PolicyPipeline::<AppContextFactory>::new_legacy_allow_fallback()
         .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
@@ -176,21 +212,26 @@ async fn execute_request_via_kernel_tool_registry_with_capabilities(
         audit.clone(),
     );
     let pack = Arc::new(test_pack_with_capabilities(capabilities));
-    kernel.register_pack((*pack).clone())?;
+    kernel
+        .register_pack((*pack).clone())
+        .expect("register test pack");
     crate::tools::register_kernel_tools(
         &mut kernel,
         config.clone(),
         crate::config::ObservabilityConfig::runtime_default(),
-    )?;
-    let token = kernel.issue_token("test-pack", "test-agent", 60)?;
+    )
+    .expect("register test kernel tools");
+    let token = kernel
+        .issue_token("test-pack", "test-agent", 60)
+        .expect("issue test token");
     let kernel_ctx = crate::KernelContext {
         kernel: Arc::new(kernel),
         pack,
         token,
         tool_runtime_config: config.clone(),
     };
-    let outcome = crate::tools::execute_kernel_tool_request(&kernel_ctx, request, false).await?;
-    Ok((outcome, audit))
+    let outcome = crate::tools::execute_kernel_tool_request(&kernel_ctx, request, false).await;
+    (outcome, audit)
 }
 
 fn tool_invoke_request(
@@ -647,14 +688,30 @@ async fn kernel_routed_file_read_reports_typed_input_error() {
         }),
     };
 
-    let error = execute_request_via_kernel_tool_registry(request, &config)
-        .await
-        .expect_err("typed read input error should fail before execution");
+    let (outcome, audit) = execute_request_via_kernel_tool_registry_result(request, &config).await;
+    let error = outcome.expect_err("typed read input error should fail before execution");
 
     assert!(
         format!("{error}").contains("read payload.offset must be a positive integer"),
         "expected file read input error, got: {error}"
     );
+    let events = audit.snapshot();
+    assert!(events.iter().any(|event| {
+        matches!(
+            &event.kind,
+            loong_kernel::AuditEventKind::ToolInvocation {
+                path_display,
+                outcome:
+                    loong_kernel::InvocationOutcome::Failed {
+                        error_kind,
+                        reason,
+                    },
+                ..
+            } if path_display == "read"
+                && error_kind == "input_error"
+                && reason.contains("read payload.offset must be a positive integer")
+        )
+    }));
     let _ = fs::remove_dir_all(base);
 }
 
