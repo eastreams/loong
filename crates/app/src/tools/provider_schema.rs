@@ -8,11 +8,6 @@ use super::{
     runtime_tool_view_for_runtime_config, tool_catalog, tool_surface,
 };
 
-// Migrated provider-visible tools are projected from the app-owned typed plane.
-// If the plane did not register one of these paths, the provider surface must
-// disappear instead of falling back to the legacy static schema.
-const TYPED_PROVIDER_TOOL_NAMES: &[&str] = &["read", "write"];
-
 pub fn provider_tool_definitions() -> Vec<Value> {
     provider_tool_definitions_with_config(Some(runtime_config::get_tool_runtime_config()))
 }
@@ -52,8 +47,7 @@ fn provider_tool_definitions_for_view_with_config(view: &ToolView) -> Vec<Value>
             continue;
         }
 
-        if TYPED_PROVIDER_TOOL_NAMES.contains(&descriptor.name)
-            && !typed_tool_paths.contains(descriptor.name)
+        if descriptor.requires_typed_plane_metadata() && !typed_tool_paths.contains(descriptor.name)
         {
             continue;
         }

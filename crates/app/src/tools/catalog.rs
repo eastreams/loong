@@ -379,6 +379,14 @@ impl ToolDescriptor {
         super::tool_surface::tool_surface_usage_guidance(self.name)
     }
 
+    pub(crate) fn requires_typed_plane_metadata(&self) -> bool {
+        // Migrated tools keep catalog rows only for visibility, governance, and
+        // aliases. Provider/search/prompt metadata must come from the typed
+        // registration so a missing typed tool fails closed instead of quietly
+        // reviving a legacy schema.
+        matches!(self.name, "read" | "write")
+    }
+
     pub fn is_direct(&self) -> bool {
         self.exposure == ToolExposureClass::Direct
     }

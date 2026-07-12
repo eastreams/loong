@@ -909,6 +909,32 @@ fn read_catalog_metadata_surfaces_line_window_fields() {
     assert!(file_parameter_types.contains(&("limit", "integer")));
 }
 
+#[cfg(feature = "tool-file")]
+#[test]
+fn migrated_file_descriptors_require_typed_plane_metadata() {
+    let catalog = tool_catalog();
+
+    assert!(
+        catalog
+            .descriptor("read")
+            .expect("read descriptor")
+            .requires_typed_plane_metadata()
+    );
+    assert!(
+        catalog
+            .descriptor("write")
+            .expect("write descriptor")
+            .requires_typed_plane_metadata()
+    );
+    assert!(
+        !catalog
+            .descriptor("edit")
+            .expect("edit descriptor")
+            .requires_typed_plane_metadata(),
+        "edit still uses legacy metadata until it migrates into typed ToolPlane"
+    );
+}
+
 #[test]
 fn top_level_catalog_no_longer_exposes_public_exec_descriptor() {
     let catalog = tool_catalog();
