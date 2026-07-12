@@ -45,6 +45,11 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      作为 migration 内部 direct tool side effect；external skills manifest 写入也不能退回
      direct atomic write 或 `FilePolicyExtension`。`FilePolicyExtension` 现在只标记这个
      未迁移分支，不能再扩回已迁移 modes；
+   - 当前 block 在 skills lifecycle，而不是 config import payload 解析：
+     `skills.install` / `skills.remove` 仍是 legacy `ToolCoreOutcome` helper，内部有
+     staging/copy/rename/archive/index/remove 等 direct filesystem side effects。先迁出
+     skills lifecycle 的 typed/access 边界，再让 config import 的 skills bridge 通过
+     `ctx.tool(...).invoke(...)` 或等价 access-backed boundary 调用；
    - `glob.search` / `content.search` 的 kernel-routed 调用已注册为 typed read-family
      path；无 context direct 调用已 fail closed，旧 app-local search helper 已删除；
    - 逐个工具迁移：concrete tool 只解析 payload、调用 `ctx.access()` / `ctx.tool()`、
