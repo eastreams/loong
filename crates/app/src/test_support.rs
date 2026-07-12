@@ -9,7 +9,8 @@ use loong_kernel::{
     policy::{
         FsContentSearchAllowPolicy, FsCopyFileAllowPolicy, FsCreateDirAllAllowPolicy,
         FsGlobAllowPolicy, FsInspectPathAllowPolicy, FsReadAllowPolicy, FsReadFilenameDenyPolicy,
-        FsResolvePathAllowedRootsPolicy, FsWriteAllowPolicy,
+        FsRemoveFileAllowPolicy, FsRemoveFileAllowedRootsPolicy, FsResolvePathAllowedRootsPolicy,
+        FsWriteAllowPolicy,
     },
 };
 
@@ -148,7 +149,8 @@ impl TurnTestHarness {
         let clock = Arc::new(FixedClock::new(1_700_000_000));
         let mut policy = PolicyPipeline::<AppContextFactory>::new_legacy_allow_fallback()
             .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
-            .with_policy(FsResolvePathAllowedRootsPolicy);
+            .with_policy(FsResolvePathAllowedRootsPolicy)
+            .with_policy(FsRemoveFileAllowedRootsPolicy);
         if !tool_config.fs.deny_read_filenames.is_empty() {
             policy.push_policy(FsReadFilenameDenyPolicy::new(
                 tool_config.fs.deny_read_filenames.clone(),
@@ -158,6 +160,7 @@ impl TurnTestHarness {
         policy.push_policy(FsWriteAllowPolicy);
         policy.push_policy(FsCopyFileAllowPolicy);
         policy.push_policy(FsCreateDirAllAllowPolicy);
+        policy.push_policy(FsRemoveFileAllowPolicy);
         policy.push_policy(FsInspectPathAllowPolicy);
         policy.push_policy(FsGlobAllowPolicy);
         policy.push_policy(FsContentSearchAllowPolicy);

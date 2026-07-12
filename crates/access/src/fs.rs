@@ -9,12 +9,13 @@ pub mod error;
 pub mod glob;
 pub mod inspect;
 pub mod path;
+pub mod remove;
 
 pub use access::{FsAccess, FsAccessError, FsReadOutput, FsWriteOutput};
 pub use action::{
     FsAction, FsContentSearchAction, FsContentSearchOptions, FsCopyFileAction,
-    FsCreateDirAllAction, FsGlobAction, FsInspectPathAction, FsReadAction, FsResolvePathAction,
-    FsWriteAction, FsWriteOptions,
+    FsCreateDirAllAction, FsGlobAction, FsInspectPathAction, FsReadAction, FsRemoveFileAction,
+    FsResolvePathAction, FsWriteAction, FsWriteOptions,
 };
 pub use content_search::{FsContentSearchMatch, FsContentSearchOutput};
 pub use copy::FsCopyFileOutput;
@@ -23,6 +24,7 @@ pub use error::FsActionError;
 pub use glob::{FsGlobOutput, FsPathKind, FsPathMatch};
 pub use inspect::FsInspectPathOutput;
 pub use path::GrantedPath;
+pub use remove::{FsRemoveFileKind, FsRemoveFileOutput};
 
 /// Filesystem root view required by path resolution.
 ///

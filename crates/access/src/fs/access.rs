@@ -14,8 +14,8 @@ use super::{
     FsResolutionContext,
     action::{
         FsContentSearchAction, FsContentSearchOptions, FsCopyFileAction, FsCreateDirAllAction,
-        FsGlobAction, FsInspectPathAction, FsReadAction, FsResolvePathAction, FsWriteAction,
-        FsWriteOptions,
+        FsGlobAction, FsInspectPathAction, FsReadAction, FsRemoveFileAction, FsResolvePathAction,
+        FsWriteAction, FsWriteOptions,
     },
     content_search::FsContentSearchOutput,
     copy::FsCopyFileOutput,
@@ -24,6 +24,7 @@ use super::{
     glob::FsGlobOutput,
     inspect::FsInspectPathOutput,
     path::GrantedPath,
+    remove::FsRemoveFileOutput,
 };
 
 /// Filesystem access facade.
@@ -165,6 +166,25 @@ where
         let path = resolve_grant.granted.run(self.ctx).await?;
 
         let action = FsCreateDirAllAction::new(path);
+        let grant = self
+            .policy_engine
+            .grant(self.ctx, action)
+            .await
+            .map_err(AuthorizationError::from)
+            .map_err(FsAccessError::Authorization)?;
+        grant.granted.run(self.ctx).await
+    }
+
+    /// Remove one file or symlink through remove-path policy and write policy.
+    ///
+    /// Unlike read/write/copy, removal does not use `GrantedPath`: the action
+    /// must preserve final-component no-follow semantics so symlink deletion
+    /// cannot accidentally become target deletion.
+    pub async fn remove_file(
+        self,
+        path: impl AsRef<Path>,
+    ) -> Result<FsRemoveFileOutput, FsAccessError> {
+        let action = FsRemoveFileAction::resolve(path, self.ctx.fs_resolution_root())?;
         let grant = self
             .policy_engine
             .grant(self.ctx, action)
@@ -505,6 +525,12 @@ pub enum FsAccessError {
     CopyFile {
         source_path: PathBuf,
         destination_path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to remove file {path}: {source}", path = .path.display())]
+    RemoveFile {
+        path: PathBuf,
         #[source]
         source: std::io::Error,
     },

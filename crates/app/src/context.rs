@@ -14,7 +14,8 @@ use loong_kernel::{
     policy::{
         FsContentSearchAllowPolicy, FsCopyFileAllowPolicy, FsCreateDirAllAllowPolicy,
         FsGlobAllowPolicy, FsInspectPathAllowPolicy, FsReadAllowPolicy, FsReadFilenameDenyPolicy,
-        FsResolvePathAllowedRootsPolicy, FsWriteAllowPolicy,
+        FsRemoveFileAllowPolicy, FsRemoveFileAllowedRootsPolicy, FsResolvePathAllowedRootsPolicy,
+        FsWriteAllowPolicy,
     },
 };
 use serde_json::Value;
@@ -537,7 +538,8 @@ fn bootstrap_kernel_context_with_audit_sink(
     let tool_rt = crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
     let mut policy = PolicyPipeline::<AppContextFactory>::new_legacy_allow_fallback()
         .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
-        .with_policy(FsResolvePathAllowedRootsPolicy);
+        .with_policy(FsResolvePathAllowedRootsPolicy)
+        .with_policy(FsRemoveFileAllowedRootsPolicy);
     if !tool_rt.fs.deny_read_filenames.is_empty() {
         policy.push_policy(FsReadFilenameDenyPolicy::new(
             tool_rt.fs.deny_read_filenames.clone(),
@@ -547,6 +549,7 @@ fn bootstrap_kernel_context_with_audit_sink(
     policy.push_policy(FsWriteAllowPolicy);
     policy.push_policy(FsCopyFileAllowPolicy);
     policy.push_policy(FsCreateDirAllAllowPolicy);
+    policy.push_policy(FsRemoveFileAllowPolicy);
     policy.push_policy(FsInspectPathAllowPolicy);
     policy.push_policy(FsGlobAllowPolicy);
     policy.push_policy(FsContentSearchAllowPolicy);

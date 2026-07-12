@@ -6,6 +6,8 @@ use thiserror::Error;
 pub enum FsActionError {
     #[error("filesystem path must not be empty")]
     EmptyPath,
+    #[error("filesystem path {path} must include a file name", path = .path.display())]
+    MissingFileName { path: PathBuf },
     #[error("failed to canonicalize filesystem path {path}: {source}", path = .path.display())]
     CanonicalizePath {
         path: PathBuf,

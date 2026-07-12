@@ -45,6 +45,57 @@ impl ResolvedPath {
     }
 }
 
+/// Filesystem deletion target prepared with final-component no-follow semantics.
+///
+/// Ancestor components are canonicalized so policy sees the real parent
+/// location. The final component is appended lexically so removing a symlink
+/// path deletes the link itself, not its target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::fs) struct ResolvedDeletionPath {
+    path: PathBuf,
+}
+
+impl ResolvedDeletionPath {
+    pub(in crate::fs) fn resolve(
+        path: impl AsRef<Path>,
+        resolution_root: impl AsRef<Path>,
+    ) -> Result<Self, FsActionError> {
+        let raw = path.as_ref();
+        if raw.as_os_str().is_empty() {
+            return Err(FsActionError::EmptyPath);
+        }
+
+        let resolution_root = resolve_existing_or_missing_path(resolution_root.as_ref())?;
+        let combined = if raw.is_absolute() {
+            raw.to_path_buf()
+        } else {
+            resolution_root.join(raw)
+        };
+        let normalized = normalize_without_fs(&combined);
+        let file_name = normalized
+            .file_name()
+            .map(std::ffi::OsStr::to_owned)
+            .ok_or_else(|| FsActionError::MissingFileName {
+                path: normalized.clone(),
+            })?;
+        let parent = normalized
+            .parent()
+            .ok_or_else(|| FsActionError::MissingExistingAncestor {
+                path: normalized.clone(),
+            })?;
+        let mut resolved = resolve_existing_or_missing_path(parent)?;
+        resolved.push(file_name);
+
+        Ok(Self {
+            path: dunce::simplified(&resolved).to_path_buf(),
+        })
+    }
+
+    pub(in crate::fs) fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
 /// Filesystem path produced by governed path resolution.
 ///
 /// Downstream fs actions accept this value instead of raw paths so their

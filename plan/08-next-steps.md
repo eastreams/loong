@@ -17,8 +17,8 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      迁移完成线必须先把这些 I/O 抽到 access-backed port 或等价的 granted action run
      边界；
    - `config.import` 的迁移先拆 filesystem primitive，再迁 tool 入口。当前 `loong-access::fs`
-     已有 read/write/copy-file/glob/content-search/inspect-path/create-dir-all，仍不足以覆盖
-     import 的全部副作用：
+     已有 read/write/copy-file/remove-file/glob/content-search/inspect-path/create-dir-all，
+     仍不足以覆盖 import 的全部副作用：
      - discovery / plan：已有受治理的 file read、directory scan、canonical/path metadata
        基础；后续迁移时仍要把调用点改成显式 I/O 边界；
      - apply：已有读取现有 output config、写 output config、创建 state dir、写 backup、
@@ -26,11 +26,8 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
        `migration::*` / `config::{load,write}` 改成使用这些边界；
      - config codec：`config::parse` / `config::render` 已提供无 filesystem side effect 的
        解析/编码边界；`config::load` / `config::write` 仍是 legacy direct fs 调用点；
-     - rollback：已有读取 manifest、复制 backup、恢复 output 的基础 primitive；仍缺少
-       删除不存在前 output 的受治理 remove primitive；
-       不要直接用当前 `GrantedPath` 实现 remove：`GrantedPath` 表示 canonical target，
-       不能表达“删除 symlink 本身还是删除 target”。remove 需要先明确 raw path / lstat
-       语义，再定义 action 和 policy payload；
+     - rollback：已有读取 manifest、复制 backup、恢复 output、删除不存在前 output 的基础
+       primitive；remove-file 只删除文件或 symlink，且 final component 不跟随 symlink；
      - apply_selected failure rollback：需要恢复 config output，并协调 skills bridge rollback。
    - 因此第一个 code 步骤不是 `Register(ConfigImportTool)`，而是把
      `migration::*` / `config::{load,write}` 依赖的 filesystem 操作改成显式 I/O 边界：

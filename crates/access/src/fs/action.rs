@@ -7,7 +7,7 @@ use loong_contracts::Capability;
 use loong_core::policy::action::{ActionMeta, ActionMetadata};
 use serde_json::{Value, json};
 
-use super::path::{GrantedPath, ResolvedPath};
+use super::path::{GrantedPath, ResolvedDeletionPath, ResolvedPath};
 
 const FS_RESOLVE_REQUIRED_CAPABILITIES: [Capability; 0] = [];
 const FS_READ_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
@@ -15,6 +15,7 @@ const FS_WRITE_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemW
 const FS_COPY_FILE_REQUIRED_CAPABILITIES: [Capability; 2] =
     [Capability::FilesystemRead, Capability::FilesystemWrite];
 const FS_CREATE_DIR_ALL_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
+const FS_REMOVE_FILE_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
 const FS_GLOB_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 const FS_CONTENT_SEARCH_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 const FS_INSPECT_PATH_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
@@ -303,6 +304,60 @@ impl ActionMeta for FsCreateDirAllAction {
     }
 }
 
+/// Typed action for removing one governed file or symlink.
+///
+/// This action does not consume `GrantedPath`: deletion needs final-component
+/// no-follow semantics, while `GrantedPath` represents a canonical target.
+/// Access prepares the deletion path facts and kernel policy decides whether
+/// they are allowed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsRemoveFileAction {
+    raw_path: PathBuf,
+    deletion: ResolvedDeletionPath,
+}
+
+impl FsRemoveFileAction {
+    pub(in crate::fs) fn resolve(
+        path: impl AsRef<Path>,
+        resolution_root: impl AsRef<Path>,
+    ) -> Result<Self, super::error::FsActionError> {
+        let raw_path = path.as_ref().to_path_buf();
+        let deletion = ResolvedDeletionPath::resolve(&raw_path, resolution_root)?;
+        Ok(Self { raw_path, deletion })
+    }
+
+    #[must_use]
+    pub fn raw_path(&self) -> &Path {
+        &self.raw_path
+    }
+
+    #[must_use]
+    pub fn deletion_path(&self) -> &Path {
+        self.deletion.path()
+    }
+}
+
+impl ActionMeta for FsRemoveFileAction {
+    fn metadata(&self) -> ActionMetadata<'_> {
+        ActionMetadata {
+            kind: "fs.remove_file",
+            operation: Cow::Borrowed("remove_file"),
+            required_capabilities: Cow::Borrowed(&FS_REMOVE_FILE_REQUIRED_CAPABILITIES),
+        }
+    }
+
+    fn audit_resource(&self) -> Option<Cow<'_, str>> {
+        Some(self.deletion_path().display().to_string().into())
+    }
+
+    fn payload(&self) -> Cow<'_, Value> {
+        Cow::Owned(json!({
+            "path": self.raw_path.display().to_string(),
+            "deletion_path": self.deletion_path().display().to_string(),
+        }))
+    }
+}
+
 /// Typed action for observing one governed filesystem path.
 ///
 /// Existence and file-kind metadata leak filesystem state, so inspect is a
@@ -508,6 +563,7 @@ pub enum FsAction {
     Write(FsWriteAction),
     CopyFile(FsCopyFileAction),
     CreateDirAll(FsCreateDirAllAction),
+    RemoveFile(FsRemoveFileAction),
     InspectPath(FsInspectPathAction),
     Glob(FsGlobAction),
     ContentSearch(FsContentSearchAction),
@@ -536,6 +592,11 @@ impl FsAction {
     #[must_use]
     pub fn create_dir_all(path: GrantedPath) -> Self {
         Self::CreateDirAll(FsCreateDirAllAction::new(path))
+    }
+
+    #[must_use]
+    pub fn remove_file(action: FsRemoveFileAction) -> Self {
+        Self::RemoveFile(action)
     }
 
     #[must_use]
@@ -575,6 +636,7 @@ impl ActionMeta for FsAction {
             Self::Write(action) => action.metadata(),
             Self::CopyFile(action) => action.metadata(),
             Self::CreateDirAll(action) => action.metadata(),
+            Self::RemoveFile(action) => action.metadata(),
             Self::InspectPath(action) => action.metadata(),
             Self::Glob(action) => action.metadata(),
             Self::ContentSearch(action) => action.metadata(),
@@ -587,6 +649,7 @@ impl ActionMeta for FsAction {
             Self::Write(action) => action.audit_resource(),
             Self::CopyFile(action) => action.audit_resource(),
             Self::CreateDirAll(action) => action.audit_resource(),
+            Self::RemoveFile(action) => action.audit_resource(),
             Self::InspectPath(action) => action.audit_resource(),
             Self::Glob(action) => action.audit_resource(),
             Self::ContentSearch(action) => action.audit_resource(),
@@ -599,6 +662,7 @@ impl ActionMeta for FsAction {
             Self::Write(action) => action.payload(),
             Self::CopyFile(action) => action.payload(),
             Self::CreateDirAll(action) => action.payload(),
+            Self::RemoveFile(action) => action.payload(),
             Self::InspectPath(action) => action.payload(),
             Self::Glob(action) => action.payload(),
             Self::ContentSearch(action) => action.payload(),
