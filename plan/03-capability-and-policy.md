@@ -46,7 +46,9 @@ config
 
 需要从旧路径迁入 typed policy/action path 的 policy：
 
-- fs allowed roots / workspace root containment：typed `FsResolvePathAction` policy。
+- fs path resolution observation：typed `FsResolvePathAction` allow policy；它只生成 opaque
+  resolved fact，不替代后续 path/operation authorization。
+- fs allowed roots / workspace root containment：typed `FsPathAction` policy。
 - filename deny，例如“不许读 clippy.toml”：typed `FsReadAction` policy，来自 app config
   或测试 bootstrap，不写死在 access/tool 里。若该 deny 只是测试用例，它的删除条件是对应
   测试不再需要该 policy fixture。

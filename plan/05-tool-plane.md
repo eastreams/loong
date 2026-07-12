@@ -103,6 +103,10 @@ App execute_kernel_tool_request
   -> FsResolvePathAction
   -> PolicyPipeline::grant(ctx, FsResolvePathAction)
   -> Granted<FsResolvePathAction>::run(ctx)
+  -> ResolvedPath
+  -> FsPathAction(ResolvedPath)
+  -> PolicyPipeline::grant(ctx, FsPathAction)
+  -> Granted<FsPathAction>::run(ctx)
   -> GrantedPath
   -> FsReadAction
   -> PolicyPipeline::grant(ctx, FsReadAction)
@@ -113,7 +117,9 @@ App execute_kernel_tool_request
 这意味着 tool invocation policy 和 fs read policy 是两层不同授权：
 
 - `ToolInvocationAction`：允许调用 app plane 上某个 path 的 tool。
-- `FsResolvePathAction`：允许把 raw path 解析成 `GrantedPath`。
+- `FsResolvePathAction`：允许执行 canonicalize/symlink observation 并生成 resolved fact；
+  它不授予 filesystem operation authority。
+- `FsPathAction`：允许把 resolved fact 变成对应 final-component 语义的 path grant。
 - `FsReadAction`：允许读取某个 `GrantedPath`。
 
 不能用 `AuthorizedToolInvocation` 这样的 receipt workaround 表达 tool invocation grant
