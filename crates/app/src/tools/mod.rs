@@ -388,8 +388,9 @@ pub async fn execute_tool(
 }
 
 // TODO(tool-plane): collapse this bridge into AppExecutionContext::tool(...)
-// call sites. Until then, keep the only typed branch here and route unmigrated
-// tools to the legacy kernel adapter plane at this boundary.
+// call sites. During migration this legacy envelope ingress first attempts the
+// app-owned typed plane through ctx.tool(path)?.invoke(payload), then falls back
+// to the legacy kernel adapter plane only for tools that are not registered yet.
 pub(crate) async fn execute_kernel_tool_request(
     ctx: &KernelContext,
     request: ToolCoreRequest,
