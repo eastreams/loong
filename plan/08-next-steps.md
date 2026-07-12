@@ -17,7 +17,8 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      `rollback_last_apply` 已通过 `ctx.access()` 读取 manifest 并恢复/删除 output；
      `apply_selected` 在 `apply_skills_plan=false` 时已通过 `ctx.access()` 创建 state dir、
      写 backup、写 output config、原子写 import manifest；`apply_skills_plan=true`
-     仍留在 legacy path，且仍依赖 `FilePolicyExtension` 的迁移期 guard；
+     仍留在 legacy path，且只有这个 skills bridge 分支继续依赖 `FilePolicyExtension`
+     的迁移期 guard；已迁移的 `config.import` modes 不再走 direct file preflight；
    - 不要只把 `config.import` 入口注册进 typed plane 来假装迁移：它调用的
      `migration::*` / `config::load` / `config::write` 当前会直接读写、备份、扫描文件。
      迁移完成线必须先把这些 I/O 抽到 access-backed port 或等价的 granted action run
@@ -42,7 +43,8 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
    - 因此下一步 code 不是 `Register(ConfigImportTool)`，而是把 `apply_selected` 的
      `apply_skills_plan=true` 路径改成显式边界：external skills install/remove 不能继续
      作为 migration 内部 direct tool side effect；external skills manifest 写入也不能退回
-     direct atomic write 或 `FilePolicyExtension`；
+     direct atomic write 或 `FilePolicyExtension`。`FilePolicyExtension` 现在只标记这个
+     未迁移分支，不能再扩回已迁移 modes；
    - `glob.search` / `content.search` 的 kernel-routed 调用已注册为 typed read-family
      path；无 context direct 调用已 fail closed，旧 app-local search helper 已删除；
    - 逐个工具迁移：concrete tool 只解析 payload、调用 `ctx.access()` / `ctx.tool()`、
@@ -53,7 +55,8 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
    - 完成线：
      - migrated import 不直接调用 filesystem/network side effect；
      - side effect 只发生在 access crate 的 granted action run 边界；
-     - `FilePolicyExtension` 不再覆盖已迁移工具；
+     - `FilePolicyExtension` 只覆盖 `apply_selected + apply_skills_plan=true`，并在该分支
+       迁完后删除；
    - 验证：按迁移工具分别跑对应 app/access 测试，再跑
      `cargo check -p loong-access -p loong-kernel -p loong-app -p loong` 和
      `git diff --check`。
@@ -65,7 +68,8 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
    - tool helper、access helper、legacy direct preflight 不再读取 config 做授权；
    - 完成线：
      - filename deny、fs allowed roots、workspace root containment 都是 typed policy；
-     - `FilePolicyExtension` 只剩 `config.import` 的迁移期分支，或在全部迁移后删除；
+     - `FilePolicyExtension` 只剩 `config.import apply_selected + apply_skills_plan=true`
+       的迁移期分支，或在该分支迁完后删除；
      - 配置变更通过 policy registration 改变行为，不通过 action required caps 改变行为；
    - 验证：`cargo test -p loong-kernel policy`、`cargo test -p loong-app workspace_root_tests`、
      `cargo test -p loong-app file_read`、`cargo check -p loong-app -p loong-kernel`、
