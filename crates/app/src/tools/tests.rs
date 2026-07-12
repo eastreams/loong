@@ -2097,6 +2097,37 @@ fn direct_write_requires_kernel_context_without_writing_file() {
 }
 
 #[test]
+fn discoverable_search_requires_kernel_context_without_reading_files() {
+    let root = unique_temp_dir("loong-direct-search");
+    std::fs::create_dir_all(&root).expect("create search root");
+    std::fs::write(root.join("notes.txt"), "needle").expect("write search fixture");
+    let config = test_tool_runtime_config(&root).into_inner();
+
+    let glob_error = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "glob.search".to_owned(),
+            payload: json!({"pattern": "*.txt"}),
+        },
+        &config,
+    )
+    .expect_err("glob.search should require kernel context");
+    let content_error = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "content.search".to_owned(),
+            payload: json!({"query": "needle"}),
+        },
+        &config,
+    )
+    .expect_err("content.search should require kernel context");
+
+    assert_eq!(glob_error, "glob.search requires kernel access context");
+    assert_eq!(
+        content_error,
+        "content.search requires kernel access context"
+    );
+}
+
+#[test]
 fn direct_edit_executes_without_hopping_through_hidden_file_edit() {
     let root = unique_temp_dir("loong-direct-edit");
     std::fs::create_dir_all(&root).expect("create direct-edit root");

@@ -509,9 +509,9 @@ fn dispatch_tool_request(
         #[cfg(feature = "tool-file")]
         "edit" => file::execute_file_edit_tool_with_config(request, config),
         #[cfg(feature = "tool-file")]
-        "glob.search" => file::execute_glob_search_tool_with_config(request, config),
+        "glob.search" => Err("glob.search requires kernel access context".to_owned()),
         #[cfg(feature = "tool-file")]
-        "content.search" => file::execute_content_search_tool_with_config(request, config),
+        "content.search" => Err("content.search requires kernel access context".to_owned()),
         #[cfg(feature = "tool-file")]
         "memory.retrieve" => {
             memory_tools::execute_memory_retrieve_tool_with_config(request, config)
