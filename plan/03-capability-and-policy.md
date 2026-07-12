@@ -50,7 +50,7 @@ config
 - filename deny，例如“不许读 clippy.toml”：typed `FsReadAction` policy，来自 app config
   或测试 bootstrap，不写死在 access/tool 里。若该 deny 只是测试用例，它的删除条件是对应
   测试不再需要该 policy fixture。
-- `FilePolicyExtension` 的 read/write/search 分支：已经迁到 access/action path 后应删除；
-  edit / config.import 在迁移前只能作为 legacy bridge。
+- `FilePolicyExtension` 的 read/write/search/edit 分支已删除；迁移期只允许
+  `config.import` 继续作为 legacy bridge。
 - web/network/memory 等后续 policy：同样由 app bootstrap 从 config 构造 policy，注册到
   pipeline；tool helper 只解析输入和调用 access。

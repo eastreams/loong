@@ -8,10 +8,10 @@
 commit。已完成的步骤从本文件删除，避免后续实现被过期完成线误导。
 
 1. 继续迁移剩余 legacy side-effect tools：
-   - `write` 的 context/kernel-routed 调用已走 typed plane；无 context direct `write`
-     已 fail closed；
-   - `edit` 和 `config.import` 仍未迁入 access-backed action 路径，且仍依赖
-     `FilePolicyExtension` 的迁移期 guard；
+   - `write` / `edit` 的 context/kernel-routed 调用已走 typed plane；无 context direct
+     `write` / `edit` 已 fail closed；
+   - `config.import` 仍未迁入 access-backed action 路径，且仍依赖 `FilePolicyExtension`
+     的迁移期 guard；
    - `glob.search` / `content.search` 的 kernel-routed 调用已注册为 typed read-family
      path；无 context direct 调用已 fail closed，旧 app-local search helper 已删除；
    - 逐个工具迁移：concrete tool 只解析 payload、调用 `ctx.access()` / `ctx.tool()`、
@@ -20,7 +20,7 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
    - 逐步清空 `Kernel::execute_tool_core` 调用面，再删除 `LegacyToolPlane` 和 adapter
      trait；
    - 完成线：
-     - migrated write/edit/import 不直接调用 filesystem/network side effect；
+     - migrated import 不直接调用 filesystem/network side effect；
      - side effect 只发生在 access crate 的 granted action run 边界；
      - `FilePolicyExtension` 不再覆盖已迁移工具；
    - 验证：按迁移工具分别跑对应 app/access 测试，再跑
@@ -34,7 +34,7 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
    - tool helper、access helper、legacy direct preflight 不再读取 config 做授权；
    - 完成线：
      - filename deny、fs allowed roots、workspace root containment 都是 typed policy；
-     - `FilePolicyExtension` 只剩未迁移 legacy tool 的迁移期分支，或在全部迁移后删除；
+     - `FilePolicyExtension` 只剩 `config.import` 的迁移期分支，或在全部迁移后删除；
      - 配置变更通过 policy registration 改变行为，不通过 action required caps 改变行为；
    - 验证：`cargo test -p loong-kernel policy`、`cargo test -p loong-app workspace_root_tests`、
      `cargo test -p loong-app file_read`、`cargo check -p loong-app -p loong-kernel`、
