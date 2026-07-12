@@ -7,29 +7,7 @@
 每个编号项都是一个最小提交候选。除非某一步明确要求合并，否则不要把相邻步骤塞进同一个
 commit。已完成的步骤从本文件删除，避免后续实现被过期完成线误导。
 
-1. 让 `loong-runtime::Runtime<C>` 接管 ToolPlane 与 kernel owner：
-   - generic `ToolPlane<C>`、plane-local `ToolPath`、`ToolInvocationAction` 和 slot registry
-     已由 runtime crate 提供；下一提交给 `loong-runtime` 增加 `loong-kernel` 依赖并引入
-     `Runtime<C>`，由该类型共同持有 `Kernel<C>` 与 tool plane registry；不得把
-     `AppContextFactory`、app config 或 concrete tool 下沉；
-   - app bootstrap 用显式 `Result` 构造 builtin plane，再创建
-     `Runtime<AppContextFactory>`；builtin duplicate registration 必须作为 bootstrap error
-     返回，删除 `app_tool_plane()` 全局 `OnceLock` 和全部 registration `expect`；
-   - `AppExecutionContext` 改为借用 runtime，并通过 runtime 取得 kernel/tool plane；
-     `ctx.access()` 继续只把 kernel + ctx 交给 `AccessCx`，`ctx.tool(path)` 通过 runtime plane
-     lookup，不给 concrete tool 暴露裸 registry/audit；
-   - 先让现有 `KernelContext` 内部持有 `Arc<Runtime<AppContextFactory>>`，保持迁移可分提交；
-     不增加 alias/fallback。后续 host/session 迁移完成后直接删除 `KernelContext`；
-   - 剩余最小提交顺序：先引入 `Runtime<C>` 和 fallible app bootstrap；再切换 context/tool
-     调用点并删除全局 plane；每个提交都必须独立通过完整 gate；
-   - 完成线：production 没有 builtin registration panic；kernel 不持有 plane；app context
-     concrete type仍由 app 定义；所有 typed tool lookup/dispatch 使用当前 runtime 实例；
-   - 验证：`cargo test -p loong-runtime`、`cargo test -p loong-app tools::plane`、
-     `cargo test -p loong-app kernel_routed_file_read`、`cargo clippy --workspace --all-targets
-     --all-features -- -D warnings`、workspace default/all-feature tests、architecture check、
-     `git diff --check`。
-
-2. 继续迁移剩余 legacy side-effect tools：
+1. 继续迁移剩余 legacy side-effect tools：
    - `write` / `edit` 的 context/kernel-routed 调用已走 typed plane；无 context direct
      `write` / `edit` 已 fail closed；
    - `config.import` 的 kernel-routed/context-aware `plan` / `discover` / `plan_many` /
@@ -92,7 +70,7 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      `cargo check -p loong-access -p loong-kernel -p loong-app -p loong` 和
      `git diff --check`。
 
-3. 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration：
+2. 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration：
    - app bootstrap 从 config 构造 concrete policy value；
    - policy 注册使用 `PolicyPipeline::push_policy` / `push_pre_policy` /
      `push_fallback_policy`；
@@ -106,9 +84,9 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      `cargo test -p loong-app file_read`、`cargo check -p loong-app -p loong-kernel`、
      `git diff --check`。
 
-4. 完成 unified Context 传播并删除 `KernelContext`：
-   - 在步骤 1 的 runtime owner 落地后，让 session 创建并持有统一 concrete context；所有
-     session 使用同一 context 类型，本次 invocation 的 caps/plane/tier/trusted overlay 通过
+3. 完成 unified Context 传播并删除 `KernelContext`：
+   - runtime owner 已落地；下一步让 session 创建并持有统一 concrete context。所有 session
+     使用同一 context 类型，本次 invocation 的 caps/plane/tier/trusted overlay 通过
      cheap-clone child context 收窄，不修改共享 context；
    - 依次迁移 `SessionRouter`、`CliTurnRuntime`、`TurnExecutionService`、conversation/provider
      binding、channel/webhook state 和 TUI runtime 持有者，不再手工调用
@@ -120,7 +98,7 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
    - 验证：context、session、conversation、channel 和 TUI 的定向测试，workspace default/
      all-feature tests、strict clippy、architecture check、`git diff --check`。
 
-5. 将 provider/runtime-self live-source 读取迁入 governed access：
+4. 将 provider/runtime-self live-source 读取迁入 governed access：
    - `AGENTS.md` / `TOOLS.md` / `IDENTITY.md` 等 source discovery 只产生候选路径；内容读取统一
      使用 session context 派生的 fs access，不能保留 provider 内部 direct read loop；
    - kernel-bound 与普通 provider assembly 使用同一 context/access 路径，并同时产出
@@ -132,21 +110,21 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
    - 验证：provider request-message、context-engine、workspace-guidance、runtime-self continuity
      测试，以及 `cargo check -p loong-access -p loong-app -p loong`、`git diff --check`。
 
-6. 收敛 ToolPlane ingress、catalog 与 display ownership：
+5. 收敛 ToolPlane ingress、catalog 与 display ownership：
    - 所有持有 unified context 的调用点直接使用 `ctx.tool(path)?.invoke(payload).await`；删除
      `execute_kernel_tool_request` 中只为 typed path 搬运 legacy envelope 的 bridge；
    - concrete tool descriptor 由 tool 实现提供，plane 在注册/list 时组合 path + descriptor；拆除
      app 全局 static catalog 中属于 concrete tool 的重复 metadata；
    - display name 由 plane-local path 的稳定 formatter 产生；删除 `file.read -> read` 这类 legacy
      display alias helper。真实 alias 若将来需要，必须作为 plane registration 语义单独设计；
-   - 剩余工具完成步骤 2 的迁移后，删除 `ToolCoreRequest` / `ToolCoreOutcome` typed bridge、
+   - 剩余工具完成步骤 1 的迁移后，删除 `ToolCoreRequest` / `ToolCoreOutcome` typed bridge、
      `Kernel::execute_tool_core` 调用面、`LegacyToolPlane` 和 adapter traits；
    - 完成线：新增 builtin tool 只需要 concrete `ToolImpl` 和一次 registration；typed dispatch、
      prompt catalog、search metadata 不再要求修改手写 match/helper；
    - 验证：tool plane/registry/catalog/search tests、每个 migrated tool 的调用测试、workspace
      default/all-feature tests、strict clippy、`git diff --check`。
 
-7. 把 tool execution audit 从 contracts/kernel 收回 runtime owner：
+6. 把 tool execution audit 从 contracts/kernel 收回 runtime owner：
    - `Kernel::grant` 继续强制记录 generic action authorization audit，包括 caps、policy report、
      allow/deny 和 grant id；这部分不能下沉到 ToolPlane 或 concrete tool；
    - grant 消费后的 tool completed/failed/input-error 由 `ToolInvocation::invoke` 在 app/runtime
@@ -154,13 +132,13 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
    - 从 contracts/kernel 删除 tool-specific `AuditEventKind::ToolInvocation` 和
      `record_tool_invocation` schema；sink 只接收 generic envelope，app runtime payload 只保存
      stable path display、grant id 和 execution outcome；
-   - legacy `PlaneInvoked` 随步骤 6 的 legacy plane 一起删除，不保留 typed/legacy 宽松双断言；
+   - legacy `PlaneInvoked` 随步骤 5 的 legacy plane 一起删除，不保留 typed/legacy 宽松双断言；
    - 完成线：deny 只由 generic grant audit 表达；grant 后 outcome 只记录一次；tool registry key
      和 route/fallback 语义不进入 contracts/kernel；
    - 验证：kernel grant audit、app typed tool completed/failed/input-error、daemon audit rendering
      测试，以及 workspace default/all-feature tests、strict clippy、`git diff --check`。
 
-8. 收敛 Kernel/Policy contract 与 registration metadata：
+7. 收敛 Kernel/Policy contract 与 registration metadata：
    - 从 concrete `Kernel<C>` 提取调用方真正需要的稳定 governance trait；trait 只暴露 grant、
      token/pack boundary 和 audit authority，不暴露 typed tool registry 或 app runtime state；
    - `RegisteredPolicy` / `RegisteredAnyPolicy` 统一携带 registration metadata，至少明确注册来源、
@@ -173,7 +151,7 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
    - 验证：kernel policy/grant/audit tests、all policy report ordering tests、workspace
      default/all-feature tests、strict clippy、architecture check、`git diff --check`。
 
-9. 用 descriptor-relative fs backend 关闭 pathname TOCTOU：
+8. 用 descriptor-relative fs backend 关闭 pathname TOCTOU：
    - 先记录跨平台 backend 决策并评估成熟库；优先采用经过验证的 descriptor-relative/
      capability-based filesystem primitive，不手写一套未经审计的 syscall wrapper；
    - path resolution 与 allowed-roots policy 仍是独立 action，但 `GrantedFsPath` 必须携带或引用
@@ -186,7 +164,7 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
    - 验证：access/kernel path policy tests、并发 symlink/rename race regression tests、各支持平台
      的 compile/test gate、workspace default/all-feature tests、strict clippy、`git diff --check`。
 
-10. 按 owner 收敛 transitional crates 并更新架构文档：
+9. 按 owner 收敛 transitional crates 并更新架构文档：
     - 在 unified runtime 稳定后逐个审计 `loong-cli`、`loong-app-protocol`、`loong-runtime`、
       `loong-plugin-sdk`、`protocol` 和 `bridge-runtime`；每次只合并/删除一个 ownership 明确的
       forwarding shell，不按 crate 行数批量合并；
@@ -203,11 +181,10 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
 
 代码里的迁移 TODO 必须能映射到上面的执行步骤；对应步骤完成时删除 TODO 和旧分支：
 
-- `TODO(runtime-owner)` -> 步骤 1；
-- `TODO(config-import-access)` / `TODO(access-migration)` -> 步骤 2；
-- `TODO(deprecate-kernel-context)` -> 步骤 4；
+- `TODO(config-import-access)` / `TODO(access-migration)` -> 步骤 1；
+- `TODO(deprecate-kernel-context)` -> 步骤 3；
 - `TODO(deprecate-no-kernel-live-source)` /
-  `TODO(deprecate-provider-live-source-bridge)` -> 步骤 5；
-- `TODO(tool-plane)` / `TODO(tool-plane-display)` / `TODO(tool-catalog-owner)` -> 步骤 6；
+  `TODO(deprecate-provider-live-source-bridge)` -> 步骤 4；
+- `TODO(tool-plane)` / `TODO(tool-plane-display)` / `TODO(tool-catalog-owner)` -> 步骤 5；
 - `TODO(kernel-contract)` / `TODO(policy-registration-metadata)` /
-  `TODO(deprecate-legacy-kernel-auth)` / `TODO(deprecate-legacy-policy-error)` -> 步骤 8。
+  `TODO(deprecate-legacy-kernel-auth)` / `TODO(deprecate-legacy-policy-error)` -> 步骤 7。
