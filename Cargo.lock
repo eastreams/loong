@@ -3124,6 +3124,7 @@ dependencies = [
  "loong-contracts",
  "loong-core",
  "loong-kernel",
+ "loong-runtime",
  "loong-tools",
  "opentelemetry",
  "prost 0.14.3",
@@ -3142,7 +3143,6 @@ dependencies = [
  "serde_yaml",
  "sha2 0.11.0",
  "similar",
- "slotmap",
  "starlark",
  "subtle",
  "tar",
@@ -3281,9 +3281,11 @@ name = "loong-runtime"
 version = "0.1.2-alpha.1"
 dependencies = [
  "async-trait",
+ "loong-contracts",
  "loong-core",
  "serde",
  "serde_json",
+ "slotmap",
  "tokio",
 ]
 

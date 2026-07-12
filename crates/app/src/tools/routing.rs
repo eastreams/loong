@@ -1,11 +1,12 @@
 use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loong_runtime::tool_plane::ToolPath;
 use serde_json::Value;
 
 use crate::context::AppExecutionContext;
 
 use super::{
     BASH_EXEC_TOOL_NAME, ToolView, canonical_tool_name, execute_discoverable_tool_core_with_config,
-    plane, runtime_config, runtime_tool_view_for_runtime_config, tool_surface,
+    runtime_config, runtime_tool_view_for_runtime_config, tool_surface,
 };
 use super::{DELEGATE_ASYNC_TOOL_NAME, DELEGATE_TOOL_NAME, config_import};
 
@@ -91,7 +92,7 @@ pub(super) async fn execute_direct_tool_core_with_context(
     }
 
     let routed_request = route_direct_tool_request(request, config)?;
-    let typed_path = plane::ToolPath::from(routed_request.tool_name.clone());
+    let typed_path = ToolPath::from(routed_request.tool_name.clone());
     match ctx.tool(typed_path) {
         Ok(invocation) => {
             let payload = invocation
@@ -119,7 +120,7 @@ async fn execute_direct_read_tool_core_with_context(
     // before dispatching through the typed aggregate tool.
     let (_read_route, direct_request) = route_direct_read_request_for_kernel(request, config)?;
     let outcome = ctx
-        .tool(plane::ToolPath::from("read"))
+        .tool(ToolPath::from("read"))
         .map_err(|error| error.to_string())?
         .invoke(direct_request.payload)
         .await

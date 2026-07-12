@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loong_runtime::tool_plane::ToolPath;
 use serde_json::{Value, json};
 pub(crate) use tool_internal_context::{
     ensure_untrusted_payload_does_not_use_reserved_internal_tool_context,
@@ -410,7 +411,7 @@ pub(crate) async fn execute_kernel_tool_request(
             loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(error))
         })?;
 
-        let typed_path = plane::ToolPath::from(request.tool_name.clone());
+        let typed_path = ToolPath::from(request.tool_name.clone());
         let tool_policy_params = json!({
             "tool_name": &requested_tool_name,
             "payload": &request.payload,
@@ -457,7 +458,7 @@ pub(crate) async fn execute_kernel_tool_request(
                         error,
                     ))
                 })?;
-            let typed_path = plane::ToolPath::from(effective_request.tool_name.clone());
+            let typed_path = ToolPath::from(effective_request.tool_name.clone());
             match execution_context.tool(typed_path) {
                 Ok(invocation) => {
                     // `tool.invoke` is only an invocation envelope here; trusted

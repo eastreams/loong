@@ -1,243 +1,36 @@
-use std::{
-    collections::BTreeSet,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-};
+use std::collections::BTreeSet;
 
-use async_trait::async_trait;
-use loong_contracts::{Capability, ToolExecutionError, ToolInputError, ToolPlaneError, ToolSpec};
-use loong_core::{
-    policy::action::ActionMeta,
-    policy::context::{CapabilityContext, ContextFactory},
-    policy::engine::PolicyEngine,
-    tool::ToolImpl,
-};
+use loong_contracts::Capability;
+use loong_core::policy::engine::PolicyEngine;
 use loong_kernel::PolicyPipeline;
-use serde_json::{Value, json};
+use loong_runtime::tool_plane::{ToolInvocationAction, ToolPath};
+use serde_json::json;
 
-use super::{AppToolPlane, ToolInvocationAction, ToolInvocationAllowPolicy, ToolPath, ToolPlane};
-
-struct TestContextFactory;
-
-impl ContextFactory for TestContextFactory {
-    type Cx<'a> = TestContext;
-}
-
-struct TestContext;
-
-impl CapabilityContext for TestContext {
-    fn allowed_capabilities(&self) -> BTreeSet<Capability> {
-        BTreeSet::new()
-    }
-}
-
-struct EchoTool {
-    executions: Arc<AtomicUsize>,
-}
-
-#[async_trait]
-impl ToolImpl<TestContextFactory> for EchoTool {
-    type Input = String;
-    type Output = Value;
-
-    fn spec(&self) -> ToolSpec {
-        ToolSpec {
-            description: "Echo the provided message.".to_owned(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "message": { "type": "string" }
-                },
-                "required": ["message"],
-                "additionalProperties": false
-            }),
-            required_capabilities: BTreeSet::new(),
-            argument_hint: None,
-            search_hint: None,
-            tags: Vec::new(),
-        }
-    }
-
-    fn parse_input(&self, payload: Value) -> Result<Self::Input, ToolInputError> {
-        payload
-            .get("message")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-            .ok_or_else(|| ToolInputError::missing_field("message"))
-    }
-
-    async fn execute(
-        &self,
-        _ctx: &<TestContextFactory as ContextFactory>::Cx<'_>,
-        input: Self::Input,
-    ) -> Result<Self::Output, ToolExecutionError> {
-        self.executions.fetch_add(1, Ordering::Relaxed);
-        Ok(json!({ "message": input }))
-    }
-}
-
-#[test]
-fn tool_path_keeps_plane_local_segments() {
-    let path = ToolPath::from("test.echo");
-
-    assert_eq!(path.segments(), ["test", "echo"]);
-    assert_eq!(path.to_string(), "test.echo");
-}
-
-#[test]
-fn tool_invocation_action_exposes_policy_metadata() {
-    let action = ToolInvocationAction::new(
-        ToolPath::from("read"),
-        BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead]),
-        json!({ "path": "notes.txt" }),
-    );
-    let metadata = action.metadata();
-
-    assert_eq!(metadata.kind, "tool.invoke");
-    assert_eq!(metadata.operation.as_ref(), "read");
-    assert_eq!(
-        metadata
-            .required_capabilities
-            .iter()
-            .copied()
-            .collect::<BTreeSet<_>>(),
-        BTreeSet::from([Capability::FilesystemRead, Capability::InvokeTool])
-    );
-    let expected_payload = json!({
-        "tool_path": "read",
-        "payload": { "path": "notes.txt" }
-    });
-    assert_eq!(action.payload().as_ref(), &expected_payload);
-}
+use super::ToolInvocationAllowPolicy;
+use crate::context::{AppContextFactory, bootstrap_test_kernel_context};
 
 #[tokio::test]
-async fn app_tool_plane_invokes_registered_tool() {
-    let executions = Arc::new(AtomicUsize::new(0));
-    let mut plane = AppToolPlane::<TestContextFactory>::new();
-    let path = ToolPath::from("test.echo");
+async fn app_policy_allows_registered_tool_invocation_after_capability_gate() {
+    let kernel_context =
+        bootstrap_test_kernel_context("test-agent", 60).expect("bootstrap context");
+    let execution_context = kernel_context
+        .memory_core_execution_context()
+        .expect("build execution context");
+    let mut policy = PolicyPipeline::<AppContextFactory>::new();
+    policy.push_policy(ToolInvocationAllowPolicy);
 
-    plane
-        .register(
-            path.clone(),
-            EchoTool {
-                executions: executions.clone(),
-            },
+    let grant = policy
+        .grant(
+            &execution_context,
+            ToolInvocationAction::new(
+                ToolPath::from("read"),
+                BTreeSet::from([Capability::InvokeTool]),
+                json!({ "path": "notes.txt" }),
+            ),
         )
-        .expect("tool should register");
-    let outcome = plane
-        .invoke(
-            tool_invocation_grant(path.clone(), json!({ "message": "hello" })).await,
-            &TestContext,
-        )
-        .await
-        .expect("tool should execute");
+        .await;
 
-    assert!(plane.contains(&path));
-    assert_eq!(plane.len(), 1);
-    assert_eq!(outcome, json!({ "message": "hello" }));
-    assert_eq!(executions.load(Ordering::Relaxed), 1);
-}
-
-#[tokio::test]
-async fn app_tool_plane_success_observer_runs_after_registered_tool() {
-    let executions = Arc::new(AtomicUsize::new(0));
-    let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let mut plane = AppToolPlane::<TestContextFactory>::new();
-    let path = ToolPath::from("test.echo");
-
-    plane
-        .register_with_provenance_and_success_observer(
-            path.clone(),
-            loong_core::tool::ToolProvenance::Builtin,
-            EchoTool {
-                executions: executions.clone(),
-            },
-            {
-                let observed = observed.clone();
-                move |_ctx, output: &Value| {
-                    observed.lock().expect("observer lock").push(
-                        output
-                            .get("message")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_owned(),
-                    );
-                    Ok(())
-                }
-            },
-        )
-        .expect("tool should register");
-    let outcome = plane
-        .invoke(
-            tool_invocation_grant(path, json!({ "message": "hello" })).await,
-            &TestContext,
-        )
-        .await
-        .expect("tool should execute");
-
-    assert_eq!(outcome, json!({ "message": "hello" }));
-    assert_eq!(executions.load(Ordering::Relaxed), 1);
-    assert_eq!(
-        observed.lock().expect("observer lock").as_slice(),
-        ["hello"]
-    );
-}
-
-#[test]
-fn app_tool_plane_rejects_duplicate_paths() {
-    let mut plane = AppToolPlane::<TestContextFactory>::new();
-    let path = ToolPath::from("test.echo");
-
-    plane
-        .register(
-            path.clone(),
-            EchoTool {
-                executions: Arc::new(AtomicUsize::new(0)),
-            },
-        )
-        .expect("first registration should pass");
-    let error = plane
-        .register(
-            path,
-            EchoTool {
-                executions: Arc::new(AtomicUsize::new(0)),
-            },
-        )
-        .expect_err("duplicate registration should fail");
-
-    assert_eq!(error, ToolPlaneError::DuplicateTool("test.echo".to_owned()));
-    assert_eq!(plane.entry_count(), 1);
-    assert_eq!(plane.path_count(), 1);
-}
-
-#[test]
-fn app_tool_plane_enumerates_registered_paths_from_plane_index() {
-    let mut plane = AppToolPlane::<TestContextFactory>::new();
-    plane
-        .register(
-            ToolPath::from("test.beta"),
-            EchoTool {
-                executions: Arc::new(AtomicUsize::new(0)),
-            },
-        )
-        .expect("beta tool should register");
-    plane
-        .register(
-            ToolPath::from("test.alpha"),
-            EchoTool {
-                executions: Arc::new(AtomicUsize::new(0)),
-            },
-        )
-        .expect("alpha tool should register");
-
-    let paths = plane.registered_paths();
-
-    assert_eq!(
-        paths,
-        vec![ToolPath::from("test.alpha"), ToolPath::from("test.beta")]
-    );
+    assert!(grant.is_ok());
 }
 
 #[cfg(feature = "tool-file")]
@@ -249,81 +42,4 @@ fn builtin_tool_plane_exposes_registered_file_paths() {
     assert!(paths.contains(&ToolPath::from("write")));
     assert!(paths.contains(&ToolPath::from("glob.search")));
     assert!(paths.contains(&ToolPath::from("content.search")));
-}
-
-#[tokio::test]
-async fn app_tool_plane_registered_path_reports_tool_input_error() {
-    let executions = Arc::new(AtomicUsize::new(0));
-    let mut plane = AppToolPlane::<TestContextFactory>::new();
-    let path = ToolPath::from("test.echo");
-    plane
-        .register(
-            path.clone(),
-            EchoTool {
-                executions: executions.clone(),
-            },
-        )
-        .expect("tool should register");
-
-    assert!(plane.contains(&path));
-    let error = plane
-        .invoke(
-            tool_invocation_grant(path.clone(), json!({})).await,
-            &TestContext,
-        )
-        .await
-        .expect_err("invalid registered tool input must fail");
-
-    assert!(matches!(
-        error,
-        ToolPlaneError::Input(loong_contracts::ToolInputError::MissingField { field })
-            if field == "message"
-    ));
-    assert_eq!(executions.load(Ordering::Relaxed), 0);
-}
-
-#[tokio::test]
-async fn app_tool_plane_missing_path_reports_not_found_without_executing_tools() {
-    let executions = Arc::new(AtomicUsize::new(0));
-    let mut plane = AppToolPlane::<TestContextFactory>::new();
-    let registered_path = ToolPath::from("test.echo");
-    let missing_path = ToolPath::from("test.missing");
-    plane
-        .register(
-            registered_path,
-            EchoTool {
-                executions: executions.clone(),
-            },
-        )
-        .expect("tool should register");
-
-    let error = plane
-        .invoke(
-            tool_invocation_grant(missing_path, json!({ "message": "hello" })).await,
-            &TestContext,
-        )
-        .await
-        .expect_err("missing path should fail");
-
-    assert_eq!(
-        error,
-        ToolPlaneError::ToolNotFound("test.missing".to_owned())
-    );
-    assert_eq!(executions.load(Ordering::Relaxed), 0);
-}
-
-async fn tool_invocation_grant(
-    path: ToolPath,
-    payload: Value,
-) -> loong_core::policy::grant::Granted<ToolInvocationAction> {
-    let mut policy = PolicyPipeline::<TestContextFactory>::new();
-    policy.push_policy(ToolInvocationAllowPolicy);
-    policy
-        .grant(
-            &TestContext,
-            ToolInvocationAction::new(path, BTreeSet::new(), payload),
-        )
-        .await
-        .expect("test policy should grant tool invocation")
-        .granted
 }

@@ -19,6 +19,7 @@ use loong_kernel::{
         FsRenameAllowPolicy, FsResolvePathAllowPolicy, FsWriteAllowPolicy,
     },
 };
+use loong_runtime::tool_plane::{ToolInvocationAction, ToolPath};
 use serde_json::Value;
 
 use crate::config::{AuditMode, LoongConfig};
@@ -228,10 +229,7 @@ impl<'a> AppExecutionContext<'a> {
         AccessCx::new(self.kernel, self)
     }
 
-    pub(crate) fn tool(
-        &self,
-        path: crate::tools::plane::ToolPath,
-    ) -> Result<ToolInvocation<'_, 'a>, ToolPlaneError> {
+    pub(crate) fn tool(&self, path: ToolPath) -> Result<ToolInvocation<'_, 'a>, ToolPlaneError> {
         let spec = crate::tools::app_tool_plane().spec(&path)?;
         let mut required_capabilities = BTreeSet::from([Capability::InvokeTool]);
         required_capabilities.extend(spec.required_capabilities.iter().copied());
@@ -251,7 +249,7 @@ impl<'a> AppExecutionContext<'a> {
 /// parsed input after `invoke` has paired kernel grant, plane dispatch, and audit.
 pub(crate) struct ToolInvocation<'ctx, 'a> {
     ctx: &'ctx AppExecutionContext<'a>,
-    path: crate::tools::plane::ToolPath,
+    path: ToolPath,
     default_capabilities: BTreeSet<Capability>,
     capability_override: Option<BTreeSet<Capability>>,
 }
@@ -297,11 +295,7 @@ impl ToolInvocation<'_, '_> {
                     "policy_denied: {error}"
                 )))
             })?;
-        let action = crate::tools::plane::ToolInvocationAction::new(
-            self.path,
-            required_capabilities,
-            payload,
-        );
+        let action = ToolInvocationAction::new(self.path, required_capabilities, payload);
         let grant = self
             .ctx
             .kernel
@@ -797,7 +791,7 @@ mod tests {
             )
             .expect("build execution context");
         let invocation = execution_context
-            .tool(crate::tools::plane::ToolPath::from("read"))
+            .tool(ToolPath::from("read"))
             .expect("read should be registered");
 
         let error = match invocation
@@ -833,7 +827,7 @@ mod tests {
             )
             .expect("build execution context");
         let invocation = execution_context
-            .tool(crate::tools::plane::ToolPath::from("read"))
+            .tool(ToolPath::from("read"))
             .expect("read should be registered");
 
         let error = invocation

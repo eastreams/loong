@@ -8,6 +8,8 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub mod tool_plane;
+
 pub use loong_core::{
     ApprovalState, ArtifactDurabilityClass, ChildBudgetPolicy, DiagnosticSeverity,
     ExecutionArtifact, ExecutionArtifactKind, Session, SessionBudgetOverlay, SessionEvent, Task,

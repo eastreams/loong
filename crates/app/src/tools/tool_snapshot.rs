@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use loong_runtime::tool_plane::ToolPath;
 use serde::{Deserialize, Serialize};
 
 use super::runtime_config;
@@ -122,7 +123,7 @@ fn agent_visible_summary_for_direct_state(state: &super::ToolSurfaceState) -> St
     // Concrete typed tools own their action-level summary. The app surface keeps
     // usage guidance because it describes prompt/orchestration behavior, not the
     // tool's payload or side effect boundary.
-    let typed_path = super::plane::ToolPath::from(state.surface_id.as_str());
+    let typed_path = ToolPath::from(state.surface_id.as_str());
     super::app_tool_plane()
         .spec(&typed_path)
         .map(|spec| spec.description.clone())

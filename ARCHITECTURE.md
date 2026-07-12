@@ -64,7 +64,7 @@ core foundation
 
 additive spine
 - loong-plugin-sdk -> loong-core
-- loong-runtime -> loong-core
+- loong-runtime -> contracts, loong-core
 - loong-app-protocol -> loong-runtime
 - loong-cli -> loong-app-protocol
 

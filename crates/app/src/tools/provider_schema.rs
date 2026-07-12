@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use loong_contracts::ToolSpec;
+use loong_runtime::tool_plane::ToolPath;
 use serde_json::{Value, json};
 
 use super::{
@@ -126,7 +127,7 @@ pub(super) fn typed_tool_spec_for_descriptor(
 ) -> Option<&'static ToolSpec> {
     // Transitional bridge: legacy descriptors still enumerate provider-visible
     // tools, while migrated tool metadata lives in the app-owned plane.
-    let path = super::plane::ToolPath::from(descriptor.name);
+    let path = ToolPath::from(descriptor.name);
     super::app_tool_plane().spec(&path).ok()
 }
 
