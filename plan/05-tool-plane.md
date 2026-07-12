@@ -144,7 +144,10 @@ Core generic helper 不属于该步骤。该步骤的目标是 app/plane 定义 
 
 ## ToolPlane
 
-`ToolPlane` 属于 `loong-app::tools::plane` runtime，不属于 kernel。
+`ToolPlane` 属于 app runtime，不属于 kernel。最终 storage/path/action primitive 放在
+`loong-runtime`，由 `Runtime<C>` 持有；builtin concrete tool 和注册清单仍由 `loong-app`
+bootstrap 提供。这里的 crate 移动不会把 plane 放进 kernel，也不会让 `loong-runtime`
+依赖 app concrete context。
 
 目标 plane 形状：
 

@@ -7,7 +7,28 @@
 每个编号项都是一个最小提交候选。除非某一步明确要求合并，否则不要把相邻步骤塞进同一个
 commit。已完成的步骤从本文件删除，避免后续实现被过期完成线误导。
 
-1. 继续迁移剩余 legacy side-effect tools：
+1. 让 `loong-runtime::Runtime<C>` 接管 ToolPlane 与 kernel owner：
+   - `loong-runtime` 增加对 `loong-kernel` / `loong-contracts` 的依赖，并把 generic
+     `ToolPlane<C>`、plane-local `ToolPath`、`ToolInvocationAction`、slot registry 从 app
+     移入 runtime crate；不得把 `AppContextFactory`、app config 或 concrete tool 下沉；
+   - app bootstrap 用显式 `Result` 构造 builtin plane，再创建
+     `Runtime<AppContextFactory>`；builtin duplicate registration 必须作为 bootstrap error
+     返回，删除 `app_tool_plane()` 全局 `OnceLock` 和全部 registration `expect`；
+   - `AppExecutionContext` 改为借用 runtime，并通过 runtime 取得 kernel/tool plane；
+     `ctx.access()` 继续只把 kernel + ctx 交给 `AccessCx`，`ctx.tool(path)` 通过 runtime plane
+     lookup，不给 concrete tool 暴露裸 registry/audit；
+   - 先让现有 `KernelContext` 内部持有 `Arc<Runtime<AppContextFactory>>`，保持迁移可分提交；
+     不增加 alias/fallback。后续 host/session 迁移完成后直接删除 `KernelContext`；
+   - 最小提交顺序：先移动 plane primitive 与测试；再引入 `Runtime<C>` 和 fallible app
+     bootstrap；再切换 context/tool 调用点并删除全局 plane；每个提交都必须独立通过完整 gate；
+   - 完成线：production 没有 builtin registration panic；kernel 不持有 plane；app context
+     concrete type仍由 app 定义；所有 typed tool lookup/dispatch 使用当前 runtime 实例；
+   - 验证：`cargo test -p loong-runtime`、`cargo test -p loong-app tools::plane`、
+     `cargo test -p loong-app kernel_routed_file_read`、`cargo clippy --workspace --all-targets
+     --all-features -- -D warnings`、workspace default/all-feature tests、architecture check、
+     `git diff --check`。
+
+2. 继续迁移剩余 legacy side-effect tools：
    - `write` / `edit` 的 context/kernel-routed 调用已走 typed plane；无 context direct
      `write` / `edit` 已 fail closed；
    - `config.import` 的 kernel-routed/context-aware `plan` / `discover` / `plan_many` /
@@ -70,7 +91,7 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      `cargo check -p loong-access -p loong-kernel -p loong-app -p loong` 和
      `git diff --check`。
 
-2. 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration：
+3. 将 config-driven policies 全部迁入 app bootstrap 的 typed policy registration：
    - app bootstrap 从 config 构造 concrete policy value；
    - policy 注册使用 `PolicyPipeline::push_policy` / `push_pre_policy` /
      `push_fallback_policy`；

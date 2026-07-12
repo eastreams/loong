@@ -120,6 +120,10 @@ execution audit 留在 `ToolInvocation::invoke(payload)` 的 grant consumption �
   并用 private slot registry + path index 存 tool。`ToolPath` 也是 app-plane-local segment
   path；dotted provider/catalog names 只在 app plane 边界转换，不能把 plane-local path
   提回 contracts/core。
+- builtin plane 目前仍由全局 `OnceLock` 构造，而且注册失败通过 `expect` 变成 production
+  panic。这不是可保留的初始化语义，也不能用 lint suppression 掩盖。unified runtime 必须
+  持有构造完成的 plane，并让 builtin/plugin 注册错误在 runtime bootstrap 返回的 `Result`
+  中显式传播；迁移后删除 `app_tool_plane()` 全局入口。
 - `crates/kernel/src/kernel.rs` 已经用 generic `grant_action` 授权 tool invocation action；
   但 `record_tool_invocation` 仍记录 contracts 里的 typed-tool event。目标是让 kernel
   只记录 sink 能理解的通用事件，tool execution outcome 的 schema 归 app runtime。

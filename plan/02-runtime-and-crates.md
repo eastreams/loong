@@ -18,19 +18,23 @@ channel/webhook/Feishu/QQ bot、`TurnExecutionService`、conversation/provider b
 - `Context`：统一执行上下文。每个 session 有自己的 `Context` 状态实例；tool/action/policy
   都通过该 concrete context 类型或它派生出的 facade 观察本次执行状态。
 
+`Runtime` 的 concrete owner 放在 `loong-runtime`，但统一 context 的 concrete 类型仍由 app
+定义。`loong-runtime::Runtime<C>` 只通过 `ContextFactory` 泛型认识 context，因此不依赖
+`loong-app`；app 使用 `Runtime<AppContextFactory>`。这同时允许 runtime 固定拥有
+`Kernel<C>` 与 `ToolPlane<C>`，而不会把 app config/session concrete types 下沉到基础 crate。
+
 目标形状示意。示例类型名用于表达 ownership，不要求最终代码逐字使用这些名字：
 
 ```rust
-pub struct Runtime {
-    governance: GovernanceRuntime,
-    tools: ToolPlane,
+pub struct Runtime<C: ContextFactory> {
+    kernel: Kernel<C>,
+    tools: ToolPlane<C>,
     sessions: SessionRuntime,
     agents: AgentRuntime,
-    config: RuntimeConfigSnapshot,
 }
 
 pub struct Context {
-    runtime: Arc<Runtime>,
+    runtime: Arc<Runtime<AppContextFactory>>,
     session: SessionId,
     agent: AgentId,
     allowed_caps: CapabilitySet,
@@ -90,15 +94,18 @@ impl ToolInvocation<'_> {
 
 1. 新增统一 runtime owner，并给它一个高信号注释：它是 app runtime owner，不是 kernel
    wrapper，不是 TUI state。
-2. 把 `RuntimeKernelOwner` 并入或替换为 runtime owner。它现在只包 `KernelContext`，统一
+2. `loong-runtime` 接管 generic `ToolPlane<C>` storage/path/action primitive；builtin concrete
+   tool 仍由 app bootstrap 注册，registration error 由 runtime 构造返回，不在全局
+   `OnceLock` 中 panic。
+3. 把 `RuntimeKernelOwner` 并入或替换为 runtime owner。它现在只包 `KernelContext`，统一
    runtime 出现后没有独立边界价值。
-3. session 创建时同时创建自己的 `Context`，并把 session id、agent id、initial effective
+4. session 创建时同时创建自己的 `Context`，并把 session id、agent id、initial effective
    caps、tool namespace view 和 runtime reference 绑定进去。
-4. `CliTurnRuntime`、`TurnExecutionService`、conversation/provider binding、channel state
+5. `CliTurnRuntime`、`TurnExecutionService`、conversation/provider binding、channel state
    逐步从 `KernelContext` 改为 `Runtime` / `Context`。
-5. `KernelContext` 在迁移期只允许作为 runtime 内部字段；所有 host surface 都改用
+6. `KernelContext` 在迁移期只允许作为 runtime 内部字段；所有 host surface 都改用
    `Runtime` / `Context` 后删除该类型，而不是改名留 alias。
-6. 外部调用点不再手动 `kernel_ctx.execution_context(...)`；统一从 session context 或它的
+7. 外部调用点不再手动 `kernel_ctx.execution_context(...)`；统一从 session context 或它的
    child context 进入 tool/access/action/policy。
 
 
