@@ -278,7 +278,8 @@ async fn load_manual_compaction_window_snapshot(
     };
     let execution_context = kernel_ctx.memory_core_execution_context()?;
     let outcome = kernel_ctx
-        .kernel
+        .runtime
+        .kernel()
         .execute_memory_core(
             kernel_ctx.pack_id(),
             &kernel_ctx.token,
@@ -435,7 +436,8 @@ pub(super) async fn load_history_lines(
         let caps = BTreeSet::from([Capability::MemoryRead]);
         let execution_context = ctx.memory_core_execution_context()?;
         let outcome = ctx
-            .kernel
+            .runtime
+            .kernel()
             .execute_memory_core(
                 ctx.pack_id(),
                 &ctx.token,

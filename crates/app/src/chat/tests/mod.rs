@@ -89,7 +89,10 @@ fn test_kernel_context_with_memory(
         .expect("issue memory test token");
 
     crate::KernelContext {
-        kernel: Arc::new(kernel),
+        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+            kernel,
+            crate::tools::plane::test_builtin_tool_plane(),
+        )),
         pack,
         token,
         tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
@@ -311,7 +314,10 @@ fn build_kernel_context_with_window_outcome(
         .expect("issue token");
 
     let ctx = crate::KernelContext {
-        kernel: Arc::new(kernel),
+        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+            kernel,
+            crate::tools::plane::test_builtin_tool_plane(),
+        )),
         token: token.clone(),
         pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
         tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),

@@ -84,7 +84,10 @@ async fn execute_tool_core_with_test_context(
         .issue_token("test-pack", "test-agent", 60)
         .map_err(|error| format!("kernel token issue failed: {error}"))?;
     let kernel_ctx = crate::KernelContext {
-        kernel: Arc::new(kernel),
+        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+            kernel,
+            crate::tools::plane::test_builtin_tool_plane(),
+        )),
         pack,
         token,
         tool_runtime_config: config.clone(),

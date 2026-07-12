@@ -111,7 +111,6 @@ pub use catalog::{
 pub(crate) use feishu::{DeferredFeishuCardUpdate, drain_deferred_feishu_card_updates};
 pub(crate) use kernel_adapter::register_kernel_tools;
 pub use kernel_adapter::{KernelToolAdapter, MvpToolAdapter};
-pub(crate) use plane::app_tool_plane;
 pub use security_posture::{
     BrowserSurfaceSecurityPosture, ShellExecutionSecurityPosture, SkillsSecurityPosture,
     SkillsSecurityPostureProbeFailure, ToolFileRootSecurityPosture, WebFetchSecurityPosture,
@@ -516,7 +515,8 @@ pub(crate) async fn execute_kernel_tool_request(
 
         let caps = required_capabilities_for_request(&request);
         let outcome = ctx
-            .kernel
+            .runtime
+            .kernel()
             .execute_tool_core(
                 ctx.pack_id(),
                 &ctx.token,

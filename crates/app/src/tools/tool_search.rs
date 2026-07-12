@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use loong_contracts::{Capability, ToolCoreOutcome, ToolCoreRequest};
+use loong_runtime::runtime::Runtime;
 use serde_json::Value;
 use serde_json::json;
 
@@ -53,6 +54,7 @@ pub(super) struct ToolSearchRanking {
 }
 
 pub(super) fn execute_tool_search_tool_with_config(
+    runtime: Option<&Runtime<crate::context::AppContextFactory>>,
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
@@ -90,15 +92,16 @@ pub(super) fn execute_tool_search_tool_with_config(
         .cloned()
         .and_then(|value| serde_json::from_value::<BTreeSet<Capability>>(value).ok());
     let visible_tool_view = search_tool_view_from_payload(payload, config);
-    let searchable_entries = runtime_tool_search_entries(config, Some(&visible_tool_view), false)
-        .into_iter()
-        .filter(|entry| {
-            tool_search_entry_is_capability_usable(
-                entry.canonical_name.as_str(),
-                granted_capabilities.as_ref(),
-            )
-        })
-        .collect::<Vec<_>>();
+    let searchable_entries =
+        runtime_tool_search_entries(runtime, config, Some(&visible_tool_view), false)
+            .into_iter()
+            .filter(|entry| {
+                tool_search_entry_is_capability_usable(
+                    entry.canonical_name.as_str(),
+                    granted_capabilities.as_ref(),
+                )
+            })
+            .collect::<Vec<_>>();
     let exact_match_entry = exact_tool_id.as_ref().and_then(|exact_tool_id| {
         let direct_tool_id = super::direct_tool_name_for_hidden_tool(exact_tool_id);
         let direct_tool_id = direct_tool_id.map(str::to_owned);

@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use loong_runtime::tool_plane::ToolPath;
+use loong_runtime::{runtime::Runtime, tool_plane::ToolPath};
 use serde::{Deserialize, Serialize};
 
 use super::runtime_config;
@@ -25,11 +25,14 @@ pub struct DiscoverableToolSurfaceSummary {
     pub hidden_surfaces: Vec<super::ToolSurfaceState>,
 }
 
-pub fn tool_registry() -> Vec<ToolRegistryEntry> {
-    tool_registry_with_config(Some(runtime_config::get_tool_runtime_config()))
+pub fn tool_registry(
+    runtime: Option<&Runtime<crate::context::AppContextFactory>>,
+) -> Vec<ToolRegistryEntry> {
+    tool_registry_with_config(runtime, Some(runtime_config::get_tool_runtime_config()))
 }
 
 pub fn tool_registry_with_config(
+    runtime: Option<&Runtime<crate::context::AppContextFactory>>,
     config: Option<&runtime_config::ToolRuntimeConfig>,
 ) -> Vec<ToolRegistryEntry> {
     let default_runtime_config;
@@ -46,7 +49,7 @@ pub fn tool_registry_with_config(
     let mut entries = Vec::new();
 
     for state in visible_direct_states {
-        let summary = agent_visible_summary_for_direct_state(&state);
+        let summary = agent_visible_summary_for_direct_state(runtime, &state);
         let registry_entry = ToolRegistryEntry {
             name: state.surface_id,
             description: format!("{} {}", summary, state.usage_guidance),
@@ -58,27 +61,43 @@ pub fn tool_registry_with_config(
     entries
 }
 
-pub fn capability_snapshot() -> String {
-    capability_snapshot_with_config(runtime_config::get_tool_runtime_config())
+pub fn capability_snapshot(runtime: Option<&Runtime<crate::context::AppContextFactory>>) -> String {
+    capability_snapshot_with_config(runtime, runtime_config::get_tool_runtime_config())
 }
 
-pub fn capability_snapshot_with_config(config: &runtime_config::ToolRuntimeConfig) -> String {
-    capability_snapshot_for_view_with_config(&runtime_tool_view_for_runtime_config(config), config)
+pub fn capability_snapshot_with_config(
+    runtime: Option<&Runtime<crate::context::AppContextFactory>>,
+    config: &runtime_config::ToolRuntimeConfig,
+) -> String {
+    capability_snapshot_for_view_with_config(
+        runtime,
+        &runtime_tool_view_for_runtime_config(config),
+        config,
+    )
 }
 
-pub fn capability_snapshot_for_view(view: &ToolView) -> String {
-    capability_snapshot_for_view_with_config(view, runtime_config::get_tool_runtime_config())
+pub fn capability_snapshot_for_view(
+    runtime: Option<&Runtime<crate::context::AppContextFactory>>,
+    view: &ToolView,
+) -> String {
+    capability_snapshot_for_view_with_config(
+        runtime,
+        view,
+        runtime_config::get_tool_runtime_config(),
+    )
 }
 
 pub(crate) fn capability_snapshot_for_view_with_config(
+    runtime: Option<&Runtime<crate::context::AppContextFactory>>,
     view: &ToolView,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> String {
     let visible_direct_states = tool_surface::visible_direct_tool_states_for_view(view);
-    capability_snapshot_for_direct_states_with_config(view, config, visible_direct_states)
+    capability_snapshot_for_direct_states_with_config(runtime, view, config, visible_direct_states)
 }
 
 pub(crate) fn capability_snapshot_for_direct_states_with_config(
+    runtime: Option<&Runtime<crate::context::AppContextFactory>>,
     _view: &ToolView,
     config: &runtime_config::ToolRuntimeConfig,
     visible_direct_states: Vec<super::ToolSurfaceState>,
@@ -88,7 +107,8 @@ pub(crate) fn capability_snapshot_for_direct_states_with_config(
         "Available tools:".to_owned(),
     ];
 
-    let visible_direct_lines = render_visible_direct_tool_lines(visible_direct_states.as_slice());
+    let visible_direct_lines =
+        render_visible_direct_tool_lines(runtime, visible_direct_states.as_slice());
     lines.extend(visible_direct_lines);
 
     lines.push("Guidelines:".to_owned());
@@ -104,11 +124,14 @@ pub(crate) fn capability_snapshot_for_direct_states_with_config(
     lines.join("\n")
 }
 
-fn render_visible_direct_tool_lines(states: &[super::ToolSurfaceState]) -> Vec<String> {
+fn render_visible_direct_tool_lines(
+    runtime: Option<&Runtime<crate::context::AppContextFactory>>,
+    states: &[super::ToolSurfaceState],
+) -> Vec<String> {
     let mut lines = Vec::new();
 
     for state in states {
-        let summary = agent_visible_summary_for_direct_state(state);
+        let summary = agent_visible_summary_for_direct_state(runtime, state);
         let line = format!(
             "- {}: {} {}",
             state.surface_id, summary, state.usage_guidance
@@ -119,15 +142,18 @@ fn render_visible_direct_tool_lines(states: &[super::ToolSurfaceState]) -> Vec<S
     lines
 }
 
-fn agent_visible_summary_for_direct_state(state: &super::ToolSurfaceState) -> String {
+fn agent_visible_summary_for_direct_state(
+    runtime: Option<&Runtime<crate::context::AppContextFactory>>,
+    state: &super::ToolSurfaceState,
+) -> String {
     // Concrete typed tools own their action-level summary. The app surface keeps
     // usage guidance because it describes prompt/orchestration behavior, not the
     // tool's payload or side effect boundary.
     let typed_path = ToolPath::from(state.surface_id.as_str());
-    super::app_tool_plane()
-        .spec(&typed_path)
+    runtime
+        .and_then(|runtime| runtime.tools().spec(&typed_path).ok())
         .map(|spec| spec.description.clone())
-        .unwrap_or_else(|_| state.prompt_snippet.clone())
+        .unwrap_or_else(|| state.prompt_snippet.clone())
 }
 
 fn render_active_tool_guideline_lines(

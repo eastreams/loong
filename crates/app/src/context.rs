@@ -19,7 +19,10 @@ use loong_kernel::{
         FsRenameAllowPolicy, FsResolvePathAllowPolicy, FsWriteAllowPolicy,
     },
 };
-use loong_runtime::tool_plane::{ToolInvocationAction, ToolPath};
+use loong_runtime::{
+    runtime::Runtime,
+    tool_plane::{ToolInvocationAction, ToolPath},
+};
 use serde_json::Value;
 
 use crate::config::{AuditMode, LoongConfig};
@@ -43,7 +46,7 @@ pub const DEFAULT_TOKEN_TTL_S: u64 = 86400;
 /// threading new `KernelContext` uses.
 #[derive(Clone)]
 pub struct KernelContext {
-    pub kernel: Arc<Kernel<AppContextFactory>>,
+    pub runtime: Arc<Runtime<AppContextFactory>>,
     pub pack: Arc<VerticalPackManifest>,
     pub token: CapabilityToken,
     pub tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig,
@@ -66,10 +69,10 @@ impl KernelContext {
         tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
     ) -> Result<AppExecutionContext<'a>, String> {
         AppExecutionContext::new(
-            self.kernel.as_ref(),
+            self.runtime.as_ref(),
             self.pack.as_ref(),
             &self.token,
-            self.kernel.now_epoch_s(),
+            self.runtime.kernel().now_epoch_s(),
             plane,
             tier,
             request_parameters,
@@ -111,7 +114,7 @@ impl ContextFactory for AppContextFactory {
 }
 
 pub struct AppExecutionContext<'a> {
-    kernel: &'a Kernel<AppContextFactory>,
+    runtime: &'a Runtime<AppContextFactory>,
     pack: &'a VerticalPackManifest,
     token: &'a CapabilityToken,
     effective_capabilities: BTreeSet<Capability>,
@@ -124,6 +127,15 @@ pub struct AppExecutionContext<'a> {
 }
 
 impl<'a> AppExecutionContext<'a> {
+    /// Return the runtime that owns every live registry used by this context.
+    ///
+    /// App orchestration may project tool metadata from this owner, but tools
+    /// still enter governed execution through `tool` or `access`.
+    #[must_use]
+    pub(crate) fn runtime(&self) -> &'a Runtime<AppContextFactory> {
+        self.runtime
+    }
+
     #[must_use]
     pub fn plane(&self) -> ExecutionPlane {
         self.plane
@@ -135,7 +147,7 @@ impl<'a> AppExecutionContext<'a> {
     }
 
     pub(crate) fn new(
-        kernel: &'a Kernel<AppContextFactory>,
+        runtime: &'a Runtime<AppContextFactory>,
         pack: &'a VerticalPackManifest,
         token: &'a CapabilityToken,
         now_epoch_s: u64,
@@ -145,7 +157,7 @@ impl<'a> AppExecutionContext<'a> {
         tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
     ) -> Result<Self, String> {
         Self::new_with_effective_capabilities(
-            kernel,
+            runtime,
             pack,
             token,
             token.allowed_capabilities.clone(),
@@ -158,7 +170,7 @@ impl<'a> AppExecutionContext<'a> {
     }
 
     pub(crate) fn new_with_effective_capabilities(
-        kernel: &'a Kernel<AppContextFactory>,
+        runtime: &'a Runtime<AppContextFactory>,
         pack: &'a VerticalPackManifest,
         token: &'a CapabilityToken,
         effective_capabilities: BTreeSet<Capability>,
@@ -177,7 +189,7 @@ impl<'a> AppExecutionContext<'a> {
         // authority while KernelInvocationContext still exposes original token
         // evidence for audit.
         Ok(Self {
-            kernel,
+            runtime,
             pack,
             token,
             effective_capabilities,
@@ -208,7 +220,7 @@ impl<'a> AppExecutionContext<'a> {
         // Tool-to-tool and tool-to-access paths inherit runtime references but
         // must not regain capabilities removed by the parent context.
         Ok(Self {
-            kernel: self.kernel,
+            runtime: self.runtime,
             pack: self.pack,
             token: self.token,
             effective_capabilities,
@@ -226,11 +238,11 @@ impl<'a> AppExecutionContext<'a> {
         // AccessCx construction is localized at the concrete context boundary.
         // Tool/action code should call ctx.access() rather than rethreading the
         // kernel reference or recreating access facades by hand.
-        AccessCx::new(self.kernel, self)
+        AccessCx::new(self.runtime.kernel(), self)
     }
 
     pub(crate) fn tool(&self, path: ToolPath) -> Result<ToolInvocation<'_, 'a>, ToolPlaneError> {
-        let spec = crate::tools::app_tool_plane().spec(&path)?;
+        let spec = self.runtime.tools().spec(&path)?;
         let mut required_capabilities = BTreeSet::from([Capability::InvokeTool]);
         required_capabilities.extend(spec.required_capabilities.iter().copied());
 
@@ -298,7 +310,8 @@ impl ToolInvocation<'_, '_> {
         let action = ToolInvocationAction::new(self.path, required_capabilities, payload);
         let grant = self
             .ctx
-            .kernel
+            .runtime
+            .kernel()
             .grant_action(
                 tool_ctx.pack.pack_id.as_str(),
                 tool_ctx.token,
@@ -315,12 +328,15 @@ impl ToolInvocation<'_, '_> {
             .copied()
             .collect::<BTreeSet<_>>();
 
-        match crate::tools::app_tool_plane()
+        match self
+            .ctx
+            .runtime
+            .tools()
             .invoke(grant.granted, &tool_ctx)
             .await
         {
             Ok(output) => {
-                tool_ctx.kernel.record_tool_invocation(
+                tool_ctx.runtime.kernel().record_tool_invocation(
                     &tool_ctx,
                     audit_path,
                     &audit_caps,
@@ -345,7 +361,7 @@ impl ToolInvocation<'_, '_> {
                     ToolPlaneError::Execution(reason) => ("execution", reason.clone()),
                     _ => ("tool_plane", error.to_string()),
                 };
-                tool_ctx.kernel.record_tool_invocation(
+                tool_ctx.runtime.kernel().record_tool_invocation(
                     &tool_ctx,
                     audit_path,
                     &audit_caps,
@@ -602,9 +618,11 @@ fn bootstrap_kernel_context_with_audit_sink(
     let token = kernel
         .issue_token(EMBEDDED_RUNTIME_PACK_ID, agent_id, ttl_s)
         .map_err(|e| format!("kernel token issue failed: {e}"))?;
+    let tools = crate::tools::plane::builtin_tool_plane()
+        .map_err(|error| format!("builtin tool registration failed: {error}"))?;
 
     Ok(KernelContext {
-        kernel: Arc::new(kernel),
+        runtime: Arc::new(Runtime::new(kernel, tools)),
         pack,
         token,
         tool_runtime_config: tool_rt,
@@ -702,11 +720,11 @@ mod tests {
         let narrowed = BTreeSet::from([Capability::MemoryRead]);
 
         let execution_context = AppExecutionContext::new_with_effective_capabilities(
-            context.kernel.as_ref(),
+            context.runtime.as_ref(),
             context.pack.as_ref(),
             &context.token,
             narrowed.clone(),
-            context.kernel.now_epoch_s(),
+            context.runtime.kernel().now_epoch_s(),
             ExecutionPlane::Memory,
             PlaneTier::Core,
             None,
@@ -730,11 +748,11 @@ mod tests {
         let widened = BTreeSet::from([Capability::MemoryRead, Capability::ControlRead]);
 
         let error = match AppExecutionContext::new_with_effective_capabilities(
-            context.kernel.as_ref(),
+            context.runtime.as_ref(),
             context.pack.as_ref(),
             &context.token,
             widened,
-            context.kernel.now_epoch_s(),
+            context.runtime.kernel().now_epoch_s(),
             ExecutionPlane::Memory,
             PlaneTier::Core,
             None,
@@ -754,11 +772,11 @@ mod tests {
     fn narrow_capabilities_rejects_capabilities_removed_by_parent_context() {
         let context = bootstrap_test_kernel_context("test-agent", 60).expect("bootstrap context");
         let parent = AppExecutionContext::new_with_effective_capabilities(
-            context.kernel.as_ref(),
+            context.runtime.as_ref(),
             context.pack.as_ref(),
             &context.token,
             BTreeSet::from([Capability::MemoryRead]),
-            context.kernel.now_epoch_s(),
+            context.runtime.kernel().now_epoch_s(),
             ExecutionPlane::Memory,
             PlaneTier::Core,
             None,
@@ -894,7 +912,8 @@ mod tests {
             .memory_core_execution_context()
             .expect("build memory execution context");
         let outcome = context
-            .kernel
+            .runtime
+            .kernel()
             .execute_memory_core(
                 context.pack_id(),
                 &context.token,

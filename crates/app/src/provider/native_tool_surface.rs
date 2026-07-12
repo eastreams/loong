@@ -1,3 +1,4 @@
+use loong_runtime::runtime::Runtime;
 use serde_json::{Value, json};
 
 use crate::config::{LoongConfig, ProviderKind, ProviderWireApi};
@@ -75,6 +76,7 @@ impl ProviderToolSurface {
 
     pub(super) fn materialize(
         self,
+        runtime: Option<&Runtime<crate::context::AppContextFactory>>,
         config: &LoongConfig,
         tool_view: &ToolView,
         tool_runtime_config: &tools::runtime_config::ToolRuntimeConfig,
@@ -82,9 +84,9 @@ impl ProviderToolSurface {
         let runtime_tool_view =
             tools::runtime_tool_view_with_runtime_config(&config.tools, tool_runtime_config);
         let base_tool_definitions = if tool_view == &runtime_tool_view {
-            tools::provider_tool_definitions_with_config(Some(tool_runtime_config))
+            tools::provider_tool_definitions_with_config(runtime, Some(tool_runtime_config))
         } else {
-            tools::try_provider_tool_definitions_for_view(tool_view)?
+            tools::try_provider_tool_definitions_for_view(runtime, tool_view)?
         };
 
         let request_tool_definitions = self
@@ -95,6 +97,7 @@ impl ProviderToolSurface {
         };
         let direct_states = self.web_surface_mode.visible_direct_tool_states(tool_view);
         let capability_snapshot = tools::capability_snapshot_for_direct_states_with_config(
+            runtime,
             tool_view,
             tool_runtime_config,
             direct_states,

@@ -50,7 +50,10 @@ fn build_provider_failover_test_kernel_context(
         .expect("issue test token");
     (
         KernelContext {
-            kernel: Arc::new(kernel),
+            runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+                kernel,
+                crate::tools::plane::test_builtin_tool_plane(),
+            )),
             pack,
             token,
             tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
@@ -1769,6 +1772,7 @@ fn http_request_contains_header(request: &str, expected_name: &str, expected_val
 #[test]
 fn turn_body_includes_tool_schema_and_auto_choice() {
     let config = test_config(ProviderConfig::default());
+    let (kernel_ctx, _audit) = build_provider_failover_test_kernel_context("tool-schema-agent");
 
     let body = build_turn_request_body(
         &config,
@@ -1776,7 +1780,7 @@ fn turn_body_includes_tool_schema_and_auto_choice() {
         "model-latest",
         CompletionPayloadMode::default_for(&config.provider),
         true,
-        &crate::tools::provider_tool_definitions(),
+        &crate::tools::provider_tool_definitions(Some(kernel_ctx.runtime.as_ref())),
     );
     let tools = body
         .get("tools")
@@ -1840,7 +1844,7 @@ fn anthropic_turn_body_uses_native_messages_shape_and_tool_schema() {
         "claude-3-7-sonnet-latest",
         CompletionPayloadMode::default_for(&config.provider),
         true,
-        &crate::tools::provider_tool_definitions(),
+        &crate::tools::provider_tool_definitions(None),
     );
 
     assert_eq!(body["system"], "system rules");
@@ -1878,7 +1882,7 @@ fn anthropic_turn_body_converts_tool_schema_to_native_format() {
         "claude-test",
         CompletionPayloadMode::default_for(&config.provider),
         true,
-        &crate::tools::provider_tool_definitions(),
+        &crate::tools::provider_tool_definitions(None),
     );
     let tools = body
         .get("tools")
@@ -1939,7 +1943,7 @@ fn anthropic_turn_body_preserves_native_tool_use_and_tool_result_blocks() {
         "claude-test",
         CompletionPayloadMode::default_for(&config.provider),
         true,
-        &crate::tools::provider_tool_definitions(),
+        &crate::tools::provider_tool_definitions(None),
     );
 
     let adapted_messages = body["messages"].as_array().expect("anthropic messages");
@@ -1999,7 +2003,7 @@ fn opencode_zen_gemini_turn_body_uses_google_generate_content_shape() {
         runtime_contract,
         capability,
         true,
-        &crate::tools::provider_tool_definitions(),
+        &crate::tools::provider_tool_definitions(None),
         false,
     );
 
@@ -2083,7 +2087,7 @@ fn opencode_zen_gemini_turn_body_preserves_native_tool_result_blocks() {
         runtime_contract,
         capability,
         true,
-        &crate::tools::provider_tool_definitions(),
+        &crate::tools::provider_tool_definitions(None),
         false,
     );
 
@@ -2250,7 +2254,7 @@ fn bedrock_turn_body_uses_native_tool_blocks_and_tool_config() {
         "anthropic.claude-3-7-sonnet-20250219-v1:0",
         CompletionPayloadMode::default_for(&config.provider),
         true,
-        &crate::tools::provider_tool_definitions(),
+        &crate::tools::provider_tool_definitions(None),
     );
 
     let adapted_messages = body["messages"].as_array().expect("bedrock messages");
@@ -2345,7 +2349,7 @@ fn responses_turn_body_keeps_tool_schema_with_responses_input_shape() {
         "gpt-5.1-mini",
         CompletionPayloadMode::default_for(&config.provider),
         true,
-        &crate::tools::provider_tool_definitions(),
+        &crate::tools::provider_tool_definitions(None),
     );
 
     assert_eq!(body["input"][0]["role"], "user");
@@ -2373,7 +2377,12 @@ fn responses_openai_turn_body_includes_native_web_search_tool_when_enabled() {
         crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(&config, None);
     let provider_tool_surface = super::native_tool_surface::provider_tool_surface(&config);
     let surface_plan = provider_tool_surface
-        .materialize(&config, &crate::tools::runtime_tool_view(), &runtime_config)
+        .materialize(
+            None,
+            &config,
+            &crate::tools::runtime_tool_view(),
+            &runtime_config,
+        )
         .expect("provider tool surface plan");
     let request_surface = surface_plan.request;
 
@@ -2432,7 +2441,12 @@ fn responses_openai_turn_body_omits_native_web_search_tool_when_disabled() {
         crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(&config, None);
     let provider_tool_surface = super::native_tool_surface::provider_tool_surface(&config);
     let surface_plan = provider_tool_surface
-        .materialize(&config, &crate::tools::runtime_tool_view(), &runtime_config)
+        .materialize(
+            None,
+            &config,
+            &crate::tools::runtime_tool_view(),
+            &runtime_config,
+        )
         .expect("provider tool surface plan");
     let request_surface = surface_plan.request;
 
@@ -2469,7 +2483,12 @@ fn responses_non_openai_turn_body_keeps_function_web_query_mode() {
         crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(&config, None);
     let provider_tool_surface = super::native_tool_surface::provider_tool_surface(&config);
     let surface_plan = provider_tool_surface
-        .materialize(&config, &crate::tools::runtime_tool_view(), &runtime_config)
+        .materialize(
+            None,
+            &config,
+            &crate::tools::runtime_tool_view(),
+            &runtime_config,
+        )
         .expect("provider tool surface plan");
     let request_surface = surface_plan.request;
 
@@ -2521,7 +2540,12 @@ fn provider_request_tool_definitions_include_native_web_search_for_openai_respon
         crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(&config, None);
     let provider_tool_surface = super::native_tool_surface::provider_tool_surface(&config);
     let surface_plan = provider_tool_surface
-        .materialize(&config, &crate::tools::runtime_tool_view(), &runtime_config)
+        .materialize(
+            None,
+            &config,
+            &crate::tools::runtime_tool_view(),
+            &runtime_config,
+        )
         .expect("provider tool surface plan");
     let request_surface = surface_plan.request;
     let prompt_surface = surface_plan.prompt;
@@ -2577,7 +2601,7 @@ fn responses_turn_body_preserves_native_function_call_roundtrip_items() {
         "gpt-5.1-mini",
         CompletionPayloadMode::default_for(&config.provider),
         true,
-        &crate::tools::provider_tool_definitions(),
+        &crate::tools::provider_tool_definitions(None),
     );
 
     let input = body["input"].as_array().expect("responses input array");

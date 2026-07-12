@@ -519,7 +519,8 @@ async fn persist_memory_window(
     let caps = BTreeSet::from([Capability::MemoryWrite]);
     let execution_context = kernel_ctx.memory_core_execution_context()?;
     let outcome = kernel_ctx
-        .kernel
+        .runtime
+        .kernel()
         .execute_memory_core(
             kernel_ctx.pack_id(),
             &kernel_ctx.token,
@@ -566,7 +567,8 @@ async fn load_stage_envelope(
             &tool_runtime_config,
         )?;
         let outcome = ctx
-            .kernel
+            .runtime
+            .kernel()
             .execute_memory_core(
                 ctx.pack_id(),
                 &ctx.token,

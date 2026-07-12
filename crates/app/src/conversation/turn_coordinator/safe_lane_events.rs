@@ -13,7 +13,7 @@ pub(super) async fn emit_safe_lane_event<R: ConversationRuntime + ?Sized>(
     }
     let _ = persist_conversation_event(runtime, session_id, event_name, payload, binding).await;
     if let Some(ctx) = binding.kernel_context() {
-        let _ = ctx.kernel.record_audit_event(
+        let _ = ctx.runtime.kernel().record_audit_event(
             Some(ctx.agent_id()),
             AuditEventKind::PlaneInvoked {
                 pack_id: ctx.pack_id().to_owned(),

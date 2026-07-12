@@ -113,9 +113,11 @@ async fn execute_file_read_with_test_context(
     let token = kernel
         .issue_token("test-pack", "test-agent", 60)
         .map_err(|error| format!("issue token failed: {error}"))?;
-    let kernel = Arc::new(kernel);
     let kernel_ctx = crate::KernelContext {
-        kernel: kernel.clone(),
+        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+            kernel,
+            crate::tools::plane::test_builtin_tool_plane(),
+        )),
         pack,
         token,
         tool_runtime_config: config.clone(),
@@ -203,8 +205,8 @@ async fn execute_request_via_kernel_tool_registry_with_capabilities(
     outcome.map(|outcome| (outcome, audit))
 }
 
-// TODO(runtime-owner): remove this exception when the test harness receives a
-// fallibly constructed runtime/tool plane instead of the global builtin plane.
+// Invalid fixture setup may panic; production bootstrap propagates every
+// registration and token error instead.
 #[allow(clippy::expect_used)]
 async fn execute_request_via_kernel_tool_registry_with_capabilities_result(
     request: ToolCoreRequest,
@@ -247,7 +249,10 @@ async fn execute_request_via_kernel_tool_registry_with_capabilities_result(
         .issue_token("test-pack", "test-agent", 60)
         .expect("issue test token");
     let kernel_ctx = crate::KernelContext {
-        kernel: Arc::new(kernel),
+        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+            kernel,
+            crate::tools::plane::test_builtin_tool_plane(),
+        )),
         pack,
         token,
         tool_runtime_config: config.clone(),
@@ -934,7 +939,10 @@ async fn context_direct_write_uses_typed_tool_registry() {
         .issue_token("test-pack", "test-agent", 60)
         .expect("issue token");
     let kernel_ctx = crate::KernelContext {
-        kernel: Arc::new(kernel),
+        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+            kernel,
+            crate::tools::plane::test_builtin_tool_plane(),
+        )),
         pack,
         token,
         tool_runtime_config: config.clone(),

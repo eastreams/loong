@@ -141,7 +141,7 @@ mod tests {
             .kernel_context()
             .expect("owned kernel binding should expose kernel context");
         assert_eq!(roundtrip_ctx.token, kernel_ctx.token);
-        assert!(Arc::ptr_eq(&roundtrip_ctx.kernel, &kernel_ctx.kernel));
+        assert!(Arc::ptr_eq(&roundtrip_ctx.runtime, &kernel_ctx.runtime));
     }
 
     #[test]

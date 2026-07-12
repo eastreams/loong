@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use loong_contracts::{ExecutionPlane, PlaneTier};
+use loong_runtime::runtime::Runtime;
 use serde_json::{Value, json};
 
 use super::runtime_binding::ProviderRuntimeBinding;
@@ -136,6 +137,7 @@ fn build_base_prompt_projection_with_tool_runtime_config(
         };
 
     build_base_prompt_projection_from_prompt_sources(
+        None,
         config,
         include_system_prompt,
         tool_view,
@@ -198,6 +200,7 @@ async fn build_base_prompt_projection_with_binding_and_tool_runtime_config(
     };
 
     build_base_prompt_projection_from_prompt_sources(
+        binding.kernel_context().map(|ctx| ctx.runtime.as_ref()),
         config,
         include_system_prompt,
         tool_view,
@@ -209,6 +212,7 @@ async fn build_base_prompt_projection_with_binding_and_tool_runtime_config(
 }
 
 fn build_base_prompt_projection_from_prompt_sources(
+    runtime: Option<&Runtime<crate::context::AppContextFactory>>,
     config: &LoongConfig,
     include_system_prompt: bool,
     tool_view: &ToolView,
@@ -239,6 +243,7 @@ fn build_base_prompt_projection_from_prompt_sources(
     let runtime_self_continuity = (!continuity.is_empty()).then_some(continuity);
 
     let prompt_fragments = build_prompt_fragments_from_prompt_sources(
+        runtime,
         config,
         tool_view,
         tool_runtime_config,
@@ -271,6 +276,7 @@ fn build_base_prompt_projection_from_prompt_sources(
 }
 
 fn build_prompt_fragments_from_prompt_sources(
+    runtime: Option<&Runtime<crate::context::AppContextFactory>>,
     config: &LoongConfig,
     tool_view: &ToolView,
     tool_runtime_config: &tools::runtime_config::ToolRuntimeConfig,
@@ -282,10 +288,11 @@ fn build_prompt_fragments_from_prompt_sources(
     let system_text = system_prompt.trim().to_owned();
     let provider_tool_surface = super::native_tool_surface::provider_tool_surface(config);
     let prompt_surface = provider_tool_surface
-        .materialize(config, tool_view, tool_runtime_config)
+        .materialize(runtime, config, tool_view, tool_runtime_config)
         .map(|surface_plan| surface_plan.prompt)
         .unwrap_or_else(|_| super::native_tool_surface::ProviderToolPromptSurface {
             capability_snapshot: tools::capability_snapshot_for_view_with_config(
+                runtime,
                 tool_view,
                 tool_runtime_config,
             ),

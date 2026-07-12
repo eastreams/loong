@@ -239,10 +239,10 @@ impl ConversationTurnMiddleware for SystemPromptToolViewTurnMiddleware {
         mut assembled: AssembledConversationContext,
         runtime_tool_view: &ToolView,
         requested_tool_view: &ToolView,
-        _binding: ConversationRuntimeBinding<'_>,
+        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<AssembledConversationContext> {
         if include_system_prompt && requested_tool_view != runtime_tool_view {
-            apply_tool_view_to_system_prompt(&mut assembled, requested_tool_view);
+            apply_tool_view_to_system_prompt(&mut assembled, requested_tool_view, binding);
         }
         Ok(assembled)
     }
@@ -316,10 +316,12 @@ pub(crate) fn apply_system_prompt_addition(
 fn apply_tool_view_to_system_prompt(
     assembled: &mut AssembledConversationContext,
     tool_view: &ToolView,
+    binding: ConversationRuntimeBinding<'_>,
 ) {
     seed_prompt_fragments_from_context(assembled);
 
-    let capability_snapshot = crate::tools::capability_snapshot_for_view(tool_view);
+    let runtime = binding.kernel_context().map(|ctx| ctx.runtime.as_ref());
+    let capability_snapshot = crate::tools::capability_snapshot_for_view(runtime, tool_view);
     let capability_fragment_index = assembled
         .prompt_fragments
         .iter()
@@ -367,7 +369,7 @@ fn apply_tool_view_to_system_prompt(
         let Some(snapshot_start) = content.find("[available_tools]") else {
             continue;
         };
-        let snapshot = crate::tools::capability_snapshot_for_view(tool_view);
+        let snapshot = crate::tools::capability_snapshot_for_view(runtime, tool_view);
 
         let prefix = content[..snapshot_start].trim_end();
         let rewritten = if prefix.is_empty() {

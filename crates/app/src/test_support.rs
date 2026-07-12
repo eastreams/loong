@@ -14,6 +14,7 @@ use loong_kernel::{
         FsRenameAllowPolicy, FsResolvePathAllowPolicy, FsWriteAllowPolicy,
     },
 };
+use loong_runtime::runtime::Runtime;
 
 use crate::context::{AppContextFactory, KernelContext};
 use crate::conversation::{
@@ -213,7 +214,11 @@ impl TurnTestHarness {
             .expect("issue token");
 
         let ctx = KernelContext {
-            kernel: Arc::new(kernel),
+            runtime: Arc::new(Runtime::new(
+                kernel,
+                crate::tools::plane::builtin_tool_plane()
+                    .expect("builtin tool registration should succeed"),
+            )),
             pack,
             token,
             tool_runtime_config: tool_config,

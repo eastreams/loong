@@ -350,7 +350,7 @@ async fn run_telegram_channel_with_context(
     let resolved = context.resolved.clone();
     let batch_config = context.config.clone();
     let batch_kernel_ctx = Arc::new(crate::KernelContext {
-        kernel: kernel_ctx.kernel.clone(),
+        runtime: kernel_ctx.runtime.clone(),
         pack: kernel_ctx.pack.clone(),
         token: kernel_ctx.token.clone(),
         tool_runtime_config: kernel_ctx.tool_runtime_config.clone(),
@@ -1937,7 +1937,7 @@ async fn run_matrix_channel_with_context(
                 let resolved = context.resolved.clone();
                 let config = context.config.clone();
                 let batch_kernel_ctx = Arc::new(crate::KernelContext {
-                    kernel: kernel_ctx.kernel.clone(),
+                    runtime: kernel_ctx.runtime.clone(),
                     pack: kernel_ctx.pack.clone(),
                     token: kernel_ctx.token.clone(),
                     tool_runtime_config: kernel_ctx.tool_runtime_config.clone(),

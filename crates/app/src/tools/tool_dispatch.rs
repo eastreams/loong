@@ -82,7 +82,9 @@ pub(crate) fn execute_tool_core_with_config_and_observability(
         let config = effective_config.as_ref().unwrap_or(config);
 
         match canonical_name.as_str() {
-            "tool.search" => tool_search::execute_tool_search_tool_with_config(request, config),
+            "tool.search" => {
+                tool_search::execute_tool_search_tool_with_config(None, request, config)
+            }
             "tool.invoke" => tool_lease::execute_tool_invoke_tool_with_config(request, config),
             "read" | "write" | "edit" | "bash" | "web" | "browse" | "memory" => {
                 super::routing::execute_direct_tool_core_with_config(request, config)
@@ -213,7 +215,11 @@ pub(crate) async fn execute_tool_core_with_config_and_context(
         let config = effective_config.as_ref().unwrap_or(config);
 
         match canonical_name.as_str() {
-            "tool.search" => tool_search::execute_tool_search_tool_with_config(request, config),
+            "tool.search" => tool_search::execute_tool_search_tool_with_config(
+                Some(ctx.runtime()),
+                request,
+                config,
+            ),
             "tool.invoke" => tool_lease::execute_tool_invoke_tool_with_config(request, config),
             "config.import" => {
                 // Kernel-routed config.import must fail closed in the

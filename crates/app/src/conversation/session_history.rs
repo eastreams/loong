@@ -364,7 +364,8 @@ pub(crate) async fn load_assistant_contents_from_session_window_detailed(
             .memory_core_execution_context()
             .map_err(AssistantHistoryLoadError::kernel_request_failed)?;
         let outcome = ctx
-            .kernel
+            .runtime
+            .kernel()
             .execute_memory_core(
                 ctx.pack_id(),
                 &ctx.token,

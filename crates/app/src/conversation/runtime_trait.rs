@@ -502,7 +502,8 @@ where
             let request = memory::build_append_turn_request(session_id, role, content);
             let caps = BTreeSet::from([Capability::MemoryWrite]);
             let execution_context = ctx.memory_core_execution_context()?;
-            ctx.kernel
+            ctx.runtime
+                .kernel()
                 .execute_memory_core(
                     ctx.pack_id(),
                     &ctx.token,

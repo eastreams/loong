@@ -489,7 +489,10 @@ mod tests {
                 .issue_token("autonomy-policy-test-pack", "autonomy-policy-agent", 60)
                 .expect("issue token");
             KernelContext {
-                kernel: Arc::new(kernel),
+                runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+                    kernel,
+                    crate::tools::plane::test_builtin_tool_plane(),
+                )),
                 token: token.clone(),
                 pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
                 tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),

@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use loong_contracts::Capability;
 use loong_core::policy::engine::PolicyEngine;
 use loong_kernel::PolicyPipeline;
-use loong_runtime::tool_plane::{ToolInvocationAction, ToolPath};
+use loong_runtime::tool_plane::{ToolInvocationAction, ToolPath, ToolPlane};
 use serde_json::json;
 
 use super::ToolInvocationAllowPolicy;
@@ -36,7 +36,8 @@ async fn app_policy_allows_registered_tool_invocation_after_capability_gate() {
 #[cfg(feature = "tool-file")]
 #[test]
 fn builtin_tool_plane_exposes_registered_file_paths() {
-    let paths = super::app_tool_plane().registered_paths();
+    let plane = super::test_builtin_tool_plane();
+    let paths = plane.registered_paths();
 
     assert!(paths.contains(&ToolPath::from("read")));
     assert!(paths.contains(&ToolPath::from("write")));

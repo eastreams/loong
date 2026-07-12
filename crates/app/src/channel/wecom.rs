@@ -371,7 +371,7 @@ async fn run_wecom_serve_session(
     let mut ping_timer = tokio::time::interval(ping_interval);
     ping_timer.tick().await;
     let provider_ctx = Arc::new(KernelContext {
-        kernel: kernel_ctx.kernel.clone(),
+        runtime: kernel_ctx.runtime.clone(),
         pack: kernel_ctx.pack.clone(),
         token: kernel_ctx.token.clone(),
         tool_runtime_config: kernel_ctx.tool_runtime_config.clone(),

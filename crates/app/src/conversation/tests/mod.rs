@@ -1806,7 +1806,8 @@ async fn provider_messages_with_kernel_binding(
         )
         .expect("build memory execution context");
     let outcome = kernel_ctx
-        .kernel
+        .runtime
+        .kernel()
         .execute_memory_core(
             kernel_ctx.pack_id(),
             &kernel_ctx.token,
@@ -1890,7 +1891,10 @@ fn test_kernel_context_with_memory(
         .expect("issue memory test token");
 
     KernelContext {
-        kernel: Arc::new(kernel),
+        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+            kernel,
+            crate::tools::plane::test_builtin_tool_plane(),
+        )),
         pack,
         token,
         tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
@@ -8993,7 +8997,10 @@ async fn handle_turn_with_runtime_safe_lane_plan_path_does_not_parallelize_fast_
         .issue_token("test-pack", "test-agent", 3600)
         .expect("issue token");
     let kernel_ctx = KernelContext {
-        kernel: Arc::new(kernel),
+        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+            kernel,
+            crate::tools::plane::test_builtin_tool_plane(),
+        )),
         token: token.clone(),
         pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
         tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
@@ -9519,7 +9526,10 @@ async fn handle_turn_with_runtime_safe_lane_plan_replans_after_transient_tool_fa
         .issue_token("test-pack", "test-agent", 3600)
         .expect("issue token");
     let ctx = KernelContext {
-        kernel: Arc::new(kernel),
+        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+            kernel,
+            crate::tools::plane::test_builtin_tool_plane(),
+        )),
         token: token.clone(),
         pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
         tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
@@ -9728,7 +9738,10 @@ async fn handle_turn_with_runtime_safe_lane_backpressure_guard_blocks_retry_stor
         .issue_token("test-pack", "test-agent", 3600)
         .expect("issue token");
     let ctx = KernelContext {
-        kernel: Arc::new(kernel),
+        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+            kernel,
+            crate::tools::plane::test_builtin_tool_plane(),
+        )),
         token: token.clone(),
         pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
         tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
@@ -9864,7 +9877,10 @@ async fn handle_turn_with_runtime_safe_lane_verify_non_retryable_failure_skips_r
         .issue_token("test-pack", "test-agent", 3600)
         .expect("issue token");
     let ctx = KernelContext {
-        kernel: Arc::new(kernel),
+        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+            kernel,
+            crate::tools::plane::test_builtin_tool_plane(),
+        )),
         token: token.clone(),
         pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
         tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
@@ -10097,7 +10113,10 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_forces_no_replan() 
         .issue_token("test-pack", "test-agent", 3600)
         .expect("issue token");
     let ctx = KernelContext {
-        kernel: Arc::new(kernel),
+        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+            kernel,
+            crate::tools::plane::test_builtin_tool_plane(),
+        )),
         token: token.clone(),
         pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
         tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
@@ -10327,7 +10346,10 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_requests_extended_h
         .issue_token("test-pack", "test-agent", 3600)
         .expect("issue token");
     let ctx = KernelContext {
-        kernel: Arc::new(kernel),
+        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+            kernel,
+            crate::tools::plane::test_builtin_tool_plane(),
+        )),
         token: token.clone(),
         pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
         tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
@@ -10508,7 +10530,10 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_does_not_reuse_sqli
         .issue_token("test-pack", "test-agent", 3600)
         .expect("issue token");
     let ctx = KernelContext {
-        kernel: Arc::new(kernel),
+        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+            kernel,
+            crate::tools::plane::test_builtin_tool_plane(),
+        )),
         token: token.clone(),
         pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
         tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
@@ -10685,7 +10710,10 @@ async fn handle_turn_with_runtime_safe_lane_replans_failed_subgraph_only() {
         .issue_token("test-pack", "test-agent", 3600)
         .expect("issue token");
     let ctx = KernelContext {
-        kernel: Arc::new(kernel),
+        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+            kernel,
+            crate::tools::plane::test_builtin_tool_plane(),
+        )),
         token: token.clone(),
         pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
         tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
@@ -14098,7 +14126,10 @@ async fn turn_engine_tool_execution_error_is_marked_retryable() {
         .expect("issue token");
 
     let ctx = KernelContext {
-        kernel: Arc::new(kernel),
+        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+            kernel,
+            crate::tools::plane::test_builtin_tool_plane(),
+        )),
         token: token.clone(),
         pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
         tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
@@ -14287,7 +14318,10 @@ async fn turn_engine_executes_known_tool_with_kernel() {
         .expect("issue token");
 
     let ctx = KernelContext {
-        kernel: Arc::new(kernel),
+        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+            kernel,
+            crate::tools::plane::test_builtin_tool_plane(),
+        )),
         token: token.clone(),
         pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
         tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
@@ -14410,7 +14444,10 @@ async fn turn_engine_truncates_oversized_tool_payload_summary() {
         .expect("issue token");
 
     let ctx = KernelContext {
-        kernel: Arc::new(kernel),
+        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+            kernel,
+            crate::tools::plane::test_builtin_tool_plane(),
+        )),
         token: token.clone(),
         pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
         tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
@@ -14542,7 +14579,10 @@ async fn turn_engine_keeps_discovery_shaped_payloads_intact_for_followup_compact
         .expect("issue token");
 
     let ctx = KernelContext {
-        kernel: Arc::new(kernel),
+        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+            kernel,
+            crate::tools::plane::test_builtin_tool_plane(),
+        )),
         token: token.clone(),
         pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
         tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
@@ -15619,7 +15659,10 @@ async fn turn_engine_rejects_legacy_external_skill_invoke_runtime_tool() {
         .expect("issue token");
 
     let ctx = KernelContext {
-        kernel: Arc::new(kernel),
+        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+            kernel,
+            crate::tools::plane::test_builtin_tool_plane(),
+        )),
         token: token.clone(),
         pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
         tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
@@ -15703,7 +15746,10 @@ async fn turn_engine_injects_browser_scope_into_kernel_request() {
         .expect("issue token");
 
     let ctx = KernelContext {
-        kernel: Arc::new(kernel),
+        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+            kernel,
+            crate::tools::plane::test_builtin_tool_plane(),
+        )),
         token: token.clone(),
         pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
         tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
@@ -15810,7 +15856,10 @@ async fn turn_engine_execute_turn_denied_without_capability() {
         .expect("issue token");
 
     let ctx = KernelContext {
-        kernel: Arc::new(kernel),
+        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+            kernel,
+            crate::tools::plane::test_builtin_tool_plane(),
+        )),
         token: token.clone(),
         pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
         tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
@@ -15974,7 +16023,10 @@ fn build_kernel_context_with_window_turns(
         .expect("issue token");
 
     let ctx = KernelContext {
-        kernel: Arc::new(kernel),
+        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+            kernel,
+            crate::tools::plane::test_builtin_tool_plane(),
+        )),
         token: token.clone(),
         pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
         tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
@@ -16063,7 +16115,10 @@ fn build_kernel_context_with_window_turn_sequence(
         .expect("issue token");
 
     let ctx = KernelContext {
-        kernel: Arc::new(kernel),
+        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+            kernel,
+            crate::tools::plane::test_builtin_tool_plane(),
+        )),
         token: token.clone(),
         pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
         tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
@@ -16107,7 +16162,10 @@ fn build_kernel_context_with_window_error(
         .expect("issue token");
 
     let ctx = KernelContext {
-        kernel: Arc::new(kernel),
+        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+            kernel,
+            crate::tools::plane::test_builtin_tool_plane(),
+        )),
         token: token.clone(),
         pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
         tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
@@ -16151,7 +16209,10 @@ fn build_kernel_context_with_raw_window_payload(
         .expect("issue token");
 
     let ctx = KernelContext {
-        kernel: Arc::new(kernel),
+        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+            kernel,
+            crate::tools::plane::test_builtin_tool_plane(),
+        )),
         token: token.clone(),
         pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
         tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
@@ -16195,7 +16256,10 @@ fn build_kernel_context_with_compaction_conflict(
         .expect("issue token");
 
     let ctx = KernelContext {
-        kernel: Arc::new(kernel),
+        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+            kernel,
+            crate::tools::plane::test_builtin_tool_plane(),
+        )),
         token: token.clone(),
         pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
         tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
@@ -16241,7 +16305,10 @@ fn build_kernel_context_with_incomplete_compaction_snapshot(
         .expect("issue token");
 
     let ctx = KernelContext {
-        kernel: Arc::new(kernel),
+        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+            kernel,
+            crate::tools::plane::test_builtin_tool_plane(),
+        )),
         token: token.clone(),
         pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
         tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
@@ -19546,7 +19613,10 @@ async fn handle_turn_with_runtime_child_session_injects_runtime_narrowing_into_k
         .issue_token("test-pack", "test-agent", 3600)
         .expect("issue token");
     let kernel_ctx = KernelContext {
-        kernel: Arc::new(kernel),
+        runtime: Arc::new(loong_runtime::runtime::Runtime::new(
+            kernel,
+            crate::tools::plane::test_builtin_tool_plane(),
+        )),
         token: token.clone(),
         pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
         tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
@@ -23484,7 +23554,7 @@ async fn handle_turn_with_runtime_delegate_async_preserves_kernel_binding_in_spa
         .expect("spawn request should carry owned governed binding");
     assert_eq!(child_kernel_ctx.token, expected_kernel_ctx.token);
     assert!(
-        Arc::ptr_eq(&child_kernel_ctx.kernel, &expected_kernel_ctx.kernel),
+        Arc::ptr_eq(&child_kernel_ctx.runtime, &expected_kernel_ctx.runtime),
         "spawned child should inherit the same kernel instance"
     );
     assert_eq!(

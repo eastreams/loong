@@ -137,18 +137,23 @@ async fn mvp_memory_adapter_routes_through_kernel() {
     };
 
     let caps = BTreeSet::from([Capability::MemoryRead]);
+    let runtime = loong_runtime::runtime::Runtime::new(
+        kernel,
+        crate::tools::plane::test_builtin_tool_plane(),
+    );
     let execution_context = crate::context::AppExecutionContext::new(
-        &kernel,
+        &runtime,
         &pack,
         &token,
-        kernel.now_epoch_s(),
+        runtime.kernel().now_epoch_s(),
         loong_contracts::ExecutionPlane::Memory,
         loong_contracts::PlaneTier::Core,
         None,
         &crate::tools::runtime_config::ToolRuntimeConfig::default(),
     )
     .expect("build memory execution context");
-    let outcome = kernel
+    let outcome = runtime
+        .kernel()
         .execute_memory_core(
             "test-pack",
             &token,

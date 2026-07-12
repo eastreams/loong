@@ -271,8 +271,12 @@ pub async fn request_turn_in_view_with_retry_progress(
     let tool_runtime_config =
         crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
     let provider_tool_surface = native_tool_surface::provider_tool_surface(config);
-    let surface_plan =
-        provider_tool_surface.materialize(config, tool_view, &tool_runtime_config)?;
+    let surface_plan = provider_tool_surface.materialize(
+        binding.kernel_context().map(|ctx| ctx.runtime.as_ref()),
+        config,
+        tool_view,
+        &tool_runtime_config,
+    )?;
     let tool_definitions = surface_plan.request.tool_definitions;
     request_across_model_candidates(
         &config.provider,
@@ -355,8 +359,12 @@ pub async fn request_turn_streaming_in_view_with_retry_progress(
     let tool_runtime_config =
         crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
     let provider_tool_surface = native_tool_surface::provider_tool_surface(config);
-    let surface_plan =
-        provider_tool_surface.materialize(config, tool_view, &tool_runtime_config)?;
+    let surface_plan = provider_tool_surface.materialize(
+        binding.kernel_context().map(|ctx| ctx.runtime.as_ref()),
+        config,
+        tool_view,
+        &tool_runtime_config,
+    )?;
     let tool_definitions = surface_plan.request.tool_definitions;
     request_across_model_candidates(
         &config.provider,
