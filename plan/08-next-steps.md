@@ -25,8 +25,8 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      迁移完成线必须先把这些 I/O 抽到 access-backed port 或等价的 granted action run
      边界；
    - `config.import` 的迁移先拆 filesystem primitive，再迁 tool 入口。当前 `loong-access::fs`
-     已有 read/write/atomic-write/copy-file/remove-file/rename/read-dir/glob/content-search/
-     inspect-path/create-dir-all，仍不足以覆盖 skills lifecycle 的全部副作用：
+     已有 read/write/atomic-write/copy-file/remove-file/remove-dir-all/rename/read-dir/glob/
+     content-search/inspect-path/create-dir-all，仍不足以覆盖 skills lifecycle 的全部副作用：
      - discovery / plan：已有受治理的 file read、一层 directory scan、canonical/path
        metadata 基础；read-only modes 的 context-aware path 已接入；
      - simple apply：已用 access 读取现有 output config、渲染 config、写最终 output
@@ -48,10 +48,10 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      未迁移分支，不能再扩回已迁移 modes；
    - 当前 block 在 skills lifecycle，而不是 config import payload 解析：
      `skills.install` / `skills.remove` 仍是 legacy `ToolCoreOutcome` helper，内部有
-     staging/copy/archive/extract/index/remove 等 direct filesystem side effects；rename 已有
-     governed fs primitive，但还不能独自迁完 install/remove。先迁出 skills lifecycle 的
-     typed/access 边界，再让 config import 的 skills bridge 通过 `ctx.tool(...).invoke(...)`
-     或等价 access-backed boundary 调用；
+     staging/copy/archive/extract/index/remove 等 direct filesystem side effects；rename 和
+     remove-dir-all 已有 governed fs primitive，但还不能独自迁完 install/remove。先迁出
+     skills lifecycle 的 typed/access 边界，再让 config import 的 skills bridge 通过
+     `ctx.tool(...).invoke(...)` 或等价 access-backed boundary 调用；
    - `glob.search` / `content.search` 的 kernel-routed 调用已注册为 typed read-family
      path；无 context direct 调用已 fail closed，旧 app-local search helper 已删除；
    - 逐个工具迁移：concrete tool 只解析 payload、调用 `ctx.access()` / `ctx.tool()`、
