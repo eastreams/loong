@@ -51,7 +51,7 @@ pub struct ToolInvocation<'ctx> {
 }
 
 impl ToolInvocation<'_> {
-    pub fn with_caps_override(self, caps: CapabilitySet) -> Result<Self, ToolLookupError>;
+    pub fn with_capabilities_override(self, caps: CapabilitySet) -> Result<Self, ToolLookupError>;
     pub fn with_trusted_overlay(self, overlay: TrustedInvocationOverlay) -> Self;
     pub async fn invoke(self, payload: Value) -> Result<Value, ToolError>;
 }
