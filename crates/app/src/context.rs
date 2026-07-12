@@ -412,13 +412,13 @@ fn fs_access_root_view(
     config: &crate::tools::runtime_config::ToolRuntimeConfig,
 ) -> Result<(PathBuf, Vec<PathBuf>), String> {
     let allowed_roots = collect_allowed_roots(config)?;
-    let Some(primary_root) = allowed_roots.first().cloned() else {
+    let Some(default_resolution_root) = allowed_roots.first().cloned() else {
         return Err("filesystem access requires at least one allowed root".to_owned());
     };
     let resolution_root = config
         .path_resolution_root()
         .map(Path::to_path_buf)
-        .unwrap_or(primary_root);
+        .unwrap_or(default_resolution_root);
     Ok((resolution_root, allowed_roots))
 }
 

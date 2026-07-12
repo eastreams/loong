@@ -13,14 +13,16 @@ pub(super) fn resolve_safe_file_path_with_config(
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<PathBuf, String> {
     let allowed_roots = collect_allowed_roots(config)?;
-    let primary_root = allowed_roots
+    // Authorization uses the whole allowed_roots set. This root is only the
+    // legacy default for resolving relative paths and formatting denial text.
+    let fallback_root = allowed_roots
         .first()
         .cloned()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     let resolution_root = config
         .path_resolution_root()
         .map(Path::to_path_buf)
-        .unwrap_or_else(|| primary_root.clone());
+        .unwrap_or_else(|| fallback_root.clone());
 
     let candidate = Path::new(raw);
     let combined = if candidate.is_absolute() {
@@ -29,7 +31,7 @@ pub(super) fn resolve_safe_file_path_with_config(
         resolution_root.join(candidate)
     };
     let normalized = super::normalize_without_fs(&combined);
-    resolve_path_within_allowed_roots(&allowed_roots, &primary_root, &normalized)
+    resolve_path_within_allowed_roots(&allowed_roots, &fallback_root, &normalized)
 }
 
 pub(super) fn resolve_safe_directory_path_with_config(
@@ -95,7 +97,7 @@ fn collect_allowed_roots(
 
 fn resolve_path_within_allowed_roots(
     allowed_roots: &[PathBuf],
-    primary_root: &Path,
+    fallback_root: &Path,
     normalized: &Path,
 ) -> Result<PathBuf, String> {
     if normalized.exists() {
@@ -106,7 +108,7 @@ fn resolve_path_within_allowed_roots(
             )
         })?;
         let canonical = dunce::simplified(&canonical).to_path_buf();
-        ensure_path_within_allowed_roots(allowed_roots, primary_root, &canonical)?;
+        ensure_path_within_allowed_roots(allowed_roots, fallback_root, &canonical)?;
         return Ok(canonical);
     }
 
@@ -118,19 +120,19 @@ fn resolve_path_within_allowed_roots(
         )
     })?;
     let canonical_ancestor = dunce::simplified(&canonical_ancestor).to_path_buf();
-    ensure_path_within_allowed_roots(allowed_roots, primary_root, &canonical_ancestor)?;
+    ensure_path_within_allowed_roots(allowed_roots, fallback_root, &canonical_ancestor)?;
 
     let mut reconstructed = canonical_ancestor;
     for component in suffix {
         reconstructed.push(component);
     }
-    ensure_path_within_allowed_roots(allowed_roots, primary_root, &reconstructed)?;
+    ensure_path_within_allowed_roots(allowed_roots, fallback_root, &reconstructed)?;
     Ok(reconstructed)
 }
 
 fn ensure_path_within_allowed_roots(
     allowed_roots: &[PathBuf],
-    primary_root: &Path,
+    fallback_root: &Path,
     path: &Path,
 ) -> Result<(), String> {
     let normalized_path = dunce::simplified(path);
@@ -144,7 +146,7 @@ fn ensure_path_within_allowed_roots(
     Err(format!(
         "policy_denied: file path {} escapes configured file root {}",
         path.display(),
-        primary_root.display()
+        fallback_root.display()
     ))
 }
 
