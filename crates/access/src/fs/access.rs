@@ -15,7 +15,7 @@ use super::{
     action::{
         FsAtomicWriteAction, FsContentSearchAction, FsContentSearchOptions, FsCopyFileAction,
         FsCreateDirAllAction, FsGlobAction, FsInspectPathAction, FsReadAction, FsReadDirAction,
-        FsRemoveFileAction, FsResolvePathAction, FsWriteAction, FsWriteOptions,
+        FsRemoveFileAction, FsRenameAction, FsResolvePathAction, FsWriteAction, FsWriteOptions,
     },
     content_search::FsContentSearchOutput,
     copy::FsCopyFileOutput,
@@ -26,6 +26,7 @@ use super::{
     path::GrantedPath,
     read_dir::FsReadDirOutput,
     remove::FsRemoveFileOutput,
+    rename::FsRenameOutput,
 };
 
 /// Filesystem access facade.
@@ -216,6 +217,28 @@ where
         path: impl AsRef<Path>,
     ) -> Result<FsRemoveFileOutput, FsAccessError> {
         let action = FsRemoveFileAction::resolve(path, self.ctx.fs_resolution_root())?;
+        let grant = self
+            .policy_engine
+            .grant(self.ctx, action)
+            .await
+            .map_err(AuthorizationError::from)
+            .map_err(FsAccessError::Authorization)?;
+        grant.granted.run(self.ctx).await
+    }
+
+    /// Rename one governed filesystem entry through no-follow path policy.
+    ///
+    /// This is for staged install/update flows that need an entry move rather
+    /// than file-byte copy. Both source and destination are resolved with
+    /// final-component no-follow semantics before policy grants the rename.
+    pub async fn rename_path(
+        self,
+        source: impl AsRef<Path>,
+        destination: impl AsRef<Path>,
+        options: FsWriteOptions,
+    ) -> Result<FsRenameOutput, FsAccessError> {
+        let action =
+            FsRenameAction::resolve(source, destination, self.ctx.fs_resolution_root(), options)?;
         let grant = self
             .policy_engine
             .grant(self.ctx, action)
@@ -645,6 +668,8 @@ pub enum FsAccessError {
     RefuseSymlink { path: PathBuf },
     #[error("file {path} already exists; overwrite is required", path = .path.display())]
     FileExistsRequiresOverwrite { path: PathBuf },
+    #[error("path {path} already exists; overwrite is required", path = .path.display())]
+    PathExistsRequiresOverwrite { path: PathBuf },
     #[error("failed to open file {path} for writing: {source}", path = .path.display())]
     OpenWriteFile {
         path: PathBuf,
@@ -663,6 +688,17 @@ pub enum FsAccessError {
         destination_path = .destination_path.display()
     )]
     CopyFile {
+        source_path: PathBuf,
+        destination_path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(
+        "failed to rename {source_path} to {destination_path}: {source}",
+        source_path = .source_path.display(),
+        destination_path = .destination_path.display()
+    )]
+    RenamePath {
         source_path: PathBuf,
         destination_path: PathBuf,
         #[source]

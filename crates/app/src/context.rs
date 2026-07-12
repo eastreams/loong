@@ -15,7 +15,8 @@ use loong_kernel::{
         FsAtomicWriteAllowPolicy, FsContentSearchAllowPolicy, FsCopyFileAllowPolicy,
         FsCreateDirAllAllowPolicy, FsGlobAllowPolicy, FsInspectPathAllowPolicy, FsReadAllowPolicy,
         FsReadDirAllowPolicy, FsReadFilenameDenyPolicy, FsRemoveFileAllowPolicy,
-        FsRemoveFileAllowedRootsPolicy, FsResolvePathAllowedRootsPolicy, FsWriteAllowPolicy,
+        FsRemoveFileAllowedRootsPolicy, FsRenameAllowPolicy, FsRenameAllowedRootsPolicy,
+        FsResolvePathAllowedRootsPolicy, FsWriteAllowPolicy,
     },
 };
 use serde_json::Value;
@@ -539,7 +540,8 @@ fn bootstrap_kernel_context_with_audit_sink(
     let mut policy = PolicyPipeline::<AppContextFactory>::new_legacy_allow_fallback()
         .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
         .with_policy(FsResolvePathAllowedRootsPolicy)
-        .with_policy(FsRemoveFileAllowedRootsPolicy);
+        .with_policy(FsRemoveFileAllowedRootsPolicy)
+        .with_policy(FsRenameAllowedRootsPolicy);
     if !tool_rt.fs.deny_read_filenames.is_empty() {
         policy.push_policy(FsReadFilenameDenyPolicy::new(
             tool_rt.fs.deny_read_filenames.clone(),
@@ -551,6 +553,7 @@ fn bootstrap_kernel_context_with_audit_sink(
     policy.push_policy(FsCopyFileAllowPolicy);
     policy.push_policy(FsCreateDirAllAllowPolicy);
     policy.push_policy(FsRemoveFileAllowPolicy);
+    policy.push_policy(FsRenameAllowPolicy);
     policy.push_policy(FsInspectPathAllowPolicy);
     policy.push_policy(FsGlobAllowPolicy);
     policy.push_policy(FsReadDirAllowPolicy);

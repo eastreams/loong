@@ -26,7 +26,7 @@ use loong_core::{
 use crate::access::fs::{
     FsAtomicWriteAction, FsContentSearchAction, FsCopyFileAction, FsCreateDirAllAction,
     FsGlobAction, FsInspectPathAction, FsPathPolicyContext, FsReadAction, FsReadDirAction,
-    FsRemoveFileAction, FsResolvePathAction, FsWriteAction,
+    FsRemoveFileAction, FsRenameAction, FsResolvePathAction, FsWriteAction,
 };
 use crate::errors::PolicyError;
 
@@ -493,6 +493,9 @@ pub struct FsCreateDirAllAllowPolicy;
 pub struct FsRemoveFileAllowPolicy;
 
 #[derive(Debug, Default, Clone, Copy)]
+pub struct FsRenameAllowPolicy;
+
+#[derive(Debug, Default, Clone, Copy)]
 pub struct FsInspectPathAllowPolicy;
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -509,6 +512,9 @@ pub struct FsResolvePathAllowedRootsPolicy;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct FsRemoveFileAllowedRootsPolicy;
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct FsRenameAllowedRootsPolicy;
 
 /// Default fs path containment policy.
 ///
@@ -578,6 +584,51 @@ where
             reason: format!(
                 "filesystem path {} escapes allowed filesystem roots [{}]",
                 action.deletion_path().display(),
+                display_path_list(allowed_roots)
+            )
+            .into(),
+        }
+    }
+}
+
+/// Default fs rename containment policy.
+///
+/// Rename uses final-component no-follow path facts for both endpoints. Source
+/// and destination are checked together so staged install flows cannot move an
+/// allowed entry outside governed roots or import an outside entry into them.
+#[async_trait]
+impl<C> Policy<C, FsRenameAction> for FsRenameAllowedRootsPolicy
+where
+    C: ContextFactory + Send + Sync,
+    for<'a> C::Cx<'a>: FsPathPolicyContext,
+{
+    fn name(&self) -> Cow<'static, str> {
+        Cow::Borrowed("fs-rename-allowed-roots")
+    }
+
+    async fn grant(&self, ctx: &C::Cx<'_>, action: &FsRenameAction) -> PolicyGrant {
+        let allowed_roots = ctx.fs_allowed_roots();
+        let source_allowed =
+            resolved_path_starts_with_allowed_root(action.source_path(), allowed_roots);
+        let destination_allowed =
+            resolved_path_starts_with_allowed_root(action.destination_path(), allowed_roots);
+        if source_allowed && destination_allowed {
+            return PolicyGrant {
+                decision: PolicyDecision::Allow,
+                predicate: Some("fs rename source and destination start with allowed roots".into()),
+                reason: "fs rename paths are within allowed roots".into(),
+            };
+        }
+
+        PolicyGrant {
+            decision: PolicyDecision::Deny,
+            predicate: Some(
+                "fs rename source and destination must start with allowed roots".into(),
+            ),
+            reason: format!(
+                "filesystem rename {} -> {} escapes allowed filesystem roots [{}]",
+                action.source_path().display(),
+                action.destination_path().display(),
                 display_path_list(allowed_roots)
             )
             .into(),
@@ -743,6 +794,24 @@ where
             decision: PolicyDecision::Allow,
             predicate: Some("fs.remove_file reached terminal allow policy".into()),
             reason: "filesystem file removal allowed after configured deny policies".into(),
+        }
+    }
+}
+
+#[async_trait]
+impl<C> Policy<C, FsRenameAction> for FsRenameAllowPolicy
+where
+    C: ContextFactory + Send + Sync,
+{
+    fn name(&self) -> Cow<'static, str> {
+        Cow::Borrowed("fs-rename-allow")
+    }
+
+    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &FsRenameAction) -> PolicyGrant {
+        PolicyGrant {
+            decision: PolicyDecision::Allow,
+            predicate: Some("fs.rename reached terminal allow policy".into()),
+            reason: "filesystem rename allowed after configured deny policies".into(),
         }
     }
 }

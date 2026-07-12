@@ -16,6 +16,7 @@ const FS_COPY_FILE_REQUIRED_CAPABILITIES: [Capability; 2] =
     [Capability::FilesystemRead, Capability::FilesystemWrite];
 const FS_CREATE_DIR_ALL_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
 const FS_REMOVE_FILE_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
+const FS_RENAME_PATH_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
 const FS_GLOB_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 const FS_READ_DIR_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 const FS_CONTENT_SEARCH_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
@@ -420,6 +421,99 @@ impl ActionMeta for FsRemoveFileAction {
     }
 }
 
+/// Typed action for renaming one governed filesystem path.
+///
+/// Rename uses final-component no-follow facts for both source and
+/// destination. That lets access move a symlink or staged directory entry as
+/// the entry itself instead of silently turning the final component into the
+/// symlink target during path resolution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsRenameAction {
+    raw_source: PathBuf,
+    raw_destination: PathBuf,
+    source: ResolvedDeletionPath,
+    destination: ResolvedDeletionPath,
+    options: FsWriteOptions,
+}
+
+impl FsRenameAction {
+    pub(in crate::fs) fn resolve(
+        source: impl AsRef<Path>,
+        destination: impl AsRef<Path>,
+        resolution_root: impl AsRef<Path>,
+        options: FsWriteOptions,
+    ) -> Result<Self, super::error::FsActionError> {
+        let raw_source = source.as_ref().to_path_buf();
+        let raw_destination = destination.as_ref().to_path_buf();
+        let source = ResolvedDeletionPath::resolve(&raw_source, resolution_root.as_ref())?;
+        let destination = ResolvedDeletionPath::resolve(&raw_destination, resolution_root)?;
+        Ok(Self {
+            raw_source,
+            raw_destination,
+            source,
+            destination,
+            options,
+        })
+    }
+
+    #[must_use]
+    pub fn raw_source(&self) -> &Path {
+        &self.raw_source
+    }
+
+    #[must_use]
+    pub fn raw_destination(&self) -> &Path {
+        &self.raw_destination
+    }
+
+    #[must_use]
+    pub fn source_path(&self) -> &Path {
+        self.source.path()
+    }
+
+    #[must_use]
+    pub fn destination_path(&self) -> &Path {
+        self.destination.path()
+    }
+
+    #[must_use]
+    pub fn options(&self) -> FsWriteOptions {
+        self.options
+    }
+}
+
+impl ActionMeta for FsRenameAction {
+    fn metadata(&self) -> ActionMetadata<'_> {
+        ActionMetadata {
+            kind: "fs.rename",
+            operation: Cow::Borrowed("rename_path"),
+            required_capabilities: Cow::Borrowed(&FS_RENAME_PATH_REQUIRED_CAPABILITIES),
+        }
+    }
+
+    fn audit_resource(&self) -> Option<Cow<'_, str>> {
+        Some(
+            format!(
+                "{} -> {}",
+                self.source_path().display(),
+                self.destination_path().display()
+            )
+            .into(),
+        )
+    }
+
+    fn payload(&self) -> Cow<'_, Value> {
+        Cow::Owned(json!({
+            "source": self.raw_source.display().to_string(),
+            "destination": self.raw_destination.display().to_string(),
+            "source_path": self.source_path().display().to_string(),
+            "destination_path": self.destination_path().display().to_string(),
+            "create_dirs": self.options.create_dirs,
+            "overwrite": self.options.overwrite,
+        }))
+    }
+}
+
 /// Typed action for observing one governed filesystem path.
 ///
 /// Existence and file-kind metadata leak filesystem state, so inspect is a
@@ -677,6 +771,7 @@ pub enum FsAction {
     CopyFile(FsCopyFileAction),
     CreateDirAll(FsCreateDirAllAction),
     RemoveFile(FsRemoveFileAction),
+    Rename(FsRenameAction),
     InspectPath(FsInspectPathAction),
     Glob(FsGlobAction),
     ReadDir(FsReadDirAction),
@@ -723,6 +818,11 @@ impl FsAction {
     }
 
     #[must_use]
+    pub fn rename_path(action: FsRenameAction) -> Self {
+        Self::Rename(action)
+    }
+
+    #[must_use]
     pub fn inspect_path(path: GrantedPath) -> Self {
         Self::InspectPath(FsInspectPathAction::new(path))
     }
@@ -766,6 +866,7 @@ impl ActionMeta for FsAction {
             Self::CopyFile(action) => action.metadata(),
             Self::CreateDirAll(action) => action.metadata(),
             Self::RemoveFile(action) => action.metadata(),
+            Self::Rename(action) => action.metadata(),
             Self::InspectPath(action) => action.metadata(),
             Self::Glob(action) => action.metadata(),
             Self::ReadDir(action) => action.metadata(),
@@ -781,6 +882,7 @@ impl ActionMeta for FsAction {
             Self::CopyFile(action) => action.audit_resource(),
             Self::CreateDirAll(action) => action.audit_resource(),
             Self::RemoveFile(action) => action.audit_resource(),
+            Self::Rename(action) => action.audit_resource(),
             Self::InspectPath(action) => action.audit_resource(),
             Self::Glob(action) => action.audit_resource(),
             Self::ReadDir(action) => action.audit_resource(),
@@ -796,6 +898,7 @@ impl ActionMeta for FsAction {
             Self::CopyFile(action) => action.payload(),
             Self::CreateDirAll(action) => action.payload(),
             Self::RemoveFile(action) => action.payload(),
+            Self::Rename(action) => action.payload(),
             Self::InspectPath(action) => action.payload(),
             Self::Glob(action) => action.payload(),
             Self::ReadDir(action) => action.payload(),
