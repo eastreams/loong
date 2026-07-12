@@ -10,8 +10,11 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
 1. 继续迁移剩余 legacy side-effect tools：
    - `write` / `edit` 的 context/kernel-routed 调用已走 typed plane；无 context direct
      `write` / `edit` 已 fail closed；
-   - `config.import` 仍未迁入 access-backed action 路径，且仍依赖 `FilePolicyExtension`
-     的迁移期 guard；
+   - `config.import plan` 的 kernel-routed/context-aware 读侧已通过 `ctx.access()` 读取
+     import files、skills artifacts 和可选 output preview config；`discover` / `plan_many` /
+     `recommend_primary` / `merge_profiles` / `map_skills` / `apply` / `apply_selected` /
+     `rollback_last_apply` 仍未迁入 access-backed action 路径，且仍依赖
+     `FilePolicyExtension` 的迁移期 guard；
    - 不要只把 `config.import` 入口注册进 typed plane 来假装迁移：它调用的
      `migration::*` / `config::load` / `config::write` 当前会直接读写、备份、扫描文件。
      迁移完成线必须先把这些 I/O 抽到 access-backed port 或等价的 granted action run
@@ -20,7 +23,8 @@ commit。已完成的步骤从本文件删除，避免后续实现被过期完�
      已有 read/write/copy-file/remove-file/read-dir/glob/content-search/inspect-path/
      create-dir-all，仍不足以覆盖 import 的全部副作用：
      - discovery / plan：已有受治理的 file read、一层 directory scan、canonical/path
-       metadata 基础；后续迁移时仍要把调用点改成显式 I/O 边界；
+       metadata 基础；`plan` 的 context-aware path 已接入，剩余 discovery-family modes
+       仍要改成显式 I/O 边界；
      - apply：已有读取现有 output config、写 output config、创建 state dir、写 backup、
        写 import manifest、可选写 external skills manifest 的基础 primitive；后续仍要把
        `migration::*` / `config::{load,write}` 改成使用这些边界；
