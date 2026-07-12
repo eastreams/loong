@@ -421,26 +421,5 @@ pub(crate) fn app_tool_plane()
     })
 }
 
-// Boundary conversion: legacy kernel/app error surfaces still carry plain
-// strings, but policy-denial detection depends on preserving prefixes such as
-// `policy_denied:` instead of formatting the whole error display.
-#[cfg(test)]
-pub(crate) fn tool_execution_error_reason(error: ToolExecutionError) -> String {
-    match error {
-        ToolExecutionError::Input(input_error) => match input_error {
-            loong_contracts::ToolInputError::MissingField { field } => {
-                format!("missing tool input field `{field}`")
-            }
-            loong_contracts::ToolInputError::InvalidField { field, reason } => {
-                format!("invalid tool input field `{field}`: {reason}")
-            }
-            loong_contracts::ToolInputError::InvalidPayload { reason } => reason,
-            unknown => unknown.to_string(),
-        },
-        ToolExecutionError::Execution { reason } => reason,
-        unknown => unknown.to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests;
