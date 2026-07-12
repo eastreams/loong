@@ -68,6 +68,14 @@ pub(super) fn execute_direct_tool_core_with_config(
         let (_read_route, _direct_request) = route_direct_read_request_for_kernel(request, config)?;
         return Err("read requires kernel access context".to_owned());
     }
+    if request.tool_name == "write" {
+        // Validate the direct-write payload before failing closed. The write
+        // side effect is migrated to the typed app plane and must enter through
+        // AppExecutionContext so it can request ToolInvocationAction and fs
+        // write grants.
+        let _direct_request = route_direct_tool_request(request, config)?;
+        return Err("write requires kernel access context".to_owned());
+    }
 
     let routed_request = route_direct_tool_request(request, config)?;
     execute_discoverable_tool_core_with_config(routed_request, config)

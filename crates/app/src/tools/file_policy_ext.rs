@@ -93,7 +93,7 @@ impl FilePolicyExtension {
     /// 2. Symlink detection — if the path is a symlink whose target cannot be
     ///    canonicalized (dangling), read the link target and check it directly.
     /// 3. Deepest existing ancestor `canonicalize` + missing suffix re-attach —
-    ///    handles `file.write "nested/new.txt"` where one or more trailing
+    ///    handles new `config.import` output paths where one or more trailing
     ///    components do not exist yet.
     /// 4. Pure path normalization — no existing ancestor can be resolved.
     ///
@@ -156,9 +156,9 @@ impl FilePolicyExtension {
         }
 
         // 2. Path doesn't exist — canonicalize the deepest existing ancestor,
-        //    then re-attach the missing suffix. Handles nested new paths such
-        //    as `file.write "nested/new.txt"` and keeps `/var` vs
-        //    `/private/var` aliases aligned on macOS.
+        //    then re-attach the missing suffix. Handles nested new
+        //    config.import output paths and keeps `/var` vs `/private/var`
+        //    aliases aligned on macOS.
         if let Some(reconstructed_path) = reconstruct_from_existing_ancestor(&combined) {
             let normalized_reconstructed = normalize_path_for_policy(reconstructed_path.as_path());
             return !self.path_is_within_allowed_roots(normalized_reconstructed.as_path());
@@ -293,10 +293,10 @@ pub(crate) fn authorize_direct_file_payload(
     payload: &serde_json::Map<String, serde_json::Value>,
     rt: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<(), String> {
-    // Kernel-routed `write` is also migrated, but legacy direct write still
-    // enters this function through `execute_tool_core_with_config`. Do not add
-    // new typed-tool policy here; delete this branch with the legacy direct
-    // write dispatch instead.
+    // Migration-only guard for legacy direct file tools that have not moved to
+    // Access-Action-Policy yet. Do not add typed-tool policy here; migrated
+    // read/write paths must fail closed without context or enter through
+    // ctx.tool(...).invoke(...) and fs access grants.
 
     let policy = FilePolicyExtension::from_runtime_config(rt);
     policy
@@ -315,20 +315,7 @@ mod tests {
         let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
         let payload = json!({"path": "src/main.rs"});
         let payload = payload.as_object().expect("object payload");
-        assert!(ext.authorize_file_payload("file.write", payload).is_ok());
-    }
-
-    #[test]
-    fn allows_search_root_within_file_root() {
-        let root_dir = tempfile::tempdir().expect("tempdir");
-        let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
-        let payload = json!({
-            "root": "src",
-            "pattern": "**/*.rs"
-        });
-        let payload = payload.as_object().expect("object payload");
-
-        assert!(ext.authorize_file_payload("glob.search", payload).is_ok());
+        assert!(ext.authorize_file_payload("file.edit", payload).is_ok());
     }
 
     #[test]
@@ -336,7 +323,7 @@ mod tests {
         let ext = FilePolicyExtension::new(None);
         let payload = json!({"path": "../../etc/passwd"});
         let payload = payload.as_object().expect("object payload");
-        assert!(ext.authorize_file_payload("file.write", payload).is_ok());
+        assert!(ext.authorize_file_payload("file.edit", payload).is_ok());
     }
 
     #[test]

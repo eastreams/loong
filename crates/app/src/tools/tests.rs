@@ -2075,12 +2075,12 @@ fn direct_read_path_mode_requires_kernel_context_after_dropping_incidental_searc
 }
 
 #[test]
-fn direct_write_executes_without_hopping_through_hidden_file_write() {
+fn direct_write_requires_kernel_context_without_writing_file() {
     let root = unique_temp_dir("loong-direct-write");
     std::fs::create_dir_all(&root).expect("create direct-write root");
     let config = test_tool_runtime_config(&root).into_inner();
 
-    let outcome = execute_tool_core_with_config(
+    let error = execute_tool_core_with_config(
         ToolCoreRequest {
             tool_name: "write".to_owned(),
             payload: json!({
@@ -2090,13 +2090,10 @@ fn direct_write_executes_without_hopping_through_hidden_file_write() {
         },
         &config,
     )
-    .expect("direct write should execute");
+    .expect_err("direct write should require kernel context");
 
-    assert_eq!(outcome.payload["tool_name"], "write");
-    assert_eq!(
-        std::fs::read_to_string(root.join("notes.txt")).unwrap(),
-        "hello"
-    );
+    assert_eq!(error, "write requires kernel access context");
+    assert!(!root.join("notes.txt").exists());
 }
 
 #[test]

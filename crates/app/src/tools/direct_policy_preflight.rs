@@ -19,14 +19,14 @@ pub(super) fn run(
         return shell_policy_ext::authorize_direct_shell_payload(payload, config);
     }
 
-    // Kernel-routed `read` and `write` are access-backed typed tools now.
-    // This preflight belongs only to legacy direct dispatch through
-    // `execute_tool_core_with_config`, where write/edit/config.import still
-    // need the old file policy guard until those direct entry points disappear.
+    // Kernel-routed `read` and `write` are access-backed typed tools now. This
+    // preflight belongs only to legacy direct dispatch through
+    // `execute_tool_core_with_config`, where edit/config.import still need the
+    // old file policy guard until those direct entry points disappear.
     // TODO(access-migration): Delete this file branch after the remaining
     // legacy direct file tools move to typed Action/Policy access paths.
     let direct_tool_name = super::direct_tool_name_for_hidden_tool(tool_name).unwrap_or(tool_name);
-    let is_file_tool = matches!(direct_tool_name, "write" | "edit") || tool_name == "config.import";
+    let is_file_tool = direct_tool_name == "edit" || tool_name == "config.import";
     if is_file_tool {
         return file_policy_ext::authorize_direct_file_payload(tool_name, payload, config);
     }
@@ -80,7 +80,7 @@ mod tests {
     }
 
     #[test]
-    fn run_reuses_shared_file_policy_escape_guard() {
+    fn run_reuses_shared_file_policy_escape_guard_for_unmigrated_edit() {
         let root = unique_temp_dir("direct-policy-preflight");
         let config = runtime_config::ToolRuntimeConfig {
             file_root: Some(root),
@@ -88,10 +88,10 @@ mod tests {
         };
 
         let request = ToolCoreRequest {
-            tool_name: "file.write".to_owned(),
+            tool_name: "file.edit".to_owned(),
             payload: json!({
                 "path": "../outside.txt",
-                "content": "blocked"
+                "edits": [{"old_text": "old", "new_text": "new"}]
             }),
         };
 
