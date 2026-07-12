@@ -7,8 +7,8 @@ use loong_contracts::{Capability, ExecutionRoute, HarnessKind};
 use loong_kernel::{
     FixedClock, InMemoryAuditSink, Kernel, PolicyPipeline, VerticalPackManifest,
     policy::{
-        FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsReadAllowPolicy, FsReadFilenameDenyPolicy,
-        FsResolvePathAllowedRootsPolicy, FsWriteAllowPolicy,
+        FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsInspectPathAllowPolicy, FsReadAllowPolicy,
+        FsReadFilenameDenyPolicy, FsResolvePathAllowedRootsPolicy, FsWriteAllowPolicy,
     },
 };
 
@@ -155,6 +155,7 @@ impl TurnTestHarness {
         }
         policy.push_policy(FsReadAllowPolicy);
         policy.push_policy(FsWriteAllowPolicy);
+        policy.push_policy(FsInspectPathAllowPolicy);
         policy.push_policy(FsGlobAllowPolicy);
         policy.push_policy(FsContentSearchAllowPolicy);
         let mut kernel =

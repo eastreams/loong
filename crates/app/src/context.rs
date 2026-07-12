@@ -12,8 +12,8 @@ use loong_kernel::{
     InMemoryAuditSink, JsonlAuditSink, Kernel, KernelAccess, KernelInvocationContext,
     PolicyPipeline, SystemClock, VerticalPackManifest,
     policy::{
-        FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsReadAllowPolicy, FsReadFilenameDenyPolicy,
-        FsResolvePathAllowedRootsPolicy, FsWriteAllowPolicy,
+        FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsInspectPathAllowPolicy, FsReadAllowPolicy,
+        FsReadFilenameDenyPolicy, FsResolvePathAllowedRootsPolicy, FsWriteAllowPolicy,
     },
 };
 use serde_json::Value;
@@ -544,6 +544,7 @@ fn bootstrap_kernel_context_with_audit_sink(
     }
     policy.push_policy(FsReadAllowPolicy);
     policy.push_policy(FsWriteAllowPolicy);
+    policy.push_policy(FsInspectPathAllowPolicy);
     policy.push_policy(FsGlobAllowPolicy);
     policy.push_policy(FsContentSearchAllowPolicy);
     let mut kernel =

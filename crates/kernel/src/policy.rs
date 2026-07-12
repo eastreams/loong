@@ -24,8 +24,8 @@ use loong_core::{
 };
 
 use crate::access::fs::{
-    FsContentSearchAction, FsGlobAction, FsPathPolicyContext, FsReadAction, FsResolvePathAction,
-    FsWriteAction,
+    FsContentSearchAction, FsGlobAction, FsInspectPathAction, FsPathPolicyContext, FsReadAction,
+    FsResolvePathAction, FsWriteAction,
 };
 use crate::errors::PolicyError;
 
@@ -480,6 +480,9 @@ pub struct FsReadAllowPolicy;
 pub struct FsWriteAllowPolicy;
 
 #[derive(Debug, Default, Clone, Copy)]
+pub struct FsInspectPathAllowPolicy;
+
+#[derive(Debug, Default, Clone, Copy)]
 pub struct FsGlobAllowPolicy;
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -612,6 +615,24 @@ where
             decision: PolicyDecision::Allow,
             predicate: Some("fs.write reached terminal allow policy".into()),
             reason: "filesystem write allowed after configured deny policies".into(),
+        }
+    }
+}
+
+#[async_trait]
+impl<C> Policy<C, FsInspectPathAction> for FsInspectPathAllowPolicy
+where
+    C: ContextFactory + Send + Sync,
+{
+    fn name(&self) -> Cow<'static, str> {
+        Cow::Borrowed("fs-inspect-path-allow")
+    }
+
+    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &FsInspectPathAction) -> PolicyGrant {
+        PolicyGrant {
+            decision: PolicyDecision::Allow,
+            predicate: Some("fs.inspect_path reached terminal allow policy".into()),
+            reason: "filesystem path inspection allowed after configured deny policies".into(),
         }
     }
 }

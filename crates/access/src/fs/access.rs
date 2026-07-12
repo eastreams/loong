@@ -13,12 +13,13 @@ use thiserror::Error;
 use super::{
     FsResolutionContext,
     action::{
-        FsContentSearchAction, FsContentSearchOptions, FsGlobAction, FsReadAction,
-        FsResolvePathAction, FsWriteAction, FsWriteOptions,
+        FsContentSearchAction, FsContentSearchOptions, FsGlobAction, FsInspectPathAction,
+        FsReadAction, FsResolvePathAction, FsWriteAction, FsWriteOptions,
     },
     content_search::FsContentSearchOutput,
     error::FsActionError,
     glob::FsGlobOutput,
+    inspect::FsInspectPathOutput,
     path::GrantedPath,
 };
 
@@ -101,6 +102,34 @@ where
         let path = resolve_grant.granted.run(self.ctx).await?;
 
         let action = FsWriteAction::new(path, bytes.into(), options);
+        let grant = self
+            .policy_engine
+            .grant(self.ctx, action)
+            .await
+            .map_err(AuthorizationError::from)
+            .map_err(FsAccessError::Authorization)?;
+        grant.granted.run(self.ctx).await
+    }
+
+    /// Inspect one path through path-resolution policy and inspect policy.
+    ///
+    /// This is for callers that need existence or file-kind observations before
+    /// a later access-backed operation. It intentionally reports only metadata,
+    /// not file contents.
+    pub async fn inspect_path(
+        self,
+        path: impl AsRef<Path>,
+    ) -> Result<FsInspectPathOutput, FsAccessError> {
+        let resolve_action = FsResolvePathAction::resolve(path, self.ctx.fs_resolution_root())?;
+        let resolve_grant = self
+            .policy_engine
+            .grant(self.ctx, resolve_action)
+            .await
+            .map_err(AuthorizationError::from)
+            .map_err(FsAccessError::Authorization)?;
+        let path = resolve_grant.granted.run(self.ctx).await?;
+
+        let action = FsInspectPathAction::new(path);
         let grant = self
             .policy_engine
             .grant(self.ctx, action)

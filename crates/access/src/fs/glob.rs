@@ -119,7 +119,7 @@ pub enum FsPathKind {
 }
 
 impl FsPathKind {
-    fn from_file_type(file_type: std::fs::FileType) -> Option<Self> {
+    pub(in crate::fs) fn from_file_type(file_type: std::fs::FileType) -> Option<Self> {
         if file_type.is_dir() {
             return Some(Self::Directory);
         }

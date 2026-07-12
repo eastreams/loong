@@ -14,6 +14,7 @@ const FS_READ_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRe
 const FS_WRITE_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
 const FS_GLOB_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 const FS_CONTENT_SEARCH_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
+const FS_INSPECT_PATH_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 
 /// Typed action for resolving a raw path into a governed fs path.
 ///
@@ -189,6 +190,48 @@ impl ActionMeta for FsWriteAction {
     }
 }
 
+/// Typed action for observing one governed filesystem path.
+///
+/// Existence and file-kind metadata leak filesystem state, so inspect is a
+/// read-family action even though it does not read file contents. Write actions
+/// keep their own write-authorized checks for overwrite safety.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsInspectPathAction {
+    path: GrantedPath,
+}
+
+impl FsInspectPathAction {
+    #[must_use]
+    pub fn new(path: GrantedPath) -> Self {
+        Self { path }
+    }
+
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        self.path.as_path()
+    }
+}
+
+impl ActionMeta for FsInspectPathAction {
+    fn metadata(&self) -> ActionMetadata<'_> {
+        ActionMetadata {
+            kind: "fs.inspect_path",
+            operation: Cow::Borrowed("inspect_path"),
+            required_capabilities: Cow::Borrowed(&FS_INSPECT_PATH_REQUIRED_CAPABILITIES),
+        }
+    }
+
+    fn audit_resource(&self) -> Option<Cow<'_, str>> {
+        Some(self.path.as_path().display().to_string().into())
+    }
+
+    fn payload(&self) -> Cow<'_, Value> {
+        Cow::Owned(json!({
+            "path": self.path.as_path().display().to_string(),
+        }))
+    }
+}
+
 /// Typed action for listing filesystem paths by glob pattern.
 ///
 /// Like `FsReadAction`, this is a data-leaking filesystem operation and
@@ -350,6 +393,7 @@ impl ActionMeta for FsContentSearchAction {
 pub enum FsAction {
     Read(FsReadAction),
     Write(FsWriteAction),
+    InspectPath(FsInspectPathAction),
     Glob(FsGlobAction),
     ContentSearch(FsContentSearchAction),
 }
@@ -363,6 +407,11 @@ impl FsAction {
     #[must_use]
     pub fn write_file(path: GrantedPath, bytes: Vec<u8>, options: FsWriteOptions) -> Self {
         Self::Write(FsWriteAction::new(path, bytes, options))
+    }
+
+    #[must_use]
+    pub fn inspect_path(path: GrantedPath) -> Self {
+        Self::InspectPath(FsInspectPathAction::new(path))
     }
 
     #[must_use]
@@ -395,6 +444,7 @@ impl ActionMeta for FsAction {
         match self {
             Self::Read(action) => action.metadata(),
             Self::Write(action) => action.metadata(),
+            Self::InspectPath(action) => action.metadata(),
             Self::Glob(action) => action.metadata(),
             Self::ContentSearch(action) => action.metadata(),
         }
@@ -404,6 +454,7 @@ impl ActionMeta for FsAction {
         match self {
             Self::Read(action) => action.audit_resource(),
             Self::Write(action) => action.audit_resource(),
+            Self::InspectPath(action) => action.audit_resource(),
             Self::Glob(action) => action.audit_resource(),
             Self::ContentSearch(action) => action.audit_resource(),
         }
@@ -413,6 +464,7 @@ impl ActionMeta for FsAction {
         match self {
             Self::Read(action) => action.payload(),
             Self::Write(action) => action.payload(),
+            Self::InspectPath(action) => action.payload(),
             Self::Glob(action) => action.payload(),
             Self::ContentSearch(action) => action.payload(),
         }

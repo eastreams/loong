@@ -5,16 +5,18 @@ pub mod action;
 pub mod content_search;
 pub mod error;
 pub mod glob;
+pub mod inspect;
 pub mod path;
 
 pub use access::{FsAccess, FsAccessError, FsReadOutput, FsWriteOutput};
 pub use action::{
-    FsAction, FsContentSearchAction, FsContentSearchOptions, FsGlobAction, FsReadAction,
-    FsResolvePathAction, FsWriteAction, FsWriteOptions,
+    FsAction, FsContentSearchAction, FsContentSearchOptions, FsGlobAction, FsInspectPathAction,
+    FsReadAction, FsResolvePathAction, FsWriteAction, FsWriteOptions,
 };
 pub use content_search::{FsContentSearchMatch, FsContentSearchOutput};
 pub use error::FsActionError;
 pub use glob::{FsGlobOutput, FsPathKind, FsPathMatch};
+pub use inspect::FsInspectPathOutput;
 pub use path::GrantedPath;
 
 /// Filesystem root view required by path resolution.
