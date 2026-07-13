@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::ops::{Deref, DerefMut};
@@ -5,8 +6,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use loong_contracts::{
-    CapabilityToken, ExecutionPlane, GovernedSessionMode, InvocationOutcome, PlaneTier,
-    ToolPlaneError,
+    Capabilities, CapabilityToken, ExecutionPlane, GovernedSessionMode, InvocationOutcome,
+    PlaneTier, ToolPlaneError,
 };
 use loong_core::policy::context::{ContextFactory, PolicyContext};
 use loong_kernel::access::fs::{FsPathPolicyContext, FsResolutionContext};
@@ -78,7 +79,7 @@ pub struct AppContextInner {
     pub(crate) pack: Arc<VerticalPackManifest>,
     pub(crate) token: Arc<CapabilityToken>,
     pub(crate) tool_runtime_config: Arc<crate::tools::runtime_config::ToolRuntimeConfig>,
-    pub(crate) effective_capabilities: BTreeSet<Capability>,
+    pub(crate) effective_capabilities: Capabilities,
     pub(crate) plane: ExecutionPlane,
     pub(crate) tier: PlaneTier,
     pub(crate) request_parameters: Option<Arc<Value>>,
@@ -126,7 +127,7 @@ impl AppContext {
             .pack_manifest(&token.pack_id)
             .map_err(|error| format!("app context pack lookup failed: {error}"))?
             .clone();
-        let effective_capabilities = token.allowed_capabilities.clone();
+        let effective_capabilities = token.allowed_capabilities.iter().copied().collect();
         let (fs_resolution_root, fs_allowed_roots) = fs_access_root_view(&tool_runtime_config)?;
         let session_id = normalize_session_id(session_id.into());
         let _ = crate::conversation::mailbox_for_session(&session_id);
@@ -514,7 +515,7 @@ impl AppContext {
 
     pub(crate) fn for_invocation_with_capabilities(
         &self,
-        effective_capabilities: BTreeSet<Capability>,
+        effective_capabilities: Capabilities,
         plane: ExecutionPlane,
         tier: PlaneTier,
         request_parameters: Option<&Value>,
@@ -562,7 +563,7 @@ impl AppContext {
 
     pub(crate) fn narrow_capabilities(
         &self,
-        effective_capabilities: BTreeSet<Capability>,
+        effective_capabilities: Capabilities,
     ) -> Result<Self, String> {
         if !effective_capabilities.is_subset(&self.effective_capabilities) {
             let missing_capabilities = effective_capabilities
@@ -648,9 +649,10 @@ impl ToolInvocation<'_> {
 
         let mut required_capabilities = BTreeSet::from([Capability::InvokeTool]);
         required_capabilities.extend(tool_capabilities);
+        let effective_capabilities = required_capabilities.iter().copied().collect();
         let tool_ctx = self
             .ctx
-            .narrow_capabilities(required_capabilities.clone())
+            .narrow_capabilities(effective_capabilities)
             .map_err(|error| {
                 loong_kernel::KernelError::ToolPlane(ToolPlaneError::Execution(format!(
                     "policy_denied: {error}"
@@ -730,8 +732,8 @@ impl KernelAccess<AppContextFactory> for AppContext {
 }
 
 impl PolicyContext for AppContext {
-    fn allowed_capabilities(&self) -> &BTreeSet<Capability> {
-        &self.effective_capabilities
+    fn allowed_capabilities(&self) -> Cow<'_, Capabilities> {
+        Cow::Borrowed(&self.effective_capabilities)
     }
 }
 
@@ -1182,7 +1184,7 @@ mod tests {
     #[test]
     fn invocation_context_updates_policy_caps_without_changing_token() {
         let context = bootstrap_test_app_context("test-agent", 60).expect("bootstrap context");
-        let narrowed = BTreeSet::from([Capability::MemoryRead]);
+        let narrowed = Capabilities::from([Capability::MemoryRead]);
 
         let execution_context = context
             .for_invocation_with_capabilities(
@@ -1194,7 +1196,7 @@ mod tests {
             )
             .expect("narrowed execution context should build");
 
-        assert_eq!(execution_context.allowed_capabilities(), &narrowed);
+        assert_eq!(execution_context.allowed_capabilities().as_ref(), &narrowed);
         assert!(
             execution_context
                 .token()
@@ -1207,7 +1209,7 @@ mod tests {
     #[test]
     fn invocation_context_rejects_added_capabilities() {
         let context = bootstrap_test_app_context("test-agent", 60).expect("bootstrap context");
-        let widened = BTreeSet::from([Capability::MemoryRead, Capability::ControlRead]);
+        let widened = Capabilities::from([Capability::MemoryRead, Capability::ControlRead]);
 
         let error = match context.for_invocation_with_capabilities(
             widened,
@@ -1231,14 +1233,14 @@ mod tests {
         let context = bootstrap_test_app_context("test-agent", 60).expect("bootstrap context");
         let parent = context
             .for_invocation_with_capabilities(
-                BTreeSet::from([Capability::MemoryRead]),
+                Capabilities::from([Capability::MemoryRead]),
                 ExecutionPlane::Memory,
                 PlaneTier::Core,
                 None,
                 context.tool_runtime_config(),
             )
             .expect("parent execution context should build");
-        let child_caps = BTreeSet::from([Capability::MemoryRead, Capability::FilesystemRead]);
+        let child_caps = Capabilities::from([Capability::MemoryRead, Capability::FilesystemRead]);
 
         let error = match parent.narrow_capabilities(child_caps) {
             Ok(_) => panic!("child context must not regain parent-removed capabilities"),

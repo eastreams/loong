@@ -1,10 +1,10 @@
 use std::{
-    collections::BTreeSet,
+    borrow::Cow,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
-use loong_contracts::Capability;
+use loong_contracts::{Capabilities, Capability};
 use loong_core::{
     AuthorizationError, PolicyGrantError,
     policy::context::{ContextFactory, PolicyContext},
@@ -22,7 +22,7 @@ use crate::policy::{
 struct AccessCxPolicyContext {
     resolution_root: PathBuf,
     allowed_roots: Vec<PathBuf>,
-    capabilities: BTreeSet<Capability>,
+    capabilities: Capabilities,
 }
 
 impl AccessCxPolicyContext {
@@ -33,14 +33,17 @@ impl AccessCxPolicyContext {
         Self {
             resolution_root: workspace_root,
             allowed_roots: vec![policy_root],
-            capabilities: BTreeSet::from([Capability::FilesystemRead, Capability::FilesystemWrite]),
+            capabilities: Capabilities::from([
+                Capability::FilesystemRead,
+                Capability::FilesystemWrite,
+            ]),
         }
     }
 }
 
 impl PolicyContext for AccessCxPolicyContext {
-    fn allowed_capabilities(&self) -> &BTreeSet<Capability> {
-        &self.capabilities
+    fn allowed_capabilities(&self) -> Cow<'_, Capabilities> {
+        Cow::Borrowed(&self.capabilities)
     }
 }
 

@@ -1,6 +1,7 @@
-use std::collections::BTreeSet;
+use std::borrow::Cow;
 
-use kernel::{Capability, CapabilityToken, KernelInvocationContext, VerticalPackManifest};
+use kernel::{CapabilityToken, KernelInvocationContext, VerticalPackManifest};
+use loong_contracts::Capabilities;
 use loong_core::policy::context::{ContextFactory, PolicyContext};
 use serde_json::Value;
 
@@ -36,8 +37,10 @@ impl<'a> SpecExecutionContext<'a> {
 }
 
 impl PolicyContext for SpecExecutionContext<'_> {
-    fn allowed_capabilities(&self) -> &BTreeSet<Capability> {
-        &self.token.allowed_capabilities
+    fn allowed_capabilities(&self) -> Cow<'_, Capabilities> {
+        // Spec remains a legacy token context with no independently narrowed
+        // authority, so the owned typed view stays at this boundary.
+        Cow::Owned(self.token.allowed_capabilities.iter().copied().collect())
     }
 }
 

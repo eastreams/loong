@@ -1,10 +1,11 @@
 #![allow(clippy::expect_used, clippy::panic)]
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use loong_contracts::{PolicyDecision, PolicyGrant};
+use loong_contracts::{Capabilities, PolicyDecision, PolicyGrant};
 use loong_core::policy::{
     action::ActionMeta,
     context::{ContextFactory, PolicyContext},
@@ -126,8 +127,8 @@ impl TestPolicyContext {
 }
 
 impl PolicyContext for TestPolicyContext {
-    fn allowed_capabilities(&self) -> &BTreeSet<Capability> {
-        &self.token.allowed_capabilities
+    fn allowed_capabilities(&self) -> Cow<'_, Capabilities> {
+        Cow::Owned(self.token.allowed_capabilities.iter().copied().collect())
     }
 }
 

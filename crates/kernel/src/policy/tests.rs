@@ -1,6 +1,8 @@
 use super::*;
 
-use loong_contracts::{ExecutionPlane, PlaneTier};
+use std::borrow::Cow;
+
+use loong_contracts::{Capabilities, ExecutionPlane, PlaneTier};
 use loong_core::PolicyGrantError;
 
 mod permission;
@@ -37,8 +39,8 @@ impl<'a> TestPolicyContext<'a> {
 }
 
 impl PolicyContext for TestPolicyContext<'_> {
-    fn allowed_capabilities(&self) -> &BTreeSet<Capability> {
-        &self.token.allowed_capabilities
+    fn allowed_capabilities(&self) -> Cow<'_, Capabilities> {
+        Cow::Owned(self.token.allowed_capabilities.iter().copied().collect())
     }
 }
 

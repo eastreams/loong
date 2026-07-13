@@ -1,3 +1,6 @@
+use std::borrow::Cow;
+
+use loong_contracts::Capabilities;
 use loong_core::policy::context::{ContextFactory, PolicyContext};
 use loong_kernel::Kernel;
 
@@ -13,10 +16,9 @@ impl ContextFactory for TestContextFactory {
 struct TestContext;
 
 impl PolicyContext for TestContext {
-    fn allowed_capabilities(&self) -> &std::collections::BTreeSet<loong_contracts::Capability> {
-        static EMPTY: std::collections::BTreeSet<loong_contracts::Capability> =
-            std::collections::BTreeSet::new();
-        &EMPTY
+    fn allowed_capabilities(&self) -> Cow<'_, Capabilities> {
+        static EMPTY: Capabilities = Capabilities::new();
+        Cow::Borrowed(&EMPTY)
     }
 }
 

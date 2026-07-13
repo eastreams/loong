@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::BTreeSet,
     future::Future,
     sync::{
@@ -9,7 +10,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use loong_contracts::{Capability, ToolExecutionError, ToolInputError, ToolSpec};
+use loong_contracts::{Capabilities, ToolExecutionError, ToolInputError, ToolSpec};
 use serde_json::{Value, json};
 
 use crate::{
@@ -26,9 +27,9 @@ impl ContextFactory for TestContextFactory {
 struct TestContext;
 
 impl PolicyContext for TestContext {
-    fn allowed_capabilities(&self) -> &BTreeSet<Capability> {
-        static EMPTY: BTreeSet<Capability> = BTreeSet::new();
-        &EMPTY
+    fn allowed_capabilities(&self) -> Cow<'_, Capabilities> {
+        static EMPTY: Capabilities = Capabilities::new();
+        Cow::Borrowed(&EMPTY)
     }
 }
 

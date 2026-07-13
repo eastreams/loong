@@ -1,7 +1,7 @@
-use std::collections::BTreeSet;
+use std::borrow::Cow;
 
 use async_trait::async_trait;
-use loong_contracts::{Capability, GrantId, PermissionResolution, PolicyOutcome, PolicyReport};
+use loong_contracts::{Capabilities, GrantId, PermissionResolution, PolicyOutcome, PolicyReport};
 
 use crate::{
     error::{PermissionRequestError, PolicyGrantError},
@@ -41,7 +41,7 @@ pub trait PolicyEngine<C: ContextFactory>: Sync {
         let metadata = action.metadata();
         let granted_capabilities = ctx.allowed_capabilities();
         for capability in metadata.required_capabilities.iter().copied() {
-            if !granted_capabilities.contains(&capability) {
+            if !granted_capabilities.contains(capability) {
                 return Err(PolicyGrantError::MissingCapability { capability });
             }
         }
@@ -98,7 +98,7 @@ pub trait PolicyEngine<C: ContextFactory>: Sync {
                 let granted_capabilities = ctx.allowed_capabilities();
                 let metadata = action.metadata();
                 for capability in metadata.required_capabilities.iter().copied() {
-                    if !granted_capabilities.contains(&capability) {
+                    if !granted_capabilities.contains(capability) {
                         return Err(PolicyGrantError::MissingCapability { capability });
                     }
                 }
@@ -122,8 +122,8 @@ pub trait PolicyEngine<C: ContextFactory>: Sync {
 }
 
 impl PolicyContext for () {
-    fn allowed_capabilities(&self) -> &BTreeSet<Capability> {
-        static EMPTY: BTreeSet<Capability> = BTreeSet::new();
-        &EMPTY
+    fn allowed_capabilities(&self) -> Cow<'_, Capabilities> {
+        static EMPTY: Capabilities = Capabilities::new();
+        Cow::Borrowed(&EMPTY)
     }
 }

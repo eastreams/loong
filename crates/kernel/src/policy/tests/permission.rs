@@ -1,6 +1,9 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    borrow::Cow,
+    sync::{Arc, Mutex},
+};
 
-use loong_contracts::{PermissionResolution, PolicyReport};
+use loong_contracts::{Capabilities, PermissionResolution, PolicyReport};
 use loong_core::{PermissionRequestError, PolicyGrantError};
 
 use super::*;
@@ -13,7 +16,7 @@ impl ContextFactory for PermissionContextFactory {
 }
 
 struct PermissionPolicyContext<'a> {
-    allowed_capabilities: &'a BTreeSet<Capability>,
+    allowed_capabilities: &'a Capabilities,
     parent_resolution: Result<PermissionResolution, PermissionRequestError>,
     user_resolution: Result<PermissionResolution, PermissionRequestError>,
     requests: Mutex<Vec<&'static str>>,
@@ -21,7 +24,7 @@ struct PermissionPolicyContext<'a> {
 
 impl<'a> PermissionPolicyContext<'a> {
     fn new(
-        allowed_capabilities: &'a BTreeSet<Capability>,
+        allowed_capabilities: &'a Capabilities,
         parent_resolution: Result<PermissionResolution, PermissionRequestError>,
         user_resolution: Result<PermissionResolution, PermissionRequestError>,
     ) -> Self {
@@ -36,8 +39,8 @@ impl<'a> PermissionPolicyContext<'a> {
 
 #[async_trait]
 impl PolicyContext for PermissionPolicyContext<'_> {
-    fn allowed_capabilities(&self) -> &BTreeSet<Capability> {
-        self.allowed_capabilities
+    fn allowed_capabilities(&self) -> Cow<'_, Capabilities> {
+        Cow::Borrowed(self.allowed_capabilities)
     }
 
     async fn request_parent_permission(
@@ -137,7 +140,7 @@ async fn policy_pipeline_user_permission_is_a_terminal_outcome() {
 
 #[tokio::test]
 async fn policy_engine_grants_after_parent_permission_and_retains_report() {
-    let capabilities = BTreeSet::from([Capability::InvokeTool]);
+    let capabilities = Capabilities::from([Capability::InvokeTool]);
     let ctx = PermissionPolicyContext::new(
         &capabilities,
         Ok(PermissionResolution::Approved),
@@ -151,7 +154,7 @@ async fn policy_engine_grants_after_parent_permission_and_retains_report() {
             decision: PolicyDecision::RequireParentPermission,
             reason: "parent must approve",
         });
-    let action = LegacyKernelAction::new("tool", capabilities.clone());
+    let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
 
     let grant = engine
         .grant(&ctx, action)
@@ -170,7 +173,7 @@ async fn policy_engine_grants_after_parent_permission_and_retains_report() {
 
 #[tokio::test]
 async fn policy_engine_parent_escalation_requests_user_permission() {
-    let capabilities = BTreeSet::from([Capability::InvokeTool]);
+    let capabilities = Capabilities::from([Capability::InvokeTool]);
     let ctx = PermissionPolicyContext::new(
         &capabilities,
         Ok(PermissionResolution::Escalate),
@@ -182,7 +185,7 @@ async fn policy_engine_parent_escalation_requests_user_permission() {
             decision: PolicyDecision::RequireParentPermission,
             reason: "parent or user must approve",
         });
-    let action = LegacyKernelAction::new("tool", capabilities.clone());
+    let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
 
     engine
         .grant(&ctx, action)
@@ -197,7 +200,7 @@ async fn policy_engine_parent_escalation_requests_user_permission() {
 
 #[tokio::test]
 async fn policy_engine_direct_user_permission_skips_parent() {
-    let capabilities = BTreeSet::from([Capability::InvokeTool]);
+    let capabilities = Capabilities::from([Capability::InvokeTool]);
     let ctx = PermissionPolicyContext::new(
         &capabilities,
         Ok(PermissionResolution::Denied {
@@ -211,7 +214,7 @@ async fn policy_engine_direct_user_permission_skips_parent() {
             decision: PolicyDecision::RequireUserPermission,
             reason: "user must approve",
         });
-    let action = LegacyKernelAction::new("tool", capabilities.clone());
+    let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
 
     engine
         .grant(&ctx, action)
@@ -226,7 +229,7 @@ async fn policy_engine_direct_user_permission_skips_parent() {
 
 #[tokio::test]
 async fn policy_engine_permission_denial_retains_policy_report() {
-    let capabilities = BTreeSet::from([Capability::InvokeTool]);
+    let capabilities = Capabilities::from([Capability::InvokeTool]);
     let ctx = PermissionPolicyContext::new(
         &capabilities,
         Ok(PermissionResolution::Denied {
@@ -240,7 +243,7 @@ async fn policy_engine_permission_denial_retains_policy_report() {
             decision: PolicyDecision::RequireParentPermission,
             reason: "parent must approve",
         });
-    let action = LegacyKernelAction::new("tool", capabilities.clone());
+    let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
 
     let error = engine
         .grant(&ctx, action)
@@ -257,7 +260,7 @@ async fn policy_engine_permission_denial_retains_policy_report() {
 
 #[tokio::test]
 async fn policy_engine_permission_request_failure_retains_policy_report() {
-    let capabilities = BTreeSet::from([Capability::InvokeTool]);
+    let capabilities = Capabilities::from([Capability::InvokeTool]);
     let ctx = PermissionPolicyContext::new(
         &capabilities,
         Err(PermissionRequestError::Unavailable {
@@ -271,7 +274,7 @@ async fn policy_engine_permission_request_failure_retains_policy_report() {
             decision: PolicyDecision::RequireParentPermission,
             reason: "parent must approve",
         });
-    let action = LegacyKernelAction::new("tool", capabilities.clone());
+    let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
 
     let error = engine
         .grant(&ctx, action)
@@ -290,7 +293,7 @@ async fn policy_engine_permission_request_failure_retains_policy_report() {
 
 #[tokio::test]
 async fn policy_engine_user_permission_cannot_escalate() {
-    let capabilities = BTreeSet::from([Capability::InvokeTool]);
+    let capabilities = Capabilities::from([Capability::InvokeTool]);
     let ctx = PermissionPolicyContext::new(
         &capabilities,
         Ok(PermissionResolution::Approved),
@@ -302,7 +305,7 @@ async fn policy_engine_user_permission_cannot_escalate() {
             decision: PolicyDecision::RequireUserPermission,
             reason: "user must approve",
         });
-    let action = LegacyKernelAction::new("tool", capabilities.clone());
+    let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
 
     let error = engine
         .grant(&ctx, action)
@@ -388,7 +391,7 @@ async fn policy_engine_default_user_permission_hook_returns_unavailable() {
 
 #[tokio::test]
 async fn policy_engine_capability_gate_precedes_permission_request() {
-    let capabilities = BTreeSet::from([Capability::InvokeTool]);
+    let capabilities = Capabilities::from([Capability::InvokeTool]);
     let ctx = PermissionPolicyContext::new(
         &capabilities,
         Ok(PermissionResolution::Approved),
@@ -445,8 +448,8 @@ enum AuthorityChange {
 
 #[async_trait]
 impl PolicyContext for ChangingAuthorityContext<'_> {
-    fn allowed_capabilities(&self) -> &BTreeSet<Capability> {
-        &self.token.allowed_capabilities
+    fn allowed_capabilities(&self) -> Cow<'_, Capabilities> {
+        Cow::Owned(self.token.allowed_capabilities.iter().copied().collect())
     }
 
     async fn request_user_permission(

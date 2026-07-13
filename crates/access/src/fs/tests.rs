@@ -1,6 +1,5 @@
 use std::{
     borrow::Cow,
-    collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
@@ -9,8 +8,8 @@ use std::{
 
 use async_trait::async_trait;
 use loong_contracts::{
-    Capability, GrantId, PolicyEntry, PolicyOutcome, PolicyRegistration, PolicyRegistrationSource,
-    PolicyReport,
+    Capabilities, Capability, GrantId, PolicyEntry, PolicyOutcome, PolicyRegistration,
+    PolicyRegistrationSource, PolicyReport,
 };
 use loong_core::{
     kernel::Kernel,
@@ -38,7 +37,7 @@ use super::{
 struct FsAccessPolicyContext {
     resolution_root: PathBuf,
     allowed_roots: Vec<PathBuf>,
-    capabilities: BTreeSet<Capability>,
+    capabilities: Capabilities,
 }
 
 impl FsAccessPolicyContext {
@@ -47,14 +46,17 @@ impl FsAccessPolicyContext {
         Self {
             resolution_root: root.clone(),
             allowed_roots: vec![root],
-            capabilities: BTreeSet::from([Capability::FilesystemRead, Capability::FilesystemWrite]),
+            capabilities: Capabilities::from([
+                Capability::FilesystemRead,
+                Capability::FilesystemWrite,
+            ]),
         }
     }
 }
 
 impl PolicyContext for FsAccessPolicyContext {
-    fn allowed_capabilities(&self) -> &BTreeSet<Capability> {
-        &self.capabilities
+    fn allowed_capabilities(&self) -> Cow<'_, Capabilities> {
+        Cow::Borrowed(&self.capabilities)
     }
 }
 

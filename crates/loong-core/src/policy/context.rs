@@ -1,7 +1,7 @@
-use std::{borrow::Cow, collections::BTreeSet};
+use std::borrow::Cow;
 
 use async_trait::async_trait;
-use loong_contracts::{Capability, PermissionResolution, PolicyReport};
+use loong_contracts::{Capabilities, PermissionResolution, PolicyReport};
 
 use crate::{error::PermissionRequestError, policy::action::ActionMeta};
 
@@ -12,7 +12,7 @@ use crate::{error::PermissionRequestError, policy::action::ActionMeta};
 #[async_trait]
 pub trait PolicyContext: Send + Sync {
     /// Capabilities currently available to the recursive execution scope.
-    fn allowed_capabilities(&self) -> &BTreeSet<Capability>;
+    fn allowed_capabilities(&self) -> Cow<'_, Capabilities>;
 
     /// Request consent from the current session's parent.
     ///
