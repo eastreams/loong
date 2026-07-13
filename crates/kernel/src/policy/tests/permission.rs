@@ -319,8 +319,7 @@ async fn policy_engine_user_permission_cannot_escalate() {
 }
 
 #[tokio::test]
-#[should_panic(expected = "parent permission requested from a context without permission support")]
-async fn policy_engine_default_parent_permission_hook_panics_when_reached() {
+async fn policy_engine_default_parent_permission_hook_returns_unavailable() {
     let engine = PolicyPipeline::<TestContextFactory>::new().with_pre_policy(StaticAnyPolicy {
         name: "parent-permission",
         decision: PolicyDecision::RequireParentPermission,
@@ -338,7 +337,53 @@ async fn policy_engine_default_parent_permission_hook_panics_when_reached() {
     );
     let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
 
-    let _ = engine.grant(&ctx, action).await;
+    let error = engine
+        .grant(&ctx, action)
+        .await
+        .expect_err("the default parent permission hook must fail closed");
+
+    assert!(matches!(
+        error,
+        PolicyGrantError::PermissionRequest {
+            ref report,
+            source: PermissionRequestError::Unavailable { ref reason },
+        } if reason == "parent permission interaction is unavailable"
+            && matches!(report.outcome, PolicyOutcome::RequireParentPermission { .. })
+    ));
+}
+
+#[tokio::test]
+async fn policy_engine_default_user_permission_hook_returns_unavailable() {
+    let engine = PolicyPipeline::<TestContextFactory>::new().with_pre_policy(StaticAnyPolicy {
+        name: "user-permission",
+        decision: PolicyDecision::RequireUserPermission,
+        reason: "user must approve",
+    });
+    let pack = pack();
+    let token = token();
+    let ctx = TestPolicyContext::new(
+        &pack,
+        &token,
+        1,
+        ExecutionPlane::Tool,
+        PlaneTier::Core,
+        None,
+    );
+    let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+
+    let error = engine
+        .grant(&ctx, action)
+        .await
+        .expect_err("the default user permission hook must fail closed");
+
+    assert!(matches!(
+        error,
+        PolicyGrantError::PermissionRequest {
+            ref report,
+            source: PermissionRequestError::Unavailable { ref reason },
+        } if reason == "user permission interaction is unavailable"
+            && matches!(report.outcome, PolicyOutcome::RequireUserPermission { .. })
+    ));
 }
 
 #[tokio::test]

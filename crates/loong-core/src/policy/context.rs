@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::{borrow::Cow, collections::BTreeSet};
 
 use async_trait::async_trait;
 use loong_contracts::{Capability, PermissionResolution, PolicyReport};
@@ -16,36 +16,30 @@ pub trait PolicyContext: Send + Sync {
 
     /// Request consent from the current session's parent.
     ///
-    /// The default is intentionally a loud test/fixture failure. Production
-    /// contexts must override this before any installed policy can return
-    /// `RequireParentPermission`; an unavailable production interaction surface
-    /// must return [`PermissionRequestError::Unavailable`] instead.
-    #[expect(
-        clippy::panic,
-        reason = "default hook exposes a miswired permission policy in tests and fixtures"
-    )]
+    /// Contexts without a parent permission interaction fail closed with
+    /// [`PermissionRequestError::Unavailable`] by default.
     async fn request_parent_permission(
         &self,
         _action: &dyn ActionMeta,
         _report: &PolicyReport,
     ) -> Result<PermissionResolution, PermissionRequestError> {
-        panic!("parent permission requested from a context without permission support")
+        Err(PermissionRequestError::Unavailable {
+            reason: Cow::Borrowed("parent permission interaction is unavailable"),
+        })
     }
 
     /// Request consent from the user, the root authority outside the session tree.
     ///
-    /// As with parent permission, production contexts must return a structured
-    /// unavailable error rather than reaching this default.
-    #[expect(
-        clippy::panic,
-        reason = "default hook exposes a miswired permission policy in tests and fixtures"
-    )]
+    /// Contexts without a user permission interaction fail closed with
+    /// [`PermissionRequestError::Unavailable`] by default.
     async fn request_user_permission(
         &self,
         _action: &dyn ActionMeta,
         _report: &PolicyReport,
     ) -> Result<PermissionResolution, PermissionRequestError> {
-        panic!("user permission requested from a context without permission support")
+        Err(PermissionRequestError::Unavailable {
+            reason: Cow::Borrowed("user permission interaction is unavailable"),
+        })
     }
 }
 
