@@ -7,7 +7,7 @@ use crate::{
     error::PolicyGrantError,
     policy::{
         action::ActionMeta,
-        context::{CapabilityContext, ContextFactory},
+        context::{ContextFactory, PolicyContext},
         grant::{ActionGrant, ActionGrantInfo},
     },
 };
@@ -67,8 +67,9 @@ pub trait PolicyEngine<C: ContextFactory>: Sync {
     }
 }
 
-impl CapabilityContext for () {
-    fn allowed_capabilities(&self) -> BTreeSet<Capability> {
-        BTreeSet::new()
+impl PolicyContext for () {
+    fn allowed_capabilities(&self) -> &BTreeSet<Capability> {
+        static EMPTY: BTreeSet<Capability> = BTreeSet::new();
+        &EMPTY
     }
 }

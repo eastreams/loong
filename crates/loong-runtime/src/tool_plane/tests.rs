@@ -15,7 +15,7 @@ use loong_contracts::{
 use loong_core::{
     policy::{
         action::ActionMeta,
-        context::{CapabilityContext, ContextFactory},
+        context::{ContextFactory, PolicyContext},
         engine::PolicyEngine,
     },
     tool::ToolImpl,
@@ -32,9 +32,10 @@ impl ContextFactory for TestContextFactory {
 
 struct TestContext;
 
-impl CapabilityContext for TestContext {
-    fn allowed_capabilities(&self) -> BTreeSet<Capability> {
-        BTreeSet::new()
+impl PolicyContext for TestContext {
+    fn allowed_capabilities(&self) -> &BTreeSet<Capability> {
+        static EMPTY: BTreeSet<Capability> = BTreeSet::new();
+        &EMPTY
     }
 }
 

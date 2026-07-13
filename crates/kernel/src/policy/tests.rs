@@ -33,9 +33,9 @@ impl<'a> TestPolicyContext<'a> {
     }
 }
 
-impl CapabilityContext for TestPolicyContext<'_> {
-    fn allowed_capabilities(&self) -> BTreeSet<Capability> {
-        self.token.allowed_capabilities.clone()
+impl PolicyContext for TestPolicyContext<'_> {
+    fn allowed_capabilities(&self) -> &BTreeSet<Capability> {
+        &self.token.allowed_capabilities
     }
 }
 

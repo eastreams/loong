@@ -7,7 +7,7 @@ use std::{
 use loong_contracts::Capability;
 use loong_core::{
     AuthorizationError, PolicyGrantError,
-    policy::context::{CapabilityContext, ContextFactory},
+    policy::context::{ContextFactory, PolicyContext},
 };
 
 use super::AccessCx;
@@ -38,9 +38,9 @@ impl AccessCxPolicyContext {
     }
 }
 
-impl CapabilityContext for AccessCxPolicyContext {
-    fn allowed_capabilities(&self) -> BTreeSet<Capability> {
-        self.capabilities.clone()
+impl PolicyContext for AccessCxPolicyContext {
+    fn allowed_capabilities(&self) -> &BTreeSet<Capability> {
+        &self.capabilities
     }
 }
 

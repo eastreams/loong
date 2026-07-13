@@ -16,7 +16,7 @@ use loong_core::{
     kernel::Kernel,
     policy::{
         action::ActionMeta,
-        context::{CapabilityContext, ContextFactory},
+        context::{ContextFactory, PolicyContext},
         engine::PolicyEngine,
     },
 };
@@ -52,9 +52,9 @@ impl FsAccessPolicyContext {
     }
 }
 
-impl CapabilityContext for FsAccessPolicyContext {
-    fn allowed_capabilities(&self) -> BTreeSet<Capability> {
-        self.capabilities.clone()
+impl PolicyContext for FsAccessPolicyContext {
+    fn allowed_capabilities(&self) -> &BTreeSet<Capability> {
+        &self.capabilities
     }
 }
 

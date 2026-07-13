@@ -8,7 +8,7 @@ use loong_contracts::{
     CapabilityToken, ExecutionPlane, GovernedSessionMode, InvocationOutcome, PlaneTier,
     ToolPlaneError,
 };
-use loong_core::policy::context::{CapabilityContext, ContextFactory};
+use loong_core::policy::context::{ContextFactory, PolicyContext};
 use loong_kernel::access::fs::{FsPathPolicyContext, FsResolutionContext};
 use loong_kernel::{
     AccessCx, AuditSink, Capability, Clock, ExecutionRoute, FanoutAuditSink, HarnessKind,
@@ -729,9 +729,9 @@ impl KernelAccess<AppContextFactory> for AppContext {
     }
 }
 
-impl CapabilityContext for AppContext {
-    fn allowed_capabilities(&self) -> BTreeSet<Capability> {
-        self.effective_capabilities.clone()
+impl PolicyContext for AppContext {
+    fn allowed_capabilities(&self) -> &BTreeSet<Capability> {
+        &self.effective_capabilities
     }
 }
 
@@ -1194,7 +1194,7 @@ mod tests {
             )
             .expect("narrowed execution context should build");
 
-        assert_eq!(execution_context.allowed_capabilities(), narrowed);
+        assert_eq!(execution_context.allowed_capabilities(), &narrowed);
         assert!(
             execution_context
                 .token()

@@ -13,7 +13,7 @@ use loong_contracts::{Capability, ToolExecutionError, ToolInputError, ToolSpec};
 use serde_json::{Value, json};
 
 use crate::{
-    policy::context::{CapabilityContext, ContextFactory},
+    policy::context::{ContextFactory, PolicyContext},
     tool::{RegisteredTool, ToolImpl, ToolProvenance},
 };
 
@@ -25,9 +25,10 @@ impl ContextFactory for TestContextFactory {
 
 struct TestContext;
 
-impl CapabilityContext for TestContext {
-    fn allowed_capabilities(&self) -> BTreeSet<Capability> {
-        BTreeSet::new()
+impl PolicyContext for TestContext {
+    fn allowed_capabilities(&self) -> &BTreeSet<Capability> {
+        static EMPTY: BTreeSet<Capability> = BTreeSet::new();
+        &EMPTY
     }
 }
 

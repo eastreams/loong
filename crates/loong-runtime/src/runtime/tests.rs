@@ -1,4 +1,4 @@
-use loong_core::policy::context::{CapabilityContext, ContextFactory};
+use loong_core::policy::context::{ContextFactory, PolicyContext};
 use loong_kernel::Kernel;
 
 use super::Runtime;
@@ -12,9 +12,11 @@ impl ContextFactory for TestContextFactory {
 
 struct TestContext;
 
-impl CapabilityContext for TestContext {
-    fn allowed_capabilities(&self) -> std::collections::BTreeSet<loong_contracts::Capability> {
-        std::collections::BTreeSet::new()
+impl PolicyContext for TestContext {
+    fn allowed_capabilities(&self) -> &std::collections::BTreeSet<loong_contracts::Capability> {
+        static EMPTY: std::collections::BTreeSet<loong_contracts::Capability> =
+            std::collections::BTreeSet::new();
+        &EMPTY
     }
 }
 

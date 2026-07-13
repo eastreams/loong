@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use loong_contracts::{PolicyDecision, PolicyGrant};
 use loong_core::policy::{
     action::ActionMeta,
-    context::{CapabilityContext, ContextFactory},
+    context::{ContextFactory, PolicyContext},
     policy::PolicyAny,
 };
 use serde_json::json;
@@ -125,9 +125,9 @@ impl TestPolicyContext {
     }
 }
 
-impl CapabilityContext for TestPolicyContext {
-    fn allowed_capabilities(&self) -> BTreeSet<Capability> {
-        self.token.allowed_capabilities.clone()
+impl PolicyContext for TestPolicyContext {
+    fn allowed_capabilities(&self) -> &BTreeSet<Capability> {
+        &self.token.allowed_capabilities
     }
 }
 
