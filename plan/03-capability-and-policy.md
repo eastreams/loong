@@ -82,8 +82,7 @@ backend 不参与 evidence 写入，也不能增加一个 public grant wrapper �
 - fs resolution root、fs allowed roots、provider-specific view 等不放进这个基础 trait；它们由
   对应 domain requirement trait 表达。
 - 整个 `KernelInvocationContext` 属于 legacy fallback；它不能作为 `Kernel<C>` 普通 API 的全局
-  HRTB。其 `request_parameters()` 仍是 duplicated payload，应从 legacy path 删除。
-  type-erased policy 读取 `ActionMeta::payload()`；typed policy 直接读取 concrete action。
+  HRTB。type-erased policy 读取 `ActionMeta::payload()`；typed policy 直接读取 concrete action。
 
 ## Config -> Policy
 

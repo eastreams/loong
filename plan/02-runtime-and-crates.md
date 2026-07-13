@@ -11,6 +11,8 @@ crate 清理。
   `ToolPlane` trait 和 slot-backed `ToolPlaneRegistry`。
 - app bootstrap 已使用 fallible `builtin_tool_plane()` 构造 registry；不存在需要迁移的全局
   `OnceLock` tool plane。
+- Context 不再保存 action payload 或 execution plane metadata；`PolicyAny` 读取
+  `ActionMeta::payload()`，`KernelInvocationContext` 只约束真正读取 legacy token/pack 的方法。
 - app 仍以 `Arc<AppContextInner>` 表达 runtime authority、session state 和 invocation overlay。
   `AppContextFactory::Cx<'a> = AppContext` 没有使用 GAT lifetime，仍是 owned clone 模型。
 - `22bc6a3e` 删除了原本独立的 `SessionContext`，并把 session identity、lineage、workspace、
@@ -209,29 +211,22 @@ Permission 是 policy terminal decision 后的 consent 流程，不是第二套 
 
 1. 将 `AppContextInner` 字段按 Runtime、Session、Turn option、Context derived view、Action
    payload 五类重新归属。
-2. 删除没有真实 consumer 的 `plane` / `tier`；legacy audit route 需要时显式传入 audit
-   boundary，不能借 Context 偷渡。
-3. 删除 `request_parameters` 和 `KernelInvocationContext::request_parameters()`；PolicyAny 通过
-   `ActionMeta::payload()` 观察当前 action，不从 Context 读取另一份请求 JSON。
-4. 删除 `Deref` / `DerefMut` / `Arc::make_mut`、`child`、`for_session`、`for_invocation` 等旧 COW
+2. 删除 `Deref` / `DerefMut` / `Arc::make_mut`、`child`、`for_session`、`for_invocation` 等旧 COW
    mutation API。新 Context 构造/派生必须显式表达 Turn options 或 authority narrowing。
-5. advisory Session 仍构造同一种 Context，只是 Session baseline authority 没有 `InvokeTool`
+3. advisory Session 仍构造同一种 Context，只是 Session baseline authority 没有 `InvokeTool`
    或 mutation caps。删除 `Option<AppContext>`、`ConversationRuntimeBinding::AdvisoryOnly` 和
    provider no-context 对应物，不能用“没有 Context”表达权限模式。
-6. 一次性迁移 production、tests、fixtures、trait impl、generic instantiation、注释和文档中的
+4. 一次性迁移 production、tests、fixtures、trait impl、generic instantiation、注释和文档中的
    concrete 名称，然后删除三个 `AppContext*` 类型；不留 compatibility alias。
 
 ### 可独立提交与原子边界
 
-在 workspace-wide 类型替换前，先完成能够独立编译且直接减少错误耦合的前置边界：
+在 workspace-wide 类型替换前，剩余可独立编译并直接减少错误耦合的前置边界是：
 
-1. 建立 `Capabilities` / `Cow<'_, Capabilities>` 与 fail-closed permission 基础 contract；
-2. 删除 `plane` / `tier` 和 duplicated `request_parameters`，并把
-   `KernelInvocationContext` HRTB 收缩到 legacy impl；
-3. 让 typed ToolInvocation 全链使用 typed error 并直接调用 `PolicyEngine::grant`；
-4. 闭合 authorization audit owner，再把带 grant id 的 execution audit 固定到 runtime
+1. 让 typed ToolInvocation 全链使用 typed error 并直接调用 `PolicyEngine::grant`；
+2. 闭合 authorization audit owner，再把带 grant id 的 execution audit 固定到 runtime
    ToolInvocation wrapper，并将 raw granted dispatch 收为 runtime-internal；
-5. channel/gateway 等长期 owner 只保留 Runtime，在 session address 确定后才物化当前 Session；
+3. channel/gateway 等长期 owner 只保留 Runtime，在 session address 确定后才物化当前 Session；
    provider、core tool 与 app tool 不能同时使用 outer/root context 和 session-specific context。
 
 之后的 `Session + Context<'a> + RuntimeContextFactory` 是一个不可再拆的类型替换：

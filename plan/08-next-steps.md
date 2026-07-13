@@ -6,7 +6,7 @@
 
 ## 当前 active goal
 
-步骤 1 到 8 共同完成这条破坏性 typed execution spine：
+剩余步骤 3 到 8 共同完成这条破坏性 typed execution spine：
 
 ```text
 Runtime
@@ -18,7 +18,7 @@ Runtime
   -> runtime ToolInvocation / Access
 ```
 
-这八步的共同边界：
+这六步的共同边界：
 
 - 保留现有 `PolicyEngine::grant`；禁止新增 `Kernel::grant`、`SessionAuthority`、permit token、
   route/receipt、`ctx.audit` 或 compatibility alias/wrapper。
@@ -38,86 +38,6 @@ Runtime
 streaming cancellation、全部 legacy tool 迁移、fs TOCTOU、crate 收敛与 bitset 不属于当前
 active goal，分别列在步骤 13、14、17、18、19。步骤 7 只建立 Context 的 cancellation field 与
 inheritance；provider/Access observation、gateway wiring 和 finalization behavior 留在步骤 13。
-
-## 1. 建立 foundation contracts
-
-**范围**
-
-- 在 `loong-contracts` 定义 `Capabilities` 的当前集合表示；
-  `PolicyContext::allowed_capabilities()` 破坏性改为 `Cow<'_, Capabilities>`。base Context 的
-  effective capabilities 字段是 `Cow::Borrowed`，child 中被收窄的字段是 `Cow::Owned`；accessor
-  对两者都返回 `Cow::Borrowed(self.effective_capabilities.as_ref())`，绝不再次 clone。不增加
-  capability provider/factory/helper trait。
-- `PolicyContext` 的 parent/user permission 默认 hook 返回
-  `PermissionRequestError::Unavailable`，删除默认 panic、clippy panic 例外和 should-panic tests；
-  grant error 保留原始 `PolicyReport` 与 error source。
-- 保持 `PolicyEngine::grant` 与 `Granted<A>` 私有 constructor，不增加同义 authority/proof 类型。
-- 本步只建立语义 contract，不迁移 bitset；表示优化留到步骤 19 的 benchmark/profile gate。
-
-**完成线**
-
-- base capability 字段不分配，child narrowing 只为字段中的求交结果分配；两者的 accessor 都只
-  reborrow，不 clone；
-- missing capability、policy deny 和 unavailable permission 都返回 typed error，不 panic；
-- core contract 不出现 `Kernel::grant`、`SessionAuthority` 或 forwarding helper。
-- 删除本步骤时同步删除/改写 `plan/07-kernel-audit-and-deviations.md` 中对应“当前偏差”，并更新
-  Code TODO 对照。
-
-**最小提交顺序**
-
-1. `fix(core): fail closed when permission interaction is unavailable`
-2. `refactor(core): borrow or own effective capabilities`
-
-**验证**
-
-```bash
-cargo test -p loong-core policy
-cargo test -p loong-kernel permission
-cargo check -p loong-contracts -p loong-core -p loong-kernel
-cargo fmt --all -- --check
-git diff --check
-```
-
-## 2. 删除 non-context fields 并隔离 legacy bounds
-
-**范围**
-
-- 删除 `KernelInvocationContext::request_parameters()` 与各 concrete/test context 中的副本；
-  `PolicyAny` 直接读取 `ActionMeta::payload()`。
-- 删除 `AppContext` 的 `plane` / `tier` 字段、getter 和 `for_invocation` 参数；legacy audit 若仍需
-  route/tier，由旧调用边界显式传入，不能从 Context 偷渡。
-- 拆开 concrete `Kernel<C>` impl：constructor、policy registration、typed policy/access 所需的
-  普通 API 不带 `KernelInvocationContext` HRTB；只有真正读取 token/pack/legacy request 的方法
-  保留该约束。
-- `CapabilityToken`、token expiry/revocation、pack validation 和 legacy plane execution 保持现有
-  fallback 行为；不重命名、不包装这些仍有 caller 的旧路径。
-
-**完成线**
-
-- Context 不再复制 Action payload 或保存无 consumer 的 execution plane metadata；
-- 仅实现 `PolicyContext`、不实现 `KernelInvocationContext` 的 test Context 可以构造 Kernel、注册
-  typed policy 并完成 Access grant；
-- typed Kernel/Access API 不受 legacy token/pack trait bound 约束；
-- legacy adapter/plane 的 expiry、revocation、pack boundary 和 fallback tests 行为不变。
-- 删除本步骤时同步删除/改写 `plan/07-kernel-audit-and-deviations.md` 中对应“当前偏差”，并更新
-  Code TODO 对照。
-
-**最小提交顺序**
-
-1. `refactor(app): remove non-context invocation metadata`
-2. `refactor(kernel): isolate legacy invocation context bounds`
-
-**验证**
-
-```bash
-cargo test -p loong-kernel policy
-cargo test -p loong-kernel access
-cargo test -p loong-app context
-cargo test -p loong-app tools
-cargo check -p loong-spec -p loong-kernel -p loong-app
-cargo fmt --all -- --check
-git diff --check
-```
 
 ## 3. 收敛 typed ToolInvocation error 并直接 grant
 
@@ -329,7 +249,7 @@ git diff --check
   `Cow::Borrowed(self.effective_capabilities.as_ref())`，绝不因 accessor 再次 clone。nested
   invocation 派生同类型 child Context，只能收窄 caps/tool/root view 并继承
   mode/goal/cancellation。
-- 将步骤 2 清理后剩余的 `AppContextInner` 字段归属到 Runtime、Session、Turn options、Context
+- 将 `AppContextInner` 的剩余字段归属到 Runtime、Session、Turn options、Context
   derived view 或 Action payload，不保留第二份 source of truth。
 - batch tool invocation 为每个分支派生 sibling Context；subagent 创建新 Session。detached task
   只 move Runtime、owned Session 和 Turn options，并在 future 内重建 Context；`&Context` 不逃逸
@@ -419,7 +339,7 @@ git diff --check
 ## 后续独立目标
 
 以下步骤不属于当前 active goal。每项在开始前重新核对 owner 和 caller，不得借后续目标扩大
-步骤 1 到 8 的提交。
+剩余步骤 3 到 8 的提交。
 
 ## 9. 将 provider/runtime-self live source 完全迁入 Access
 
@@ -525,7 +445,8 @@ git diff --check
 
 - unavailable 保留原始 report 并返回 `PermissionRequestError::Unavailable`；
 - parent/user 路由与 Session lineage 一致，user escalation 被结构化拒绝；
-- production 只在步骤 1、4、7、11 完成后注册 permission policy。
+- production 只在 fail-closed permission foundation 以及步骤 4、7、11 完成后注册 permission
+  policy。
 
 **验证**
 

@@ -95,8 +95,6 @@ execution evidence。
 - app typed tool invocation 仍调用接收 pack/token 的 `Kernel::grant_action`。该方法把 typed policy
   deny 转成 legacy `PolicyError` 并记录旧 authorization denial；没有统一记录 action metadata、
   attempt id、report 和 grant id。
-- `KernelInvocationContext::request_parameters()` 仍让 legacy `PolicyAny` 从 Context 读取另一份请求
-  JSON，而不是读取 `ActionMeta::payload()`。
 - permission decision 当前与 allow/deny 一样立即终止 pipeline；registry 尚未编码“hard constraints
   先于 terminal consent”，较早的 permission policy 仍可能跳过后续 typed hard deny。
 
@@ -122,7 +120,6 @@ execution evidence。
 
 - typed tool invocation 已通过 `AppContext::tool(...).invoke(...)` 构造 concrete action，但 grant
   仍接收 legacy pack/token；`AppContext` 也仍是 Arc/COW session+invocation 混合体。
-- `plane` / `tier` 没有真实 Context consumer；`request_parameters` 只服务 legacy policy test/path。
 - `ConversationRuntimeBinding` / `ProviderRuntimeBinding` 仍用 optional/advisory 分支传播“可能没有
   Context”。
 
