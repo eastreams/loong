@@ -4,8 +4,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use async_trait::async_trait;
 use loong_contracts::{
-    Capability, ExecutionPlane, ExecutionRoute, HarnessKind, MemoryPlaneError, PlaneTier,
-    ToolCoreOutcome, ToolCoreRequest,
+    Capability, ExecutionRoute, HarnessKind, MemoryPlaneError, ToolCoreOutcome, ToolCoreRequest,
 };
 use loong_kernel::{
     CoreMemoryAdapter, FixedClock, InMemoryAuditSink, Kernel, MemoryCoreOutcome, MemoryCoreRequest,
@@ -1795,11 +1794,7 @@ async fn provider_messages_with_kernel_binding(
     );
     let caps = BTreeSet::from([Capability::MemoryRead]);
     let execution_context = app_ctx
-        .for_invocation(
-            ExecutionPlane::Memory,
-            PlaneTier::Core,
-            &tool_runtime_config,
-        )
+        .for_invocation(&tool_runtime_config)
         .expect("build memory execution context");
     let outcome = app_ctx
         .runtime()

@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use loong_contracts::{ExecutionPlane, PlaneTier};
 use loong_runtime::runtime::Runtime;
 use serde_json::{Value, json};
 
@@ -458,9 +457,7 @@ async fn read_prompt_source_via_access(
     let request_path = workspace_guidance::workspace_source_request_path(workspace_root, path)?;
     let read_runtime_config =
         tool_runtime_config.with_workspace_root_override(workspace_root.to_path_buf());
-    let execution_context = app_ctx
-        .for_invocation(ExecutionPlane::Tool, PlaneTier::Core, &read_runtime_config)
-        .ok()?;
+    let execution_context = app_ctx.for_invocation(&read_runtime_config).ok()?;
     let output = execution_context
         .access()
         .fs()

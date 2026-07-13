@@ -2,7 +2,7 @@
 use std::collections::BTreeSet;
 
 #[cfg(feature = "memory-sqlite")]
-use loong_contracts::{Capability, ExecutionPlane, PlaneTier};
+use loong_contracts::Capability;
 #[cfg(feature = "memory-sqlite")]
 use serde_json::json;
 
@@ -278,11 +278,7 @@ async fn load_manual_compaction_window_snapshot(
             "allow_extended_limit": true,
         }),
     };
-    let execution_context = app_ctx.for_invocation(
-        ExecutionPlane::Memory,
-        PlaneTier::Core,
-        app_ctx.tool_runtime_config(),
-    )?;
+    let execution_context = app_ctx.for_invocation(app_ctx.tool_runtime_config())?;
     let outcome = app_ctx
         .runtime()
         .kernel()
@@ -440,11 +436,7 @@ pub(super) async fn load_history_lines(
     if let Some(ctx) = binding.context() {
         let request = memory::build_window_request(session_id, limit);
         let caps = BTreeSet::from([Capability::MemoryRead]);
-        let execution_context = ctx.for_invocation(
-            ExecutionPlane::Memory,
-            PlaneTier::Core,
-            ctx.tool_runtime_config(),
-        )?;
+        let execution_context = ctx.for_invocation(ctx.tool_runtime_config())?;
         let outcome = ctx
             .runtime()
             .kernel()

@@ -2,7 +2,7 @@
 use std::collections::BTreeSet;
 
 #[cfg(feature = "memory-sqlite")]
-use loong_contracts::{Capability, ExecutionPlane, MemoryCoreRequest, PlaneTier};
+use loong_contracts::{Capability, MemoryCoreRequest};
 #[cfg(feature = "memory-sqlite")]
 use serde_json::{Value, json};
 
@@ -340,11 +340,7 @@ pub(crate) async fn load_assistant_contents_from_session_window_detailed(
         };
         let caps = BTreeSet::from([Capability::MemoryRead]);
         let execution_context = ctx
-            .for_invocation(
-                ExecutionPlane::Memory,
-                PlaneTier::Core,
-                ctx.tool_runtime_config(),
-            )
+            .for_invocation(ctx.tool_runtime_config())
             .map_err(AssistantHistoryLoadError::kernel_request_failed)?;
         let outcome = ctx
             .runtime()

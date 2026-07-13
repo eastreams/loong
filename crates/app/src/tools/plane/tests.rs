@@ -13,11 +13,7 @@ use crate::context::{AppContextFactory, bootstrap_test_app_context};
 async fn app_policy_allows_registered_tool_invocation_after_capability_gate() {
     let ctx = bootstrap_test_app_context("test-agent", 60).expect("bootstrap context");
     let execution_context = ctx
-        .for_invocation(
-            loong_contracts::ExecutionPlane::Tool,
-            loong_contracts::PlaneTier::Core,
-            ctx.tool_runtime_config(),
-        )
+        .for_invocation(ctx.tool_runtime_config())
         .expect("build execution context");
     let mut policy = PolicyPipeline::<AppContextFactory>::new();
     policy.push_policy(ToolInvocationAllowPolicy);

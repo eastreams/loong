@@ -13258,11 +13258,7 @@ async fn kernel_tool_adapter_routes_through_kernel() {
     )
     .expect("build app context");
     let execution_context = app_context
-        .for_invocation(
-            loong_contracts::ExecutionPlane::Tool,
-            loong_contracts::PlaneTier::Core,
-            &tool_runtime_config,
-        )
+        .for_invocation(&tool_runtime_config)
         .expect("build tool execution context");
     let err = runtime
         .kernel()
@@ -13343,11 +13339,7 @@ async fn kernel_tool_adapter_rejects_reserved_internal_payload_through_kernel_by
     )
     .expect("build app context");
     let execution_context = app_context
-        .for_invocation(
-            loong_contracts::ExecutionPlane::Tool,
-            loong_contracts::PlaneTier::Core,
-            &tool_runtime_config,
-        )
+        .for_invocation(&tool_runtime_config)
         .expect("build tool execution context");
     let err = runtime
         .kernel()

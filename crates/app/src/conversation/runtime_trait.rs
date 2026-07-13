@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use loong_contracts::{Capability, ExecutionPlane, PlaneTier};
+use loong_contracts::Capability;
 use serde_json::Value;
 
 use crate::memory;
@@ -490,11 +490,7 @@ where
         if let Some(ctx) = binding.context() {
             let request = memory::build_append_turn_request(session_id, role, content);
             let caps = BTreeSet::from([Capability::MemoryWrite]);
-            let execution_context = ctx.for_invocation(
-                ExecutionPlane::Memory,
-                PlaneTier::Core,
-                ctx.tool_runtime_config(),
-            )?;
+            let execution_context = ctx.for_invocation(ctx.tool_runtime_config())?;
             ctx.runtime()
                 .kernel()
                 .execute_memory_core(

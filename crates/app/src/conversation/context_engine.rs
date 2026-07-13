@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 #[cfg(feature = "memory-sqlite")]
-use loong_contracts::{Capability, ExecutionPlane, PlaneTier};
+use loong_contracts::Capability;
 use serde_json::Value;
 
 use crate::config::LoongConfig;
@@ -509,11 +509,7 @@ async fn persist_memory_window(
         expected_turn_count,
     );
     let caps = BTreeSet::from([Capability::MemoryWrite]);
-    let execution_context = app_ctx.for_invocation(
-        ExecutionPlane::Memory,
-        PlaneTier::Core,
-        app_ctx.tool_runtime_config(),
-    )?;
+    let execution_context = app_ctx.for_invocation(app_ctx.tool_runtime_config())?;
     let outcome = app_ctx
         .runtime()
         .kernel()
@@ -556,11 +552,7 @@ async fn load_stage_envelope(
             &config.memory,
         );
         let caps = BTreeSet::from([Capability::MemoryRead]);
-        let execution_context = ctx.for_invocation(
-            ExecutionPlane::Memory,
-            PlaneTier::Core,
-            &tool_runtime_config,
-        )?;
+        let execution_context = ctx.for_invocation(&tool_runtime_config)?;
         let outcome = ctx
             .runtime()
             .kernel()

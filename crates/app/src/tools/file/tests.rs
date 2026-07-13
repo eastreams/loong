@@ -5,8 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use loong_contracts::{
-    Capability, ExecutionPlane, ExecutionRoute, HarnessKind, PlaneTier, ToolCoreOutcome,
-    ToolCoreRequest, ToolExecutionError,
+    Capability, ExecutionRoute, HarnessKind, ToolCoreOutcome, ToolCoreRequest, ToolExecutionError,
 };
 use loong_core::tool::{RegisteredTool, ToolProvenance};
 use loong_kernel::{
@@ -124,8 +123,7 @@ async fn execute_file_read_with_test_context(
         crate::tools::runtime_tool_view(),
         loong_contracts::GovernedSessionMode::MutatingCapable,
     )?;
-    let execution_context =
-        app_ctx.for_invocation(ExecutionPlane::Tool, PlaneTier::Core, config)?;
+    let execution_context = app_ctx.for_invocation(config)?;
     let _ = config;
     let tool = RegisteredTool::<AppContextFactory>::from_tool(
         ToolProvenance::Compatibility,
@@ -952,7 +950,7 @@ async fn context_direct_write_uses_typed_tool_registry() {
     )
     .expect("build app context");
     let execution_context = app_ctx
-        .for_invocation(ExecutionPlane::Tool, PlaneTier::Core, &config)
+        .for_invocation(&config)
         .expect("build execution context");
     let request = ToolCoreRequest {
         tool_name: "write".to_owned(),

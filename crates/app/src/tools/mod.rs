@@ -410,15 +410,9 @@ pub(crate) async fn execute_kernel_tool_request(
         })?;
 
         let typed_path = ToolPath::from(request.tool_name.clone());
-        let execution_context = ctx
-            .for_invocation(
-                loong_contracts::ExecutionPlane::Tool,
-                loong_contracts::PlaneTier::Core,
-                &effective_config,
-            )
-            .map_err(|error| {
-                loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(error))
-            })?;
+        let execution_context = ctx.for_invocation(&effective_config).map_err(|error| {
+            loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(error))
+        })?;
 
         if request.tool_name == "tool.invoke" {
             ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(

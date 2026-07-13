@@ -6,8 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use loong_contracts::{
-    Capabilities, CapabilityToken, ExecutionPlane, GovernedSessionMode, InvocationOutcome,
-    PlaneTier, ToolPlaneError,
+    Capabilities, CapabilityToken, GovernedSessionMode, InvocationOutcome, ToolPlaneError,
 };
 use loong_core::policy::context::{ContextFactory, PolicyContext};
 use loong_kernel::access::fs::{FsPathPolicyContext, FsResolutionContext};
@@ -61,8 +60,6 @@ impl fmt::Debug for AppContext {
             .debug_struct("AppContext")
             .field("session_id", &self.session_id)
             .field("parent_session_id", &self.parent_session_id)
-            .field("plane", &self.plane)
-            .field("tier", &self.tier)
             .field("session_mode", &self.session_mode)
             .finish_non_exhaustive()
     }
@@ -80,8 +77,6 @@ pub struct AppContextInner {
     pub(crate) token: Arc<CapabilityToken>,
     pub(crate) tool_runtime_config: Arc<crate::tools::runtime_config::ToolRuntimeConfig>,
     pub(crate) effective_capabilities: Capabilities,
-    pub(crate) plane: ExecutionPlane,
-    pub(crate) tier: PlaneTier,
     pub(crate) fs_resolution_root: Arc<PathBuf>,
     pub(crate) fs_allowed_roots: Arc<[PathBuf]>,
     pub session_id: String,
@@ -137,8 +132,6 @@ impl AppContext {
                 token: Arc::new(token),
                 tool_runtime_config: Arc::new(tool_runtime_config),
                 effective_capabilities,
-                plane: ExecutionPlane::Runtime,
-                tier: PlaneTier::Core,
                 fs_resolution_root: Arc::new(fs_resolution_root),
                 fs_allowed_roots: fs_allowed_roots.into(),
                 session_id,
@@ -485,26 +478,14 @@ impl AppContext {
         self.tool_runtime_config.as_ref()
     }
 
-    #[must_use]
-    pub fn plane(&self) -> ExecutionPlane {
-        self.plane
-    }
-
-    #[must_use]
-    pub fn tier(&self) -> PlaneTier {
-        self.tier
-    }
-
+    // Typed execution domains are expressed by ToolInvocation, AccessCx, and concrete
+    // Action types; legacy routes are passed explicitly only at legacy kernel boundaries.
     pub(crate) fn for_invocation(
         &self,
-        plane: ExecutionPlane,
-        tier: PlaneTier,
         tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
     ) -> Result<Self, String> {
         self.for_invocation_with_capabilities(
             self.effective_capabilities.clone(),
-            plane,
-            tier,
             tool_runtime_config,
         )
     }
@@ -512,8 +493,6 @@ impl AppContext {
     pub(crate) fn for_invocation_with_capabilities(
         &self,
         effective_capabilities: Capabilities,
-        plane: ExecutionPlane,
-        tier: PlaneTier,
         tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
     ) -> Result<Self, String> {
         if !effective_capabilities.is_subset(&self.effective_capabilities) {
@@ -535,8 +514,6 @@ impl AppContext {
                 token: self.token.clone(),
                 tool_runtime_config: Arc::new(tool_runtime_config.clone()),
                 effective_capabilities,
-                plane,
-                tier,
                 fs_resolution_root: Arc::new(fs_resolution_root),
                 fs_allowed_roots: fs_allowed_roots.into(),
                 session_id: self.session_id.clone(),
@@ -1177,12 +1154,7 @@ mod tests {
         let narrowed = Capabilities::from([Capability::MemoryRead]);
 
         let execution_context = context
-            .for_invocation_with_capabilities(
-                narrowed.clone(),
-                ExecutionPlane::Memory,
-                PlaneTier::Core,
-                context.tool_runtime_config(),
-            )
+            .for_invocation_with_capabilities(narrowed.clone(), context.tool_runtime_config())
             .expect("narrowed execution context should build");
 
         assert_eq!(execution_context.allowed_capabilities().as_ref(), &narrowed);
@@ -1200,12 +1172,9 @@ mod tests {
         let context = bootstrap_test_app_context("test-agent", 60).expect("bootstrap context");
         let widened = Capabilities::from([Capability::MemoryRead, Capability::ControlRead]);
 
-        let error = match context.for_invocation_with_capabilities(
-            widened,
-            ExecutionPlane::Memory,
-            PlaneTier::Core,
-            context.tool_runtime_config(),
-        ) {
+        let error = match context
+            .for_invocation_with_capabilities(widened, context.tool_runtime_config())
+        {
             Ok(_) => panic!("execution context must not add capabilities"),
             Err(error) => error,
         };
@@ -1222,8 +1191,6 @@ mod tests {
         let parent = context
             .for_invocation_with_capabilities(
                 Capabilities::from([Capability::MemoryRead]),
-                ExecutionPlane::Memory,
-                PlaneTier::Core,
                 context.tool_runtime_config(),
             )
             .expect("parent execution context should build");
@@ -1245,11 +1212,7 @@ mod tests {
     async fn typed_tool_capability_override_rejects_added_capabilities() {
         let context = bootstrap_test_app_context("test-agent", 60).expect("bootstrap context");
         let execution_context = context
-            .for_invocation(
-                ExecutionPlane::Tool,
-                PlaneTier::Core,
-                context.tool_runtime_config(),
-            )
+            .for_invocation(context.tool_runtime_config())
             .expect("build execution context");
         let invocation = execution_context
             .tool(ToolPath::from("read"))
@@ -1280,11 +1243,7 @@ mod tests {
         let context = bootstrap_app_context_with_config("test-agent", 60, &config)
             .expect("bootstrap context");
         let execution_context = context
-            .for_invocation(
-                ExecutionPlane::Tool,
-                PlaneTier::Core,
-                context.tool_runtime_config(),
-            )
+            .for_invocation(context.tool_runtime_config())
             .expect("build execution context");
         let invocation = execution_context
             .tool(ToolPath::from("read"))
@@ -1351,11 +1310,7 @@ mod tests {
         let request = crate::memory::build_read_context_request("kernel-bootstrap-env-session");
         let caps = BTreeSet::from([Capability::MemoryRead]);
         let execution_context = context
-            .for_invocation(
-                ExecutionPlane::Memory,
-                PlaneTier::Core,
-                context.tool_runtime_config(),
-            )
+            .for_invocation(context.tool_runtime_config())
             .expect("build memory execution context");
         let outcome = context
             .runtime()

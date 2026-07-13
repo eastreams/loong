@@ -152,11 +152,7 @@ async fn mvp_memory_adapter_routes_through_kernel() {
     )
     .expect("build app context");
     let execution_context = app_context
-        .for_invocation(
-            loong_contracts::ExecutionPlane::Memory,
-            loong_contracts::PlaneTier::Core,
-            &tool_runtime_config,
-        )
+        .for_invocation(&tool_runtime_config)
         .expect("build memory execution context");
     let outcome = runtime
         .kernel()
