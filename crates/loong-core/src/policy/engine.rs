@@ -53,7 +53,7 @@ pub trait PolicyEngine<C: ContextFactory>: Sync {
                 reason: _,
             } => Ok(ActionGrant::new(
                 self.next_grant_id().await,
-                ActionGrantInfo,
+                ActionGrantInfo { report },
                 action,
             )),
             PolicyOutcome::Deny {

@@ -1,13 +1,16 @@
-use loong_contracts::GrantId;
+use loong_contracts::{GrantId, PolicyReport};
 
 use crate::policy::action::{Action, ActionMeta};
 
-/// Placeholder for structured metadata minted with an action grant.
+/// Policy evidence minted with an action grant.
 ///
-/// Keep this empty until grant metadata has a concrete report/audit shape.
-/// Callers should not thread side-channel metadata around `Granted<A>`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ActionGrantInfo;
+/// The report is the same evaluation that authorized the action. Keeping it on
+/// the grant prevents audit callers from re-running policy or reconstructing
+/// authorization evidence from side channels.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActionGrantInfo {
+    pub report: PolicyReport,
+}
 
 /// Authorized action plus grant metadata returned by a policy engine.
 #[derive(Debug)]
