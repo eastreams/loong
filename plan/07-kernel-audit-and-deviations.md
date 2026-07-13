@@ -9,23 +9,31 @@ Kernel 是 governance authority：
 - 验证 pack/token/revocation/time/capability boundary；
 - 运行 typed policy pipeline；
 - 发放 `ActionGrant<A>` / `Granted<A>`；
-- 持有 audit sink、clock、event/grant identity；
+- 持有 audit sink、clock、authorization/event/grant identity；
 - 不持有 typed ToolPlane，不 dispatch concrete tool，不拥有 app Session/Context。
 
 tool invocation、filesystem operation 和其它 domain intent 都走同一个 generic action grant
 contract。不要增加 `AuthorizedToolInvocation`、tool-specific receipt 或只把 generic grant 包一层的
 helper。
 
-现有 `loong_core::kernel::Kernel<C>` trait 只为 Access 暴露 `policy_engine()`，已经满足当前跨 crate
-需求。没有第二个 concrete kernel 或外部 caller 的真实需求前，不提取更宽的 forwarding
+现有 `loong_core::kernel::Kernel<C>` trait 只为 Access 暴露 `policy_engine()`，导致 direct Access
+绕过 token 复查与 generic authorization audit。目标 contract 应直接暴露最小 generic grant
+boundary：Access 依赖 core trait 并持有 Kernel 引用，不能依赖 concrete `loong-kernel`，也不能只
+拿裸 `PolicyEngine`。统一 Context 通过 core-owned `ActionAuthorizationContext` 从 Session 借出
+`CapabilityToken`；Kernel 从 token 解析 pack id、从自己的 clock 取时间，并结合 child Context 的
+effective capabilities 完成检查。contract 返回 core-owned typed `AuthorizationError`，不能暴露
+concrete `KernelError`；Access error 用 `thiserror` 透明承载它。不要为此增加第二套宽 forwarding
 governance trait。
 
 ## Audit Invariant
 
 audit 分为两个强制边界：
 
-1. **Authorization evidence**：Kernel generic grant 记录 action metadata、required caps、pack/token
-   结果、policy report、allow/deny 和 grant id。deny 不进入 execution。
+1. **Authorization evidence**：Kernel 在 policy evaluation 前分配只用于 audit correlation 的
+   authorization attempt id。每个已结束 attempt 记录一条 terminal event；permission
+   request/resolution/failure 另记零到多条关联 interaction event。generic grant 记录 action
+   metadata、required caps、pack/token 结果、policy report 与 allow/deny；成功 grant 另有 grant
+   id。deny 不进入 execution。
 2. **Execution evidence**：grant consumption owner 记录 completed/failed/input-error/cancelled。对 tool
    是 `ctx.tool(...).invoke(...)`；对 fs 是 concrete `Granted<Action>::run(ctx)`。
 
@@ -57,12 +65,14 @@ execution evidence。
 
 ### Generic grant evidence 不完整
 
-- `PolicyEngine::grant` 在 allow 时取得完整 `PolicyReport`，但 `ActionGrantInfo` 为空，allow report
-  被丢弃。
+- `ActionGrantInfo` 已保存完整 allow `PolicyReport`，但 direct Access 仍调用
+  `PolicyEngine::grant`，绕过 Kernel 的 token expiry/revocation 复查与 authorization audit。
 - `Kernel::grant_action` 对 token/policy deny 仍转换成 legacy `PolicyError` 并记录旧 authorization
-  denial；没有统一记录 action metadata、report 和 grant id。
+  denial；没有统一记录 action metadata、attempt id、report 和 grant id。
 - `KernelInvocationContext::request_parameters()` 仍让 legacy `PolicyAny` 从 Context 读取另一份请求
   JSON，而不是读取 `ActionMeta::payload()`。
+- permission decision 当前与 allow/deny 一样立即终止 pipeline；registry 尚未编码“hard constraints
+  先于 terminal consent”，较早的 permission policy 仍可能跳过后续 typed hard deny。
 
 ### Tool execution audit ownership 未收敛
 
