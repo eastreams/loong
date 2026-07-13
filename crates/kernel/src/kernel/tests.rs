@@ -4,13 +4,64 @@ use loong_contracts::{
     AuditEventKind, Capability, ExecutionRoute, HarnessKind, InvocationOutcome,
     VerticalPackManifest,
 };
-use loong_core::policy::action::{ActionMeta, ActionMetadata};
+use loong_core::policy::{
+    action::{ActionMeta, ActionMetadata},
+    context::ContextFactory,
+};
 use serde_json::json;
 
 use super::Kernel;
 use crate::test_support::{TestContextFactory, TestPolicyContext};
 use crate::{AllowPolicy, InMemoryAuditSink, PolicyPipeline, SystemClock};
 use std::sync::Arc;
+
+struct MinimalContextFactory;
+
+impl ContextFactory for MinimalContextFactory {
+    type Cx<'a> = ();
+}
+
+#[test]
+fn kernel_context_free_api_does_not_require_legacy_invocation_context() {
+    let mut kernel = Kernel::<MinimalContextFactory>::new();
+    let pack_id = "context-free";
+
+    kernel
+        .register_pack(VerticalPackManifest {
+            pack_id: pack_id.to_owned(),
+            domain: "kernel".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: None,
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::ObserveTelemetry]),
+            metadata: Default::default(),
+        })
+        .expect("pack should register without an invocation context");
+    assert_eq!(
+        kernel
+            .get_namespace(pack_id)
+            .map(|namespace| namespace.pack_id.as_str()),
+        Some(pack_id)
+    );
+
+    let token = kernel
+        .issue_token(pack_id, "context-free-agent", 120)
+        .expect("token should issue without an invocation context");
+    kernel
+        .revoke_token(&token.token_id, Some(&token.agent_id))
+        .expect("token should revoke without an invocation context");
+    kernel
+        .record_audit_event(
+            None,
+            AuditEventKind::TokenRevoked {
+                token_id: "external-token".to_owned(),
+            },
+        )
+        .expect("audit event should record without an invocation context");
+}
 
 fn kernel_with_tool_invocation_policy() -> (Kernel<TestContextFactory>, Arc<InMemoryAuditSink>) {
     let mut policy = PolicyPipeline::<TestContextFactory>::new();

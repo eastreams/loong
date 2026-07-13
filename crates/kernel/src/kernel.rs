@@ -165,8 +165,7 @@ where
 
 impl<C> Kernel<C>
 where
-    C: ContextFactory + Send + Sync,
-    for<'a> C::Cx<'a>: KernelInvocationContext,
+    C: ContextFactory,
 {
     pub fn register_pack(&mut self, pack: VerticalPackManifest) -> Result<(), KernelError> {
         pack.validate()?;
@@ -251,88 +250,6 @@ where
     pub fn set_default_core_tool_adapter(&mut self, name: &str) -> Result<(), KernelError> {
         self.legacy_tool_plane.set_default_core_adapter(name)?;
         Ok(())
-    }
-
-    /// Grant one typed action without executing it.
-    ///
-    /// Kernel owns pack/token/policy authorization, but not the concrete app
-    /// registry that will consume the grant.
-    pub async fn grant_action<A>(
-        &self,
-        pack_id: &str,
-        token: &CapabilityToken,
-        action: A,
-        ctx: &C::Cx<'_>,
-    ) -> Result<ActionGrant<A>, KernelError>
-    where
-        A: ActionMeta + 'static,
-    {
-        let pack = self.pack_manifest(pack_id)?;
-        let required_capabilities = {
-            let metadata = action.metadata();
-            metadata
-                .required_capabilities
-                .iter()
-                .copied()
-                .collect::<BTreeSet<_>>()
-        };
-        self.assert_pack_grants(pack, &required_capabilities)?;
-        let now = ctx.now_epoch_s();
-        if let Err(policy_error) = self.authorize_token(pack, token, now, &required_capabilities) {
-            self.record_authorization_denial(pack, token, now, &policy_error)?;
-            return Err(KernelError::Policy(policy_error));
-        }
-
-        match self.policy.grant(ctx, action).await {
-            Ok(grant) => {
-                // Policy may wait for an external permission decision. Recheck
-                // token revocation/expiry after that await before releasing the
-                // grant to an execution boundary.
-                let post_policy_now_epoch_s = ctx.now_epoch_s();
-                if let Err(policy_error) = self.authorize_token(
-                    pack,
-                    token,
-                    post_policy_now_epoch_s,
-                    &required_capabilities,
-                ) {
-                    self.record_authorization_denial(
-                        pack,
-                        token,
-                        post_policy_now_epoch_s,
-                        &policy_error,
-                    )?;
-                    return Err(KernelError::Policy(policy_error));
-                }
-                Ok(grant)
-            }
-            Err(grant_error) => {
-                let policy_error = policy_engine_error(grant_error);
-                self.record_authorization_denial(pack, token, now, &policy_error)?;
-                Err(KernelError::Policy(policy_error))
-            }
-        }
-    }
-
-    /// Record the outcome of an app-owned tool invocation.
-    ///
-    /// Tool implementations never receive audit capability. App orchestration
-    /// records the dispatch outcome here after consuming a tool invocation
-    /// grant; legacy adapters keep `PlaneInvoked` until they are migrated.
-    pub fn record_tool_invocation(
-        &self,
-        ctx: &C::Cx<'_>,
-        path_display: impl Into<String>,
-        required_capabilities: &BTreeSet<Capability>,
-        outcome: InvocationOutcome,
-    ) -> Result<(), KernelError> {
-        self.record_tool_invocation_event(
-            ctx.now_epoch_s(),
-            Some(ctx.token().agent_id.clone()),
-            ctx.pack().pack_id.clone(),
-            path_display.into(),
-            required_capabilities,
-            outcome,
-        )
     }
 
     pub fn register_core_memory_adapter<A: CoreMemoryAdapter + 'static>(&mut self, adapter: A) {
@@ -447,6 +364,285 @@ where
             kind,
         ))?;
         Ok(())
+    }
+
+    /// Resolve the registered manifest that defines a token's pack boundary.
+    ///
+    /// Context constructors use this lookup instead of accepting a second,
+    /// caller-supplied manifest that could disagree with kernel authority.
+    pub fn pack_manifest(&self, pack_id: &str) -> Result<&VerticalPackManifest, KernelError> {
+        self.packs
+            .get(pack_id)
+            .ok_or_else(|| KernelError::PackNotFound(pack_id.to_owned()))
+    }
+
+    fn assert_connector_allowed(
+        &self,
+        pack: &VerticalPackManifest,
+        connector_name: &str,
+    ) -> Result<(), KernelError> {
+        if !pack.allows_connector(connector_name) {
+            return Err(KernelError::ConnectorNotAllowed {
+                connector: connector_name.to_owned(),
+                pack_id: pack.pack_id.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    fn record_plane_invocation(
+        &self,
+        record: PlaneInvocationRecord<'_>,
+    ) -> Result<(), KernelError> {
+        self.audit.record(self.new_event(
+            record.timestamp_epoch_s,
+            Some(record.agent_id.to_owned()),
+            AuditEventKind::PlaneInvoked {
+                pack_id: record.pack_id.to_owned(),
+                plane: record.plane,
+                tier: record.tier,
+                primary_adapter: record.primary_adapter,
+                delegated_core_adapter: record.delegated_core_adapter,
+                operation: record.operation,
+                required_capabilities: record.required_capabilities.iter().copied().collect(),
+            },
+        ))?;
+        Ok(())
+    }
+
+    fn record_tool_invocation_event(
+        &self,
+        timestamp_epoch_s: u64,
+        agent_id: Option<String>,
+        pack_id: String,
+        path_display: String,
+        required_capabilities: &BTreeSet<Capability>,
+        outcome: InvocationOutcome,
+    ) -> Result<(), KernelError> {
+        self.audit.record(self.new_event(
+            timestamp_epoch_s,
+            agent_id,
+            AuditEventKind::ToolInvocation {
+                pack_id,
+                path_display,
+                required_capabilities: required_capabilities.iter().copied().collect(),
+                outcome,
+            },
+        ))?;
+        Ok(())
+    }
+
+    fn assert_pack_grants(
+        &self,
+        pack: &VerticalPackManifest,
+        required_capabilities: &BTreeSet<Capability>,
+    ) -> Result<(), KernelError> {
+        for capability in required_capabilities {
+            if !pack.grants(*capability) {
+                return Err(KernelError::PackCapabilityBoundary {
+                    pack_id: pack.pack_id.clone(),
+                    capability: *capability,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_tool_call_denial(
+        &self,
+        pack: &VerticalPackManifest,
+        token: &CapabilityToken,
+        now_epoch_s: u64,
+        error: &crate::errors::PolicyError,
+    ) -> Result<(), KernelError> {
+        self.audit.record(self.new_event(
+            now_epoch_s,
+            Some(token.agent_id.clone()),
+            AuditEventKind::AuthorizationDenied {
+                pack_id: pack.pack_id.clone(),
+                token_id: token.token_id.clone(),
+                reason: error.to_string(),
+            },
+        ))?;
+        Ok(())
+    }
+
+    fn record_authorization_denial(
+        &self,
+        pack: &VerticalPackManifest,
+        token: &CapabilityToken,
+        now_epoch_s: u64,
+        error: &crate::errors::PolicyError,
+    ) -> Result<(), KernelError> {
+        self.audit.record(self.new_event(
+            now_epoch_s,
+            Some(token.agent_id.clone()),
+            AuditEventKind::AuthorizationDenied {
+                pack_id: pack.pack_id.clone(),
+                token_id: token.token_id.clone(),
+                reason: error.to_string(),
+            },
+        ))?;
+        Ok(())
+    }
+
+    fn authorize_token(
+        &self,
+        pack: &VerticalPackManifest,
+        token: &CapabilityToken,
+        now_epoch_s: u64,
+        required_capabilities: &BTreeSet<Capability>,
+    ) -> Result<(), crate::errors::PolicyError> {
+        if self
+            .revoked_tokens
+            .lock()
+            .map_err(|_err| crate::errors::PolicyError::RevokedToken {
+                token_id: token.token_id.clone(),
+            })?
+            .contains(&token.token_id)
+        {
+            return Err(crate::errors::PolicyError::RevokedToken {
+                token_id: token.token_id.clone(),
+            });
+        }
+
+        let threshold = self.revoked_below_generation.load(Ordering::Relaxed);
+        if token.generation > 0 && token.generation <= threshold {
+            return Err(crate::errors::PolicyError::RevokedToken {
+                token_id: token.token_id.clone(),
+            });
+        }
+
+        if token.pack_id != pack.pack_id {
+            return Err(crate::errors::PolicyError::PackMismatch {
+                token_pack_id: token.pack_id.clone(),
+                runtime_pack_id: pack.pack_id.clone(),
+            });
+        }
+
+        if now_epoch_s > token.expires_at_epoch_s {
+            return Err(crate::errors::PolicyError::ExpiredToken {
+                token_id: token.token_id.clone(),
+                expires_at_epoch_s: token.expires_at_epoch_s,
+            });
+        }
+
+        for capability in required_capabilities {
+            if !token.allowed_capabilities.contains(capability) {
+                return Err(crate::errors::PolicyError::MissingCapability {
+                    token_id: token.token_id.clone(),
+                    capability: *capability,
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    fn new_event(
+        &self,
+        timestamp_epoch_s: u64,
+        agent_id: Option<String>,
+        kind: AuditEventKind,
+    ) -> AuditEvent {
+        let seq = self.event_seq.fetch_add(1, Ordering::Relaxed) + 1;
+        AuditEvent {
+            event_id: format!("evt-{seq:016x}"),
+            timestamp_epoch_s,
+            agent_id,
+            kind,
+        }
+    }
+}
+
+impl<C> Kernel<C>
+where
+    C: ContextFactory,
+    for<'a> C::Cx<'a>: KernelInvocationContext,
+{
+    /// Grant one typed action without executing it.
+    ///
+    /// Kernel owns pack/token/policy authorization, but not the concrete app
+    /// registry that will consume the grant.
+    /// This token-shaped compatibility API owns the legacy context bound;
+    /// typed `Kernel`/`Access` APIs must not inherit it.
+    pub async fn grant_action<A>(
+        &self,
+        pack_id: &str,
+        token: &CapabilityToken,
+        action: A,
+        ctx: &C::Cx<'_>,
+    ) -> Result<ActionGrant<A>, KernelError>
+    where
+        A: ActionMeta + 'static,
+    {
+        let pack = self.pack_manifest(pack_id)?;
+        let required_capabilities = {
+            let metadata = action.metadata();
+            metadata
+                .required_capabilities
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+        };
+        self.assert_pack_grants(pack, &required_capabilities)?;
+        let now = ctx.now_epoch_s();
+        if let Err(policy_error) = self.authorize_token(pack, token, now, &required_capabilities) {
+            self.record_authorization_denial(pack, token, now, &policy_error)?;
+            return Err(KernelError::Policy(policy_error));
+        }
+
+        match self.policy.grant(ctx, action).await {
+            Ok(grant) => {
+                // Policy may wait for an external permission decision. Recheck
+                // token revocation/expiry after that await before releasing the
+                // grant to an execution boundary.
+                let post_policy_now_epoch_s = ctx.now_epoch_s();
+                if let Err(policy_error) = self.authorize_token(
+                    pack,
+                    token,
+                    post_policy_now_epoch_s,
+                    &required_capabilities,
+                ) {
+                    self.record_authorization_denial(
+                        pack,
+                        token,
+                        post_policy_now_epoch_s,
+                        &policy_error,
+                    )?;
+                    return Err(KernelError::Policy(policy_error));
+                }
+                Ok(grant)
+            }
+            Err(grant_error) => {
+                let policy_error = policy_engine_error(grant_error);
+                self.record_authorization_denial(pack, token, now, &policy_error)?;
+                Err(KernelError::Policy(policy_error))
+            }
+        }
+    }
+
+    /// Record the outcome of an app-owned tool invocation.
+    ///
+    /// Tool implementations never receive audit capability. App orchestration
+    /// records the dispatch outcome here after consuming a tool invocation
+    /// grant; legacy adapters keep `PlaneInvoked` until they are migrated.
+    pub fn record_tool_invocation(
+        &self,
+        ctx: &C::Cx<'_>,
+        path_display: impl Into<String>,
+        required_capabilities: &BTreeSet<Capability>,
+        outcome: InvocationOutcome,
+    ) -> Result<(), KernelError> {
+        self.record_tool_invocation_event(
+            ctx.now_epoch_s(),
+            Some(ctx.token().agent_id.clone()),
+            ctx.pack().pack_id.clone(),
+            path_display.into(),
+            required_capabilities,
+            outcome,
+        )
     }
 
     pub async fn authorize_operation(
@@ -991,16 +1187,6 @@ where
         Ok(outcome)
     }
 
-    /// Resolve the registered manifest that defines a token's pack boundary.
-    ///
-    /// Context constructors use this lookup instead of accepting a second,
-    /// caller-supplied manifest that could disagree with kernel authority.
-    pub fn pack_manifest(&self, pack_id: &str) -> Result<&VerticalPackManifest, KernelError> {
-        self.packs
-            .get(pack_id)
-            .ok_or_else(|| KernelError::PackNotFound(pack_id.to_owned()))
-    }
-
     async fn authorize_pack_operation(
         &self,
         ctx: &C::Cx<'_>,
@@ -1024,120 +1210,11 @@ where
         .await
     }
 
-    fn assert_connector_allowed(
-        &self,
-        pack: &VerticalPackManifest,
-        connector_name: &str,
-    ) -> Result<(), KernelError> {
-        if !pack.allows_connector(connector_name) {
-            return Err(KernelError::ConnectorNotAllowed {
-                connector: connector_name.to_owned(),
-                pack_id: pack.pack_id.clone(),
-            });
-        }
-        Ok(())
-    }
-
-    fn record_plane_invocation(
-        &self,
-        record: PlaneInvocationRecord<'_>,
-    ) -> Result<(), KernelError> {
-        self.audit.record(self.new_event(
-            record.timestamp_epoch_s,
-            Some(record.agent_id.to_owned()),
-            AuditEventKind::PlaneInvoked {
-                pack_id: record.pack_id.to_owned(),
-                plane: record.plane,
-                tier: record.tier,
-                primary_adapter: record.primary_adapter,
-                delegated_core_adapter: record.delegated_core_adapter,
-                operation: record.operation,
-                required_capabilities: record.required_capabilities.iter().copied().collect(),
-            },
-        ))?;
-        Ok(())
-    }
-
-    fn record_tool_invocation_event(
-        &self,
-        timestamp_epoch_s: u64,
-        agent_id: Option<String>,
-        pack_id: String,
-        path_display: String,
-        required_capabilities: &BTreeSet<Capability>,
-        outcome: InvocationOutcome,
-    ) -> Result<(), KernelError> {
-        self.audit.record(self.new_event(
-            timestamp_epoch_s,
-            agent_id,
-            AuditEventKind::ToolInvocation {
-                pack_id,
-                path_display,
-                required_capabilities: required_capabilities.iter().copied().collect(),
-                outcome,
-            },
-        ))?;
-        Ok(())
-    }
-
-    fn assert_pack_grants(
-        &self,
-        pack: &VerticalPackManifest,
-        required_capabilities: &BTreeSet<Capability>,
-    ) -> Result<(), KernelError> {
-        for capability in required_capabilities {
-            if !pack.grants(*capability) {
-                return Err(KernelError::PackCapabilityBoundary {
-                    pack_id: pack.pack_id.clone(),
-                    capability: *capability,
-                });
-            }
-        }
-        Ok(())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn record_tool_call_denial(
-        &self,
-        pack: &VerticalPackManifest,
-        token: &CapabilityToken,
-        now_epoch_s: u64,
-        error: &crate::errors::PolicyError,
-    ) -> Result<(), KernelError> {
-        self.audit.record(self.new_event(
-            now_epoch_s,
-            Some(token.agent_id.clone()),
-            AuditEventKind::AuthorizationDenied {
-                pack_id: pack.pack_id.clone(),
-                token_id: token.token_id.clone(),
-                reason: error.to_string(),
-            },
-        ))?;
-        Ok(())
-    }
-
-    fn record_authorization_denial(
-        &self,
-        pack: &VerticalPackManifest,
-        token: &CapabilityToken,
-        now_epoch_s: u64,
-        error: &crate::errors::PolicyError,
-    ) -> Result<(), KernelError> {
-        self.audit.record(self.new_event(
-            now_epoch_s,
-            Some(token.agent_id.clone()),
-            AuditEventKind::AuthorizationDenied {
-                pack_id: pack.pack_id.clone(),
-                token_id: token.token_id.clone(),
-                reason: error.to_string(),
-            },
-        ))?;
-        Ok(())
-    }
-
     // TODO(deprecate-legacy-kernel-auth): add `#[deprecated]` once old kernel
     // envelopes stop returning `PolicyError`; new side effects must consume
     // `Granted<ConcreteAction>` at their execution boundary.
+    // Keep this context bound local to legacy pack/token envelopes; typed
+    // Kernel/Access APIs must use their action-specific context bounds.
     async fn authorize_or_audit_denial(
         &self,
         ctx: &C::Cx<'_>,
@@ -1177,74 +1254,6 @@ where
 
         let payload = granted.into_action().into_payload();
         Ok((post_policy_now_epoch_s, payload))
-    }
-
-    fn authorize_token(
-        &self,
-        pack: &VerticalPackManifest,
-        token: &CapabilityToken,
-        now_epoch_s: u64,
-        required_capabilities: &BTreeSet<Capability>,
-    ) -> Result<(), crate::errors::PolicyError> {
-        if self
-            .revoked_tokens
-            .lock()
-            .map_err(|_err| crate::errors::PolicyError::RevokedToken {
-                token_id: token.token_id.clone(),
-            })?
-            .contains(&token.token_id)
-        {
-            return Err(crate::errors::PolicyError::RevokedToken {
-                token_id: token.token_id.clone(),
-            });
-        }
-
-        let threshold = self.revoked_below_generation.load(Ordering::Relaxed);
-        if token.generation > 0 && token.generation <= threshold {
-            return Err(crate::errors::PolicyError::RevokedToken {
-                token_id: token.token_id.clone(),
-            });
-        }
-
-        if token.pack_id != pack.pack_id {
-            return Err(crate::errors::PolicyError::PackMismatch {
-                token_pack_id: token.pack_id.clone(),
-                runtime_pack_id: pack.pack_id.clone(),
-            });
-        }
-
-        if now_epoch_s > token.expires_at_epoch_s {
-            return Err(crate::errors::PolicyError::ExpiredToken {
-                token_id: token.token_id.clone(),
-                expires_at_epoch_s: token.expires_at_epoch_s,
-            });
-        }
-
-        for capability in required_capabilities {
-            if !token.allowed_capabilities.contains(capability) {
-                return Err(crate::errors::PolicyError::MissingCapability {
-                    token_id: token.token_id.clone(),
-                    capability: *capability,
-                });
-            }
-        }
-
-        Ok(())
-    }
-
-    fn new_event(
-        &self,
-        timestamp_epoch_s: u64,
-        agent_id: Option<String>,
-        kind: AuditEventKind,
-    ) -> AuditEvent {
-        let seq = self.event_seq.fetch_add(1, Ordering::Relaxed) + 1;
-        AuditEvent {
-            event_id: format!("evt-{seq:016x}"),
-            timestamp_epoch_s,
-            agent_id,
-            kind,
-        }
     }
 }
 
