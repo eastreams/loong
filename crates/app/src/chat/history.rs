@@ -281,7 +281,6 @@ async fn load_manual_compaction_window_snapshot(
     let execution_context = app_ctx.for_invocation(
         ExecutionPlane::Memory,
         PlaneTier::Core,
-        None,
         app_ctx.tool_runtime_config(),
     )?;
     let outcome = app_ctx
@@ -444,7 +443,6 @@ pub(super) async fn load_history_lines(
         let execution_context = ctx.for_invocation(
             ExecutionPlane::Memory,
             PlaneTier::Core,
-            None,
             ctx.tool_runtime_config(),
         )?;
         let outcome = ctx

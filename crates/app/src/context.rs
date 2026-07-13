@@ -82,7 +82,6 @@ pub struct AppContextInner {
     pub(crate) effective_capabilities: Capabilities,
     pub(crate) plane: ExecutionPlane,
     pub(crate) tier: PlaneTier,
-    pub(crate) request_parameters: Option<Arc<Value>>,
     pub(crate) fs_resolution_root: Arc<PathBuf>,
     pub(crate) fs_allowed_roots: Arc<[PathBuf]>,
     pub session_id: String,
@@ -140,7 +139,6 @@ impl AppContext {
                 effective_capabilities,
                 plane: ExecutionPlane::Runtime,
                 tier: PlaneTier::Core,
-                request_parameters: None,
                 fs_resolution_root: Arc::new(fs_resolution_root),
                 fs_allowed_roots: fs_allowed_roots.into(),
                 session_id,
@@ -501,14 +499,12 @@ impl AppContext {
         &self,
         plane: ExecutionPlane,
         tier: PlaneTier,
-        request_parameters: Option<&Value>,
         tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
     ) -> Result<Self, String> {
         self.for_invocation_with_capabilities(
             self.effective_capabilities.clone(),
             plane,
             tier,
-            request_parameters,
             tool_runtime_config,
         )
     }
@@ -518,7 +514,6 @@ impl AppContext {
         effective_capabilities: Capabilities,
         plane: ExecutionPlane,
         tier: PlaneTier,
-        request_parameters: Option<&Value>,
         tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
     ) -> Result<Self, String> {
         if !effective_capabilities.is_subset(&self.effective_capabilities) {
@@ -542,7 +537,6 @@ impl AppContext {
                 effective_capabilities,
                 plane,
                 tier,
-                request_parameters: request_parameters.cloned().map(Arc::new),
                 fs_resolution_root: Arc::new(fs_resolution_root),
                 fs_allowed_roots: fs_allowed_roots.into(),
                 session_id: self.session_id.clone(),
@@ -748,10 +742,6 @@ impl KernelInvocationContext for AppContext {
 
     fn now_epoch_s(&self) -> u64 {
         self.runtime.kernel().now_epoch_s()
-    }
-
-    fn request_parameters(&self) -> Option<&Value> {
-        self.request_parameters.as_deref()
     }
 }
 
@@ -1191,7 +1181,6 @@ mod tests {
                 narrowed.clone(),
                 ExecutionPlane::Memory,
                 PlaneTier::Core,
-                None,
                 context.tool_runtime_config(),
             )
             .expect("narrowed execution context should build");
@@ -1215,7 +1204,6 @@ mod tests {
             widened,
             ExecutionPlane::Memory,
             PlaneTier::Core,
-            None,
             context.tool_runtime_config(),
         ) {
             Ok(_) => panic!("execution context must not add capabilities"),
@@ -1236,7 +1224,6 @@ mod tests {
                 Capabilities::from([Capability::MemoryRead]),
                 ExecutionPlane::Memory,
                 PlaneTier::Core,
-                None,
                 context.tool_runtime_config(),
             )
             .expect("parent execution context should build");
@@ -1261,7 +1248,6 @@ mod tests {
             .for_invocation(
                 ExecutionPlane::Tool,
                 PlaneTier::Core,
-                None,
                 context.tool_runtime_config(),
             )
             .expect("build execution context");
@@ -1297,7 +1283,6 @@ mod tests {
             .for_invocation(
                 ExecutionPlane::Tool,
                 PlaneTier::Core,
-                None,
                 context.tool_runtime_config(),
             )
             .expect("build execution context");
@@ -1369,7 +1354,6 @@ mod tests {
             .for_invocation(
                 ExecutionPlane::Memory,
                 PlaneTier::Core,
-                None,
                 context.tool_runtime_config(),
             )
             .expect("build memory execution context");

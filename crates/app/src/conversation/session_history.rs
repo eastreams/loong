@@ -343,7 +343,6 @@ pub(crate) async fn load_assistant_contents_from_session_window_detailed(
             .for_invocation(
                 ExecutionPlane::Memory,
                 PlaneTier::Core,
-                None,
                 ctx.tool_runtime_config(),
             )
             .map_err(AssistantHistoryLoadError::kernel_request_failed)?;

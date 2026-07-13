@@ -5,6 +5,7 @@ use std::{
 
 use loong_contracts::{Capabilities, PermissionResolution, PolicyReport};
 use loong_core::{PermissionRequestError, PolicyGrantError};
+use serde_json::json;
 
 use super::*;
 use crate::{FixedClock, InMemoryAuditSink, Kernel, KernelError, PolicyError};
@@ -83,15 +84,9 @@ async fn policy_pipeline_parent_permission_is_a_terminal_outcome() {
         });
     let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(
-        &pack,
-        &token,
-        1,
-        ExecutionPlane::Tool,
-        PlaneTier::Core,
-        None,
-    );
-    let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+    let ctx = TestPolicyContext::new(&pack, &token, 1, ExecutionPlane::Tool, PlaneTier::Core);
+    let action =
+        LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
     let report = engine.decide(&ctx, &action).await;
 
@@ -118,15 +113,9 @@ async fn policy_pipeline_user_permission_is_a_terminal_outcome() {
         });
     let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(
-        &pack,
-        &token,
-        1,
-        ExecutionPlane::Tool,
-        PlaneTier::Core,
-        None,
-    );
-    let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+    let ctx = TestPolicyContext::new(&pack, &token, 1, ExecutionPlane::Tool, PlaneTier::Core);
+    let action =
+        LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
     let report = engine.decide(&ctx, &action).await;
 
@@ -154,7 +143,8 @@ async fn policy_engine_grants_after_parent_permission_and_retains_report() {
             decision: PolicyDecision::RequireParentPermission,
             reason: "parent must approve",
         });
-    let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+    let action =
+        LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
     let grant = engine
         .grant(&ctx, action)
@@ -185,7 +175,8 @@ async fn policy_engine_parent_escalation_requests_user_permission() {
             decision: PolicyDecision::RequireParentPermission,
             reason: "parent or user must approve",
         });
-    let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+    let action =
+        LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
     engine
         .grant(&ctx, action)
@@ -214,7 +205,8 @@ async fn policy_engine_direct_user_permission_skips_parent() {
             decision: PolicyDecision::RequireUserPermission,
             reason: "user must approve",
         });
-    let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+    let action =
+        LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
     engine
         .grant(&ctx, action)
@@ -243,7 +235,8 @@ async fn policy_engine_permission_denial_retains_policy_report() {
             decision: PolicyDecision::RequireParentPermission,
             reason: "parent must approve",
         });
-    let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+    let action =
+        LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
     let error = engine
         .grant(&ctx, action)
@@ -274,7 +267,8 @@ async fn policy_engine_permission_request_failure_retains_policy_report() {
             decision: PolicyDecision::RequireParentPermission,
             reason: "parent must approve",
         });
-    let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+    let action =
+        LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
     let error = engine
         .grant(&ctx, action)
@@ -305,7 +299,8 @@ async fn policy_engine_user_permission_cannot_escalate() {
             decision: PolicyDecision::RequireUserPermission,
             reason: "user must approve",
         });
-    let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+    let action =
+        LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
     let error = engine
         .grant(&ctx, action)
@@ -330,15 +325,9 @@ async fn policy_engine_default_parent_permission_hook_returns_unavailable() {
     });
     let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(
-        &pack,
-        &token,
-        1,
-        ExecutionPlane::Tool,
-        PlaneTier::Core,
-        None,
-    );
-    let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+    let ctx = TestPolicyContext::new(&pack, &token, 1, ExecutionPlane::Tool, PlaneTier::Core);
+    let action =
+        LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
     let error = engine
         .grant(&ctx, action)
@@ -364,15 +353,9 @@ async fn policy_engine_default_user_permission_hook_returns_unavailable() {
     });
     let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(
-        &pack,
-        &token,
-        1,
-        ExecutionPlane::Tool,
-        PlaneTier::Core,
-        None,
-    );
-    let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+    let ctx = TestPolicyContext::new(&pack, &token, 1, ExecutionPlane::Tool, PlaneTier::Core);
+    let action =
+        LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
     let error = engine
         .grant(&ctx, action)
@@ -403,7 +386,11 @@ async fn policy_engine_capability_gate_precedes_permission_request() {
             decision: PolicyDecision::RequireUserPermission,
             reason: "user must approve",
         });
-    let action = LegacyKernelAction::new("read", BTreeSet::from([Capability::FilesystemRead]));
+    let action = LegacyKernelAction::new(
+        "read",
+        BTreeSet::from([Capability::FilesystemRead]),
+        json!({}),
+    );
 
     let error = engine
         .grant(&ctx, action)
@@ -483,10 +470,6 @@ impl KernelInvocationContext for ChangingAuthorityContext<'_> {
     fn now_epoch_s(&self) -> u64 {
         self.kernel.now_epoch_s()
     }
-
-    fn request_parameters(&self) -> Option<&serde_json::Value> {
-        None
-    }
 }
 
 #[tokio::test]
@@ -519,7 +502,7 @@ async fn kernel_rechecks_token_after_permission_approval() {
         .grant_action(
             &pack.pack_id,
             &token,
-            LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool])),
+            LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({})),
             &ctx,
         )
         .await

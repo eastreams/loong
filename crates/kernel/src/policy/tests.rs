@@ -4,6 +4,7 @@ use std::borrow::Cow;
 
 use loong_contracts::{Capabilities, ExecutionPlane, PlaneTier};
 use loong_core::PolicyGrantError;
+use serde_json::json;
 
 mod permission;
 
@@ -17,7 +18,6 @@ struct TestPolicyContext<'a> {
     pack: &'a VerticalPackManifest,
     token: &'a CapabilityToken,
     now_epoch_s: u64,
-    request_parameters: Option<&'a serde_json::Value>,
 }
 
 impl<'a> TestPolicyContext<'a> {
@@ -27,13 +27,11 @@ impl<'a> TestPolicyContext<'a> {
         now_epoch_s: u64,
         _plane: ExecutionPlane,
         _tier: PlaneTier,
-        request_parameters: Option<&'a serde_json::Value>,
     ) -> Self {
         Self {
             pack,
             token,
             now_epoch_s,
-            request_parameters,
         }
     }
 }
@@ -55,10 +53,6 @@ impl KernelInvocationContext for TestPolicyContext<'_> {
 
     fn now_epoch_s(&self) -> u64 {
         self.now_epoch_s
-    }
-
-    fn request_parameters(&self) -> Option<&serde_json::Value> {
-        self.request_parameters
     }
 }
 
@@ -184,15 +178,9 @@ async fn policy_pipeline_new_has_no_fallback_allow() {
     let engine = PolicyPipeline::<TestContextFactory>::new();
     let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(
-        &pack,
-        &token,
-        1,
-        ExecutionPlane::Tool,
-        PlaneTier::Core,
-        None,
-    );
-    let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+    let ctx = TestPolicyContext::new(&pack, &token, 1, ExecutionPlane::Tool, PlaneTier::Core);
+    let action =
+        LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
     let report = engine.decide(&ctx, &action).await;
 
@@ -211,15 +199,9 @@ async fn policy_pipeline_new_legacy_allow_fallback_grants_unmatched_actions() {
     let engine = PolicyPipeline::<TestContextFactory>::new_legacy_allow_fallback();
     let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(
-        &pack,
-        &token,
-        1,
-        ExecutionPlane::Tool,
-        PlaneTier::Core,
-        None,
-    );
-    let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+    let ctx = TestPolicyContext::new(&pack, &token, 1, ExecutionPlane::Tool, PlaneTier::Core);
+    let action =
+        LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
     let report = engine.decide(&ctx, &action).await;
 
@@ -236,14 +218,7 @@ async fn policy_pipeline_new_legacy_allow_fallback_does_not_grant_typed_actions(
     let engine = PolicyPipeline::<TestContextFactory>::new_legacy_allow_fallback();
     let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(
-        &pack,
-        &token,
-        1,
-        ExecutionPlane::Tool,
-        PlaneTier::Core,
-        None,
-    );
+    let ctx = TestPolicyContext::new(&pack, &token, 1, ExecutionPlane::Tool, PlaneTier::Core);
 
     let report = engine.decide(&ctx, &TypedOnlyAction).await;
 
@@ -264,15 +239,8 @@ async fn policy_pipeline_grants_actions_allowed_by_registered_policy() {
     let pack = pack();
     let token = token();
     let required_capabilities = BTreeSet::from([Capability::InvokeTool]);
-    let ctx = TestPolicyContext::new(
-        &pack,
-        &token,
-        1,
-        ExecutionPlane::Tool,
-        PlaneTier::Core,
-        None,
-    );
-    let action = LegacyKernelAction::new("tool", required_capabilities);
+    let ctx = TestPolicyContext::new(&pack, &token, 1, ExecutionPlane::Tool, PlaneTier::Core);
+    let action = LegacyKernelAction::new("tool", required_capabilities, json!({}));
 
     let grant = engine
         .grant(&ctx, action)
@@ -300,15 +268,8 @@ async fn policy_pipeline_pre_policy_can_block_legacy_actions() {
     let mut token = token();
     token.allowed_capabilities.insert(Capability::NetworkEgress);
     let required_capabilities = BTreeSet::from([Capability::NetworkEgress]);
-    let ctx = TestPolicyContext::new(
-        &pack,
-        &token,
-        1,
-        ExecutionPlane::Runtime,
-        PlaneTier::Core,
-        None,
-    );
-    let action = LegacyKernelAction::new("fetch", required_capabilities);
+    let ctx = TestPolicyContext::new(&pack, &token, 1, ExecutionPlane::Runtime, PlaneTier::Core);
+    let action = LegacyKernelAction::new("fetch", required_capabilities, json!({}));
 
     let error = engine
         .authorize_kernel_action(&ctx, action)
@@ -330,15 +291,12 @@ async fn policy_pipeline_grant_denies_action_missing_required_capability() {
     let engine = PolicyPipeline::<TestContextFactory>::new_legacy_allow_fallback();
     let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(
-        &pack,
-        &token,
-        1,
-        ExecutionPlane::Tool,
-        PlaneTier::Core,
-        None,
+    let ctx = TestPolicyContext::new(&pack, &token, 1, ExecutionPlane::Tool, PlaneTier::Core);
+    let action = LegacyKernelAction::new(
+        "read",
+        BTreeSet::from([Capability::FilesystemRead]),
+        json!({}),
     );
-    let action = LegacyKernelAction::new("read", BTreeSet::from([Capability::FilesystemRead]));
 
     let error = engine
         .grant(&ctx, action)
@@ -368,15 +326,9 @@ async fn policy_pipeline_report_preserves_pre_and_action_evaluation_stages() {
         });
     let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(
-        &pack,
-        &token,
-        1,
-        ExecutionPlane::Tool,
-        PlaneTier::Core,
-        None,
-    );
-    let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+    let ctx = TestPolicyContext::new(&pack, &token, 1, ExecutionPlane::Tool, PlaneTier::Core);
+    let action =
+        LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
     let report = engine.decide(&ctx, &action).await;
 
@@ -404,15 +356,9 @@ async fn policy_pipeline_report_preserves_registration_metadata() {
         });
     let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(
-        &pack,
-        &token,
-        1,
-        ExecutionPlane::Tool,
-        PlaneTier::Core,
-        None,
-    );
-    let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+    let ctx = TestPolicyContext::new(&pack, &token, 1, ExecutionPlane::Tool, PlaneTier::Core);
+    let action =
+        LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
     let report = engine.decide(&ctx, &action).await;
     let pre_registration = &report.evaluations[0].source.registration;
@@ -451,15 +397,9 @@ async fn policy_pipeline_typed_policy_only_matches_registered_action_type() {
     );
     let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(
-        &pack,
-        &token,
-        1,
-        ExecutionPlane::Tool,
-        PlaneTier::Core,
-        None,
-    );
-    let legacy_action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+    let ctx = TestPolicyContext::new(&pack, &token, 1, ExecutionPlane::Tool, PlaneTier::Core);
+    let legacy_action =
+        LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
     let legacy_report = engine.decide(&ctx, &legacy_action).await;
     let typed_report = engine.decide(&ctx, &TypedOnlyAction).await;
@@ -491,15 +431,9 @@ async fn policy_pipeline_pre_deny_prevents_typed_allow() {
         });
     let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(
-        &pack,
-        &token,
-        1,
-        ExecutionPlane::Tool,
-        PlaneTier::Core,
-        None,
-    );
-    let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+    let ctx = TestPolicyContext::new(&pack, &token, 1, ExecutionPlane::Tool, PlaneTier::Core);
+    let action =
+        LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
     let error = engine
         .grant(&ctx, action)
@@ -530,15 +464,9 @@ async fn policy_pipeline_allow_short_circuits_before_later_typed_deny() {
         });
     let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(
-        &pack,
-        &token,
-        1,
-        ExecutionPlane::Tool,
-        PlaneTier::Core,
-        None,
-    );
-    let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+    let ctx = TestPolicyContext::new(&pack, &token, 1, ExecutionPlane::Tool, PlaneTier::Core);
+    let action =
+        LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
     let report = engine.decide(&ctx, &action).await;
 
@@ -561,15 +489,9 @@ async fn policy_pipeline_typed_deny_prevents_fallback_allow() {
         .with_fallback_policy(AllowPolicy);
     let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(
-        &pack,
-        &token,
-        1,
-        ExecutionPlane::Tool,
-        PlaneTier::Core,
-        None,
-    );
-    let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+    let ctx = TestPolicyContext::new(&pack, &token, 1, ExecutionPlane::Tool, PlaneTier::Core);
+    let action =
+        LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
     let report = engine.decide(&ctx, &action).await;
 
@@ -599,15 +521,9 @@ async fn policy_pipeline_typed_allow_prevents_fallback_deny() {
         });
     let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(
-        &pack,
-        &token,
-        1,
-        ExecutionPlane::Tool,
-        PlaneTier::Core,
-        None,
-    );
-    let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+    let ctx = TestPolicyContext::new(&pack, &token, 1, ExecutionPlane::Tool, PlaneTier::Core);
+    let action =
+        LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
     let report = engine.decide(&ctx, &action).await;
 
@@ -639,15 +555,9 @@ async fn policy_pipeline_advance_skips_rest_of_current_subchain() {
         });
     let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(
-        &pack,
-        &token,
-        1,
-        ExecutionPlane::Tool,
-        PlaneTier::Core,
-        None,
-    );
-    let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+    let ctx = TestPolicyContext::new(&pack, &token, 1, ExecutionPlane::Tool, PlaneTier::Core);
+    let action =
+        LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
     let report = engine.decide(&ctx, &action).await;
 
@@ -667,15 +577,9 @@ async fn policy_pipeline_fallback_advance_defaults_to_deny() {
         });
     let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(
-        &pack,
-        &token,
-        1,
-        ExecutionPlane::Tool,
-        PlaneTier::Core,
-        None,
-    );
-    let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+    let ctx = TestPolicyContext::new(&pack, &token, 1, ExecutionPlane::Tool, PlaneTier::Core);
+    let action =
+        LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
     let report = engine.decide(&ctx, &action).await;
 
@@ -699,15 +603,9 @@ async fn policy_pipeline_all_continue_defaults_to_deny() {
     });
     let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(
-        &pack,
-        &token,
-        1,
-        ExecutionPlane::Tool,
-        PlaneTier::Core,
-        None,
-    );
-    let action = LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]));
+    let ctx = TestPolicyContext::new(&pack, &token, 1, ExecutionPlane::Tool, PlaneTier::Core);
+    let action =
+        LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
     let report = engine.decide(&ctx, &action).await;
 
@@ -729,15 +627,12 @@ async fn policy_pipeline_missing_required_capability_denies_before_policy_execut
     });
     let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(
-        &pack,
-        &token,
-        1,
-        ExecutionPlane::Tool,
-        PlaneTier::Core,
-        None,
+    let ctx = TestPolicyContext::new(&pack, &token, 1, ExecutionPlane::Tool, PlaneTier::Core);
+    let action = LegacyKernelAction::new(
+        "read",
+        BTreeSet::from([Capability::FilesystemRead]),
+        json!({}),
     );
-    let action = LegacyKernelAction::new("read", BTreeSet::from([Capability::FilesystemRead]));
 
     let error = engine
         .grant(&ctx, action)

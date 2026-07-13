@@ -493,7 +493,6 @@ where
             let execution_context = ctx.for_invocation(
                 ExecutionPlane::Memory,
                 PlaneTier::Core,
-                None,
                 ctx.tool_runtime_config(),
             )?;
             ctx.runtime()

@@ -1175,7 +1175,7 @@ async fn invoke_programmatic_connector_with_resilience(
         rate_wait_ms_total = rate_wait_ms_total.saturating_add(waited);
 
         let policy_context =
-            crate::context::SpecExecutionContext::new(pack, token, kernel.now_epoch_s(), None);
+            crate::context::SpecExecutionContext::new(pack, token, kernel.now_epoch_s());
         let dispatch = kernel
             .execute_connector_core(
                 pack_id,

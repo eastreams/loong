@@ -22,6 +22,7 @@ use loong_core::{
     policy::{
         context::{ContextFactory, PolicyContext},
         engine::PolicyEngine,
+        grant::Granted,
         policy::{Policy, PolicyAny},
     },
 };
@@ -42,22 +43,34 @@ pub trait KernelInvocationContext: PolicyContext {
     fn token(&self) -> &CapabilityToken;
 
     fn now_epoch_s(&self) -> u64;
-
-    fn request_parameters(&self) -> Option<&serde_json::Value>;
 }
 
+/// Compatibility action for legacy kernel envelopes.
+///
+/// `operation` remains routing metadata while `payload` preserves the original request body.
 #[derive(Debug)]
 pub struct LegacyKernelAction {
     operation: String,
     required_capabilities: Vec<Capability>,
+    payload: serde_json::Value,
 }
 
 impl LegacyKernelAction {
-    pub fn new(operation: impl Into<String>, required_capabilities: BTreeSet<Capability>) -> Self {
+    pub fn new(
+        operation: impl Into<String>,
+        required_capabilities: BTreeSet<Capability>,
+        payload: serde_json::Value,
+    ) -> Self {
         Self {
             operation: operation.into(),
             required_capabilities: required_capabilities.into_iter().collect(),
+            payload,
         }
+    }
+
+    /// Consume the granted legacy action and recover its sole owned request body.
+    pub fn into_payload(self) -> serde_json::Value {
+        self.payload
     }
 }
 
@@ -71,9 +84,7 @@ impl ActionMeta for LegacyKernelAction {
     }
 
     fn payload(&self) -> Cow<'_, serde_json::Value> {
-        Cow::Owned(serde_json::json!({
-            "operation": self.operation.as_str(),
-        }))
+        Cow::Borrowed(&self.payload)
     }
 }
 
@@ -214,9 +225,6 @@ impl<C: ContextFactory> PolicyPipeline<C> {
         });
     }
 
-    /// TODO(deprecate-legacy-kernel-auth): add `#[deprecated]` once legacy
-    /// kernel operations no longer need `Result<(), PolicyError>`.
-    ///
     /// New access-backed side effects must call `PolicyEngine::grant` on a
     /// typed action and pass `Granted<ConcreteAction>` to the side-effect
     /// entrypoint. Do not add new callers here; this exists only until legacy
@@ -225,10 +233,10 @@ impl<C: ContextFactory> PolicyPipeline<C> {
         &self,
         ctx: &C::Cx<'_>,
         action: A,
-    ) -> Result<(), PolicyError> {
+    ) -> Result<Granted<A>, PolicyError> {
         self.grant(ctx, action)
             .await
-            .map(|_| ())
+            .map(|grant| grant.granted)
             .map_err(policy_engine_error)
     }
 

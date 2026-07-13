@@ -459,12 +459,7 @@ async fn read_prompt_source_via_access(
     let read_runtime_config =
         tool_runtime_config.with_workspace_root_override(workspace_root.to_path_buf());
     let execution_context = app_ctx
-        .for_invocation(
-            ExecutionPlane::Tool,
-            PlaneTier::Core,
-            None,
-            &read_runtime_config,
-        )
+        .for_invocation(ExecutionPlane::Tool, PlaneTier::Core, &read_runtime_config)
         .ok()?;
     let output = execution_context
         .access()

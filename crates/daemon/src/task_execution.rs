@@ -36,7 +36,7 @@ pub(crate) async fn execute_daemon_task_with_supervisor(
     intent: TaskIntent,
 ) -> CliResult<DaemonTaskExecution> {
     let mut supervisor = TaskSupervisor::new(intent);
-    let policy_context = SpecExecutionContext::new(pack, token, kernel.now_epoch_s(), None);
+    let policy_context = SpecExecutionContext::new(pack, token, kernel.now_epoch_s());
     let dispatch_result = supervisor
         .execute(kernel, pack_id, token, &policy_context)
         .await;
@@ -467,7 +467,7 @@ pub async fn run_demo() -> CliResult<()> {
         route.harness_kind, task_dispatch.supervisor_state, outcome.output
     );
 
-    let policy_context = SpecExecutionContext::new(&pack, &token, kernel.now_epoch_s(), None);
+    let policy_context = SpecExecutionContext::new(&pack, &token, kernel.now_epoch_s());
     let connector_dispatch = kernel
         .execute_connector_core(
             DEFAULT_PACK_ID,

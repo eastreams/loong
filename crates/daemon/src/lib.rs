@@ -1115,8 +1115,7 @@ pub async fn invoke_connector_cli(operation: &str, payload_raw: &str) -> CliResu
         .issue_token(DEFAULT_PACK_ID, DEFAULT_AGENT_ID, 120)
         .map_err(|error| format!("token issue failed: {error}"))?;
     let pack = loong_spec::default_pack_manifest();
-    let policy_context =
-        loong_spec::SpecExecutionContext::new(&pack, &token, kernel.now_epoch_s(), None);
+    let policy_context = loong_spec::SpecExecutionContext::new(&pack, &token, kernel.now_epoch_s());
 
     let dispatch = kernel
         .execute_connector_core(
@@ -1170,8 +1169,7 @@ pub async fn run_audit_demo() -> CliResult<()> {
 
     fixed_clock.advance_by(5);
 
-    let policy_context =
-        loong_spec::SpecExecutionContext::new(&pack, &token, kernel.now_epoch_s(), None);
+    let policy_context = loong_spec::SpecExecutionContext::new(&pack, &token, kernel.now_epoch_s());
     let _ = kernel
         .execute_connector_core(
             DEFAULT_PACK_ID,

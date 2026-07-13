@@ -1798,7 +1798,6 @@ async fn provider_messages_with_kernel_binding(
         .for_invocation(
             ExecutionPlane::Memory,
             PlaneTier::Core,
-            None,
             &tool_runtime_config,
         )
         .expect("build memory execution context");

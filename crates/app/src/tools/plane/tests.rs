@@ -16,7 +16,6 @@ async fn app_policy_allows_registered_tool_invocation_after_capability_gate() {
         .for_invocation(
             loong_contracts::ExecutionPlane::Tool,
             loong_contracts::PlaneTier::Core,
-            None,
             ctx.tool_runtime_config(),
         )
         .expect("build execution context");

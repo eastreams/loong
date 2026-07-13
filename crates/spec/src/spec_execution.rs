@@ -895,7 +895,7 @@ async fn execute_spec_operation(
             payload,
         } => {
             let policy_context =
-                crate::context::SpecExecutionContext::new(pack, token, kernel.now_epoch_s(), None);
+                crate::context::SpecExecutionContext::new(pack, token, kernel.now_epoch_s());
             let mut supervisor = TaskSupervisor::new(TaskIntent {
                 task_id: task_id.clone(),
                 objective: objective.clone(),
@@ -931,7 +931,7 @@ async fn execute_spec_operation(
             payload,
         } => {
             let policy_context =
-                crate::context::SpecExecutionContext::new(pack, token, kernel.now_epoch_s(), None);
+                crate::context::SpecExecutionContext::new(pack, token, kernel.now_epoch_s());
             let dispatch = kernel
                 .execute_connector_core(
                     pack_id,
@@ -963,7 +963,7 @@ async fn execute_spec_operation(
             core,
         } => {
             let policy_context =
-                crate::context::SpecExecutionContext::new(pack, token, kernel.now_epoch_s(), None);
+                crate::context::SpecExecutionContext::new(pack, token, kernel.now_epoch_s());
             let dispatch = kernel
                 .execute_connector_core(
                     pack_id,
@@ -996,7 +996,7 @@ async fn execute_spec_operation(
             core,
         } => {
             let policy_context =
-                crate::context::SpecExecutionContext::new(pack, token, kernel.now_epoch_s(), None);
+                crate::context::SpecExecutionContext::new(pack, token, kernel.now_epoch_s());
             let dispatch = kernel
                 .execute_connector_extension(
                     pack_id,
@@ -1030,7 +1030,7 @@ async fn execute_spec_operation(
             core,
         } => {
             let policy_context =
-                crate::context::SpecExecutionContext::new(pack, token, kernel.now_epoch_s(), None);
+                crate::context::SpecExecutionContext::new(pack, token, kernel.now_epoch_s());
             let outcome = kernel
                 .execute_runtime_core(
                     pack_id,
@@ -1055,7 +1055,7 @@ async fn execute_spec_operation(
             core,
         } => {
             let policy_context =
-                crate::context::SpecExecutionContext::new(pack, token, kernel.now_epoch_s(), None);
+                crate::context::SpecExecutionContext::new(pack, token, kernel.now_epoch_s());
             let outcome = kernel
                 .execute_runtime_extension(
                     pack_id,
@@ -1081,16 +1081,8 @@ async fn execute_spec_operation(
             payload,
             core,
         } => {
-            let tool_policy_params = json!({
-                "tool_name": tool_name,
-                "payload": payload,
-            });
-            let policy_context = crate::context::SpecExecutionContext::new(
-                pack,
-                token,
-                kernel.now_epoch_s(),
-                Some(&tool_policy_params),
-            );
+            let policy_context =
+                crate::context::SpecExecutionContext::new(pack, token, kernel.now_epoch_s());
             let outcome = kernel
                 .execute_tool_core(
                     pack_id,
@@ -1114,16 +1106,8 @@ async fn execute_spec_operation(
             extension,
             core,
         } => {
-            let tool_policy_params = json!({
-                "tool_name": extension_action,
-                "payload": payload,
-            });
-            let policy_context = crate::context::SpecExecutionContext::new(
-                pack,
-                token,
-                kernel.now_epoch_s(),
-                Some(&tool_policy_params),
-            );
+            let policy_context =
+                crate::context::SpecExecutionContext::new(pack, token, kernel.now_epoch_s());
             let outcome = kernel
                 .execute_tool_extension(
                     pack_id,
@@ -1148,7 +1132,7 @@ async fn execute_spec_operation(
             core,
         } => {
             let policy_context =
-                crate::context::SpecExecutionContext::new(pack, token, kernel.now_epoch_s(), None);
+                crate::context::SpecExecutionContext::new(pack, token, kernel.now_epoch_s());
             let outcome = kernel
                 .execute_memory_core(
                     pack_id,
@@ -1173,7 +1157,7 @@ async fn execute_spec_operation(
             core,
         } => {
             let policy_context =
-                crate::context::SpecExecutionContext::new(pack, token, kernel.now_epoch_s(), None);
+                crate::context::SpecExecutionContext::new(pack, token, kernel.now_epoch_s());
             let outcome = kernel
                 .execute_memory_extension(
                     pack_id,

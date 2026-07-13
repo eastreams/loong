@@ -140,7 +140,7 @@ impl ControlPlaneKernelAuthority {
                 .ok_or_else(|| "missing control-plane kernel token binding".to_owned())?
         };
         let policy_context =
-            SpecExecutionContext::new(&self.pack, &token, self.kernel.now_epoch_s(), None);
+            SpecExecutionContext::new(&self.pack, &token, self.kernel.now_epoch_s());
         self.kernel
             .authorize_operation(
                 CONTROL_PLANE_PACK_ID,

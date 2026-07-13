@@ -73,7 +73,6 @@ async fn load_compaction_window_snapshot(
     let execution_context = app_ctx.for_invocation(
         ExecutionPlane::Memory,
         PlaneTier::Core,
-        None,
         app_ctx.tool_runtime_config(),
     )?;
     let outcome = app_ctx
@@ -113,7 +112,6 @@ async fn load_compaction_transcript_snapshot(
     let execution_context = app_ctx.for_invocation(
         ExecutionPlane::Memory,
         PlaneTier::Core,
-        None,
         app_ctx.tool_runtime_config(),
     )?;
     let outcome = app_ctx

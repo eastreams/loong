@@ -13243,10 +13243,6 @@ async fn kernel_tool_adapter_routes_through_kernel() {
         tool_name: "noop".to_owned(),
         payload: json!({"key": "value"}),
     };
-    let tool_policy_params = json!({
-        "tool_name": &request.tool_name,
-        "payload": &request.payload,
-    });
     let runtime = Arc::new(loong_runtime::runtime::Runtime::new(
         kernel,
         crate::tools::plane::test_builtin_tool_plane(),
@@ -13265,7 +13261,6 @@ async fn kernel_tool_adapter_routes_through_kernel() {
         .for_invocation(
             loong_contracts::ExecutionPlane::Tool,
             loong_contracts::PlaneTier::Core,
-            Some(&tool_policy_params),
             &tool_runtime_config,
         )
         .expect("build tool execution context");
@@ -13333,10 +13328,6 @@ async fn kernel_tool_adapter_rejects_reserved_internal_payload_through_kernel_by
             }
         }),
     };
-    let tool_policy_params = json!({
-        "tool_name": &request.tool_name,
-        "payload": &request.payload,
-    });
     let runtime = Arc::new(loong_runtime::runtime::Runtime::new(
         kernel,
         crate::tools::plane::test_builtin_tool_plane(),
@@ -13355,7 +13346,6 @@ async fn kernel_tool_adapter_rejects_reserved_internal_payload_through_kernel_by
         .for_invocation(
             loong_contracts::ExecutionPlane::Tool,
             loong_contracts::PlaneTier::Core,
-            Some(&tool_policy_params),
             &tool_runtime_config,
         )
         .expect("build tool execution context");

@@ -81,21 +81,14 @@ pub struct TestPolicyContext {
     pack: VerticalPackManifest,
     token: CapabilityToken,
     now_epoch_s: u64,
-    request_parameters: Option<serde_json::Value>,
 }
 
 impl TestPolicyContext {
-    pub fn new(
-        pack: VerticalPackManifest,
-        token: CapabilityToken,
-        now_epoch_s: u64,
-        request_parameters: Option<serde_json::Value>,
-    ) -> Self {
+    pub fn new(pack: VerticalPackManifest, token: CapabilityToken, now_epoch_s: u64) -> Self {
         Self {
             pack,
             token,
             now_epoch_s,
-            request_parameters,
         }
     }
 
@@ -115,14 +108,7 @@ impl TestPolicyContext {
             },
             token: token.clone(),
             now_epoch_s,
-            request_parameters: None,
         }
-    }
-
-    #[must_use]
-    pub fn with_request_parameters(mut self, request_parameters: serde_json::Value) -> Self {
-        self.request_parameters = Some(request_parameters);
-        self
     }
 }
 
@@ -143,10 +129,6 @@ impl KernelInvocationContext for TestPolicyContext {
 
     fn now_epoch_s(&self) -> u64 {
         self.now_epoch_s
-    }
-
-    fn request_parameters(&self) -> Option<&serde_json::Value> {
-        self.request_parameters.as_ref()
     }
 }
 
@@ -473,32 +455,37 @@ impl PolicyAny<TestContextFactory> for ToolGatePolicy {
 
     async fn grant(
         &self,
-        ctx: &<TestContextFactory as ContextFactory>::Cx<'_>,
-        _action: &dyn ActionMeta,
+        _ctx: &<TestContextFactory as ContextFactory>::Cx<'_>,
+        action: &dyn ActionMeta,
     ) -> PolicyGrant {
-        let Some(params) = ctx.request_parameters() else {
-            return PolicyGrant {
-                decision: PolicyDecision::Continue,
-                predicate: Some("request has no tool parameters".into()),
-                reason: "tool gate policy did not apply".into(),
-            };
-        };
-        let tool_name = params
-            .get("tool_name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if tool_name != self.gated_tool {
+        if action.metadata().operation.as_ref() != self.gated_tool.as_str() {
             return PolicyGrant {
                 decision: PolicyDecision::Continue,
                 predicate: Some("request targets a different tool".into()),
                 reason: "tool gate policy did not apply".into(),
             };
         }
+        if action
+            .payload()
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .is_none()
+        {
+            return PolicyGrant {
+                decision: PolicyDecision::Continue,
+                predicate: Some("request has no string command".into()),
+                reason: "tool gate policy did not apply".into(),
+            };
+        }
         match self.mode {
             ToolGateMode::Deny => PolicyGrant {
                 decision: PolicyDecision::Deny,
-                predicate: Some("request targets gated tool".into()),
-                reason: "tool call denied by policy for `shell.exec`: blocked by deterministic policy rule".into(),
+                predicate: Some("request targets gated tool with string command".into()),
+                reason: format!(
+                    "tool call denied by policy for {} by deterministic policy rule",
+                    self.gated_tool
+                )
+                .into(),
             },
         }
     }

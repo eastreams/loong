@@ -328,7 +328,7 @@ mod tests {
             .expect("token issue should succeed");
         let pack = default_pack_manifest();
         let policy_context =
-            crate::context::SpecExecutionContext::new(&pack, &token, kernel.now_epoch_s(), None);
+            crate::context::SpecExecutionContext::new(&pack, &token, kernel.now_epoch_s());
 
         let dispatch = kernel
             .execute_task(
@@ -388,7 +388,7 @@ mod tests {
             .expect("token issue should succeed");
         let pack = default_pack_manifest();
         let policy_context =
-            crate::context::SpecExecutionContext::new(&pack, &token, kernel.now_epoch_s(), None);
+            crate::context::SpecExecutionContext::new(&pack, &token, kernel.now_epoch_s());
 
         let dispatch = kernel
             .execute_task(

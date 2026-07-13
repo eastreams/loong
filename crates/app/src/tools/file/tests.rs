@@ -125,7 +125,7 @@ async fn execute_file_read_with_test_context(
         loong_contracts::GovernedSessionMode::MutatingCapable,
     )?;
     let execution_context =
-        app_ctx.for_invocation(ExecutionPlane::Tool, PlaneTier::Core, None, config)?;
+        app_ctx.for_invocation(ExecutionPlane::Tool, PlaneTier::Core, config)?;
     let _ = config;
     let tool = RegisteredTool::<AppContextFactory>::from_tool(
         ToolProvenance::Compatibility,
@@ -952,7 +952,7 @@ async fn context_direct_write_uses_typed_tool_registry() {
     )
     .expect("build app context");
     let execution_context = app_ctx
-        .for_invocation(ExecutionPlane::Tool, PlaneTier::Core, None, &config)
+        .for_invocation(ExecutionPlane::Tool, PlaneTier::Core, &config)
         .expect("build execution context");
     let request = ToolCoreRequest {
         tool_name: "write".to_owned(),

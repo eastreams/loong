@@ -155,7 +155,6 @@ async fn mvp_memory_adapter_routes_through_kernel() {
         .for_invocation(
             loong_contracts::ExecutionPlane::Memory,
             loong_contracts::PlaneTier::Core,
-            None,
             &tool_runtime_config,
         )
         .expect("build memory execution context");

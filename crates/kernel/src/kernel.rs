@@ -2,6 +2,7 @@ use loong_core::policy::action::ActionMeta;
 use loong_core::policy::context::ContextFactory;
 use loong_core::policy::engine::PolicyEngine;
 use loong_core::policy::grant::ActionGrant;
+use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
@@ -461,8 +462,15 @@ where
         ctx: &C::Cx<'_>,
     ) -> Result<(), KernelError> {
         let pack = self.pack_manifest(pack_id)?;
-        let now = self
-            .authorize_pack_operation(ctx, pack, token, operation, required_capabilities)
+        let (now, _) = self
+            .authorize_pack_operation(
+                ctx,
+                pack,
+                token,
+                operation,
+                required_capabilities,
+                json!({}),
+            )
             .await?;
 
         let primary_adapter = primary_adapter.to_owned();
@@ -491,13 +499,20 @@ where
         ctx: &C::Cx<'_>,
     ) -> Result<KernelDispatch, KernelError> {
         let pack = self.pack_manifest(pack_id)?;
-        let now = self
+        let TaskIntent {
+            task_id,
+            objective,
+            required_capabilities,
+            payload,
+        } = task;
+        let (now, payload) = self
             .authorize_pack_operation(
                 ctx,
                 pack,
                 token,
                 "execute_task",
-                &task.required_capabilities,
+                &required_capabilities,
+                payload,
             )
             .await?;
 
@@ -505,9 +520,9 @@ where
             token_id: token.token_id.clone(),
             pack_id: pack.pack_id.clone(),
             agent_id: token.agent_id.clone(),
-            task_id: task.task_id.clone(),
-            objective: task.objective,
-            payload: task.payload,
+            task_id: task_id.clone(),
+            objective,
+            payload,
         };
 
         let route = pack.default_route.clone();
@@ -518,9 +533,9 @@ where
             Some(token.agent_id.clone()),
             AuditEventKind::TaskDispatched {
                 pack_id: pack.pack_id.clone(),
-                task_id: task.task_id,
+                task_id,
                 route: route.clone(),
-                required_capabilities: task.required_capabilities.iter().copied().collect(),
+                required_capabilities: required_capabilities.iter().copied().collect(),
             },
         ))?;
 
@@ -539,14 +554,21 @@ where
         ctx: &C::Cx<'_>,
     ) -> Result<ConnectorDispatch, KernelError> {
         let pack = self.pack_manifest(pack_id)?;
-        self.assert_connector_allowed(pack, &command.connector_name)?;
-        let now = self
+        let ConnectorCommand {
+            connector_name,
+            operation,
+            required_capabilities,
+            payload,
+        } = command;
+        self.assert_connector_allowed(pack, &connector_name)?;
+        let (now, payload) = self
             .authorize_pack_operation(
                 ctx,
                 pack,
                 token,
-                &command.operation,
-                &command.required_capabilities,
+                &operation,
+                &required_capabilities,
+                payload,
             )
             .await?;
         let resolved_core_adapter = core_name
@@ -558,9 +580,12 @@ where
             })
             .unwrap_or_else(|| "default".to_owned());
 
-        let connector_name = command.connector_name.clone();
-        let operation = command.operation.clone();
-        let required_capabilities = command.required_capabilities.clone();
+        let command = ConnectorCommand {
+            connector_name: connector_name.clone(),
+            operation: operation.clone(),
+            required_capabilities: required_capabilities.clone(),
+            payload,
+        };
         let outcome = self.connector_plane.invoke_core(core_name, command).await?;
 
         self.audit.record(self.new_event(
@@ -602,14 +627,21 @@ where
         ctx: &C::Cx<'_>,
     ) -> Result<ConnectorDispatch, KernelError> {
         let pack = self.pack_manifest(pack_id)?;
-        self.assert_connector_allowed(pack, &command.connector_name)?;
-        let now = self
+        let ConnectorCommand {
+            connector_name,
+            operation,
+            required_capabilities,
+            payload,
+        } = command;
+        self.assert_connector_allowed(pack, &connector_name)?;
+        let (now, payload) = self
             .authorize_pack_operation(
                 ctx,
                 pack,
                 token,
-                &command.operation,
-                &command.required_capabilities,
+                &operation,
+                &required_capabilities,
+                payload,
             )
             .await?;
         let resolved_core_adapter = core_name
@@ -621,9 +653,12 @@ where
             })
             .unwrap_or_else(|| "default".to_owned());
 
-        let connector_name = command.connector_name.clone();
-        let operation = command.operation.clone();
-        let required_capabilities = command.required_capabilities.clone();
+        let command = ConnectorCommand {
+            connector_name: connector_name.clone(),
+            operation: operation.clone(),
+            required_capabilities: required_capabilities.clone(),
+            payload,
+        };
         let outcome = self
             .connector_plane
             .invoke_extension(extension_name, core_name, command)
@@ -668,8 +703,9 @@ where
         ctx: &C::Cx<'_>,
     ) -> Result<RuntimeCoreOutcome, KernelError> {
         let pack = self.pack_manifest(pack_id)?;
-        let now = self
-            .authorize_pack_operation(ctx, pack, token, &request.action, required_capabilities)
+        let RuntimeCoreRequest { action, payload } = request;
+        let (now, payload) = self
+            .authorize_pack_operation(ctx, pack, token, &action, required_capabilities, payload)
             .await?;
         let resolved_core_adapter = core_name
             .map(std::string::ToString::to_string)
@@ -679,7 +715,10 @@ where
                     .map(std::string::ToString::to_string)
             })
             .unwrap_or_else(|| "default".to_owned());
-        let action = request.action.clone();
+        let request = RuntimeCoreRequest {
+            action: action.clone(),
+            payload,
+        };
         let outcome = self.runtime_plane.execute_core(core_name, request).await?;
 
         self.record_plane_invocation(PlaneInvocationRecord {
@@ -708,8 +747,9 @@ where
         ctx: &C::Cx<'_>,
     ) -> Result<RuntimeExtensionOutcome, KernelError> {
         let pack = self.pack_manifest(pack_id)?;
-        let now = self
-            .authorize_pack_operation(ctx, pack, token, &request.action, required_capabilities)
+        let RuntimeExtensionRequest { action, payload } = request;
+        let (now, payload) = self
+            .authorize_pack_operation(ctx, pack, token, &action, required_capabilities, payload)
             .await?;
         let resolved_core_adapter = core_name
             .map(std::string::ToString::to_string)
@@ -719,7 +759,10 @@ where
                     .map(std::string::ToString::to_string)
             })
             .unwrap_or_else(|| "default".to_owned());
-        let action = request.action.clone();
+        let request = RuntimeExtensionRequest {
+            action: action.clone(),
+            payload,
+        };
         let outcome = self
             .runtime_plane
             .execute_extension(extension_name, core_name, request)
@@ -757,13 +800,15 @@ where
         policy_context: &C::Cx<'_>,
     ) -> Result<ToolCoreOutcome, KernelError> {
         let pack = self.pack_manifest(pack_id)?;
-        let now = self
+        let ToolCoreRequest { tool_name, payload } = request;
+        let (now, payload) = self
             .authorize_pack_operation(
                 policy_context,
                 pack,
                 token,
-                &request.tool_name,
+                &tool_name,
                 required_capabilities,
+                payload,
             )
             .await?;
         let resolved_core_adapter = core_name
@@ -774,7 +819,10 @@ where
                     .map(std::string::ToString::to_string)
             })
             .unwrap_or_else(|| "default".to_owned());
-        let tool_name = request.tool_name.clone();
+        let request = ToolCoreRequest {
+            tool_name: tool_name.clone(),
+            payload,
+        };
         let outcome = self
             .legacy_tool_plane
             .execute_core_with_context(core_name, request, policy_context)
@@ -807,13 +855,18 @@ where
         ctx: &C::Cx<'_>,
     ) -> Result<ToolExtensionOutcome, KernelError> {
         let pack = self.pack_manifest(pack_id)?;
-        let now = self
+        let ToolExtensionRequest {
+            extension_action,
+            payload,
+        } = request;
+        let (now, payload) = self
             .authorize_pack_operation(
                 ctx,
                 pack,
                 token,
-                &request.extension_action,
+                &extension_action,
                 required_capabilities,
+                payload,
             )
             .await?;
         let resolved_core_adapter = core_name
@@ -824,7 +877,10 @@ where
                     .map(std::string::ToString::to_string)
             })
             .unwrap_or_else(|| "default".to_owned());
-        let action = request.extension_action.clone();
+        let request = ToolExtensionRequest {
+            extension_action: extension_action.clone(),
+            payload,
+        };
         let outcome = self
             .legacy_tool_plane
             .execute_extension(extension_name, core_name, request)
@@ -838,7 +894,7 @@ where
             tier: PlaneTier::Extension,
             primary_adapter: extension_name.to_owned(),
             delegated_core_adapter: Some(resolved_core_adapter),
-            operation: action,
+            operation: extension_action,
             required_capabilities,
         })?;
 
@@ -855,8 +911,9 @@ where
         ctx: &C::Cx<'_>,
     ) -> Result<MemoryCoreOutcome, KernelError> {
         let pack = self.pack_manifest(pack_id)?;
-        let now = self
-            .authorize_pack_operation(ctx, pack, token, &request.operation, required_capabilities)
+        let MemoryCoreRequest { operation, payload } = request;
+        let (now, payload) = self
+            .authorize_pack_operation(ctx, pack, token, &operation, required_capabilities, payload)
             .await?;
         let resolved_core_adapter = core_name
             .map(std::string::ToString::to_string)
@@ -866,7 +923,10 @@ where
                     .map(std::string::ToString::to_string)
             })
             .unwrap_or_else(|| "default".to_owned());
-        let operation = request.operation.clone();
+        let request = MemoryCoreRequest {
+            operation: operation.clone(),
+            payload,
+        };
         let outcome = self.memory_plane.execute_core(core_name, request).await?;
 
         self.record_plane_invocation(PlaneInvocationRecord {
@@ -895,8 +955,9 @@ where
         ctx: &C::Cx<'_>,
     ) -> Result<MemoryExtensionOutcome, KernelError> {
         let pack = self.pack_manifest(pack_id)?;
-        let now = self
-            .authorize_pack_operation(ctx, pack, token, &request.operation, required_capabilities)
+        let MemoryExtensionRequest { operation, payload } = request;
+        let (now, payload) = self
+            .authorize_pack_operation(ctx, pack, token, &operation, required_capabilities, payload)
             .await?;
         let resolved_core_adapter = core_name
             .map(std::string::ToString::to_string)
@@ -906,7 +967,10 @@ where
                     .map(std::string::ToString::to_string)
             })
             .unwrap_or_else(|| "default".to_owned());
-        let operation = request.operation.clone();
+        let request = MemoryExtensionRequest {
+            operation: operation.clone(),
+            payload,
+        };
         let outcome = self
             .memory_plane
             .execute_extension(extension_name, core_name, request)
@@ -944,11 +1008,20 @@ where
         token: &CapabilityToken,
         operation: &str,
         required_capabilities: &BTreeSet<Capability>,
-    ) -> Result<u64, KernelError> {
+        payload: Value,
+    ) -> Result<(u64, Value), KernelError> {
         self.assert_pack_grants(pack, required_capabilities)?;
         let now = ctx.now_epoch_s();
-        self.authorize_or_audit_denial(ctx, pack, token, now, operation, required_capabilities)
-            .await
+        self.authorize_or_audit_denial(
+            ctx,
+            pack,
+            token,
+            now,
+            operation,
+            required_capabilities,
+            payload,
+        )
+        .await
     }
 
     fn assert_connector_allowed(
@@ -1073,7 +1146,8 @@ where
         now_epoch_s: u64,
         operation: &str,
         required_capabilities: &BTreeSet<Capability>,
-    ) -> Result<u64, KernelError> {
+        payload: Value,
+    ) -> Result<(u64, Value), KernelError> {
         if let Err(policy_error) =
             self.authorize_token(pack, token, now_epoch_s, required_capabilities)
         {
@@ -1081,11 +1155,14 @@ where
             return Err(KernelError::Policy(policy_error));
         }
 
-        let action = LegacyKernelAction::new(operation, required_capabilities.clone());
-        if let Err(policy_error) = self.policy.authorize_kernel_action(ctx, action).await {
-            self.record_authorization_denial(pack, token, now_epoch_s, &policy_error)?;
-            return Err(KernelError::Policy(policy_error));
-        }
+        let action = LegacyKernelAction::new(operation, required_capabilities.clone(), payload);
+        let granted = match self.policy.authorize_kernel_action(ctx, action).await {
+            Ok(granted) => granted,
+            Err(policy_error) => {
+                self.record_authorization_denial(pack, token, now_epoch_s, &policy_error)?;
+                return Err(KernelError::Policy(policy_error));
+            }
+        };
 
         // Permission-capable policy may have awaited an external authority.
         // Legacy envelopes must not execute under a token invalidated while
@@ -1098,7 +1175,8 @@ where
             return Err(KernelError::Policy(policy_error));
         }
 
-        Ok(post_policy_now_epoch_s)
+        let payload = granted.into_action().into_payload();
+        Ok((post_policy_now_epoch_s, payload))
     }
 
     fn authorize_token(

@@ -1506,10 +1506,6 @@ async fn tool_core_call_is_denied_when_policy_engine_rejects_rule_of_two_gate() 
         tool_name: "shell.exec".to_owned(),
         payload: json!({"command": "ls"}),
     };
-    let tool_policy_params = json!({
-        "tool_name": &request.tool_name,
-        "payload": &request.payload,
-    });
 
     let error = kernel
         .execute_tool_core(
@@ -1518,8 +1514,7 @@ async fn tool_core_call_is_denied_when_policy_engine_rejects_rule_of_two_gate() 
             &required,
             None,
             request,
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s())
-                .with_request_parameters(tool_policy_params),
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
         )
         .await
         .expect_err("tool call should be denied by policy");
@@ -1527,7 +1522,8 @@ async fn tool_core_call_is_denied_when_policy_engine_rejects_rule_of_two_gate() 
     assert!(matches!(
         error,
         KernelError::Policy(PolicyError::ExtensionDenied { extension, reason })
-            if extension == "policy-engine" && reason.contains("shell.exec")
+            if extension == "policy-engine"
+                && reason.contains("shell.exec")
     ));
 
     let events = audit.snapshot();
@@ -1539,6 +1535,53 @@ async fn tool_core_call_is_denied_when_policy_engine_rejects_rule_of_two_gate() 
                 && token_id == &token.token_id
                 && reason.contains("tool call denied by policy")
     ));
+}
+
+#[tokio::test]
+async fn tool_core_call_continues_when_gated_tool_has_no_string_command() {
+    let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_002_000));
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let mut policy = PolicyPipeline::<TestContextFactory>::new_legacy_allow_fallback();
+    policy.push_pre_policy(ToolGatePolicy::new("shell.exec", ToolGateMode::Deny));
+    let mut kernel =
+        Kernel::<TestContextFactory>::with_policy_runtime(policy, clock.clone(), audit.clone());
+    kernel
+        .register_pack(VerticalPackManifest {
+            pack_id: "tool-gate-continue".to_owned(),
+            domain: "security".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
+            metadata: BTreeMap::new(),
+        })
+        .expect("pack should register");
+    kernel.register_core_tool_adapter(MockCoreTool);
+
+    let token = kernel
+        .issue_token("tool-gate-continue", "agent-continue", 120)
+        .expect("token should issue");
+    let required = BTreeSet::from([Capability::InvokeTool]);
+
+    let outcome = kernel
+        .execute_tool_core(
+            "tool-gate-continue",
+            &token,
+            &required,
+            None,
+            ToolCoreRequest {
+                tool_name: "shell.exec".to_owned(),
+                payload: json!({"command": ["ls"]}),
+            },
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+        )
+        .await
+        .expect("non-string command should not trigger the tool gate");
+
+    assert_eq!(outcome.status, "ok");
 }
 
 #[tokio::test]

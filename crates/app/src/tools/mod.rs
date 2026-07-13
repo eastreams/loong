@@ -396,7 +396,6 @@ pub(crate) async fn execute_kernel_tool_request(
     request: ToolCoreRequest,
     trusted_internal_payload: bool,
 ) -> Result<ToolCoreOutcome, loong_kernel::KernelError> {
-    let requested_tool_name = request.tool_name.clone();
     let request = ToolCoreRequest {
         tool_name: canonical_tool_name(request.tool_name.as_str()).to_owned(),
         payload: request.payload,
@@ -411,15 +410,10 @@ pub(crate) async fn execute_kernel_tool_request(
         })?;
 
         let typed_path = ToolPath::from(request.tool_name.clone());
-        let tool_policy_params = json!({
-            "tool_name": &requested_tool_name,
-            "payload": &request.payload,
-        });
         let execution_context = ctx
             .for_invocation(
                 loong_contracts::ExecutionPlane::Tool,
                 loong_contracts::PlaneTier::Core,
-                Some(&tool_policy_params),
                 &effective_config,
             )
             .map_err(|error| {
