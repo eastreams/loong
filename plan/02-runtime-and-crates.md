@@ -23,11 +23,12 @@ crate 清理。
 - `loong-runtime` crate root 仍保留 `RuntimeSpine`、one-shot/interactive transitional API，并
   re-export `loong_core::Session`；新的 `runtime` / `tool_plane` owner 与旧 spine 尚未收敛。
 - typed policy pipeline 已支持 terminal parent/user permission decision，grant 保留完整
-  `PolicyReport`。`PolicyEngine` 在外部 permission await 后复查 capabilities，Kernel 的 typed 与
-  legacy grant boundary 复查 token expiry/revocation；direct Access 仍直接调用
-  `PolicyEngine::grant`，因此尚未获得同一 token 复查与 generic audit。production Context 也尚未
-  接通 permission interaction，pipeline 尚未强制 permission 位于所有 hard deny 之后；这些边界
-  完成前，production 不得注册会返回 permission decision 的 policy。
+  `PolicyReport`，并在外部 permission await 后复查 effective capabilities。当前 typed tool grant
+  仍错误地接收 legacy pack/token；它应改用 Access 已经使用的现有 `PolicyEngine::grant`，而不是
+  新增 Kernel grant API。token expiry/revocation 继续由 legacy fallback 自己验证，不能反向塑造
+  新 contract。production Context 也尚未接通 permission interaction，pipeline 尚未强制
+  permission 位于所有 hard deny 之后；这些边界完成前，production 不得注册会返回 permission
+  decision 的 policy。
 
 ## 目标 Ownership
 
@@ -42,11 +43,13 @@ crate 清理。
 
 ### Session
 
-Session 表达跨 Turn 稳定的 identity 与 authority，但其进程内物化生命周期必须单独说明：
+Session 表达跨 Turn 稳定的 typed identity 与 baseline，但其进程内物化生命周期必须单独说明：
 
-- 拥有 identity、基础 capability/token evidence、session mode，以及并发安全的 lifecycle owner；
-  Session 自身必须是 `Send + Sync`，不能混入只能由单线程/UI owner 持有的 handle；
-- 保存可被后续 Turn 继承的稳定配置/authority，不保存本次 invocation Context；
+- 只拥有 identity、lineage、baseline capabilities、稳定 config，以及并发安全的
+  lifecycle owner；Session 自身必须是 `Send + Sync`，不能混入只能由单线程/UI owner 持有的
+  handle；
+- 不保存 `CapabilityToken`、pack、token evidence 或本次 invocation Context。legacy bearer
+  evidence 只留在旧 ingress/fallback owner，不能成为 typed Session 的持久化或恢复内容；
 - Rust lifetime 只约束 Context 借用，不负责注销、取消、恢复或持久化 Session；
 - durable Session record 与进程内活跃 owner 必须保持语义可区分，不能因为名字相同就假定是
   同一个 object lifetime。
@@ -57,7 +60,7 @@ Session 表达跨 Turn 稳定的 identity 与 authority，但其进程内物化�
   durable identity 的新内存快照，不表示同一个 active object 跨 Turn 存活；当前没有通用
   per-session serialization、passivation 或不可重建资源，因此 Session registry 和永久 actor
   都不是 Context 迁移的前提。
-- Context 通过共享引用读取 Session 的稳定 authority/config。需要在 Context 存活期间更新的
+- Context 通过共享引用读取 Session 的 typed baseline/config。需要在 Context 存活期间更新的
   lifecycle state 必须封装在 Session 的并发安全 owner 中，并通过窄方法更新；Context 不持有
   `&mut Session`，也不把 lifecycle snapshot 缓存成第二份状态。SQLite connection、UI/provider
   handle 不进入 Context，否则 `Context<'a>: Send` 与跨 `.await` 更新会产生错误耦合。
@@ -69,7 +72,7 @@ invocation。Turn boundary 先构造 base Context；tool/action 的递归调用�
 同类型 child Context：
 
 ```text
-Session authority
+Session typed baseline
   + typed Turn options (mode / goal / narrowing / request options)
   + Turn cancellation signal
   -> validate and normalize
@@ -98,22 +101,32 @@ pub struct Context<'a> {
     cancellation: CancellationToken,
     mode: TurnMode,
     goal: Option<GoalId>,
-    effective_capabilities: Cow<'a, BTreeSet<Capability>>,
+    effective_capabilities: Cow<'a, Capabilities>,
     tool_config: Cow<'a, ToolRuntimeConfig>,
     fs_resolution_root: Cow<'a, Path>,
     fs_allowed_roots: Cow<'a, [PathBuf]>,
 }
 ```
 
-base Context 借用已经归一化的数据；caps/tool/root override 只把对应字段替换成
-`Cow::Owned`。Clone base Context 只复制引用和 cancellation handle；clone 已经 owned 的 override
-会深复制对应字段，因此 orchestration 不应靠反复 clone derived Context 派生 sibling。只有
+base Context 的字段使用 `Cow::Borrowed` 借用已经归一化的数据；caps/tool/root override 只把
+被收窄的字段替换成 `Cow::Owned`。字段 ownership 不改变 accessor 语义：
+
+```rust
+fn allowed_capabilities(&self) -> Cow<'_, Capabilities> {
+    Cow::Borrowed(self.effective_capabilities.as_ref())
+}
+```
+
+base 和 child Context 都只从 accessor reborrow，绝不因读取 effective capabilities 再次 clone。
+Clone base Context 只复制引用和 cancellation handle；显式 clone 已有 owned override 的 Context
+才会深复制对应字段，因此 orchestration 不应靠反复 clone derived Context 派生 sibling。只有
 profiling 证明某个大型 owned view 确实需要频繁 clone 时，才为该字段引入共享存储，不能为了
 理论上的 O(1) clone 把 `Arc` 铺满 Context。
 
 Context 不包含：
 
 - tool/action payload；
+- `CapabilityToken`、pack 或其它 legacy token evidence；
 - `ExecutionPlane` / `PlaneTier`；
 - mailbox、task supervisor、session registry 或持久化 repository；
 - 独立 kernel/policy/audit owner；
@@ -134,8 +147,9 @@ Context 不包含：
   `'static` task。
 - `Context::access()` 是 `AccessCx::new(...)` 的唯一 app concrete 构造点；普通调用点使用
   `ctx.access()`。
-- `ctx.tool(path)` 只做 lookup 并返回借用型 invocation handle；`invoke(payload)` 才构造 child
-  Context 和 invocation action。
+- `Context::tool(path)` 是薄入口，只把 parent Context 与 path 交给 Runtime 创建借用型
+  invocation handle；lookup、child derivation、grant、dispatch 和 audit 属于 runtime
+  `ToolInvocation`。
 - `RuntimeContextFactory` 只有 GAT：
 
 ```rust
@@ -146,6 +160,24 @@ impl ContextFactory for RuntimeContextFactory {
 
 它不提供 factory method；value construction 属于 Session/turn orchestration。
 
+runtime-owned `ToolInvocation` 与 app-defined Context 之间只有一个直接 contract：
+
+```rust
+pub trait ToolInvocationContext<C: ContextFactory> {
+    type NarrowingError: std::error::Error + Send + Sync + 'static;
+
+    fn derive_tool_child(
+        &self,
+        capabilities: Capabilities,
+    ) -> Result<C::Cx<'_>, Self::NarrowingError>;
+}
+```
+
+`ToolInvocationContext<C>` 属于 `loong-runtime`，app concrete `Context<'a>` 实现它。trait 只表达
+“从 parent 按给定 capabilities 派生同一 concrete child Context”，不暴露 kernel、audit 或
+Runtime，不进入 `ContextFactory`，也不能构造 base Context。附近注释必须说明它解决的是跨 crate
+child authority narrowing，而不是为了缩短调用写出的搬运 helper。
+
 ### Permission Authority
 
 Permission 是 policy terminal decision 后的 consent 流程，不是第二套 authorization：
@@ -154,15 +186,17 @@ Permission 是 policy terminal decision 后的 consent 流程，不是第二套 
 - `RequireUserPermission` 请求 Session 树之外的 root user actor；user 没有更高 authority，不能
   再升级。
 - approved 不能增加 capabilities、覆盖 hard deny、放宽 root/runtime limit，或替换原始
-  `PolicyReport`。permission await 返回后必须复查 capability 与 token expiry/revocation。
+  `PolicyReport`。typed grant 在 permission await 返回后复查 effective capabilities；legacy
+  fallback 继续单独复查其 token expiry/revocation。
 - permission decision 只能在全部 hard authorization policy 之后成为 terminal outcome。
   pipeline registration 必须用类型/阶段编码区分 hard constraint 与 terminal consent，并同时支持
   typed `Policy` 和 `PolicyAny`。constraint stage 只接受 `Deny` / `Continue`；`Allow`、permission
   或 `Advance` 都必须作为结构化 misconfiguration deny，不能靠人工注册顺序约定正确性。
-- 不增加 `PermissionContext`、permit token 或可伪造的 approval type。`PolicyContext` 的 async
-  hooks 直接接收 action/report，由 concrete Context 通过 Runtime/Session orchestration 路由。
-- hooks 的默认 panic 只用于暴露 tests/fixtures 的错误接线。production interaction unavailable
-  必须返回结构化 `PermissionRequestError::Unavailable`，不能触发默认实现。
+- 不增加 `PermissionContext`、permit token、`SessionAuthority` 或其它 approval/grant wrapper。
+  `Granted<A>` 已由私有构造保证不可伪造；`PolicyContext` 的 async hooks 直接接收 action/report，
+  由 concrete Context 通过 Runtime/Session orchestration 路由。
+- hooks 默认返回结构化 `PermissionRequestError::Unavailable`。没有 permission surface 的
+  test/fixture 与 production Context 都 fail closed，不通过默认 panic 区分接线状态。
 - permission request/resolution 与普通 grant 一样必须自动进入 generic authorization audit；
   Kernel 在 policy evaluation 前分配 authorization attempt id。每个已结束 attempt 恰好一条
   terminal authorization event，permission request/resolution/failure 是零到多条关联同一 id 的
@@ -189,13 +223,16 @@ Permission 是 policy terminal decision 后的 consent 流程，不是第二套 
 
 ### 可独立提交与原子边界
 
-在 workspace-wide 类型替换前，只做能够独立编译且直接减少错误耦合的前置提交：
+在 workspace-wide 类型替换前，先完成能够独立编译且直接减少错误耦合的前置边界：
 
-1. 删除 `plane` / `tier` 和 duplicated `request_parameters`，让 `PolicyAny` 直接读取
-   `ActionMeta::payload()`；
-2. channel/gateway 等长期 owner 只保留 Runtime，在 session address 确定后才物化当前 Session
-   authority；provider、core tool 与 app tool 不能同时使用 outer/root context 和
-   session-specific context。
+1. 建立 `Capabilities` / `Cow<'_, Capabilities>` 与 fail-closed permission 基础 contract；
+2. 删除 `plane` / `tier` 和 duplicated `request_parameters`，并把
+   `KernelInvocationContext` HRTB 收缩到 legacy impl；
+3. 让 typed ToolInvocation 全链使用 typed error 并直接调用 `PolicyEngine::grant`；
+4. 闭合 authorization audit owner，再把带 grant id 的 execution audit 固定到 runtime
+   ToolInvocation wrapper，并将 raw granted dispatch 收为 runtime-internal；
+5. channel/gateway 等长期 owner 只保留 Runtime，在 session address 确定后才物化当前 Session；
+   provider、core tool 与 app tool 不能同时使用 outer/root context 和 session-specific context。
 
 之后的 `Session + Context<'a> + RuntimeContextFactory` 是一个不可再拆的类型替换：
 

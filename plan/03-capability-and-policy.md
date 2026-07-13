@@ -14,8 +14,14 @@
   `child_caps = parent_caps ∩ override`。无 override 时使用 tool default caps。
 - `ToolInvocationAction` 只授权进入一个 tool；tool 内部 filesystem/network/memory/process
   side effect 仍需各自的 domain action grant。
-- `CapabilityContext::allowed_capabilities()` 目标返回借用，不能为每次 capability gate clone
-  整个 `BTreeSet<Capability>`。
+- `PolicyContext::allowed_capabilities()` 目标签名是
+  `Cow<'_, Capabilities>`。base Context 的字段是 `Cow::Borrowed`，child 中被收窄的字段是
+  `Cow::Owned`；accessor 对两者都返回
+  `Cow::Borrowed(self.effective_capabilities.as_ref())`，绝不为读取再次 clone。
+  `Cow` 只优化 recursive Context 的存储借用/收窄，不改变 `child_caps ⊆ parent_caps`。
+- `Capabilities` 先使用当前集合表示，避免在本轮同时引入表示层重构。bitset 迁移必须由
+  benchmark/profile 证明 capability membership、集合求交或 child narrowing 是 hot path 后再
+  单独进行；不得把 bitset 细节泄露进 Policy/Action/Context trait。
 
 ## PolicyPipeline
 
@@ -38,10 +44,8 @@ pre PolicyAny -> typed Policy<C, A> -> fallback PolicyAny
 
 ## Grant Metadata
 
-`PolicyEngine::grant` 已经获得 allow `PolicyReport` 和 `GrantId`，但当前
-`ActionGrantInfo` 仍是空 placeholder，allow report 被丢弃。目标：
+`ActionGrantInfo` 已保存发放 grant 所依据的完整 `PolicyReport`：
 
-- `ActionGrantInfo` 保存发放 grant 所依据的完整 `PolicyReport`；
 - `ActionGrant<A>` 同时提供 `GrantId`、grant metadata 和不可伪造的 `Granted<A>`；
 - deny 继续通过 typed authorization error 保存 report；
 - kernel generic authorization audit 直接使用 allow/deny report，不重新运行 policy，也不生成
@@ -49,13 +53,36 @@ pre PolicyAny -> typed Policy<C, A> -> fallback PolicyAny
 - `Granted<A>::as_ref()` 只允许 execution boundary 在消费前读取 action metadata，不能提供
   clone/mint/bypass API。
 
+`Granted<A>` 的 constructor 是 crate-private，已经完成不可伪造的类型边界。不要为同一目的
+引入 `SessionAuthority`、authorize token、permit wrapper 或另一层 `Granted`；需要约束的是
+production typed path 只能通过现有 `PolicyEngine::grant` 获得它。
+
+`PolicyEngine::grant` 也是 typed authorization evidence 的唯一自动触发点。implementor 必须在
+grant 返回前完成 terminal authorization audit；concrete caller、Context、policy 和 Access
+backend 不参与 evidence 写入，也不能增加一个 public grant wrapper 代替该 contract。
+
+## Typed 与 Legacy Authorization
+
+- 新 typed path 是
+  `Context -> PolicyEngine::grant -> ActionGrant<A> -> Granted<A> -> execution`。Access 和 typed
+  tool invocation 不接收 pack/token；不为这条链新增 `Kernel::grant` forwarding method。
+- `CapabilityToken`、`KernelInvocationContext`、`authorize_token`、`authorize_operation` 和旧 plane
+  execution 可以继续服务仍在运行的 legacy fallback，但只能位于明确的 legacy owner/bounded
+  impl；不得成为 typed grant、Access 或 typed ToolPlane authorization 的 trait bound。
+- 不把 legacy API 包装成新的 authority abstraction。legacy caller 留在旧路径，新 caller 直接
+  使用 typed grant；迁移一个 caller 时删除该 caller 的 token/pack 参数。
+- capability collection 是 policy input，`Granted<A>` 是 policy 通过后才能获得的 execution
+  proof。审查 Context 的可信构造与 grant 的唯一 production 入口，不能把两者误称为
+  `Granted<A>` 可伪造。
+
 ## Context Requirement
 
-- `CapabilityContext` 是所有 governed execution Context 的基础要求，因为每个 action 都必须先过
+- `PolicyContext` 是所有 governed execution Context 的基础要求，因为每个 action 都必须先过
   capability gate。
 - fs resolution root、fs allowed roots、provider-specific view 等不放进这个基础 trait；它们由
   对应 domain requirement trait 表达。
-- `KernelInvocationContext::request_parameters()` 是 legacy request duplication，应删除。
+- 整个 `KernelInvocationContext` 属于 legacy fallback；它不能作为 `Kernel<C>` 普通 API 的全局
+  HRTB。其 `request_parameters()` 仍是 duplicated payload，应从 legacy path 删除。
   type-erased policy 读取 `ActionMeta::payload()`；typed policy 直接读取 concrete action。
 
 ## Config -> Policy

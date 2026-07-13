@@ -18,7 +18,8 @@
   `AccessCx` 或 legacy envelope。
 - concrete tool 只约束获取 governed access/tool invocation 所需的小 trait；不依赖 app concrete
   Context，也不直接依赖 fs path-policy view。
-- side effect 只通过 `ctx.access()` / `ctx.tool()` 进入 owning boundary。
+- concrete tool 可以通过 `ctx.tool()` 编排 nested typed tool，但物理 side effect 只通过
+  `ctx.access()` 进入 owning Access boundary。
 
 ## Grant 与 Payload
 
@@ -40,12 +41,20 @@
 只搬运同构数据、包装 `from`/`into`、拼 legacy display alias、隐藏 policy/access construction、
 或把应删除 boundary 延长一层的 helper 直接删除。
 
+`loong-runtime::ToolInvocationContext<C>` 不是上述搬运 helper：它是 runtime-owned
+`ToolInvocation` 与 app-defined Context 之间唯一的跨 crate requirement，只允许 typed child
+authority narrowing。不要给它增加 kernel/audit/runtime accessor、base constructor 或其它
+Context convenience method。
+
 ## Error
 
 - 每个 Access domain 拥有自己的 typed error，并用 `thiserror` 保留 source chain。
 - 不为单个 `?` 新增无意义 `From`；只有跨多个调用点稳定表达同一层 error boundary 时才实现
   conversion。
 - policy denial 通过 typed authorization error/report 传播，不靠字符串分类 helper。
+- typed tool 的 lookup、caps override、child narrowing、grant 和 dispatch 统一进入
+  `ToolInvocationError`，并保留 `PolicyGrantError` / plane error source；不能中途转换成
+  `KernelError` 或字符串再分类。
 - legacy string envelope 的最后转换只发生在 legacy owner，并标明删除条件。
 
 ## Comment Audit
@@ -59,18 +68,24 @@
 - `crates/loong-runtime/src/runtime.rs`：Runtime 是 kernel + typed plane 的长期 owner，不是 kernel
   facade 或 UI state。
 - `crates/loong-runtime/src/tool_plane.rs`：path/slot 属于 concrete plane，ErasedTool dispatch
-  必须消费 `Granted<ToolInvocationAction>`；普通 caller 使用 `ctx.tool(...).invoke(...)`。
+  必须消费 `Granted<ToolInvocationAction>`，raw dispatch 只在 runtime 内可达；普通 caller 使用
+  `ctx.tool(...).invoke(...)`。`ToolInvocationContext<C>` 附近注释说明它跨 crate 表达 child
+  authority narrowing，不是搬运 helper。
 - `crates/kernel/src/access.rs`：`KernelAccess<C>` 为什么在 kernel，以及 `AccessCx::new` 只能由
   concrete Context 的 `access()` 集中调用。
 - `crates/app/src/context.rs`：迁移前标明旧 COW 形状和删除目标；迁移后只使用
-  `Context<'a>` / `RuntimeContextFactory`，并解释 Turn snapshot、authority narrowing 和
-  cancellation inheritance。
+  `Context<'a>` / `RuntimeContextFactory`，并解释 recursive execution scope、authority narrowing
+  和 cancellation inheritance。`Context::tool` 保持薄入口，app Context 只直接实现 runtime-owned
+  `ToolInvocationContext<RuntimeContextFactory>`，不复制 runtime invocation orchestration。
 - `crates/app/src/tools/plane.rs`：app 只组装 builtin registry/policy，plane primitive 属于
   `loong-runtime`；registration failure 必须传播。
 - `crates/app/src/tools/mod.rs` / `tool_dispatch.rs`：typed ingress 与 legacy fallback 的边界和
   删除条件。
-- `crates/kernel/src/kernel.rs`：generic grant 负责治理与 authorization audit，不 dispatch typed
-  tool；domain side effect 仍需自己的 action grant。
+- `crates/loong-core/src/policy/engine.rs`：`PolicyEngine::grant` 是 typed grant owner；不要增加只
+  转发它的 Kernel/helper method。authorization audit 由 implementor 在 grant boundary 自动完成，
+  write failure 在 grant 返回前作为 typed error 传播。
+- `crates/kernel/src/kernel.rs`：legacy pack/token authorization 与 typed policy grant 的边界；
+  Kernel 不 dispatch typed tool，domain side effect 仍需自己的 action grant。
 - `crates/contracts/src/audit_types.rs`：不把 ToolPlane registry key、route 或 fallback 语义固化
   成 kernel contract。
 - `crates/loong-core/src/policy/action.rs`：payload 是 action type-erased view，不是 legacy request。

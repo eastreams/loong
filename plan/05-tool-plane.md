@@ -5,7 +5,7 @@
 ## Plane Ownership
 
 - `loong-runtime::tool_plane` 拥有 default plane 的 `ToolPath`、`ToolInvocationAction`、
-  `ToolPlane` trait 和 `ToolPlaneRegistry`。
+  `ToolInvocationContext<C>`、`ToolPlane` trait 和 `ToolPlaneRegistry`。
 - path 类型是 concrete plane associated type。default `ToolPath` 使用 segment path；另一个 plane
   可以选择 trie key、interned key 或其它表示，contracts/core 不作全局规定。
 - app bootstrap 注册 concrete builtin tools 和 app-owned policy/success observer；kernel 不持有
@@ -32,29 +32,52 @@ ToolPath -> private ToolSlot -> RegisteredTool<C>
 
 ```text
 ctx.tool(path)?
-  -> resolved ToolInvocation handle
+  -> thin Context::tool entry asks Runtime for ToolInvocation handle
   -> invoke(payload)
-  -> validate caps override and derive child Context
+  -> validate caps override
+  -> ToolInvocationContext<C>::derive_tool_child(capabilities)
   -> ToolInvocationAction(path, required caps, payload)
-  -> Kernel generic grant
-  -> Granted<ToolInvocationAction>
-  -> ToolPlane::invoke(grant, &child_ctx)
+  -> PolicyEngine::grant
+  -> ActionGrant<ToolInvocationAction>
+  -> wrapper retains grant id/info
+  -> runtime-internal dispatch consumes Granted<ToolInvocationAction>
   -> RegisteredTool parse typed input
   -> concrete ToolImpl::execute
-  -> Value or typed error
+  -> runtime wrapper records execution outcome with grant id
+  -> Value or ToolInvocationError
 ```
 
-- `ctx.tool(path)` 只 lookup，不 grant、不 parse payload。
+- `Context::tool(path)` 是 app concrete Context 上的薄入口，只调用 Runtime 创建 handle；不在 app
+  复制 lookup、narrowing、grant、dispatch 或 audit orchestration。
 - `ToolInvocation::invoke(payload)` 是普通 caller 唯一入口。它绑定 capability narrowing、generic
   action grant、granted dispatch 和 execution audit。
-- `ToolPlane::invoke` 是低层 granted primitive，只接收 grant + Context，不知道 kernel/audit 参数。
+- raw granted dispatch 是 `loong-runtime` 内部 primitive，只接收 `Granted` + Context，不知道
+  kernel/audit 参数，也不能作为 public/普通 caller API。
+- lookup、caps override validation、child narrowing、`PolicyEngine::grant` 和 dispatch 全部返回
+  `ToolInvocationError` 并保留 typed source；`PolicyGrantError` 不转换成 `KernelError` 或字符串。
 - `ToolInvocationAction` 只授权进入 concrete tool。tool 内部 side effect 仍通过 Access 构造新的
   domain action。
 - policy 必须看到原始 agent payload，因此 payload 在 grant 前进入 `ToolInvocationAction`，在
   grant 被消费后取回并 parse。
 - parse/input error 是 typed invocation failure，不 fallback。
 - tool 调 tool 仍经过 `ctx.tool(...).invoke(...)`，child caps 只缩窄，cancellation/mode/goal 等
-  Turn identity 继承父 Context。
+  Turn identity 继承父 Context。nested tool 只能编排，最终物理 side effect 仍必须进入
+  `Granted` Access action。
+
+## Context Requirement
+
+`ToolInvocationContext<C>` 是 `loong-runtime` 拥有的窄 requirement trait，也是 runtime
+`ToolInvocation` 与 app Context 的唯一直接 contract：
+
+- app concrete Context 实现该 trait；
+- 唯一 operation 按给定 `Capabilities` 从 parent 派生同一 `C::Cx<'_>` child，并返回 typed
+  narrowing error；
+- trait 不暴露 kernel、audit 或 Runtime，不属于 `ContextFactory`，也不构造 base Context；
+- runtime `ToolInvocation` 使用它完成 narrowing，然后调用现有 `PolicyEngine::grant`、
+  runtime-internal plane dispatch 和 execution audit。
+
+trait 附近必须注释 why：它跨 crate 表达 child authority narrowing，不是只搬运参数或缩短调用的
+helper。不能再增加第二个 app/runtime Context bridge。
 
 ## Tool Contract
 
@@ -74,7 +97,9 @@ ctx.tool(path)?
 
 - 持有 unified Context 的 caller 直接调用 `ctx.tool(path)?.invoke(payload).await`，不先包装 legacy
   envelope。
-- 尚未迁移的 legacy tool 只从旧 ingress 最末端 fallback；不能注册进 typed plane冒充迁移。
+- 尚未迁移的 legacy tool 只在 typed lookup 明确返回“path 未注册”时从旧 ingress 最末端
+  fallback；caps override、narrowing、grant、parse/input 和 execution error 一律不 fallback。
+  legacy tool 不能注册进 typed plane 冒充迁移。
 - concrete descriptor 迁入 tool/registration owner 后，删除 app static catalog 重复 metadata。
 - display name 来自 plane-local path formatter；删除 `file.read -> read` 等 display alias helper。
 - 所有 concrete tools 迁完后删除 `ToolCoreRequest` / `ToolCoreOutcome`、`LegacyToolPlane`、

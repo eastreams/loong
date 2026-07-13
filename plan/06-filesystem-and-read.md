@@ -39,7 +39,7 @@ raw path
 - `FsResolutionContext::fs_resolution_root()` 是 Access 构造 resolve action 的 execution input。
 - `FsPathPolicyContext::fs_allowed_roots()` 只被 typed path policy 读取。
 - `AccessCx::fs()` 只要求 resolution view；`FsPathAllowedRootsPolicy` 单独约束 path policy view。
-- capability 由通用 `CapabilityContext` 提供；不再存在把 resolution、allowed roots 和 capabilities
+- capability 由通用 `PolicyContext` 提供；不再存在把 resolution、allowed roots 和 capabilities
   混在一起的 `FsAccessPolicyContext`。
 
 ## FsAccess

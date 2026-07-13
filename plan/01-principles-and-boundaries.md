@@ -4,8 +4,9 @@
 
 ## 迁移纪律
 
-- 敢于破坏性改动。替代边界确认后，迁移调用点并删除旧入口；不保留 alias、proxy、长期
-  fallback 或同义 wrapper。
+- 敢于破坏性改动。替代边界确认后，迁移调用点并删除旧入口；不保留 alias、proxy 或同义
+  wrapper。仍有 production caller 的 legacy fallback 可以暂留，但必须有明确 owner/删除条件，
+  且不能塑造或进入新 typed contract。
 - 每个提交只完成一个可解释的边界变化。机械迁移、行为变化、文档清理和无关重构不能混在
   同一个提交里。
 - helper 默认不成立。只有它统一多个真实重复调用面，而且该约束不适合由类型、trait、owned
@@ -19,19 +20,21 @@
 
 - `Runtime<C>` 是长期 runtime owner，持有 `Kernel<C>` 和 typed `ToolPlane<C>`。kernel 是
   Runtime 内的 governance authority，不是第二套 app runtime，也不持有 typed tool registry。
-- `Session` 是跨 Turn 存活的主体，拥有 session identity、基础 authority 和 lifecycle state。
-  Session 的业务生命周期不由 Rust lifetime 表达；Session 不是 Future。
-- `Context<'a>` 是一次 Turn 的不可变执行快照，由 app/runtime 层根据 Session authority、
-  本次 Turn 的 typed options 和本次执行的 cancellation signal 构造。Plan、Implementation、
-  Goal 等模式/选择，以及会影响工具、权限、workspace 或 policy 的选项，都必须在构造时
-  归一化。
-- 一个 Context 生命周期内，影响 authority 或 policy 输入的 Turn 选项不可原地修改。需要改变
-  这些选项时，结束旧执行并构造新 Context。是否仍属于同一个持久化用户 Turn，由 conversation
-  层决定。
-- nested tool invocation 可以派生同一种 concrete `Context<'a>`，但只能继承或收窄 authority：
-  `child_caps ⊆ parent_caps`。它继承同一 Turn 的 identity、mode/goal 和 cancellation signal。
-- Context 不保存 tool payload、action payload、`ExecutionPlane` 或 `PlaneTier`。payload 属于
-  concrete Action；tool invocation、`AccessCx` 和 concrete Action 类型已经表达执行域。
+- `Session` 是跨 Turn 存活的主体，只拥有 typed identity、lineage、baseline capabilities、稳定
+  config 和 lifecycle state。它不保存 `CapabilityToken`、pack 或其它 token evidence；Session 的
+  业务生命周期不由 Rust lifetime 表达，Session 也不是 Future。
+- `Context<'a>` 是递归执行作用域的不可变视图，不等同于整个 Turn，也不固定代表单次
+  invocation。Turn boundary 根据 Session typed baseline、typed options 和 cancellation signal 构造
+  base Context；nested invocation 从 parent 派生同类型 child Context。
+- 一个 Context 生命周期内，影响 authority 或 policy 输入的字段不可原地修改。child Context
+  只能继承或收窄 authority：`child_caps ⊆ parent_caps`，并继承同一 Turn 的 identity、
+  mode/goal 和 cancellation signal。
+- Context 的 `Cow` 字段表达存储 ownership：base 字段是 `Cow::Borrowed`，child 中被收窄的字段
+  是 `Cow::Owned`。`PolicyContext::allowed_capabilities()` 对两者都返回
+  `Cow::Borrowed(self.effective_capabilities.as_ref())`；accessor 只 reborrow，绝不再次 clone。
+- Context 不保存 tool payload、action payload、`CapabilityToken`、pack/token evidence、
+  `ExecutionPlane` 或 `PlaneTier`。payload 属于 concrete Action；tool invocation、`AccessCx` 和
+  concrete Action 类型已经表达执行域。
 - Session、Runtime registry 和持久化 store 都不保存 invocation Context。需要 `'static` 的任务
   持有真正的长期 owner，并在 future 内构造借用型 Context；不能把整个 Context 重新 Arc 化。
 - concrete 名称固定为 `Context<'a>`，GAT marker 固定为 `RuntimeContextFactory`。旧
@@ -39,6 +42,11 @@
   wrapper 或 re-export。
 - `ContextFactory` 只是 lifetime 到 concrete context 的 GAT 映射，不构造值，也不持有 policy
   engine 或 runtime。
+- `loong-runtime` 拥有窄 requirement trait `ToolInvocationContext<C>`，这是 runtime-owned
+  `ToolInvocation` 与 app-defined Context 的唯一直接 contract。它只按给定 `Capabilities` 从
+  parent 派生同一 `C::Cx<'_>` child，并返回 typed narrowing error；不暴露 kernel、audit 或
+  Runtime，不放进 `ContextFactory`，也不构造 base Context。app concrete Context 直接实现它。
+  该 trait 用于跨 crate 表达 child authority narrowing，不是搬运同构数据的 helper。
 
 ## Cancellation
 
@@ -53,16 +61,23 @@
 
 ## Access、Action 与 Policy
 
-- 副作用 only access can do。migrated tool/helper/adapter/policy/kernel 不能直接执行文件、网络、
-  process 或其它 domain side effect。
+- 副作用 only Access can do。migrated tool/helper/adapter/policy/kernel 不能直接执行文件、网络、
+  process 或其它 domain side effect。nested typed tool 只能继续编排；它最终仍必须进入一个
+  `Granted<ConcreteAction>` 的 Access operation 才能产生物理副作用。
 - `ActionMeta::required_capabilities` 是 action 属性。workspace root、allowed roots、runtime config
   等是 context/resolver/policy 输入，不塞进 caps。
 - `ActionMeta::payload()` 必须显式返回 `Cow<'_, Value>`，没有默认 `Null`。Action 自身表达
   policy 含义，payload 只是 type-erased structured view。
 - `PolicyEngine::grant` 先做 capability gate，再运行 policy pipeline。没有 terminal allow 就
-  default deny；没有 grant 不能进入 dispatch 或 side-effect execution。
-- `Granted<A>` 是授权到执行的不可伪造边界。执行入口消费 `Granted<ConcreteAction>`；backend
-  可以存在，但不要求统一 backend trait。
+  default deny；它继续是 production typed action 的 grant API，不为隐藏现有 engine 再增加
+  Kernel forwarding method。
+- `PolicyEngine::grant` 的 implementor 承担自动 authorization audit。concrete kernel
+  `PolicyPipeline` 使用 kernel-private shared audit state 取得 sink、clock 与 identity；audit write
+  失败必须在 grant 逃逸前成为 typed grant error。Context、caller、policy 和 Access backend 都
+  不手写 authorization evidence。
+- `Granted<A>` 的构造私有，因此已经是授权到执行的不可伪造边界。执行入口消费
+  `Granted<ConcreteAction>`；不能再为“防伪造 grant”增加 `SessionAuthority`、token wrapper 或
+  同义证明类型。backend 可以存在，但不要求统一 backend trait。
 - policy 不依赖 app concrete Context。它通过小 requirement trait 读取所需字段；config ->
   concrete typed policy registration 属于 app bootstrap。
 - `AccessCx`、fs facade 等 concrete view 可以存在，但只能借用 Context/Runtime 中的 source of
@@ -70,12 +85,16 @@
 
 ## Tool
 
-- 普通调用入口是 `ctx.tool(path)?.invoke(payload).await`。lookup 只解析 plane-local path 和
-  entry；`invoke` 才计算 child caps、构造 `ToolInvocationAction`、请求 grant、dispatch 并强制
-  记录 grant 后 execution outcome。
-- `ToolPlane::invoke` 只消费 `Granted<InvocationAction>` 并 dispatch；它不知道 kernel token、
-  pack、audit sink 或 event id。`ErasedTool` 保持 private/sealed，concrete `ToolImpl` 不得绕过
-  plane wrapper。
+- 普通调用入口是 `ctx.tool(path)?.invoke(payload).await`。`Context::tool(path)` 是薄入口，只调用
+  Runtime 创建 handle；runtime `ToolInvocation` 通过 `ToolInvocationContext<C>` 派生 child，再用
+  现有 `PolicyEngine::grant` 完成 grant、internal dispatch 和强制 execution audit。
+- raw ToolPlane granted dispatch 是 `loong-runtime` 内部 primitive，只消费
+  `Granted<InvocationAction>` 并 dispatch；它不能被普通 caller 直接调用，也不知道 kernel
+  token、pack、audit sink 或 event id。`ErasedTool` 保持 private/sealed，concrete `ToolImpl` 不得
+  绕过 runtime invocation wrapper。
+- runtime `ToolInvocation` wrapper 强制记录带 grant id 的 execution outcome；`ToolImpl` 不获得
+  audit API。lookup、caps override、child narrowing、grant 和 dispatch 都通过
+  `ToolInvocationError` 保留 typed source，不能降级成 `KernelError` 或字符串。
 - `path` 属于具体 ToolPlane，不属于 contracts/core。tool descriptor 不带 path；注册点把
   plane path 与 `RegisteredTool` 组合。新增 builtin tool 的目标改动面只有 concrete
   `ToolImpl` 和一条 registration。
@@ -103,7 +122,9 @@
 - `loong-contracts`：稳定数据、error/report/audit primitives；不定义全局 ToolPath，不承载
   concrete ToolPlane registry key。
 - `loong-core`：`ContextFactory`、Action/Granted/Policy/ToolImpl 等行为 contract 和不可伪造授权。
-- `loong-kernel`：pack/token/capability/policy/grant/audit authority；不执行 typed tool。
+- `loong-kernel`：typed capability/policy/grant/audit authority；不执行 typed tool。pack/token 与
+  manual authorization 只属于仍在运行的 legacy fallback，不能进入新的 Kernel/Access/Tool
+  contract。
 - `loong-access`：domain side-effect boundary。
 - `loong-runtime`：`Runtime<C>`、ToolPlane primitive 和 plane-local default registry。crate root
   仍有 transitional spine 时应删除旧 spine，而不是删除已经形成的 runtime owner。
