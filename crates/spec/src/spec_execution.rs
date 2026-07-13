@@ -1101,7 +1101,7 @@ async fn execute_spec_operation(
                         tool_name: tool_name.clone(),
                         payload: payload.clone(),
                     },
-                    policy_context,
+                    &policy_context,
                 )
                 .await
                 .map_err(|error| format!("tool core execution from spec failed: {error}"))?;

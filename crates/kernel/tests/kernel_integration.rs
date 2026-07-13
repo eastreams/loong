@@ -1518,7 +1518,7 @@ async fn tool_core_call_is_denied_when_policy_engine_rejects_rule_of_two_gate() 
             &required,
             None,
             request,
-            TestPolicyContext::from_token(&token, kernel.now_epoch_s())
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s())
                 .with_request_parameters(tool_policy_params),
         )
         .await

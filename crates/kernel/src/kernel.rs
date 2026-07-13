@@ -727,19 +727,19 @@ where
     /// same unified context to the adapter. Access-backed tools must call
     /// `ctx.access().fs().read_file(...)`; the adapter should not perform the
     /// protected side effect itself.
-    pub async fn execute_tool_core<'a>(
-        &'a self,
+    pub async fn execute_tool_core(
+        &self,
         pack_id: &str,
         token: &CapabilityToken,
         required_capabilities: &BTreeSet<Capability>,
         core_name: Option<&str>,
         request: ToolCoreRequest,
-        policy_context: C::Cx<'a>,
+        policy_context: &C::Cx<'_>,
     ) -> Result<ToolCoreOutcome, KernelError> {
         let pack = self.pack_manifest(pack_id)?;
         let now = self
             .authorize_pack_operation(
-                &policy_context,
+                policy_context,
                 pack,
                 token,
                 &request.tool_name,
@@ -757,7 +757,7 @@ where
         let tool_name = request.tool_name.clone();
         let outcome = self
             .legacy_tool_plane
-            .execute_core_with_context(core_name, request, &policy_context)
+            .execute_core_with_context(core_name, request, policy_context)
             .await?;
 
         self.record_plane_invocation(PlaneInvocationRecord {

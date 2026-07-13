@@ -13271,7 +13271,14 @@ async fn kernel_tool_adapter_routes_through_kernel() {
         .expect("build tool execution context");
     let err = runtime
         .kernel()
-        .execute_tool_core("test-pack", &token, &caps, None, request, execution_context)
+        .execute_tool_core(
+            "test-pack",
+            &token,
+            &caps,
+            None,
+            request,
+            &execution_context,
+        )
         .await
         .expect_err("unknown tool via KernelToolAdapter should fail");
     assert!(
@@ -13354,7 +13361,14 @@ async fn kernel_tool_adapter_rejects_reserved_internal_payload_through_kernel_by
         .expect("build tool execution context");
     let err = runtime
         .kernel()
-        .execute_tool_core("test-pack", &token, &caps, None, request, execution_context)
+        .execute_tool_core(
+            "test-pack",
+            &token,
+            &caps,
+            None,
+            request,
+            &execution_context,
+        )
         .await
         .expect_err("kernel-routed tool call should reject reserved internal payload by default");
 

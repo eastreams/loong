@@ -523,7 +523,7 @@ pub(crate) async fn execute_kernel_tool_request(
                 &caps,
                 None,
                 request,
-                execution_context,
+                &execution_context,
             )
             .await?;
         Ok(outcome)
