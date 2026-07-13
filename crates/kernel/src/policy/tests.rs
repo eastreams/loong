@@ -1,6 +1,9 @@
 use super::*;
+
 use loong_contracts::{ExecutionPlane, PlaneTier};
 use loong_core::PolicyGrantError;
+
+mod permission;
 
 struct TestContextFactory;
 

@@ -1,10 +1,10 @@
 use std::collections::BTreeSet;
 
 use async_trait::async_trait;
-use loong_contracts::{Capability, GrantId, PolicyOutcome, PolicyReport};
+use loong_contracts::{Capability, GrantId, PermissionResolution, PolicyOutcome, PolicyReport};
 
 use crate::{
-    error::PolicyGrantError,
+    error::{PermissionRequestError, PolicyGrantError},
     policy::{
         action::ActionMeta,
         context::{ContextFactory, PolicyContext},
@@ -47,21 +47,75 @@ pub trait PolicyEngine<C: ContextFactory>: Sync {
         }
 
         let report = self.decide(ctx, &action).await;
-        match report.outcome.clone() {
+        let permission_resolution = match report.outcome.clone() {
             PolicyOutcome::Allow {
                 source: _,
                 reason: _,
-            } => Ok(ActionGrant::new(
-                self.next_grant_id().await,
-                ActionGrantInfo { report },
-                action,
-            )),
+            } => {
+                return Ok(ActionGrant::new(
+                    self.next_grant_id().await,
+                    ActionGrantInfo { report },
+                    action,
+                ));
+            }
             PolicyOutcome::Deny {
                 grant_source: _,
                 reason,
-            } => Err(PolicyGrantError::Denied {
+            } => {
+                return Err(PolicyGrantError::Denied {
+                    report: Box::new(report),
+                    reason,
+                });
+            }
+            PolicyOutcome::RequireParentPermission { .. } => {
+                match ctx.request_parent_permission(&action, &report).await {
+                    Ok(PermissionResolution::Escalate) => {
+                        ctx.request_user_permission(&action, &report).await
+                    }
+                    resolution => resolution,
+                }
+            }
+            PolicyOutcome::RequireUserPermission { .. } => {
+                ctx.request_user_permission(&action, &report).await
+            }
+        };
+
+        let permission_resolution = match permission_resolution {
+            Ok(resolution) => resolution,
+            Err(source) => {
+                return Err(PolicyGrantError::PermissionRequest {
+                    report: Box::new(report),
+                    source,
+                });
+            }
+        };
+
+        match permission_resolution {
+            PermissionResolution::Approved => {
+                // Permission awaits external input. Recheck authority before
+                // minting a grant so consent cannot restore capabilities lost
+                // while the request was pending.
+                let granted_capabilities = ctx.allowed_capabilities();
+                let metadata = action.metadata();
+                for capability in metadata.required_capabilities.iter().copied() {
+                    if !granted_capabilities.contains(&capability) {
+                        return Err(PolicyGrantError::MissingCapability { capability });
+                    }
+                }
+
+                Ok(ActionGrant::new(
+                    self.next_grant_id().await,
+                    ActionGrantInfo { report },
+                    action,
+                ))
+            }
+            PermissionResolution::Denied { reason } => Err(PolicyGrantError::PermissionDenied {
                 report: Box::new(report),
                 reason,
+            }),
+            PermissionResolution::Escalate => Err(PolicyGrantError::PermissionRequest {
+                report: Box::new(report),
+                source: PermissionRequestError::EscalationUnavailable,
             }),
         }
     }

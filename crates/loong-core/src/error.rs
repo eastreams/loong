@@ -15,6 +15,28 @@ pub enum PolicyGrantError {
         report: Box<PolicyReport>,
         reason: Cow<'static, str>,
     },
+    #[error("permission denied: {reason}")]
+    PermissionDenied {
+        report: Box<PolicyReport>,
+        reason: Cow<'static, str>,
+    },
+    #[error("permission request failed: {source}")]
+    PermissionRequest {
+        report: Box<PolicyReport>,
+        #[source]
+        source: PermissionRequestError,
+    },
+}
+
+/// Failure to obtain a decision from a permission authority.
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum PermissionRequestError {
+    #[error("permission surface unavailable: {reason}")]
+    Unavailable { reason: Cow<'static, str> },
+    #[error("permission transport failed: {reason}")]
+    Failed { reason: Cow<'static, str> },
+    #[error("user permission cannot escalate to a higher authority")]
+    EscalationUnavailable,
 }
 
 #[derive(Debug, Error)]

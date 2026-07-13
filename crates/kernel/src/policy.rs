@@ -85,12 +85,12 @@ impl ActionMeta for LegacyKernelAction {
 /// 2. `action`: policies registered for the concrete action type.
 /// 3. `fallback`: broad [`PolicyAny`] policy used after typed policy.
 ///
-/// [`PolicyDecision::Allow`] and [`PolicyDecision::Deny`] stop the whole
-/// pipeline. [`PolicyDecision::Continue`] evaluates the next policy in the
-/// current subchain. [`PolicyDecision::Advance`] skips the rest of the current
-/// subchain and moves to the next one. If no terminal decision is produced,
-/// the pipeline returns default deny. The returned [`PolicyReport`] records the
-/// evaluated policy chain.
+/// [`PolicyDecision::Allow`], [`PolicyDecision::Deny`], and both permission
+/// decisions stop the whole pipeline. [`PolicyDecision::Continue`] evaluates
+/// the next policy in the current subchain. [`PolicyDecision::Advance`] skips
+/// the rest of the current subchain and moves to the next one. If no terminal
+/// decision is produced, the pipeline returns default deny. The returned
+/// [`PolicyReport`] records the evaluated policy chain.
 pub struct PolicyPipeline<C: ContextFactory> {
     pre_policies: Vec<RegisteredAnyPolicy<C>>,
     typed_policies: anymap::Map<dyn anymap::any::Any + Send + Sync>,
@@ -340,6 +340,26 @@ where
                         outcome,
                     };
                 }
+                PolicyDecision::RequireParentPermission => {
+                    let outcome = PolicyOutcome::RequireParentPermission {
+                        source: outcome_source,
+                        reason,
+                    };
+                    return PolicyReport {
+                        evaluations,
+                        outcome,
+                    };
+                }
+                PolicyDecision::RequireUserPermission => {
+                    let outcome = PolicyOutcome::RequireUserPermission {
+                        source: outcome_source,
+                        reason,
+                    };
+                    return PolicyReport {
+                        evaluations,
+                        outcome,
+                    };
+                }
                 PolicyDecision::Continue => {}
                 PolicyDecision::Advance => break,
             }
@@ -383,6 +403,26 @@ where
                             outcome,
                         };
                     }
+                    PolicyDecision::RequireParentPermission => {
+                        let outcome = PolicyOutcome::RequireParentPermission {
+                            source: outcome_source,
+                            reason,
+                        };
+                        return PolicyReport {
+                            evaluations,
+                            outcome,
+                        };
+                    }
+                    PolicyDecision::RequireUserPermission => {
+                        let outcome = PolicyOutcome::RequireUserPermission {
+                            source: outcome_source,
+                            reason,
+                        };
+                        return PolicyReport {
+                            evaluations,
+                            outcome,
+                        };
+                    }
                     PolicyDecision::Continue => {}
                     PolicyDecision::Advance => break,
                 }
@@ -419,6 +459,26 @@ where
                 PolicyDecision::Deny => {
                     let outcome = PolicyOutcome::Deny {
                         grant_source: Some(outcome_source),
+                        reason,
+                    };
+                    return PolicyReport {
+                        evaluations,
+                        outcome,
+                    };
+                }
+                PolicyDecision::RequireParentPermission => {
+                    let outcome = PolicyOutcome::RequireParentPermission {
+                        source: outcome_source,
+                        reason,
+                    };
+                    return PolicyReport {
+                        evaluations,
+                        outcome,
+                    };
+                }
+                PolicyDecision::RequireUserPermission => {
+                    let outcome = PolicyOutcome::RequireUserPermission {
+                        source: outcome_source,
                         reason,
                     };
                     return PolicyReport {

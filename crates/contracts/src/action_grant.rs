@@ -29,22 +29,41 @@ pub struct PolicyRegistration {
 
 /// Decision returned by one policy evaluation.
 ///
-/// `Allow` and `Deny` are terminal decisions for the whole pipeline.
-/// `Continue` and `Advance` are control-flow decisions: `Continue` evaluates
-/// the next policy in the current subchain, while `Advance` skips the rest of
-/// the current subchain and moves to the next one. Advancing from the final
-/// subchain leaves the pipeline without a terminal decision, so the caller's
-/// default-deny behavior applies.
+/// `Allow`, `Deny`, and both permission requests are terminal decisions for the
+/// whole pipeline. `Continue` and `Advance` are control-flow decisions:
+/// `Continue` evaluates the next policy in the current subchain, while
+/// `Advance` skips the rest of the current subchain and moves to the next one.
+/// Advancing from the final subchain leaves the pipeline without a terminal
+/// decision, so the caller's default-deny behavior applies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PolicyDecision {
     /// Stop the whole pipeline and authorize the action.
     Allow,
     /// Stop the whole pipeline and reject the action.
     Deny,
+    /// Stop policy evaluation and require consent from the parent session.
+    RequireParentPermission,
+    /// Stop policy evaluation and require consent from the user.
+    RequireUserPermission,
     /// Keep evaluating policies in the current subchain.
     Continue,
     /// Stop the current subchain and evaluate the next subchain.
     Advance,
+}
+
+/// Result of asking an authority to consent to an already-evaluated action.
+///
+/// Permission can satisfy consent only. It does not alter action capabilities
+/// or replace the policy report that requested it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PermissionResolution {
+    Approved,
+    Denied {
+        reason: Cow<'static, str>,
+    },
+    /// Ask the next authority. Parent permission may escalate to the user;
+    /// user permission has no higher authority and must resolve terminally.
+    Escalate,
 }
 
 /// Result returned by one single action policy.
@@ -154,6 +173,14 @@ pub enum PolicyOutcome {
         grant_source: Option<PolicyEntry>,
         reason: Cow<'static, str>,
     },
+    RequireParentPermission {
+        source: PolicyEntry,
+        reason: Cow<'static, str>,
+    },
+    RequireUserPermission {
+        source: PolicyEntry,
+        reason: Cow<'static, str>,
+    },
 }
 
 impl<'de> Deserialize<'de> for PolicyOutcome {
@@ -171,6 +198,14 @@ impl<'de> Deserialize<'de> for PolicyOutcome {
                 grant_source: Option<PolicyEntry>,
                 reason: String,
             },
+            RequireParentPermission {
+                source: PolicyEntry,
+                reason: String,
+            },
+            RequireUserPermission {
+                source: PolicyEntry,
+                reason: String,
+            },
         }
 
         match Helper::deserialize(deserializer)? {
@@ -185,6 +220,16 @@ impl<'de> Deserialize<'de> for PolicyOutcome {
                 grant_source,
                 reason: Cow::Owned(reason),
             }),
+            Helper::RequireParentPermission { source, reason } => {
+                Ok(Self::RequireParentPermission {
+                    source,
+                    reason: Cow::Owned(reason),
+                })
+            }
+            Helper::RequireUserPermission { source, reason } => Ok(Self::RequireUserPermission {
+                source,
+                reason: Cow::Owned(reason),
+            }),
         }
     }
 }
@@ -194,4 +239,59 @@ impl<'de> Deserialize<'de> for PolicyOutcome {
 pub struct PolicyReport {
     pub evaluations: Vec<PolicyEvaluation>,
     pub outcome: PolicyOutcome,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn policy_entry() -> PolicyEntry {
+        PolicyEntry {
+            policy_name: Cow::Borrowed("permission-policy"),
+            policy_id: 7,
+            registration: PolicyRegistration {
+                order: 3,
+                registered_at_unix_ms: 11,
+                source: PolicyRegistrationSource {
+                    file: "policy.rs".to_owned(),
+                    line: 5,
+                    column: 9,
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn permission_policy_decisions_round_trip_through_json() {
+        for decision in [
+            PolicyDecision::RequireParentPermission,
+            PolicyDecision::RequireUserPermission,
+        ] {
+            let encoded = serde_json::to_string(&decision).expect("serialize policy decision");
+            let decoded =
+                serde_json::from_str::<PolicyDecision>(&encoded).expect("deserialize decision");
+
+            assert_eq!(decoded, decision);
+        }
+    }
+
+    #[test]
+    fn permission_policy_outcomes_round_trip_through_json() {
+        for outcome in [
+            PolicyOutcome::RequireParentPermission {
+                source: policy_entry(),
+                reason: Cow::Borrowed("parent must approve"),
+            },
+            PolicyOutcome::RequireUserPermission {
+                source: policy_entry(),
+                reason: Cow::Borrowed("user must approve"),
+            },
+        ] {
+            let encoded = serde_json::to_string(&outcome).expect("serialize policy outcome");
+            let decoded =
+                serde_json::from_str::<PolicyOutcome>(&encoded).expect("deserialize outcome");
+
+            assert_eq!(decoded, outcome);
+        }
+    }
 }

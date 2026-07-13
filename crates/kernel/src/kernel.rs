@@ -283,7 +283,27 @@ where
         }
 
         match self.policy.grant(ctx, action).await {
-            Ok(grant) => Ok(grant),
+            Ok(grant) => {
+                // Policy may wait for an external permission decision. Recheck
+                // token revocation/expiry after that await before releasing the
+                // grant to an execution boundary.
+                let post_policy_now_epoch_s = ctx.now_epoch_s();
+                if let Err(policy_error) = self.authorize_token(
+                    pack,
+                    token,
+                    post_policy_now_epoch_s,
+                    &required_capabilities,
+                ) {
+                    self.record_authorization_denial(
+                        pack,
+                        token,
+                        post_policy_now_epoch_s,
+                        &policy_error,
+                    )?;
+                    return Err(KernelError::Policy(policy_error));
+                }
+                Ok(grant)
+            }
             Err(grant_error) => {
                 let policy_error = policy_engine_error(grant_error);
                 self.record_authorization_denial(pack, token, now, &policy_error)?;
@@ -928,8 +948,7 @@ where
         self.assert_pack_grants(pack, required_capabilities)?;
         let now = ctx.now_epoch_s();
         self.authorize_or_audit_denial(ctx, pack, token, now, operation, required_capabilities)
-            .await?;
-        Ok(now)
+            .await
     }
 
     fn assert_connector_allowed(
@@ -1054,7 +1073,7 @@ where
         now_epoch_s: u64,
         operation: &str,
         required_capabilities: &BTreeSet<Capability>,
-    ) -> Result<(), KernelError> {
+    ) -> Result<u64, KernelError> {
         if let Err(policy_error) =
             self.authorize_token(pack, token, now_epoch_s, required_capabilities)
         {
@@ -1068,7 +1087,18 @@ where
             return Err(KernelError::Policy(policy_error));
         }
 
-        Ok(())
+        // Permission-capable policy may have awaited an external authority.
+        // Legacy envelopes must not execute under a token invalidated while
+        // that request was pending.
+        let post_policy_now_epoch_s = ctx.now_epoch_s();
+        if let Err(policy_error) =
+            self.authorize_token(pack, token, post_policy_now_epoch_s, required_capabilities)
+        {
+            self.record_authorization_denial(pack, token, post_policy_now_epoch_s, &policy_error)?;
+            return Err(KernelError::Policy(policy_error));
+        }
+
+        Ok(post_policy_now_epoch_s)
     }
 
     fn authorize_token(
