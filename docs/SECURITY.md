@@ -220,7 +220,7 @@ Provider runtime binding:
 
 ### Audit System
 
-- 10 event kinds with atomic sequencing
+- 11 event kinds with atomic sequencing
 - Production app runtimes default to durable JSONL retention via `[audit].mode = "fanout"`
 - Default journal path: `~/.loong/audit/events.jsonl`
 - `Kernel::new()` and spec/test/demo helpers may still opt into explicit in-memory audit seams when side-effect-free snapshot reporting is required
