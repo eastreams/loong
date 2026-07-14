@@ -10,12 +10,12 @@ use std::{
 };
 
 use async_trait::async_trait;
-use loong_contracts::{Capabilities, ToolExecutionError, ToolInputError, ToolSpec};
+use loong_contracts::{Capabilities, ToolInputError, ToolSpec};
 use serde_json::{Value, json};
 
 use crate::{
     policy::context::{ContextFactory, PolicyContext},
-    tool::{RegisteredTool, ToolImpl, ToolProvenance},
+    tool::{RegisteredTool, RegisteredToolError, ToolImpl, ToolProvenance},
 };
 
 struct TestContextFactory;
@@ -35,12 +35,18 @@ impl PolicyContext for TestContext {
 
 struct EchoTool {
     executions: Arc<AtomicUsize>,
+    fail_execution: bool,
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("echo execution failed")]
+struct EchoExecutionError;
 
 #[async_trait]
 impl ToolImpl<TestContextFactory> for EchoTool {
     type Input = String;
     type Output = Value;
+    type Error = EchoExecutionError;
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -72,8 +78,11 @@ impl ToolImpl<TestContextFactory> for EchoTool {
         &self,
         _ctx: &<TestContextFactory as ContextFactory>::Cx<'_>,
         input: Self::Input,
-    ) -> Result<Self::Output, ToolExecutionError> {
+    ) -> Result<Self::Output, Self::Error> {
         self.executions.fetch_add(1, Ordering::Relaxed);
+        if self.fail_execution {
+            return Err(EchoExecutionError);
+        }
         Ok(json!({ "message": input }))
     }
 }
@@ -85,6 +94,7 @@ fn registered_tool_invokes_erased_tool_impl() {
         ToolProvenance::Builtin,
         EchoTool {
             executions: executions.clone(),
+            fail_execution: false,
         },
     );
 
@@ -103,6 +113,7 @@ fn registered_tool_parse_failure_does_not_execute_tool() {
         ToolProvenance::Builtin,
         EchoTool {
             executions: executions.clone(),
+            fail_execution: false,
         },
     );
 
@@ -111,9 +122,28 @@ fn registered_tool_parse_failure_does_not_execute_tool() {
 
     assert!(matches!(
         error,
-        ToolExecutionError::Input(ToolInputError::MissingField { field }) if field == "message"
+        RegisteredToolError::Input(ToolInputError::MissingField { field }) if field == "message"
     ));
     assert_eq!(executions.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn registered_tool_preserves_concrete_execution_error_as_source() {
+    let tool = RegisteredTool::<TestContextFactory>::from_tool(
+        ToolProvenance::Builtin,
+        EchoTool {
+            executions: Arc::new(AtomicUsize::new(0)),
+            fail_execution: true,
+        },
+    );
+
+    let error = block_on(tool.invoke(&TestContext, json!({ "message": "hello" })))
+        .expect_err("concrete execution failure should escape erasure");
+
+    assert!(matches!(error, RegisteredToolError::Execution { .. }));
+    std::error::Error::source(&error)
+        .and_then(|source| source.downcast_ref::<EchoExecutionError>())
+        .expect("erased error should retain the concrete execution source");
 }
 
 #[test]
@@ -124,6 +154,7 @@ fn registered_tool_success_observer_sees_typed_output_before_erasure() {
         ToolProvenance::Builtin,
         EchoTool {
             executions: executions.clone(),
+            fail_execution: false,
         },
         {
             let observed = observed.clone();
@@ -135,7 +166,6 @@ fn registered_tool_success_observer_sees_typed_output_before_erasure() {
                         .unwrap_or_default()
                         .to_owned(),
                 );
-                Ok(())
             }
         },
     );

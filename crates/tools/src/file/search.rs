@@ -1,7 +1,7 @@
 use std::{collections::BTreeSet, path::PathBuf};
 
 use async_trait::async_trait;
-use loong_contracts::{Capability, ToolExecutionError, ToolInputError, ToolSpec};
+use loong_contracts::{Capability, ToolInputError, ToolSpec};
 use loong_core::{policy::context::ContextFactory, tool::ToolImpl};
 use loong_kernel::{
     KernelAccess,
@@ -10,7 +10,7 @@ use loong_kernel::{
 use serde_json::{Value, json};
 
 use super::{
-    fs_access_error_reason, optional_bounded_usize_field, optional_trimmed_string_field,
+    FileToolError, optional_bounded_usize_field, optional_trimmed_string_field,
     required_trimmed_string_field,
 };
 
@@ -309,6 +309,7 @@ where
 {
     type Input = GlobReadRequest;
     type Output = GlobReadOutput;
+    type Error = FileToolError;
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -340,7 +341,7 @@ where
         &self,
         ctx: &C::Cx<'_>,
         input: Self::Input,
-    ) -> Result<Self::Output, ToolExecutionError> {
+    ) -> Result<Self::Output, Self::Error> {
         let output = ctx
             .access()
             .fs()
@@ -350,9 +351,7 @@ where
                 input.include_directories,
                 input.max_results,
             )
-            .await
-            .map_err(fs_access_error_reason)
-            .map_err(ToolExecutionError::execution)?;
+            .await?;
 
         Ok(GlobReadOutput::from_access_output(input, output))
     }
@@ -370,6 +369,7 @@ where
 {
     type Input = ContentSearchReadRequest;
     type Output = ContentSearchReadOutput;
+    type Error = FileToolError;
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -402,7 +402,7 @@ where
         &self,
         ctx: &C::Cx<'_>,
         input: Self::Input,
-    ) -> Result<Self::Output, ToolExecutionError> {
+    ) -> Result<Self::Output, Self::Error> {
         let options = FsContentSearchOptions {
             glob: input.glob.clone(),
             max_results: input.max_results,
@@ -413,9 +413,7 @@ where
             .access()
             .fs()
             .search_content(input.root.as_str(), input.query.clone(), options)
-            .await
-            .map_err(fs_access_error_reason)
-            .map_err(ToolExecutionError::execution)?;
+            .await?;
 
         Ok(ContentSearchReadOutput::from_access_output(input, output))
     }

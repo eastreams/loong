@@ -3287,6 +3287,7 @@ dependencies = [
  "serde",
  "serde_json",
  "slotmap",
+ "thiserror 2.0.18",
  "tokio",
 ]
 
@@ -3324,6 +3325,7 @@ dependencies = [
  "loong-core",
  "loong-kernel",
  "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

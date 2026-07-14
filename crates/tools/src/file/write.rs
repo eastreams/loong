@@ -1,12 +1,12 @@
 use std::{collections::BTreeSet, path::PathBuf};
 
 use async_trait::async_trait;
-use loong_contracts::{Capability, ToolExecutionError, ToolInputError, ToolSpec};
+use loong_contracts::{Capability, ToolInputError, ToolSpec};
 use loong_core::{policy::context::ContextFactory, tool::ToolImpl};
 use loong_kernel::{KernelAccess, access::fs::FsWriteOptions};
 use serde_json::{Value, json};
 
-use super::{fs_access_error_reason, required_trimmed_string_field};
+use super::{FileToolError, required_trimmed_string_field};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WriteRequest {
@@ -90,6 +90,7 @@ where
 {
     type Input = WriteRequest;
     type Output = WriteOutput;
+    type Error = FileToolError;
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -119,7 +120,7 @@ where
         &self,
         ctx: &C::Cx<'_>,
         input: Self::Input,
-    ) -> Result<Self::Output, ToolExecutionError> {
+    ) -> Result<Self::Output, Self::Error> {
         let options = FsWriteOptions {
             create_dirs: input.create_dirs,
             overwrite: input.overwrite,
@@ -128,9 +129,7 @@ where
             .access()
             .fs()
             .write_file(input.path.as_str(), input.content.into_bytes(), options)
-            .await
-            .map_err(fs_access_error_reason)
-            .map_err(ToolExecutionError::execution)?;
+            .await?;
 
         Ok(WriteOutput {
             tool_name: input.tool_name,

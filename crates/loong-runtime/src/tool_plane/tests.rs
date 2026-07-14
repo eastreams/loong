@@ -10,8 +10,7 @@ use std::{
 use async_trait::async_trait;
 use loong_contracts::{
     Capabilities, Capability, GrantId, PolicyEntry, PolicyOutcome, PolicyRegistration,
-    PolicyRegistrationSource, PolicyReport, ToolExecutionError, ToolInputError, ToolPlaneError,
-    ToolSpec,
+    PolicyRegistrationSource, PolicyReport, ToolInputError, ToolSpec,
 };
 use loong_core::{
     policy::{
@@ -23,7 +22,10 @@ use loong_core::{
 };
 use serde_json::{Value, json};
 
-use super::{ToolInvocationAction, ToolPath, ToolPlane, ToolPlaneRegistry};
+use super::{
+    ToolInvocationAction, ToolPath, ToolPlane, ToolPlaneRegistry,
+    error::{DispatchError, LookupError, RegistrationError},
+};
 
 struct TestContextFactory;
 
@@ -93,6 +95,7 @@ struct EchoTool {
 impl ToolImpl<TestContextFactory> for EchoTool {
     type Input = String;
     type Output = Value;
+    type Error = std::convert::Infallible;
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -124,7 +127,7 @@ impl ToolImpl<TestContextFactory> for EchoTool {
         &self,
         _ctx: &<TestContextFactory as ContextFactory>::Cx<'_>,
         input: Self::Input,
-    ) -> Result<Self::Output, ToolExecutionError> {
+    ) -> Result<Self::Output, Self::Error> {
         self.executions.fetch_add(1, Ordering::Relaxed);
         Ok(json!({ "message": input }))
     }
@@ -216,7 +219,6 @@ async fn registry_runs_success_observer_after_tool_execution() {
                                 .unwrap_or_default()
                                 .to_owned(),
                         );
-                    Ok(())
                 }
             },
         )
@@ -263,7 +265,11 @@ fn registry_rejects_duplicate_paths_without_leaking_slots() {
         )
         .expect_err("duplicate path should fail");
 
-    assert_eq!(error, ToolPlaneError::DuplicateTool("test.echo".to_owned()));
+    assert!(matches!(
+        error,
+        RegistrationError::AlreadyRegistered { path }
+            if path == ToolPath::from("test.echo")
+    ));
     assert_eq!(plane.entry_count(), 1);
     assert_eq!(plane.path_count(), 1);
 }
@@ -309,13 +315,17 @@ async fn registry_preserves_registered_tool_input_errors() {
 
     assert!(matches!(
         error,
-        ToolPlaneError::Input(ToolInputError::MissingField { field }) if field == "message"
+        DispatchError::Tool {
+            source: loong_core::tool::RegisteredToolError::Input(
+                ToolInputError::MissingField { field }
+            )
+        } if field == "message"
     ));
     assert_eq!(executions.load(Ordering::Relaxed), 0);
 }
 
 #[tokio::test]
-async fn registry_reports_missing_path_without_executing_registered_tools() {
+async fn registry_distinguishes_lookup_miss_from_post_grant_dispatch_failure() {
     let executions = Arc::new(AtomicUsize::new(0));
     let mut plane = ToolPlaneRegistry::<TestContextFactory>::new();
     plane
@@ -327,22 +337,26 @@ async fn registry_reports_missing_path_without_executing_registered_tools() {
         )
         .expect("test tool registration should succeed");
 
-    let error = plane
+    let path = ToolPath::from("test.missing");
+    let lookup_error = plane
+        .spec(&path)
+        .expect_err("unregistered path should fail lookup");
+    let dispatch_error = plane
         .invoke(
-            grant_invocation(
-                ToolPath::from("test.missing"),
-                json!({ "message": "hello" }),
-            )
-            .await,
+            grant_invocation(path.clone(), json!({ "message": "hello" })).await,
             &TestContext,
         )
         .await
-        .expect_err("missing path should fail");
+        .expect_err("a granted but absent entry should fail during dispatch");
 
-    assert_eq!(
-        error,
-        ToolPlaneError::ToolNotFound("test.missing".to_owned())
-    );
+    assert!(matches!(
+        lookup_error,
+        LookupError::NotRegistered { path: missing } if missing == path
+    ));
+    assert!(matches!(
+        dispatch_error,
+        DispatchError::RegistryInvariant { path: missing } if missing == path
+    ));
     assert_eq!(executions.load(Ordering::Relaxed), 0);
 }
 

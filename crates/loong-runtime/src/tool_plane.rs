@@ -4,6 +4,8 @@
 //! binds a plane-local path to an erased `RegisteredTool` and consumes a grant
 //! before dispatch, so storage choices cannot become tool identity.
 
+pub mod error;
+
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
@@ -11,7 +13,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use loong_contracts::{Capability, ToolExecutionError, ToolPlaneError, ToolSpec};
+use loong_contracts::{Capability, ToolSpec};
 use loong_core::{
     policy::{
         action::{ActionMeta, ActionMetadata},
@@ -22,6 +24,8 @@ use loong_core::{
 };
 use serde_json::{Value, json};
 use slotmap::{SlotMap, new_key_type};
+
+use self::error::{DispatchError, LookupError, RegistrationError};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// Path type chosen by the default runtime registry.
@@ -140,12 +144,12 @@ impl ActionMeta for ToolInvocationAction {
 /// Runtime tool-plane capability independent of its registry representation.
 #[async_trait]
 pub trait ToolPlane<C: ContextFactory>: Send + Sync {
-    type Path: Clone + Ord + fmt::Display + Send + Sync + 'static;
+    type Path: Clone + fmt::Debug + Ord + fmt::Display + Send + Sync + 'static;
     type InvocationAction: ActionMeta + Send + Sync + 'static;
 
     fn registered_paths(&self) -> Vec<Self::Path>;
 
-    fn spec(&self, path: &Self::Path) -> Result<&ToolSpec, ToolPlaneError>;
+    fn spec(&self, path: &Self::Path) -> Result<&ToolSpec, LookupError<Self::Path>>;
 
     /// Consumes an already governed invocation grant.
     ///
@@ -155,7 +159,7 @@ pub trait ToolPlane<C: ContextFactory>: Send + Sync {
         &self,
         grant: Granted<Self::InvocationAction>,
         ctx: &C::Cx<'_>,
-    ) -> Result<Value, ToolPlaneError>;
+    ) -> Result<Value, DispatchError<Self::Path>>;
 }
 
 new_key_type! {
@@ -189,7 +193,7 @@ where
         }
     }
 
-    pub fn register<T>(&mut self, path: ToolPath, tool: T) -> Result<(), ToolPlaneError>
+    pub fn register<T>(&mut self, path: ToolPath, tool: T) -> Result<(), RegistrationError>
     where
         T: ToolImpl<C>,
     {
@@ -201,12 +205,12 @@ where
         path: ToolPath,
         provenance: ToolProvenance,
         tool: T,
-    ) -> Result<(), ToolPlaneError>
+    ) -> Result<(), RegistrationError>
     where
         T: ToolImpl<C>,
     {
         if self.paths.contains_key(&path) {
-            return Err(ToolPlaneError::DuplicateTool(path.to_string()));
+            return Err(RegistrationError::AlreadyRegistered { path });
         }
 
         let slot = self.entries.insert(ToolEntry {
@@ -222,16 +226,13 @@ where
         provenance: ToolProvenance,
         tool: T,
         observer: F,
-    ) -> Result<(), ToolPlaneError>
+    ) -> Result<(), RegistrationError>
     where
         T: ToolImpl<C>,
-        F: for<'a> Fn(&C::Cx<'a>, &T::Output) -> Result<(), ToolExecutionError>
-            + Send
-            + Sync
-            + 'static,
+        F: for<'a> Fn(&C::Cx<'a>, &T::Output) + Send + Sync + 'static,
     {
         if self.paths.contains_key(&path) {
-            return Err(ToolPlaneError::DuplicateTool(path.to_string()));
+            return Err(RegistrationError::AlreadyRegistered { path });
         }
 
         let slot = self.entries.insert(ToolEntry {
@@ -275,15 +276,15 @@ where
         self.paths.keys().cloned().collect()
     }
 
-    fn spec(&self, path: &ToolPath) -> Result<&ToolSpec, ToolPlaneError> {
+    fn spec(&self, path: &ToolPath) -> Result<&ToolSpec, LookupError<ToolPath>> {
         let slot = self
             .paths
             .get(path)
-            .ok_or_else(|| ToolPlaneError::ToolNotFound(path.to_string()))?;
+            .ok_or_else(|| LookupError::NotRegistered { path: path.clone() })?;
         let entry = self
             .entries
             .get(*slot)
-            .ok_or_else(|| ToolPlaneError::ToolNotFound(path.to_string()))?;
+            .ok_or_else(|| LookupError::RegistryInvariant { path: path.clone() })?;
 
         Ok(entry.tool.spec())
     }
@@ -292,18 +293,22 @@ where
         &self,
         grant: Granted<ToolInvocationAction>,
         ctx: &C::Cx<'_>,
-    ) -> Result<Value, ToolPlaneError> {
+    ) -> Result<Value, DispatchError<ToolPath>> {
         let (path, _required_capabilities, payload) = grant.into_action().into_parts();
         let slot = self
             .paths
             .get(&path)
-            .ok_or_else(|| ToolPlaneError::ToolNotFound(path.to_string()))?;
+            .ok_or_else(|| DispatchError::RegistryInvariant { path: path.clone() })?;
         let entry = self
             .entries
             .get(*slot)
-            .ok_or_else(|| ToolPlaneError::ToolNotFound(path.to_string()))?;
+            .ok_or_else(|| DispatchError::RegistryInvariant { path })?;
 
-        entry.tool.invoke(ctx, payload).await.map_err(Into::into)
+        entry
+            .tool
+            .invoke(ctx, payload)
+            .await
+            .map_err(|source| DispatchError::Tool { source })
     }
 }
 

@@ -82,6 +82,9 @@ pub(super) fn execute_direct_tool_core_with_config(
     execute_discoverable_tool_core_with_config(routed_request, config)
 }
 
+// TODO(typed-tool-legacy-ingress): Delete this ToolCoreOutcome/string bridge
+// when direct callers use ctx.tool(path)?.invoke(payload). All typed lookup and
+// invocation errors are downgraded here only for the legacy direct-tool API.
 pub(super) async fn execute_direct_tool_core_with_context(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
@@ -104,7 +107,7 @@ pub(super) async fn execute_direct_tool_core_with_context(
                 payload,
             })
         }
-        Err(loong_contracts::ToolPlaneError::ToolNotFound(_)) => {
+        Err(loong_runtime::tool_plane::error::LookupError::NotRegistered { .. }) => {
             execute_discoverable_tool_core_with_config(routed_request, config)
         }
         Err(error) => Err(error.to_string()),

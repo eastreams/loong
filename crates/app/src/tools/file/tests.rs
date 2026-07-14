@@ -4,10 +4,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use loong_contracts::{
-    Capability, ExecutionRoute, HarnessKind, ToolCoreOutcome, ToolCoreRequest, ToolExecutionError,
-};
-use loong_core::tool::{RegisteredTool, ToolProvenance};
+use loong_contracts::{Capability, ExecutionRoute, HarnessKind, ToolCoreOutcome, ToolCoreRequest};
+use loong_core::tool::{RegisteredTool, RegisteredToolError, ToolProvenance};
 use loong_kernel::{
     InMemoryAuditSink, Kernel, NoopAuditSink, PolicyPipeline, SystemClock, VerticalPackManifest,
     policy::{
@@ -132,28 +130,18 @@ async fn execute_file_read_with_test_context(
     let outcome = tool
         .invoke(&execution_context, request.payload)
         .await
-        .map_err(tool_execution_error_reason)?;
+        .map_err(|error| match error {
+            RegisteredToolError::Input(loong_contracts::ToolInputError::InvalidPayload {
+                reason,
+            }) => reason,
+            RegisteredToolError::Input(input_error) => input_error.to_string(),
+            RegisteredToolError::Execution { source } => source.to_string(),
+            unknown => unknown.to_string(),
+        })?;
     Ok(ToolCoreOutcome {
         status: "ok".to_owned(),
         payload: outcome,
     })
-}
-
-fn tool_execution_error_reason(error: ToolExecutionError) -> String {
-    match error {
-        ToolExecutionError::Input(input_error) => match input_error {
-            loong_contracts::ToolInputError::MissingField { field } => {
-                format!("missing tool input field `{field}`")
-            }
-            loong_contracts::ToolInputError::InvalidField { field, reason } => {
-                format!("invalid tool input field `{field}`: {reason}")
-            }
-            loong_contracts::ToolInputError::InvalidPayload { reason } => reason,
-            unknown => unknown.to_string(),
-        },
-        ToolExecutionError::Execution { reason } => reason,
-        unknown => unknown.to_string(),
-    }
 }
 
 async fn execute_request_via_kernel_tool_registry(

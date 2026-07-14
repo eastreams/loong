@@ -1,12 +1,12 @@
 use std::{collections::BTreeSet, path::PathBuf};
 
 use async_trait::async_trait;
-use loong_contracts::{Capability, ToolExecutionError, ToolInputError, ToolSpec};
+use loong_contracts::{Capability, ToolInputError, ToolSpec};
 use loong_core::{policy::context::ContextFactory, tool::ToolImpl};
 use loong_kernel::{KernelAccess, access::fs::FsWriteOptions};
 use serde_json::{Value, json};
 
-use super::{fs_access_error_reason, required_trimmed_string_field};
+use super::{FileToolError, required_trimmed_string_field};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExactTextEditBlock {
@@ -154,6 +154,7 @@ where
 {
     type Input = EditRequest;
     type Output = EditOutput;
+    type Error = FileToolError;
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -183,22 +184,15 @@ where
         &self,
         ctx: &C::Cx<'_>,
         input: Self::Input,
-    ) -> Result<Self::Output, ToolExecutionError> {
-        let read_output = ctx
-            .access()
-            .fs()
-            .read_file(input.path.as_str())
-            .await
-            .map_err(fs_access_error_reason)
-            .map_err(ToolExecutionError::execution)?;
-        let before = String::from_utf8(read_output.bytes).map_err(|source| {
-            ToolExecutionError::execution(format!(
-                "failed to decode {} as UTF-8: {source}",
-                read_output.path.display()
-            ))
-        })?;
+    ) -> Result<Self::Output, Self::Error> {
+        let read_output = ctx.access().fs().read_file(input.path.as_str()).await?;
+        let before =
+            String::from_utf8(read_output.bytes).map_err(|source| FileToolError::InvalidUtf8 {
+                path: read_output.path.clone(),
+                source,
+            })?;
         let applied = Self::apply_exact_edit_blocks(before.as_str(), input.blocks.as_slice())
-            .map_err(ToolExecutionError::execution)?;
+            .map_err(|reason| FileToolError::ApplyEdit { reason })?;
 
         let write_output = ctx
             .access()
@@ -211,9 +205,7 @@ where
                     overwrite: true,
                 },
             )
-            .await
-            .map_err(fs_access_error_reason)
-            .map_err(ToolExecutionError::execution)?;
+            .await?;
 
         Ok(EditOutput {
             tool_name: input.tool_name,

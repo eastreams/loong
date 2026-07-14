@@ -1,4 +1,3 @@
-use loong_kernel::access::fs::FsAccessError;
 use serde_json::Value;
 
 // Concrete file tools live here, but filesystem effects do not. Each tool only
@@ -6,29 +5,19 @@ use serde_json::Value;
 // directory traversal, and content search side effects are owned by
 // loong_access::fs through granted fs actions.
 mod edit;
+mod error;
 mod read;
 mod search;
 mod write;
 
 pub use edit::{EditOutput, EditRequest, EditTool, ExactTextEditBlock};
+pub use error::FileToolError;
 pub use read::{FileReadRequest, ReadFileOutput, ReadOutput, ReadRequest, ReadTool};
 pub use search::{
     ContentSearchReadOutput, ContentSearchReadRequest, ContentSearchTool, GlobReadOutput,
     GlobReadRequest, GlobSearchTool,
 };
 pub use write::{WriteOutput, WriteRequest, WriteTool};
-
-// Boundary conversion: access keeps typed errors, while the legacy app-facing
-// tool result still carries string reasons. Keep policy denials recognizable
-// until the outer error envelope becomes typed end to end.
-fn fs_access_error_reason(error: FsAccessError) -> String {
-    let rendered = error.to_string();
-    if matches!(error, FsAccessError::Authorization(_)) {
-        format!("policy_denied: {rendered}")
-    } else {
-        rendered
-    }
-}
 
 fn required_trimmed_string_field<'a>(
     payload: &'a serde_json::Map<String, Value>,

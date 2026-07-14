@@ -249,3 +249,16 @@ use super::*;
 use std::path::PathBuf;
 
 use serde_json::{Value, json};
+
+#[test]
+fn file_tool_error_preserves_fs_access_error_as_source() {
+    let error = FileToolError::from(loong_kernel::access::fs::FsAccessError::ReadFile {
+        path: PathBuf::from("notes.txt"),
+        source: std::io::Error::other("test read failure"),
+    });
+
+    assert!(matches!(error, FileToolError::Access(_)));
+    std::error::Error::source(&error)
+        .and_then(|source| source.downcast_ref::<loong_kernel::access::fs::FsAccessError>())
+        .expect("file tool error should retain its filesystem access source");
+}

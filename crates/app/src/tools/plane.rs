@@ -1,12 +1,14 @@
 use std::borrow::Cow;
 
 use async_trait::async_trait;
-use loong_contracts::{PolicyDecision, PolicyGrant, ToolExecutionError, ToolPlaneError};
+use loong_contracts::{PolicyDecision, PolicyGrant};
 use loong_core::{
     policy::{context::ContextFactory, policy::Policy},
     tool::ToolProvenance,
 };
-use loong_runtime::tool_plane::{ToolInvocationAction, ToolPath, ToolPlaneRegistry};
+use loong_runtime::tool_plane::{
+    ToolInvocationAction, ToolPath, ToolPlaneRegistry, error::RegistrationError,
+};
 
 use crate::context::AppContextFactory;
 
@@ -35,7 +37,8 @@ where
 ///
 /// Registration is deliberately fallible: a duplicate builtin path is a
 /// bootstrap error, not a process-global initialization panic.
-pub(crate) fn builtin_tool_plane() -> Result<ToolPlaneRegistry<AppContextFactory>, ToolPlaneError> {
+pub(crate) fn builtin_tool_plane() -> Result<ToolPlaneRegistry<AppContextFactory>, RegistrationError>
+{
     let plane = ToolPlaneRegistry::new();
     #[cfg(feature = "tool-file")]
     let plane = {
@@ -67,7 +70,6 @@ pub(crate) fn builtin_tool_plane() -> Result<ToolPlaneRegistry<AppContextFactory
                     Some(output.before.as_str()),
                     output.after.as_str(),
                 );
-                Ok::<(), ToolExecutionError>(())
             },
         )?;
 

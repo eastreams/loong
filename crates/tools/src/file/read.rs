@@ -1,14 +1,14 @@
 use std::{collections::BTreeSet, path::PathBuf};
 
 use async_trait::async_trait;
-use loong_contracts::{Capability, ToolExecutionError, ToolInputError, ToolSpec};
+use loong_contracts::{Capability, ToolInputError, ToolSpec};
 use loong_core::{policy::context::ContextFactory, tool::ToolImpl};
 use loong_kernel::{KernelAccess, access::fs::FsContentSearchOptions};
 use serde_json::{Value, json};
 
 use super::{
-    ContentSearchReadOutput, ContentSearchReadRequest, GlobReadOutput, GlobReadRequest,
-    fs_access_error_reason, optional_positive_usize_field, optional_trimmed_string_field,
+    ContentSearchReadOutput, ContentSearchReadRequest, FileToolError, GlobReadOutput,
+    GlobReadRequest, optional_positive_usize_field, optional_trimmed_string_field,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,6 +190,7 @@ where
 {
     type Input = ReadRequest;
     type Output = ReadOutput;
+    type Error = FileToolError;
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -221,21 +222,13 @@ where
         &self,
         ctx: &C::Cx<'_>,
         input: Self::Input,
-    ) -> Result<Self::Output, ToolExecutionError> {
+    ) -> Result<Self::Output, Self::Error> {
         // ReadTool owns direct-read mode selection and response shaping only.
         // Filesystem side effects stay behind loong_access::fs actions.
         match input {
             ReadRequest::File(input) => {
-                let output = ctx
-                    .access()
-                    .fs()
-                    .read_file(input.target.as_str())
-                    .await
-                    .map_err(fs_access_error_reason)
-                    .map_err(ToolExecutionError::execution)?;
-                Self::build_file_output(input, output.path, output.bytes)
-                    .map(ReadOutput::File)
-                    .map_err(ToolExecutionError::execution)
+                let output = ctx.access().fs().read_file(input.target.as_str()).await?;
+                Self::build_file_output(input, output.path, output.bytes).map(ReadOutput::File)
             }
             ReadRequest::Glob(input) => {
                 let output = ctx
@@ -247,9 +240,7 @@ where
                         input.include_directories,
                         input.max_results,
                     )
-                    .await
-                    .map_err(fs_access_error_reason)
-                    .map_err(ToolExecutionError::execution)?;
+                    .await?;
                 Ok(ReadOutput::Glob(GlobReadOutput::from_access_output(
                     input, output,
                 )))
@@ -265,9 +256,7 @@ where
                     .access()
                     .fs()
                     .search_content(input.root.as_str(), input.query.clone(), options)
-                    .await
-                    .map_err(fs_access_error_reason)
-                    .map_err(ToolExecutionError::execution)?;
+                    .await?;
                 Ok(ReadOutput::Content(
                     ContentSearchReadOutput::from_access_output(input, output),
                 ))
@@ -281,7 +270,7 @@ impl ReadTool {
         request: FileReadRequest,
         resolved: PathBuf,
         bytes: Vec<u8>,
-    ) -> Result<ReadFileOutput, String> {
+    ) -> Result<ReadFileOutput, FileToolError> {
         let file_text = String::from_utf8_lossy(&bytes).to_string();
         let selection = select_file_read_content(
             file_text.as_str(),
@@ -289,7 +278,8 @@ impl ReadTool {
             request.offset,
             request.limit,
             request.tool_name.as_str(),
-        )?;
+        )
+        .map_err(|reason| FileToolError::ReadResponse { reason })?;
 
         Ok(ReadFileOutput {
             tool_name: request.tool_name,

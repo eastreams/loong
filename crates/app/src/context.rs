@@ -9,6 +9,7 @@ use loong_contracts::{
     Capabilities, CapabilityToken, GovernedSessionMode, InvocationOutcome, ToolPlaneError,
 };
 use loong_core::policy::context::{ContextFactory, PolicyContext};
+use loong_core::tool::RegisteredToolError;
 use loong_kernel::access::fs::{FsPathPolicyContext, FsResolutionContext};
 use loong_kernel::{
     AccessCx, AuditSink, Capability, Clock, ExecutionRoute, FanoutAuditSink, HarnessKind,
@@ -24,7 +25,10 @@ use loong_kernel::{
 };
 use loong_runtime::{
     runtime::Runtime,
-    tool_plane::{ToolInvocationAction, ToolPath},
+    tool_plane::{
+        ToolInvocationAction, ToolPath,
+        error::{DispatchError, LookupError},
+    },
 };
 use serde_json::Value;
 
@@ -562,7 +566,7 @@ impl AppContext {
         AccessCx::new(self.runtime.kernel(), self)
     }
 
-    pub(crate) fn tool(&self, path: ToolPath) -> Result<ToolInvocation<'_>, ToolPlaneError> {
+    pub(crate) fn tool(&self, path: ToolPath) -> Result<ToolInvocation<'_>, LookupError<ToolPath>> {
         let spec = self.runtime.tools().spec(&path)?;
         let mut required_capabilities = BTreeSet::from([Capability::InvokeTool]);
         required_capabilities.extend(spec.required_capabilities.iter().copied());
@@ -580,6 +584,9 @@ impl AppContext {
 ///
 /// Concrete tool implementations never receive this handle; they only receive
 /// parsed input after `invoke` has paired kernel grant, plane dispatch, and audit.
+// TODO(typed-tool-authorization-audit): Delete this app-owned wrapper once
+// mandatory grant audit and runtime invocation evidence are closed. Until then,
+// keep every typed-to-legacy downgrade local and do not add blanket From impls.
 pub(crate) struct ToolInvocation<'ctx> {
     ctx: &'ctx AppContext,
     path: ToolPath,
@@ -662,21 +669,37 @@ impl ToolInvocation<'_> {
                 Ok(output)
             }
             Err(error) => {
-                let (error_kind, reason) = match &error {
-                    ToolPlaneError::ToolNotFound(reason) => ("not_found", reason.clone()),
-                    ToolPlaneError::DuplicateTool(reason) => ("duplicate_tool", reason.clone()),
-                    ToolPlaneError::CoreAdapterNotFound(reason) => {
-                        ("core_adapter_not_found", reason.clone())
+                let error_kind = if matches!(error, DispatchError::RegistryInvariant { .. }) {
+                    "registry_invariant"
+                } else if matches!(
+                    error,
+                    DispatchError::Tool {
+                        source: RegisteredToolError::Input(_),
                     }
-                    ToolPlaneError::ExtensionNotFound(reason) => {
-                        ("extension_not_found", reason.clone())
-                    }
-                    ToolPlaneError::NoDefaultCoreAdapter => {
-                        ("no_default_core_adapter", error.to_string())
-                    }
-                    ToolPlaneError::Input(input_error) => ("input_error", input_error.to_string()),
-                    ToolPlaneError::Execution(reason) => ("execution", reason.clone()),
-                    _ => ("tool_plane", error.to_string()),
+                ) {
+                    "input_error"
+                } else {
+                    "execution"
+                };
+                let rendered = error.to_string();
+                #[cfg(feature = "tool-file")]
+                let policy_denied = matches!(
+                    &error,
+                    DispatchError::Tool {
+                        source: RegisteredToolError::Execution { source },
+                    } if matches!(
+                        source.downcast_ref::<loong_tools::file::FileToolError>(),
+                        Some(loong_tools::file::FileToolError::Access(
+                            loong_kernel::access::fs::FsAccessError::Authorization(_)
+                        ))
+                    )
+                );
+                #[cfg(not(feature = "tool-file"))]
+                let policy_denied = false;
+                let legacy_reason = if policy_denied {
+                    format!("policy_denied: {rendered}")
+                } else {
+                    rendered
                 };
                 tool_ctx.runtime.kernel().record_tool_invocation(
                     &tool_ctx,
@@ -684,10 +707,13 @@ impl ToolInvocation<'_> {
                     &audit_caps,
                     InvocationOutcome::Failed {
                         error_kind: error_kind.to_owned(),
-                        reason,
+                        reason: legacy_reason.clone(),
                     },
                 )?;
-                Err(loong_kernel::KernelError::ToolPlane(error))
+                // This explicit downgrade belongs only to the temporary owner above.
+                Err(loong_kernel::KernelError::ToolPlane(
+                    ToolPlaneError::Execution(legacy_reason),
+                ))
             }
         }
     }

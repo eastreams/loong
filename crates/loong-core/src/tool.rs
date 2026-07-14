@@ -1,7 +1,7 @@
-use std::time::SystemTime;
+use std::{error::Error, time::SystemTime};
 
 use async_trait::async_trait;
-use loong_contracts::{ToolExecutionError, ToolInputError, ToolSpec};
+use loong_contracts::{ToolInputError, ToolSpec};
 use serde_json::Value;
 
 use crate::policy::context::ContextFactory;
@@ -18,6 +18,7 @@ pub enum ToolProvenance {
 pub trait ToolImpl<C: ContextFactory>: Send + Sync + 'static {
     type Input: Send + 'static;
     type Output: Send + Into<Value> + 'static;
+    type Error: Error + Send + Sync + 'static;
 
     fn spec(&self) -> ToolSpec;
 
@@ -27,7 +28,24 @@ pub trait ToolImpl<C: ContextFactory>: Send + Sync + 'static {
         &self,
         ctx: &C::Cx<'_>,
         input: Self::Input,
-    ) -> Result<Self::Output, ToolExecutionError>;
+    ) -> Result<Self::Output, Self::Error>;
+}
+
+/// Failure produced while invoking a type-erased registered tool.
+///
+/// Parsing remains a stable core contract, while execution retains the concrete
+/// tool error as its source so policy and orchestration boundaries can inspect
+/// typed failures without teaching core about every tool crate.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum RegisteredToolError {
+    #[error(transparent)]
+    Input(#[from] ToolInputError),
+    #[error("tool execution failed: {source}")]
+    Execution {
+        #[source]
+        source: Box<dyn Error + Send + Sync>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,7 +116,11 @@ where
     /// Concrete tool crates still only implement [`ToolImpl`]. This hook lets
     /// the app/runtime boundary observe the concrete output before it is erased
     /// into JSON, which is where app-owned side channels such as preview events
-    /// belong.
+    /// belong. Returning `()` removes a recoverable error channel; it does not
+    /// prevent a callback from panicking. Observers must not panic, and the
+    /// registrar must absorb or handle recoverable delivery failures inside the
+    /// callback. Fallible delivery needs a separate event contract rather than
+    /// changing tool success after its side effects have completed.
     #[must_use]
     pub fn from_tool_with_success_observer<T, F>(
         provenance: ToolProvenance,
@@ -107,10 +129,7 @@ where
     ) -> Self
     where
         T: ToolImpl<C>,
-        F: for<'a> Fn(&C::Cx<'a>, &T::Output) -> Result<(), ToolExecutionError>
-            + Send
-            + Sync
-            + 'static,
+        F: for<'a> Fn(&C::Cx<'a>, &T::Output) + Send + Sync + 'static,
     {
         let registration = ToolRegistration::new(tool.spec(), provenance);
         Self {
@@ -137,17 +156,17 @@ where
         &self,
         ctx: &C::Cx<'_>,
         payload: Value,
-    ) -> Result<Value, ToolExecutionError> {
+    ) -> Result<Value, RegisteredToolError> {
         self.erased.invoke(ctx, payload).await
     }
 }
 
-// Private by design: only RegisteredTool may erase concrete tool types. That
-// keeps registration metadata attached to every dispatch path and prevents
-// concrete ToolImpl authors from bypassing the app plane's grant/audit wrapper.
+// Private by design: callers may register concrete ToolImpl values, but cannot
+// inject an erased implementation that bypasses input parsing or loses concrete
+// error sources. Grant and audit remain the invoking ToolPlane's responsibility.
 #[async_trait]
 trait ErasedTool<C: ContextFactory>: Send + Sync {
-    async fn invoke(&self, ctx: &C::Cx<'_>, payload: Value) -> Result<Value, ToolExecutionError>;
+    async fn invoke(&self, ctx: &C::Cx<'_>, payload: Value) -> Result<Value, RegisteredToolError>;
 }
 
 struct ObservedTool<T, F> {
@@ -164,12 +183,16 @@ impl<C, T, F> ErasedTool<C> for ObservedTool<T, F>
 where
     C: ContextFactory,
     T: ToolImpl<C>,
-    F: for<'a> Fn(&C::Cx<'a>, &T::Output) -> Result<(), ToolExecutionError> + Send + Sync + 'static,
+    F: for<'a> Fn(&C::Cx<'a>, &T::Output) + Send + Sync + 'static,
 {
-    async fn invoke(&self, ctx: &C::Cx<'_>, payload: Value) -> Result<Value, ToolExecutionError> {
+    async fn invoke(&self, ctx: &C::Cx<'_>, payload: Value) -> Result<Value, RegisteredToolError> {
         let input = self.tool.parse_input(payload)?;
-        let output = self.tool.execute(ctx, input).await?;
-        (self.observer)(ctx, &output)?;
+        let output = self.tool.execute(ctx, input).await.map_err(|source| {
+            RegisteredToolError::Execution {
+                source: Box::new(source),
+            }
+        })?;
+        (self.observer)(ctx, &output);
         Ok(output.into())
     }
 }
@@ -180,9 +203,15 @@ where
     C: ContextFactory,
     T: ToolImpl<C>,
 {
-    async fn invoke(&self, ctx: &C::Cx<'_>, payload: Value) -> Result<Value, ToolExecutionError> {
+    async fn invoke(&self, ctx: &C::Cx<'_>, payload: Value) -> Result<Value, RegisteredToolError> {
         let input = self.tool.parse_input(payload)?;
-        self.tool.execute(ctx, input).await.map(Into::into)
+        self.tool
+            .execute(ctx, input)
+            .await
+            .map(Into::into)
+            .map_err(|source| RegisteredToolError::Execution {
+                source: Box::new(source),
+            })
     }
 }
 

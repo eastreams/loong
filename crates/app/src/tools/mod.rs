@@ -391,6 +391,7 @@ pub async fn execute_tool(
 // call sites. During migration this legacy envelope ingress first attempts the
 // app-owned typed plane through ctx.tool(path)?.invoke(payload), then falls back
 // to the legacy kernel adapter plane only for tools that are not registered yet.
+// Other typed lookup failures are downgraded here only for this legacy envelope.
 pub(crate) async fn execute_kernel_tool_request(
     ctx: &AppContext,
     request: ToolCoreRequest,
@@ -467,8 +468,12 @@ pub(crate) async fn execute_kernel_tool_request(
                         payload,
                     });
                 }
-                Err(loong_kernel::ToolPlaneError::ToolNotFound(_)) => {}
-                Err(error) => return Err(loong_kernel::KernelError::ToolPlane(error)),
+                Err(loong_runtime::tool_plane::error::LookupError::NotRegistered { .. }) => {}
+                Err(error) => {
+                    return Err(loong_kernel::KernelError::ToolPlane(
+                        loong_kernel::ToolPlaneError::Execution(error.to_string()),
+                    ));
+                }
             }
         }
 
@@ -497,8 +502,12 @@ pub(crate) async fn execute_kernel_tool_request(
                     payload,
                 });
             }
-            Err(loong_kernel::ToolPlaneError::ToolNotFound(_)) => {}
-            Err(error) => return Err(loong_kernel::KernelError::ToolPlane(error)),
+            Err(loong_runtime::tool_plane::error::LookupError::NotRegistered { .. }) => {}
+            Err(error) => {
+                return Err(loong_kernel::KernelError::ToolPlane(
+                    loong_kernel::ToolPlaneError::Execution(error.to_string()),
+                ));
+            }
         }
 
         let caps = required_capabilities_for_request(&request);
