@@ -58,6 +58,44 @@ ctx.access().fs().write_file(path, bytes, options).await
 每个 fs domain error 使用 `thiserror` 保留 source。legacy string reason 只在旧 tool envelope 的
 最后边界转换，不能反向污染 Access error。
 
+## Operation Module Ownership
+
+filesystem 模块按 operation 纵向切片，而不是按 action、facade method、execution 和 output
+横向切片。一个 operation 的 concrete `Action`、options、`FsAccess` method、
+`impl Action::run` 和 output 由同一个文件拥有：
+
+```text
+fs/
+  access.rs          # FsAccess + shared grant_path chain
+  action.rs          # only the FsAction family enum
+  error.rs           # shared fs domain errors
+  path.rs            # path facts + resolve/path actions and execution
+  read.rs
+  write.rs
+  copy.rs
+  directory.rs
+  inspect.rs
+  glob.rs
+  read_dir.rs
+  content_search.rs
+  remove.rs
+  remove_dir.rs
+  rename.rs
+```
+
+- operation modules、`action` 和 error implementation modules 都保持 private；`fs` facade 显式
+  re-export 每个 operation 的 public members。调用者只依赖
+  `loong_access::fs::{FsAccess, FsReadAction, ...}`，不能依赖 `fs::action::*` 或 operation module
+  path。
+- `access.rs` 只保留 facade identity、构造和强制 resolve -> path grant 顺序的共享实现。
+  `error.rs` 保留跨 operation 共用的 domain error；不能为了文件共置复制错误类型或添加转发 helper。
+- `FsAction` family 可以继续存在，但只负责 concrete action 的和类型与 delegation，不重新拥有各
+  action 的构造事实或 execution logic。
+- 每个 operation module 顶部用简短注释说明其授权与副作用边界；不写复述代码的注释。
+
+当前实现仍把 concrete actions 集中在 `action.rs`，并公开内部 module path。破坏性收敛步骤和
+完成线见 `08-next-steps.md` 步骤 9；该结构调整不改变 authorization 或 filesystem 行为。
+
 ## Read Family
 
 `ReadTool` 是 aggregate tool，不是 aggregate action：
@@ -74,7 +112,7 @@ concrete tool 只 parse payload、调用上述 Access operation、格式化 type
 - Turn cancellation 后不再开始新的 resolve/path/operation grant。
 - long-running search/glob/read-dir 应在可安全停止的迭代边界观察 cancellation。
 - 已经进入不可中断 syscall 或 atomic commit 的操作不承诺回滚。generic Access execution evidence
-  尚未建立；它必须等步骤 20 确定唯一 consumption owner 与 correlation carrier 后再实现，不能从
+  尚未建立；它必须等步骤 21 确定唯一 consumption owner 与 correlation carrier 后再实现，不能从
   authorization evidence 推断 operation 已完成或失败。
 - cancellation signal 来自当前 Turn Context，不成为 fs policy input，也不改变 Action required
   capabilities。

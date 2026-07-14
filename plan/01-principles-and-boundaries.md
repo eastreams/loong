@@ -77,9 +77,19 @@
   engine 再增加 Kernel forwarding method。
 - `PolicyContext` 只读提供 effective capabilities 和 owned typed authorization subject/identity；
   它不暴露 sink、clock、id source 或 `ctx.audit`。
-- concrete kernel `PolicyPipeline` 与 Kernel 使用 kernel-private shared state 共用 sink、clock 和
-  identity source。`PolicyGrantError::Audit` 在 core 通过 source-preserving boundary 承载 concrete
-  sink error；audit write 失败必须在 grant 逃逸前传播。
+- public `loong_kernel::policy::PolicyPipelineBuilder` 只注册 policy，kernel crate root 不 re-export
+  它；Kernel 把 builder 和 non-optional kernel-private audit state 安装成 private
+  `PolicyPipeline`。installed pipeline 与 Kernel 共用 sink、clock 和 identity source，不存在可运行的
+  unbound pipeline。
+- policy-bearing Kernel 不提供 silent/no-op audit constructor 或 sink。测试如果不写 journal，也使用
+  可观察的 in-memory sink；自定义 `AuditSink` 是调用方显式选择的 durability trust boundary。
+- authorization evidence 用 sum type 编码合法阶段：attempt allocation failure 不能携带 attempt id、
+  policy report 或 terminal outcome；capability deny 不能伪装成 policy evaluation；policy 运行后的
+  permission/terminal event 必须携带同一份 report。permission resolution 分成 approved、denied 和
+  parent-to-user escalation，不能构造 `User + Escalate` 这种非法组合。
+- `PolicyGrantError::{Audit, IdentityAllocation, IdentityAllocationAndAudit}` 分别保留 evidence write、
+  identity allocation，以及 allocation + failure-evidence write 的双重失败。错误必须携带 core 当时准备
+  写入的 evidence 和原始 typed source，并在 grant 逃逸前传播；evidence 字段不声称 sink 已经接受它。
 - terminal authorization write 成功后，core 才能私有 mint `ActionGrant<A>` 与 `Granted<A>`。
   `ActionGrant<A>` 承载 grant metadata，`Granted<A>` 是不可伪造的 action execution proof；不把
   sink、report 或 authority 塞进 execution proof。私有 mint 仍必须保证 deny 与 audit failure

@@ -14,10 +14,10 @@
    hygiene。
 5. [ToolPlane 与 Tool Invocation](05-tool-plane.md)：plane-local path、sealed dispatch 和
    legacy ingress 删除目标。
-6. [Filesystem Path Grants](06-filesystem-and-read.md)：fs typestate、安全边界和剩余
-   TOCTOU 工作。
+6. [Filesystem Path Grants](06-filesystem-and-read.md)：fs typestate、安全边界、operation
+   ownership 和剩余 TOCTOU 工作。
 7. [Kernel / Audit / 当前偏差](07-kernel-audit-and-deviations.md)：governance 与 audit
-   目标，以及截至 2026-07-14 仍存在的代码偏差。
+   目标，以及截至 2026-07-15 仍存在的代码偏差。
 8. [最小提交顺序](08-next-steps.md)：只列尚未完成的实施步骤、完成线和验证命令。
 
 维护规则：

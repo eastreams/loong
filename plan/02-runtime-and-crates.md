@@ -26,10 +26,11 @@ crate 清理。
 - `loong-runtime` crate root 仍保留 `RuntimeSpine`、one-shot/interactive transitional API，并
   re-export `loong_core::Session`；新的 `runtime` / `tool_plane` owner 与旧 spine 尚未收敛。
 - typed policy pipeline 已支持 terminal parent/user permission decision，grant 保留完整
-  `PolicyReport`，并在外部 permission await 后复查 effective capabilities。当前 typed tool grant
-  仍错误地接收 legacy pack/token；mandatory authorization audit 闭合后，它才能改用 Access 已经
-  使用的 `PolicyEngine::grant`，而不是新增 Kernel grant API。token expiry/revocation 继续由 legacy
-  fallback 自己验证，不能反向塑造新 contract。production Context 也尚未接通 permission
+  `PolicyReport`，并在外部 permission await 后复查 effective capabilities。sealed grant algorithm
+  已经自动记录 mandatory authorization evidence；当前 typed tool grant 仍错误地接收 legacy
+  pack/token，步骤 5 必须改用 Access 已经使用的 `PolicyEngine::grant`，而不是新增 Kernel grant
+  API。token expiry/revocation 继续由 legacy fallback 自己验证，不能反向塑造新 contract。
+  production Context 也尚未接通 permission
   interaction，pipeline 尚未强制 permission 位于所有 hard deny 之后；这些边界完成前，production
   不得注册会返回 permission decision 的 policy。
 
@@ -201,11 +202,12 @@ Permission 是 policy terminal decision 后的 consent 流程，不是第二套 
   audit attribution；它不暴露 audit sink、clock、id source 或 `ctx.audit`。
 - hooks 默认返回结构化 `PermissionRequestError::Unavailable`。没有 permission surface 的
   test/fixture 与 production Context 都 fail closed，不通过默认 panic 区分接线状态。
-- permission request/resolution 与普通 grant 一样必须自动进入 generic authorization audit；
-  core grant algorithm 通过 kernel-private backend state 在 policy evaluation 前分配 authorization
-  attempt id。每个已结束 attempt 恰好一条 terminal authorization event，permission
-  request/resolution/failure 是零到多条关联同一 id 的 interaction event；成功后另行分配 grant
-  id。policy、tool、Access backend 都不手写这类 evidence。
+- permission request/resolution 与普通 grant 一样自动进入 generic authorization audit；core grant
+  algorithm 在 capability gate 前分配 authorization attempt id。capability deny 使用不带 report 的
+  attempt event；policy 一旦运行，permission interaction 与 terminal outcome 都携带同一 report 和
+  attempt id。interaction 明确区分 requested、approved、denied、parent-to-user escalation 和 failed；
+  user authority 没有 escalation event。最终 allow 另行分配 grant id。policy、tool、Access backend
+  都不手写这类 evidence。
 
 ## Context 破坏性替换
 
@@ -223,15 +225,15 @@ Permission 是 policy terminal decision 后的 consent 流程，不是第二套 
 
 ### 可独立提交与原子边界
 
-在 workspace-wide 类型替换前，剩余可独立编译并直接减少错误耦合的前置边界是：
+`PolicyEngine::grant` 的 mandatory authorization audit owner 已闭合。在 workspace-wide 类型替换
+前，剩余可独立编译并直接减少错误耦合的前置边界是：
 
-1. 先闭合 `PolicyEngine::grant` 的 mandatory authorization audit owner；
-2. 再由 runtime `ToolInvocation` owner 同时接入 composite typed error、child narrowing、direct
+1. 由 runtime `ToolInvocation` owner 同时接入 composite typed error、child narrowing、direct
    `PolicyEngine::grant`、granted dispatch 和 execution audit；wrapper 保留 outer
    `ActionGrant.id/info` 直到关联 execution audit 结束，通过 Kernel 现有 generic
    `record_audit_event` 写入 evidence。删除 app-owned wrapper 与 tool-specific
    `Kernel::record_tool_invocation`，保留 generic recorder；
-3. channel/gateway 等长期 owner 只保留 Runtime，在 session address 确定后才物化当前 Session；
+2. channel/gateway 等长期 owner 只保留 Runtime，在 session address 确定后才物化当前 Session；
    provider、core tool 与 app tool 不能同时使用 outer/root context 和 session-specific context。
 
 之后的 `Session + Context<'a> + RuntimeContextFactory` 是一个不可再拆的类型替换：

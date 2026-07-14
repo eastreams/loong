@@ -39,17 +39,45 @@ pre PolicyAny -> typed Policy<C, A> -> fallback PolicyAny
   `PolicyReport` 保留完整 evaluation order、stage、grant 和 outcome。
 - `Policy` 与 `PolicyAny` 都通过 `&C::Cx<'_>` 读取 Context，不持有 Factory，不依赖 app concrete
   Context。
-- `PolicyPipeline::new()` 是 default deny；legacy allow fallback 必须显式选择，且不能授权新
-  typed tool/access action。
+- public `loong_kernel::policy::PolicyPipelineBuilder<C>` 只负责 policy registration；kernel crate
+  root 不 re-export 它。`new()` 是 default deny，legacy allow fallback 必须显式选择，且不能授权新
+  typed tool/access action。legacy allow 只注册给 concrete `LegacyKernelAction`，不能根据可伪造的
+  `ActionMetadata.kind` 字符串放行。builder 不实现 `PolicyEngine`，也没有可选 audit state。
+- Kernel installation 是 registration 与 execution 的唯一转换边界：它把 builder 与 non-optional
+  `SharedAuditState` 组合成 private `PolicyPipeline<C>`。installed pipeline 与 Kernel 共用 sink、clock、
+  attempt/event/grant identity；不存在可运行的 unbound pipeline，也不提供 silent/no-op audit
+  constructor。
 - `PolicyEngine::grant` 是唯一 typed authorization API，core 拥有不可由外部 implementor 覆写的
-  grant algorithm。`PolicyEngine` 对 caller 只暴露 `grant`；现有 decision/grant-id implementation
-  hooks 与 audit write/identity source 一并收进窄 backend contract。需要解耦 kernel 实现时，可以
-  在该 contract 上 blanket 实现 `PolicyEngine`；不能把 core algorithm 重新开放成可绕过的
-  default method，也不能让 core 依赖 kernel `AuditError`。
+  grant algorithm。`PolicyEngineBackend` 只提供 decision、identity allocation 和 durable evidence
+  write；core 在该窄 contract 上 blanket 实现 sealed `PolicyEngine`，且不反向依赖 kernel
+  `AuditError`。
+- `loong_core::kernel::Kernel::policy_engine()` 返回 opaque `&impl PolicyEngine<C>`。跨 crate caller
+  只能调用 `grant`，不能借 concrete installed pipeline 调用 backend hooks 或绕过 core algorithm。
+
+## Authorization Evidence
+
+`AuthorizationEvidence` 只由 sealed core grant algorithm 构造，结构固定为
+`subject + action + attempt`：
+
+- `AuthorizationAttempt::StartFailed` 只表示 attempt id allocation 失败，不能同时携带 id、report、
+  permission 或 terminal outcome；成功分配后才使用 `Started { id, event }`。
+- `AuthorizationAttemptEvent::CapabilityDenied` 发生在 policy 前，因此不携带伪造的空 report；policy
+  已运行时使用 `Policy { report, event }`，其中 event 只能是 permission interaction 或 terminal
+  outcome。
+- permission interaction 使用 `Requested`、`Approved`、`Denied`、`EscalatedToUser` 和 `Failed`
+  分支表达合法状态；不能退回通用 `Resolved { authority, resolution }` 重新允许
+  `User + Escalate`。
+- 这个嵌套 sum type 是 contract，不得退回独立 optional `kind/report/id` 字段，也不能让 caller 自由
+  组合不可能状态。
+- `PolicyGrantError::Audit` 表示已有有效 attempt 时 evidence write 失败；
+  `IdentityAllocation` 表示 attempt/grant identity allocation 失败且 failure evidence 已写入；
+  `IdentityAllocationAndAudit` 表示 allocation 与记录该失败同时失败。compound variant 必须分别保留
+  allocation 与 audit source；所有 variant 都保留 core 准备写入的 exact evidence，但不借此声称 sink
+  已接受。
 
 ## Grant Metadata
 
-`ActionGrantInfo` 已保存发放 grant 所依据的完整 `PolicyReport`。目标 grant boundary 还要求：
+`ActionGrantInfo` 保存发放 grant 所依据的完整 `PolicyReport`。当前 grant boundary 要求：
 
 - 当前字段形状由 outer `ActionGrant<A>` 提供 `GrantId`、grant metadata 和不可伪造的
   `Granted<A>`；当前 goal 保持 `Granted<A>` 只保存 action，不新增 `grant_id()`，也不复制 outer
@@ -65,10 +93,10 @@ pre PolicyAny -> typed Policy<C, A> -> fallback PolicyAny
 和 authorization audit failure 都无法到达 mint。不要为同一目的引入 `SessionAuthority`、
 authorize token、permit wrapper 或另一层 `Granted`。
 
-`PolicyEngine::grant` 也是 typed authorization evidence 的唯一自动触发点。terminal write 成功后
-才能 mint；`PolicyGrantError::Audit` 在 core 通过 source-preserving boundary 保留 concrete sink
-error，而不反向依赖 kernel。concrete caller、Context、policy 和 Access backend 不参与 evidence
-写入，也不能增加一个 public grant wrapper 代替该 contract。
+`PolicyEngine::grant` 也是 typed authorization evidence 的唯一自动触发点。terminal allow write 成功
+后才能 mint；evidence/identity 错误按上一节保留 source，而 core 不反向依赖 kernel `AuditError`。
+concrete caller、Context、policy 和 Access backend 不参与 evidence 写入，也不能增加一个 public
+grant wrapper 代替该 contract。
 
 ## Typed 与 Legacy Authorization
 
@@ -90,6 +118,10 @@ error，而不反向依赖 kernel。concrete caller、Context、policy 和 Acces
   capability gate。
 - `PolicyContext` 只读提供 owned typed authorization subject/identity；它不提供 sink、clock、id
   source 或 `ctx.audit`。
+- typed Context 使用 `AuthorizationScope::Session { session_id }`；尚未迁移到 Session owner、仍由
+  bearer token 驱动的入口必须显式使用
+  `AuthorizationScope::LegacyToken { boundary, pack_id, token_id }`，不能伪造 session id，也不能让
+  token/pack 字段进入普通 typed Context scope。
 - fs resolution root、fs allowed roots、provider-specific view 等不放进这个基础 trait；它们由
   对应 domain requirement trait 表达。
 - 整个 `KernelInvocationContext` 属于 legacy fallback；它不能作为 `Kernel<C>` 普通 API 的全局

@@ -1,12 +1,12 @@
 # plan: 最小提交顺序
 
-本文件只列尚未完成的有序迁移目标。提交拓扑由唯一 owner 和可验证边界决定：步骤 4 是
-owner-driven 原子提交，步骤 7 是 workspace-wide 原子替换；其它目标不把一个编号机械塞进单个
-commit。目标完成后删除该项，长期不变量只保留在 `01` 到 `07`。
+本文件只列尚未完成的有序迁移目标。提交拓扑由唯一 owner 和可验证边界决定：步骤 5 是
+runtime-owned execution boundary，步骤 7 是 workspace-wide 原子替换；其它目标不把一个编号机械
+塞进单个 commit。目标完成后删除该项，长期不变量只保留在 `01` 到 `07`。
 
 ## 当前 active goal
 
-剩余步骤 4 到 8 共同完成这条破坏性 typed execution spine：
+剩余步骤 5 到 8 共同完成这条破坏性 typed execution spine：
 
 ```text
 Runtime
@@ -18,10 +18,10 @@ Runtime
   -> runtime ToolInvocation / Access
 ```
 
-这五步的共同边界：
+这四步的共同边界：
 
 - `PolicyEngine::grant` 是唯一 typed authorization API；core grant algorithm 对外不可覆写，且在
-  terminal authorization write 成功前不能 mint。步骤 4 完成前不得迁移 direct typed tool grant。
+  terminal authorization write 成功前不能 mint。runtime typed tool 必须直接复用这条已闭合路径。
 - 禁止新增 `Kernel::grant`、`SessionAuthority`、permit token、`AuditHandle`、route/receipt、
   `ctx.audit` 或 compatibility alias/wrapper。
 - typed Session 只保存 identity、lineage、baseline capabilities、稳定 config 和 lifecycle state；
@@ -39,85 +39,11 @@ Runtime
 - legacy fallback 只在 typed path 未注册时发生；override/narrowing/grant/parse/dispatch error
   都不 fallback。
 
-streaming cancellation、全部 legacy tool 迁移、fs TOCTOU、crate 收敛、bitset 与 generic Access
-execution evidence 不属于当前 active goal，分别列在步骤 13、14、17、18、19、20。步骤 7 只建立
+filesystem 模块收敛、streaming cancellation、全部 legacy tool 迁移、fs TOCTOU、crate 收敛、
+bitset 与 generic Access execution evidence 不属于当前 active goal，分别列在步骤 9、14、15、
+18、19、20、21。步骤 7 只建立
 Context 的 cancellation field 与 inheritance；provider/Access observation、gateway wiring 和
-finalization behavior 留在步骤 13。
-
-## 4. 闭合 authorization audit owner
-
-**范围**
-
-- `PolicyEngine::grant` 是唯一 typed authorization API。core 固定 capability gate、policy
-  evaluation、permission、mandatory audit 和 mint 的完整 algorithm，对外 implementor 不能覆写；
-  `PolicyEngine` 对 caller 只暴露 `grant`，caller 不能选择跳过，也不增加 public Kernel
-  wrapper/forwarder。现有 decision/grant-id implementation hooks 与 audit write/identity source
-  收进窄 backend contract；需要解耦实现时，可以在其上 blanket 实现 `PolicyEngine`，但 core
-  不能依赖 kernel `AuditError`。
-- `PolicyContext` 只读提供 owned typed authorization subject/identity；不提供 sink、clock、id
-  source 或 `ctx.audit`。
-- concrete kernel `PolicyPipeline` 使用 kernel-private shared authorization audit state，与 Kernel
-  共用 audit sink、clock、authorization attempt/event identity 和 grant identity。state 不进入
-  public core API，也不由 Context 或 `Granted` 持有。
-- grant 在 capability gate/policy evaluation 前开始 attempt。capability failure、policy deny、
-  permission failure 和 allow terminal 全部由同一 core grant algorithm 发起恰好一次 terminal write；
-  permission requested/resolved 是零到多条关联同一 attempt 的 interaction event。
-- allow 路径先分配 grant id，写入包含 authorization subject、action metadata、required caps、
-  完整 report、attempt id 与 grant id 的 terminal event；只有 sink 确认成功后，core 才能私有
-  mint `ActionGrant` 和 `Granted`，并把 event 中的 `GrantId` 写入 outer `ActionGrant.id`。当前
-  goal 不修改 `Granted` 的字段形状、不新增 `grant_id()`，也不复制 outer metadata；generic
-  correlation carrier 留到步骤 20 决定。
-- `PolicyGrantError::Audit` 在 core 使用 source-preserving boundary 承载 concrete sink error 和
-  当时已产生的 report（若有），不反向依赖 kernel error type；同一规则适用于 permission
-  interaction evidence。
-- deny/request/audit failure 保留 authorization outcome、sink error source 和已经产生的
-  `PolicyReport`；不重新运行 policy，也不生成替代 reason。
-- Context、caller、concrete policy、tool 和 Access backend 都不手写 authorization evidence。
-  legacy pack/token validation 继续记录自己的 legacy evidence。
-- `FanoutAuditSink` 只保证 engine 对配置的 sink 发起一次 write 调用；不承诺跨 child sink 的
-  transaction、rollback 或 retry。部分 child 已接受后失败时保留具体 source，engine 不自动重试，
-  也不虚构全局原子提交。
-- core sealed `PolicyEngine` / backend contract、contracts authorization evidence/error、Kernel 与
-  `PolicyPipeline` 的真实 shared audit state、全部 implementor 迁移和 tests 必须在同一提交落地。
-  禁止用 `no-op audit`、`unbound-success` 或不可编译 commit 作为中间状态。
-
-**完成线**
-
-- 正常 sink 下，completed/denied/failed grant attempt 各有且仅有一条 terminal authorization
-  event；failing sink 下，terminal write failure 返回 typed error；
-- permission interaction 与最终 outcome 共享 attempt/action/report correlation；
-- audit sink failure 时没有 `ActionGrant` / `Granted<A>` 逃逸；
-- terminal allow event 的 grant id 与 outer `ActionGrant.id` 一致；`Granted` 保持现有字段形状且
-  不新增 `grant_id()`；
-- direct Access 与任何调用 `PolicyEngine::grant` 的 typed Action 自动获得相同 authorization
-  evidence；typed tool 在步骤 5 切换 direct grant 后继承同一 contract；
-- private mint 使成功 grant 不可伪造，测试同时证明 capability deny、policy deny、permission
-  failure 和 audit failure 都不能绕过 mint；
-- Fanout 测试只断言 engine 单次调用与具体失败传播，不断言跨 child transaction 或 retry；
-- 所有 `PolicyEngine` implementor 和 tests 已迁移；不存在 `no-op audit`、`unbound-success` 或只完成
-  半边 contract 的中间状态；
-- 没有 `Kernel::grant`、`ctx.audit` 或 authorization forwarding wrapper。
-- 删除本步骤时同步删除/改写 `plan/07-kernel-audit-and-deviations.md` 中对应“当前偏差”，并更新
-  Code TODO 对照。
-
-**最小提交**
-
-`refactor(kernel): seal and audit typed grants`
-
-这是一个 owner-driven 原子提交：core sealed algorithm/backend contract、contracts evidence/error、
-Kernel/`PolicyPipeline` shared state、全部 implementor 与 tests 必须同时可用；不能拆成 scaffold 与
-后续 wiring。
-
-**验证**
-
-```bash
-cargo test -p loong-core policy
-cargo test -p loong-kernel audit
-cargo test -p loong-kernel permission
-cargo test -p loong-access audit
-cargo fmt --all -- --check
-git diff --check
-```
+finalization behavior 留在步骤 14。
 
 ## 5. 让 runtime ToolInvocation 成为强制 execution audit 边界
 
@@ -136,11 +62,11 @@ git diff --check
   kernel、audit 或 Runtime，不放进 `ContextFactory`，也不构造 base Context。app concrete Context
   直接实现它。
 - `Context::tool(path)` 保持薄入口，只调用 Runtime 创建 handle；runtime `ToolInvocation` 通过
-  `ToolInvocationContext` narrowing 后直接调用步骤 4 已闭合 mandatory audit 的
-  `PolicyEngine::grant`，再完成 internal plane dispatch 和 execution audit。trait 附近注释说明它是
+  `ToolInvocationContext` narrowing 后直接调用具备 mandatory audit 的 `PolicyEngine::grant`，再完成
+  internal plane dispatch 和 execution audit。trait 附近注释说明它是
   跨 crate child authority narrowing contract，不是搬运 helper。
 - 删除 typed caller 的 pack/token 参数和 `Kernel::grant_action`；该方法没有 legacy production
-  caller，不能留到步骤 16。authorization deny/audit failure 原样保留 `PolicyGrantError` source。
+  caller，不能留到步骤 17。authorization deny/audit failure 原样保留 `PolicyGrantError` source。
 - raw ToolPlane granted dispatch 收为 runtime-internal；public/普通 caller、app helper 和
   concrete `ToolImpl` 都不能直接消费 `Granted<ToolInvocationAction>` 绕过 wrapper。破坏性删除 public
   `ToolPlane::invoke`、caller-provided plane 的 `Runtime::new<P>` 以及返回 `dyn ToolPlane` 的
@@ -327,7 +253,7 @@ Context adapter、alias 或 blanket forwarding trait 拆小。
 - typed registration 的 descriptor/path/output metadata 只来自 concrete tool + runtime plane；legacy
   static catalog 只描述尚未迁移的 legacy tools，不能覆盖 typed registration。
 - 尚未迁移的 concrete tools 继续明确留在 legacy plane，不注册进 typed plane冒充完成；全部逐
-  tool 迁移与最终 envelope 删除留到步骤 14。
+  tool 迁移与最终 envelope 删除留到步骤 15。
 
 **完成线**
 
@@ -353,9 +279,48 @@ git diff --check
 ## 后续独立目标
 
 以下步骤不属于当前 active goal。每项在开始前重新核对 owner 和 caller，不得借后续目标扩大
-剩余步骤 4 到 8 的提交。
+剩余步骤 5 到 8 的提交。
 
-## 9. 将 provider/runtime-self live source 完全迁入 Access
+## 9. 按 filesystem operation 共置 Access 实现
+
+**范围**
+
+- 将 filesystem concrete action、options、`FsAccess` method、granted execution 和 output 按
+  operation 共置到 `read.rs`、`write.rs`、`glob.rs` 等文件；不再让修改一个 operation 横跨
+  `action.rs`、`access.rs` 和 output/execution 文件。
+- `access.rs` 只保留 `FsAccess` identity、构造和强制 resolve -> path grant 顺序的共享 chain；
+  `action.rs` 只保留 `FsAction` family；`path.rs` 只拥有共享 path facts、resolve/path actions 与
+  execution；`error.rs` 只拥有跨 operation 共用的 fs domain error。
+- operation modules 保持 private，由 `fs` facade 显式 re-export public members。破坏性删除
+  `fs::action::*` 和其它内部 module path，不保留 alias、forwarder 或 compatibility re-export。
+- 保持现有 authorization、path typestate、副作用顺序和 error source 不变。不要把本次文件 ownership
+  调整与 authorization-audit、新 Access primitive 或 TOCTOU backend 混进同一提交。
+- operation 边界只加说明授权/副作用 ownership 的简短注释；tests 继续按 operation 放在
+  `fs/tests/<operation>.rs`，不重新聚合成大测试文件。
+
+**完成线**
+
+- concrete action definitions 不再集中在 `action.rs`；一个 operation 的主要实现可以在单个文件内
+  阅读和修改；
+- `access.rs` 不保存 concrete operation method 或 final side effect；
+- `rg -n '^pub mod ' crates/access/src/fs.rs` 无输出，workspace caller 不再使用旧 module paths；
+- 没有仅为搬运相同参数或维持旧路径新增的 helper/alias；行为测试保持不变。
+
+**最小提交**
+
+`refactor(access): co-locate filesystem operations`
+
+**验证**
+
+```bash
+cargo test -p loong-access
+cargo test -p loong-kernel access --all-features
+cargo clippy -p loong-access -p loong-kernel --all-targets --all-features -- -D warnings
+cargo fmt --all -- --check
+git diff --check
+```
+
+## 10. 将 provider/runtime-self live source 完全迁入 Access
 
 **范围**
 
@@ -387,7 +352,7 @@ git diff --check
 
 建议提交：`refactor(app): govern runtime source reads through access`
 
-## 10. 迁移 config.import skills lifecycle 副作用
+## 11. 迁移 config.import skills lifecycle 副作用
 
 **范围**
 
@@ -418,7 +383,7 @@ git diff --check
 
 按 Access primitive 与 concrete tool owner 分拆提交，不把完整 skills lifecycle 塞进一个 commit。
 
-## 11. 编码 hard constraint 与 terminal consent 阶段
+## 12. 编码 hard constraint 与 terminal consent 阶段
 
 **范围**
 
@@ -444,7 +409,7 @@ cargo fmt --all -- --check
 git diff --check
 ```
 
-## 12. 接通 production parent/user permission interaction
+## 13. 接通 production parent/user permission interaction
 
 **范围**
 
@@ -459,7 +424,7 @@ git diff --check
 
 - unavailable 保留原始 report 并返回 `PermissionRequestError::Unavailable`；
 - parent/user 路由与 Session lineage 一致，user escalation 被结构化拒绝；
-- production 只在 fail-closed permission foundation 以及步骤 4、7、11 完成后注册 permission
+- production 只在 fail-closed permission foundation 以及步骤 7、12 完成后注册 permission
   policy。
 
 **验证**
@@ -472,7 +437,7 @@ cargo fmt --all -- --check
 git diff --check
 ```
 
-## 13. 让 streaming Turn 协作取消并保证 finalization
+## 14. 让 streaming Turn 协作取消并保证 finalization
 
 该目标固定按 owner 拆成五个最小提交，不能合成一个大 cancellation commit：
 
@@ -490,8 +455,8 @@ git diff --check
    cancelled/timeout、partial-output policy 和 Session lifecycle transition；等待 grace period 后
    才允许 force abort，并记录 timeout。partial text 不写成 completed reply。
 
-已经进入 backend 的 side effect 不承诺回滚。步骤 13 只记录其已有 owner 能证明的 tool/Turn
-outcome；generic Access action execution evidence 在步骤 20 完成前不能假定存在。不为取消引入
+已经进入 backend 的 side effect 不承诺回滚。步骤 14 只记录其已有 owner 能证明的 tool/Turn
+outcome；generic Access action execution evidence 在步骤 21 完成前不能假定存在。不为取消引入
 永久 Session actor、全局 registry 或 Context-owned task supervisor。
 
 **完成线**
@@ -513,7 +478,7 @@ cargo fmt --all -- --check
 git diff --check
 ```
 
-## 14. 逐个迁移全部 legacy tools 并删除 tool envelope
+## 15. 逐个迁移全部 legacy tools 并删除 tool envelope
 
 **范围**
 
@@ -545,7 +510,7 @@ cargo fmt --all -- --check
 git diff --check
 ```
 
-## 15. 逐 plane 迁移并删除 non-tool legacy execution paths
+## 16. 逐 plane 迁移并删除 non-tool legacy execution paths
 
 每个 plane 都按“typed action/Access contract -> caller migration -> legacy adapter/envelope deletion”拆成
 独立最小提交；前一个 plane 清空后再处理下一个：
@@ -568,7 +533,7 @@ typed policy grant 只授权 action；文件、网络、进程或外部系统副
 
 - 每个 non-tool plane 都有明确 caller-zero 证据后才删除旧 surface；
 - production 不再通过 legacy plane 或 `authorize_operation` 发起 governed execution；
-- legacy authorization surface 的剩余 caller 只可能是步骤 16 明确审计的 dead API/test fixture。
+- legacy authorization surface 的剩余 caller 只可能是步骤 17 明确审计的 dead API/test fixture。
 
 **验证**
 
@@ -580,16 +545,16 @@ cargo fmt --all -- --check
 git diff --check
 ```
 
-## 16. 删除 legacy kernel authorization surface
+## 17. 删除 legacy kernel authorization surface
 
 **范围**
 
 - `Kernel::grant_action` 必须已经随步骤 5 删除；它没有 legacy production caller，不能等待步骤
-  14、15。这里不再迁移或保留它。
-- 在步骤 14、15 的 caller 全部清空后，删除 `authorize_kernel_action`、
-  `authorize_operation`、`policy_engine_error` 和 legacy `PolicyError` conversion。
+  15、16。这里不再迁移或保留它。
+- 在步骤 15、16 的 caller 全部清空后，删除 `authorize_operation`、`policy_engine_error` 和 legacy
+  `PolicyError` conversion。
 - 删除不再有 ingress owner 的 `KernelInvocationContext`、token/pack authorization methods 与 bearer
-  evidence type；若某个 wire contract 仍有真实 caller，先把该 caller 纳入步骤 14 或 15，不能
+  evidence type；若某个 wire contract 仍有真实 caller，先把该 caller 纳入步骤 15 或 16，不能
   留 fallback/workaround。
 - 保留现有最小 `loong_core::kernel::Kernel<C>` Access contract；没有真实外部需求时删除
   `TODO(kernel-contract)`，不新增宽 forwarding trait。
@@ -611,7 +576,7 @@ cargo fmt --all -- --check
 git diff --check
 ```
 
-## 17. 用 descriptor-relative backend 关闭 fs TOCTOU
+## 18. 用 descriptor-relative backend 关闭 fs TOCTOU
 
 **范围**
 
@@ -635,7 +600,7 @@ cargo fmt --all -- --check
 git diff --check
 ```
 
-## 18. 删除 runtime transitional spine 并收敛 crates/docs
+## 19. 删除 runtime transitional spine 并收敛 crates/docs
 
 **范围**
 
@@ -664,7 +629,7 @@ cargo fmt --all -- --check
 git diff --check
 ```
 
-## 19. 在 benchmark/profile 证明后迁移 Capabilities bitset
+## 20. 在 benchmark/profile 证明后迁移 Capabilities bitset
 
 **进入条件**
 
@@ -699,10 +664,11 @@ cargo fmt --all -- --check
 git diff --check
 ```
 
-## 20. 设计并闭合 generic Granted Action execution evidence
+## 21. 设计并闭合 generic Granted Action execution evidence
 
-该目标独立于当前 active goal。步骤 4 只保证所有 typed Action 的 authorization evidence，步骤 5
-只保证 ToolInvocation execution evidence；不能借其中任一步声称 Access execution audit 已完成。
+该目标独立于当前 active goal。sealed grant algorithm 已保证所有 typed Action 的 authorization
+evidence；步骤 5 只保证 ToolInvocation execution evidence。不能借二者声称 Access execution audit
+已完成。
 
 **范围**
 
@@ -754,11 +720,12 @@ git diff --check
 ## Code TODO 对照
 
 - `TODO(session-owned-context)` -> 步骤 7；
-- `TODO(deprecate-no-kernel-live-source)` -> 步骤 9；
-- `TODO(config-import-access)` / `TODO(access-migration)` -> 步骤 10；
-- `TODO(tool-audit-owner)` -> 步骤 5；
+- `TODO(typed-tool-authorization-audit)` / `TODO(tool-audit-owner)` -> 步骤 5；
+- `TODO(deprecate-no-kernel-live-source)` -> 步骤 10；
+- `TODO(config-import-access)` / `TODO(access-migration)` -> 步骤 11；
 - `TODO(deprecate-tool-core-envelope)` / `TODO(tool-plane)` /
-  `TODO(tool-plane-display)` / `TODO(tool-catalog-owner)` -> 步骤 14；
-- `TODO(control-plane-action)` -> 步骤 15；
-- `TODO(deprecate-legacy-kernel-auth)` / `TODO(deprecate-legacy-policy-error)` -> 步骤 16；
-- `TODO(kernel-contract)` -> 步骤 16。
+  `TODO(tool-plane-display)` / `TODO(tool-catalog-owner)` /
+  `TODO(typed-tool-legacy-ingress)` -> 步骤 15；
+- `TODO(control-plane-action)` -> 步骤 16；
+- `TODO(deprecate-legacy-kernel-auth)` / `TODO(deprecate-legacy-policy-error)` -> 步骤 17；
+- `TODO(kernel-contract)` -> 步骤 17。

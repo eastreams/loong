@@ -91,7 +91,8 @@ route/receipt 或 `ctx.audit`。
   删除条件。
 - `crates/loong-core/src/policy/engine.rs`：`PolicyEngine::grant` 是唯一 typed grant owner，core
   algorithm 对外不可覆写；不要增加只转发它的 Kernel/helper method。mandatory authorization
-  audit write failure 在 mint 前通过 source-preserving typed error 传播。
+  evidence write、identity allocation 及二者同时失败都在 mint 前通过 source-preserving typed error
+  传播；compound error 不能只保留其中一个 cause。
 - `crates/kernel/src/kernel.rs`：legacy pack/token authorization 与 typed policy grant 的边界；
   `record_audit_event` 负责 clock/event id/sink write，附近短注释解释它为何不是 forwarding helper。
   Kernel 不 dispatch typed tool，domain side effect 仍需自己的 action grant。
@@ -112,7 +113,10 @@ route/receipt 或 `ctx.audit`。
 - policy tests 覆盖 pre/action/fallback 顺序、四种 decision、default deny、typed match、完整 report
   和 capability gate before policy。
 - sealed grant/audit contract 跨 core/contracts/kernel 时必须在同一原子提交迁移全部 implementor 和
-  tests；禁止 `no-op audit`、`unbound-success` 或不可编译的中间提交。
+  tests；attempt/grant identity allocation + failure-evidence write 的双故障必须分别测试两个 source。
+  禁止 `no-op audit`、`unbound-success` 或不可编译的中间提交。
+- direct Access 回归测试必须读取 evidence collector，断言 action 顺序、terminal outcome 与 grant id；
+  只记录 action kind 而不检查 evidence 不足以证明 mandatory authorization audit。
 - cancellation tests覆盖 downstream disconnect、provider stream drop、tool 不再启动、finalization、
   grace timeout 和 Session 可继续执行。
 - 每个提交至少运行受影响 crate 的定向测试、`cargo fmt --all -- --check` 和 `git diff --check`；
