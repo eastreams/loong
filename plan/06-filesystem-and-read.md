@@ -73,8 +73,9 @@ concrete tool 只 parse payload、调用上述 Access operation、格式化 type
 
 - Turn cancellation 后不再开始新的 resolve/path/operation grant。
 - long-running search/glob/read-dir 应在可安全停止的迭代边界观察 cancellation。
-- 已经进入不可中断 syscall 或 atomic commit 的操作不承诺回滚；完成或失败后仍记录 execution
-  evidence。
+- 已经进入不可中断 syscall 或 atomic commit 的操作不承诺回滚。generic Access execution evidence
+  尚未建立；它必须等步骤 20 确定唯一 consumption owner 与 correlation carrier 后再实现，不能从
+  authorization evidence 推断 operation 已完成或失败。
 - cancellation signal 来自当前 Turn Context，不成为 fs policy input，也不改变 Action required
   capabilities。
 

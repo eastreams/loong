@@ -1,105 +1,85 @@
 # plan: 最小提交顺序
 
-本文件只列尚未完成的有序迁移目标。每个目标按 owner 和可独立验证的边界拆成最小提交；除
-步骤 7 的 workspace-wide 原子替换外，不把一个编号机械塞进单个 commit。目标完成后删除该项，
-长期不变量只保留在 `01` 到 `07`。
+本文件只列尚未完成的有序迁移目标。提交拓扑由唯一 owner 和可验证边界决定：步骤 4 是
+owner-driven 原子提交，步骤 7 是 workspace-wide 原子替换；其它目标不把一个编号机械塞进单个
+commit。目标完成后删除该项，长期不变量只保留在 `01` 到 `07`。
 
 ## 当前 active goal
 
-剩余步骤 3 到 8 共同完成这条破坏性 typed execution spine：
+剩余步骤 4 到 8 共同完成这条破坏性 typed execution spine：
 
 ```text
 Runtime
   -> owned Session
   -> borrowed Context<'a>
-  -> PolicyEngine::grant
+  -> PolicyEngine::grant + mandatory authorization audit
   -> ActionGrant<A>
   -> Granted<A>
   -> runtime ToolInvocation / Access
 ```
 
-这六步的共同边界：
+这五步的共同边界：
 
-- 保留现有 `PolicyEngine::grant`；禁止新增 `Kernel::grant`、`SessionAuthority`、permit token、
-  route/receipt、`ctx.audit` 或 compatibility alias/wrapper。
+- `PolicyEngine::grant` 是唯一 typed authorization API；core grant algorithm 对外不可覆写，且在
+  terminal authorization write 成功前不能 mint。步骤 4 完成前不得迁移 direct typed tool grant。
+- 禁止新增 `Kernel::grant`、`SessionAuthority`、permit token、`AuditHandle`、route/receipt、
+  `ctx.audit` 或 compatibility alias/wrapper。
 - typed Session 只保存 identity、lineage、baseline capabilities、稳定 config 和 lifecycle state；
   `CapabilityToken`、pack 与 token evidence 只留在旧 ingress/fallback。
 - `ContextFactory` 只有 GAT；effective capabilities API 保持
   `Cow<'_, Capabilities>`，child Context 只能收窄 authority。
 - 物理副作用只发生在 Access。nested typed tool 只能编排，最终仍必须进入
   `Granted<ConcreteAction>` 的 Access operation。
-- typed tool 的 lookup、caps override、child narrowing、grant 和 dispatch 全部使用
-  `ToolInvocationError`；`PolicyGrantError` 不降级成 `KernelError` 或字符串。
+- typed tool primitive 已有 `RegisteredToolError` 与 runtime
+  `error::{RegistrationError, LookupError<P>, DispatchError<P>}`。composite `ToolInvocationError` 只在
+  步骤 5 的 runtime wrapper 真正接线时定义并使用；`PolicyGrantError` 不降级成 `KernelError` 或
+  字符串。
 - `ctx.tool(...).invoke(...)` 是普通 caller 唯一入口；raw granted ToolPlane dispatch 只在
   `loong-runtime` 内可达。
 - legacy fallback 只在 typed path 未注册时发生；override/narrowing/grant/parse/dispatch error
   都不 fallback。
 
-streaming cancellation、全部 legacy tool 迁移、fs TOCTOU、crate 收敛与 bitset 不属于当前
-active goal，分别列在步骤 13、14、17、18、19。步骤 7 只建立 Context 的 cancellation field 与
-inheritance；provider/Access observation、gateway wiring 和 finalization behavior 留在步骤 13。
-
-## 3. 收敛 typed ToolInvocation error 并直接 grant
-
-**范围**
-
-- 在 `loong-runtime` 定义 `ToolInvocationError`，分别表达 lookup、invalid caps override、child
-  narrowing、policy grant 和 dispatch failure，并用 typed source 保留底层错误。
-- `ctx.tool(path)`、`with_capabilities_override` 和 `invoke` 使用同一个 error boundary；删除
-  `policy_denied: ...` 字符串分类和 `KernelError::ToolPlane` 中转。
-- app typed ToolInvocation 使用现有 `PolicyEngine::grant(ctx, action)`，保留完整
-  `ActionGrant { id, info, granted }`；删除 typed caller 的 pack/token 参数与
-  token-shaped `Kernel::grant_action` 调用。
-- lookup 只有“path 未注册”可以交给旧 ingress 决定 fallback；override、narrowing、grant、parse
-  和 execution error 都直接返回 `ToolInvocationError`。
-- 本步不改变 execution audit owner；步骤 4 先闭合 authorization audit，步骤 5 再迁移 runtime
-  wrapper 和 execution audit。
-
-**完成线**
-
-- typed tool authorization 与 Access 共用现有 `PolicyEngine::grant`，不接收 pack/token；
-- lookup/override/narrowing/grant/dispatch 任一失败都保留 typed source；
-- `PolicyGrantError` 在 owning typed boundary 之前不转成 `KernelError`、`PolicyError` 或字符串；
-- grant/parse/execution failure 不触发 legacy fallback。
-- 删除本步骤时同步删除/改写 `plan/07-kernel-audit-and-deviations.md` 中对应“当前偏差”，并更新
-  Code TODO 对照。
-
-**最小提交顺序**
-
-1. `refactor(runtime): type tool invocation failures`
-2. `refactor(app): grant typed tool invocation directly`
-
-**验证**
-
-```bash
-cargo test -p loong-runtime tool_plane
-cargo test -p loong-app tool_invocation
-cargo test -p loong-app tools
-cargo check -p loong-core -p loong-runtime -p loong-kernel -p loong-app
-cargo fmt --all -- --check
-git diff --check
-```
+streaming cancellation、全部 legacy tool 迁移、fs TOCTOU、crate 收敛、bitset 与 generic Access
+execution evidence 不属于当前 active goal，分别列在步骤 13、14、17、18、19、20。步骤 7 只建立
+Context 的 cancellation field 与 inheritance；provider/Access observation、gateway wiring 和
+finalization behavior 留在步骤 13。
 
 ## 4. 闭合 authorization audit owner
 
 **范围**
 
-- `PolicyEngine::grant` 继续是唯一 typed authorization API。grant 固定调用 implementor 提供的
-  mandatory audit behavior；caller 不能选择跳过，也不增加 public Kernel wrapper/forwarder。
+- `PolicyEngine::grant` 是唯一 typed authorization API。core 固定 capability gate、policy
+  evaluation、permission、mandatory audit 和 mint 的完整 algorithm，对外 implementor 不能覆写；
+  `PolicyEngine` 对 caller 只暴露 `grant`，caller 不能选择跳过，也不增加 public Kernel
+  wrapper/forwarder。现有 decision/grant-id implementation hooks 与 audit write/identity source
+  收进窄 backend contract；需要解耦实现时，可以在其上 blanket 实现 `PolicyEngine`，但 core
+  不能依赖 kernel `AuditError`。
+- `PolicyContext` 只读提供 owned typed authorization subject/identity；不提供 sink、clock、id
+  source 或 `ctx.audit`。
 - concrete kernel `PolicyPipeline` 使用 kernel-private shared authorization audit state，与 Kernel
   共用 audit sink、clock、authorization attempt/event identity 和 grant identity。state 不进入
-  public core API，也不由 Context 持有。
+  public core API，也不由 Context 或 `Granted` 持有。
 - grant 在 capability gate/policy evaluation 前开始 attempt。capability failure、policy deny、
-  permission failure 和 allow terminal 全部由同一 implementor 发起恰好一次 terminal write；
+  permission failure 和 allow terminal 全部由同一 core grant algorithm 发起恰好一次 terminal write；
   permission requested/resolved 是零到多条关联同一 attempt 的 interaction event。
-- allow 路径先分配 grant id，写入包含 action metadata、required caps、完整 report、attempt id 与
-  grant id 的 terminal event；只有 sink 确认成功后才能构造并返回 `ActionGrant`。audit write
-  failure 必须在 grant 逃逸前返回 typed `PolicyGrantError`；同一规则适用于 permission
+- allow 路径先分配 grant id，写入包含 authorization subject、action metadata、required caps、
+  完整 report、attempt id 与 grant id 的 terminal event；只有 sink 确认成功后，core 才能私有
+  mint `ActionGrant` 和 `Granted`，并把 event 中的 `GrantId` 写入 outer `ActionGrant.id`。当前
+  goal 不修改 `Granted` 的字段形状、不新增 `grant_id()`，也不复制 outer metadata；generic
+  correlation carrier 留到步骤 20 决定。
+- `PolicyGrantError::Audit` 在 core 使用 source-preserving boundary 承载 concrete sink error 和
+  当时已产生的 report（若有），不反向依赖 kernel error type；同一规则适用于 permission
   interaction evidence。
 - deny/request/audit failure 保留 authorization outcome、sink error source 和已经产生的
   `PolicyReport`；不重新运行 policy，也不生成替代 reason。
 - Context、caller、concrete policy、tool 和 Access backend 都不手写 authorization evidence。
   legacy pack/token validation 继续记录自己的 legacy evidence。
+- `FanoutAuditSink` 只保证 engine 对配置的 sink 发起一次 write 调用；不承诺跨 child sink 的
+  transaction、rollback 或 retry。部分 child 已接受后失败时保留具体 source，engine 不自动重试，
+  也不虚构全局原子提交。
+- core sealed `PolicyEngine` / backend contract、contracts authorization evidence/error、Kernel 与
+  `PolicyPipeline` 的真实 shared audit state、全部 implementor 迁移和 tests 必须在同一提交落地。
+  禁止用 `no-op audit`、`unbound-success` 或不可编译 commit 作为中间状态。
 
 **完成线**
 
@@ -107,18 +87,26 @@ git diff --check
   event；failing sink 下，terminal write failure 返回 typed error；
 - permission interaction 与最终 outcome 共享 attempt/action/report correlation；
 - audit sink failure 时没有 `ActionGrant` / `Granted<A>` 逃逸；
-- direct Access 与 typed tool grant 自动获得相同 authorization evidence；
+- terminal allow event 的 grant id 与 outer `ActionGrant.id` 一致；`Granted` 保持现有字段形状且
+  不新增 `grant_id()`；
+- direct Access 与任何调用 `PolicyEngine::grant` 的 typed Action 自动获得相同 authorization
+  evidence；typed tool 在步骤 5 切换 direct grant 后继承同一 contract；
+- private mint 使成功 grant 不可伪造，测试同时证明 capability deny、policy deny、permission
+  failure 和 audit failure 都不能绕过 mint；
+- Fanout 测试只断言 engine 单次调用与具体失败传播，不断言跨 child transaction 或 retry；
+- 所有 `PolicyEngine` implementor 和 tests 已迁移；不存在 `no-op audit`、`unbound-success` 或只完成
+  半边 contract 的中间状态；
 - 没有 `Kernel::grant`、`ctx.audit` 或 authorization forwarding wrapper。
 - 删除本步骤时同步删除/改写 `plan/07-kernel-audit-and-deviations.md` 中对应“当前偏差”，并更新
   Code TODO 对照。
 
-**最小提交顺序**
+**最小提交**
 
-1. `feat(core): model typed authorization audit failures`
-2. `feat(kernel): audit every policy grant attempt`
+`refactor(kernel): seal and audit typed grants`
 
-第二个提交只跨越 `PolicyEngine` implementor 及其 tests 所需的 compile-safe contract 更新，不混入
-tool execution audit。
+这是一个 owner-driven 原子提交：core sealed algorithm/backend contract、contracts evidence/error、
+Kernel/`PolicyPipeline` shared state、全部 implementor 与 tests 必须同时可用；不能拆成 scaffold 与
+后续 wiring。
 
 **验证**
 
@@ -135,32 +123,48 @@ git diff --check
 
 **范围**
 
-- 将 typed `ToolInvocation` wrapper 归属到 `loong-runtime`。`ctx.tool(path)?.invoke(payload)` 是普通
-  caller 唯一入口，wrapper 绑定 child narrowing、grant consumption、dispatch 和 execution audit。
-- 在 `loong-runtime` 定义唯一直接 requirement trait `ToolInvocationContext<C>`。它只按给定
-  `Capabilities` 从 parent 派生同一 `C::Cx<'_>` child，返回 typed narrowing error；不暴露
+- 将 typed `ToolInvocation` wrapper 从 app 迁入 `loong-runtime`。`ctx.tool(path)?.invoke(payload)` 是
+  普通 caller 唯一入口，同一个 runtime owner 绑定 lookup、caps override、child narrowing、direct
+  grant、granted dispatch 和 execution audit；删除 app-owned `ToolInvocation`，不保留 forwarding
+  wrapper。
+- 在 runtime wrapper 接线的同一提交中定义并实际使用 composite `ToolInvocationError`。它分别
+  保留 `LookupError`、invalid caps override、`CapabilityNarrowingError`、`PolicyGrantError`、
+  `DispatchError` 和 typed `AuditError` source；不先提交未接线的 public error scaffold。
+- 在 `loong-runtime` 定义唯一直接 requirement trait `ToolInvocationContext`。它只按给定
+  `Capabilities` 从 parent 派生同类型 child，`derive_tool_child` 返回
+  `Result<Self, CapabilityNarrowingError>`；trait 没有 Factory 参数或 associated error，不暴露
   kernel、audit 或 Runtime，不放进 `ContextFactory`，也不构造 base Context。app concrete Context
   直接实现它。
 - `Context::tool(path)` 保持薄入口，只调用 Runtime 创建 handle；runtime `ToolInvocation` 通过
-  `ToolInvocationContext<C>` narrowing 后调用现有 `PolicyEngine::grant`、internal plane dispatch
-  和 execution audit。trait 附近注释说明它是跨 crate child authority narrowing contract，不是
-  搬运 helper。
+  `ToolInvocationContext` narrowing 后直接调用步骤 4 已闭合 mandatory audit 的
+  `PolicyEngine::grant`，再完成 internal plane dispatch 和 execution audit。trait 附近注释说明它是
+  跨 crate child authority narrowing contract，不是搬运 helper。
+- 删除 typed caller 的 pack/token 参数和 `Kernel::grant_action`；该方法没有 legacy production
+  caller，不能留到步骤 16。authorization deny/audit failure 原样保留 `PolicyGrantError` source。
 - raw ToolPlane granted dispatch 收为 runtime-internal；public/普通 caller、app helper 和
-  concrete `ToolImpl` 都不能直接消费 `Granted<ToolInvocationAction>` 绕过 wrapper。
-- wrapper 在消费 grant 前读取 grant id 和 stable path display，并在 dispatch 前完成必要的
-  execution-start audit write；该 write 失败时返回 typed error，且不得 dispatch。authorization
-  deny 没有 execution event。
+  concrete `ToolImpl` 都不能直接消费 `Granted<ToolInvocationAction>` 绕过 wrapper。破坏性删除 public
+  `ToolPlane::invoke`、caller-provided plane 的 `Runtime::new<P>` 以及返回 `dyn ToolPlane` 的
+  `Runtime::tools()`；runtime-internal trait 只保留 crate 内 storage strategy 替换能力。catalog/spec
+  查询通过不暴露 dispatch capability 的 Runtime API 提供。
+- wrapper 在消费 `ActionGrant.granted` 前保留 outer `ActionGrant.id/info`，直到关联 execution audit
+  结束，并用 outer id 关联 outcome；dispatch 前先完成必要的 execution-start write，该 write 失败时
+  返回 typed error，且不得 dispatch。authorization deny 没有 execution event。
 - dispatch 后 wrapper 必须写 terminal completed/failed/input-error/cancelled outcome。terminal audit
   failure 返回 typed `ToolInvocationError`，但 execution 可能已经 completed 或产生 side effect，
   因此不得自动重试。
 - dispatch success + terminal audit failure 的 error variant 同时保留“execution completed”事实和
   typed audit source；dispatch failure + terminal audit failure 的复合 error variant 同时保留
   dispatch 与 audit 两个 typed source，不能互相覆盖。
-- execution audit 使用 Runtime 可达的 kernel-owned sink/clock/id state；不从
-  `KernelInvocationContext`、pack/token 或 `ctx.audit` 取得 attribution。
-- execution audit failure 通过 `ToolInvocationError` 保留 source；`ToolImpl` 不获得 audit API。
-- 删除 `Kernel::record_tool_invocation`、tool-specific route/registry schema 和
-  `TODO(tool-audit-owner)`；legacy `PlaneInvoked` 只随对应 legacy plane 保留。
+- runtime 不得访问 kernel-private audit state。wrapper 通过 Kernel 现有 generic
+  `record_audit_event` governance recorder 提交 execution evidence；保留该 recorder，并将其 error
+  boundary 收敛为 typed `AuditError`。recorder 负责 clock、event id 与 sink write。
+- `record_audit_event` 附近用短注释说明其真实 ownership 职责，因此它不是 forwarding helper；不新增
+  `AuditHandle`、route/receipt、`ctx.audit` 或同义 capability。`ToolImpl` 不获得 audit API。
+- 删除 tool-specific `Kernel::record_tool_invocation`、tool-specific route/registry schema 和
+  `TODO(tool-audit-owner)`；保留并收敛 generic `record_audit_event`。legacy `PlaneInvoked` 只随对应
+  legacy plane 保留。
+- 只有 `LookupError::NotRegistered` 可以交给 legacy ingress fallback；override、narrowing、grant、
+  audit、parse/input、dispatch 和 concrete execution error 都不 fallback。
 
 **完成线**
 
@@ -171,17 +175,27 @@ git diff --check
 - tests 覆盖 pre-dispatch audit failure、success + audit failure、dispatch + audit failure；断言第一种
   不 dispatch，第二种保留 completed 事实，第三种同时保留两个 typed source；
 - raw granted dispatch 在 `loong-runtime` 外不可调用；
-- runtime `ToolInvocation` 与 app Context 之间除 `ToolInvocationContext<C>` 外没有第二个 direct
+- `Runtime` 不接受外部 `ToolPlane` implementation，也不返回带 granted dispatch capability 的 trait
+  object；内部 trait 不能成为绕过 wrapper 的扩展面；
+- runtime `ToolInvocation` 与 app Context 之间除 `ToolInvocationContext` 外没有第二个 direct
   bridge；`ContextFactory` 仍只有 GAT；
+- composite `ToolInvocationError` 的每个 variant 都有真实 runtime caller，没有 public scaffold；
+- app-owned `ToolInvocation`、`Kernel::grant_action` 与 `Kernel::record_tool_invocation` 均已删除，
+  production 和 tests 都没有 caller；
+- runtime 没有 sink/clock/event-id state access；跨 crate audit 只经过返回 typed `AuditError` 的
+  `Kernel::record_audit_event`；
 - ToolSlot、registry key、legacy route 和 pack/token 不进入 typed execution audit payload；
-- concrete tool 无法跳过 wrapper，也不手写 audit。
+- concrete tool 无法跳过 wrapper，也不手写 audit；本步骤不声称 generic Access execution evidence
+  已经存在。
 - 删除本步骤时同步删除/改写 `plan/07-kernel-audit-and-deviations.md` 中对应“当前偏差”，并更新
   Code TODO 对照。
 
-**最小提交顺序**
+**最小提交**
 
-1. `refactor(runtime): own typed tool invocation wrapper`
-2. `feat(runtime): audit granted tool execution`
+`refactor(runtime): own audited typed tool invocation`
+
+这是一个 owner-driven 原子接线提交：error、wrapper、direct grant、dispatch、audit 与旧入口删除必须
+同时可用，不能拆出未接线 public error commit。
 
 **验证**
 
@@ -256,9 +270,9 @@ git diff --check
   到 `'static` task。
 - advisory Session 也构造同一种 Context，只通过 baseline capabilities 表达限制；删除
   `ConversationRuntimeBinding` / `ProviderRuntimeBinding` 的 no-context 分支。
-- 新 app `Context<'a>` 直接实现既有 runtime-owned
-  `ToolInvocationContext<RuntimeContextFactory>`；`Context::tool(path)` 仍是薄入口。不得为原子替换
-  增加 Context adapter、第二个 bridge 或 `RuntimeContextFactory` 方法。
+- 新 app `Context<'a>` 直接实现既有 runtime-owned `ToolInvocationContext`；
+  `Context::tool(path)` 仍是薄入口。不得为原子替换增加 Context adapter、第二个 bridge 或
+  `RuntimeContextFactory` 方法。
 - 一次性迁移 production、tests、fixtures、generic instantiation、注释和文档，删除
   `AppContext`、`AppContextInner`、`AppContextFactory`、旧 COW mutation API 和 compatibility
   re-export。同一提交同步 `plan/02-runtime-and-crates.md` 的当前事实、
@@ -273,7 +287,7 @@ git diff --check
   effective capabilities accessor 也只 reborrow owned field，不 clone；
 - `ctx.access()` 与 runtime-owned `ctx.tool(path)?.invoke(payload)` 是普通执行入口；
 - `RuntimeContextFactory` 命名不变且仍只有 GAT；app Context 直接实现
-  `ToolInvocationContext<RuntimeContextFactory>`，没有 adapter；
+  `ToolInvocationContext`，没有 adapter；
 - 删除本步骤时已经同步改写 `plan/02-runtime-and-crates.md` 当前事实、删除/改写
   `plan/07-kernel-audit-and-deviations.md` 对应“当前偏差”，并更新 Code TODO 对照；
 - 以下搜索无输出：
@@ -339,7 +353,7 @@ git diff --check
 ## 后续独立目标
 
 以下步骤不属于当前 active goal。每项在开始前重新核对 owner 和 caller，不得借后续目标扩大
-剩余步骤 3 到 8 的提交。
+剩余步骤 4 到 8 的提交。
 
 ## 9. 将 provider/runtime-self live source 完全迁入 Access
 
@@ -476,8 +490,9 @@ git diff --check
    cancelled/timeout、partial-output policy 和 Session lifecycle transition；等待 grace period 后
    才允许 force abort，并记录 timeout。partial text 不写成 completed reply。
 
-已经进入 backend 的 side effect 不承诺回滚，完成或失败后仍保留 execution evidence。不为取消
-引入永久 Session actor、全局 registry 或 Context-owned task supervisor。
+已经进入 backend 的 side effect 不承诺回滚。步骤 13 只记录其已有 owner 能证明的 tool/Turn
+outcome；generic Access action execution evidence 在步骤 20 完成前不能假定存在。不为取消引入
+永久 Session actor、全局 registry 或 Context-owned task supervisor。
 
 **完成线**
 
@@ -569,9 +584,10 @@ git diff --check
 
 **范围**
 
-- 在步骤 14、15 的 caller 全部清空后，删除 `Kernel::grant_action`、
-  `authorize_kernel_action`、`authorize_operation`、`policy_engine_error` 和 legacy `PolicyError`
-  conversion。
+- `Kernel::grant_action` 必须已经随步骤 5 删除；它没有 legacy production caller，不能等待步骤
+  14、15。这里不再迁移或保留它。
+- 在步骤 14、15 的 caller 全部清空后，删除 `authorize_kernel_action`、
+  `authorize_operation`、`policy_engine_error` 和 legacy `PolicyError` conversion。
 - 删除不再有 ingress owner 的 `KernelInvocationContext`、token/pack authorization methods 与 bearer
   evidence type；若某个 wire contract 仍有真实 caller，先把该 caller 纳入步骤 14 或 15，不能
   留 fallback/workaround。
@@ -679,6 +695,58 @@ cargo test -p loong-kernel policy
 cargo test -p loong-app context
 cargo bench -p loong-bench -- capabilities
 cargo clippy -p loong-contracts -p loong-core -p loong-kernel --all-targets --all-features -- -D warnings
+cargo fmt --all -- --check
+git diff --check
+```
+
+## 20. 设计并闭合 generic Granted Action execution evidence
+
+该目标独立于当前 active goal。步骤 4 只保证所有 typed Action 的 authorization evidence，步骤 5
+只保证 ToolInvocation execution evidence；不能借其中任一步声称 Access execution audit 已完成。
+
+**范围**
+
+- 先确定 generic `Granted<Action>` execution evidence 的唯一 owner 与调用签名，使 filesystem 与
+  其它 Access action 在真正执行时记录 started/completed/failed/cancelled；在 owner 确定前不修改
+  `Granted` 字段形状，也不预设 correlation carrier。
+- 比较两种候选：A) 单一 execution wrapper 同时拥有 outer `ActionGrant` 并负责 audit 时，由它保留
+  id/info；B) 只有当 `Granted` 必须独立跨越 execution boundary、owner 无法可靠保留 outer metadata，
+  且保留 outer 会迫使多个 consumer 重复传 id 或增加 wrapper 时，才考虑将 `GrantId` 下沉并提供只读
+  accessor。不得因调用方便提前选择 B，也不能用当前 ToolInvocation 的 outer-retention 方案替
+  generic Access 预先定案。
+- 无论选择哪种 carrier，都不把 sink、clock、report 或 authority 挂到 Context/`Granted`，不增加
+  `Kernel::grant`，也不让 ToolInvocation wrapper 代替 generic Action owner。
+- execution-start write 必须先成功才进入 `Action::run`；失败时 action dispatch count 为零。
+  terminal write 发生在 action outcome 已知后，必须保留 concrete action error 与 audit source。
+- terminal audit failure 不能抹去 completed/failed/cancelled 或 side effect already happened 的事实，
+  不能自动重试 action、回滚 backend side effect，或把 audit failure 伪造成 action failure。
+- cancellation 在 execution-start 前阻止新 action；进入 backend 后只按 action 的 cooperative
+  cancellation/atomicity contract 完成或失败。已经发生的 side effect 不因随后收到 cancellation
+  或 terminal audit failure 而被重写成“未执行”。
+- `FanoutAuditSink` 仍只表示 engine 对配置 sink 的单次 write 调用，不提供跨 child sink
+  transaction、rollback 或 retry。某个 child 已接受后后续 child 失败时，返回 source-preserving
+  audit error 并禁止自动重跑 action。
+
+**完成线**
+
+- generic execution evidence 的唯一 owner/调用签名已经确定，并据此在候选 A/B 中完成明确决策；
+- 每个 migrated Access action 的 authorization 与 execution event 使用选定 carrier 关联同一
+  grant id，且没有同时保留两套 metadata path；
+- 当前只委托 `Action::run` 的 `Granted<Action>::run(ctx)` 不再被误认为已有 audit；完成后其 owning
+  consumption path 才能保证 generic execution evidence；
+- tests 覆盖 pre-execution audit failure、action success + terminal audit failure、action failure +
+  terminal audit failure、cooperative cancellation 和 Fanout partial acceptance；
+- tests 明确断言 pre-execution failure 不运行 action，post-execution audit failure 不重试且保留
+  side effect already happened，Fanout 不具有跨 child transaction 语义；
+- Context/`Granted` 没有 sink，kernel 没有新增 grant forwarding API。
+
+**验证**
+
+```bash
+cargo test -p loong-core policy
+cargo test -p loong-kernel audit
+cargo test -p loong-access
+cargo clippy -p loong-core -p loong-kernel -p loong-access --all-targets --all-features -- -D warnings
 cargo fmt --all -- --check
 git diff --check
 ```

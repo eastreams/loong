@@ -14,13 +14,14 @@ Kernel 是 governance authority：
 
 tool invocation、filesystem operation 和其它 domain intent 都使用现有 `PolicyEngine::grant`。
 不要增加 `Kernel::grant`、`AuthorizedToolInvocation`、tool-specific receipt 或只把现有 grant
-包一层的 helper。
+包一层的 helper。也不要增加 `AuditHandle`、route/receipt 或 `ctx.audit`。
 
 现有 `loong_core::kernel::Kernel<C>` trait 为 Access 暴露 `policy_engine()`，Access 再调用
 `PolicyEngine::grant`；这条 typed path 保持不变。当前错误在 app typed tool invocation：它绕回
-接收 pack/token 的 concrete `Kernel::grant_action`。目标是让该 caller 直接复用现有 typed grant，
-而不是重写 core Kernel/PolicyEngine ownership。typed authorization error 继续保留
-`PolicyGrantError` source；不能降级成 concrete `KernelError` 或字符串。
+接收 pack/token 的 concrete `Kernel::grant_action`。步骤 4 必须先闭合 mandatory authorization
+audit；步骤 5 才让该 caller 直接复用 typed grant，并删除没有 legacy production caller 的
+`Kernel::grant_action`。typed authorization error 继续保留 `PolicyGrantError` source；不能降级成
+concrete `KernelError` 或字符串。
 
 `CapabilityToken`、`KernelInvocationContext` 和 manual authorization 继续服务仍有 caller 的
 legacy fallback，但必须位于明确的 legacy module/bounded impl。typed Kernel contract、Access、
@@ -28,21 +29,36 @@ ToolPlane 和 recursive Context 不依赖它们。
 
 ## Audit Invariant
 
-audit 分为两个强制边界，owner 与调用路径已经确定：
+audit 分为 authorization 与 execution 两类 evidence。authorization owner 和当前 active goal 的
+ToolInvocation owner 已确定；generic Access execution owner 尚未确定：
 
-1. **Authorization evidence**：`PolicyEngine::grant` 是唯一 typed authorization API；它调用
-   implementor 的 mandatory audit behavior，不依赖 caller 手写 hook。concrete kernel
-   `PolicyPipeline` 持有 kernel-private shared audit state，和 Kernel 共用 sink、clock、attempt/event
-   id 与 grant id source；不增加 public wrapper/forwarder。
+1. **Authorization evidence**：`PolicyEngine::grant` 是唯一 typed authorization API；capability
+   gate、policy evaluation、mandatory audit 和 mint 顺序由 core 固定，对外不可覆写。
+   `PolicyEngine` 对 caller 只暴露 `grant`；decision、audit write 与 identity source 收在窄 backend
+   contract 中，core 可以在其上 blanket 实现该 trait，但不依赖 kernel `AuditError`。
+   `PolicyContext` 只读提供 owned typed authorization subject/identity，不提供 sink 或 `ctx.audit`。
+   concrete kernel `PolicyPipeline` 持有 kernel-private shared audit state，和 Kernel 共用 sink、
+   clock、attempt/event id 与 grant id source；不增加 public wrapper/forwarder。
 2. grant 在 capability gate/policy evaluation 前开始 attempt；capability failure、policy deny、
-   permission failure 和 allow terminal 都由同一 implementor 发起恰好一次 terminal write。
-   allow 先分配 grant id、写 terminal allow event，并在 sink 确认成功后构造、返回
-   `ActionGrant`。任何 authorization audit write failure 都必须在 grant 逃逸前返回 typed
-   `PolicyGrantError`，保留 sink source 和已经产生的 `PolicyReport`。permission interaction 是
-   零到多条关联同一 attempt 的 event。
+   permission failure 和 allow terminal 都由同一 core grant algorithm 发起恰好一次 terminal write。
+   allow 先分配 grant id、写 terminal allow event，并在 sink 确认成功后把同一 id 写入 outer
+   `ActionGrant.id`，再构造、返回 grant。任何 authorization audit write failure 都必须在 grant
+   逃逸前返回 typed `PolicyGrantError::Audit`，通过 core 的 source-preserving boundary 保留
+   concrete sink error 和当时已经产生的 `PolicyReport`（若有）。当前 outer `ActionGrant` 已有 id/info，
+   当前 goal 不修改 `Granted` 字段形状或增加 `grant_id()`；permission interaction 是零到多条关联
+   同一 attempt 的 event。
 3. **Execution evidence**：grant consumption owner 记录 completed/failed/input-error/cancelled。tool
-   由 runtime `ToolInvocation` wrapper 强制记录并携带 authorization grant id；fs 由 concrete
-   `Granted<Action>::run(ctx)` 记录。`ToolImpl` 不获得 audit API。
+   在当前 active goal 由 runtime `ToolInvocation` wrapper 保留 outer `ActionGrant.id/info`，直到关联
+   execution audit 结束，并用 outer id 关联 execution outcome。generic `Granted<Action>` / Access
+   execution evidence 尚未实现，留给独立后续目标；`ToolImpl` 不获得 audit API。
+
+`FanoutAuditSink` 只保证 engine 对配置的 sink 发起一次 write 调用。它不提供跨 child sink 的
+transaction、rollback 或 retry；某个 child 已接受而后续 child 失败时，error 必须保留这一事实，
+engine 不得虚构全局原子提交或自动重试。
+
+runtime 不得访问 kernel-private audit state。跨 crate execution evidence 只通过 Kernel 现有 generic
+`record_audit_event` governance recorder 写入；保留该方法并将其 error boundary 收敛为 typed
+`AuditError`。它负责 clock、event id 与 sink write，有真实 ownership 职责，不是 forwarding helper。
 
 runtime wrapper 在 dispatch 前完成必要的 execution-start audit write；write 失败时不得 dispatch。
 dispatch 后的 terminal write 失败必须显式返回 typed `ToolInvocationError`，但不能抹去 execution
@@ -65,8 +81,10 @@ validation 保留自己的 legacy evidence，不混入 typed attempt schema。
   或 fallback 语义固化进 contracts/kernel。
 
 Turn cancellation 另有 execution lifecycle evidence：client disconnect、explicit cancel 和 runtime
-shutdown 必须能区分；partial output 不能记录成 completed。已经提交的 side effect 保留各自 action
-execution evidence。
+shutdown 必须能区分；partial output 不能记录成 completed。cancellation 不回滚已经提交的 side
+effect。当前 active goal 只闭合 ToolInvocation outcome；generic Access action 的
+completed/failed/cancelled evidence 与“side effect already happened”语义留给独立后续目标，在此
+之前不能声称 Access execution evidence 已存在。
 
 ## Tool Failure Matrix
 
@@ -85,6 +103,9 @@ execution evidence。
 - forced abort after grace timeout：记录 cancellation timeout/forced termination，不能假装正常 cancelled。
 - legacy fallback：只记录 legacy evidence，直到对应 tool 迁移；typed tests 不接受宽松双断言。
 
+当前 active goal 只闭合所有 typed Action 的 authorization evidence，以及 runtime ToolInvocation 的
+execution evidence；不在该目标中偷做 generic Access execution audit。
+
 ## 当前偏差
 
 ### Generic grant evidence 不完整
@@ -92,6 +113,9 @@ execution evidence。
 - `ActionGrantInfo` 已保存完整 allow `PolicyReport`，但 `PolicyEngine::grant` 尚未自动记录完整
   attempt-correlated authorization audit；这是 audit contract 的剩余工作，不构成改写 grant owner
   的理由。
+- core grant algorithm 当前仍是 trait default method，implementor 可以覆写；`PolicyGrantError`
+  也尚无 source-preserving audit variant。outer `ActionGrant.id` 已存在，但当前 tool invocation
+  没有保留它用于 execution correlation；这不构成修改 `Granted` 字段形状的理由。
 - app typed tool invocation 仍调用接收 pack/token 的 `Kernel::grant_action`。该方法把 typed policy
   deny 转成 legacy `PolicyError` 并记录旧 authorization denial；没有统一记录 action metadata、
   attempt id、report 和 grant id。
@@ -103,9 +127,20 @@ execution evidence。
 - `contracts::AuditEventKind::ToolInvocation` 仍是 tool-specific event；
   `Kernel::record_tool_invocation` 仍由 kernel 构造它。
 - 当前 event 没有 grant id；typed authorization 与 execution evidence 不能可靠关联。
-- owner 已固定为 runtime `ToolInvocation` wrapper；剩余工作是让它使用 kernel-owned audit sink
-  capability、带上 grant id，并把 raw granted dispatch 收为 runtime-internal。不能把记录责任留给
-  Context/caller，也不能只移动函数名。
+- owner 已固定为 runtime `ToolInvocation` wrapper；剩余工作是让它保留 outer grant metadata、通过
+  generic `record_audit_event` 获得 typed `AuditError`，并把 raw granted dispatch 收为
+  runtime-internal。不能把 kernel-private state 暴露给 runtime，也不能只移动函数名。
+
+### Generic Access execution evidence 尚未实现
+
+- 当前 `Granted<Action>::run(ctx)` 只调用 `Action::run`；它不自动写 execution audit。该调用签名
+  只接收 `Granted`，但它是否就是未来唯一 execution owner 尚未确认。
+- 因此 filesystem 和其它 Access action 当前只有各自 policy/grant 结果，没有 generic
+  completed/failed/cancelled execution evidence。当前 active goal 不得把 authorization evidence
+  误写成 execution evidence。
+- 当前 outer `ActionGrant` 已有 id/info，当前 goal 不修改 `Granted` 字段形状。generic execution
+  owner/调用签名仍未确定；不把 sink 挂到 Context 或 `Granted`，不增加 `Kernel::grant`，也不借
+  ToolInvocation wrapper 偷渡 generic Action owner。
 
 ### Legacy tool/kernel 路径仍大
 
