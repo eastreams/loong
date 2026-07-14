@@ -6,21 +6,22 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use loong_contracts::{
-    Capabilities, CapabilityToken, GovernedSessionMode, InvocationOutcome, ToolPlaneError,
+    AuthorizationScope, AuthorizationSubject, Capabilities, CapabilityToken, GovernedSessionMode,
+    InvocationOutcome, ToolPlaneError,
 };
 use loong_core::policy::context::{ContextFactory, PolicyContext};
 use loong_core::tool::RegisteredToolError;
 use loong_kernel::access::fs::{FsPathPolicyContext, FsResolutionContext};
 use loong_kernel::{
     AccessCx, AuditSink, Capability, Clock, ExecutionRoute, FanoutAuditSink, HarnessKind,
-    InMemoryAuditSink, JsonlAuditSink, Kernel, KernelAccess, KernelInvocationContext,
-    PolicyPipeline, SystemClock, VerticalPackManifest,
+    InMemoryAuditSink, JsonlAuditSink, Kernel, KernelAccess, KernelInvocationContext, SystemClock,
+    VerticalPackManifest,
     policy::{
         FsAtomicWriteAllowPolicy, FsContentSearchAllowPolicy, FsCopyFileAllowPolicy,
         FsCreateDirAllAllowPolicy, FsGlobAllowPolicy, FsInspectPathAllowPolicy,
         FsPathAllowedRootsPolicy, FsReadAllowPolicy, FsReadDirAllowPolicy,
         FsReadFilenameDenyPolicy, FsRemoveDirAllAllowPolicy, FsRemoveFileAllowPolicy,
-        FsRenameAllowPolicy, FsResolvePathAllowPolicy, FsWriteAllowPolicy,
+        FsRenameAllowPolicy, FsResolvePathAllowPolicy, FsWriteAllowPolicy, PolicyPipelineBuilder,
     },
 };
 use loong_runtime::{
@@ -83,6 +84,9 @@ pub struct AppContextInner {
     pub(crate) effective_capabilities: Capabilities,
     pub(crate) fs_resolution_root: Arc<PathBuf>,
     pub(crate) fs_allowed_roots: Arc<[PathBuf]>,
+    // Transitional host contexts need legacy attribution, but identity stays
+    // sourced from the current token or session fields instead of being copied here.
+    pub(crate) legacy_authorization_boundary: Option<String>,
     pub session_id: String,
     pub parent_session_id: Option<String>,
     pub profile: Option<DelegateBuiltinProfile>,
@@ -138,6 +142,7 @@ impl AppContext {
                 effective_capabilities,
                 fs_resolution_root: Arc::new(fs_resolution_root),
                 fs_allowed_roots: fs_allowed_roots.into(),
+                legacy_authorization_boundary: None,
                 session_id,
                 parent_session_id: None,
                 profile: None,
@@ -215,6 +220,7 @@ impl AppContext {
         let _ = crate::conversation::mailbox_for_session(&parent_session_id);
         let mut child = self.clone();
         let state = Arc::make_mut(&mut child.inner);
+        state.legacy_authorization_boundary = None;
         state.session_id = session_id;
         state.parent_session_id = Some(parent_session_id);
         state.profile = None;
@@ -235,6 +241,7 @@ impl AppContext {
         let _ = crate::conversation::mailbox_for_session(&session_id);
         let mut session = self.clone();
         let state = Arc::make_mut(&mut session.inner);
+        state.legacy_authorization_boundary = None;
         state.session_id = session_id;
         state.parent_session_id = None;
         state.profile = None;
@@ -520,6 +527,7 @@ impl AppContext {
                 effective_capabilities,
                 fs_resolution_root: Arc::new(fs_resolution_root),
                 fs_allowed_roots: fs_allowed_roots.into(),
+                legacy_authorization_boundary: self.legacy_authorization_boundary.clone(),
                 session_id: self.session_id.clone(),
                 parent_session_id: self.parent_session_id.clone(),
                 profile: self.profile,
@@ -732,6 +740,23 @@ impl PolicyContext for AppContext {
     fn allowed_capabilities(&self) -> Cow<'_, Capabilities> {
         Cow::Borrowed(&self.effective_capabilities)
     }
+
+    fn authorization_subject(&self) -> AuthorizationSubject {
+        let scope = self.legacy_authorization_boundary.as_ref().map_or_else(
+            || AuthorizationScope::Session {
+                session_id: self.session_id.clone(),
+            },
+            |boundary| AuthorizationScope::LegacyToken {
+                boundary: boundary.clone(),
+                pack_id: self.token.pack_id.clone(),
+                token_id: self.token.token_id.clone(),
+            },
+        );
+        AuthorizationSubject {
+            actor_id: self.agent_id().to_owned(),
+            scope,
+        }
+    }
 }
 
 impl KernelInvocationContext for AppContext {
@@ -920,14 +945,18 @@ fn bootstrap_app_context_with_audit_sink(
         .issue_token(EMBEDDED_RUNTIME_PACK_ID, agent_id, ttl_s)
         .map_err(|e| format!("kernel token issue failed: {e}"))?;
 
-    AppContext::new(
+    let mut context = AppContext::new(
         runtime,
         token,
         tool_rt,
         agent_id,
         crate::tools::runtime_tool_view_from_loong_config(config),
         GovernedSessionMode::MutatingCapable,
-    )
+    )?;
+    // This bootstrap has no Session owner. Keep its bearer identity explicit
+    // until step 7 removes the transitional host context entirely.
+    Arc::make_mut(&mut context.inner).legacy_authorization_boundary = Some("app.host".to_owned());
+    Ok(context)
 }
 
 // Keep production-selected and test-injected audit sinks on one runtime construction path.
@@ -936,7 +965,7 @@ fn bootstrap_runtime_with_audit_sink(
     config: &LoongConfig,
     tool_rt: &crate::tools::runtime_config::ToolRuntimeConfig,
 ) -> Result<Arc<Runtime<AppContextFactory>>, String> {
-    let mut policy = PolicyPipeline::<AppContextFactory>::new_legacy_allow_fallback()
+    let mut policy = PolicyPipelineBuilder::<AppContextFactory>::new_legacy_allow_fallback()
         .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
         .with_policy(FsResolvePathAllowPolicy::target())
         .with_policy(FsResolvePathAllowPolicy::entry())
@@ -1069,12 +1098,33 @@ mod tests {
                 Capability::NetworkEgress,
             ])
         );
+        assert!(matches!(
+            context.authorization_subject().scope,
+            AuthorizationScope::Session { ref session_id }
+                if session_id == "advisory-session"
+        ));
+    }
+
+    #[test]
+    fn authorization_subject_reads_the_current_session_identity() {
+        let context = bootstrap_test_app_context("session-identity-agent", 60)
+            .expect("test app context")
+            .for_session("initial-session", crate::tools::runtime_tool_view());
+        let mut context = context;
+
+        context.session_id = "updated-session".to_owned();
+
+        assert!(matches!(
+            context.authorization_subject().scope,
+            AuthorizationScope::Session { ref session_id }
+                if session_id == "updated-session"
+        ));
     }
 
     #[test]
     fn app_context_rejects_token_for_unregistered_pack() {
         let runtime = Arc::new(Runtime::new(
-            Kernel::<AppContextFactory>::new_without_audit(),
+            Kernel::<AppContextFactory>::new(),
             crate::tools::plane::test_builtin_tool_plane(),
         ));
         let token = CapabilityToken {
@@ -1115,6 +1165,16 @@ mod tests {
             .expect("bootstrap with jsonl audit should succeed");
 
         assert_eq!(context.agent_id(), "test-agent");
+        assert!(matches!(
+            context.authorization_subject().scope,
+            AuthorizationScope::LegacyToken {
+                ref boundary,
+                ref pack_id,
+                ref token_id,
+            } if boundary == "app.host"
+                && pack_id == EMBEDDED_RUNTIME_PACK_ID
+                && token_id == &context.token().token_id
+        ));
 
         let journal = fs::read_to_string(&audit_path).expect("audit journal should exist");
         assert_eq!(

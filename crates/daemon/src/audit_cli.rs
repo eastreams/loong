@@ -9,6 +9,10 @@ use crate::kernel::{
     AuditEvent, AuditEventKind, AuditRepairOutcome, PluginTrustTier, repair_jsonl_audit_journal,
     verify_jsonl_audit_journal,
 };
+use loong_contracts::{
+    AuthorizationAttempt, AuthorizationAttemptEvent, AuthorizationPolicyEvent, AuthorizationScope,
+    AuthorizationTerminalOutcome,
+};
 use loong_spec::CliResult;
 use serde_json::{Map, Value, json};
 
@@ -2113,6 +2117,7 @@ fn summarize_token_trail(
 fn parse_audit_event_kind_filter(raw: &str) -> Result<String, String> {
     let normalized = normalize_audit_filter_token(raw);
     let canonical = match normalized.as_str() {
+        "authorization" => "Authorization",
         "tokenissued" => "TokenIssued",
         "tokenrevoked" => "TokenRevoked",
         "taskdispatched" => "TaskDispatched",
@@ -2125,7 +2130,7 @@ fn parse_audit_event_kind_filter(raw: &str) -> Result<String, String> {
         "authorizationdenied" => "AuthorizationDenied",
         _ => {
             return Err(format!(
-                "unsupported audit event kind filter `{raw}` (expected one of: TokenIssued, TokenRevoked, TaskDispatched, ConnectorInvoked, PlaneInvoked, SecurityScanEvaluated, PluginTrustEvaluated, ToolSearchEvaluated, ProviderFailover, AuthorizationDenied)"
+                "unsupported audit event kind filter `{raw}` (expected one of: Authorization, TokenIssued, TokenRevoked, TaskDispatched, ConnectorInvoked, PlaneInvoked, SecurityScanEvaluated, PluginTrustEvaluated, ToolSearchEvaluated, ProviderFailover, AuthorizationDenied)"
             ));
         }
     };
@@ -2137,6 +2142,7 @@ fn parse_audit_triage_label_filter(raw: &str) -> Result<String, String> {
     let normalized = normalize_audit_filter_token(raw);
     let canonical = match normalized.as_str() {
         "authorizationdenied" => "authorization_denied",
+        "authorizationfailed" => "authorization_failed",
         "providerfailover" => "provider_failover",
         "securityscanblocked" => "security_scan_blocked",
         "plugintrustblocked" => "plugin_trust_blocked",
@@ -2144,7 +2150,7 @@ fn parse_audit_triage_label_filter(raw: &str) -> Result<String, String> {
         "toolsearchtrustempty" => "tool_search_trust_empty",
         _ => {
             return Err(format!(
-                "unsupported audit triage label filter `{raw}` (expected one of: authorization_denied, provider_failover, security_scan_blocked, plugin_trust_blocked, tool_search_trust_conflict, tool_search_trust_empty)"
+                "unsupported audit triage label filter `{raw}` (expected one of: authorization_denied, authorization_failed, provider_failover, security_scan_blocked, plugin_trust_blocked, tool_search_trust_conflict, tool_search_trust_empty)"
             ));
         }
     };
@@ -2386,6 +2392,10 @@ fn tool_search_event_context(kind: &AuditEventKind) -> Option<ToolSearchAuditEve
 
 fn audit_event_pack_id(kind: &AuditEventKind) -> Option<&str> {
     match kind {
+        AuditEventKind::Authorization { evidence } => match &evidence.subject.scope {
+            AuthorizationScope::LegacyToken { pack_id, .. } => Some(pack_id.as_str()),
+            AuthorizationScope::Session { .. } => None,
+        },
         AuditEventKind::TokenIssued { token } => Some(token.pack_id.as_str()),
         AuditEventKind::TaskDispatched { pack_id, .. }
         | AuditEventKind::ConnectorInvoked { pack_id, .. }
@@ -2402,6 +2412,12 @@ fn audit_event_pack_id(kind: &AuditEventKind) -> Option<&str> {
 }
 
 fn audit_event_token_id(kind: &AuditEventKind) -> Option<&str> {
+    if let AuditEventKind::Authorization { evidence } = kind
+        && let AuthorizationScope::LegacyToken { token_id, .. } = &evidence.subject.scope
+    {
+        return Some(token_id.as_str());
+    }
+
     if let AuditEventKind::TokenIssued { token } = kind {
         return Some(token.token_id.as_str());
     }
@@ -2432,7 +2448,56 @@ fn increment_count_rollup(
     }
 }
 
+#[derive(Clone, Copy)]
+enum AuthorizationTriage {
+    Denied,
+    Failed,
+}
+
+/// CLI triage is concerned only with terminal attention states; permission and
+/// allow evidence remain visible through event-kind filtering without alerts.
+fn authorization_triage(
+    evidence: &loong_contracts::AuthorizationEvidence,
+) -> Option<AuthorizationTriage> {
+    match &evidence.attempt {
+        AuthorizationAttempt::StartFailed => Some(AuthorizationTriage::Failed),
+        AuthorizationAttempt::Started {
+            event: AuthorizationAttemptEvent::CapabilityDenied { .. },
+            ..
+        } => Some(AuthorizationTriage::Denied),
+        AuthorizationAttempt::Started {
+            event:
+                AuthorizationAttemptEvent::Policy {
+                    event: AuthorizationPolicyEvent::Terminal(outcome),
+                    ..
+                },
+            ..
+        } => match outcome {
+            AuthorizationTerminalOutcome::Deny { .. } => Some(AuthorizationTriage::Denied),
+            AuthorizationTerminalOutcome::Failure { .. } => Some(AuthorizationTriage::Failed),
+            AuthorizationTerminalOutcome::Allow { .. } => None,
+        },
+        AuthorizationAttempt::Started {
+            event:
+                AuthorizationAttemptEvent::Policy {
+                    event: AuthorizationPolicyEvent::Permission(_),
+                    ..
+                },
+            ..
+        } => None,
+    }
+}
+
+// Each arm owns one persisted event's operator summary. Splitting this
+// exhaustive mapping would scatter the CLI schema across forwarding helpers.
+#[allow(clippy::too_many_lines)]
 fn triage_event_summary(kind: &AuditEventKind) -> Option<String> {
+    if let AuditEventKind::Authorization { evidence } = kind
+        && authorization_triage(evidence).is_some()
+    {
+        return Some(format_audit_event_detail(kind));
+    }
+
     if let AuditEventKind::AuthorizationDenied {
         pack_id,
         token_id,
@@ -2535,6 +2600,19 @@ fn triage_event_summary(kind: &AuditEventKind) -> Option<String> {
 }
 
 fn triage_event_hint(kind: &AuditEventKind) -> Option<String> {
+    if let AuditEventKind::Authorization { evidence } = kind {
+        return authorization_triage(evidence).map(|triage| match triage {
+            AuthorizationTriage::Denied => {
+                "grant the required capability or adjust the policy or authority for the requested action"
+                    .to_owned()
+            }
+            AuthorizationTriage::Failed => {
+                "restore the authorization identity, permission, and audit backend before retrying"
+                    .to_owned()
+            }
+        });
+    }
+
     triage_event_label(kind)
         .and_then(triage_label_remediation_hint)
         .map(str::to_owned)
@@ -2542,6 +2620,12 @@ fn triage_event_hint(kind: &AuditEventKind) -> Option<String> {
 
 fn triage_event_label(kind: &AuditEventKind) -> Option<&'static str> {
     match kind {
+        AuditEventKind::Authorization { evidence } => {
+            authorization_triage(evidence).map(|triage| match triage {
+                AuthorizationTriage::Denied => "authorization_denied",
+                AuthorizationTriage::Failed => "authorization_failed",
+            })
+        }
         AuditEventKind::AuthorizationDenied { .. } => Some("authorization_denied"),
         AuditEventKind::ProviderFailover { .. } => Some("provider_failover"),
         AuditEventKind::SecurityScanEvaluated { blocked: true, .. } => {
@@ -2576,6 +2660,7 @@ fn triage_event_label(kind: &AuditEventKind) -> Option<&'static str> {
 
 fn audit_event_kind_label(kind: &AuditEventKind) -> &'static str {
     match kind {
+        AuditEventKind::Authorization { .. } => "Authorization",
         AuditEventKind::TokenIssued { .. } => "TokenIssued",
         AuditEventKind::TokenRevoked { .. } => "TokenRevoked",
         AuditEventKind::TaskDispatched { .. } => "TaskDispatched",
@@ -2593,8 +2678,45 @@ fn audit_event_kind_label(kind: &AuditEventKind) -> &'static str {
     }
 }
 
+// Keep the exhaustive persisted-event rendering table together so a new audit
+// variant has one obvious CLI integration point.
+#[allow(clippy::too_many_lines)]
 fn format_audit_event_detail(kind: &AuditEventKind) -> String {
     match kind {
+        AuditEventKind::Authorization { evidence } => {
+            let (attempt, event) = match &evidence.attempt {
+                AuthorizationAttempt::StartFailed => {
+                    ("start_failed".to_owned(), "attempt_start_failed".to_owned())
+                }
+                AuthorizationAttempt::Started { id, event } => {
+                    let event = match event {
+                        AuthorizationAttemptEvent::CapabilityDenied { capability } => {
+                            format!("capability_denied capability={capability:?}")
+                        }
+                        AuthorizationAttemptEvent::Policy {
+                            event: AuthorizationPolicyEvent::Permission(interaction),
+                            ..
+                        } => format!("permission interaction={interaction:?}"),
+                        AuthorizationAttemptEvent::Policy {
+                            event: AuthorizationPolicyEvent::Terminal(outcome),
+                            ..
+                        } => format!("terminal outcome={outcome:?}"),
+                    };
+                    (format!("{:?}", id), event)
+                }
+            };
+            format!(
+                "attempt={} actor_id={} scope={:?} action_kind={} operation={} resource={} required_capabilities={:?} evidence={}",
+                attempt,
+                evidence.subject.actor_id,
+                evidence.subject.scope,
+                evidence.action.kind,
+                evidence.action.operation,
+                evidence.action.resource.as_deref().unwrap_or("-"),
+                evidence.action.required_capabilities,
+                event,
+            )
+        }
         AuditEventKind::TokenIssued { token } => format!(
             "pack_id={} token_id={} expires_at_epoch_s={}",
             token.pack_id, token.token_id, token.expires_at_epoch_s
@@ -2821,6 +2943,9 @@ fn triage_label_remediation_hint(label: &str) -> Option<&'static str> {
         "authorization_denied" => Some(
             "grant the required capability or retry with a token scoped for the requested operation",
         ),
+        "authorization_failed" => Some(
+            "restore the authorization identity, permission, and audit backend before retrying",
+        ),
         "provider_failover" => Some(
             "inspect provider health, fallback routing, and model compatibility before retrying",
         ),
@@ -2882,3 +3007,7 @@ mod tests;
 #[cfg(test)]
 #[path = "audit_cli_tool_invocation_tests.rs"]
 mod tool_invocation_tests;
+
+#[cfg(test)]
+#[path = "audit_cli_authorization_tests.rs"]
+mod authorization_tests;

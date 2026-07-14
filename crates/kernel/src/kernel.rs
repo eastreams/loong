@@ -13,22 +13,24 @@ use std::{
 
 use crate::{
     audit::{
-        AuditEvent, AuditEventKind, AuditSink, ExecutionPlane, InMemoryAuditSink, NoopAuditSink,
-        PlaneTier,
+        AuditEventKind, AuditSink, ExecutionPlane, InMemoryAuditSink, PlaneTier, SharedAuditState,
     },
     clock::{Clock, SystemClock},
     connector::{ConnectorExtensionAdapter, ConnectorPlane, CoreConnectorAdapter},
     contracts::{
         Capability, CapabilityToken, ConnectorCommand, ConnectorOutcome, HarnessRequest, TaskIntent,
     },
-    errors::KernelError,
+    errors::{AuditError, KernelError},
     harness::{HarnessAdapter, HarnessBroker},
     memory::{
         CoreMemoryAdapter, MemoryCoreOutcome, MemoryCoreRequest, MemoryExtensionAdapter,
         MemoryExtensionOutcome, MemoryExtensionRequest, MemoryPlane,
     },
     pack::VerticalPackManifest,
-    policy::{KernelInvocationContext, LegacyKernelAction, PolicyPipeline, policy_engine_error},
+    policy::{
+        KernelInvocationContext, LegacyKernelAction, PolicyPipeline, PolicyPipelineBuilder,
+        policy_engine_error,
+    },
     runtime::{
         CoreRuntimeAdapter, RuntimeCoreOutcome, RuntimeCoreRequest, RuntimeExtensionAdapter,
         RuntimeExtensionOutcome, RuntimeExtensionRequest, RuntimePlane,
@@ -72,7 +74,7 @@ pub struct Kernel<C: ContextFactory> {
     revoked_tokens: Mutex<BTreeSet<String>>,
     revoked_below_generation: AtomicU64,
 
-    audit: Arc<dyn AuditSink>,
+    audit_state: Arc<SharedAuditState>,
 
     legacy_tool_plane: LegacyToolPlane<C>,
     memory_plane: MemoryPlane,
@@ -81,8 +83,6 @@ pub struct Kernel<C: ContextFactory> {
     packs: BTreeMap<String, VerticalPackManifest>,
     namespaces: BTreeMap<String, loong_contracts::Namespace>,
     harness: HarnessBroker,
-    clock: Arc<dyn Clock>,
-    event_seq: AtomicU64,
 }
 
 impl<C> Kernel<C>
@@ -111,18 +111,9 @@ where
         (kernel, audit)
     }
 
-    /// Construct a kernel that intentionally discards audit events.
-    ///
-    /// This is reserved for narrow fixture paths where callers explicitly do
-    /// not need audit assertions or evidence retention.
-    #[must_use]
-    pub fn new_without_audit() -> Self {
-        Self::with_runtime(Arc::new(SystemClock), Arc::new(NoopAuditSink))
-    }
-
     #[must_use]
     pub fn with_runtime(clock: Arc<dyn Clock>, audit: Arc<dyn AuditSink>) -> Self {
-        Self::with_policy_runtime(PolicyPipeline::new(), clock, audit)
+        Self::with_policy_runtime(PolicyPipelineBuilder::new(), clock, audit)
     }
 
     /// Construct a migration runtime for old adapter planes.
@@ -131,15 +122,23 @@ where
     /// only grants `LegacyKernelAction` so default construction stays deny-by-default.
     #[must_use]
     pub fn with_legacy_allow_runtime(clock: Arc<dyn Clock>, audit: Arc<dyn AuditSink>) -> Self {
-        Self::with_policy_runtime(PolicyPipeline::new_legacy_allow_fallback(), clock, audit)
+        Self::with_policy_runtime(
+            PolicyPipelineBuilder::new_legacy_allow_fallback(),
+            clock,
+            audit,
+        )
     }
 
     #[must_use]
     pub fn with_policy_runtime(
-        policy: PolicyPipeline<C>,
+        policy: PolicyPipelineBuilder<C>,
         clock: Arc<dyn Clock>,
         audit: Arc<dyn AuditSink>,
     ) -> Self {
+        // Kernel is the only installation boundary: sharing one state prevents
+        // authorization identity, event sequencing, and sink selection from diverging.
+        let audit_state = Arc::new(SharedAuditState::new(clock, audit));
+        let policy = PolicyPipeline::install(policy, audit_state.clone());
         Self {
             policy,
             packs: BTreeMap::new(),
@@ -151,15 +150,13 @@ where
             memory_plane: MemoryPlane::new(),
             revoked_tokens: Mutex::new(BTreeSet::new()),
             revoked_below_generation: AtomicU64::new(0),
-            clock,
-            audit,
-            event_seq: AtomicU64::new(0),
+            audit_state,
         }
     }
 
     #[must_use]
     pub fn now_epoch_s(&self) -> u64 {
-        self.clock.now_epoch_s()
+        self.audit_state.now_epoch_s()
     }
 }
 
@@ -275,28 +272,12 @@ where
         ttl_s: u64,
     ) -> Result<CapabilityToken, KernelError> {
         let pack = self.pack_manifest(pack_id)?;
-        let issued_at_epoch_s = self.clock.now_epoch_s();
-        let generation = self.event_seq.fetch_add(1, Ordering::Relaxed) + 1;
-        let token = CapabilityToken {
-            token_id: format!("tok-{generation:016x}"),
-            pack_id: pack.pack_id.clone(),
-            agent_id: agent_id.to_owned(),
-            allowed_capabilities: pack.granted_capabilities.clone(),
-            issued_at_epoch_s,
-            expires_at_epoch_s: issued_at_epoch_s.saturating_add(ttl_s),
-            generation,
-        };
-
-        self.audit.record(AuditEvent {
-            event_id: format!("evt-{generation:016x}"),
-            timestamp_epoch_s: issued_at_epoch_s,
-            agent_id: Some(agent_id.to_owned()),
-            kind: AuditEventKind::TokenIssued {
-                token: token.clone(),
-            },
-        })?;
-
-        Ok(token)
+        self.mint_capability_token(
+            &pack.pack_id,
+            agent_id,
+            pack.granted_capabilities.clone(),
+            ttl_s,
+        )
     }
 
     pub fn issue_scoped_token(
@@ -308,28 +289,40 @@ where
     ) -> Result<CapabilityToken, KernelError> {
         let pack = self.pack_manifest(pack_id)?;
         self.assert_pack_grants(pack, allowed_capabilities)?;
-        let issued_at_epoch_s = self.clock.now_epoch_s();
-        let generation = self.event_seq.fetch_add(1, Ordering::Relaxed) + 1;
-        let token = CapabilityToken {
-            token_id: format!("tok-{generation:016x}"),
-            pack_id: pack.pack_id.clone(),
-            agent_id: agent_id.to_owned(),
-            allowed_capabilities: allowed_capabilities.clone(),
+        self.mint_capability_token(&pack.pack_id, agent_id, allowed_capabilities.clone(), ttl_s)
+    }
+
+    fn mint_capability_token(
+        &self,
+        pack_id: &str,
+        agent_id: &str,
+        allowed_capabilities: BTreeSet<Capability>,
+        ttl_s: u64,
+    ) -> Result<CapabilityToken, KernelError> {
+        let issued_at_epoch_s = self.audit_state.now_epoch_s();
+        // Full and scoped issuance perform different authority checks, then
+        // converge here so token identity and its audit event commit together.
+        Ok(self.audit_state.record_with_sequence(
             issued_at_epoch_s,
-            expires_at_epoch_s: issued_at_epoch_s.saturating_add(ttl_s),
-            generation,
-        };
-
-        self.audit.record(AuditEvent {
-            event_id: format!("evt-{generation:016x}"),
-            timestamp_epoch_s: issued_at_epoch_s,
-            agent_id: Some(agent_id.to_owned()),
-            kind: AuditEventKind::TokenIssued {
-                token: token.clone(),
+            Some(agent_id.to_owned()),
+            |generation| {
+                let token = CapabilityToken {
+                    token_id: format!("tok-{generation:016x}"),
+                    pack_id: pack_id.to_owned(),
+                    agent_id: agent_id.to_owned(),
+                    allowed_capabilities,
+                    issued_at_epoch_s,
+                    expires_at_epoch_s: issued_at_epoch_s.saturating_add(ttl_s),
+                    generation,
+                };
+                (
+                    AuditEventKind::TokenIssued {
+                        token: token.clone(),
+                    },
+                    token,
+                )
             },
-        })?;
-
-        Ok(token)
+        )?)
     }
 
     pub fn revoke_token(&self, token_id: &str, agent_id: Option<&str>) -> Result<(), KernelError> {
@@ -341,28 +334,31 @@ where
                 })
             })?
             .insert(token_id.to_owned());
-        let now = self.clock.now_epoch_s();
-        self.audit.record(self.new_event(
-            now,
+        self.audit_state.record(
             agent_id.map(std::string::ToString::to_string),
             AuditEventKind::TokenRevoked {
                 token_id: token_id.to_owned(),
             },
-        ))?;
+        )?;
         Ok(())
     }
 
+    /// Record operational evidence supplied by an orchestration owner.
+    ///
+    /// `AuditEventKind` is also the persisted schema, so it contains the
+    /// engine-owned `Authorization` variant. Reject that variant at this sole
+    /// external write boundary: only `PolicyEngine::grant` may emit typed
+    /// authorization evidence.
     pub fn record_audit_event(
         &self,
         agent_id: Option<&str>,
         kind: AuditEventKind,
     ) -> Result<(), KernelError> {
-        let now = self.clock.now_epoch_s();
-        self.audit.record(self.new_event(
-            now,
-            agent_id.map(std::string::ToString::to_string),
-            kind,
-        ))?;
+        if matches!(kind, AuditEventKind::Authorization { .. }) {
+            return Err(AuditError::AuthorizationEvidenceOwnedByPolicyEngine.into());
+        }
+        self.audit_state
+            .record(agent_id.map(std::string::ToString::to_string), kind)?;
         Ok(())
     }
 
@@ -394,7 +390,7 @@ where
         &self,
         record: PlaneInvocationRecord<'_>,
     ) -> Result<(), KernelError> {
-        self.audit.record(self.new_event(
+        self.audit_state.record_at(
             record.timestamp_epoch_s,
             Some(record.agent_id.to_owned()),
             AuditEventKind::PlaneInvoked {
@@ -406,7 +402,7 @@ where
                 operation: record.operation,
                 required_capabilities: record.required_capabilities.iter().copied().collect(),
             },
-        ))?;
+        )?;
         Ok(())
     }
 
@@ -419,7 +415,7 @@ where
         required_capabilities: &BTreeSet<Capability>,
         outcome: InvocationOutcome,
     ) -> Result<(), KernelError> {
-        self.audit.record(self.new_event(
+        self.audit_state.record_at(
             timestamp_epoch_s,
             agent_id,
             AuditEventKind::ToolInvocation {
@@ -428,7 +424,7 @@ where
                 required_capabilities: required_capabilities.iter().copied().collect(),
                 outcome,
             },
-        ))?;
+        )?;
         Ok(())
     }
 
@@ -456,7 +452,7 @@ where
         now_epoch_s: u64,
         error: &crate::errors::PolicyError,
     ) -> Result<(), KernelError> {
-        self.audit.record(self.new_event(
+        self.audit_state.record_at(
             now_epoch_s,
             Some(token.agent_id.clone()),
             AuditEventKind::AuthorizationDenied {
@@ -464,7 +460,7 @@ where
                 token_id: token.token_id.clone(),
                 reason: error.to_string(),
             },
-        ))?;
+        )?;
         Ok(())
     }
 
@@ -473,9 +469,9 @@ where
         pack: &VerticalPackManifest,
         token: &CapabilityToken,
         now_epoch_s: u64,
-        error: &crate::errors::PolicyError,
+        error: &impl std::fmt::Display,
     ) -> Result<(), KernelError> {
-        self.audit.record(self.new_event(
+        self.audit_state.record_at(
             now_epoch_s,
             Some(token.agent_id.clone()),
             AuditEventKind::AuthorizationDenied {
@@ -483,7 +479,7 @@ where
                 token_id: token.token_id.clone(),
                 reason: error.to_string(),
             },
-        ))?;
+        )?;
         Ok(())
     }
 
@@ -539,21 +535,6 @@ where
 
         Ok(())
     }
-
-    fn new_event(
-        &self,
-        timestamp_epoch_s: u64,
-        agent_id: Option<String>,
-        kind: AuditEventKind,
-    ) -> AuditEvent {
-        let seq = self.event_seq.fetch_add(1, Ordering::Relaxed) + 1;
-        AuditEvent {
-            event_id: format!("evt-{seq:016x}"),
-            timestamp_epoch_s,
-            agent_id,
-            kind,
-        }
-    }
 }
 
 impl<C> Kernel<C>
@@ -567,6 +548,9 @@ where
     /// registry that will consume the grant.
     /// This token-shaped compatibility API owns the legacy context bound;
     /// typed `Kernel`/`Access` APIs must not inherit it.
+    // Keep the complete legacy token recheck visible until step 5 deletes this
+    // method; extracting it would create another token-shaped migration helper.
+    #[allow(clippy::too_many_lines)]
     pub async fn grant_action<A>(
         &self,
         pack_id: &str,
@@ -586,8 +570,11 @@ where
                 .copied()
                 .collect::<BTreeSet<_>>()
         };
-        self.assert_pack_grants(pack, &required_capabilities)?;
         let now = ctx.now_epoch_s();
+        if let Err(error) = self.assert_pack_grants(pack, &required_capabilities) {
+            self.record_authorization_denial(pack, token, now, &error)?;
+            return Err(error);
+        }
         if let Err(policy_error) = self.authorize_token(pack, token, now, &required_capabilities) {
             self.record_authorization_denial(pack, token, now, &policy_error)?;
             return Err(KernelError::Policy(policy_error));
@@ -617,7 +604,6 @@ where
             }
             Err(grant_error) => {
                 let policy_error = policy_engine_error(grant_error);
-                self.record_authorization_denial(pack, token, now, &policy_error)?;
                 Err(KernelError::Policy(policy_error))
             }
         }
@@ -724,7 +710,7 @@ where
         let route = pack.default_route.clone();
         let outcome = self.harness.execute(&route, request).await?;
 
-        self.audit.record(self.new_event(
+        self.audit_state.record_at(
             now,
             Some(token.agent_id.clone()),
             AuditEventKind::TaskDispatched {
@@ -733,7 +719,7 @@ where
                 route: route.clone(),
                 required_capabilities: required_capabilities.iter().copied().collect(),
             },
-        ))?;
+        )?;
 
         Ok(KernelDispatch {
             adapter_route: route,
@@ -784,7 +770,7 @@ where
         };
         let outcome = self.connector_plane.invoke_core(core_name, command).await?;
 
-        self.audit.record(self.new_event(
+        self.audit_state.record_at(
             now,
             Some(token.agent_id.clone()),
             AuditEventKind::ConnectorInvoked {
@@ -793,7 +779,7 @@ where
                 operation: operation.clone(),
                 required_capabilities: required_capabilities.iter().copied().collect(),
             },
-        ))?;
+        )?;
 
         self.record_plane_invocation(PlaneInvocationRecord {
             timestamp_epoch_s: now,
@@ -860,7 +846,7 @@ where
             .invoke_extension(extension_name, core_name, command)
             .await?;
 
-        self.audit.record(self.new_event(
+        self.audit_state.record_at(
             now,
             Some(token.agent_id.clone()),
             AuditEventKind::ConnectorInvoked {
@@ -869,7 +855,7 @@ where
                 operation: operation.clone(),
                 required_capabilities: required_capabilities.iter().copied().collect(),
             },
-        ))?;
+        )?;
 
         self.record_plane_invocation(PlaneInvocationRecord {
             timestamp_epoch_s: now,
@@ -1196,8 +1182,11 @@ where
         required_capabilities: &BTreeSet<Capability>,
         payload: Value,
     ) -> Result<(u64, Value), KernelError> {
-        self.assert_pack_grants(pack, required_capabilities)?;
         let now = ctx.now_epoch_s();
+        if let Err(error) = self.assert_pack_grants(pack, required_capabilities) {
+            self.record_authorization_denial(pack, token, now, &error)?;
+            return Err(error);
+        }
         self.authorize_or_audit_denial(
             ctx,
             pack,
@@ -1233,12 +1222,9 @@ where
         }
 
         let action = LegacyKernelAction::new(operation, required_capabilities.clone(), payload);
-        let granted = match self.policy.authorize_kernel_action(ctx, action).await {
-            Ok(granted) => granted,
-            Err(policy_error) => {
-                self.record_authorization_denial(pack, token, now_epoch_s, &policy_error)?;
-                return Err(KernelError::Policy(policy_error));
-            }
+        let granted = match self.policy.grant(ctx, action).await {
+            Ok(grant) => grant.granted,
+            Err(error) => return Err(KernelError::Policy(policy_engine_error(error))),
         };
 
         // Permission-capable policy may have awaited an external authority.
@@ -1264,9 +1250,7 @@ impl<C> loong_core::kernel::Kernel<C> for Kernel<C>
 where
     C: ContextFactory,
 {
-    type PolicyEngine = PolicyPipeline<C>;
-
-    fn policy_engine(&self) -> &Self::PolicyEngine {
+    fn policy_engine(&self) -> &impl PolicyEngine<C> {
         &self.policy
     }
 }

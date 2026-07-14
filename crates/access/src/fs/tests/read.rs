@@ -44,6 +44,52 @@ async fn tool_context_like_chain_grants_read_file_via_access_then_fs() {
 }
 
 #[tokio::test]
+async fn read_access_grants_resolve_path_and_read_actions_in_order() {
+    let kernel = FsAccessTestKernel::default();
+    let base = unique_temp_dir("loong-access-fs-read-actions");
+    let workspace_root = base.join("workspace");
+    fs::create_dir_all(&workspace_root).expect("create workspace root");
+    fs::write(workspace_root.join("note.txt"), "evidence").expect("write note");
+    let ctx = FsAccessToolCx::new(&kernel, &workspace_root);
+
+    ctx.access()
+        .fs()
+        .read_file("note.txt")
+        .await
+        .expect("read should be authorized");
+
+    let evidence = kernel
+        .policy
+        .evidence
+        .lock()
+        .expect("filesystem access evidence log");
+    assert_eq!(evidence.len(), 3);
+    for (item, (kind, grant_id)) in evidence.iter().zip([
+        ("fs.resolve_path", GrantId(1)),
+        ("fs.path", GrantId(2)),
+        ("fs.read", GrantId(3)),
+    ]) {
+        assert_eq!(item.action.kind, kind);
+        assert!(matches!(
+            &item.attempt,
+            AuthorizationAttempt::Started {
+                event: AuthorizationAttemptEvent::Policy {
+                    event: AuthorizationPolicyEvent::Terminal(
+                        AuthorizationTerminalOutcome::Allow {
+                            grant_id: recorded_grant_id,
+                        }
+                    ),
+                    ..
+                },
+                ..
+            } if *recorded_grant_id == grant_id
+        ));
+    }
+
+    fs::remove_dir_all(base).ok();
+}
+
+#[tokio::test]
 async fn fs_read_execution_boundary_consumes_granted_action() {
     let kernel = FsAccessTestKernel::default();
     let base = unique_temp_dir("loong-access-fs-granted-boundary");

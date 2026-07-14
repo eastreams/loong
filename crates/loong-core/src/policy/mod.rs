@@ -4,3 +4,6 @@ pub mod engine;
 pub mod grant;
 #[allow(clippy::module_inception)]
 pub mod policy;
+
+#[cfg(test)]
+mod tests;

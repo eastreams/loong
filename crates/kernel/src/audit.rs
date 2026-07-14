@@ -1,28 +1,132 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicU64, Ordering},
+};
 
 // Re-export data types from contracts
 pub use loong_contracts::{
     AuditEvent, AuditEventKind, ExecutionPlane, InvocationOutcome, PlaneTier,
 };
+use loong_contracts::{AuthorizationAttemptId, AuthorizationEvidence, GrantId};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::errors::AuditError;
+use crate::{clock::Clock, errors::AuditError};
+
+#[cfg(test)]
+mod tests;
+
+/// Kernel-private identity and durability owner shared with the installed policy pipeline.
+///
+/// Keeping the clock, sink, and all audit-related sequences together prevents
+/// kernel events and authorization evidence from diverging in identity or destination.
+pub(crate) struct SharedAuditState {
+    sink: Arc<dyn AuditSink>,
+    clock: Arc<dyn Clock>,
+    event_seq: Mutex<u64>,
+    authorization_attempt_seq: AtomicU64,
+    grant_seq: AtomicU64,
+}
+
+impl SharedAuditState {
+    pub(crate) fn new(clock: Arc<dyn Clock>, sink: Arc<dyn AuditSink>) -> Self {
+        Self {
+            sink,
+            clock,
+            event_seq: Mutex::new(0),
+            authorization_attempt_seq: AtomicU64::new(0),
+            grant_seq: AtomicU64::new(0),
+        }
+    }
+
+    pub(crate) fn now_epoch_s(&self) -> u64 {
+        self.clock.now_epoch_s()
+    }
+
+    pub(crate) fn reserve_authorization_attempt_id(
+        &self,
+    ) -> Result<AuthorizationAttemptId, AuditError> {
+        self.authorization_attempt_seq
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                current.checked_add(1)
+            })
+            .map(|previous| AuthorizationAttemptId(previous + 1))
+            .map_err(|_current| AuditError::AuthorizationAttemptIdExhausted)
+    }
+
+    pub(crate) fn reserve_grant_id(&self) -> Result<GrantId, AuditError> {
+        self.grant_seq
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                current.checked_add(1)
+            })
+            .map(|previous| GrantId(previous + 1))
+            .map_err(|_current| AuditError::GrantIdExhausted)
+    }
+
+    pub(crate) fn record(
+        &self,
+        agent_id: Option<String>,
+        kind: AuditEventKind,
+    ) -> Result<(), AuditError> {
+        self.record_at(self.now_epoch_s(), agent_id, kind)
+    }
+
+    pub(crate) fn record_at(
+        &self,
+        timestamp_epoch_s: u64,
+        agent_id: Option<String>,
+        kind: AuditEventKind,
+    ) -> Result<(), AuditError> {
+        self.record_with_sequence(timestamp_epoch_s, agent_id, |_sequence| (kind, ()))
+    }
+
+    pub(crate) fn record_authorization(
+        &self,
+        evidence: &AuthorizationEvidence,
+    ) -> Result<(), AuditError> {
+        // Authorization stays a typed event here; policy code only supplies
+        // evidence and cannot choose audit identity or destination.
+        self.record(
+            Some(evidence.subject.actor_id.clone()),
+            AuditEventKind::Authorization {
+                evidence: evidence.clone(),
+            },
+        )
+    }
+
+    /// Hold the sequence lock through the sink write so persisted order cannot
+    /// disagree with event ids under concurrent recording. Callers may derive
+    /// domain values from the sequence, but SharedAuditState alone constructs
+    /// the event identity.
+    pub(crate) fn record_with_sequence<T>(
+        &self,
+        timestamp_epoch_s: u64,
+        agent_id: Option<String>,
+        build: impl FnOnce(u64) -> (AuditEventKind, T),
+    ) -> Result<T, AuditError> {
+        let mut sequence = self
+            .event_seq
+            .lock()
+            .map_err(|_error| AuditError::Sink("audit event mutex poisoned".to_owned()))?;
+        *sequence = sequence
+            .checked_add(1)
+            .ok_or(AuditError::EventIdExhausted)?;
+        let (kind, result) = build(*sequence);
+        self.sink.record(AuditEvent {
+            event_id: format!("evt-{:016x}", *sequence),
+            timestamp_epoch_s,
+            agent_id,
+            kind,
+        })?;
+        Ok(result)
+    }
+}
 
 pub trait AuditSink: Send + Sync {
     fn record(&self, event: AuditEvent) -> Result<(), AuditError>;
-}
-
-#[derive(Debug, Default)]
-pub struct NoopAuditSink;
-
-impl AuditSink for NoopAuditSink {
-    fn record(&self, _event: AuditEvent) -> Result<(), AuditError> {
-        Ok(())
-    }
 }
 
 #[derive(Debug, Default, Clone)]

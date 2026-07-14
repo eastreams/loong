@@ -5,7 +5,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use loong_contracts::{Capabilities, PolicyDecision, PolicyGrant};
+use loong_contracts::{
+    AuthorizationScope, AuthorizationSubject, Capabilities, PolicyDecision, PolicyGrant,
+};
 use loong_core::policy::{
     action::ActionMeta,
     context::{ContextFactory, PolicyContext},
@@ -115,6 +117,17 @@ impl TestPolicyContext {
 impl PolicyContext for TestPolicyContext {
     fn allowed_capabilities(&self) -> Cow<'_, Capabilities> {
         Cow::Owned(self.token.allowed_capabilities.iter().copied().collect())
+    }
+
+    fn authorization_subject(&self) -> AuthorizationSubject {
+        AuthorizationSubject {
+            actor_id: self.token.agent_id.clone(),
+            scope: AuthorizationScope::LegacyToken {
+                boundary: "kernel.test-support".to_owned(),
+                pack_id: self.token.pack_id.clone(),
+                token_id: self.token.token_id.clone(),
+            },
+        }
     }
 }
 

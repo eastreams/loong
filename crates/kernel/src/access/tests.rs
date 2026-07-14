@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use loong_contracts::{Capabilities, Capability};
+use loong_contracts::{AuthorizationScope, AuthorizationSubject, Capabilities, Capability};
 use loong_core::{
     AuthorizationError, PolicyGrantError,
     policy::context::{ContextFactory, PolicyContext},
@@ -44,6 +44,15 @@ impl AccessCxPolicyContext {
 impl PolicyContext for AccessCxPolicyContext {
     fn allowed_capabilities(&self) -> Cow<'_, Capabilities> {
         Cow::Borrowed(&self.capabilities)
+    }
+
+    fn authorization_subject(&self) -> AuthorizationSubject {
+        AuthorizationSubject {
+            actor_id: "test:kernel:access:actor".to_owned(),
+            scope: AuthorizationScope::Session {
+                session_id: "test:kernel:access:session".to_owned(),
+            },
+        }
     }
 }
 
@@ -365,7 +374,7 @@ async fn fs_rename_path_denies_destination_ancestor_symlink_escape() {
 }
 
 fn kernel_with_fs_path_policy() -> crate::Kernel<AccessCxContextFactory> {
-    let policy = crate::PolicyPipeline::<AccessCxContextFactory>::new()
+    let policy = crate::policy::PolicyPipelineBuilder::<AccessCxContextFactory>::new()
         .with_policy(FsResolvePathAllowPolicy::target())
         .with_policy(FsResolvePathAllowPolicy::entry())
         .with_policy(FsPathAllowedRootsPolicy::target())
@@ -380,7 +389,7 @@ fn kernel_with_fs_path_policy() -> crate::Kernel<AccessCxContextFactory> {
     crate::Kernel::with_policy_runtime(
         policy,
         Arc::new(crate::SystemClock),
-        Arc::new(crate::NoopAuditSink),
+        Arc::new(crate::InMemoryAuditSink::default()),
     )
 }
 

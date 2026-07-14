@@ -1,24 +1,43 @@
 use std::{borrow::Cow, collections::BTreeSet};
 
 use loong_contracts::{
-    AuditEventKind, Capability, ExecutionRoute, HarnessKind, InvocationOutcome,
-    VerticalPackManifest,
+    AuditEventKind, AuthorizationActionSnapshot, AuthorizationAttempt, AuthorizationEvidence,
+    AuthorizationScope, AuthorizationSubject, Capabilities, Capability, ExecutionRoute,
+    HarnessKind, InvocationOutcome, VerticalPackManifest,
 };
 use loong_core::policy::{
     action::{ActionMeta, ActionMetadata},
-    context::ContextFactory,
+    context::{ContextFactory, PolicyContext},
 };
 use serde_json::json;
 
 use super::Kernel;
 use crate::test_support::{TestContextFactory, TestPolicyContext};
-use crate::{AllowPolicy, InMemoryAuditSink, PolicyPipeline, SystemClock};
+use crate::{AllowPolicy, InMemoryAuditSink, SystemClock, policy::PolicyPipelineBuilder};
 use std::sync::Arc;
 
 struct MinimalContextFactory;
 
+struct MinimalContext;
+
+impl PolicyContext for MinimalContext {
+    fn allowed_capabilities(&self) -> Cow<'_, Capabilities> {
+        static EMPTY: Capabilities = Capabilities::new();
+        Cow::Borrowed(&EMPTY)
+    }
+
+    fn authorization_subject(&self) -> AuthorizationSubject {
+        AuthorizationSubject {
+            actor_id: "test:kernel:minimal:actor".to_owned(),
+            scope: AuthorizationScope::Session {
+                session_id: "test:kernel:minimal:session".to_owned(),
+            },
+        }
+    }
+}
+
 impl ContextFactory for MinimalContextFactory {
-    type Cx<'a> = ();
+    type Cx<'a> = MinimalContext;
 }
 
 #[test]
@@ -63,8 +82,41 @@ fn kernel_context_free_api_does_not_require_legacy_invocation_context() {
         .expect("audit event should record without an invocation context");
 }
 
+#[test]
+fn generic_recorder_rejects_engine_owned_authorization_evidence() {
+    let (kernel, audit) = Kernel::<MinimalContextFactory>::new_with_in_memory_audit();
+    let error = kernel
+        .record_audit_event(
+            Some("forged-actor"),
+            AuditEventKind::Authorization {
+                evidence: AuthorizationEvidence {
+                    attempt: AuthorizationAttempt::StartFailed,
+                    subject: AuthorizationSubject {
+                        actor_id: "different-actor".to_owned(),
+                        scope: AuthorizationScope::Session {
+                            session_id: "forged-session".to_owned(),
+                        },
+                    },
+                    action: AuthorizationActionSnapshot {
+                        kind: "forged.action".to_owned(),
+                        operation: "forge".to_owned(),
+                        resource: None,
+                        required_capabilities: Vec::new(),
+                    },
+                },
+            },
+        )
+        .expect_err("generic recorder must not accept authorization evidence");
+
+    assert!(matches!(
+        error,
+        crate::KernelError::Audit(crate::AuditError::AuthorizationEvidenceOwnedByPolicyEngine)
+    ));
+    assert!(audit.snapshot().is_empty());
+}
+
 fn kernel_with_tool_invocation_policy() -> (Kernel<TestContextFactory>, Arc<InMemoryAuditSink>) {
-    let mut policy = PolicyPipeline::<TestContextFactory>::new();
+    let mut policy = PolicyPipelineBuilder::<TestContextFactory>::new();
     policy.push_fallback_policy(AllowPolicy);
     let audit = Arc::new(InMemoryAuditSink::default());
     let kernel = Kernel::with_policy_runtime(policy, Arc::new(SystemClock), audit.clone());
@@ -95,6 +147,41 @@ async fn grant_action_grants_without_recording_tool_outcome() {
             .iter()
             .any(|event| { matches!(event.kind, AuditEventKind::ToolInvocation { .. }) })
     );
+}
+
+#[tokio::test]
+async fn grant_action_audits_legacy_pack_capability_rejection() {
+    let (mut kernel, audit) = kernel_with_tool_invocation_policy();
+    register_tool_pack(&mut kernel, "typed-pack-deny");
+    let token = kernel
+        .issue_token("typed-pack-deny", "agent-typed", 120)
+        .expect("token should issue");
+
+    let error = kernel
+        .grant_action(
+            "typed-pack-deny",
+            &token,
+            tool_invocation_action(
+                "read",
+                BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead]),
+            ),
+            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+        )
+        .await
+        .expect_err("pack capability boundary must reject the grant");
+
+    assert!(matches!(
+        error,
+        crate::KernelError::PackCapabilityBoundary {
+            capability: Capability::FilesystemRead,
+            ..
+        }
+    ));
+    assert!(matches!(
+        audit.snapshot().last().map(|event| &event.kind),
+        Some(AuditEventKind::AuthorizationDenied { reason, .. })
+            if reason.contains("does not grant capability FilesystemRead")
+    ));
 }
 
 #[tokio::test]

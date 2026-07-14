@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use async_trait::async_trait;
-use loong_contracts::{Capabilities, PermissionResolution, PolicyReport};
+use loong_contracts::{AuthorizationSubject, Capabilities, PermissionResolution, PolicyReport};
 
 use crate::{error::PermissionRequestError, policy::action::ActionMeta};
 
@@ -13,6 +13,9 @@ use crate::{error::PermissionRequestError, policy::action::ActionMeta};
 pub trait PolicyContext: Send + Sync {
     /// Capabilities currently available to the recursive execution scope.
     fn allowed_capabilities(&self) -> Cow<'_, Capabilities>;
+
+    /// Stable actor and typed-or-legacy authority scope for authorization evidence.
+    fn authorization_subject(&self) -> AuthorizationSubject;
 
     /// Request consent from the current session's parent.
     ///

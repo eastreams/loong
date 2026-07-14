@@ -10,7 +10,9 @@ use std::{
 };
 
 use async_trait::async_trait;
-use loong_contracts::{Capabilities, ToolInputError, ToolSpec};
+use loong_contracts::{
+    AuthorizationScope, AuthorizationSubject, Capabilities, ToolInputError, ToolSpec,
+};
 use serde_json::{Value, json};
 
 use crate::{
@@ -30,6 +32,15 @@ impl PolicyContext for TestContext {
     fn allowed_capabilities(&self) -> Cow<'_, Capabilities> {
         static EMPTY: Capabilities = Capabilities::new();
         Cow::Borrowed(&EMPTY)
+    }
+
+    fn authorization_subject(&self) -> AuthorizationSubject {
+        AuthorizationSubject {
+            actor_id: "actor:test:tool".to_owned(),
+            scope: AuthorizationScope::Session {
+                session_id: "session:test:tool".to_owned(),
+            },
+        }
     }
 }
 

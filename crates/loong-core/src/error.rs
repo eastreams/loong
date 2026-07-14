@@ -1,12 +1,61 @@
-use std::{borrow::Cow, path::PathBuf};
+use std::{borrow::Cow, error::Error, fmt, path::PathBuf};
 
-use loong_contracts::{Capability, PolicyEntry, PolicyReport};
+use loong_contracts::{AuthorizationEvidence, Capability, PolicyEntry, PolicyReport};
 use thiserror::Error;
 
 use crate::TaskLifecycle;
 
+/// Correlation identity whose allocation prevented authorization from continuing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuthorizationIdentityKind {
+    Attempt,
+    Grant,
+}
+
+impl fmt::Display for AuthorizationIdentityKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Attempt => "attempt",
+            Self::Grant => "grant",
+        })
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum PolicyGrantError {
+    /// The backend rejected authorization evidence.
+    ///
+    /// `evidence` is the exact envelope core intended to write; it is diagnostic
+    /// context and does not claim that the sink durably accepted it.
+    #[error("authorization audit failed: {source}")]
+    Audit {
+        evidence: Box<AuthorizationEvidence>,
+        #[source]
+        source: Box<dyn Error + Send + Sync>,
+    },
+    /// Identity allocation failed, but the backend accepted evidence of that failure.
+    #[error("authorization {identity} identity allocation failed: {source}")]
+    IdentityAllocation {
+        identity: AuthorizationIdentityKind,
+        evidence: Box<AuthorizationEvidence>,
+        #[source]
+        source: Box<dyn Error + Send + Sync>,
+    },
+    /// Identity allocation and the attempt to record that failure both failed.
+    ///
+    /// Both concrete sources remain available for direct pattern matching. The
+    /// allocation error is the primary `Error::source`; `audit_source` records
+    /// why the diagnostic evidence could not be accepted.
+    #[error(
+        "authorization {identity} identity allocation failed: {allocation_source}; recording that failure also failed: {audit_source}"
+    )]
+    IdentityAllocationAndAudit {
+        identity: AuthorizationIdentityKind,
+        evidence: Box<AuthorizationEvidence>,
+        #[source]
+        allocation_source: Box<dyn Error + Send + Sync>,
+        audit_source: Box<dyn Error + Send + Sync>,
+    },
     #[error("missing capability: {capability:?}")]
     MissingCapability { capability: Capability },
     #[error("authorization denied: {reason}")]

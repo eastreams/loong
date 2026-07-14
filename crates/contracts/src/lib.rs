@@ -2,6 +2,7 @@
 
 mod action_grant;
 mod audit_types;
+mod authorization_evidence;
 mod capabilities;
 mod child_process_env;
 mod clock;
@@ -27,6 +28,12 @@ pub use action_grant::{
     PolicyId, PolicyOutcome, PolicyRegistration, PolicyRegistrationSource, PolicyReport,
 };
 pub use audit_types::{AuditEvent, AuditEventKind, ExecutionPlane, InvocationOutcome, PlaneTier};
+pub use authorization_evidence::{
+    AuthorizationActionSnapshot, AuthorizationAttempt, AuthorizationAttemptEvent,
+    AuthorizationAttemptId, AuthorizationDenial, AuthorizationEvidence, AuthorizationFailure,
+    AuthorizationPermissionAuthority, AuthorizationPermissionInteraction, AuthorizationPolicyEvent,
+    AuthorizationScope, AuthorizationSubject, AuthorizationTerminalOutcome,
+};
 pub use capabilities::Capabilities;
 pub use child_process_env::{
     HIGH_RISK_CHILD_PROCESS_ENV_VARS, child_process_env_var_is_allowed, sanitized_child_process_env,

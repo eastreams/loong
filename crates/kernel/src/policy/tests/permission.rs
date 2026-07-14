@@ -3,7 +3,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use loong_contracts::{Capabilities, PermissionResolution, PolicyReport};
+use loong_contracts::{
+    AuthorizationScope, AuthorizationSubject, Capabilities, ExecutionPlane, PermissionResolution,
+    PlaneTier, PolicyReport,
+};
 use loong_core::{PermissionRequestError, PolicyGrantError};
 use serde_json::json;
 
@@ -44,6 +47,15 @@ impl PolicyContext for PermissionPolicyContext<'_> {
         Cow::Borrowed(self.allowed_capabilities)
     }
 
+    fn authorization_subject(&self) -> AuthorizationSubject {
+        AuthorizationSubject {
+            actor_id: "test:kernel:permission:actor".to_owned(),
+            scope: AuthorizationScope::Session {
+                session_id: "test:kernel:permission:session".to_owned(),
+            },
+        }
+    }
+
     async fn request_parent_permission(
         &self,
         _action: &dyn ActionMeta,
@@ -71,7 +83,7 @@ impl PolicyContext for PermissionPolicyContext<'_> {
 
 #[tokio::test]
 async fn policy_pipeline_parent_permission_is_a_terminal_outcome() {
-    let engine = PolicyPipeline::<TestContextFactory>::new()
+    let registry = PolicyPipelineBuilder::<TestContextFactory>::new()
         .with_pre_policy(StaticAnyPolicy {
             name: "parent-permission",
             decision: PolicyDecision::RequireParentPermission,
@@ -81,14 +93,15 @@ async fn policy_pipeline_parent_permission_is_a_terminal_outcome() {
             name: "typed-deny",
             decision: PolicyDecision::Deny,
             reason: "must not run",
-        });
+        })
+        .registry;
     let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(&pack, &token, 1, ExecutionPlane::Tool, PlaneTier::Core);
+    let ctx = TestPolicyContext::new(&pack, &token, 1);
     let action =
         LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
-    let report = engine.decide(&ctx, &action).await;
+    let report = registry.decide(&ctx, &action).await;
 
     assert_eq!(report.evaluations.len(), 1);
     assert!(matches!(
@@ -100,7 +113,7 @@ async fn policy_pipeline_parent_permission_is_a_terminal_outcome() {
 
 #[tokio::test]
 async fn policy_pipeline_user_permission_is_a_terminal_outcome() {
-    let engine = PolicyPipeline::<TestContextFactory>::new()
+    let registry = PolicyPipelineBuilder::<TestContextFactory>::new()
         .with_policy::<LegacyKernelAction, _>(StaticTypedPolicy {
             name: "user-permission",
             decision: PolicyDecision::RequireUserPermission,
@@ -110,14 +123,15 @@ async fn policy_pipeline_user_permission_is_a_terminal_outcome() {
             name: "fallback-deny",
             decision: PolicyDecision::Deny,
             reason: "must not run",
-        });
+        })
+        .registry;
     let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(&pack, &token, 1, ExecutionPlane::Tool, PlaneTier::Core);
+    let ctx = TestPolicyContext::new(&pack, &token, 1);
     let action =
         LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
-    let report = engine.decide(&ctx, &action).await;
+    let report = registry.decide(&ctx, &action).await;
 
     assert_eq!(report.evaluations.len(), 1);
     assert!(matches!(
@@ -137,16 +151,18 @@ async fn policy_engine_grants_after_parent_permission_and_retains_report() {
             reason: "user should not be asked".into(),
         }),
     );
-    let engine =
-        PolicyPipeline::<PermissionContextFactory>::new().with_pre_policy(StaticAnyPolicy {
+    let kernel = kernel_with_policy(
+        PolicyPipelineBuilder::<PermissionContextFactory>::new().with_pre_policy(StaticAnyPolicy {
             name: "parent-permission",
             decision: PolicyDecision::RequireParentPermission,
             reason: "parent must approve",
-        });
+        }),
+    );
     let action =
         LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
-    let grant = engine
+    let grant = kernel
+        .policy_engine()
         .grant(&ctx, action)
         .await
         .expect("parent approval should grant the action");
@@ -169,16 +185,18 @@ async fn policy_engine_parent_escalation_requests_user_permission() {
         Ok(PermissionResolution::Escalate),
         Ok(PermissionResolution::Approved),
     );
-    let engine =
-        PolicyPipeline::<PermissionContextFactory>::new().with_pre_policy(StaticAnyPolicy {
+    let kernel = kernel_with_policy(
+        PolicyPipelineBuilder::<PermissionContextFactory>::new().with_pre_policy(StaticAnyPolicy {
             name: "parent-permission",
             decision: PolicyDecision::RequireParentPermission,
             reason: "parent or user must approve",
-        });
+        }),
+    );
     let action =
         LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
-    engine
+    kernel
+        .policy_engine()
         .grant(&ctx, action)
         .await
         .expect("user approval should grant after parent escalation");
@@ -199,16 +217,18 @@ async fn policy_engine_direct_user_permission_skips_parent() {
         }),
         Ok(PermissionResolution::Approved),
     );
-    let engine =
-        PolicyPipeline::<PermissionContextFactory>::new().with_pre_policy(StaticAnyPolicy {
+    let kernel = kernel_with_policy(
+        PolicyPipelineBuilder::<PermissionContextFactory>::new().with_pre_policy(StaticAnyPolicy {
             name: "user-permission",
             decision: PolicyDecision::RequireUserPermission,
             reason: "user must approve",
-        });
+        }),
+    );
     let action =
         LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
-    engine
+    kernel
+        .policy_engine()
         .grant(&ctx, action)
         .await
         .expect("user approval should grant the action");
@@ -229,16 +249,18 @@ async fn policy_engine_permission_denial_retains_policy_report() {
         }),
         Ok(PermissionResolution::Approved),
     );
-    let engine =
-        PolicyPipeline::<PermissionContextFactory>::new().with_pre_policy(StaticAnyPolicy {
+    let kernel = kernel_with_policy(
+        PolicyPipelineBuilder::<PermissionContextFactory>::new().with_pre_policy(StaticAnyPolicy {
             name: "parent-permission",
             decision: PolicyDecision::RequireParentPermission,
             reason: "parent must approve",
-        });
+        }),
+    );
     let action =
         LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
-    let error = engine
+    let error = kernel
+        .policy_engine()
         .grant(&ctx, action)
         .await
         .expect_err("parent denial should reject the action");
@@ -261,16 +283,18 @@ async fn policy_engine_permission_request_failure_retains_policy_report() {
         }),
         Ok(PermissionResolution::Approved),
     );
-    let engine =
-        PolicyPipeline::<PermissionContextFactory>::new().with_pre_policy(StaticAnyPolicy {
+    let kernel = kernel_with_policy(
+        PolicyPipelineBuilder::<PermissionContextFactory>::new().with_pre_policy(StaticAnyPolicy {
             name: "parent-permission",
             decision: PolicyDecision::RequireParentPermission,
             reason: "parent must approve",
-        });
+        }),
+    );
     let action =
         LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
-    let error = engine
+    let error = kernel
+        .policy_engine()
         .grant(&ctx, action)
         .await
         .expect_err("an unavailable permission surface must reject the action");
@@ -293,16 +317,18 @@ async fn policy_engine_user_permission_cannot_escalate() {
         Ok(PermissionResolution::Approved),
         Ok(PermissionResolution::Escalate),
     );
-    let engine =
-        PolicyPipeline::<PermissionContextFactory>::new().with_pre_policy(StaticAnyPolicy {
+    let kernel = kernel_with_policy(
+        PolicyPipelineBuilder::<PermissionContextFactory>::new().with_pre_policy(StaticAnyPolicy {
             name: "user-permission",
             decision: PolicyDecision::RequireUserPermission,
             reason: "user must approve",
-        });
+        }),
+    );
     let action =
         LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
-    let error = engine
+    let error = kernel
+        .policy_engine()
         .grant(&ctx, action)
         .await
         .expect_err("the root user authority has nowhere to escalate");
@@ -318,18 +344,21 @@ async fn policy_engine_user_permission_cannot_escalate() {
 
 #[tokio::test]
 async fn policy_engine_default_parent_permission_hook_returns_unavailable() {
-    let engine = PolicyPipeline::<TestContextFactory>::new().with_pre_policy(StaticAnyPolicy {
-        name: "parent-permission",
-        decision: PolicyDecision::RequireParentPermission,
-        reason: "parent must approve",
-    });
+    let kernel = kernel_with_policy(
+        PolicyPipelineBuilder::<TestContextFactory>::new().with_pre_policy(StaticAnyPolicy {
+            name: "parent-permission",
+            decision: PolicyDecision::RequireParentPermission,
+            reason: "parent must approve",
+        }),
+    );
     let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(&pack, &token, 1, ExecutionPlane::Tool, PlaneTier::Core);
+    let ctx = TestPolicyContext::new(&pack, &token, 1);
     let action =
         LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
-    let error = engine
+    let error = kernel
+        .policy_engine()
         .grant(&ctx, action)
         .await
         .expect_err("the default parent permission hook must fail closed");
@@ -346,18 +375,21 @@ async fn policy_engine_default_parent_permission_hook_returns_unavailable() {
 
 #[tokio::test]
 async fn policy_engine_default_user_permission_hook_returns_unavailable() {
-    let engine = PolicyPipeline::<TestContextFactory>::new().with_pre_policy(StaticAnyPolicy {
-        name: "user-permission",
-        decision: PolicyDecision::RequireUserPermission,
-        reason: "user must approve",
-    });
+    let kernel = kernel_with_policy(
+        PolicyPipelineBuilder::<TestContextFactory>::new().with_pre_policy(StaticAnyPolicy {
+            name: "user-permission",
+            decision: PolicyDecision::RequireUserPermission,
+            reason: "user must approve",
+        }),
+    );
     let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(&pack, &token, 1, ExecutionPlane::Tool, PlaneTier::Core);
+    let ctx = TestPolicyContext::new(&pack, &token, 1);
     let action =
         LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
-    let error = engine
+    let error = kernel
+        .policy_engine()
         .grant(&ctx, action)
         .await
         .expect_err("the default user permission hook must fail closed");
@@ -380,19 +412,21 @@ async fn policy_engine_capability_gate_precedes_permission_request() {
         Ok(PermissionResolution::Approved),
         Ok(PermissionResolution::Approved),
     );
-    let engine =
-        PolicyPipeline::<PermissionContextFactory>::new().with_pre_policy(StaticAnyPolicy {
+    let kernel = kernel_with_policy(
+        PolicyPipelineBuilder::<PermissionContextFactory>::new().with_pre_policy(StaticAnyPolicy {
             name: "user-permission",
             decision: PolicyDecision::RequireUserPermission,
             reason: "user must approve",
-        });
+        }),
+    );
     let action = LegacyKernelAction::new(
         "read",
         BTreeSet::from([Capability::FilesystemRead]),
         json!({}),
     );
 
-    let error = engine
+    let error = kernel
+        .policy_engine()
         .grant(&ctx, action)
         .await
         .expect_err("missing capability should reject before permission");
@@ -439,6 +473,17 @@ impl PolicyContext for ChangingAuthorityContext<'_> {
         Cow::Owned(self.token.allowed_capabilities.iter().copied().collect())
     }
 
+    fn authorization_subject(&self) -> AuthorizationSubject {
+        AuthorizationSubject {
+            actor_id: self.token.agent_id.clone(),
+            scope: AuthorizationScope::LegacyToken {
+                boundary: "kernel.policy.permission-test".to_owned(),
+                pack_id: self.token.pack_id.clone(),
+                token_id: self.token.token_id.clone(),
+            },
+        }
+    }
+
     async fn request_user_permission(
         &self,
         _action: &dyn ActionMeta,
@@ -474,12 +519,13 @@ impl KernelInvocationContext for ChangingAuthorityContext<'_> {
 
 #[tokio::test]
 async fn kernel_rechecks_token_after_permission_approval() {
-    let policy =
-        PolicyPipeline::<ChangingAuthorityContextFactory>::new().with_pre_policy(StaticAnyPolicy {
+    let policy = PolicyPipelineBuilder::<ChangingAuthorityContextFactory>::new().with_pre_policy(
+        StaticAnyPolicy {
             name: "user-permission",
             decision: PolicyDecision::RequireUserPermission,
             reason: "user must approve",
-        });
+        },
+    );
     let clock = Arc::new(FixedClock::new(1));
     let audit = Arc::new(InMemoryAuditSink::default());
     let mut kernel = Kernel::with_policy_runtime(policy, clock.clone(), audit);
@@ -517,12 +563,13 @@ async fn kernel_rechecks_token_after_permission_approval() {
 
 #[tokio::test]
 async fn legacy_kernel_authorization_rechecks_token_after_permission_approval() {
-    let policy =
-        PolicyPipeline::<ChangingAuthorityContextFactory>::new().with_pre_policy(StaticAnyPolicy {
+    let policy = PolicyPipelineBuilder::<ChangingAuthorityContextFactory>::new().with_pre_policy(
+        StaticAnyPolicy {
             name: "user-permission",
             decision: PolicyDecision::RequireUserPermission,
             reason: "user must approve",
-        });
+        },
+    );
     let clock = Arc::new(FixedClock::new(1));
     let audit = Arc::new(InMemoryAuditSink::default());
     let mut kernel = Kernel::with_policy_runtime(policy, clock.clone(), audit);
@@ -565,12 +612,13 @@ async fn legacy_kernel_authorization_rechecks_token_after_permission_approval() 
 
 #[tokio::test]
 async fn legacy_kernel_authorization_rechecks_expiry_after_permission_approval() {
-    let policy =
-        PolicyPipeline::<ChangingAuthorityContextFactory>::new().with_pre_policy(StaticAnyPolicy {
+    let policy = PolicyPipelineBuilder::<ChangingAuthorityContextFactory>::new().with_pre_policy(
+        StaticAnyPolicy {
             name: "user-permission",
             decision: PolicyDecision::RequireUserPermission,
             reason: "user must approve",
-        });
+        },
+    );
     let clock = Arc::new(FixedClock::new(1));
     let audit = Arc::new(InMemoryAuditSink::default());
     let mut kernel = Kernel::with_policy_runtime(policy, clock.clone(), audit);

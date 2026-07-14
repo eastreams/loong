@@ -4,10 +4,11 @@ use std::sync::Arc;
 
 use loong_contracts::{Capability, ExecutionRoute, HarnessKind, ToolCoreOutcome, ToolCoreRequest};
 use loong_kernel::{
-    Kernel, NoopAuditSink, PolicyPipeline, SystemClock, VerticalPackManifest,
+    InMemoryAuditSink, Kernel, SystemClock, VerticalPackManifest,
     policy::{
         FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsPathAllowedRootsPolicy, FsReadAllowPolicy,
         FsReadFilenameDenyPolicy, FsResolvePathAllowPolicy, FsWriteAllowPolicy,
+        PolicyPipelineBuilder,
     },
 };
 use serde_json::json;
@@ -37,7 +38,7 @@ async fn execute_tool_core_with_test_context(
 ) -> Result<ToolCoreOutcome, String> {
     let trusted_internal_payload = payload_uses_reserved_internal_tool_context(&request.payload);
     let mut policy =
-        PolicyPipeline::<crate::context::AppContextFactory>::new_legacy_allow_fallback()
+        PolicyPipelineBuilder::<crate::context::AppContextFactory>::new_legacy_allow_fallback()
             .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
             .with_policy(FsResolvePathAllowPolicy::target())
             .with_policy(FsResolvePathAllowPolicy::entry())
@@ -52,8 +53,11 @@ async fn execute_tool_core_with_test_context(
     policy.push_policy(FsWriteAllowPolicy);
     policy.push_policy(FsGlobAllowPolicy);
     policy.push_policy(FsContentSearchAllowPolicy);
-    let mut kernel =
-        Kernel::with_policy_runtime(policy, Arc::new(SystemClock), Arc::new(NoopAuditSink));
+    let mut kernel = Kernel::with_policy_runtime(
+        policy,
+        Arc::new(SystemClock),
+        Arc::new(InMemoryAuditSink::default()),
+    );
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
         domain: "test".to_owned(),

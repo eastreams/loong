@@ -1,6 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
+use loong_contracts::{
+    AuthorizationAttempt, AuthorizationAttemptEvent, AuthorizationDenial, AuthorizationPolicyEvent,
+    AuthorizationTerminalOutcome,
+};
+use loong_kernel::policy::PolicyPipelineBuilder;
 use loong_kernel::test_support::*;
 use loong_kernel::*;
 use serde_json::json;
@@ -101,7 +106,7 @@ async fn kernel_executes_task_and_connector_under_pack_policy() {
 
 #[tokio::test]
 async fn kernel_rejects_token_missing_capability() {
-    let (mut kernel, _audit) = legacy_kernel_with_in_memory_audit();
+    let (mut kernel, audit) = legacy_kernel_with_in_memory_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -134,6 +139,10 @@ async fn kernel_rejects_token_missing_capability() {
     assert!(matches!(
         error,
         KernelError::Policy(PolicyError::MissingCapability { .. })
+    ));
+    assert!(matches!(
+        audit.snapshot().last().map(|event| &event.kind),
+        Some(AuditEventKind::AuthorizationDenied { .. })
     ));
 }
 
@@ -1240,7 +1249,7 @@ async fn audit_sink_captures_runtime_tool_memory_and_connector_plane_events() {
 #[tokio::test]
 async fn policy_pipeline_pre_policy_can_block_high_risk_capabilities() {
     let audit = Arc::new(InMemoryAuditSink::default());
-    let mut policy = PolicyPipeline::<TestContextFactory>::new_legacy_allow_fallback();
+    let mut policy = PolicyPipelineBuilder::<TestContextFactory>::new_legacy_allow_fallback();
     policy.push_pre_policy(NoNetworkEgressPolicy);
     let mut kernel =
         Kernel::<TestContextFactory>::with_policy_runtime(policy, Arc::new(SystemClock), audit);
@@ -1449,14 +1458,14 @@ async fn audit_event_json_schema_for_plane_invoked_is_stable() {
         .expect("runtime core should execute");
 
     let snapshot = audit.snapshot();
-    assert_eq!(snapshot.len(), 2);
+    assert_eq!(snapshot.len(), 3);
 
     let plane_event_json = serde_json::to_value(snapshot.last().expect("plane event should exist"))
         .expect("serialize event");
     assert_eq!(
         plane_event_json,
         json!({
-            "event_id": "evt-0000000000000002",
+            "event_id": "evt-0000000000000003",
             "timestamp_epoch_s": 1_700_001_000_u64,
             "agent_id": "agent-schema",
             "kind": {
@@ -1478,7 +1487,7 @@ async fn audit_event_json_schema_for_plane_invoked_is_stable() {
 async fn tool_core_call_is_denied_when_policy_engine_rejects_rule_of_two_gate() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_002_000));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let mut policy = PolicyPipeline::<TestContextFactory>::new_legacy_allow_fallback();
+    let mut policy = PolicyPipelineBuilder::<TestContextFactory>::new_legacy_allow_fallback();
     policy.push_pre_policy(ToolGatePolicy::new("shell.exec", ToolGateMode::Deny));
     let mut kernel =
         Kernel::<TestContextFactory>::with_policy_runtime(policy, clock.clone(), audit.clone());
@@ -1530,18 +1539,34 @@ async fn tool_core_call_is_denied_when_policy_engine_rejects_rule_of_two_gate() 
     assert_eq!(events.len(), 2);
     assert!(matches!(
         &events[1].kind,
-        AuditEventKind::AuthorizationDenied { pack_id, token_id, reason }
-            if pack_id == "tool-gate-deny"
-                && token_id == &token.token_id
-                && reason.contains("tool call denied by policy")
+        AuditEventKind::Authorization { evidence }
+            if matches!(
+                &evidence.attempt,
+                AuthorizationAttempt::Started {
+                    event: AuthorizationAttemptEvent::Policy {
+                        event: AuthorizationPolicyEvent::Terminal(
+                            AuthorizationTerminalOutcome::Deny {
+                                reason: AuthorizationDenial::Policy { reason },
+                            }
+                        ),
+                        ..
+                    },
+                    ..
+                } if reason.contains("tool call denied by policy")
+            )
     ));
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event.kind, AuditEventKind::AuthorizationDenied { .. }))
+    );
 }
 
 #[tokio::test]
 async fn tool_core_call_continues_when_gated_tool_has_no_string_command() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_002_000));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let mut policy = PolicyPipeline::<TestContextFactory>::new_legacy_allow_fallback();
+    let mut policy = PolicyPipelineBuilder::<TestContextFactory>::new_legacy_allow_fallback();
     policy.push_pre_policy(ToolGatePolicy::new("shell.exec", ToolGateMode::Deny));
     let mut kernel =
         Kernel::<TestContextFactory>::with_policy_runtime(policy, clock.clone(), audit.clone());

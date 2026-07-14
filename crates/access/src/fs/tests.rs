@@ -2,21 +2,26 @@ use std::{
     borrow::Cow,
     fs,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
 use loong_contracts::{
-    Capabilities, Capability, GrantId, PolicyEntry, PolicyOutcome, PolicyRegistration,
-    PolicyRegistrationSource, PolicyReport,
+    AuthorizationAttempt, AuthorizationAttemptEvent, AuthorizationAttemptId, AuthorizationEvidence,
+    AuthorizationPolicyEvent, AuthorizationScope, AuthorizationSubject,
+    AuthorizationTerminalOutcome, Capabilities, Capability, GrantId, PolicyEntry, PolicyOutcome,
+    PolicyRegistration, PolicyRegistrationSource, PolicyReport,
 };
 use loong_core::{
     kernel::Kernel,
     policy::{
         action::ActionMeta,
         context::{ContextFactory, PolicyContext},
-        engine::PolicyEngine,
+        engine::{PolicyEngine, PolicyEngineBackend},
     },
 };
 
@@ -58,6 +63,15 @@ impl PolicyContext for FsAccessPolicyContext {
     fn allowed_capabilities(&self) -> Cow<'_, Capabilities> {
         Cow::Borrowed(&self.capabilities)
     }
+
+    fn authorization_subject(&self) -> AuthorizationSubject {
+        AuthorizationSubject {
+            actor_id: "test:access:fs:actor".to_owned(),
+            scope: AuthorizationScope::Session {
+                session_id: "test:access:fs:session".to_owned(),
+            },
+        }
+    }
 }
 
 impl FsResolutionContext for FsAccessPolicyContext {
@@ -79,21 +93,33 @@ impl ContextFactory for FsAccessTestContextFactory {
 }
 
 struct FsAccessPolicyEngine {
-    next_grant_id: AtomicU64,
+    attempt_seq: AtomicU64,
+    grant_seq: AtomicU64,
+    evidence: Mutex<Vec<AuthorizationEvidence>>,
     allow: bool,
 }
 
 impl Default for FsAccessPolicyEngine {
     fn default() -> Self {
         Self {
-            next_grant_id: AtomicU64::new(0),
+            attempt_seq: AtomicU64::new(0),
+            grant_seq: AtomicU64::new(0),
+            evidence: Mutex::new(Vec::new()),
             allow: true,
         }
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+enum FsAccessAuditError {
+    #[error("filesystem access test evidence collector is poisoned: {reason}")]
+    EvidencePoisoned { reason: String },
+}
+
 #[async_trait]
-impl PolicyEngine<FsAccessTestContextFactory> for FsAccessPolicyEngine {
+impl PolicyEngineBackend<FsAccessTestContextFactory> for FsAccessPolicyEngine {
+    type AuditError = FsAccessAuditError;
+
     async fn decide<A: ActionMeta + 'static>(
         &self,
         _ctx: &<FsAccessTestContextFactory as ContextFactory>::Cx<'_>,
@@ -130,8 +156,27 @@ impl PolicyEngine<FsAccessTestContextFactory> for FsAccessPolicyEngine {
         }
     }
 
-    async fn next_grant_id(&self) -> GrantId {
-        GrantId(self.next_grant_id.fetch_add(1, Ordering::Relaxed) + 1)
+    fn reserve_authorization_attempt_id(&self) -> Result<AuthorizationAttemptId, Self::AuditError> {
+        Ok(AuthorizationAttemptId(
+            self.attempt_seq.fetch_add(1, Ordering::Relaxed) + 1,
+        ))
+    }
+
+    fn reserve_grant_id(&self) -> Result<GrantId, Self::AuditError> {
+        Ok(GrantId(self.grant_seq.fetch_add(1, Ordering::Relaxed) + 1))
+    }
+
+    fn write_authorization_evidence(
+        &self,
+        evidence: &AuthorizationEvidence,
+    ) -> Result<(), Self::AuditError> {
+        self.evidence
+            .lock()
+            .map_err(|error| FsAccessAuditError::EvidencePoisoned {
+                reason: error.to_string(),
+            })?
+            .push(evidence.clone());
+        Ok(())
     }
 }
 
@@ -144,18 +189,17 @@ impl FsAccessTestKernel {
     fn denying() -> Self {
         Self {
             policy: FsAccessPolicyEngine {
-                next_grant_id: AtomicU64::new(0),
+                attempt_seq: AtomicU64::new(0),
+                grant_seq: AtomicU64::new(0),
+                evidence: Mutex::new(Vec::new()),
                 allow: false,
             },
         }
     }
 }
 
-#[async_trait]
 impl Kernel<FsAccessTestContextFactory> for FsAccessTestKernel {
-    type PolicyEngine = FsAccessPolicyEngine;
-
-    fn policy_engine(&self) -> &Self::PolicyEngine {
+    fn policy_engine(&self) -> &impl PolicyEngine<FsAccessTestContextFactory> {
         &self.policy
     }
 }
@@ -218,7 +262,10 @@ impl<'a> FsAccessToolCx<'a> {
 }
 
 impl<'a> FsAccessTestCx<'a> {
-    fn fs(self) -> FsAccess<'a, 'a, FsAccessTestContextFactory, FsAccessPolicyEngine> {
+    fn fs(
+        self,
+    ) -> FsAccess<'a, 'a, FsAccessTestContextFactory, impl PolicyEngine<FsAccessTestContextFactory>>
+    {
         FsAccess::new(self.kernel.policy_engine(), self.ctx)
     }
 }

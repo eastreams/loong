@@ -55,7 +55,7 @@ pub enum PolicyDecision {
 ///
 /// Permission can satisfy consent only. It does not alter action capabilities
 /// or replace the policy report that requested it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum PermissionResolution {
     Approved,
     Denied {
@@ -64,6 +64,28 @@ pub enum PermissionResolution {
     /// Ask the next authority. Parent permission may escalate to the user;
     /// user permission has no higher authority and must resolve terminally.
     Escalate,
+}
+
+impl<'de> Deserialize<'de> for PermissionResolution {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        enum Representation {
+            Approved,
+            Denied { reason: String },
+            Escalate,
+        }
+
+        Ok(match Representation::deserialize(deserializer)? {
+            Representation::Approved => Self::Approved,
+            Representation::Denied { reason } => Self::Denied {
+                reason: Cow::Owned(reason),
+            },
+            Representation::Escalate => Self::Escalate,
+        })
+    }
 }
 
 /// Result returned by one single action policy.
@@ -272,6 +294,23 @@ mod tests {
                 serde_json::from_str::<PolicyDecision>(&encoded).expect("deserialize decision");
 
             assert_eq!(decoded, decision);
+        }
+    }
+
+    #[test]
+    fn permission_resolutions_round_trip_through_json() {
+        for resolution in [
+            PermissionResolution::Approved,
+            PermissionResolution::Denied {
+                reason: Cow::Borrowed("user denied"),
+            },
+            PermissionResolution::Escalate,
+        ] {
+            let encoded = serde_json::to_string(&resolution).expect("serialize resolution");
+            let decoded = serde_json::from_str::<PermissionResolution>(&encoded)
+                .expect("deserialize resolution");
+
+            assert_eq!(decoded, resolution);
         }
     }
 

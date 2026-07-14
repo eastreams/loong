@@ -1,7 +1,10 @@
 use loong_access::fs::FsAccess;
-use loong_core::{kernel::Kernel as CoreKernel, policy::context::ContextFactory};
+use loong_core::{
+    kernel::Kernel as CoreKernel,
+    policy::{context::ContextFactory, engine::PolicyEngine},
+};
 
-use crate::{kernel::Kernel, policy::PolicyPipeline};
+use crate::kernel::Kernel;
 
 pub mod fs {
     pub use loong_access::fs::{
@@ -55,7 +58,7 @@ where
     /// typed action grants, and perform the fs side effect.
     #[inline(always)]
     #[must_use]
-    pub fn fs(self) -> FsAccess<'a, 'ctx, C, PolicyPipeline<C>> {
+    pub fn fs(self) -> FsAccess<'a, 'ctx, C, impl PolicyEngine<C> + 'a> {
         FsAccess::new(self.kernel.policy_engine(), self.ctx)
     }
 }

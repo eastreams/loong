@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::contracts::{Capability, CapabilityToken, ExecutionRoute};
+use crate::{
+    AuthorizationEvidence,
+    contracts::{Capability, CapabilityToken, ExecutionRoute},
+};
 
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,6 +49,10 @@ pub enum InvocationOutcome {
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AuditEventKind {
+    /// Typed evidence emitted by the authorization engine.
+    Authorization {
+        evidence: AuthorizationEvidence,
+    },
     TokenIssued {
         token: CapabilityToken,
     },

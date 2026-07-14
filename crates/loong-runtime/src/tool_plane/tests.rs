@@ -3,16 +3,16 @@ use std::{
     collections::BTreeSet,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
 use async_trait::async_trait;
 use loong_contracts::{
-    Capabilities, Capability, GrantId, PolicyEntry, PolicyOutcome, PolicyRegistration,
-    PolicyRegistrationSource, PolicyReport, ToolInputError, ToolSpec,
+    AuthorizationScope, AuthorizationSubject, Capabilities, Capability, ToolInputError, ToolSpec,
 };
 use loong_core::{
+    kernel::Kernel as CoreKernel,
     policy::{
         action::ActionMeta,
         context::{ContextFactory, PolicyContext},
@@ -20,6 +20,8 @@ use loong_core::{
     },
     tool::ToolImpl,
 };
+use loong_kernel::policy::PolicyPipelineBuilder;
+use loong_kernel::{AllowPolicy, FixedClock, InMemoryAuditSink, Kernel};
 use serde_json::{Value, json};
 
 use super::{
@@ -40,50 +42,14 @@ impl PolicyContext for TestContext {
         static EMPTY: Capabilities = Capabilities::new();
         Cow::Borrowed(&EMPTY)
     }
-}
 
-struct AllowPolicyEngine {
-    next_grant_id: AtomicU64,
-}
-
-impl Default for AllowPolicyEngine {
-    fn default() -> Self {
-        Self {
-            next_grant_id: AtomicU64::new(0),
-        }
-    }
-}
-
-#[async_trait]
-impl PolicyEngine<TestContextFactory> for AllowPolicyEngine {
-    async fn decide<A: ActionMeta + 'static>(
-        &self,
-        _ctx: &<TestContextFactory as ContextFactory>::Cx<'_>,
-        _action: &A,
-    ) -> PolicyReport {
-        PolicyReport {
-            evaluations: Vec::new(),
-            outcome: PolicyOutcome::Allow {
-                source: PolicyEntry {
-                    policy_name: Cow::Borrowed("test-allow"),
-                    policy_id: 1,
-                    registration: PolicyRegistration {
-                        order: 1,
-                        registered_at_unix_ms: 1,
-                        source: PolicyRegistrationSource {
-                            file: "tool_plane/tests.rs".to_owned(),
-                            line: 1,
-                            column: 1,
-                        },
-                    },
-                },
-                reason: Cow::Borrowed("test policy allows invocation"),
+    fn authorization_subject(&self) -> AuthorizationSubject {
+        AuthorizationSubject {
+            actor_id: "test:runtime:tool-plane:actor".to_owned(),
+            scope: AuthorizationScope::Session {
+                session_id: "test:runtime:tool-plane:session".to_owned(),
             },
         }
-    }
-
-    async fn next_grant_id(&self) -> GrantId {
-        GrantId(self.next_grant_id.fetch_add(1, Ordering::Relaxed) + 1)
     }
 }
 
@@ -364,7 +330,13 @@ async fn grant_invocation(
     path: ToolPath,
     payload: Value,
 ) -> loong_core::policy::grant::Granted<ToolInvocationAction> {
-    AllowPolicyEngine::default()
+    let kernel = Kernel::<TestContextFactory>::with_policy_runtime(
+        PolicyPipelineBuilder::new().with_fallback_policy(AllowPolicy),
+        Arc::new(FixedClock::new(1)),
+        Arc::new(InMemoryAuditSink::default()),
+    );
+    kernel
+        .policy_engine()
         .grant(
             &TestContext,
             ToolInvocationAction::new(path, BTreeSet::new(), payload),

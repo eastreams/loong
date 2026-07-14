@@ -13459,8 +13459,9 @@ async fn web_fetch_through_kernel_exposes_network_egress_to_pre_policy() {
 
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut policy =
-        loong_kernel::PolicyPipeline::<crate::context::AppContextFactory>::new_legacy_allow_fallback();
+    let mut policy = loong_kernel::policy::PolicyPipelineBuilder::<
+        crate::context::AppContextFactory,
+    >::new_legacy_allow_fallback();
     policy.push_pre_policy(loong_kernel::test_support::NoNetworkEgressPolicy);
     let mut kernel = Kernel::with_policy_runtime(policy, clock, audit);
 

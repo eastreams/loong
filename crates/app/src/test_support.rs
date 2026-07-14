@@ -5,13 +5,13 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use loong_contracts::{Capability, ExecutionRoute, HarnessKind};
 use loong_kernel::{
-    FixedClock, InMemoryAuditSink, Kernel, PolicyPipeline, VerticalPackManifest,
+    FixedClock, InMemoryAuditSink, Kernel, VerticalPackManifest,
     policy::{
         FsAtomicWriteAllowPolicy, FsContentSearchAllowPolicy, FsCopyFileAllowPolicy,
         FsCreateDirAllAllowPolicy, FsGlobAllowPolicy, FsInspectPathAllowPolicy,
         FsPathAllowedRootsPolicy, FsReadAllowPolicy, FsReadDirAllowPolicy,
         FsReadFilenameDenyPolicy, FsRemoveDirAllAllowPolicy, FsRemoveFileAllowPolicy,
-        FsRenameAllowPolicy, FsResolvePathAllowPolicy, FsWriteAllowPolicy,
+        FsRenameAllowPolicy, FsResolvePathAllowPolicy, FsWriteAllowPolicy, PolicyPipelineBuilder,
     },
 };
 use loong_runtime::runtime::Runtime;
@@ -184,7 +184,7 @@ impl TurnTestHarness {
 
         let audit = Arc::new(InMemoryAuditSink::default());
         let clock = Arc::new(FixedClock::new(1_700_000_000));
-        let mut policy = PolicyPipeline::<AppContextFactory>::new_legacy_allow_fallback()
+        let mut policy = PolicyPipelineBuilder::<AppContextFactory>::new_legacy_allow_fallback()
             .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
             .with_policy(FsResolvePathAllowPolicy::target())
             .with_policy(FsResolvePathAllowPolicy::entry())

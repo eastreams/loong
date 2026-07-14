@@ -166,6 +166,14 @@ pub enum IntegrationError {
 pub enum AuditError {
     #[error("audit sink failure: {0}")]
     Sink(String),
+    #[error("typed authorization evidence can only be recorded by PolicyEngine::grant")]
+    AuthorizationEvidenceOwnedByPolicyEngine,
+    #[error("authorization attempt identity sequence exhausted")]
+    AuthorizationAttemptIdExhausted,
+    #[error("grant identity sequence exhausted")]
+    GrantIdExhausted,
+    #[error("audit event identity sequence exhausted")]
+    EventIdExhausted,
 }
 
 #[non_exhaustive]

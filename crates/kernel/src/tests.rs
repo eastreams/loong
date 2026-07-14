@@ -4,7 +4,10 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicU64, Ordering},
+};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -315,6 +318,40 @@ fn fanout_audit_sink_records_to_all_children() {
     let _ = fs::remove_file(path);
 }
 
+#[derive(Default)]
+struct CountingAuditSink {
+    calls: AtomicU64,
+    failure: Option<&'static str>,
+}
+
+impl AuditSink for CountingAuditSink {
+    fn record(&self, _event: AuditEvent) -> Result<(), AuditError> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        self.failure
+            .map_or(Ok(()), |reason| Err(AuditError::Sink(reason.to_owned())))
+    }
+}
+
+#[test]
+fn fanout_audit_sink_stops_at_concrete_child_failure_without_retry() {
+    let first = Arc::new(CountingAuditSink::default());
+    let failing = Arc::new(CountingAuditSink {
+        calls: AtomicU64::new(0),
+        failure: Some("second child failed"),
+    });
+    let last = Arc::new(CountingAuditSink::default());
+    let sink = FanoutAuditSink::new(vec![first.clone(), failing.clone(), last.clone()]);
+
+    let error = sink
+        .record(sample_audit_event("evt-fanout-failure", 201))
+        .expect_err("fanout must return the failing child's error");
+
+    assert!(matches!(error, AuditError::Sink(ref reason) if reason == "second child failed"));
+    assert_eq!(first.calls.load(Ordering::Relaxed), 1);
+    assert_eq!(failing.calls.load(Ordering::Relaxed), 1);
+    assert_eq!(last.calls.load(Ordering::Relaxed), 0);
+}
+
 #[test]
 fn explicit_in_memory_kernel_constructor_records_token_audit_events() {
     let (mut kernel, audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
@@ -329,20 +366,6 @@ fn explicit_in_memory_kernel_constructor_records_token_audit_events() {
     let events = audit.snapshot();
     assert_eq!(events.len(), 1, "expected one token-issued audit event");
     assert!(matches!(events[0].kind, AuditEventKind::TokenIssued { .. }));
-}
-
-#[test]
-fn explicit_no_audit_kernel_constructor_keeps_side_effect_free_fixture_path() {
-    let mut kernel = Kernel::<TestContextFactory>::new_without_audit();
-    kernel
-        .register_pack(sample_pack())
-        .expect("pack should register");
-
-    let token = kernel
-        .issue_token("sales-intel", "agent-no-audit", 120)
-        .expect("token should issue without wiring an audit sink");
-
-    assert_eq!(token.agent_id, "agent-no-audit");
 }
 
 #[test]
@@ -459,7 +482,7 @@ proptest! {
         let audit = Arc::new(InMemoryAuditSink::default());
         let mut kernel = Kernel::<TestContextFactory>::with_legacy_allow_runtime(
             Arc::new(FixedClock::new(1_700_004_100)),
-            audit,
+            audit.clone(),
         );
         let mut pack = sample_pack();
         pack.granted_capabilities = pack_capabilities.clone();
@@ -497,6 +520,11 @@ proptest! {
         } else {
             let boundary_error = matches!(result, Err(KernelError::PackCapabilityBoundary { .. }));
             prop_assert!(boundary_error);
+            let denial_recorded = matches!(
+                audit.snapshot().last().map(|event| &event.kind),
+                Some(AuditEventKind::AuthorizationDenied { .. })
+            );
+            prop_assert!(denial_recorded);
         }
     }
 }

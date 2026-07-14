@@ -7,10 +7,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use loong_contracts::{Capability, ExecutionRoute, HarnessKind, ToolCoreOutcome, ToolCoreRequest};
 use loong_core::tool::{RegisteredTool, RegisteredToolError, ToolProvenance};
 use loong_kernel::{
-    InMemoryAuditSink, Kernel, NoopAuditSink, PolicyPipeline, SystemClock, VerticalPackManifest,
+    InMemoryAuditSink, Kernel, SystemClock, VerticalPackManifest,
     policy::{
         FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsPathAllowedRootsPolicy, FsReadAllowPolicy,
         FsReadFilenameDenyPolicy, FsResolvePathAllowPolicy, FsWriteAllowPolicy,
+        PolicyPipelineBuilder,
     },
 };
 use loong_tools::file::ReadTool;
@@ -85,7 +86,7 @@ async fn execute_file_read_with_test_context(
     request: ToolCoreRequest,
     config: &ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    let mut policy = PolicyPipeline::<AppContextFactory>::new_legacy_allow_fallback()
+    let mut policy = PolicyPipelineBuilder::<AppContextFactory>::new_legacy_allow_fallback()
         .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
         .with_policy(FsResolvePathAllowPolicy::target())
         .with_policy(FsPathAllowedRootsPolicy::target());
@@ -101,7 +102,7 @@ async fn execute_file_read_with_test_context(
     let mut kernel = Kernel::<AppContextFactory>::with_policy_runtime(
         policy,
         Arc::new(SystemClock),
-        Arc::new(NoopAuditSink),
+        Arc::new(InMemoryAuditSink::default()),
     );
     let pack = test_pack();
     kernel
@@ -205,7 +206,7 @@ async fn execute_request_via_kernel_tool_registry_with_capabilities_result(
     Arc<InMemoryAuditSink>,
 ) {
     let audit = Arc::new(InMemoryAuditSink::default());
-    let mut policy = PolicyPipeline::<AppContextFactory>::new_legacy_allow_fallback()
+    let mut policy = PolicyPipelineBuilder::<AppContextFactory>::new_legacy_allow_fallback()
         .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
         .with_policy(FsResolvePathAllowPolicy::target())
         .with_policy(FsPathAllowedRootsPolicy::target());
@@ -909,7 +910,7 @@ async fn context_direct_write_uses_typed_tool_registry() {
         file_root: Some(root.clone()),
         ..ToolRuntimeConfig::default()
     };
-    let mut policy = PolicyPipeline::<AppContextFactory>::new_legacy_allow_fallback()
+    let mut policy = PolicyPipelineBuilder::<AppContextFactory>::new_legacy_allow_fallback()
         .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
         .with_policy(FsResolvePathAllowPolicy::target())
         .with_policy(FsPathAllowedRootsPolicy::target());

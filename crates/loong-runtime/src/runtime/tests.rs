@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use loong_contracts::Capabilities;
+use loong_contracts::{AuthorizationScope, AuthorizationSubject, Capabilities};
 use loong_core::policy::context::{ContextFactory, PolicyContext};
 use loong_kernel::Kernel;
 
@@ -20,12 +20,21 @@ impl PolicyContext for TestContext {
         static EMPTY: Capabilities = Capabilities::new();
         Cow::Borrowed(&EMPTY)
     }
+
+    fn authorization_subject(&self) -> AuthorizationSubject {
+        AuthorizationSubject {
+            actor_id: "test:runtime:owner:actor".to_owned(),
+            scope: AuthorizationScope::Session {
+                session_id: "test:runtime:owner:session".to_owned(),
+            },
+        }
+    }
 }
 
 #[test]
 fn runtime_owns_kernel_and_selected_tool_plane() {
     let runtime = Runtime::new(
-        Kernel::<TestContextFactory>::new_without_audit(),
+        Kernel::<TestContextFactory>::new(),
         ToolPlaneRegistry::new(),
     );
 

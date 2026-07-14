@@ -1,8 +1,9 @@
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::Arc};
 
 use loong_contracts::Capability;
-use loong_core::policy::engine::PolicyEngine;
-use loong_kernel::PolicyPipeline;
+use loong_core::{kernel::Kernel as CoreKernel, policy::engine::PolicyEngine};
+use loong_kernel::policy::PolicyPipelineBuilder;
+use loong_kernel::{FixedClock, InMemoryAuditSink, Kernel};
 use loong_runtime::tool_plane::{ToolInvocationAction, ToolPath, ToolPlane};
 use serde_json::json;
 
@@ -15,10 +16,16 @@ async fn app_policy_allows_registered_tool_invocation_after_capability_gate() {
     let execution_context = ctx
         .for_invocation(ctx.tool_runtime_config())
         .expect("build execution context");
-    let mut policy = PolicyPipeline::<AppContextFactory>::new();
+    let mut policy = PolicyPipelineBuilder::<AppContextFactory>::new();
     policy.push_policy(ToolInvocationAllowPolicy);
+    let kernel = Kernel::with_policy_runtime(
+        policy,
+        Arc::new(FixedClock::new(1)),
+        Arc::new(InMemoryAuditSink::default()),
+    );
 
-    let grant = policy
+    let grant = kernel
+        .policy_engine()
         .grant(
             &execution_context,
             ToolInvocationAction::new(
