@@ -109,8 +109,8 @@ pub use catalog::{
 };
 #[cfg(feature = "feishu-integration")]
 pub(crate) use feishu::{DeferredFeishuCardUpdate, drain_deferred_feishu_card_updates};
+pub use kernel_adapter::KernelToolAdapter;
 pub(crate) use kernel_adapter::register_kernel_tools;
-pub use kernel_adapter::{KernelToolAdapter, MvpToolAdapter};
 pub use security_posture::{
     BrowserSurfaceSecurityPosture, ShellExecutionSecurityPosture, SkillsSecurityPosture,
     SkillsSecurityPostureProbeFailure, ToolFileRootSecurityPosture, WebFetchSecurityPosture,

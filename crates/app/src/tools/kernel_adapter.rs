@@ -83,5 +83,3 @@ impl CoreToolAdapter<AppContextFactory> for KernelToolAdapter {
         .map_err(ToolPlaneError::Execution)
     }
 }
-
-pub type MvpToolAdapter = KernelToolAdapter;
