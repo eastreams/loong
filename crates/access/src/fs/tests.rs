@@ -13,8 +13,8 @@ use async_trait::async_trait;
 use loong_contracts::{
     AuthorizationAttempt, AuthorizationAttemptEvent, AuthorizationAttemptId, AuthorizationEvidence,
     AuthorizationPolicyEvent, AuthorizationScope, AuthorizationSubject,
-    AuthorizationTerminalOutcome, Capabilities, Capability, GrantId, PolicyEntry, PolicyOutcome,
-    PolicyRegistration, PolicyRegistrationSource, PolicyReport,
+    AuthorizationTerminalOutcome, Capabilities, Capability, GrantId, PolicyEntry, PolicyId,
+    PolicyOutcome, PolicyRegistration, PolicyRegistrationSource, PolicyReport,
 };
 use loong_core::{
     kernel::Kernel,
@@ -129,7 +129,7 @@ impl PolicyEngineBackend<FsAccessTestContextFactory> for FsAccessPolicyEngine {
                 outcome: PolicyOutcome::Allow {
                     source: PolicyEntry {
                         policy_name: Cow::Borrowed("allow-all"),
-                        policy_id: 1,
+                        policy_id: PolicyId::new(1),
                         registration: PolicyRegistration {
                             order: 1,
                             registered_at_unix_ms: 1,

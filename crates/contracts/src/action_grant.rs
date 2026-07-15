@@ -47,7 +47,16 @@ impl<'de> Deserialize<'de> for GrantId {
     }
 }
 
-pub type PolicyId = u64;
+/// Pipeline-local identity assigned to one registered policy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct PolicyId(u64);
+
+impl PolicyId {
+    #[must_use]
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+}
 
 /// Source location where a policy entered its runtime pipeline.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -311,7 +320,7 @@ mod tests {
     fn policy_entry() -> PolicyEntry {
         PolicyEntry {
             policy_name: Cow::Borrowed("permission-policy"),
-            policy_id: 7,
+            policy_id: PolicyId::new(7),
             registration: PolicyRegistration {
                 order: 3,
                 registered_at_unix_ms: 11,

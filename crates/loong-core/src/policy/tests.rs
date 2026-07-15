@@ -14,8 +14,8 @@ use loong_contracts::{
     AuthorizationAttemptId, AuthorizationDenial, AuthorizationEvidence, AuthorizationFailure,
     AuthorizationPermissionAuthority, AuthorizationPermissionInteraction, AuthorizationPolicyEvent,
     AuthorizationScope, AuthorizationSubject, AuthorizationTerminalOutcome, Capabilities,
-    Capability, GrantId, PermissionResolution, PolicyEntry, PolicyOutcome, PolicyRegistration,
-    PolicyRegistrationSource, PolicyReport,
+    Capability, GrantId, PermissionResolution, PolicyEntry, PolicyId, PolicyOutcome,
+    PolicyRegistration, PolicyRegistrationSource, PolicyReport,
 };
 use serde_json::{Value, json};
 
@@ -264,7 +264,7 @@ impl PolicyEngineBackend<TestContextFactory> for CollectingBackend {
 fn policy_entry(name: &'static str) -> PolicyEntry {
     PolicyEntry {
         policy_name: Cow::Borrowed(name),
-        policy_id: 1,
+        policy_id: PolicyId::new(1),
         registration: PolicyRegistration {
             order: 1,
             registered_at_unix_ms: 1,

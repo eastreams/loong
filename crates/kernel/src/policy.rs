@@ -118,7 +118,7 @@ struct PolicyRegistry<C: ContextFactory> {
     pre_policies: Vec<RegisteredAnyPolicy<C>>,
     typed_policies: anymap::Map<dyn anymap::any::Any + Send + Sync>,
     fallback_policies: Vec<RegisteredAnyPolicy<C>>,
-    next_policy_id: PolicyId,
+    next_policy_order: u64,
     _context: PhantomData<fn() -> C>,
 }
 
@@ -135,7 +135,7 @@ impl<C: ContextFactory> PolicyPipelineBuilder<C> {
                 pre_policies: Vec::new(),
                 typed_policies: anymap::Map::new(),
                 fallback_policies: Vec::new(),
-                next_policy_id: 0,
+                next_policy_order: 0,
                 _context: PhantomData,
             },
         }
@@ -240,8 +240,9 @@ impl<C: ContextFactory> PolicyPipelineBuilder<C> {
 
     #[track_caller]
     fn allocate_registration(&mut self) -> (PolicyId, PolicyRegistration) {
-        let id = self.registry.next_policy_id;
-        self.registry.next_policy_id = self.registry.next_policy_id.saturating_add(1);
+        let order = self.registry.next_policy_order;
+        self.registry.next_policy_order = self.registry.next_policy_order.saturating_add(1);
+        let id = PolicyId::new(order);
         let caller = std::panic::Location::caller();
         let registered_at_unix_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -249,7 +250,7 @@ impl<C: ContextFactory> PolicyPipelineBuilder<C> {
                 u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
             });
         let registration = PolicyRegistration {
-            order: id,
+            order,
             registered_at_unix_ms,
             source: PolicyRegistrationSource {
                 file: caller.file().to_owned(),
