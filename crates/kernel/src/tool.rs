@@ -41,19 +41,6 @@ pub trait CoreToolAdapter<C: ContextFactory>: Send + Sync {
         &self,
         request: ToolCoreRequest,
     ) -> Result<ToolCoreOutcome, ToolPlaneError>;
-
-    /// Context-aware execution for tools that have moved side effects behind
-    /// `loong_access`.
-    ///
-    /// The default keeps old adapters working. New access-backed tools should
-    /// override this method and route through the supplied unified context.
-    async fn execute_core_tool_with_context(
-        &self,
-        request: ToolCoreRequest,
-        _ctx: &C::Cx<'_>,
-    ) -> Result<ToolCoreOutcome, ToolPlaneError> {
-        self.execute_core_tool(request).await
-    }
 }
 
 #[async_trait]
@@ -139,36 +126,7 @@ where
             ))?
             .clone();
 
-        return adapter.execute_core_tool(request).await;
-    }
-
-    /// Execute a core tool while preserving the kernel policy context.
-    ///
-    /// This is the path used by legacy `Kernel::execute_tool_core` while
-    /// unmigrated adapters still need to call access facades.
-    pub async fn execute_core_with_context(
-        &self,
-        core_name: Option<&str>,
-        request: ToolCoreRequest,
-        ctx: &C::Cx<'_>,
-    ) -> Result<ToolCoreOutcome, ToolPlaneError> {
-        let resolved_name = if let Some(name) = core_name {
-            name
-        } else {
-            self.default_core_adapter
-                .as_deref()
-                .ok_or(ToolPlaneError::NoDefaultCoreAdapter)?
-        };
-
-        let adapter = self
-            .core_adapters
-            .get(resolved_name)
-            .ok_or(ToolPlaneError::CoreAdapterNotFound(
-                resolved_name.to_owned(),
-            ))?
-            .clone();
-
-        adapter.execute_core_tool_with_context(request, ctx).await
+        adapter.execute_core_tool(request).await
     }
 
     pub async fn execute_extension(

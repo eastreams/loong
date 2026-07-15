@@ -968,10 +968,9 @@ where
     /// Execute one core tool call through the legacy adapter plane.
     ///
     /// This is the temporary compatibility entry point for unmigrated tools.
-    /// The kernel authorizes the caller for the requested tool, then hands the
-    /// same unified context to the adapter. Access-backed tools must call
-    /// `ctx.access().fs().read_file(...)`; the adapter should not perform the
-    /// protected side effect itself.
+    /// The context exists only for legacy pack/token authorization. Once this
+    /// ingress selects fallback, the adapter cannot re-enter typed dispatch;
+    /// migrated tools must have been handled before this method is called.
     pub async fn execute_tool_core(
         &self,
         pack_id: &str,
@@ -1007,7 +1006,7 @@ where
         };
         let outcome = self
             .legacy_tool_plane
-            .execute_core_with_context(core_name, request, policy_context)
+            .execute_core(core_name, request)
             .await?;
 
         self.record_plane_invocation(PlaneInvocationRecord {
