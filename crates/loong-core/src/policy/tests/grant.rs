@@ -61,6 +61,9 @@ async fn allow_evidence_is_written_with_the_minted_grant_id() {
 
     let evidence = backend.evidence.lock().expect("evidence lock");
     assert_eq!(evidence.len(), 1);
+    assert_eq!(grant.info().report, report);
+    assert_eq!(grant.info().subject, evidence[0].subject);
+    assert_eq!(grant.info().action, evidence[0].action);
     assert!(matches!(
         &evidence[0].attempt,
         AuthorizationAttempt::Started {
@@ -71,7 +74,7 @@ async fn allow_evidence_is_written_with_the_minted_grant_id() {
                 ),
             },
             ..
-        } if evidence_report == &report && *grant_id == grant.id
+        } if evidence_report == &report && *grant_id == grant.id()
     ));
 }
 
@@ -180,9 +183,9 @@ async fn terminal_audit_failure_returns_typed_source_without_minting_grant() {
         &evidence.attempt,
         AuthorizationAttempt::Started {
             event: AuthorizationAttemptEvent::Policy {
-                event: AuthorizationPolicyEvent::Terminal(AuthorizationTerminalOutcome::Allow {
-                    grant_id: GrantId(1),
-                }),
+                event: AuthorizationPolicyEvent::Terminal(
+                    AuthorizationTerminalOutcome::Allow { .. }
+                ),
                 ..
             },
             ..

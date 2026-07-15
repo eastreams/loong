@@ -47,6 +47,7 @@ toml = "1.1"
 semver = "1"
 thiserror = "2"
 tempfile = "3"
+uuid = { version = "1", features = ["v4"] }
 chrono = "0.4"
 time = { version = "0.3.47", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "net", "io-util", "io-std", "process", "signal"] }

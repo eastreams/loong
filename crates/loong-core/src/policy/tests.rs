@@ -241,7 +241,8 @@ impl PolicyEngineBackend<TestContextFactory> for CollectingBackend {
         if self.fail_grant {
             return Err(TestAuditError::Grant);
         }
-        Ok(GrantId(self.grants.fetch_add(1, Ordering::Relaxed) + 1))
+        self.grants.fetch_add(1, Ordering::Relaxed);
+        Ok(GrantId::new())
     }
 
     fn write_authorization_evidence(

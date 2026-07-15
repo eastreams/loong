@@ -141,18 +141,24 @@ fn shared_audit_state_rejects_exhausted_authorization_attempt_ids() {
 }
 
 #[test]
-fn shared_audit_state_rejects_exhausted_grant_ids() {
-    let state = SharedAuditState::new(
+fn independent_audit_states_allocate_distinct_grant_ids() {
+    let first = SharedAuditState::new(
         Arc::new(FixedClock::new(42)),
         Arc::new(InMemoryAuditSink::default()),
     );
-    state.grant_seq.store(u64::MAX, Ordering::Relaxed);
+    let second = SharedAuditState::new(
+        Arc::new(FixedClock::new(42)),
+        Arc::new(InMemoryAuditSink::default()),
+    );
 
-    let error = state
+    let first_id = first
         .reserve_grant_id()
-        .expect_err("grant ids must not wrap");
+        .expect("first grant id should allocate");
+    let second_id = second
+        .reserve_grant_id()
+        .expect("second grant id should allocate");
 
-    assert_eq!(error, AuditError::GrantIdExhausted);
+    assert_ne!(first_id, second_id);
 }
 
 #[test]

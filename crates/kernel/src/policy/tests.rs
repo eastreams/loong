@@ -312,13 +312,15 @@ async fn policy_pipeline_grants_actions_allowed_by_registered_policy() {
         .await
         .expect("allow policy should grant action");
 
-    assert_eq!(grant.id.0, 1);
-    assert_eq!(grant.info.report.evaluations.len(), 1);
+    assert_eq!(grant.info().report.evaluations.len(), 1);
     assert!(matches!(
-        grant.info.report.outcome,
+        grant.info().report.outcome,
         PolicyOutcome::Allow { ref source, .. } if source.policy_name == "allow"
     ));
-    assert_eq!(grant.granted.into_action().metadata().operation, "tool");
+    assert_eq!(
+        grant.into_granted().into_action().metadata().operation,
+        "tool"
+    );
 }
 
 #[tokio::test]

@@ -100,7 +100,7 @@ async fn permission_interactions_share_the_authorization_attempt() {
                 ..
             },
             ..
-        } if *grant_id == grant.id
+        } if *grant_id == grant.id()
     ));
 }
 

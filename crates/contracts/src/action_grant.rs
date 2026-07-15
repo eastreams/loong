@@ -1,10 +1,90 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, fmt};
 
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Visitor};
+use uuid::Uuid;
 
-/// Stable identifier for an action grant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct GrantId(pub u64);
+/// JSON-journal-stable identifier for an action grant.
+///
+/// New identifiers use UUID v4 so independent kernels and process restarts do
+/// not reuse the same audit correlation key. Deserialization still accepts the
+/// historical integer representation because persisted authorization evidence
+/// is immutable input, not an API alias. Historical values also serialize back
+/// as integers because protected journal hashes cover their JSON representation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct GrantId(GrantIdRepresentation);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum GrantIdRepresentation {
+    Uuid(Uuid),
+    Historical(u64),
+}
+
+impl GrantId {
+    #[must_use]
+    pub fn new() -> Self {
+        Self(GrantIdRepresentation::Uuid(Uuid::new_v4()))
+    }
+}
+
+impl Default for GrantId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Display for GrantId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            GrantIdRepresentation::Uuid(value) => value.fmt(formatter),
+            GrantIdRepresentation::Historical(value) => value.fmt(formatter),
+        }
+    }
+}
+
+impl Serialize for GrantId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self.0 {
+            GrantIdRepresentation::Uuid(value) => serializer.collect_str(&value),
+            GrantIdRepresentation::Historical(value) => serializer.serialize_u64(value),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for GrantId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct GrantIdVisitor;
+
+        impl Visitor<'_> for GrantIdVisitor {
+            type Value = GrantId;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a UUID grant id or a historical integer grant id")
+            }
+
+            fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+                Ok(GrantId(GrantIdRepresentation::Historical(value)))
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Uuid::parse_str(value)
+                    .map(GrantIdRepresentation::Uuid)
+                    .map(GrantId)
+                    .map_err(E::custom)
+            }
+        }
+
+        deserializer.deserialize_any(GrantIdVisitor)
+    }
+}
 
 pub type PolicyId = u64;
 
@@ -332,5 +412,21 @@ mod tests {
 
             assert_eq!(decoded, outcome);
         }
+    }
+
+    #[test]
+    fn grant_id_preserves_historical_integer_and_writes_new_ids_as_uuid() {
+        let decoded = serde_json::from_str::<GrantId>("17")
+            .expect("historical integer grant id should deserialize");
+
+        assert_eq!(decoded.to_string(), "17");
+        assert_eq!(
+            serde_json::to_string(&decoded).expect("historical grant id should serialize"),
+            "17"
+        );
+        let new_id = serde_json::to_string(&GrantId::new()).expect("new grant id should serialize");
+        let uuid =
+            serde_json::from_str::<String>(&new_id).expect("new grant id should be a string");
+        Uuid::parse_str(&uuid).expect("new grant id should contain a UUID");
     }
 }

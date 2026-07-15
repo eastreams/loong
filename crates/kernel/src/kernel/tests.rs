@@ -203,7 +203,7 @@ async fn record_tool_invocation_records_typed_completed_event() {
         .await
         .expect("tool invocation should authorize");
     let audit_caps = grant
-        .granted
+        .into_granted()
         .as_ref()
         .metadata()
         .required_capabilities
@@ -251,7 +251,7 @@ async fn record_tool_invocation_records_typed_failed_event() {
         .await
         .expect("tool invocation should authorize");
     let audit_caps = grant
-        .granted
+        .into_granted()
         .as_ref()
         .metadata()
         .required_capabilities

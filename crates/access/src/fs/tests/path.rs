@@ -25,7 +25,7 @@ async fn fs_resolve_path_action_runs_relative_target_resolution_after_grant() {
         .grant(&ctx, resolve)
         .await
         .expect("policy should grant path resolution")
-        .granted
+        .into_granted()
         .run(&ctx)
         .await
         .expect("granted resolve action should resolve the path");
@@ -57,7 +57,7 @@ async fn fs_resolve_path_action_does_not_observe_filesystem_until_run() {
         .grant(&ctx, resolve)
         .await
         .expect("policy should grant path resolution")
-        .granted
+        .into_granted()
         .run(&ctx)
         .await
         .expect("granted resolve action should observe the late symlink");
@@ -96,7 +96,7 @@ async fn fs_path_action_outputs_granted_target_path_for_read_action() {
         )
         .await
         .expect("policy should grant path resolution")
-        .granted
+        .into_granted()
         .run(&ctx)
         .await
         .expect("granted resolve action should run");
@@ -120,7 +120,7 @@ async fn fs_path_action_outputs_granted_target_path_for_read_action() {
         .grant(&ctx, path_action)
         .await
         .expect("policy should grant resolved path")
-        .granted
+        .into_granted()
         .run(&ctx)
         .await
         .expect("granted path action should mint a target path");
@@ -152,7 +152,7 @@ async fn fs_path_action_outputs_granted_entry_path_for_remove_action() {
         )
         .await
         .expect("policy should grant entry resolution")
-        .granted
+        .into_granted()
         .run(&ctx)
         .await
         .expect("granted entry resolve action should run");
@@ -174,7 +174,7 @@ async fn fs_path_action_outputs_granted_entry_path_for_remove_action() {
         .grant(&ctx, path_action)
         .await
         .expect("policy should grant entry path")
-        .granted
+        .into_granted()
         .run(&ctx)
         .await
         .expect("granted path action should mint an entry path");
@@ -197,7 +197,7 @@ async fn fs_resolve_path_action_preserves_workspace_escape_for_path_policy() {
         )
         .await
         .expect("policy should grant path resolution")
-        .granted
+        .into_granted()
         .run(&ctx)
         .await
         .expect("path resolution should retain escaped path facts");
@@ -230,7 +230,7 @@ async fn fs_resolve_path_action_preserves_symlink_escape_for_path_policy() {
         )
         .await
         .expect("policy should grant path resolution")
-        .granted
+        .into_granted()
         .run(&ctx)
         .await
         .expect("path resolution should prepare symlink escape for policy");
@@ -265,7 +265,7 @@ async fn fs_resolve_path_action_resolves_missing_root_through_symlink_ancestor()
         )
         .await
         .expect("policy should grant path resolution")
-        .granted
+        .into_granted()
         .run(&ctx)
         .await
         .expect("missing root under symlink ancestor should resolve");

@@ -343,5 +343,5 @@ async fn grant_invocation(
         )
         .await
         .expect("test policy should grant invocation")
-        .granted
+        .into_granted()
 }

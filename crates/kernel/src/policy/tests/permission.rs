@@ -172,7 +172,7 @@ async fn policy_engine_grants_after_parent_permission_and_retains_report() {
         vec!["parent"]
     );
     assert!(matches!(
-        grant.info.report.outcome,
+        grant.info().report.outcome,
         PolicyOutcome::RequireParentPermission { .. }
     ));
 }

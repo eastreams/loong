@@ -94,7 +94,6 @@ impl ContextFactory for FsAccessTestContextFactory {
 
 struct FsAccessPolicyEngine {
     attempt_seq: AtomicU64,
-    grant_seq: AtomicU64,
     evidence: Mutex<Vec<AuthorizationEvidence>>,
     allow: bool,
 }
@@ -103,7 +102,6 @@ impl Default for FsAccessPolicyEngine {
     fn default() -> Self {
         Self {
             attempt_seq: AtomicU64::new(0),
-            grant_seq: AtomicU64::new(0),
             evidence: Mutex::new(Vec::new()),
             allow: true,
         }
@@ -163,7 +161,7 @@ impl PolicyEngineBackend<FsAccessTestContextFactory> for FsAccessPolicyEngine {
     }
 
     fn reserve_grant_id(&self) -> Result<GrantId, Self::AuditError> {
-        Ok(GrantId(self.grant_seq.fetch_add(1, Ordering::Relaxed) + 1))
+        Ok(GrantId::new())
     }
 
     fn write_authorization_evidence(
@@ -190,7 +188,6 @@ impl FsAccessTestKernel {
         Self {
             policy: FsAccessPolicyEngine {
                 attempt_seq: AtomicU64::new(0),
-                grant_seq: AtomicU64::new(0),
                 evidence: Mutex::new(Vec::new()),
                 allow: false,
             },
@@ -220,7 +217,7 @@ async fn grant_target_path(
         )
         .await
         .expect("test policy should grant target path resolution")
-        .granted
+        .into_granted()
         .run(ctx)
         .await
         .expect("granted target resolve action should run");
@@ -229,7 +226,7 @@ async fn grant_target_path(
         .grant(ctx, FsPathAction::new(resolved))
         .await
         .expect("test policy should grant target path")
-        .granted
+        .into_granted()
         .run(ctx)
         .await
         .expect("granted target path action should run")

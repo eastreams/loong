@@ -28,7 +28,6 @@ pub(crate) struct SharedAuditState {
     clock: Arc<dyn Clock>,
     event_seq: Mutex<u64>,
     authorization_attempt_seq: AtomicU64,
-    grant_seq: AtomicU64,
 }
 
 impl SharedAuditState {
@@ -38,7 +37,6 @@ impl SharedAuditState {
             clock,
             event_seq: Mutex::new(0),
             authorization_attempt_seq: AtomicU64::new(0),
-            grant_seq: AtomicU64::new(0),
         }
     }
 
@@ -58,12 +56,7 @@ impl SharedAuditState {
     }
 
     pub(crate) fn reserve_grant_id(&self) -> Result<GrantId, AuditError> {
-        self.grant_seq
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                current.checked_add(1)
-            })
-            .map(|previous| GrantId(previous + 1))
-            .map_err(|_current| AuditError::GrantIdExhausted)
+        Ok(GrantId::new())
     }
 
     pub(crate) fn record(

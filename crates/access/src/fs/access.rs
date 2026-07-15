@@ -102,7 +102,7 @@ where
             .await
             .map_err(AuthorizationError::from)
             .map_err(FsAccessError::Authorization)?
-            .granted
+            .into_granted()
             .run(self.ctx)
             .await?;
         let path_action = FsPathAction::new(resolved);
@@ -112,7 +112,7 @@ where
             .await
             .map_err(AuthorizationError::from)
             .map_err(FsAccessError::Authorization)?
-            .granted
+            .into_granted()
             .run(self.ctx)
             .await?;
         Ok(path)
@@ -140,7 +140,7 @@ where
             .await
             .map_err(AuthorizationError::from)
             .map_err(FsAccessError::Authorization)?;
-        grant.granted.run(self.ctx).await
+        grant.into_granted().run(self.ctx).await
     }
 
     /// Write bytes through resolution, path authorization, and write policy.
@@ -162,7 +162,7 @@ where
             .await
             .map_err(AuthorizationError::from)
             .map_err(FsAccessError::Authorization)?;
-        grant.granted.run(self.ctx).await
+        grant.into_granted().run(self.ctx).await
     }
 
     /// Atomically write through resolution, path authorization, and write policy.
@@ -185,7 +185,7 @@ where
             .await
             .map_err(AuthorizationError::from)
             .map_err(FsAccessError::Authorization)?;
-        grant.granted.run(self.ctx).await
+        grant.into_granted().run(self.ctx).await
     }
 
     /// Copy one file through source/destination path policy and copy policy.
@@ -205,7 +205,7 @@ where
             .await
             .map_err(AuthorizationError::from)
             .map_err(FsAccessError::Authorization)?;
-        grant.granted.run(self.ctx).await
+        grant.into_granted().run(self.ctx).await
     }
 
     /// Create a directory tree through resolution, path, and write policy.
@@ -222,7 +222,7 @@ where
             .await
             .map_err(AuthorizationError::from)
             .map_err(FsAccessError::Authorization)?;
-        grant.granted.run(self.ctx).await
+        grant.into_granted().run(self.ctx).await
     }
 
     /// Remove one file or symlink through remove-path policy and write policy.
@@ -243,7 +243,7 @@ where
             .await
             .map_err(AuthorizationError::from)
             .map_err(FsAccessError::Authorization)?;
-        grant.granted.run(self.ctx).await
+        grant.into_granted().run(self.ctx).await
     }
 
     /// Recursively remove one governed directory tree.
@@ -263,7 +263,7 @@ where
             .await
             .map_err(AuthorizationError::from)
             .map_err(FsAccessError::Authorization)?;
-        grant.granted.run(self.ctx).await
+        grant.into_granted().run(self.ctx).await
     }
 
     /// Rename one governed filesystem entry through no-follow path policy.
@@ -287,7 +287,7 @@ where
             .await
             .map_err(AuthorizationError::from)
             .map_err(FsAccessError::Authorization)?;
-        grant.granted.run(self.ctx).await
+        grant.into_granted().run(self.ctx).await
     }
 
     /// Inspect one path through resolution, path, and inspect policy.
@@ -308,7 +308,7 @@ where
             .await
             .map_err(AuthorizationError::from)
             .map_err(FsAccessError::Authorization)?;
-        grant.granted.run(self.ctx).await
+        grant.into_granted().run(self.ctx).await
     }
 
     /// List paths under a governed root by glob pattern.
@@ -332,7 +332,7 @@ where
             .await
             .map_err(AuthorizationError::from)
             .map_err(FsAccessError::Authorization)?;
-        grant.granted.run(self.ctx).await
+        grant.into_granted().run(self.ctx).await
     }
 
     /// Read the immediate children of one governed directory.
@@ -354,7 +354,7 @@ where
             .await
             .map_err(AuthorizationError::from)
             .map_err(FsAccessError::Authorization)?;
-        grant.granted.run(self.ctx).await
+        grant.into_granted().run(self.ctx).await
     }
 
     /// Search file contents under a governed root.
@@ -377,7 +377,7 @@ where
             .await
             .map_err(AuthorizationError::from)
             .map_err(FsAccessError::Authorization)?;
-        grant.granted.run(self.ctx).await
+        grant.into_granted().run(self.ctx).await
     }
 }
 

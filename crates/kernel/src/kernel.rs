@@ -1223,7 +1223,7 @@ where
 
         let action = LegacyKernelAction::new(operation, required_capabilities.clone(), payload);
         let granted = match self.policy.grant(ctx, action).await {
-            Ok(grant) => grant.granted,
+            Ok(grant) => grant.into_granted(),
             Err(error) => return Err(KernelError::Policy(policy_engine_error(error))),
         };
 

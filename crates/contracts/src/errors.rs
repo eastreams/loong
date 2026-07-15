@@ -170,8 +170,6 @@ pub enum AuditError {
     AuthorizationEvidenceOwnedByPolicyEngine,
     #[error("authorization attempt identity sequence exhausted")]
     AuthorizationAttemptIdExhausted,
-    #[error("grant identity sequence exhausted")]
-    GrantIdExhausted,
     #[error("audit event identity sequence exhausted")]
     EventIdExhausted,
 }

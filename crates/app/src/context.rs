@@ -651,22 +651,16 @@ impl ToolInvocation<'_> {
             .kernel()
             .grant_action(tool_ctx.pack_id(), tool_ctx.token(), action, &tool_ctx)
             .await?;
-        let audit_path = grant.granted.as_ref().path().to_string();
-        let audit_caps = grant
-            .granted
+        let granted = grant.into_granted();
+        let audit_path = granted.as_ref().path().to_string();
+        let audit_caps = granted
             .as_ref()
             .required_capabilities()
             .iter()
             .copied()
             .collect::<BTreeSet<_>>();
 
-        match self
-            .ctx
-            .runtime
-            .tools()
-            .invoke(grant.granted, &tool_ctx)
-            .await
-        {
+        match self.ctx.runtime.tools().invoke(granted, &tool_ctx).await {
             Ok(output) => {
                 tool_ctx.runtime.kernel().record_tool_invocation(
                     &tool_ctx,

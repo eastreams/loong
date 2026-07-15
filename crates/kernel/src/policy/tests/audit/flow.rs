@@ -186,7 +186,7 @@ async fn kernel_bound_allow_records_authorization_with_matching_grant_id() {
                 ..
             },
             ..
-        } if grant_id == grant.id
+        } if grant_id == grant.id()
     ));
 }
 

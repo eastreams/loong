@@ -64,27 +64,31 @@ async fn read_access_grants_resolve_path_and_read_actions_in_order() {
         .lock()
         .expect("filesystem access evidence log");
     assert_eq!(evidence.len(), 3);
-    for (item, (kind, grant_id)) in evidence.iter().zip([
-        ("fs.resolve_path", GrantId(1)),
-        ("fs.path", GrantId(2)),
-        ("fs.read", GrantId(3)),
-    ]) {
+    let mut grant_ids = Vec::new();
+    for (item, kind) in evidence
+        .iter()
+        .zip(["fs.resolve_path", "fs.path", "fs.read"])
+    {
         assert_eq!(item.action.kind, kind);
-        assert!(matches!(
-            &item.attempt,
-            AuthorizationAttempt::Started {
-                event: AuthorizationAttemptEvent::Policy {
-                    event: AuthorizationPolicyEvent::Terminal(
-                        AuthorizationTerminalOutcome::Allow {
-                            grant_id: recorded_grant_id,
-                        }
-                    ),
+        let AuthorizationAttempt::Started {
+            event:
+                AuthorizationAttemptEvent::Policy {
+                    event:
+                        AuthorizationPolicyEvent::Terminal(AuthorizationTerminalOutcome::Allow {
+                            grant_id,
+                        }),
                     ..
                 },
-                ..
-            } if *recorded_grant_id == grant_id
-        ));
+            ..
+        } = &item.attempt
+        else {
+            panic!("filesystem action should record a terminal allow grant");
+        };
+        grant_ids.push(*grant_id);
     }
+    grant_ids.sort_unstable();
+    grant_ids.dedup();
+    assert_eq!(grant_ids.len(), 3, "each action must receive its own grant");
 
     fs::remove_dir_all(base).ok();
 }
@@ -106,7 +110,7 @@ async fn fs_read_execution_boundary_consumes_granted_action() {
         .expect("policy should grant read");
 
     let output = grant
-        .granted
+        .into_granted()
         .run(&ctx)
         .await
         .expect("granted read should execute");

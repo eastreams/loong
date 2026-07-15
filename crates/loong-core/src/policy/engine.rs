@@ -469,7 +469,11 @@ where
         // Minting happens only after the terminal allow is durably accepted.
         Ok(ActionGrant::new(
             grant_id,
-            ActionGrantInfo { report },
+            ActionGrantInfo {
+                report,
+                subject: attempt.subject.clone(),
+                action: attempt.action.clone(),
+            },
             action,
         ))
     }
