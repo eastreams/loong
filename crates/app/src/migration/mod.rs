@@ -12,7 +12,6 @@ use crate::{
     config::{LoongConfig, MemoryProfile, active_cli_command_name},
     prompt::DEFAULT_PROMPT_PACK_ID,
 };
-use loong_kernel::access::fs::FsPathKind;
 use serde_json::Value;
 
 pub use merge::{
@@ -25,12 +24,6 @@ pub use orchestrator::{
     PrimarySourceRecommendation, apply_import_selection, discover_import_sources,
     merge_profile_sources, plan_import_sources, recommend_primary_source, rollback_last_migration,
 };
-pub(crate) use orchestrator::{
-    apply_import_selection_with_access, discover_import_sources_with_access,
-    merge_profile_sources_with_access, plan_import_sources_with_access,
-    rollback_last_migration_with_access,
-};
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LegacyClawSource {
     Nanobot,
@@ -137,34 +130,6 @@ pub fn plan_external_skill_mapping(input_path: &Path) -> ExternalSkillMappingPla
     }
 }
 
-pub(crate) async fn plan_external_skill_mapping_with_access(
-    ctx: &crate::context::AppContext,
-    input_path: &Path,
-) -> CliResult<ExternalSkillMappingPlan> {
-    let artifacts = detect_external_skill_artifacts_with_access(ctx, input_path).await?;
-    let mut warnings = artifacts
-        .iter()
-        .map(external_skill_warning)
-        .collect::<Vec<_>>();
-    let declared_skills = collect_declared_skills_with_access(ctx, &artifacts, &mut warnings).await;
-    let locked_skills = collect_locked_skills_with_access(ctx, &artifacts, &mut warnings).await;
-    let resolved_skills = merge_resolved_skills(&declared_skills, &locked_skills);
-    Ok(ExternalSkillMappingPlan {
-        input_path: input_path.to_path_buf(),
-        profile_note_addendum: render_external_skill_profile_note_addendum(
-            &artifacts,
-            &declared_skills,
-            &locked_skills,
-            &resolved_skills,
-        ),
-        artifacts,
-        declared_skills,
-        locked_skills,
-        resolved_skills,
-        warnings,
-    })
-}
-
 pub fn apply_external_skill_mapping(
     config: &mut LoongConfig,
     plan: &ExternalSkillMappingPlan,
@@ -195,19 +160,6 @@ pub fn plan_import_from_path(
     )
 }
 
-pub(crate) async fn plan_import_from_path_with_access(
-    ctx: &crate::context::AppContext,
-    input_path: &Path,
-    hint: Option<LegacyClawSource>,
-) -> CliResult<ImportPlan> {
-    let files = collect_import_files_with_access(ctx, input_path).await?;
-    let external_skills = plan_external_skill_mapping_with_access(ctx, input_path).await?;
-    plan_import_from_loaded_files(input_path, hint, files, external_skills.warnings)
-}
-
-// Pure planning over already-loaded migration files. The access-backed
-// config.import path will reuse this boundary after it obtains file contents
-// through governed fs access instead of direct filesystem reads.
 fn plan_import_from_loaded_files(
     input_path: &Path,
     hint: Option<LegacyClawSource>,
@@ -304,20 +256,6 @@ pub(crate) fn inspect_import_path(
     inspect_loaded_import_path(input_path, hint, files, external_skill_artifacts)
 }
 
-async fn inspect_import_path_with_access(
-    ctx: &crate::context::AppContext,
-    input_path: &Path,
-    hint: Option<LegacyClawSource>,
-) -> CliResult<Option<ImportPathInspection>> {
-    let external_skill_artifacts =
-        detect_external_skill_artifacts_with_access(ctx, input_path).await?;
-    let files = collect_import_files_with_access(ctx, input_path).await?;
-    inspect_loaded_import_path(input_path, hint, files, external_skill_artifacts)
-}
-
-// Pure inspection over already-loaded discovery facts. Access-backed discovery
-// should feed this function instead of copying the prompt/profile counting
-// rules into a second path.
 fn inspect_loaded_import_path(
     input_path: &Path,
     hint: Option<LegacyClawSource>,
@@ -419,9 +357,6 @@ const IMPORT_RELATIVE_PATHS: &[&str] = &[
 ];
 
 fn collect_import_files(input_path: &Path) -> CliResult<Vec<ImportFile>> {
-    // TODO(config-import-access): this discovery reader is still legacy direct
-    // filesystem I/O. The typed config.import path must replace it with an
-    // access-backed directory/file reader before the tool enters ToolPlane.
     if input_path.is_file() {
         return read_single_import_file(input_path)
             .map(|file| file.into_iter().collect())
@@ -472,60 +407,6 @@ fn collect_import_files(input_path: &Path) -> CliResult<Vec<ImportFile>> {
     Ok(files)
 }
 
-async fn collect_import_files_with_access(
-    ctx: &crate::context::AppContext,
-    input_path: &Path,
-) -> CliResult<Vec<ImportFile>> {
-    let input = inspect_path_with_access(ctx, input_path).await?;
-    if input.kind == Some(FsPathKind::File) {
-        return read_single_import_file_with_access(ctx, input.path.as_path())
-            .await
-            .map(|file| file.into_iter().collect());
-    }
-
-    if input.kind.is_none() {
-        return Err(format!(
-            "migration input does not exist: {}",
-            input_path.display()
-        ));
-    }
-
-    let mut roots = vec![input.path.clone()];
-    let workspace_root = input.path.join("workspace");
-    let workspace = inspect_path_with_access(ctx, workspace_root.as_path()).await?;
-    if workspace.kind == Some(FsPathKind::Directory) {
-        roots.push(workspace.path);
-    }
-
-    let mut seen = BTreeSet::new();
-    let mut files = Vec::new();
-    for root in roots {
-        for relative in IMPORT_RELATIVE_PATHS {
-            let path = root.join(relative);
-            let inspection = inspect_path_with_access(ctx, path.as_path()).await?;
-            if inspection.kind != Some(FsPathKind::File) {
-                continue;
-            }
-            let canonical = inspection.path.display().to_string();
-            if !seen.insert(canonical) {
-                continue;
-            }
-            if let Some(file) = read_single_import_file_with_access(ctx, inspection.path.as_path())
-                .await
-                .map_err(|error| {
-                    format!(
-                        "failed to read migration file {}: {error}",
-                        inspection.path.display()
-                    )
-                })?
-            {
-                files.push(file);
-            }
-        }
-    }
-    Ok(files)
-}
-
 fn read_single_import_file(path: &Path) -> Result<Option<ImportFile>, std::io::Error> {
     let content = fs::read_to_string(path)?;
     let trimmed = content.trim();
@@ -539,43 +420,6 @@ fn read_single_import_file(path: &Path) -> Result<Option<ImportFile>, std::io::E
     let kind = classify_file_kind(path, file_name)?;
     Ok(Some(ImportFile {
         label: relative_label(path),
-        kind,
-        content: trimmed.to_owned(),
-    }))
-}
-
-async fn read_single_import_file_with_access(
-    ctx: &crate::context::AppContext,
-    path: &Path,
-) -> CliResult<Option<ImportFile>> {
-    let output = ctx
-        .access()
-        .fs()
-        .read_file(path)
-        .await
-        .map_err(|error| error.to_string())?;
-    let content = String::from_utf8(output.bytes).map_err(|error| {
-        format!(
-            "failed to decode migration file {} as UTF-8: {error}",
-            output.path.display()
-        )
-    })?;
-    let trimmed = content.trim();
-    if trimmed.is_empty() {
-        return Ok(None);
-    }
-
-    let Some(file_name) = output.path.file_name().and_then(|name| name.to_str()) else {
-        return Ok(None);
-    };
-    let kind = classify_file_kind(output.path.as_path(), file_name).map_err(|error| {
-        format!(
-            "failed to classify migration file {}: {error}",
-            output.path.display()
-        )
-    })?;
-    Ok(Some(ImportFile {
-        label: relative_label(output.path.as_path()),
         kind,
         content: trimmed.to_owned(),
     }))
@@ -781,49 +625,6 @@ fn detect_external_skill_artifacts(input_path: &Path) -> Vec<ExternalSkillArtifa
     artifacts
 }
 
-async fn detect_external_skill_artifacts_with_access(
-    ctx: &crate::context::AppContext,
-    input_path: &Path,
-) -> CliResult<Vec<ExternalSkillArtifact>> {
-    let mut artifacts = Vec::new();
-    let mut seen = BTreeSet::new();
-    for root in external_skill_probe_roots_with_access(ctx, input_path).await? {
-        for (relative, kind) in [
-            ("SKILLS.md", ExternalSkillArtifactKind::SkillsCatalog),
-            ("skills-lock.json", ExternalSkillArtifactKind::SkillsLock),
-            (".codex/skills", ExternalSkillArtifactKind::CodexSkillsDir),
-            (".claude/skills", ExternalSkillArtifactKind::ClaudeSkillsDir),
-            ("skills", ExternalSkillArtifactKind::SkillsDir),
-        ] {
-            let path = root.join(relative);
-            let inspection = inspect_path_with_access(ctx, path.as_path()).await?;
-            let expected_kind = match kind {
-                ExternalSkillArtifactKind::SkillsCatalog
-                | ExternalSkillArtifactKind::SkillsLock => FsPathKind::File,
-                ExternalSkillArtifactKind::CodexSkillsDir
-                | ExternalSkillArtifactKind::ClaudeSkillsDir
-                | ExternalSkillArtifactKind::SkillsDir => FsPathKind::Directory,
-            };
-            if inspection.kind != Some(expected_kind) {
-                continue;
-            }
-            let key = inspection.path.display().to_string();
-            if seen.insert(key) {
-                artifacts.push(ExternalSkillArtifact {
-                    kind,
-                    path: inspection.path,
-                });
-            }
-        }
-    }
-    artifacts.sort_by(|left, right| {
-        left.path
-            .cmp(&right.path)
-            .then_with(|| left.kind.as_id().cmp(right.kind.as_id()))
-    });
-    Ok(artifacts)
-}
-
 fn external_skill_probe_roots(input_path: &Path) -> Vec<PathBuf> {
     let mut roots = BTreeSet::new();
     if input_path.is_file() {
@@ -838,27 +639,6 @@ fn external_skill_probe_roots(input_path: &Path) -> Vec<PathBuf> {
         }
     }
     roots.into_iter().collect()
-}
-
-async fn external_skill_probe_roots_with_access(
-    ctx: &crate::context::AppContext,
-    input_path: &Path,
-) -> CliResult<Vec<PathBuf>> {
-    let mut roots = BTreeSet::new();
-    let input = inspect_path_with_access(ctx, input_path).await?;
-    if input.kind == Some(FsPathKind::File) {
-        if let Some(parent) = input.path.parent() {
-            roots.insert(parent.to_path_buf());
-        }
-    } else {
-        roots.insert(input.path.clone());
-        let workspace_root = input.path.join("workspace");
-        let workspace = inspect_path_with_access(ctx, workspace_root.as_path()).await?;
-        if workspace.kind == Some(FsPathKind::Directory) {
-            roots.insert(workspace.path);
-        }
-    }
-    Ok(roots.into_iter().collect())
 }
 
 fn external_skill_warning(artifact: &ExternalSkillArtifact) -> String {
@@ -905,45 +685,6 @@ fn collect_declared_skills(
     collected.into_iter().collect()
 }
 
-async fn collect_declared_skills_with_access(
-    ctx: &crate::context::AppContext,
-    artifacts: &[ExternalSkillArtifact],
-    warnings: &mut Vec<String>,
-) -> Vec<String> {
-    let mut collected = BTreeSet::new();
-    for artifact in artifacts {
-        match artifact.kind {
-            ExternalSkillArtifactKind::SkillsCatalog => {
-                let content = match read_text_with_access(ctx, artifact.path.as_path()).await {
-                    Ok(content) => content,
-                    Err(error) => {
-                        warnings.push(format!(
-                            "failed to read declared skills catalog {}: {error}",
-                            artifact.path.display()
-                        ));
-                        continue;
-                    }
-                };
-                for skill in parse_skills_markdown_entries(&content) {
-                    collected.insert(skill);
-                }
-            }
-            ExternalSkillArtifactKind::CodexSkillsDir
-            | ExternalSkillArtifactKind::ClaudeSkillsDir
-            | ExternalSkillArtifactKind::SkillsDir => {
-                for skill in
-                    list_directory_skill_entries_with_access(ctx, artifact.path.as_path(), warnings)
-                        .await
-                {
-                    collected.insert(skill);
-                }
-            }
-            ExternalSkillArtifactKind::SkillsLock => {}
-        }
-    }
-    collected.into_iter().collect()
-}
-
 fn collect_locked_skills(
     artifacts: &[ExternalSkillArtifact],
     warnings: &mut Vec<String>,
@@ -955,44 +696,6 @@ fn collect_locked_skills(
         }
 
         let content = match fs::read_to_string(&artifact.path) {
-            Ok(content) => content,
-            Err(error) => {
-                warnings.push(format!(
-                    "failed to read skills lock {}: {error}",
-                    artifact.path.display()
-                ));
-                continue;
-            }
-        };
-        let value = match serde_json::from_str::<Value>(&content) {
-            Ok(value) => value,
-            Err(error) => {
-                warnings.push(format!(
-                    "failed to parse skills lock {}: {error}",
-                    artifact.path.display()
-                ));
-                continue;
-            }
-        };
-        for skill in parse_skills_lock_entries(&value) {
-            collected.insert(skill);
-        }
-    }
-    collected.into_iter().collect()
-}
-
-async fn collect_locked_skills_with_access(
-    ctx: &crate::context::AppContext,
-    artifacts: &[ExternalSkillArtifact],
-    warnings: &mut Vec<String>,
-) -> Vec<String> {
-    let mut collected = BTreeSet::new();
-    for artifact in artifacts {
-        if artifact.kind != ExternalSkillArtifactKind::SkillsLock {
-            continue;
-        }
-
-        let content = match read_text_with_access(ctx, artifact.path.as_path()).await {
             Ok(content) => content,
             Err(error) => {
                 warnings.push(format!(
@@ -1085,56 +788,6 @@ fn list_directory_skill_entries(path: &Path, warnings: &mut Vec<String>) -> Vec<
         }
     }
     skills.into_iter().collect()
-}
-
-async fn list_directory_skill_entries_with_access(
-    ctx: &crate::context::AppContext,
-    path: &Path,
-    warnings: &mut Vec<String>,
-) -> Vec<String> {
-    let output = match ctx.access().fs().read_dir(path, 10_000).await {
-        Ok(output) => output,
-        Err(error) => {
-            warnings.push(format!(
-                "failed to enumerate skills directory {}: {error}",
-                path.display()
-            ));
-            return Vec::new();
-        }
-    };
-
-    let mut skills = BTreeSet::new();
-    for entry in output.entries {
-        if entry.kind != FsPathKind::Directory {
-            continue;
-        }
-        if let Some(skill) = normalize_skill_reference(entry.name.as_str()) {
-            skills.insert(skill);
-        }
-    }
-    skills.into_iter().collect()
-}
-
-async fn read_text_with_access(ctx: &crate::context::AppContext, path: &Path) -> CliResult<String> {
-    let output = ctx
-        .access()
-        .fs()
-        .read_file(path)
-        .await
-        .map_err(|error| error.to_string())?;
-    String::from_utf8(output.bytes)
-        .map_err(|error| format!("failed to decode {} as UTF-8: {error}", path.display()))
-}
-
-async fn inspect_path_with_access(
-    ctx: &crate::context::AppContext,
-    path: &Path,
-) -> CliResult<loong_kernel::access::fs::FsInspectPathOutput> {
-    ctx.access()
-        .fs()
-        .inspect_path(path)
-        .await
-        .map_err(|error| error.to_string())
 }
 
 fn parse_skills_lock_entries(value: &Value) -> Vec<String> {

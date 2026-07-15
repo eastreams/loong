@@ -331,9 +331,12 @@ fn run_migrate_cli_apply_mode_rejects_output_path_outside_configured_file_root()
     .expect_err("policy root should deny writing outside configured file root");
 
     assert!(
-        error.contains("authorization denied:")
-            && error.contains("escapes allowed filesystem roots"),
-        "expected typed filesystem policy denial, got: {error}"
+        error.starts_with("policy_denied: ") && error.contains("escapes file root"),
+        "expected legacy filesystem policy denial, got: {error}"
+    );
+    assert!(
+        !escape_output.exists(),
+        "a denied legacy config import must not write outside the file root"
     );
 
     fs::remove_dir_all(&policy_root).ok();

@@ -941,26 +941,18 @@ async fn context_direct_write_uses_typed_tool_registry() {
     let execution_context = app_ctx
         .for_invocation(&config)
         .expect("build execution context");
-    let request = ToolCoreRequest {
-        tool_name: "write".to_owned(),
-        payload: json!({
+    let outcome = execution_context
+        .tool(loong_runtime::tool_plane::ToolPath::from("write"))
+        .expect("lookup typed write")
+        .invoke(json!({
             "path": "typed.txt",
             "content": "typed"
-        }),
-    };
+        }))
+        .await
+        .expect("context direct write should execute");
 
-    let outcome = crate::tools::tool_dispatch::execute_tool_core_with_config_and_context(
-        request,
-        &config,
-        &crate::config::ObservabilityConfig::runtime_default(),
-        &execution_context,
-    )
-    .await
-    .expect("context direct write should execute");
-
-    assert_eq!(outcome.status, "ok");
-    assert_eq!(outcome.payload["tool_name"], json!("write"));
-    assert_eq!(outcome.payload["bytes_written"], json!(5));
+    assert_eq!(outcome["tool_name"], json!("write"));
+    assert_eq!(outcome["bytes_written"], json!(5));
     assert_eq!(
         fs::read_to_string(root.join("typed.txt")).expect("read written file"),
         "typed"

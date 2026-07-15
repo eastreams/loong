@@ -21,9 +21,8 @@ pub(super) fn run(
 
     // Kernel-routed file tools are access-backed typed tools now. This
     // preflight belongs only to legacy direct dispatch through
-    // `execute_tool_core_with_config`, where config.import's skills bridge
-    // still needs the old file policy guard until it gets an explicit access
-    // or tool boundary.
+    // `execute_tool_core_with_config`, where all config.import modes remain
+    // until the tool receives a complete typed Tool + Access implementation.
     // TODO(access-migration): Delete this file branch after the remaining
     // legacy direct file tools move to typed Action/Policy access paths.
     if tool_name == "config.import" {
@@ -116,7 +115,7 @@ mod tests {
     }
 
     #[test]
-    fn run_does_not_apply_file_policy_preflight_to_migrated_config_import_apply() {
+    fn run_applies_file_policy_preflight_to_legacy_config_import_apply() {
         let root = unique_temp_dir("direct-policy-preflight-import");
         let config = runtime_config::ToolRuntimeConfig {
             file_root: Some(root),
@@ -132,11 +131,11 @@ mod tests {
             }),
         };
 
-        assert!(run(&request, &config).is_ok());
+        assert!(run(&request, &config).is_err());
     }
 
     #[test]
-    fn run_does_not_apply_file_policy_preflight_to_access_backed_config_import_apply_selected() {
+    fn run_applies_file_policy_preflight_to_legacy_config_import_apply_selected() {
         let root = unique_temp_dir("direct-policy-preflight-import-apply-selected");
         let config = runtime_config::ToolRuntimeConfig {
             file_root: Some(root),
@@ -153,11 +152,11 @@ mod tests {
             }),
         };
 
-        assert!(run(&request, &config).is_ok());
+        assert!(run(&request, &config).is_err());
     }
 
     #[test]
-    fn run_reuses_shared_config_import_skills_bridge_path_guard() {
+    fn run_reuses_shared_legacy_config_import_path_guard() {
         let root = unique_temp_dir("direct-policy-preflight-import-skills");
         let config = runtime_config::ToolRuntimeConfig {
             file_root: Some(root),
@@ -174,7 +173,7 @@ mod tests {
             }),
         };
 
-        let error = run(&request, &config).expect_err("escaped skills bridge path should deny");
+        let error = run(&request, &config).expect_err("escaped legacy import path should deny");
 
         assert!(
             error.starts_with("policy_denied: "),

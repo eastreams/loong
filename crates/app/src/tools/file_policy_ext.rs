@@ -180,25 +180,6 @@ impl FilePolicyExtension {
             return raw_paths;
         }
 
-        let mode = payload
-            .get("mode")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("plan");
-        let apply_skills_plan = payload
-            .get("apply_skills_plan")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-
-        // Only the legacy skills bridge still performs config.import filesystem
-        // side effects outside ctx.access(). Migrated modes must not depend on
-        // this preflight; their path policy lives on the typed access/action
-        // route.
-        if mode != "apply_selected" || !apply_skills_plan {
-            return raw_paths;
-        }
-
         let input_path = trimmed_non_empty_path(payload.get("input_path"));
         if let Some(input_path) = input_path {
             raw_paths.push(input_path);
@@ -296,10 +277,9 @@ pub(crate) fn authorize_direct_file_payload(
     payload: &serde_json::Map<String, serde_json::Value>,
     rt: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<(), String> {
-    // Migration-only guard for config.import's remaining legacy skills bridge.
-    // Migrated file tools must fail closed without context or enter through
-    // ctx.tool(...).invoke(...) and fs access grants; do not add typed-tool
-    // policy here.
+    // `config.import` remains wholly legacy until its complete Tool + Access
+    // migration. Keep its path guard here without extending this policy to
+    // typed tools, which must use action grants instead.
 
     let policy = FilePolicyExtension::from_runtime_config(rt);
     policy
@@ -343,7 +323,7 @@ mod tests {
     }
 
     #[test]
-    fn migrated_config_import_apply_does_not_use_legacy_file_policy() {
+    fn legacy_config_import_apply_checks_output_path() {
         let root_dir = tempfile::tempdir().expect("tempdir");
         let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
         let payload = json!({
@@ -352,11 +332,15 @@ mod tests {
             "output_path": "../../etc/passwd"
         });
         let payload = payload.as_object().expect("object payload");
-        assert!(ext.authorize_file_payload("config.import", payload).is_ok());
+        assert!(matches!(
+            ext.authorize_file_payload("config.import", payload)
+                .expect_err("escaped legacy output path must be denied"),
+            PolicyError::ExtensionDenied { .. }
+        ));
     }
 
     #[test]
-    fn migrated_config_import_plan_does_not_use_legacy_file_policy() {
+    fn legacy_config_import_plan_checks_payload_paths() {
         let root_dir = tempfile::tempdir().expect("tempdir");
         let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
         let payload = json!({
@@ -365,8 +349,11 @@ mod tests {
             "output_path": " ../../etc/passwd "
         });
         let payload = payload.as_object().expect("object payload");
-        let result = ext.authorize_file_payload("config.import", payload);
-        assert!(result.is_ok());
+        assert!(matches!(
+            ext.authorize_file_payload("config.import", payload)
+                .expect_err("escaped legacy plan path must be denied"),
+            PolicyError::ExtensionDenied { .. }
+        ));
     }
 
     #[test]

@@ -6,7 +6,6 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use loong_kernel::access::fs::{FsAccessError, FsInspectPathOutput, FsPathKind, FsWriteOptions};
 use serde::{Deserialize, Serialize};
 
 use crate::CliResult;
@@ -14,7 +13,7 @@ use crate::CliResult;
 use super::{
     LegacyClawSource, MergedProfilePlan, ProfileEntryLane, ProfileMergeEntry,
     apply_external_skill_mapping, apply_import_plan, inspect_import_path, merge_profile_entries,
-    plan_external_skill_mapping, plan_import_from_path, plan_import_from_path_with_access,
+    plan_external_skill_mapping, plan_import_from_path,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,71 +189,10 @@ pub fn discover_import_sources(
     Ok(DiscoveryReport { sources })
 }
 
-pub(crate) async fn discover_import_sources_with_access(
-    ctx: &crate::context::AppContext,
-    search_root: &Path,
-    options: DiscoveryOptions,
-) -> CliResult<DiscoveryReport> {
-    let root = super::inspect_path_with_access(ctx, search_root).await?;
-    if root.kind.is_none() {
-        return Err(format!(
-            "discovery root does not exist: {}",
-            search_root.display()
-        ));
-    }
-
-    let mut sources = Vec::new();
-    for candidate in collect_candidate_directories_with_access(ctx, &root, &options).await? {
-        let Some(inspection) =
-            super::inspect_import_path_with_access(ctx, candidate.as_path(), None).await?
-        else {
-            continue;
-        };
-        sources.push(DiscoveredImportSource {
-            source: inspection.source,
-            source_id: String::new(),
-            confidence_score: score_discovered_source(&inspection),
-            found_files: inspection.found_files,
-            path: candidate,
-        });
-    }
-
-    sources.sort_by(|left, right| {
-        right
-            .confidence_score
-            .cmp(&left.confidence_score)
-            .then_with(|| left.path.cmp(&right.path))
-    });
-    assign_discovery_source_ids(&mut sources);
-
-    Ok(DiscoveryReport { sources })
-}
-
 pub fn plan_import_sources(report: &DiscoveryReport) -> CliResult<DiscoveryPlanSummary> {
     let mut plans = Vec::new();
     for source in &report.sources {
         let plan = plan_import_from_path(&source.path, Some(source.source))?;
-        plans.push(PlannedImportSource {
-            source: source.source,
-            source_id: source.source_id.clone(),
-            input_path: source.path.clone(),
-            confidence_score: source.confidence_score,
-            prompt_addendum_present: plan.system_prompt_addendum.is_some(),
-            profile_note_present: plan.profile_note.is_some(),
-            warning_count: plan.warnings.len(),
-        });
-    }
-    Ok(DiscoveryPlanSummary { plans })
-}
-
-pub(crate) async fn plan_import_sources_with_access(
-    ctx: &crate::context::AppContext,
-    report: &DiscoveryReport,
-) -> CliResult<DiscoveryPlanSummary> {
-    let mut plans = Vec::new();
-    for source in &report.sources {
-        let plan =
-            plan_import_from_path_with_access(ctx, &source.path, Some(source.source)).await?;
         plans.push(PlannedImportSource {
             source: source.source,
             source_id: source.source_id.clone(),
@@ -337,48 +275,6 @@ pub fn merge_profile_sources(report: &DiscoveryReport) -> CliResult<MergedProfil
     Ok(merged)
 }
 
-pub(crate) async fn merge_profile_sources_with_access(
-    ctx: &crate::context::AppContext,
-    report: &DiscoveryReport,
-) -> CliResult<MergedProfilePlan> {
-    if report.sources.is_empty() {
-        return Err("cannot merge profiles from an empty discovery report".to_owned());
-    }
-
-    let mut entries = Vec::new();
-    for source in &report.sources {
-        let plan =
-            plan_import_from_path_with_access(ctx, &source.path, Some(source.source)).await?;
-        let source_id = source.source_id.clone();
-
-        if let Some(prompt_addendum) = plan.system_prompt_addendum.as_deref() {
-            entries.push(ProfileMergeEntry {
-                lane: ProfileEntryLane::Prompt,
-                canonical_text: prompt_addendum.trim().to_owned(),
-                source_id: source_id.clone(),
-                source_confidence: source.confidence_score,
-                entry_confidence: 1,
-                slot_key: None,
-            });
-        }
-
-        if let Some(profile_note) = plan.profile_note.as_deref() {
-            entries.extend(parse_profile_merge_entries(
-                profile_note,
-                &source_id,
-                source.confidence_score,
-            ));
-        }
-    }
-
-    let mut merged = merge_profile_entries(&entries)?;
-    if merged.prompt_owner_source_id.is_none() {
-        let summary = plan_import_sources_with_access(ctx, report).await?;
-        merged.prompt_owner_source_id = Some(recommend_primary_source(&summary)?.source_id);
-    }
-    Ok(merged)
-}
-
 pub fn apply_import_selection(
     request: &ApplyImportSelection,
 ) -> CliResult<ApplyImportSelectionResult> {
@@ -450,9 +346,6 @@ pub fn apply_import_selection(
 
     let mut backup_context: Option<(PathBuf, bool)> = None;
     let persist_result = (|| -> CliResult<(PathBuf, PathBuf, PathBuf, Option<PathBuf>)> {
-        // TODO(config-import-access): this block is the apply side-effect
-        // boundary for legacy config.import. Typed migration must move every
-        // create/copy/write/manifest operation here behind ctx.access().
         if request.apply_skills_plan {
             let input_path = request
                 .skills_input_path
@@ -592,246 +485,6 @@ pub fn apply_import_selection(
     })
 }
 
-pub(crate) async fn apply_import_selection_with_access(
-    ctx: &crate::context::AppContext,
-    request: &ApplyImportSelection,
-) -> CliResult<ApplyImportSelectionResult> {
-    if request.apply_skills_plan {
-        // TODO(config-import-access): migrate skills.install/skills.remove
-        // first. Calling the legacy bridge from this access-backed path would
-        // hide direct filesystem side effects behind a migrated config.import
-        // entrypoint.
-        return Err("apply_selected with apply_skills_plan is not access-backed yet".to_owned());
-    }
-
-    let selected_primary_source_id = match &request.mode {
-        ImportSelectionMode::RecommendedSingleSource { source_id }
-        | ImportSelectionMode::SelectedSingleSource { source_id } => source_id.clone(),
-        ImportSelectionMode::SafeProfileMerge { primary_source_id } => primary_source_id.clone(),
-    };
-    let selected_primary =
-        resolve_discovered_source(&request.discovery, selected_primary_source_id.as_str())?;
-
-    let mut config = load_or_default_config_with_access(ctx, Some(&request.output_path)).await?;
-    let mut warnings = Vec::new();
-    let (merged_source_ids, prompt_owner_source_id, unresolved_conflicts) = match &request.mode {
-        ImportSelectionMode::RecommendedSingleSource { .. }
-        | ImportSelectionMode::SelectedSingleSource { .. } => {
-            let plan = plan_import_from_path_with_access(
-                ctx,
-                &selected_primary.path,
-                Some(selected_primary.source),
-            )
-            .await?;
-            warnings.extend(plan.warnings.clone());
-            apply_import_plan(&mut config, &plan);
-            (
-                vec![selected_primary_source_id.clone()],
-                Some(selected_primary_source_id.clone()),
-                0,
-            )
-        }
-        ImportSelectionMode::SafeProfileMerge { .. } => {
-            let primary_plan = plan_import_from_path_with_access(
-                ctx,
-                &selected_primary.path,
-                Some(selected_primary.source),
-            )
-            .await?;
-            warnings.extend(primary_plan.warnings);
-
-            for source in &request.discovery.sources {
-                if source.path == selected_primary.path {
-                    continue;
-                }
-                let plan =
-                    plan_import_from_path_with_access(ctx, &source.path, Some(source.source))
-                        .await?;
-                warnings.extend(plan.warnings);
-            }
-
-            let merged = merge_profile_sources_with_access(ctx, &request.discovery).await?;
-            if !merged.auto_apply_allowed {
-                return Err(format!(
-                    "cannot auto-apply safe profile merge with {} unresolved conflict(s)",
-                    merged.unresolved_conflicts.len()
-                ));
-            }
-            config.memory.profile = crate::config::MemoryProfile::ProfilePlusWindow;
-            config.memory.profile_note = if merged.merged_profile_note.trim().is_empty() {
-                None
-            } else {
-                Some(merged.merged_profile_note.clone())
-            };
-            (
-                request
-                    .discovery
-                    .sources
-                    .iter()
-                    .map(|source| source.source_id.clone())
-                    .collect(),
-                None,
-                merged.unresolved_conflicts.len(),
-            )
-        }
-    };
-
-    let mut backup_context: Option<(PathBuf, bool)> = None;
-    let persist_result: CliResult<(PathBuf, PathBuf, PathBuf, Option<PathBuf>)> = async {
-        dedup_strings_in_place(&mut warnings);
-
-        let state_dir = migration_state_dir(&request.output_path);
-        ctx.access()
-            .fs()
-            .create_dir_all(&state_dir)
-            .await
-            .map_err(|error| {
-                format!(
-                    "failed to create migration state directory {}: {error}",
-                    state_dir.display()
-                )
-            })?;
-
-        let session_id = import_session_id();
-        let backup_path = backup_path_for_output(&request.output_path, &state_dir, &session_id);
-        let manifest_path = manifest_path_for_output(&request.output_path, &state_dir);
-        let output_inspection = ctx
-            .access()
-            .fs()
-            .inspect_path(&request.output_path)
-            .await
-            .map_err(|error| error.to_string())?;
-        let output_preexisted = output_inspection.kind.is_some();
-        if output_preexisted {
-            ctx.access()
-                .fs()
-                .copy_file(
-                    &request.output_path,
-                    &backup_path,
-                    FsWriteOptions {
-                        create_dirs: true,
-                        overwrite: false,
-                    },
-                )
-                .await
-                .map_err(|error| {
-                    format!(
-                        "failed to write import backup {}: {error}",
-                        backup_path.display()
-                    )
-                })?;
-        } else {
-            ctx.access()
-                .fs()
-                .write_file(
-                    &backup_path,
-                    Vec::new(),
-                    FsWriteOptions {
-                        create_dirs: true,
-                        overwrite: false,
-                    },
-                )
-                .await
-                .map_err(|error| {
-                    format!(
-                        "failed to initialize import backup {}: {error}",
-                        backup_path.display()
-                    )
-                })?;
-        }
-        backup_context = Some((backup_path.clone(), output_preexisted));
-
-        let config_toml = crate::config::render(&config)?;
-        let written = ctx
-            .access()
-            .fs()
-            .write_file(
-                &request.output_path,
-                config_toml.into_bytes(),
-                FsWriteOptions {
-                    create_dirs: true,
-                    overwrite: true,
-                },
-            )
-            .await
-            .map_err(|error| {
-                format!(
-                    "failed to write config file {}: {error}",
-                    request.output_path.display()
-                )
-            })?;
-
-        let manifest = ImportApplyManifest {
-            session_id,
-            selected_primary_source: selected_primary_source_id.clone(),
-            merged_sources: merged_source_ids.clone(),
-            prompt_owner_source: prompt_owner_source_id.clone(),
-            output_path: written.path.display().to_string(),
-            backup_path: backup_path.display().to_string(),
-            output_preexisted,
-            warnings: warnings.clone(),
-            unresolved_conflicts,
-            external_skill_artifact_count: 0,
-            external_skill_entries_applied: 0,
-            external_skill_managed_install_count: 0,
-            external_skill_managed_skill_ids: Vec::new(),
-            skills_manifest_path: None,
-        };
-        let manifest_body = serde_json::to_vec_pretty(&manifest)
-            .map_err(|error| format!("failed to encode import manifest: {error}"))?;
-        ctx.access()
-            .fs()
-            .write_file_atomically(
-                &manifest_path,
-                manifest_body,
-                FsWriteOptions {
-                    create_dirs: true,
-                    overwrite: true,
-                },
-            )
-            .await
-            .map_err(|error| {
-                format!(
-                    "failed to write import manifest {}: {error}",
-                    manifest_path.display()
-                )
-            })?;
-
-        Ok((written.path, backup_path, manifest_path, None))
-    }
-    .await;
-
-    let (written_output_path, backup_path, manifest_path, skills_manifest_path) =
-        match persist_result {
-            Ok(result) => result,
-            Err(error) => {
-                return Err(finalize_apply_import_selection_failure_with_access(
-                    ctx,
-                    error,
-                    &request.output_path,
-                    backup_context.as_ref(),
-                )
-                .await);
-            }
-        };
-
-    Ok(ApplyImportSelectionResult {
-        output_path: written_output_path,
-        backup_path,
-        manifest_path,
-        skills_manifest_path,
-        selected_primary_source_id,
-        merged_source_ids,
-        prompt_owner_source_id,
-        unresolved_conflicts,
-        warnings,
-        external_skill_artifact_count: 0,
-        external_skill_entries_applied: 0,
-        external_skill_managed_install_count: 0,
-        external_skill_managed_skill_ids: Vec::new(),
-    })
-}
-
 fn dedup_strings_in_place(values: &mut Vec<String>) {
     let mut seen = BTreeSet::new();
     values.retain(|value| seen.insert(value.clone()));
@@ -862,9 +515,6 @@ fn bridge_installable_skills(
     input_path: &Path,
     mapping: &super::ExternalSkillMappingPlan,
 ) -> CliResult<Vec<InstalledSkill>> {
-    // TODO(config-import-access): legacy-only bridge. The access-backed
-    // config.import path must invoke a migrated skills lifecycle boundary
-    // instead of calling this direct ToolCoreOutcome helper.
     let installable_roots = collect_installable_external_skill_roots(mapping)?;
     if installable_roots.is_empty() {
         return Ok(Vec::new());
@@ -1135,54 +785,6 @@ fn restore_output_from_backup(
     Ok(())
 }
 
-async fn restore_output_from_backup_with_access(
-    ctx: &crate::context::AppContext,
-    output_path: &Path,
-    backup_path: &Path,
-    output_preexisted: bool,
-) -> CliResult<()> {
-    if output_preexisted {
-        ctx.access()
-            .fs()
-            .copy_file(
-                backup_path,
-                output_path,
-                FsWriteOptions {
-                    create_dirs: true,
-                    overwrite: true,
-                },
-            )
-            .await
-            .map_err(|error| {
-                format!(
-                    "failed to restore config {} from backup {}: {error}",
-                    output_path.display(),
-                    backup_path.display()
-                )
-            })?;
-    } else {
-        let inspection = ctx
-            .access()
-            .fs()
-            .inspect_path(output_path)
-            .await
-            .map_err(|error| error.to_string())?;
-        if inspection.kind.is_some() {
-            ctx.access()
-                .fs()
-                .remove_file(output_path)
-                .await
-                .map_err(|error| {
-                    format!(
-                        "failed to remove partial config {} after rollback: {error}",
-                        output_path.display()
-                    )
-                })?;
-        }
-    }
-    Ok(())
-}
-
 fn remove_config_output_path(output_path: &Path) -> CliResult<()> {
     let metadata = fs::symlink_metadata(output_path).map_err(|error| {
         format!(
@@ -1202,27 +804,6 @@ fn remove_config_output_path(output_path: &Path) -> CliResult<()> {
             output_path.display()
         )
     })
-}
-
-async fn finalize_apply_import_selection_failure_with_access(
-    ctx: &crate::context::AppContext,
-    error: String,
-    output_path: &Path,
-    backup_context: Option<&(PathBuf, bool)>,
-) -> String {
-    let mut message = error;
-    if let Some((backup_path, output_preexisted)) = backup_context
-        && let Err(restore_error) = restore_output_from_backup_with_access(
-            ctx,
-            output_path,
-            backup_path,
-            *output_preexisted,
-        )
-        .await
-    {
-        message = format!("{message}; config restore also failed: {restore_error}");
-    }
-    message
 }
 
 fn finalize_apply_import_selection_failure(
@@ -1316,9 +897,6 @@ fn build_skills_apply_manifest(
 }
 
 pub fn rollback_last_migration(output_path: &Path) -> CliResult<PathBuf> {
-    // TODO(config-import-access): this direct-fs function remains only for
-    // legacy callers. Kernel-routed rollback_last_apply must use the
-    // access-backed variant below.
     let manifest = load_last_migration_manifest(output_path)?;
     let backup_path = PathBuf::from(&manifest.backup_path);
     if manifest.output_preexisted {
@@ -1340,59 +918,6 @@ pub fn rollback_last_migration(output_path: &Path) -> CliResult<PathBuf> {
     Ok(output_path.to_path_buf())
 }
 
-pub(crate) async fn rollback_last_migration_with_access(
-    ctx: &crate::context::AppContext,
-    output_path: &Path,
-) -> CliResult<PathBuf> {
-    let manifest = load_last_migration_manifest_with_access(ctx, output_path).await?;
-    let backup_path = PathBuf::from(&manifest.backup_path);
-    if manifest.output_preexisted {
-        let restored = ctx
-            .access()
-            .fs()
-            .copy_file(
-                backup_path.as_path(),
-                output_path,
-                FsWriteOptions {
-                    create_dirs: true,
-                    overwrite: true,
-                },
-            )
-            .await
-            .map_err(|error| {
-                format!(
-                    "failed to restore config {} from backup {}: {error}",
-                    output_path.display(),
-                    backup_path.display()
-                )
-            })?;
-        return Ok(restored.destination);
-    }
-
-    let inspection = ctx
-        .access()
-        .fs()
-        .inspect_path(output_path)
-        .await
-        .map_err(|error| error.to_string())?;
-    if inspection.kind.is_some() {
-        let removed = ctx
-            .access()
-            .fs()
-            .remove_file(output_path)
-            .await
-            .map_err(|error| {
-                format!(
-                    "failed to remove imported config {}: {error}",
-                    output_path.display()
-                )
-            })?;
-        return Ok(removed.path);
-    }
-
-    Ok(inspection.path)
-}
-
 fn load_last_migration_manifest(output_path: &Path) -> CliResult<ImportApplyManifest> {
     let state_dir = migration_state_dir(output_path);
     let manifest_path = manifest_path_for_output(output_path, &state_dir);
@@ -1406,41 +931,6 @@ fn load_last_migration_manifest(output_path: &Path) -> CliResult<ImportApplyMani
                 }
                 Err(legacy_error) if legacy_error.kind() == ErrorKind::NotFound => Err(format!(
                     "failed to read migration manifest {} or legacy import manifest {}: {error}",
-                    manifest_path.display(),
-                    legacy_manifest_path.display()
-                )),
-                Err(legacy_error) => Err(format!(
-                    "failed to read legacy import manifest {}: {legacy_error}",
-                    legacy_manifest_path.display()
-                )),
-            }
-        }
-        Err(error) => Err(format!(
-            "failed to read migration manifest {}: {error}",
-            manifest_path.display()
-        )),
-    }
-}
-
-async fn load_last_migration_manifest_with_access(
-    ctx: &crate::context::AppContext,
-    output_path: &Path,
-) -> CliResult<ImportApplyManifest> {
-    let state_dir = migration_state_dir(output_path);
-    let manifest_path = manifest_path_for_output(output_path, &state_dir);
-    match ctx.access().fs().read_file(&manifest_path).await {
-        Ok(manifest_body) => parse_import_apply_manifest(&manifest_path, &manifest_body.bytes),
-        Err(FsAccessError::ReadFile { source, .. }) if source.kind() == ErrorKind::NotFound => {
-            let legacy_manifest_path = legacy_manifest_path_for_output(output_path, &state_dir);
-            match ctx.access().fs().read_file(&legacy_manifest_path).await {
-                Ok(manifest_body) => {
-                    parse_import_apply_manifest(&legacy_manifest_path, &manifest_body.bytes)
-                }
-                Err(FsAccessError::ReadFile {
-                    source: legacy_error,
-                    ..
-                }) if legacy_error.kind() == ErrorKind::NotFound => Err(format!(
-                    "failed to read migration manifest {} or legacy import manifest {}: {source}",
                     manifest_path.display(),
                     legacy_manifest_path.display()
                 )),
@@ -1494,37 +984,6 @@ fn collect_candidate_directories(
             let path = entry.path();
             if path.is_dir() {
                 push_candidate(&mut candidates, &mut seen, path);
-            }
-        }
-    }
-
-    Ok(candidates)
-}
-
-pub(super) async fn collect_candidate_directories_with_access(
-    ctx: &crate::context::AppContext,
-    search_root: &FsInspectPathOutput,
-    options: &DiscoveryOptions,
-) -> CliResult<Vec<PathBuf>> {
-    let mut seen = BTreeSet::new();
-    let mut candidates = Vec::new();
-    push_candidate(&mut candidates, &mut seen, search_root.path.clone());
-
-    if options.include_child_directories && search_root.kind == Some(FsPathKind::Directory) {
-        let entries = ctx
-            .access()
-            .fs()
-            .read_dir(search_root.path.as_path(), 10_000)
-            .await
-            .map_err(|error| {
-                format!(
-                    "failed to read discovery root {}: {error}",
-                    search_root.path.display()
-                )
-            })?;
-        for entry in entries.entries {
-            if entry.kind == FsPathKind::Directory {
-                push_candidate(&mut candidates, &mut seen, entry.path);
             }
         }
     }
@@ -1712,38 +1171,6 @@ fn load_or_default_config(path: Option<&Path>) -> CliResult<crate::config::Loong
     let path_string = path.display().to_string();
     let (_, config) = crate::config::load(Some(&path_string))?;
     Ok(config)
-}
-
-async fn load_or_default_config_with_access(
-    ctx: &crate::context::AppContext,
-    path: Option<&Path>,
-) -> CliResult<crate::config::LoongConfig> {
-    let Some(path) = path else {
-        return Ok(crate::config::LoongConfig::default());
-    };
-    let inspection = ctx
-        .access()
-        .fs()
-        .inspect_path(path)
-        .await
-        .map_err(|error| error.to_string())?;
-    if inspection.kind.is_none() {
-        return Ok(crate::config::LoongConfig::default());
-    }
-
-    let output = ctx
-        .access()
-        .fs()
-        .read_file(path)
-        .await
-        .map_err(|error| error.to_string())?;
-    let raw = String::from_utf8(output.bytes).map_err(|error| {
-        format!(
-            "failed to decode config {} as UTF-8: {error}",
-            output.path.display()
-        )
-    })?;
-    crate::config::parse(raw.as_str())
 }
 
 fn migration_state_dir(output_path: &Path) -> PathBuf {

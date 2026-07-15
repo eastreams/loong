@@ -12892,7 +12892,7 @@ fn config_import_apply_selected_mode_writes_manifest_and_backup() {
 }
 
 #[test]
-fn config_import_apply_selected_mode_can_apply_skills_plan() {
+fn config_import_apply_selected_mode_rejects_skills_plan_until_access_backed() {
     use std::{
         fs,
         path::{Path, PathBuf},
@@ -12943,7 +12943,7 @@ fn config_import_apply_selected_mode_can_apply_skills_plan() {
         file_root: Some(root.clone()),
         ..runtime_config::ToolRuntimeConfig::default()
     };
-    let outcome = execute_tool_core_with_config(
+    let error = execute_tool_core_with_config(
         ToolCoreRequest {
             tool_name: "config.import".to_owned(),
             payload: json!({
@@ -12956,46 +12956,24 @@ fn config_import_apply_selected_mode_can_apply_skills_plan() {
         },
         &config,
     )
-    .expect("config import apply_selected with skills should succeed");
+    .expect_err("unmigrated skill writes must fail closed at the tool boundary");
 
-    assert_eq!(outcome.status, "ok");
-    assert_eq!(
-        outcome.payload["result"]["external_skill_artifact_count"],
-        2
-    );
-    assert_eq!(
-        outcome.payload["result"]["external_skill_entries_applied"],
-        6
-    );
-    assert_eq!(
-        outcome.payload["result"]["external_skill_managed_install_count"],
-        1
-    );
-    assert_eq!(
-        outcome.payload["result"]["external_skill_managed_skill_ids"],
-        json!(["release-guard"])
+    assert!(
+        error.contains("apply_selected with apply_skills_plan is not access-backed yet"),
+        "unexpected denial: {error}"
     );
     assert!(
-        outcome.payload["apply_skills_plan"]
-            .as_bool()
-            .unwrap_or(false),
-        "canonical apply_skills_plan should be present"
+        !output_path.exists(),
+        "a rejected skill plan must not write config output"
     );
     assert!(
-        outcome.payload["result"]["skills_manifest_path"]
-            .as_str()
-            .is_some(),
-        "canonical skills_manifest_path should exist"
-    );
-    let raw = fs::read_to_string(&output_path).expect("read output config");
-    assert!(raw.contains("Imported External Skills Artifacts"));
-    assert!(
-        root.join(crate::config::HOME_DIR_NAME)
+        !root
+            .join(crate::config::HOME_DIR_NAME)
             .join("skills")
             .join("release-guard")
             .join("SKILL.md")
             .exists(),
-        "config.import should bridge installable local skills into the managed runtime"
+        "a rejected skill plan must not install managed skills"
     );
 
     fs::remove_dir_all(&root).ok();

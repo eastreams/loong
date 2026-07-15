@@ -1,8 +1,5 @@
 use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
-use loong_runtime::tool_plane::ToolPath;
 use serde_json::Value;
-
-use crate::context::AppContext;
 
 use super::{
     BASH_EXEC_TOOL_NAME, ToolView, canonical_tool_name, execute_discoverable_tool_core_with_config,
@@ -64,74 +61,20 @@ pub(super) fn execute_direct_tool_core_with_config(
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
     if request.tool_name == "read" {
-        // Validate the direct-read surface before failing closed; actual read
-        // execution needs AppContext so it can enter typed access.
+        // This context-free legacy entry only validates the payload. Migrated
+        // reads must enter through the typed runtime so Access can own I/O.
         let (_read_route, _direct_request) = route_direct_read_request_for_kernel(request, config)?;
         return Err("read requires kernel access context".to_owned());
     }
     if request.tool_name == "write" {
-        // Validate the direct-write payload before failing closed. The write
-        // side effect is migrated to the typed app plane and must enter through
-        // AppContext so it can request ToolInvocationAction and fs
-        // write grants.
+        // As above, payload validation remains for legacy callers, while the
+        // side effect is reachable only through typed ToolInvocation + Access.
         let _direct_request = route_direct_tool_request(request, config)?;
         return Err("write requires kernel access context".to_owned());
     }
 
     let routed_request = route_direct_tool_request(request, config)?;
     execute_discoverable_tool_core_with_config(routed_request, config)
-}
-
-// TODO(typed-tool-legacy-ingress): Delete this ToolCoreOutcome/string bridge
-// when direct callers use ctx.tool(path)?.invoke(payload). All typed lookup and
-// invocation errors are downgraded here only for the legacy direct-tool API.
-pub(super) async fn execute_direct_tool_core_with_context(
-    request: ToolCoreRequest,
-    config: &runtime_config::ToolRuntimeConfig,
-    ctx: &AppContext,
-) -> Result<ToolCoreOutcome, String> {
-    if request.tool_name == "read" {
-        return execute_direct_read_tool_core_with_context(request, config, ctx).await;
-    }
-
-    let routed_request = route_direct_tool_request(request, config)?;
-    let typed_path = ToolPath::from(routed_request.tool_name.clone());
-    match ctx.tool(typed_path) {
-        Ok(invocation) => {
-            let payload = invocation
-                .invoke(routed_request.payload)
-                .await
-                .map_err(|error| error.to_string())?;
-            Ok(ToolCoreOutcome {
-                status: "ok".to_owned(),
-                payload,
-            })
-        }
-        Err(loong_runtime::tool_plane::error::LookupError::NotRegistered { .. }) => {
-            execute_discoverable_tool_core_with_config(routed_request, config)
-        }
-        Err(error) => Err(error.to_string()),
-    }
-}
-
-async fn execute_direct_read_tool_core_with_context(
-    request: ToolCoreRequest,
-    config: &runtime_config::ToolRuntimeConfig,
-    ctx: &AppContext,
-) -> Result<ToolCoreOutcome, String> {
-    // Preserve direct-read normalization (path priority, glob alias handling)
-    // before dispatching through the typed aggregate tool.
-    let (_read_route, direct_request) = route_direct_read_request_for_kernel(request, config)?;
-    let outcome = ctx
-        .tool(ToolPath::from("read"))
-        .map_err(|error| error.to_string())?
-        .invoke(direct_request.payload)
-        .await
-        .map_err(|error| error.to_string())?;
-    Ok(ToolCoreOutcome {
-        status: "ok".to_owned(),
-        payload: outcome,
-    })
 }
 
 fn route_direct_read_request_for_kernel(
