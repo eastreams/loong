@@ -156,9 +156,6 @@ async fn fs_read_dir_action_uses_granted_path_root() {
         "max_entries": 25,
     });
     assert_eq!(action.payload().as_ref(), &expected_payload);
-
-    let action = FsAction::read_dir(GrantedPath::new(PathBuf::from("/workspace/src")), 25);
-    assert_eq!(action.metadata().kind, "fs.read_dir");
 }
 
 #[tokio::test]

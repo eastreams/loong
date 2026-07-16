@@ -71,9 +71,6 @@ fn fs_rename_action_uses_granted_entry_paths() {
         "overwrite": false,
     });
     assert_eq!(action.payload().as_ref(), &expected_payload);
-
-    let action = FsAction::rename_path(action);
-    assert_eq!(action.metadata().kind, "fs.rename");
 }
 
 #[tokio::test]

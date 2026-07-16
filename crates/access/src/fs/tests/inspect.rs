@@ -71,27 +71,6 @@ async fn fs_inspect_path_action_uses_granted_path() {
 }
 
 #[tokio::test]
-async fn fs_action_wraps_inspect_path_action() {
-    let kernel = FsAccessTestKernel::default();
-    let workspace_root = PathBuf::from("/workspace");
-    let ctx = FsAccessPolicyContext::new(&workspace_root);
-    let path = grant_target_path(&kernel, &ctx, "notes.md").await;
-    let action = FsAction::inspect_path(path);
-    let metadata = action.metadata();
-
-    assert_eq!(metadata.kind, "fs.inspect_path");
-    assert_eq!(metadata.operation, "inspect_path");
-    assert_eq!(
-        metadata.required_capabilities.as_ref(),
-        [Capability::FilesystemRead]
-    );
-    let expected_payload = serde_json::json!({
-        "path": "/workspace/notes.md",
-    });
-    assert_eq!(action.payload().as_ref(), &expected_payload);
-}
-
-#[tokio::test]
 async fn fs_inspect_path_denies_before_inspecting_path() {
     let kernel = FsAccessTestKernel::denying();
     let base = unique_temp_dir("loong-access-fs-inspect-deny");

@@ -71,38 +71,6 @@ async fn fs_copy_file_action_uses_granted_paths() {
 }
 
 #[tokio::test]
-async fn fs_action_wraps_copy_file_action() {
-    let kernel = FsAccessTestKernel::default();
-    let workspace_root = PathBuf::from("/workspace");
-    let ctx = FsAccessPolicyContext::new(&workspace_root);
-    let source = grant_target_path(&kernel, &ctx, "source.txt").await;
-    let destination = grant_target_path(&kernel, &ctx, "backup/source.txt").await;
-    let action = FsAction::copy_file(
-        source,
-        destination,
-        FsWriteOptions {
-            create_dirs: false,
-            overwrite: true,
-        },
-    );
-    let metadata = action.metadata();
-
-    assert_eq!(metadata.kind, "fs.copy_file");
-    assert_eq!(metadata.operation, "copy_file");
-    assert_eq!(
-        metadata.required_capabilities.as_ref(),
-        [Capability::FilesystemRead, Capability::FilesystemWrite]
-    );
-    let expected_payload = serde_json::json!({
-        "source": "/workspace/source.txt",
-        "destination": "/workspace/backup/source.txt",
-        "create_dirs": false,
-        "overwrite": true,
-    });
-    assert_eq!(action.payload().as_ref(), &expected_payload);
-}
-
-#[tokio::test]
 async fn fs_copy_file_denies_before_copying_file() {
     let kernel = FsAccessTestKernel::denying();
     let base = unique_temp_dir("loong-access-fs-copy-file-deny");

@@ -1,25 +1,6 @@
 use super::*;
 
 #[tokio::test]
-async fn fs_action_wraps_read_action() {
-    let kernel = FsAccessTestKernel::default();
-    let workspace_root = PathBuf::from("/workspace");
-    let ctx = FsAccessPolicyContext::new(&workspace_root);
-    let path = grant_target_path(&kernel, &ctx, "notes.md").await;
-    let action = FsAction::read_file(path);
-    let metadata = action.metadata();
-
-    assert_eq!(metadata.kind, "fs.read");
-    assert_eq!(metadata.operation, "read_file");
-    assert_eq!(
-        metadata.required_capabilities.as_ref(),
-        [Capability::FilesystemRead]
-    );
-    let expected_payload = serde_json::json!({"path": "/workspace/notes.md"});
-    assert_eq!(action.payload().as_ref(), &expected_payload);
-}
-
-#[tokio::test]
 async fn tool_context_like_chain_grants_read_file_via_access_then_fs() {
     let kernel = FsAccessTestKernel::default();
     let base = unique_temp_dir("loong-access-fs-read-output");

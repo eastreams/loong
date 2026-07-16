@@ -162,68 +162,6 @@ async fn fs_atomic_write_action_uses_granted_path() {
 }
 
 #[tokio::test]
-async fn fs_action_wraps_atomic_write_action() {
-    let kernel = FsAccessTestKernel::default();
-    let workspace_root = PathBuf::from("/workspace");
-    let ctx = FsAccessPolicyContext::new(&workspace_root);
-    let path = grant_target_path(&kernel, &ctx, "manifest.json").await;
-    let action = FsAction::write_file_atomically(
-        path,
-        b"hello".to_vec(),
-        FsWriteOptions {
-            create_dirs: true,
-            overwrite: true,
-        },
-    );
-    let metadata = action.metadata();
-
-    assert_eq!(metadata.kind, "fs.atomic_write");
-    assert_eq!(metadata.operation, "write_file_atomically");
-    assert_eq!(
-        metadata.required_capabilities.as_ref(),
-        [Capability::FilesystemWrite]
-    );
-    let expected_payload = serde_json::json!({
-        "path": "/workspace/manifest.json",
-        "byte_count": 5,
-        "create_dirs": true,
-        "overwrite": true,
-    });
-    assert_eq!(action.payload().as_ref(), &expected_payload);
-}
-
-#[tokio::test]
-async fn fs_action_wraps_write_action() {
-    let kernel = FsAccessTestKernel::default();
-    let workspace_root = PathBuf::from("/workspace");
-    let ctx = FsAccessPolicyContext::new(&workspace_root);
-    let path = grant_target_path(&kernel, &ctx, "notes.md").await;
-    let action = FsAction::write_file(
-        path,
-        b"hello".to_vec(),
-        FsWriteOptions {
-            create_dirs: false,
-            overwrite: true,
-        },
-    );
-    let metadata = action.metadata();
-
-    assert_eq!(metadata.kind, "fs.write");
-    assert_eq!(metadata.operation, "write_file");
-    assert_eq!(
-        metadata.required_capabilities.as_ref(),
-        [Capability::FilesystemWrite]
-    );
-    let expected_payload = serde_json::json!({
-        "path": "/workspace/notes.md",
-        "byte_count": 5,
-        "create_dirs": false,
-        "overwrite": true,
-    });
-    assert_eq!(action.payload().as_ref(), &expected_payload);
-}
-
-#[tokio::test]
 async fn fs_write_denies_before_creating_file() {
     let kernel = FsAccessTestKernel::denying();
     let base = unique_temp_dir("loong-access-fs-write-deny");

@@ -29,9 +29,9 @@ use super::{
     FsPathKind, FsPathPolicyContext, FsResolutionContext,
     access::{FsAccess, FsAccessError},
     action::{
-        FsAction, FsContentSearchAction, FsContentSearchOptions, FsCopyFileAction,
-        FsCreateDirAllAction, FsGlobAction, FsInspectPathAction, FsReadDirAction,
-        FsRemoveDirAllAction, FsRemoveFileAction, FsRenameAction,
+        FsContentSearchAction, FsContentSearchOptions, FsCopyFileAction, FsCreateDirAllAction,
+        FsGlobAction, FsInspectPathAction, FsReadDirAction, FsRemoveDirAllAction,
+        FsRemoveFileAction, FsRenameAction,
     },
     path::{FsPathAction, FsResolvePathAction, GrantedEntryPath, GrantedPath},
     read::FsReadAction,

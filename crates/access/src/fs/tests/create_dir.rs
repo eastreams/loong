@@ -67,27 +67,6 @@ async fn fs_create_dir_all_action_uses_granted_path() {
 }
 
 #[tokio::test]
-async fn fs_action_wraps_create_dir_all_action() {
-    let kernel = FsAccessTestKernel::default();
-    let workspace_root = PathBuf::from("/workspace");
-    let ctx = FsAccessPolicyContext::new(&workspace_root);
-    let path = grant_target_path(&kernel, &ctx, "state").await;
-    let action = FsAction::create_dir_all(path);
-    let metadata = action.metadata();
-
-    assert_eq!(metadata.kind, "fs.create_dir_all");
-    assert_eq!(metadata.operation, "create_dir_all");
-    assert_eq!(
-        metadata.required_capabilities.as_ref(),
-        [Capability::FilesystemWrite]
-    );
-    let expected_payload = serde_json::json!({
-        "path": "/workspace/state",
-    });
-    assert_eq!(action.payload().as_ref(), &expected_payload);
-}
-
-#[tokio::test]
 async fn fs_create_dir_all_denies_before_creating_directory() {
     let kernel = FsAccessTestKernel::denying();
     let base = unique_temp_dir("loong-access-fs-create-dir-deny");

@@ -16,9 +16,9 @@ pub mod write;
 
 pub use access::{FsAccess, FsAccessError};
 pub use action::{
-    FsAction, FsContentSearchAction, FsContentSearchOptions, FsCopyFileAction,
-    FsCreateDirAllAction, FsGlobAction, FsInspectPathAction, FsReadDirAction, FsRemoveDirAllAction,
-    FsRemoveFileAction, FsRenameAction,
+    FsContentSearchAction, FsContentSearchOptions, FsCopyFileAction, FsCreateDirAllAction,
+    FsGlobAction, FsInspectPathAction, FsReadDirAction, FsRemoveDirAllAction, FsRemoveFileAction,
+    FsRenameAction,
 };
 pub use content_search::{FsContentSearchMatch, FsContentSearchOutput};
 pub use copy::FsCopyFileOutput;

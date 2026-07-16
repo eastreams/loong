@@ -98,9 +98,6 @@ fn fs_remove_file_action_uses_granted_entry_path() {
         "path": "/workspace/logs/old.txt",
     });
     assert_eq!(action.payload().as_ref(), &expected_payload);
-
-    let action = FsAction::remove_file(action);
-    assert_eq!(action.metadata().kind, "fs.remove_file");
 }
 
 #[tokio::test]
@@ -167,9 +164,6 @@ fn fs_remove_dir_all_action_uses_granted_entry_path() {
         "path": "/workspace/managed/demo",
     });
     assert_eq!(action.payload().as_ref(), &expected_payload);
-
-    let action = FsAction::remove_dir_all(action);
-    assert_eq!(action.metadata().kind, "fs.remove_dir_all");
 }
 
 #[tokio::test]
