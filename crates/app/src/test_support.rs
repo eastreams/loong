@@ -7,14 +7,13 @@ use loong_contracts::{Capability, ExecutionRoute, HarnessKind};
 use loong_kernel::{
     FixedClock, InMemoryAuditSink, Kernel, VerticalPackManifest,
     access::fs::{
-        FsAtomicWriteAllowPolicy, FsPathAllowedRootsPolicy, FsReadAllowPolicy,
-        FsReadFilenameDenyPolicy, FsResolvePathAllowPolicy, FsWriteAllowPolicy,
+        FsAtomicWriteAllowPolicy, FsCopyFileAllowPolicy, FsPathAllowedRootsPolicy,
+        FsReadAllowPolicy, FsReadFilenameDenyPolicy, FsResolvePathAllowPolicy, FsWriteAllowPolicy,
     },
     policy::{
-        FsContentSearchAllowPolicy, FsCopyFileAllowPolicy, FsCreateDirAllAllowPolicy,
-        FsGlobAllowPolicy, FsInspectPathAllowPolicy, FsReadDirAllowPolicy,
-        FsRemoveDirAllAllowPolicy, FsRemoveFileAllowPolicy, FsRenameAllowPolicy,
-        PolicyPipelineBuilder,
+        FsContentSearchAllowPolicy, FsCreateDirAllAllowPolicy, FsGlobAllowPolicy,
+        FsInspectPathAllowPolicy, FsReadDirAllowPolicy, FsRemoveDirAllAllowPolicy,
+        FsRemoveFileAllowPolicy, FsRenameAllowPolicy, PolicyPipelineBuilder,
     },
 };
 use loong_runtime::runtime::Runtime;

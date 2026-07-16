@@ -8,12 +8,11 @@ use thiserror::Error;
 
 use super::{
     action::{
-        FsContentSearchAction, FsContentSearchOptions, FsCopyFileAction, FsCreateDirAllAction,
-        FsGlobAction, FsInspectPathAction, FsReadDirAction, FsRemoveDirAllAction,
-        FsRemoveFileAction, FsRenameAction,
+        FsContentSearchAction, FsContentSearchOptions, FsCreateDirAllAction, FsGlobAction,
+        FsInspectPathAction, FsReadDirAction, FsRemoveDirAllAction, FsRemoveFileAction,
+        FsRenameAction,
     },
     content_search::FsContentSearchOutput,
-    copy::FsCopyFileOutput,
     directory::FsCreateDirAllOutput,
     error::FsActionError,
     glob::FsGlobOutput,
@@ -60,26 +59,6 @@ where
     P: PolicyEngine<C>,
     C::Cx<'ctx>: FsResolutionContext,
 {
-    /// Copy one file through source/destination path policy and copy policy.
-    pub async fn copy_file(
-        self,
-        source: impl AsRef<Path>,
-        destination: impl AsRef<Path>,
-        options: FsWriteOptions,
-    ) -> Result<FsCopyFileOutput, FsAccessError> {
-        let source = self.grant_target_path(source).await?;
-        let destination = self.grant_target_path(destination).await?;
-
-        let action = FsCopyFileAction::new(source, destination, options);
-        let grant = self
-            .policy_engine
-            .grant(self.ctx, action)
-            .await
-            .map_err(AuthorizationError::from)
-            .map_err(FsAccessError::Authorization)?;
-        grant.into_granted().run(self.ctx).await
-    }
-
     /// Create a directory tree through resolution, path, and write policy.
     pub async fn create_dir_all(
         self,

@@ -7,8 +7,8 @@ use std::{
 };
 
 use crate::access::fs::{
-    FsContentSearchAction, FsCopyFileAction, FsCreateDirAllAction, FsGlobAction,
-    FsInspectPathAction, FsReadDirAction, FsRemoveDirAllAction, FsRemoveFileAction, FsRenameAction,
+    FsContentSearchAction, FsCreateDirAllAction, FsGlobAction, FsInspectPathAction,
+    FsReadDirAction, FsRemoveDirAllAction, FsRemoveFileAction, FsRenameAction,
 };
 use crate::{
     audit::SharedAuditState,
@@ -542,9 +542,6 @@ where
 }
 
 #[derive(Debug, Default, Clone, Copy)]
-pub struct FsCopyFileAllowPolicy;
-
-#[derive(Debug, Default, Clone, Copy)]
 pub struct FsCreateDirAllAllowPolicy;
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -567,24 +564,6 @@ pub struct FsReadDirAllowPolicy;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct FsContentSearchAllowPolicy;
-
-#[async_trait]
-impl<C> Policy<C, FsCopyFileAction> for FsCopyFileAllowPolicy
-where
-    C: ContextFactory + Send + Sync,
-{
-    fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("fs-copy-file-allow")
-    }
-
-    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &FsCopyFileAction) -> PolicyGrant {
-        PolicyGrant {
-            decision: PolicyDecision::Allow,
-            predicate: Some("fs.copy_file reached terminal allow policy".into()),
-            reason: "filesystem file copy allowed after configured deny policies".into(),
-        }
-    }
-}
 
 #[async_trait]
 impl<C> Policy<C, FsCreateDirAllAction> for FsCreateDirAllAllowPolicy

@@ -9,8 +9,6 @@ use super::{
     write::FsWriteOptions,
 };
 
-const FS_COPY_FILE_REQUIRED_CAPABILITIES: [Capability; 2] =
-    [Capability::FilesystemRead, Capability::FilesystemWrite];
 const FS_CREATE_DIR_ALL_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
 const FS_REMOVE_FILE_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
 const FS_REMOVE_DIR_ALL_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
@@ -19,74 +17,6 @@ const FS_GLOB_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRe
 const FS_READ_DIR_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 const FS_CONTENT_SEARCH_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 const FS_INSPECT_PATH_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
-
-/// Typed action for copying bytes between two governed filesystem paths.
-///
-/// Copy is modeled as one action instead of `read_file` plus app-side
-/// `write_file` so backup/restore flows do not move file bytes through tool or
-/// migration orchestration code.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FsCopyFileAction {
-    source: GrantedPath,
-    destination: GrantedPath,
-    options: FsWriteOptions,
-}
-
-impl FsCopyFileAction {
-    #[must_use]
-    pub fn new(source: GrantedPath, destination: GrantedPath, options: FsWriteOptions) -> Self {
-        Self {
-            source,
-            destination,
-            options,
-        }
-    }
-
-    #[must_use]
-    pub fn source_path(&self) -> &Path {
-        self.source.as_path()
-    }
-
-    #[must_use]
-    pub fn destination_path(&self) -> &Path {
-        self.destination.as_path()
-    }
-
-    #[must_use]
-    pub fn options(&self) -> FsWriteOptions {
-        self.options
-    }
-}
-
-impl ActionMeta for FsCopyFileAction {
-    fn metadata(&self) -> ActionMetadata<'_> {
-        ActionMetadata {
-            kind: "fs.copy_file",
-            operation: Cow::Borrowed("copy_file"),
-            required_capabilities: Cow::Borrowed(&FS_COPY_FILE_REQUIRED_CAPABILITIES),
-        }
-    }
-
-    fn audit_resource(&self) -> Option<Cow<'_, str>> {
-        Some(
-            format!(
-                "{} -> {}",
-                self.source.as_path().display(),
-                self.destination.as_path().display()
-            )
-            .into(),
-        )
-    }
-
-    fn payload(&self) -> Cow<'_, Value> {
-        Cow::Owned(json!({
-            "source": self.source.as_path().display().to_string(),
-            "destination": self.destination.as_path().display().to_string(),
-            "create_dirs": self.options.create_dirs,
-            "overwrite": self.options.overwrite,
-        }))
-    }
-}
 
 /// Typed action for creating one governed directory tree.
 ///
