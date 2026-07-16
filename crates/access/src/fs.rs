@@ -12,12 +12,13 @@ pub mod read_dir;
 pub mod remove;
 pub mod remove_dir;
 pub mod rename;
+pub mod write;
 
-pub use access::{FsAccess, FsAccessError, FsWriteOutput};
+pub use access::{FsAccess, FsAccessError};
 pub use action::{
-    FsAction, FsAtomicWriteAction, FsContentSearchAction, FsContentSearchOptions, FsCopyFileAction,
+    FsAction, FsContentSearchAction, FsContentSearchOptions, FsCopyFileAction,
     FsCreateDirAllAction, FsGlobAction, FsInspectPathAction, FsReadDirAction, FsRemoveDirAllAction,
-    FsRemoveFileAction, FsRenameAction, FsWriteAction, FsWriteOptions,
+    FsRemoveFileAction, FsRenameAction,
 };
 pub use content_search::{FsContentSearchMatch, FsContentSearchOutput};
 pub use copy::FsCopyFileOutput;
@@ -35,6 +36,10 @@ pub use read_dir::{FsReadDirEntry, FsReadDirOutput};
 pub use remove::{FsRemoveFileKind, FsRemoveFileOutput};
 pub use remove_dir::FsRemoveDirAllOutput;
 pub use rename::FsRenameOutput;
+pub use write::{
+    FsAtomicWriteAction, FsAtomicWriteAllowPolicy, FsWriteAction, FsWriteAllowPolicy,
+    FsWriteOptions, FsWriteOutput,
+};
 
 #[cfg(test)]
 mod tests;

@@ -1,20 +1,16 @@
-use std::{
-    io::Write as _,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
-use async_trait::async_trait;
 use loong_core::{
     error::AuthorizationError,
-    policy::{action::Action, context::ContextFactory, engine::PolicyEngine, grant::Granted},
+    policy::{context::ContextFactory, engine::PolicyEngine},
 };
 use thiserror::Error;
 
 use super::{
     action::{
-        FsAtomicWriteAction, FsContentSearchAction, FsContentSearchOptions, FsCopyFileAction,
-        FsCreateDirAllAction, FsGlobAction, FsInspectPathAction, FsReadDirAction,
-        FsRemoveDirAllAction, FsRemoveFileAction, FsRenameAction, FsWriteAction, FsWriteOptions,
+        FsContentSearchAction, FsContentSearchOptions, FsCopyFileAction, FsCreateDirAllAction,
+        FsGlobAction, FsInspectPathAction, FsReadDirAction, FsRemoveDirAllAction,
+        FsRemoveFileAction, FsRenameAction,
     },
     content_search::FsContentSearchOutput,
     copy::FsCopyFileOutput,
@@ -27,6 +23,7 @@ use super::{
     remove::FsRemoveFileOutput,
     remove_dir::FsRemoveDirAllOutput,
     rename::FsRenameOutput,
+    write::FsWriteOptions,
 };
 
 /// Filesystem access facade.
@@ -63,51 +60,6 @@ where
     P: PolicyEngine<C>,
     C::Cx<'ctx>: FsResolutionContext,
 {
-    /// Write bytes through resolution, path authorization, and write policy.
-    ///
-    /// This only prepares the access-backed primitive. App write/edit tools
-    /// still own payload parsing and response/audit preview until they migrate.
-    pub async fn write_file(
-        self,
-        path: impl AsRef<Path>,
-        bytes: impl Into<Vec<u8>>,
-        options: FsWriteOptions,
-    ) -> Result<FsWriteOutput, FsAccessError> {
-        let path = self.grant_target_path(path).await?;
-
-        let action = FsWriteAction::new(path, bytes.into(), options);
-        let grant = self
-            .policy_engine
-            .grant(self.ctx, action)
-            .await
-            .map_err(AuthorizationError::from)
-            .map_err(FsAccessError::Authorization)?;
-        grant.into_granted().run(self.ctx).await
-    }
-
-    /// Atomically write through resolution, path authorization, and write policy.
-    ///
-    /// This is for manifests and rollback records where a failed write must not
-    /// leave the previous target truncated. The final replacement still happens
-    /// inside access after policy grants the concrete action.
-    pub async fn write_file_atomically(
-        self,
-        path: impl AsRef<Path>,
-        bytes: impl Into<Vec<u8>>,
-        options: FsWriteOptions,
-    ) -> Result<FsWriteOutput, FsAccessError> {
-        let path = self.grant_target_path(path).await?;
-
-        let action = FsAtomicWriteAction::new(path, bytes.into(), options);
-        let grant = self
-            .policy_engine
-            .grant(self.ctx, action)
-            .await
-            .map_err(AuthorizationError::from)
-            .map_err(FsAccessError::Authorization)?;
-        grant.into_granted().run(self.ctx).await
-    }
-
     /// Copy one file through source/destination path policy and copy policy.
     pub async fn copy_file(
         self,
@@ -299,187 +251,6 @@ where
             .map_err(FsAccessError::Authorization)?;
         grant.into_granted().run(self.ctx).await
     }
-}
-
-/// Execute an already-authorized fs write.
-///
-/// This consumes `Granted<FsWriteAction>` so write side effects cannot be
-/// reached with a raw path or an ungranted action.
-#[async_trait]
-impl<Cx> Action<Cx> for FsWriteAction
-where
-    Cx: Sync,
-{
-    type Output = FsWriteOutput;
-    type Error = FsAccessError;
-
-    async fn run(granted: Granted<Self>, _ctx: &Cx) -> Result<Self::Output, Self::Error> {
-        let action = granted.into_action();
-        let path = action.path().to_path_buf();
-        let options = action.options();
-
-        if symlink_metadata_is_symlink(&path)? {
-            return Err(FsAccessError::RefuseSymlink { path });
-        }
-        if path.is_dir() {
-            return Err(FsAccessError::PathIsDirectory { path });
-        }
-        if options.create_dirs
-            && let Some(parent) = path.parent()
-        {
-            std::fs::create_dir_all(parent).map_err(|source| {
-                FsAccessError::CreateParentDirectory {
-                    path: parent.to_path_buf(),
-                    source,
-                }
-            })?;
-        }
-
-        let overwritten = path
-            .try_exists()
-            .map_err(|source| FsAccessError::InspectPath {
-                path: path.clone(),
-                source,
-            })?;
-        if overwritten && !options.overwrite {
-            return Err(FsAccessError::FileExistsRequiresOverwrite { path });
-        }
-
-        let mut file = open_write_target(&path, options.overwrite)?;
-        file.write_all(action.bytes())
-            .map_err(|source| FsAccessError::WriteFile {
-                path: path.clone(),
-                source,
-            })?;
-
-        Ok(FsWriteOutput {
-            path,
-            bytes_written: action.bytes().len(),
-            overwritten,
-        })
-    }
-}
-
-/// Execute an already-authorized atomic fs write.
-///
-/// This consumes `Granted<FsAtomicWriteAction>` so manifest-style replacement
-/// cannot be performed with an ungranted target path.
-#[async_trait]
-impl<Cx> Action<Cx> for FsAtomicWriteAction
-where
-    Cx: Sync,
-{
-    type Output = FsWriteOutput;
-    type Error = FsAccessError;
-
-    async fn run(granted: Granted<Self>, _ctx: &Cx) -> Result<Self::Output, Self::Error> {
-        let action = granted.into_action();
-        let path = action.path().to_path_buf();
-        let options = action.options();
-
-        if symlink_metadata_is_symlink(&path)? {
-            return Err(FsAccessError::RefuseSymlink { path });
-        }
-        if path.is_dir() {
-            return Err(FsAccessError::PathIsDirectory { path });
-        }
-        if options.create_dirs
-            && let Some(parent) = path.parent()
-        {
-            std::fs::create_dir_all(parent).map_err(|source| {
-                FsAccessError::CreateParentDirectory {
-                    path: parent.to_path_buf(),
-                    source,
-                }
-            })?;
-        }
-
-        let overwritten = path
-            .try_exists()
-            .map_err(|source| FsAccessError::InspectPath {
-                path: path.clone(),
-                source,
-            })?;
-        if overwritten && !options.overwrite {
-            return Err(FsAccessError::FileExistsRequiresOverwrite { path });
-        }
-
-        let parent = path.parent().unwrap_or(Path::new("."));
-        let mut staged = tempfile::NamedTempFile::new_in(parent).map_err(|source| {
-            FsAccessError::OpenWriteFile {
-                path: path.clone(),
-                source,
-            }
-        })?;
-        staged
-            .as_file_mut()
-            .write_all(action.bytes())
-            .map_err(|source| FsAccessError::WriteFile {
-                path: path.clone(),
-                source,
-            })?;
-        staged
-            .as_file_mut()
-            .sync_all()
-            .map_err(|source| FsAccessError::WriteFile {
-                path: path.clone(),
-                source,
-            })?;
-        staged
-            .persist(&path)
-            .map_err(|error| FsAccessError::WriteFile {
-                path: path.clone(),
-                source: error.error,
-            })?;
-
-        Ok(FsWriteOutput {
-            path,
-            bytes_written: action.bytes().len(),
-            overwritten,
-        })
-    }
-}
-
-fn symlink_metadata_is_symlink(path: &Path) -> Result<bool, FsAccessError> {
-    match std::fs::symlink_metadata(path) {
-        Ok(metadata) => Ok(metadata.file_type().is_symlink()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(source) => Err(FsAccessError::InspectPath {
-            path: path.to_path_buf(),
-            source,
-        }),
-    }
-}
-
-fn open_write_target(path: &Path, overwrite: bool) -> Result<std::fs::File, FsAccessError> {
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true);
-    if overwrite {
-        options.create(true).truncate(true);
-    } else {
-        options.create_new(true);
-    }
-
-    options.open(path).map_err(|source| {
-        if source.kind() == std::io::ErrorKind::AlreadyExists && !overwrite {
-            return FsAccessError::FileExistsRequiresOverwrite {
-                path: path.to_path_buf(),
-            };
-        }
-
-        FsAccessError::OpenWriteFile {
-            path: path.to_path_buf(),
-            source,
-        }
-    })
-}
-
-/// Result returned after a governed fs write.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FsWriteOutput {
-    pub path: PathBuf,
-    pub bytes_written: usize,
-    pub overwritten: bool,
 }
 
 #[derive(Debug, Error)]

@@ -7,11 +7,9 @@ use loong_kernel::{
     InMemoryAuditSink, Kernel, SystemClock, VerticalPackManifest,
     access::fs::{
         FsPathAllowedRootsPolicy, FsReadAllowPolicy, FsReadFilenameDenyPolicy,
-        FsResolvePathAllowPolicy,
+        FsResolvePathAllowPolicy, FsWriteAllowPolicy,
     },
-    policy::{
-        FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsWriteAllowPolicy, PolicyPipelineBuilder,
-    },
+    policy::{FsContentSearchAllowPolicy, FsGlobAllowPolicy, PolicyPipelineBuilder},
 };
 use serde_json::json;
 

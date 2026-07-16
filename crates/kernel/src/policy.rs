@@ -7,9 +7,8 @@ use std::{
 };
 
 use crate::access::fs::{
-    FsAtomicWriteAction, FsContentSearchAction, FsCopyFileAction, FsCreateDirAllAction,
-    FsGlobAction, FsInspectPathAction, FsReadDirAction, FsRemoveDirAllAction, FsRemoveFileAction,
-    FsRenameAction, FsWriteAction,
+    FsContentSearchAction, FsCopyFileAction, FsCreateDirAllAction, FsGlobAction,
+    FsInspectPathAction, FsReadDirAction, FsRemoveDirAllAction, FsRemoveFileAction, FsRenameAction,
 };
 use crate::{
     audit::SharedAuditState,
@@ -543,12 +542,6 @@ where
 }
 
 #[derive(Debug, Default, Clone, Copy)]
-pub struct FsWriteAllowPolicy;
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct FsAtomicWriteAllowPolicy;
-
-#[derive(Debug, Default, Clone, Copy)]
 pub struct FsCopyFileAllowPolicy;
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -574,42 +567,6 @@ pub struct FsReadDirAllowPolicy;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct FsContentSearchAllowPolicy;
-
-#[async_trait]
-impl<C> Policy<C, FsWriteAction> for FsWriteAllowPolicy
-where
-    C: ContextFactory + Send + Sync,
-{
-    fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("fs-write-allow")
-    }
-
-    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &FsWriteAction) -> PolicyGrant {
-        PolicyGrant {
-            decision: PolicyDecision::Allow,
-            predicate: Some("fs.write reached terminal allow policy".into()),
-            reason: "filesystem write allowed after configured deny policies".into(),
-        }
-    }
-}
-
-#[async_trait]
-impl<C> Policy<C, FsAtomicWriteAction> for FsAtomicWriteAllowPolicy
-where
-    C: ContextFactory + Send + Sync,
-{
-    fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("fs-atomic-write-allow")
-    }
-
-    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &FsAtomicWriteAction) -> PolicyGrant {
-        PolicyGrant {
-            decision: PolicyDecision::Allow,
-            predicate: Some("fs.atomic_write reached terminal allow policy".into()),
-            reason: "filesystem atomic write allowed after configured deny policies".into(),
-        }
-    }
-}
 
 #[async_trait]
 impl<C> Policy<C, FsCopyFileAction> for FsCopyFileAllowPolicy

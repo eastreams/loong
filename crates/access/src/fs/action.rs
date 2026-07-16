@@ -7,9 +7,9 @@ use serde_json::{Value, json};
 use super::{
     path::{GrantedEntryPath, GrantedPath},
     read::FsReadAction,
+    write::{FsAtomicWriteAction, FsWriteAction, FsWriteOptions},
 };
 
-const FS_WRITE_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
 const FS_COPY_FILE_REQUIRED_CAPABILITIES: [Capability; 2] =
     [Capability::FilesystemRead, Capability::FilesystemWrite];
 const FS_CREATE_DIR_ALL_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
@@ -20,135 +20,6 @@ const FS_GLOB_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRe
 const FS_READ_DIR_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 const FS_CONTENT_SEARCH_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 const FS_INSPECT_PATH_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
-
-/// Policy-visible options for writing one governed filesystem path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FsWriteOptions {
-    pub create_dirs: bool,
-    pub overwrite: bool,
-}
-
-/// Typed action for writing bytes to one governed filesystem path.
-///
-/// The action carries bytes because the access side-effect boundary needs them
-/// to perform the write. Its audit payload records only byte count and flags,
-/// not file content.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FsWriteAction {
-    path: GrantedPath,
-    bytes: Vec<u8>,
-    options: FsWriteOptions,
-}
-
-impl FsWriteAction {
-    #[must_use]
-    pub fn new(path: GrantedPath, bytes: Vec<u8>, options: FsWriteOptions) -> Self {
-        Self {
-            path,
-            bytes,
-            options,
-        }
-    }
-
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        self.path.as_path()
-    }
-
-    #[must_use]
-    pub fn bytes(&self) -> &[u8] {
-        self.bytes.as_slice()
-    }
-
-    #[must_use]
-    pub fn options(&self) -> FsWriteOptions {
-        self.options
-    }
-}
-
-impl ActionMeta for FsWriteAction {
-    fn metadata(&self) -> ActionMetadata<'_> {
-        ActionMetadata {
-            kind: "fs.write",
-            operation: Cow::Borrowed("write_file"),
-            required_capabilities: Cow::Borrowed(&FS_WRITE_REQUIRED_CAPABILITIES),
-        }
-    }
-
-    fn audit_resource(&self) -> Option<Cow<'_, str>> {
-        Some(self.path.as_path().display().to_string().into())
-    }
-
-    fn payload(&self) -> Cow<'_, Value> {
-        Cow::Owned(json!({
-            "path": self.path.as_path().display().to_string(),
-            "byte_count": self.bytes.len(),
-            "create_dirs": self.options.create_dirs,
-            "overwrite": self.options.overwrite,
-        }))
-    }
-}
-
-/// Typed action for atomically replacing one governed filesystem path.
-///
-/// This is separate from `FsWriteAction` because migration manifests and
-/// rollback records need a stronger failure mode: stage bytes next to the
-/// target, then replace the target only after the staged file is complete.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FsAtomicWriteAction {
-    path: GrantedPath,
-    bytes: Vec<u8>,
-    options: FsWriteOptions,
-}
-
-impl FsAtomicWriteAction {
-    #[must_use]
-    pub fn new(path: GrantedPath, bytes: Vec<u8>, options: FsWriteOptions) -> Self {
-        Self {
-            path,
-            bytes,
-            options,
-        }
-    }
-
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        self.path.as_path()
-    }
-
-    #[must_use]
-    pub fn bytes(&self) -> &[u8] {
-        self.bytes.as_slice()
-    }
-
-    #[must_use]
-    pub fn options(&self) -> FsWriteOptions {
-        self.options
-    }
-}
-
-impl ActionMeta for FsAtomicWriteAction {
-    fn metadata(&self) -> ActionMetadata<'_> {
-        ActionMetadata {
-            kind: "fs.atomic_write",
-            operation: Cow::Borrowed("write_file_atomically"),
-            required_capabilities: Cow::Borrowed(&FS_WRITE_REQUIRED_CAPABILITIES),
-        }
-    }
-
-    fn audit_resource(&self) -> Option<Cow<'_, str>> {
-        Some(self.path.as_path().display().to_string().into())
-    }
-
-    fn payload(&self) -> Cow<'_, Value> {
-        Cow::Owned(json!({
-            "path": self.path.as_path().display().to_string(),
-            "byte_count": self.bytes.len(),
-            "create_dirs": self.options.create_dirs,
-            "overwrite": self.options.overwrite,
-        }))
-    }
-}
 
 /// Typed action for copying bytes between two governed filesystem paths.
 ///
