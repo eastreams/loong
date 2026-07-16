@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loong_contracts::{Capabilities, ToolCoreOutcome, ToolCoreRequest};
 use loong_runtime::tool_plane::ToolPath;
 use serde_json::{Value, json};
 pub(crate) use tool_internal_context::{
@@ -39,6 +39,7 @@ mod config_import;
 pub(crate) mod delegate;
 mod direct_policy_preflight;
 pub(crate) mod download_guard;
+mod error;
 #[cfg(feature = "feishu-integration")]
 mod feishu;
 #[cfg(feature = "tool-file")]
@@ -107,6 +108,7 @@ pub use catalog::{
     runtime_tool_view, runtime_tool_view_for_config, runtime_tool_view_for_config_with_skills,
     runtime_tool_view_for_runtime_config, tool_catalog,
 };
+pub(crate) use error::ToolRequestError;
 #[cfg(feature = "feishu-integration")]
 pub(crate) use feishu::{DeferredFeishuCardUpdate, drain_deferred_feishu_card_updates};
 pub use kernel_adapter::KernelToolAdapter;
@@ -389,14 +391,14 @@ pub async fn execute_tool(
 
 // TODO(tool-plane): collapse this bridge into AppContext::tool(...)
 // call sites. During migration this legacy envelope ingress first attempts the
-// app-owned typed plane through ctx.tool(path)?.invoke(payload), then falls back
+// runtime-owned typed plane through ctx.tool(path)?.invoke(payload), then falls back
 // to the legacy kernel adapter plane only for tools that are not registered yet.
-// Other typed lookup failures are downgraded here only for this legacy envelope.
+// Every other typed failure keeps its owning error type and never falls back.
 pub(crate) async fn execute_kernel_tool_request(
     ctx: &AppContext,
     request: ToolCoreRequest,
     trusted_internal_payload: bool,
-) -> Result<ToolCoreOutcome, loong_kernel::KernelError> {
+) -> Result<ToolCoreOutcome, ToolRequestError> {
     let request = ToolCoreRequest {
         tool_name: canonical_tool_name(request.tool_name.as_str()).to_owned(),
         payload: request.payload,
@@ -406,14 +408,12 @@ pub(crate) async fn execute_kernel_tool_request(
             &request.payload,
             ctx.tool_runtime_config(),
         )
-        .map_err(|error| {
-            loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(error))
-        })?;
+        .map_err(ToolRequestError::Input)?;
 
         let typed_path = ToolPath::from(request.tool_name.clone());
-        let execution_context = ctx.for_invocation(&effective_config).map_err(|error| {
-            loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(error))
-        })?;
+        let execution_context = ctx
+            .for_invocation(&effective_config)
+            .map_err(ToolRequestError::Context)?;
 
         if request.tool_name == "tool.invoke" {
             ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
@@ -421,31 +421,21 @@ pub(crate) async fn execute_kernel_tool_request(
                 &request.payload,
                 "payload",
             )
-            .map_err(|error| {
-                loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(error))
-            })?;
+            .map_err(ToolRequestError::ReservedContext)?;
             let inner_arguments = request.payload.get("arguments").unwrap_or(&Value::Null);
             ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
                 request.tool_name.as_str(),
                 inner_arguments,
                 "payload.arguments",
             )
-            .map_err(|error| {
-                loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(error))
-            })?;
+            .map_err(ToolRequestError::ReservedContext)?;
             let (_resolved_tool, effective_request) = resolve_tool_invoke_request(
                 &request,
                 ToolInvokeProviderExposure::AllowProviderExposed,
             )
-            .map_err(|error| {
-                loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(error))
-            })?;
-            let capability_override =
-                tool_invoke_capabilities_override(&request.payload).map_err(|error| {
-                    loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(
-                        error,
-                    ))
-                })?;
+            .map_err(ToolRequestError::Input)?;
+            let capability_override = tool_invoke_capabilities_override(&request.payload)
+                .map_err(ToolRequestError::Input)?;
             let typed_path = ToolPath::from(effective_request.tool_name.clone());
             match execution_context.tool(typed_path) {
                 Ok(invocation) => {
@@ -457,9 +447,9 @@ pub(crate) async fn execute_kernel_tool_request(
                         let _trusted_overlay = take_trusted_internal_tool_context(body);
                     }
                     let invocation = match capability_override {
-                        Some(capabilities) => {
-                            invocation.with_capabilities_override(capabilities)?
-                        }
+                        Some(capabilities) => invocation.with_capabilities_override(
+                            capabilities.into_iter().collect::<Capabilities>(),
+                        ),
                         None => invocation,
                     };
                     let payload = invocation.invoke(typed_payload).await?;
@@ -469,11 +459,7 @@ pub(crate) async fn execute_kernel_tool_request(
                     });
                 }
                 Err(loong_runtime::tool_plane::error::LookupError::NotRegistered { .. }) => {}
-                Err(error) => {
-                    return Err(loong_kernel::KernelError::ToolPlane(
-                        loong_kernel::ToolPlaneError::Execution(error.to_string()),
-                    ));
-                }
+                Err(error) => return Err(error.into()),
             }
         }
 
@@ -487,11 +473,7 @@ pub(crate) async fn execute_kernel_tool_request(
                     &request.payload,
                     "payload",
                 )
-                .map_err(|error| {
-                    loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(
-                        error,
-                    ))
-                })?;
+                .map_err(ToolRequestError::ReservedContext)?;
                 let mut typed_payload = request.payload;
                 if let Some(body) = typed_payload.as_object_mut() {
                     let _trusted_overlay = take_trusted_internal_tool_context(body);
@@ -503,11 +485,7 @@ pub(crate) async fn execute_kernel_tool_request(
                 });
             }
             Err(loong_runtime::tool_plane::error::LookupError::NotRegistered { .. }) => {}
-            Err(error) => {
-                return Err(loong_kernel::KernelError::ToolPlane(
-                    loong_kernel::ToolPlaneError::Execution(error.to_string()),
-                ));
-            }
+            Err(error) => return Err(error.into()),
         }
 
         let caps = required_capabilities_for_request(&request);
@@ -523,7 +501,7 @@ pub(crate) async fn execute_kernel_tool_request(
                 &execution_context,
             )
             .await?;
-        Ok(outcome)
+        Ok::<ToolCoreOutcome, ToolRequestError>(outcome)
     };
     if trusted_internal_payload {
         return with_trusted_internal_tool_payload_async(execute).await;

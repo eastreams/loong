@@ -2,7 +2,7 @@ use std::{
     borrow::Cow,
     collections::BTreeSet,
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicUsize, Ordering},
     },
 };
@@ -12,21 +12,17 @@ use loong_contracts::{
     AuthorizationScope, AuthorizationSubject, Capabilities, Capability, ToolInputError, ToolSpec,
 };
 use loong_core::{
-    kernel::Kernel as CoreKernel,
     policy::{
         action::ActionMeta,
         context::{ContextFactory, PolicyContext},
-        engine::PolicyEngine,
     },
     tool::ToolImpl,
 };
-use loong_kernel::policy::PolicyPipelineBuilder;
-use loong_kernel::{AllowPolicy, FixedClock, InMemoryAuditSink, Kernel};
 use serde_json::{Value, json};
 
 use super::{
-    ToolInvocationAction, ToolPath, ToolPlane, ToolPlaneRegistry,
-    error::{DispatchError, LookupError, RegistrationError},
+    ToolInvocationAction, ToolPath, ToolPlaneRegistry,
+    error::{LookupError, RegistrationError},
 };
 
 struct TestContextFactory;
@@ -111,11 +107,21 @@ fn tool_path_keeps_plane_local_segments() {
 fn tool_invocation_action_exposes_policy_metadata() {
     let action = ToolInvocationAction::new(
         ToolPath::from("read"),
-        BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead]),
+        Capabilities::from([Capability::InvokeTool, Capability::FilesystemRead]),
         json!({ "path": "notes.txt" }),
     );
     let metadata = action.metadata();
 
+    assert_eq!(action.path(), &ToolPath::from("read"));
+    assert_eq!(
+        action
+            .required_capabilities()
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([Capability::FilesystemRead, Capability::InvokeTool])
+    );
+    assert_eq!(action.payload(), &json!({ "path": "notes.txt" }));
     assert_eq!(metadata.kind, "tool.invoke");
     assert_eq!(metadata.operation.as_ref(), "read");
     assert_eq!(
@@ -127,7 +133,7 @@ fn tool_invocation_action_exposes_policy_metadata() {
         BTreeSet::from([Capability::FilesystemRead, Capability::InvokeTool])
     );
     assert_eq!(
-        action.payload().as_ref(),
+        ActionMeta::payload(&action).as_ref(),
         &json!({
             "tool_path": "read",
             "payload": { "path": "notes.txt" }
@@ -135,8 +141,8 @@ fn tool_invocation_action_exposes_policy_metadata() {
     );
 }
 
-#[tokio::test]
-async fn registry_invokes_registered_tool() {
+#[test]
+fn registry_resolves_registered_tool_metadata() {
     let executions = Arc::new(AtomicUsize::new(0));
     let mut plane = ToolPlaneRegistry::<TestContextFactory>::new();
     let path = ToolPath::from("test.echo");
@@ -148,65 +154,12 @@ async fn registry_invokes_registered_tool() {
             },
         )
         .expect("test tool registration should succeed");
-    let grant = grant_invocation(path, json!({ "message": "hello" })).await;
+    let registered = plane
+        .resolve(&path)
+        .expect("registered path should resolve its concrete entry");
 
-    let output = plane
-        .invoke(grant, &TestContext)
-        .await
-        .expect("registered tool should execute");
-
-    assert_eq!(output, json!({ "message": "hello" }));
-    assert_eq!(executions.load(Ordering::Relaxed), 1);
-}
-
-#[tokio::test]
-async fn registry_runs_success_observer_after_tool_execution() {
-    let executions = Arc::new(AtomicUsize::new(0));
-    let observed = Arc::new(Mutex::new(Vec::new()));
-    let mut plane = ToolPlaneRegistry::<TestContextFactory>::new();
-    let path = ToolPath::from("test.echo");
-    plane
-        .register_with_provenance_and_success_observer(
-            path.clone(),
-            loong_core::tool::ToolProvenance::Builtin,
-            EchoTool {
-                executions: Arc::clone(&executions),
-            },
-            {
-                let observed = Arc::clone(&observed);
-                move |_ctx, output: &Value| {
-                    observed
-                        .lock()
-                        .expect("observer lock should remain available")
-                        .push(
-                            output
-                                .get("message")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default()
-                                .to_owned(),
-                        );
-                }
-            },
-        )
-        .expect("test tool registration should succeed");
-
-    let output = plane
-        .invoke(
-            grant_invocation(path, json!({ "message": "hello" })).await,
-            &TestContext,
-        )
-        .await
-        .expect("registered tool should execute");
-
-    assert_eq!(output, json!({ "message": "hello" }));
-    assert_eq!(executions.load(Ordering::Relaxed), 1);
-    assert_eq!(
-        observed
-            .lock()
-            .expect("observer lock should remain available")
-            .as_slice(),
-        ["hello"]
-    );
+    assert_eq!(registered.spec().description, "Echo the provided message.");
+    assert_eq!(executions.load(Ordering::Relaxed), 0);
 }
 
 #[test]
@@ -260,88 +213,26 @@ fn registry_enumerates_paths_in_path_order() {
     );
 }
 
-#[tokio::test]
-async fn registry_preserves_registered_tool_input_errors() {
-    let executions = Arc::new(AtomicUsize::new(0));
-    let mut plane = ToolPlaneRegistry::<TestContextFactory>::new();
-    let path = ToolPath::from("test.echo");
-    plane
-        .register(
-            path.clone(),
-            EchoTool {
-                executions: Arc::clone(&executions),
-            },
-        )
-        .expect("test tool registration should succeed");
-
-    let error = plane
-        .invoke(grant_invocation(path, json!({})).await, &TestContext)
-        .await
-        .expect_err("invalid registered tool input should fail");
-
-    assert!(matches!(
-        error,
-        DispatchError::Tool {
-            source: loong_core::tool::RegisteredToolError::Input(
-                ToolInputError::MissingField { field }
-            )
-        } if field == "message"
-    ));
-    assert_eq!(executions.load(Ordering::Relaxed), 0);
-}
-
-#[tokio::test]
-async fn registry_distinguishes_lookup_miss_from_post_grant_dispatch_failure() {
-    let executions = Arc::new(AtomicUsize::new(0));
+#[test]
+fn registry_reports_unregistered_path_before_invocation() {
     let mut plane = ToolPlaneRegistry::<TestContextFactory>::new();
     plane
         .register(
             ToolPath::from("test.echo"),
             EchoTool {
-                executions: Arc::clone(&executions),
+                executions: Arc::new(AtomicUsize::new(0)),
             },
         )
         .expect("test tool registration should succeed");
 
     let path = ToolPath::from("test.missing");
-    let lookup_error = plane
-        .spec(&path)
-        .expect_err("unregistered path should fail lookup");
-    let dispatch_error = plane
-        .invoke(
-            grant_invocation(path.clone(), json!({ "message": "hello" })).await,
-            &TestContext,
-        )
-        .await
-        .expect_err("a granted but absent entry should fail during dispatch");
+    let error = match plane.resolve(&path) {
+        Ok(_) => panic!("unregistered path should fail before invocation"),
+        Err(error) => error,
+    };
 
     assert!(matches!(
-        lookup_error,
+        error,
         LookupError::NotRegistered { path: missing } if missing == path
     ));
-    assert!(matches!(
-        dispatch_error,
-        DispatchError::RegistryInvariant { path: missing } if missing == path
-    ));
-    assert_eq!(executions.load(Ordering::Relaxed), 0);
-}
-
-async fn grant_invocation(
-    path: ToolPath,
-    payload: Value,
-) -> loong_core::policy::grant::Granted<ToolInvocationAction> {
-    let kernel = Kernel::<TestContextFactory>::with_policy_runtime(
-        PolicyPipelineBuilder::new().with_fallback_policy(AllowPolicy),
-        Arc::new(FixedClock::new(1)),
-        Arc::new(InMemoryAuditSink::default()),
-    );
-    kernel
-        .policy_engine()
-        .grant(
-            &TestContext,
-            ToolInvocationAction::new(path, BTreeSet::new(), payload),
-        )
-        .await
-        .expect("test policy should grant invocation")
-        .into_granted()
 }

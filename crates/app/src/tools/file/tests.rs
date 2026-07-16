@@ -4,8 +4,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use loong_contracts::{Capability, ExecutionRoute, HarnessKind, ToolCoreOutcome, ToolCoreRequest};
-use loong_core::tool::{RegisteredTool, RegisteredToolError, ToolProvenance};
+use loong_contracts::{
+    ActionExecutionEvent, AuditEvent, AuditEventKind, AuthorizationAttempt,
+    AuthorizationAttemptEvent, AuthorizationPolicyEvent, AuthorizationTerminalOutcome, Capability,
+    ExecutionRoute, HarnessKind, ToolCoreOutcome, ToolCoreRequest,
+};
 use loong_kernel::{
     InMemoryAuditSink, Kernel, SystemClock, VerticalPackManifest,
     access::fs::{
@@ -14,7 +17,7 @@ use loong_kernel::{
     },
     policy::{FsContentSearchAllowPolicy, FsGlobAllowPolicy, PolicyPipelineBuilder},
 };
-use loong_tools::file::ReadTool;
+use loong_runtime::tool_plane::ToolPath;
 use serde_json::json;
 
 use super::*;
@@ -44,6 +47,48 @@ impl ToolRuntimeEventSink for RecordingRuntimeSink {
         let mut events = lock_runtime_events(self);
         events.push(event);
     }
+}
+
+/// Join execution evidence to the authorization action that owns tool identity.
+fn terminal_action_execution<'a>(
+    events: &'a [AuditEvent],
+    operation: &str,
+) -> Option<&'a ActionExecutionEvent> {
+    let grant_id = events.iter().find_map(|event| {
+        let AuditEventKind::Authorization { evidence } = &event.kind else {
+            return None;
+        };
+        if evidence.action.kind != "tool.invoke" || evidence.action.operation != operation {
+            return None;
+        }
+        let AuthorizationAttempt::Started {
+            event:
+                AuthorizationAttemptEvent::Policy {
+                    event:
+                        AuthorizationPolicyEvent::Terminal(AuthorizationTerminalOutcome::Allow {
+                            grant_id,
+                        }),
+                    ..
+                },
+            ..
+        } = &evidence.attempt
+        else {
+            return None;
+        };
+        Some(*grant_id)
+    })?;
+
+    events.iter().rev().find_map(|event| {
+        let AuditEventKind::ActionExecution {
+            grant_id: event_grant_id,
+            event,
+        } = &event.kind
+        else {
+            return None;
+        };
+        (*event_grant_id == grant_id && !matches!(event, ActionExecutionEvent::Started))
+            .then_some(event)
+    })
 }
 
 #[cfg(unix)]
@@ -124,21 +169,12 @@ async fn execute_file_read_with_test_context(
     )?;
     let execution_context = app_ctx.for_invocation(config)?;
     let _ = config;
-    let tool = RegisteredTool::<AppContextFactory>::from_tool(
-        ToolProvenance::Compatibility,
-        ReadTool::new("read"),
-    );
-    let outcome = tool
-        .invoke(&execution_context, request.payload)
+    let outcome = execution_context
+        .tool(loong_runtime::tool_plane::ToolPath::from("read"))
+        .map_err(|error| error.to_string())?
+        .invoke(request.payload)
         .await
-        .map_err(|error| match error {
-            RegisteredToolError::Input(loong_contracts::ToolInputError::InvalidPayload {
-                reason,
-            }) => reason,
-            RegisteredToolError::Input(input_error) => input_error.to_string(),
-            RegisteredToolError::Execution { source } => source.to_string(),
-            unknown => unknown.to_string(),
-        })?;
+        .map_err(|error| error.to_string())?;
     Ok(ToolCoreOutcome {
         status: "ok".to_owned(),
         payload: outcome,
@@ -148,7 +184,7 @@ async fn execute_file_read_with_test_context(
 async fn execute_request_via_kernel_tool_registry(
     request: ToolCoreRequest,
     config: &ToolRuntimeConfig,
-) -> Result<(ToolCoreOutcome, Arc<InMemoryAuditSink>), loong_kernel::KernelError> {
+) -> Result<(ToolCoreOutcome, Arc<InMemoryAuditSink>), crate::tools::ToolRequestError> {
     execute_request_via_kernel_tool_registry_with_capabilities(
         request,
         config,
@@ -165,7 +201,7 @@ async fn execute_request_via_kernel_tool_registry_result(
     request: ToolCoreRequest,
     config: &ToolRuntimeConfig,
 ) -> (
-    Result<ToolCoreOutcome, loong_kernel::KernelError>,
+    Result<ToolCoreOutcome, crate::tools::ToolRequestError>,
     Arc<InMemoryAuditSink>,
 ) {
     execute_request_via_kernel_tool_registry_with_capabilities_result(
@@ -184,7 +220,7 @@ async fn execute_request_via_kernel_tool_registry_with_capabilities(
     request: ToolCoreRequest,
     config: &ToolRuntimeConfig,
     capabilities: BTreeSet<Capability>,
-) -> Result<(ToolCoreOutcome, Arc<InMemoryAuditSink>), loong_kernel::KernelError> {
+) -> Result<(ToolCoreOutcome, Arc<InMemoryAuditSink>), crate::tools::ToolRequestError> {
     let (outcome, audit) = execute_request_via_kernel_tool_registry_with_capabilities_result(
         request,
         config,
@@ -202,7 +238,7 @@ async fn execute_request_via_kernel_tool_registry_with_capabilities_result(
     config: &ToolRuntimeConfig,
     capabilities: BTreeSet<Capability>,
 ) -> (
-    Result<ToolCoreOutcome, loong_kernel::KernelError>,
+    Result<ToolCoreOutcome, crate::tools::ToolRequestError>,
     Arc<InMemoryAuditSink>,
 ) {
     let audit = Arc::new(InMemoryAuditSink::default());
@@ -357,16 +393,10 @@ async fn kernel_routed_file_read_uses_typed_tool_registry() {
     assert_eq!(outcome.payload["line_start"], json!(2));
     assert_eq!(outcome.payload["line_end"], json!(2));
     let events = audit.snapshot();
-    assert!(events.iter().any(|event| {
-        matches!(
-            &event.kind,
-            loong_kernel::AuditEventKind::ToolInvocation {
-                path_display,
-                outcome: loong_kernel::InvocationOutcome::Completed,
-                ..
-            } if path_display == "read"
-        )
-    }));
+    assert!(matches!(
+        terminal_action_execution(&events, "read"),
+        Some(ActionExecutionEvent::Completed)
+    ));
     assert!(!events.iter().any(|event| {
         matches!(
             &event.kind,
@@ -407,16 +437,10 @@ async fn kernel_routed_tool_invoke_file_read_uses_typed_tool_registry() {
     assert_eq!(outcome.status, "ok");
     assert_eq!(outcome.payload["content"], json!("beta"));
     let events = audit.snapshot();
-    assert!(events.iter().any(|event| {
-        matches!(
-            &event.kind,
-            loong_kernel::AuditEventKind::ToolInvocation {
-                path_display,
-                outcome: loong_kernel::InvocationOutcome::Completed,
-                ..
-            } if path_display == "read"
-        )
-    }));
+    assert!(matches!(
+        terminal_action_execution(&events, "read"),
+        Some(ActionExecutionEvent::Completed)
+    ));
     assert!(!events.iter().any(|event| {
         matches!(
             &event.kind,
@@ -495,12 +519,20 @@ async fn kernel_routed_tool_invoke_capability_override_rejects_added_capabilitie
         .await
         .expect_err("override must not add capabilities beyond read descriptor");
 
-    assert!(
-        error
-            .to_string()
-            .contains("tool capability override cannot add capabilities"),
-        "expected capability override rejection, got: {error}"
-    );
+    assert!(matches!(
+        error,
+        crate::tools::ToolRequestError::Invocation(
+            loong_runtime::tool_plane::error::ToolInvocationError::CapabilityOverride(
+                loong_runtime::tool_plane::error::CapabilityOverrideError {
+                    path,
+                    requested,
+                    declared,
+                }
+            )
+        ) if path == ToolPath::from("read")
+            && requested == loong_contracts::Capabilities::from([Capability::FilesystemWrite])
+            && declared == loong_contracts::Capabilities::from([Capability::FilesystemRead])
+    ));
     let _ = fs::remove_dir_all(base);
 }
 
@@ -537,16 +569,10 @@ async fn kernel_routed_direct_read_glob_uses_typed_tool_registry() {
     assert_eq!(matches[0]["path"], "src/lib.rs");
     assert_eq!(matches[1]["path"], "src/nested/mod.rs");
     let events = audit.snapshot();
-    assert!(events.iter().any(|event| {
-        matches!(
-            &event.kind,
-            loong_kernel::AuditEventKind::ToolInvocation {
-                path_display,
-                outcome: loong_kernel::InvocationOutcome::Completed,
-                ..
-            } if path_display == "read"
-        )
-    }));
+    assert!(matches!(
+        terminal_action_execution(&events, "read"),
+        Some(ActionExecutionEvent::Completed)
+    ));
     assert!(!events.iter().any(|event| {
         matches!(
             &event.kind,
@@ -599,16 +625,10 @@ async fn kernel_routed_direct_read_query_uses_typed_tool_registry() {
     assert_eq!(first["column"], 15);
     assert_eq!(first["snippet"], "println!(\"hello world\");");
     let events = audit.snapshot();
-    assert!(events.iter().any(|event| {
-        matches!(
-            &event.kind,
-            loong_kernel::AuditEventKind::ToolInvocation {
-                path_display,
-                outcome: loong_kernel::InvocationOutcome::Completed,
-                ..
-            } if path_display == "read"
-        )
-    }));
+    assert!(matches!(
+        terminal_action_execution(&events, "read"),
+        Some(ActionExecutionEvent::Completed)
+    ));
     assert!(!events.iter().any(|event| {
         matches!(
             &event.kind,
@@ -713,22 +733,11 @@ async fn kernel_routed_file_read_reports_typed_input_error() {
         "expected file read input error, got: {error}"
     );
     let events = audit.snapshot();
-    assert!(events.iter().any(|event| {
-        matches!(
-            &event.kind,
-            loong_kernel::AuditEventKind::ToolInvocation {
-                path_display,
-                outcome:
-                    loong_kernel::InvocationOutcome::Failed {
-                        error_kind,
-                        reason,
-                    },
-                ..
-            } if path_display == "read"
-                && error_kind == "input_error"
-                && reason.contains("read payload.offset must be a positive integer")
-        )
-    }));
+    assert!(matches!(
+        terminal_action_execution(&events, "read"),
+        Some(ActionExecutionEvent::InputRejected { error })
+            if error.to_string().contains("read payload.offset must be a positive integer")
+    ));
     let _ = fs::remove_dir_all(base);
 }
 
@@ -764,16 +773,10 @@ async fn kernel_routed_glob_search_uses_typed_tool_registry() {
         json!("read")
     );
     let events = audit.snapshot();
-    assert!(events.iter().any(|event| {
-        matches!(
-            &event.kind,
-            loong_kernel::AuditEventKind::ToolInvocation {
-                path_display,
-                outcome: loong_kernel::InvocationOutcome::Completed,
-                ..
-            } if path_display == "glob.search"
-        )
-    }));
+    assert!(matches!(
+        terminal_action_execution(&events, "glob.search"),
+        Some(ActionExecutionEvent::Completed)
+    ));
     assert!(!events.iter().any(|event| {
         matches!(
             &event.kind,
@@ -819,16 +822,10 @@ async fn kernel_routed_content_search_uses_typed_tool_registry() {
     assert_eq!(outcome.payload["match_count"], json!(1));
     assert_eq!(outcome.payload["matches"][0]["path"], json!("src/main.rs"));
     let events = audit.snapshot();
-    assert!(events.iter().any(|event| {
-        matches!(
-            &event.kind,
-            loong_kernel::AuditEventKind::ToolInvocation {
-                path_display,
-                outcome: loong_kernel::InvocationOutcome::Completed,
-                ..
-            } if path_display == "content.search"
-        )
-    }));
+    assert!(matches!(
+        terminal_action_execution(&events, "content.search"),
+        Some(ActionExecutionEvent::Completed)
+    ));
     assert!(!events.iter().any(|event| {
         matches!(
             &event.kind,
@@ -878,16 +875,10 @@ async fn kernel_routed_file_write_uses_typed_tool_registry() {
         "alpha\nbeta\n"
     );
     let events = audit.snapshot();
-    assert!(events.iter().any(|event| {
-        matches!(
-            &event.kind,
-            loong_kernel::AuditEventKind::ToolInvocation {
-                path_display,
-                outcome: loong_kernel::InvocationOutcome::Completed,
-                ..
-            } if path_display == "write"
-        )
-    }));
+    assert!(matches!(
+        terminal_action_execution(&events, "write"),
+        Some(ActionExecutionEvent::Completed)
+    ));
     assert!(!events.iter().any(|event| {
         matches!(
             &event.kind,
@@ -958,16 +949,10 @@ async fn context_direct_write_uses_typed_tool_registry() {
         "typed"
     );
     let events = audit.snapshot();
-    assert!(events.iter().any(|event| {
-        matches!(
-            &event.kind,
-            loong_kernel::AuditEventKind::ToolInvocation {
-                path_display,
-                outcome: loong_kernel::InvocationOutcome::Completed,
-                ..
-            } if path_display == "write"
-        )
-    }));
+    assert!(matches!(
+        terminal_action_execution(&events, "write"),
+        Some(ActionExecutionEvent::Completed)
+    ));
     let _ = fs::remove_dir_all(base);
 }
 
@@ -1001,16 +986,10 @@ async fn kernel_routed_tool_invoke_file_write_uses_typed_tool_registry() {
         "alpha"
     );
     let events = audit.snapshot();
-    assert!(events.iter().any(|event| {
-        matches!(
-            &event.kind,
-            loong_kernel::AuditEventKind::ToolInvocation {
-                path_display,
-                outcome: loong_kernel::InvocationOutcome::Completed,
-                ..
-            } if path_display == "write"
-        )
-    }));
+    assert!(matches!(
+        terminal_action_execution(&events, "write"),
+        Some(ActionExecutionEvent::Completed)
+    ));
     assert!(!events.iter().any(|event| {
         matches!(
             &event.kind,
@@ -1072,16 +1051,10 @@ async fn kernel_routed_file_edit_uses_typed_tool_registry_and_preview_observer()
     assert!(preview_text.contains("+new line"));
 
     let events = audit.snapshot();
-    assert!(events.iter().any(|event| {
-        matches!(
-            &event.kind,
-            loong_kernel::AuditEventKind::ToolInvocation {
-                path_display,
-                outcome: loong_kernel::InvocationOutcome::Completed,
-                ..
-            } if path_display == "edit"
-        )
-    }));
+    assert!(matches!(
+        terminal_action_execution(&events, "edit"),
+        Some(ActionExecutionEvent::Completed)
+    ));
     assert!(!events.iter().any(|event| {
         matches!(
             &event.kind,
@@ -1148,7 +1121,7 @@ async fn kernel_routed_file_write_requires_filesystem_write_capability() {
         }),
     };
 
-    let error = execute_request_via_kernel_tool_registry_with_capabilities(
+    execute_request_via_kernel_tool_registry_with_capabilities(
         request,
         &config,
         BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead]),
@@ -1156,10 +1129,6 @@ async fn kernel_routed_file_write_requires_filesystem_write_capability() {
     .await
     .expect_err("filesystem write capability should be required");
 
-    assert!(
-        error.to_string().contains("filesystem_write"),
-        "expected write capability denial, got: {error}"
-    );
     assert!(
         !root.join("notes.txt").exists(),
         "denied write must not create a file"

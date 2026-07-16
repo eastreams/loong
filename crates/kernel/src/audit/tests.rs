@@ -8,6 +8,8 @@ use std::{
 use super::{AuditEvent, AuditEventKind, AuditSink, InMemoryAuditSink, SharedAuditState};
 use crate::{FixedClock, errors::AuditError};
 
+mod persistence;
+
 struct BlockingFirstAuditSink {
     events: Mutex<Vec<AuditEvent>>,
     first_entered: Mutex<Option<mpsc::Sender<()>>>,

@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 use crate::contracts::{Capability, HarnessKind};
-use crate::tool_types::{ToolExecutionError, ToolInputError};
+use crate::tool_types::ToolInputError;
 
 #[non_exhaustive]
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -106,15 +106,6 @@ pub enum ToolPlaneError {
     Execution(String),
 }
 
-impl From<ToolExecutionError> for ToolPlaneError {
-    fn from(error: ToolExecutionError) -> Self {
-        match error {
-            ToolExecutionError::Input(input_error) => Self::Input(input_error),
-            ToolExecutionError::Execution { reason } => Self::Execution(reason),
-        }
-    }
-}
-
 #[non_exhaustive]
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum MemoryPlaneError {
@@ -168,6 +159,10 @@ pub enum AuditError {
     Sink(String),
     #[error("typed authorization evidence can only be recorded by PolicyEngine::grant")]
     AuthorizationEvidenceOwnedByPolicyEngine,
+    #[error("typed action execution evidence requires a real Granted<Action>")]
+    ActionExecutionEvidenceRequiresGrant,
+    #[error("historical tool invocation evidence is read-only")]
+    HistoricalToolInvocationEvidenceReadOnly,
     #[error("authorization attempt identity sequence exhausted")]
     AuthorizationAttemptIdExhausted,
     #[error("audit event identity sequence exhausted")]

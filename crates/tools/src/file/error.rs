@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use loong_core::{AuthorizationError, PolicyGrantError, tool::ToolFailureKind};
 use loong_kernel::access::fs::FsAccessError;
 use thiserror::Error;
 
@@ -28,4 +29,25 @@ pub enum FileToolError {
     ReadResponse { reason: String },
     #[error("{reason}")]
     ApplyEdit { reason: String },
+}
+
+impl FileToolError {
+    /// Preserve governed Access denial as batch-local tool control flow.
+    pub(crate) fn failure_kind(&self) -> ToolFailureKind {
+        match self {
+            Self::Access(FsAccessError::Authorization(
+                AuthorizationError::PolicyGrant(
+                    PolicyGrantError::MissingCapability { .. }
+                    | PolicyGrantError::Denied { .. }
+                    | PolicyGrantError::PermissionDenied { .. },
+                )
+                | AuthorizationError::MissingCapability(_)
+                | AuthorizationError::Denied { .. },
+            )) => ToolFailureKind::Denied,
+            Self::Access(_)
+            | Self::InvalidUtf8 { .. }
+            | Self::ReadResponse { .. }
+            | Self::ApplyEdit { .. } => ToolFailureKind::Execution,
+        }
+    }
 }

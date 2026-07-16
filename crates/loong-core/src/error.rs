@@ -90,8 +90,12 @@ pub enum PermissionRequestError {
 
 #[derive(Debug, Error)]
 pub enum AuthorizationError {
-    #[error(transparent)]
-    PolicyGrant(#[from] PolicyGrantError),
+    #[error("{0}")]
+    PolicyGrant(
+        #[from]
+        #[source]
+        PolicyGrantError,
+    ),
     #[error("missing capability: {0:?}")]
     MissingCapability(Capability),
     #[error("authorization denied: {grant_source:?} {reason:?}")]

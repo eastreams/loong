@@ -27,7 +27,10 @@ pub use action_grant::{
     GrantId, PermissionResolution, PolicyDecision, PolicyEntry, PolicyEvaluation, PolicyGrant,
     PolicyId, PolicyOutcome, PolicyRegistration, PolicyRegistrationSource, PolicyReport,
 };
-pub use audit_types::{AuditEvent, AuditEventKind, ExecutionPlane, InvocationOutcome, PlaneTier};
+pub use audit_types::{
+    ActionExecutionEvent, AuditEvent, AuditEventKind, ExecutionPlane,
+    HistoricalToolInvocationOutcome, PlaneTier,
+};
 pub use authorization_evidence::{
     AuthorizationActionSnapshot, AuthorizationAttempt, AuthorizationAttemptEvent,
     AuthorizationAttemptId, AuthorizationDenial, AuthorizationEvidence, AuthorizationFailure,
@@ -64,8 +67,8 @@ pub use secret_resolver::{SecretResolutionError, SecretResolver};
 pub use secret_value::SecretValue;
 pub use task_state::TaskState;
 pub use tool_types::{
-    ToolCoreOutcome, ToolCoreRequest, ToolExecutionError, ToolExtensionOutcome,
-    ToolExtensionRequest, ToolInputError, ToolSpec, ToolTier,
+    ToolCoreOutcome, ToolCoreRequest, ToolExtensionOutcome, ToolExtensionRequest, ToolInputError,
+    ToolSpec, ToolTier,
 };
 pub use work_types::{
     WorkRuntimeHealthSnapshot, WorkSourceKind, WorkUnitEventRecord, WorkUnitKind,

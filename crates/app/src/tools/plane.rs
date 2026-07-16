@@ -2,10 +2,7 @@ use std::borrow::Cow;
 
 use async_trait::async_trait;
 use loong_contracts::{PolicyDecision, PolicyGrant};
-use loong_core::{
-    policy::{context::ContextFactory, policy::Policy},
-    tool::ToolProvenance,
-};
+use loong_core::policy::{context::ContextFactory, policy::Policy};
 use loong_runtime::tool_plane::{
     ToolInvocationAction, ToolPath, ToolPlaneRegistry, error::RegistrationError,
 };
@@ -45,21 +42,18 @@ pub(crate) fn builtin_tool_plane() -> Result<ToolPlaneRegistry<AppContextFactory
         let mut plane = plane;
         // `read` is the aggregate typed facade; provider aliases such as
         // `file.read` canonicalize to this path before plane lookup.
-        plane.register_with_provenance(
+        plane.register(
             ToolPath::from("read"),
-            ToolProvenance::Builtin,
             loong_tools::file::ReadTool::new("read"),
         )?;
 
-        plane.register_with_provenance(
+        plane.register(
             ToolPath::from("write"),
-            ToolProvenance::Builtin,
             loong_tools::file::WriteTool::new("write"),
         )?;
 
-        plane.register_with_provenance_and_success_observer(
+        plane.register_with_success_observer(
             ToolPath::from("edit"),
-            ToolProvenance::Builtin,
             loong_tools::file::EditTool::new("edit"),
             |_ctx, output: &loong_tools::file::EditOutput| {
                 // Preview events are an app-runtime side channel; the
@@ -76,15 +70,13 @@ pub(crate) fn builtin_tool_plane() -> Result<ToolPlaneRegistry<AppContextFactory
         // Legacy read-family discoverable paths keep their own typed entries so
         // audit path and response metadata do not collapse into `read` while fs
         // side effects continue moving to access actions.
-        plane.register_with_provenance(
+        plane.register(
             ToolPath::from("glob.search"),
-            ToolProvenance::Builtin,
             loong_tools::file::GlobSearchTool::new("glob.search"),
         )?;
 
-        plane.register_with_provenance(
+        plane.register(
             ToolPath::from("content.search"),
-            ToolProvenance::Builtin,
             loong_tools::file::ContentSearchTool::new("content.search"),
         )?;
         plane

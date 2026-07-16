@@ -29,7 +29,6 @@ pub(super) fn default_loopback_exposure_policy() -> ControlPlaneExposurePolicy {
 
 pub(super) struct ControlPlaneKernelAuthority {
     kernel: Kernel<SpecContextFactory>,
-    pack: VerticalPackManifest,
     _audit: Arc<InMemoryAuditSink>,
     token_bindings: std::sync::RwLock<std::collections::BTreeMap<String, CapabilityToken>>,
 }
@@ -94,12 +93,11 @@ impl ControlPlaneKernelAuthority {
         // control-plane action, then remove this explicit legacy policy opt-in.
         let mut kernel = Kernel::with_legacy_allow_runtime(Arc::new(SystemClock), audit.clone());
         let pack = control_plane_pack();
-        let register_result = kernel.register_pack(pack.clone());
+        let register_result = kernel.register_pack(pack);
         register_result
             .map_err(|error| format!("control-plane pack registration failed: {error}"))?;
         Ok(Self {
             kernel,
-            pack,
             _audit: audit,
             token_bindings: std::sync::RwLock::new(std::collections::BTreeMap::new()),
         })
@@ -139,8 +137,7 @@ impl ControlPlaneKernelAuthority {
                 .cloned()
                 .ok_or_else(|| "missing control-plane kernel token binding".to_owned())?
         };
-        let policy_context =
-            SpecExecutionContext::new(&self.pack, &token, self.kernel.now_epoch_s());
+        let policy_context = SpecExecutionContext::new(&token);
         self.kernel
             .authorize_operation(
                 CONTROL_PLANE_PACK_ID,

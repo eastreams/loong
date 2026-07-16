@@ -1,24 +1,24 @@
 use std::{
     borrow::Cow,
     collections::BTreeSet,
-    future::Future,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
-    task::{Context, Poll, Waker},
 };
 
 use async_trait::async_trait;
 use loong_contracts::{
-    AuthorizationScope, AuthorizationSubject, Capabilities, ToolInputError, ToolSpec,
+    AuthorizationScope, AuthorizationSubject, Capabilities, Capability, ToolInputError, ToolSpec,
+};
+use loong_core::{
+    error::{AuthorizationError, PolicyGrantError},
+    policy::context::{ContextFactory, PolicyContext},
+    tool::{ToolFailureKind, ToolImpl},
 };
 use serde_json::{Value, json};
 
-use crate::{
-    policy::context::{ContextFactory, PolicyContext},
-    tool::{RegisteredTool, RegisteredToolError, ToolImpl, ToolProvenance},
-};
+use super::{RegisteredTool, RegisteredToolError};
 
 struct TestContextFactory;
 
@@ -52,6 +52,50 @@ struct EchoTool {
 #[derive(Debug, thiserror::Error)]
 #[error("echo execution failed")]
 struct EchoExecutionError;
+
+#[derive(Debug, thiserror::Error)]
+#[error("nested authorization failure: {0}")]
+struct NestedAuthorizationError(#[source] AuthorizationError);
+
+struct DeniedTool;
+
+#[async_trait]
+impl ToolImpl<TestContextFactory> for DeniedTool {
+    type Input = ();
+    type Output = Value;
+    type Error = NestedAuthorizationError;
+
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            description: "Always denied.".to_owned(),
+            input_schema: json!({ "type": "object" }),
+            required_capabilities: BTreeSet::new(),
+            argument_hint: None,
+            search_hint: None,
+            tags: Vec::new(),
+        }
+    }
+
+    fn parse_input(&self, _payload: Value) -> Result<Self::Input, ToolInputError> {
+        Ok(())
+    }
+
+    fn failure_kind(&self, _error: &Self::Error) -> ToolFailureKind {
+        ToolFailureKind::Denied
+    }
+
+    async fn execute(
+        &self,
+        _ctx: &<TestContextFactory as ContextFactory>::Cx<'_>,
+        (): Self::Input,
+    ) -> Result<Self::Output, Self::Error> {
+        Err(NestedAuthorizationError(AuthorizationError::PolicyGrant(
+            PolicyGrantError::MissingCapability {
+                capability: Capability::FilesystemRead,
+            },
+        )))
+    }
+}
 
 #[async_trait]
 impl ToolImpl<TestContextFactory> for EchoTool {
@@ -98,18 +142,17 @@ impl ToolImpl<TestContextFactory> for EchoTool {
     }
 }
 
-#[test]
-fn registered_tool_invokes_erased_tool_impl() {
+#[tokio::test]
+async fn registered_tool_invokes_erased_tool_impl() {
     let executions = Arc::new(AtomicUsize::new(0));
-    let tool = RegisteredTool::<TestContextFactory>::from_tool(
-        ToolProvenance::Builtin,
-        EchoTool {
-            executions: executions.clone(),
-            fail_execution: false,
-        },
-    );
+    let tool = RegisteredTool::<TestContextFactory>::from_tool(EchoTool {
+        executions: Arc::clone(&executions),
+        fail_execution: false,
+    });
 
-    let outcome = block_on(tool.invoke(&TestContext, json!({ "message": "hello" })))
+    let outcome = tool
+        .invoke(&TestContext, json!({ "message": "hello" }))
+        .await
         .expect("tool should execute");
 
     assert_eq!(tool.spec().description, "Echo the provided message.");
@@ -117,18 +160,17 @@ fn registered_tool_invokes_erased_tool_impl() {
     assert_eq!(executions.load(Ordering::Relaxed), 1);
 }
 
-#[test]
-fn registered_tool_parse_failure_does_not_execute_tool() {
+#[tokio::test]
+async fn registered_tool_parse_failure_does_not_execute_tool() {
     let executions = Arc::new(AtomicUsize::new(0));
-    let tool = RegisteredTool::<TestContextFactory>::from_tool(
-        ToolProvenance::Builtin,
-        EchoTool {
-            executions: executions.clone(),
-            fail_execution: false,
-        },
-    );
+    let tool = RegisteredTool::<TestContextFactory>::from_tool(EchoTool {
+        executions: Arc::clone(&executions),
+        fail_execution: false,
+    });
 
-    let error = block_on(tool.invoke(&TestContext, json!({})))
+    let error = tool
+        .invoke(&TestContext, json!({}))
+        .await
         .expect_err("missing message should be rejected");
 
     assert!(matches!(
@@ -138,17 +180,16 @@ fn registered_tool_parse_failure_does_not_execute_tool() {
     assert_eq!(executions.load(Ordering::Relaxed), 0);
 }
 
-#[test]
-fn registered_tool_preserves_concrete_execution_error_as_source() {
-    let tool = RegisteredTool::<TestContextFactory>::from_tool(
-        ToolProvenance::Builtin,
-        EchoTool {
-            executions: Arc::new(AtomicUsize::new(0)),
-            fail_execution: true,
-        },
-    );
+#[tokio::test]
+async fn registered_tool_preserves_concrete_execution_error_as_source() {
+    let tool = RegisteredTool::<TestContextFactory>::from_tool(EchoTool {
+        executions: Arc::new(AtomicUsize::new(0)),
+        fail_execution: true,
+    });
 
-    let error = block_on(tool.invoke(&TestContext, json!({ "message": "hello" })))
+    let error = tool
+        .invoke(&TestContext, json!({ "message": "hello" }))
+        .await
         .expect_err("concrete execution failure should escape erasure");
 
     assert!(matches!(error, RegisteredToolError::Execution { .. }));
@@ -157,18 +198,48 @@ fn registered_tool_preserves_concrete_execution_error_as_source() {
         .expect("erased error should retain the concrete execution source");
 }
 
-#[test]
-fn registered_tool_success_observer_sees_typed_output_before_erasure() {
+#[tokio::test]
+async fn registered_tool_respects_explicit_denial_class_at_erasure() {
+    let nested = NestedAuthorizationError(AuthorizationError::PolicyGrant(
+        PolicyGrantError::MissingCapability {
+            capability: Capability::FilesystemRead,
+        },
+    ));
+    let authorization = std::error::Error::source(&nested)
+        .expect("nested tool error should expose authorization source");
+    assert!(authorization.is::<AuthorizationError>());
+    assert!(
+        authorization
+            .source()
+            .is_some_and(|source| source.is::<PolicyGrantError>()),
+        "authorization error should expose typed policy grant source"
+    );
+
+    let error = RegisteredTool::<TestContextFactory>::from_tool(DeniedTool)
+        .invoke(&TestContext, json!({}))
+        .await
+        .expect_err("nested policy denial should remain typed after erasure");
+
+    assert!(matches!(error, RegisteredToolError::Denied { .. }));
+    assert!(
+        std::error::Error::source(&error)
+            .and_then(|source| source.downcast_ref::<NestedAuthorizationError>())
+            .is_some(),
+        "denied erasure must retain the concrete tool error"
+    );
+}
+
+#[tokio::test]
+async fn registered_tool_success_observer_sees_typed_output_before_erasure() {
     let executions = Arc::new(AtomicUsize::new(0));
-    let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = Arc::new(Mutex::new(Vec::new()));
     let tool = RegisteredTool::<TestContextFactory>::from_tool_with_success_observer(
-        ToolProvenance::Builtin,
         EchoTool {
-            executions: executions.clone(),
+            executions: Arc::clone(&executions),
             fail_execution: false,
         },
         {
-            let observed = observed.clone();
+            let observed = Arc::clone(&observed);
             move |_ctx, output: &Value| {
                 observed.lock().expect("observer lock").push(
                     output
@@ -181,7 +252,9 @@ fn registered_tool_success_observer_sees_typed_output_before_erasure() {
         },
     );
 
-    let outcome = block_on(tool.invoke(&TestContext, json!({ "message": "hello" })))
+    let outcome = tool
+        .invoke(&TestContext, json!({ "message": "hello" }))
+        .await
         .expect("tool should execute");
 
     assert_eq!(outcome, json!({ "message": "hello" }));
@@ -190,16 +263,4 @@ fn registered_tool_success_observer_sees_typed_output_before_erasure() {
         observed.lock().expect("observer lock").as_slice(),
         ["hello"]
     );
-}
-
-fn block_on<F: Future>(future: F) -> F::Output {
-    let mut context = Context::from_waker(Waker::noop());
-    let mut future = std::pin::pin!(future);
-
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => std::thread::yield_now(),
-        }
-    }
 }

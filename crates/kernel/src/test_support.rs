@@ -27,7 +27,6 @@ use crate::memory::{
     MemoryExtensionOutcome, MemoryExtensionRequest,
 };
 use crate::pack::VerticalPackManifest;
-use crate::policy::KernelInvocationContext;
 use crate::runtime::{
     CoreRuntimeAdapter, RuntimeCoreOutcome, RuntimeCoreRequest, RuntimeExtensionAdapter,
     RuntimeExtensionOutcome, RuntimeExtensionRequest,
@@ -80,36 +79,13 @@ impl ContextFactory for TestContextFactory {
 
 #[derive(Clone)]
 pub struct TestPolicyContext {
-    pack: VerticalPackManifest,
     token: CapabilityToken,
-    now_epoch_s: u64,
 }
 
 impl TestPolicyContext {
-    pub fn new(pack: VerticalPackManifest, token: CapabilityToken, now_epoch_s: u64) -> Self {
+    pub fn from_token(token: &CapabilityToken) -> Self {
         Self {
-            pack,
-            token,
-            now_epoch_s,
-        }
-    }
-
-    pub fn from_token(token: &CapabilityToken, now_epoch_s: u64) -> Self {
-        Self {
-            pack: VerticalPackManifest {
-                pack_id: token.pack_id.clone(),
-                domain: "test".to_owned(),
-                version: "0.1.0".to_owned(),
-                default_route: ExecutionRoute {
-                    harness_kind: HarnessKind::EmbeddedPi,
-                    adapter: None,
-                },
-                allowed_connectors: BTreeSet::new(),
-                granted_capabilities: token.allowed_capabilities.clone(),
-                metadata: BTreeMap::new(),
-            },
             token: token.clone(),
-            now_epoch_s,
         }
     }
 }
@@ -128,20 +104,6 @@ impl PolicyContext for TestPolicyContext {
                 token_id: self.token.token_id.clone(),
             },
         }
-    }
-}
-
-impl KernelInvocationContext for TestPolicyContext {
-    fn pack(&self) -> &VerticalPackManifest {
-        &self.pack
-    }
-
-    fn token(&self) -> &CapabilityToken {
-        &self.token
-    }
-
-    fn now_epoch_s(&self) -> u64 {
-        self.now_epoch_s
     }
 }
 

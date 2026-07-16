@@ -8,7 +8,8 @@ use std::sync::{
 
 // Re-export data types from contracts
 pub use loong_contracts::{
-    AuditEvent, AuditEventKind, ExecutionPlane, InvocationOutcome, PlaneTier,
+    ActionExecutionEvent, AuditEvent, AuditEventKind, ExecutionPlane,
+    HistoricalToolInvocationOutcome, PlaneTier,
 };
 use loong_contracts::{AuthorizationAttemptId, AuthorizationEvidence, GrantId};
 use serde::{Deserialize, Serialize};

@@ -697,7 +697,7 @@ mod tests {
         let has_typed_tool_event = audit_events.iter().any(|event| {
             matches!(
                 &event.kind,
-                loong_kernel::AuditEventKind::ToolInvocation { .. }
+                loong_kernel::AuditEventKind::ActionExecution { .. }
             )
         });
         let has_legacy_tool_plane_event = audit_events.iter().any(|event| {

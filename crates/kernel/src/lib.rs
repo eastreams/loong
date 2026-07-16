@@ -29,8 +29,8 @@ pub use architecture::{
 };
 pub use audit::{
     AuditEvent, AuditEventKind, AuditRepairOutcome, AuditRepairReport, AuditSink,
-    AuditVerificationReport, ExecutionPlane, FanoutAuditSink, InMemoryAuditSink, InvocationOutcome,
-    JsonlAuditSink, PlaneTier, probe_jsonl_audit_journal_runtime_ready, repair_jsonl_audit_journal,
+    AuditVerificationReport, ExecutionPlane, FanoutAuditSink, InMemoryAuditSink, JsonlAuditSink,
+    PlaneTier, probe_jsonl_audit_journal_runtime_ready, repair_jsonl_audit_journal,
     verify_jsonl_audit_journal,
 };
 pub use awareness::{CodebaseAwarenessConfig, CodebaseAwarenessEngine, CodebaseAwarenessSnapshot};
@@ -78,7 +78,7 @@ pub use plugin_ir::{
     PluginTranslationReport, PluginTranslator, canonical_channel_bridge_contract,
     evaluate_plugin_setup_requirements, plugin_runtime_scaffold_defaults,
 };
-pub use policy::{AllowPolicy, KernelInvocationContext, LegacyKernelAction};
+pub use policy::{AllowPolicy, LegacyKernelAction};
 pub use runtime::{
     CoreRuntimeAdapter, RuntimeCoreOutcome, RuntimeCoreRequest, RuntimeExtensionAdapter,
     RuntimeExtensionOutcome, RuntimeExtensionRequest, RuntimePlane, RuntimeTier,

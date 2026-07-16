@@ -95,7 +95,6 @@ fn should_reduce_programmatic_budget(
 #[allow(clippy::indexing_slicing)] // serde_json::Value string-keyed IndexMut is infallible
 pub async fn execute_programmatic_tool_call(
     kernel: &Kernel<crate::context::SpecContextFactory>,
-    pack: &kernel::VerticalPackManifest,
     pack_id: &str,
     token: &kernel::CapabilityToken,
     caller: &str,
@@ -224,7 +223,6 @@ pub async fn execute_programmatic_tool_call(
 
                 let (dispatch, metrics) = invoke_programmatic_connector_with_resilience(
                     kernel,
-                    pack,
                     pack_id,
                     token,
                     connector_name,
@@ -297,7 +295,6 @@ pub async fn execute_programmatic_tool_call(
 
                 let (call_reports, scheduler) = execute_programmatic_batch_calls(
                     kernel,
-                    pack,
                     pack_id,
                     token,
                     step_id,
@@ -580,7 +577,6 @@ fn prepare_programmatic_batch_calls(
 #[allow(clippy::too_many_arguments)]
 async fn execute_programmatic_batch_calls(
     kernel: &Kernel<crate::context::SpecContextFactory>,
-    pack: &kernel::VerticalPackManifest,
     pack_id: &str,
     token: &kernel::CapabilityToken,
     step_id: &str,
@@ -674,7 +670,6 @@ async fn execute_programmatic_batch_calls(
                 inflight.push(async move {
                     let dispatch = invoke_programmatic_connector_with_resilience(
                         kernel,
-                        pack,
                         pack_id,
                         token,
                         &connector_name,
@@ -797,7 +792,6 @@ async fn execute_programmatic_batch_calls(
             }
             let dispatch = invoke_programmatic_connector_with_resilience(
                 kernel,
-                pack,
                 pack_id,
                 token,
                 &connector_name,
@@ -1134,7 +1128,6 @@ async fn apply_programmatic_rate_limit(
 #[allow(clippy::too_many_arguments)]
 async fn invoke_programmatic_connector_with_resilience(
     kernel: &Kernel<crate::context::SpecContextFactory>,
-    pack: &kernel::VerticalPackManifest,
     pack_id: &str,
     token: &kernel::CapabilityToken,
     connector_name: &str,
@@ -1174,8 +1167,7 @@ async fn invoke_programmatic_connector_with_resilience(
         .await?;
         rate_wait_ms_total = rate_wait_ms_total.saturating_add(waited);
 
-        let policy_context =
-            crate::context::SpecExecutionContext::new(pack, token, kernel.now_epoch_s());
+        let policy_context = crate::context::SpecExecutionContext::new(token);
         let dispatch = kernel
             .execute_connector_core(
                 pack_id,

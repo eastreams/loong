@@ -2400,12 +2400,14 @@ fn audit_event_pack_id(kind: &AuditEventKind) -> Option<&str> {
         AuditEventKind::TaskDispatched { pack_id, .. }
         | AuditEventKind::ConnectorInvoked { pack_id, .. }
         | AuditEventKind::PlaneInvoked { pack_id, .. }
-        | AuditEventKind::ToolInvocation { pack_id, .. }
         | AuditEventKind::SecurityScanEvaluated { pack_id, .. }
         | AuditEventKind::PluginTrustEvaluated { pack_id, .. }
         | AuditEventKind::ToolSearchEvaluated { pack_id, .. }
         | AuditEventKind::ProviderFailover { pack_id, .. }
         | AuditEventKind::AuthorizationDenied { pack_id, .. } => Some(pack_id.as_str()),
+        AuditEventKind::ToolInvocation { pack_id, .. } => Some(pack_id.as_str()),
+        AuditEventKind::ActionExecution { .. }
+        | AuditEventKind::ToolCapabilityOverrideRejected { .. } => None,
         AuditEventKind::TokenRevoked { .. } => None,
         _ => None,
     }
@@ -2650,6 +2652,8 @@ fn triage_event_label(kind: &AuditEventKind) -> Option<&'static str> {
         | AuditEventKind::TaskDispatched { .. }
         | AuditEventKind::ConnectorInvoked { .. }
         | AuditEventKind::PlaneInvoked { .. }
+        | AuditEventKind::ActionExecution { .. }
+        | AuditEventKind::ToolCapabilityOverrideRejected { .. }
         | AuditEventKind::ToolInvocation { .. }
         | AuditEventKind::SecurityScanEvaluated { .. }
         | AuditEventKind::PluginTrustEvaluated { .. }
@@ -2666,6 +2670,8 @@ fn audit_event_kind_label(kind: &AuditEventKind) -> &'static str {
         AuditEventKind::TaskDispatched { .. } => "TaskDispatched",
         AuditEventKind::ConnectorInvoked { .. } => "ConnectorInvoked",
         AuditEventKind::PlaneInvoked { .. } => "PlaneInvoked",
+        AuditEventKind::ActionExecution { .. } => "ActionExecution",
+        AuditEventKind::ToolCapabilityOverrideRejected { .. } => "ToolCapabilityOverrideRejected",
         AuditEventKind::ToolInvocation { .. } => "ToolInvocation",
         AuditEventKind::SecurityScanEvaluated { .. } => "SecurityScanEvaluated",
         AuditEventKind::PluginTrustEvaluated { .. } => "PluginTrustEvaluated",
@@ -2754,15 +2760,23 @@ fn format_audit_event_detail(kind: &AuditEventKind) -> String {
             "pack_id={} plane={:?} tier={:?} adapter={} operation={}",
             pack_id, plane, tier, primary_adapter, operation
         ),
+        AuditEventKind::ActionExecution { grant_id, event } => {
+            format!("grant_id={grant_id} event={event:?}")
+        }
+        AuditEventKind::ToolCapabilityOverrideRejected {
+            path_display,
+            requested,
+            declared,
+            ..
+        } => format!(
+            "path={path_display} capability_override_rejected requested={requested:?} declared={declared:?}"
+        ),
         AuditEventKind::ToolInvocation {
             pack_id,
             path_display,
-            required_capabilities,
             outcome,
-        } => format!(
-            "pack_id={} path={} required_capabilities={required_capabilities:?} outcome={outcome:?}",
-            pack_id, path_display
-        ),
+            ..
+        } => format!("pack_id={pack_id} path={path_display} historical_outcome={outcome:?}"),
         AuditEventKind::SecurityScanEvaluated {
             pack_id,
             total_findings,

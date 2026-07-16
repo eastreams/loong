@@ -512,7 +512,7 @@ proptest! {
             "sales-intel",
             &token,
             task,
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         ));
 
         if required_capabilities.is_subset(&pack_capabilities) {

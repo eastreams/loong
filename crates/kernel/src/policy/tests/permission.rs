@@ -95,9 +95,8 @@ async fn policy_pipeline_parent_permission_is_a_terminal_outcome() {
             reason: "must not run",
         })
         .registry;
-    let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(&pack, &token, 1);
+    let ctx = TestPolicyContext::new(&token);
     let action =
         LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
@@ -125,9 +124,8 @@ async fn policy_pipeline_user_permission_is_a_terminal_outcome() {
             reason: "must not run",
         })
         .registry;
-    let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(&pack, &token, 1);
+    let ctx = TestPolicyContext::new(&token);
     let action =
         LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
@@ -351,9 +349,8 @@ async fn policy_engine_default_parent_permission_hook_returns_unavailable() {
             reason: "parent must approve",
         }),
     );
-    let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(&pack, &token, 1);
+    let ctx = TestPolicyContext::new(&token);
     let action =
         LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
@@ -382,9 +379,8 @@ async fn policy_engine_default_user_permission_hook_returns_unavailable() {
             reason: "user must approve",
         }),
     );
-    let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(&pack, &token, 1);
+    let ctx = TestPolicyContext::new(&token);
     let action =
         LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
@@ -456,7 +452,6 @@ impl ContextFactory for ChangingAuthorityContextFactory {
 struct ChangingAuthorityContext<'a> {
     kernel: &'a Kernel<ChangingAuthorityContextFactory>,
     clock: &'a FixedClock,
-    pack: &'a VerticalPackManifest,
     token: &'a CapabilityToken,
     change: AuthorityChange,
 }
@@ -503,64 +498,6 @@ impl PolicyContext for ChangingAuthorityContext<'_> {
     }
 }
 
-impl KernelInvocationContext for ChangingAuthorityContext<'_> {
-    fn pack(&self) -> &VerticalPackManifest {
-        self.pack
-    }
-
-    fn token(&self) -> &CapabilityToken {
-        self.token
-    }
-
-    fn now_epoch_s(&self) -> u64 {
-        self.kernel.now_epoch_s()
-    }
-}
-
-#[tokio::test]
-async fn kernel_rechecks_token_after_permission_approval() {
-    let policy = PolicyPipelineBuilder::<ChangingAuthorityContextFactory>::new().with_pre_policy(
-        StaticAnyPolicy {
-            name: "user-permission",
-            decision: PolicyDecision::RequireUserPermission,
-            reason: "user must approve",
-        },
-    );
-    let clock = Arc::new(FixedClock::new(1));
-    let audit = Arc::new(InMemoryAuditSink::default());
-    let mut kernel = Kernel::with_policy_runtime(policy, clock.clone(), audit);
-    let pack = pack();
-    kernel
-        .register_pack(pack.clone())
-        .expect("test pack should register");
-    let token = kernel
-        .issue_token(&pack.pack_id, "agent", 120)
-        .expect("test token should issue");
-    let ctx = ChangingAuthorityContext {
-        kernel: &kernel,
-        clock: &clock,
-        pack: &pack,
-        token: &token,
-        change: AuthorityChange::RevokeToken,
-    };
-
-    let error = kernel
-        .grant_action(
-            &pack.pack_id,
-            &token,
-            LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({})),
-            &ctx,
-        )
-        .await
-        .expect_err("revocation during permission must prevent the grant");
-
-    assert!(matches!(
-        error,
-        KernelError::Policy(PolicyError::RevokedToken { ref token_id })
-            if token_id == &token.token_id
-    ));
-}
-
 #[tokio::test]
 async fn legacy_kernel_authorization_rechecks_token_after_permission_approval() {
     let policy = PolicyPipelineBuilder::<ChangingAuthorityContextFactory>::new().with_pre_policy(
@@ -583,7 +520,6 @@ async fn legacy_kernel_authorization_rechecks_token_after_permission_approval() 
     let ctx = ChangingAuthorityContext {
         kernel: &kernel,
         clock: &clock,
-        pack: &pack,
         token: &token,
         change: AuthorityChange::RevokeToken,
     };
@@ -632,7 +568,6 @@ async fn legacy_kernel_authorization_rechecks_expiry_after_permission_approval()
     let ctx = ChangingAuthorityContext {
         kernel: &kernel,
         clock: &clock,
-        pack: &pack,
         token: &token,
         change: AuthorityChange::AdvanceClock(121),
     };

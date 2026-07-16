@@ -3,6 +3,8 @@ use std::sync::Arc;
 use crate::tools::runtime_events::{
     ToolRuntimeEvent, ToolRuntimeEventSink, with_tool_runtime_event_sink,
 };
+use loong_core::error::PolicyGrantError;
+use loong_runtime::tool_plane::{RegisteredToolError, error::ToolInvocationError};
 
 use super::*;
 
@@ -29,6 +31,86 @@ fn build_observer_tool_runtime_event_sink(
     Arc::new(observer_sink)
 }
 
+/// Collapse the temporary typed-or-legacy request sum at the turn boundary.
+///
+/// Typed errors keep their runtime owner here; only the explicit `Legacy`
+/// branch enters the old Kernel error classifier.
+impl From<crate::tools::ToolRequestError> for TurnFailure {
+    fn from(error: crate::tools::ToolRequestError) -> Self {
+        match error {
+            crate::tools::ToolRequestError::Legacy(error) => {
+                if let KernelError::ToolPlane(ToolPlaneError::Execution(reason)) = &error
+                    && let Some(stripped) = RepairableToolPreflight::parse(reason.as_str())
+                {
+                    let human_reason = RepairableToolPreflight::render(stripped);
+                    return Self::retryable("tool_preflight_denied", human_reason);
+                }
+
+                let reason = render_kernel_error_reason(&error);
+                match classify_kernel_error(&error) {
+                    KernelFailureClass::PolicyDenied => {
+                        Self::policy_denied("kernel_policy_denied", reason)
+                    }
+                    KernelFailureClass::RetryableExecution => {
+                        Self::retryable("tool_execution_failed", reason)
+                    }
+                    KernelFailureClass::NonRetryable => {
+                        Self::non_retryable("kernel_execution_failed", reason)
+                    }
+                }
+            }
+            crate::tools::ToolRequestError::Input(reason) => {
+                Self::retryable("tool_input_invalid", reason)
+            }
+            crate::tools::ToolRequestError::ReservedContext(reason) => {
+                Self::policy_denied("tool_context_denied", reason)
+            }
+            crate::tools::ToolRequestError::Context(reason) => {
+                Self::non_retryable("tool_context_failed", reason)
+            }
+            crate::tools::ToolRequestError::Lookup(error) => {
+                Self::non_retryable("tool_registry_failed", error.to_string())
+            }
+            crate::tools::ToolRequestError::Invocation(error) => {
+                let reason = error.to_string();
+                match &error {
+                    ToolInvocationError::CapabilityOverride(_) => {
+                        Self::policy_denied("tool_capability_override_denied", reason)
+                    }
+                    ToolInvocationError::Authorization(
+                        PolicyGrantError::MissingCapability { .. }
+                        | PolicyGrantError::Denied { .. }
+                        | PolicyGrantError::PermissionDenied { .. },
+                    ) => Self::policy_denied("tool_authorization_denied", reason),
+                    ToolInvocationError::Dispatch {
+                        source: RegisteredToolError::Denied { .. },
+                        ..
+                    } => Self::policy_denied("tool_execution_denied", reason),
+                    ToolInvocationError::Dispatch {
+                        source: RegisteredToolError::Input(_),
+                        ..
+                    } => Self::retryable("tool_input_invalid", reason),
+                    ToolInvocationError::CapabilityNarrowing(_) => {
+                        Self::non_retryable("tool_capability_narrowing_failed", reason)
+                    }
+                    ToolInvocationError::Authorization(_) => {
+                        Self::non_retryable("tool_authorization_failed", reason)
+                    }
+                    ToolInvocationError::CapabilityOverrideAndAudit { .. }
+                    | ToolInvocationError::StartAudit { .. }
+                    | ToolInvocationError::CompletedAudit { .. }
+                    | ToolInvocationError::DispatchAndAudit { .. } => {
+                        Self::non_retryable("tool_execution_audit_failed", reason)
+                    }
+                    ToolInvocationError::Dispatch { .. } => {
+                        Self::non_retryable("tool_execution_failed", reason)
+                    }
+                }
+            }
+        }
+    }
+}
+
 async fn execute_tool_intent_via_kernel(
     request: ToolCoreRequest,
     app_ctx: &AppContext,
@@ -36,27 +118,7 @@ async fn execute_tool_intent_via_kernel(
 ) -> Result<ToolCoreOutcome, TurnFailure> {
     crate::tools::execute_kernel_tool_request(app_ctx, request, trusted_internal_context)
         .await
-        .map_err(|error| {
-            if let KernelError::ToolPlane(ToolPlaneError::Execution(reason)) = &error
-                && let Some(stripped) = RepairableToolPreflight::parse(reason.as_str())
-            {
-                let human_reason = RepairableToolPreflight::render(stripped);
-                return TurnFailure::retryable("tool_preflight_denied", human_reason);
-            }
-
-            let reason = render_kernel_error_reason(&error);
-            match classify_kernel_error(&error) {
-                KernelFailureClass::PolicyDenied => {
-                    TurnFailure::policy_denied("kernel_policy_denied", reason)
-                }
-                KernelFailureClass::RetryableExecution => {
-                    TurnFailure::retryable("tool_execution_failed", reason)
-                }
-                KernelFailureClass::NonRetryable => {
-                    TurnFailure::non_retryable("kernel_execution_failed", reason)
-                }
-            }
-        })
+        .map_err(TurnFailure::from)
 }
 
 impl TurnEngine {

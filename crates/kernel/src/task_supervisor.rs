@@ -1,7 +1,6 @@
 use crate::{
     contracts::{CapabilityToken, TaskIntent},
     kernel::{Kernel, KernelDispatch},
-    policy::KernelInvocationContext,
 };
 use loong_contracts::{Fault, TaskState};
 use loong_core::policy::context::ContextFactory;
@@ -42,7 +41,6 @@ impl TaskSupervisor {
     ) -> Result<KernelDispatch, Fault>
     where
         C: ContextFactory + Send + Sync,
-        for<'a> C::Cx<'a>: KernelInvocationContext,
     {
         // Clone the intent before transitioning, since we need it for the
         // kernel call and transition_to_in_send consumes it.

@@ -8,8 +8,14 @@ use std::{
     },
 };
 
-use loong_contracts::{AuthorizationScope, AuthorizationSubject, Capabilities};
-use loong_core::{PolicyGrantError, kernel::Kernel as _, policy::engine::PolicyEngine};
+use loong_contracts::{
+    AuthorizationScope, AuthorizationSubject, Capabilities, CapabilityToken, VerticalPackManifest,
+};
+use loong_core::{
+    PolicyGrantError,
+    kernel::Kernel as _,
+    policy::{context::PolicyContext, engine::PolicyEngine},
+};
 use serde_json::json;
 
 mod audit;
@@ -35,18 +41,12 @@ impl ContextFactory for TestContextFactory {
 }
 
 struct TestPolicyContext<'a> {
-    pack: &'a VerticalPackManifest,
     token: &'a CapabilityToken,
-    now_epoch_s: u64,
 }
 
 impl<'a> TestPolicyContext<'a> {
-    fn new(pack: &'a VerticalPackManifest, token: &'a CapabilityToken, now_epoch_s: u64) -> Self {
-        Self {
-            pack,
-            token,
-            now_epoch_s,
-        }
+    fn new(token: &'a CapabilityToken) -> Self {
+        Self { token }
     }
 }
 
@@ -64,20 +64,6 @@ impl PolicyContext for TestPolicyContext<'_> {
                 token_id: self.token.token_id.clone(),
             },
         }
-    }
-}
-
-impl KernelInvocationContext for TestPolicyContext<'_> {
-    fn pack(&self) -> &VerticalPackManifest {
-        self.pack
-    }
-
-    fn token(&self) -> &CapabilityToken {
-        self.token
-    }
-
-    fn now_epoch_s(&self) -> u64 {
-        self.now_epoch_s
     }
 }
 
@@ -217,9 +203,8 @@ fn token() -> CapabilityToken {
 #[tokio::test]
 async fn policy_pipeline_new_has_no_fallback_allow() {
     let registry = PolicyPipelineBuilder::<TestContextFactory>::new().registry;
-    let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(&pack, &token, 1);
+    let ctx = TestPolicyContext::new(&token);
     let action =
         LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
@@ -239,9 +224,8 @@ async fn policy_pipeline_new_has_no_fallback_allow() {
 async fn policy_pipeline_new_legacy_allow_fallback_grants_legacy_action() {
     let registry =
         PolicyPipelineBuilder::<TestContextFactory>::new_legacy_allow_fallback().registry;
-    let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(&pack, &token, 1);
+    let ctx = TestPolicyContext::new(&token);
     let action =
         LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
@@ -259,9 +243,8 @@ async fn policy_pipeline_new_legacy_allow_fallback_grants_legacy_action() {
 async fn policy_pipeline_new_legacy_allow_fallback_does_not_grant_typed_actions() {
     let registry =
         PolicyPipelineBuilder::<TestContextFactory>::new_legacy_allow_fallback().registry;
-    let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(&pack, &token, 1);
+    let ctx = TestPolicyContext::new(&token);
 
     let report = registry.decide(&ctx, &TypedOnlyAction).await;
 
@@ -279,9 +262,8 @@ async fn policy_pipeline_new_legacy_allow_fallback_does_not_grant_typed_actions(
 async fn policy_pipeline_legacy_allow_cannot_be_spoofed_by_action_kind() {
     let registry =
         PolicyPipelineBuilder::<TestContextFactory>::new_legacy_allow_fallback().registry;
-    let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(&pack, &token, 1);
+    let ctx = TestPolicyContext::new(&token);
 
     let report = registry.decide(&ctx, &TypedLegacyKindAction).await;
 
@@ -300,10 +282,9 @@ async fn policy_pipeline_grants_actions_allowed_by_registered_policy() {
     let kernel = kernel_with_policy(
         PolicyPipelineBuilder::<TestContextFactory>::new().with_fallback_policy(AllowPolicy),
     );
-    let pack = pack();
     let token = token();
     let required_capabilities = BTreeSet::from([Capability::InvokeTool]);
-    let ctx = TestPolicyContext::new(&pack, &token, 1);
+    let ctx = TestPolicyContext::new(&token);
     let action = LegacyKernelAction::new("tool", required_capabilities, json!({}));
 
     let grant = kernel
@@ -332,11 +313,10 @@ async fn policy_pipeline_pre_policy_can_block_legacy_actions() {
         reason: "network egress denied by test policy",
     });
     let kernel = kernel_with_policy(pipeline);
-    let pack = pack();
     let mut token = token();
     token.allowed_capabilities.insert(Capability::NetworkEgress);
     let required_capabilities = BTreeSet::from([Capability::NetworkEgress]);
-    let ctx = TestPolicyContext::new(&pack, &token, 1);
+    let ctx = TestPolicyContext::new(&token);
     let action = LegacyKernelAction::new("fetch", required_capabilities, json!({}));
 
     let error = kernel
@@ -361,9 +341,8 @@ async fn policy_pipeline_grant_denies_action_missing_required_capability() {
     let kernel = kernel_with_policy(
         PolicyPipelineBuilder::<TestContextFactory>::new_legacy_allow_fallback(),
     );
-    let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(&pack, &token, 1);
+    let ctx = TestPolicyContext::new(&token);
     let action = LegacyKernelAction::new(
         "read",
         BTreeSet::from([Capability::FilesystemRead]),
@@ -398,9 +377,8 @@ async fn policy_pipeline_report_preserves_pre_and_action_evaluation_stages() {
             reason: "typed allowed",
         })
         .registry;
-    let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(&pack, &token, 1);
+    let ctx = TestPolicyContext::new(&token);
     let action =
         LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
@@ -429,9 +407,8 @@ async fn policy_pipeline_report_preserves_registration_metadata() {
             reason: "typed allowed",
         })
         .registry;
-    let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(&pack, &token, 1);
+    let ctx = TestPolicyContext::new(&token);
     let action =
         LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
@@ -470,9 +447,8 @@ async fn policy_pipeline_typed_policy_only_matches_registered_action_type() {
             reason: "typed only allowed",
         })
         .registry;
-    let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(&pack, &token, 1);
+    let ctx = TestPolicyContext::new(&token);
     let legacy_action =
         LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
@@ -506,9 +482,8 @@ async fn policy_pipeline_pre_deny_prevents_typed_allow() {
                 reason: "typed allowed",
             }),
     );
-    let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(&pack, &token, 1);
+    let ctx = TestPolicyContext::new(&token);
     let action =
         LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
@@ -541,9 +516,8 @@ async fn policy_pipeline_allow_short_circuits_before_later_typed_deny() {
             reason: "typed denied",
         })
         .registry;
-    let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(&pack, &token, 1);
+    let ctx = TestPolicyContext::new(&token);
     let action =
         LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
@@ -567,9 +541,8 @@ async fn policy_pipeline_typed_deny_prevents_fallback_allow() {
         })
         .with_fallback_policy(AllowPolicy)
         .registry;
-    let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(&pack, &token, 1);
+    let ctx = TestPolicyContext::new(&token);
     let action =
         LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
@@ -600,9 +573,8 @@ async fn policy_pipeline_typed_allow_prevents_fallback_deny() {
             reason: "fallback denied",
         })
         .registry;
-    let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(&pack, &token, 1);
+    let ctx = TestPolicyContext::new(&token);
     let action =
         LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
@@ -635,9 +607,8 @@ async fn policy_pipeline_advance_skips_rest_of_current_subchain() {
             reason: "typed allowed",
         })
         .registry;
-    let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(&pack, &token, 1);
+    let ctx = TestPolicyContext::new(&token);
     let action =
         LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
@@ -658,9 +629,8 @@ async fn policy_pipeline_fallback_advance_defaults_to_deny() {
             reason: "no next chain",
         })
         .registry;
-    let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(&pack, &token, 1);
+    let ctx = TestPolicyContext::new(&token);
     let action =
         LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
@@ -686,9 +656,8 @@ async fn policy_pipeline_all_continue_defaults_to_deny() {
             reason: "no opinion",
         })
         .registry;
-    let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(&pack, &token, 1);
+    let ctx = TestPolicyContext::new(&token);
     let action =
         LegacyKernelAction::new("tool", BTreeSet::from([Capability::InvokeTool]), json!({}));
 
@@ -712,9 +681,8 @@ async fn policy_pipeline_missing_required_capability_denies_before_policy_execut
             calls: calls.clone(),
         }),
     );
-    let pack = pack();
     let token = token();
-    let ctx = TestPolicyContext::new(&pack, &token, 1);
+    let ctx = TestPolicyContext::new(&token);
     let action = LegacyKernelAction::new(
         "read",
         BTreeSet::from([Capability::FilesystemRead]),

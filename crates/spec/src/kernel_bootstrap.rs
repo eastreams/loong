@@ -326,9 +326,7 @@ mod tests {
         let token = kernel
             .issue_token(DEFAULT_PACK_ID, "test-agent", 60)
             .expect("token issue should succeed");
-        let pack = default_pack_manifest();
-        let policy_context =
-            crate::context::SpecExecutionContext::new(&pack, &token, kernel.now_epoch_s());
+        let policy_context = crate::context::SpecExecutionContext::new(&token);
 
         let dispatch = kernel
             .execute_task(
@@ -386,9 +384,7 @@ mod tests {
         let token = kernel
             .issue_token(DEFAULT_PACK_ID, "test-agent", 60)
             .expect("token issue should succeed");
-        let pack = default_pack_manifest();
-        let policy_context =
-            crate::context::SpecExecutionContext::new(&pack, &token, kernel.now_epoch_s());
+        let policy_context = crate::context::SpecExecutionContext::new(&token);
 
         let dispatch = kernel
             .execute_task(

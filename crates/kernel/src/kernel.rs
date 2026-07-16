@@ -1,7 +1,5 @@
-use loong_core::policy::action::ActionMeta;
 use loong_core::policy::context::ContextFactory;
 use loong_core::policy::engine::PolicyEngine;
-use loong_core::policy::grant::ActionGrant;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -27,10 +25,7 @@ use crate::{
         MemoryExtensionOutcome, MemoryExtensionRequest, MemoryPlane,
     },
     pack::VerticalPackManifest,
-    policy::{
-        KernelInvocationContext, LegacyKernelAction, PolicyPipeline, PolicyPipelineBuilder,
-        policy_engine_error,
-    },
+    policy::{LegacyKernelAction, PolicyPipeline, PolicyPipelineBuilder, policy_engine_error},
     runtime::{
         CoreRuntimeAdapter, RuntimeCoreOutcome, RuntimeCoreRequest, RuntimeExtensionAdapter,
         RuntimeExtensionOutcome, RuntimeExtensionRequest, RuntimePlane,
@@ -40,7 +35,8 @@ use crate::{
         ToolExtensionOutcome, ToolExtensionRequest,
     },
 };
-use loong_contracts::InvocationOutcome;
+
+mod action_execution_audit;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct KernelDispatch {
@@ -345,17 +341,23 @@ where
 
     /// Record operational evidence supplied by an orchestration owner.
     ///
-    /// `AuditEventKind` is also the persisted schema, so it contains the
-    /// engine-owned `Authorization` variant. Reject that variant at this sole
-    /// external write boundary: only `PolicyEngine::grant` may emit typed
-    /// authorization evidence.
+    /// Persisted authorization and tool-execution evidence have narrower live
+    /// writers that possess their corresponding typed proof. This operational
+    /// recorder rejects both reserved families instead of accepting a caller-
+    /// constructed persisted envelope.
     pub fn record_audit_event(
         &self,
         agent_id: Option<&str>,
         kind: AuditEventKind,
-    ) -> Result<(), KernelError> {
+    ) -> Result<(), AuditError> {
         if matches!(kind, AuditEventKind::Authorization { .. }) {
-            return Err(AuditError::AuthorizationEvidenceOwnedByPolicyEngine.into());
+            return Err(AuditError::AuthorizationEvidenceOwnedByPolicyEngine);
+        }
+        if matches!(kind, AuditEventKind::ActionExecution { .. }) {
+            return Err(AuditError::ActionExecutionEvidenceRequiresGrant);
+        }
+        if matches!(kind, AuditEventKind::ToolInvocation { .. }) {
+            return Err(AuditError::HistoricalToolInvocationEvidenceReadOnly);
         }
         self.audit_state
             .record(agent_id.map(std::string::ToString::to_string), kind)?;
@@ -401,28 +403,6 @@ where
                 delegated_core_adapter: record.delegated_core_adapter,
                 operation: record.operation,
                 required_capabilities: record.required_capabilities.iter().copied().collect(),
-            },
-        )?;
-        Ok(())
-    }
-
-    fn record_tool_invocation_event(
-        &self,
-        timestamp_epoch_s: u64,
-        agent_id: Option<String>,
-        pack_id: String,
-        path_display: String,
-        required_capabilities: &BTreeSet<Capability>,
-        outcome: InvocationOutcome,
-    ) -> Result<(), KernelError> {
-        self.audit_state.record_at(
-            timestamp_epoch_s,
-            agent_id,
-            AuditEventKind::ToolInvocation {
-                pack_id,
-                path_display,
-                required_capabilities: required_capabilities.iter().copied().collect(),
-                outcome,
             },
         )?;
         Ok(())
@@ -540,97 +520,7 @@ where
 impl<C> Kernel<C>
 where
     C: ContextFactory,
-    for<'a> C::Cx<'a>: KernelInvocationContext,
 {
-    /// Grant one typed action without executing it.
-    ///
-    /// Kernel owns pack/token/policy authorization, but not the concrete app
-    /// registry that will consume the grant.
-    /// This token-shaped compatibility API owns the legacy context bound;
-    /// typed `Kernel`/`Access` APIs must not inherit it.
-    // Keep the complete legacy token recheck visible until step 5 deletes this
-    // method; extracting it would create another token-shaped migration helper.
-    #[allow(clippy::too_many_lines)]
-    pub async fn grant_action<A>(
-        &self,
-        pack_id: &str,
-        token: &CapabilityToken,
-        action: A,
-        ctx: &C::Cx<'_>,
-    ) -> Result<ActionGrant<A>, KernelError>
-    where
-        A: ActionMeta + 'static,
-    {
-        let pack = self.pack_manifest(pack_id)?;
-        let required_capabilities = {
-            let metadata = action.metadata();
-            metadata
-                .required_capabilities
-                .iter()
-                .copied()
-                .collect::<BTreeSet<_>>()
-        };
-        let now = ctx.now_epoch_s();
-        if let Err(error) = self.assert_pack_grants(pack, &required_capabilities) {
-            self.record_authorization_denial(pack, token, now, &error)?;
-            return Err(error);
-        }
-        if let Err(policy_error) = self.authorize_token(pack, token, now, &required_capabilities) {
-            self.record_authorization_denial(pack, token, now, &policy_error)?;
-            return Err(KernelError::Policy(policy_error));
-        }
-
-        match self.policy.grant(ctx, action).await {
-            Ok(grant) => {
-                // Policy may wait for an external permission decision. Recheck
-                // token revocation/expiry after that await before releasing the
-                // grant to an execution boundary.
-                let post_policy_now_epoch_s = ctx.now_epoch_s();
-                if let Err(policy_error) = self.authorize_token(
-                    pack,
-                    token,
-                    post_policy_now_epoch_s,
-                    &required_capabilities,
-                ) {
-                    self.record_authorization_denial(
-                        pack,
-                        token,
-                        post_policy_now_epoch_s,
-                        &policy_error,
-                    )?;
-                    return Err(KernelError::Policy(policy_error));
-                }
-                Ok(grant)
-            }
-            Err(grant_error) => {
-                let policy_error = policy_engine_error(grant_error);
-                Err(KernelError::Policy(policy_error))
-            }
-        }
-    }
-
-    /// Record the outcome of an app-owned tool invocation.
-    ///
-    /// Tool implementations never receive audit capability. App orchestration
-    /// records the dispatch outcome here after consuming a tool invocation
-    /// grant; legacy adapters keep `PlaneInvoked` until they are migrated.
-    pub fn record_tool_invocation(
-        &self,
-        ctx: &C::Cx<'_>,
-        path_display: impl Into<String>,
-        required_capabilities: &BTreeSet<Capability>,
-        outcome: InvocationOutcome,
-    ) -> Result<(), KernelError> {
-        self.record_tool_invocation_event(
-            ctx.now_epoch_s(),
-            Some(ctx.token().agent_id.clone()),
-            ctx.pack().pack_id.clone(),
-            path_display.into(),
-            required_capabilities,
-            outcome,
-        )
-    }
-
     pub async fn authorize_operation(
         &self,
         pack_id: &str,
@@ -1181,7 +1071,7 @@ where
         required_capabilities: &BTreeSet<Capability>,
         payload: Value,
     ) -> Result<(u64, Value), KernelError> {
-        let now = ctx.now_epoch_s();
+        let now = self.now_epoch_s();
         if let Err(error) = self.assert_pack_grants(pack, required_capabilities) {
             self.record_authorization_denial(pack, token, now, &error)?;
             return Err(error);
@@ -1229,7 +1119,7 @@ where
         // Permission-capable policy may have awaited an external authority.
         // Legacy envelopes must not execute under a token invalidated while
         // that request was pending.
-        let post_policy_now_epoch_s = ctx.now_epoch_s();
+        let post_policy_now_epoch_s = self.now_epoch_s();
         if let Err(policy_error) =
             self.authorize_token(pack, token, post_policy_now_epoch_s, required_capabilities)
         {

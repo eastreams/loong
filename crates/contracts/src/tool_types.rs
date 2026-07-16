@@ -61,24 +61,6 @@ impl ToolInputError {
     }
 }
 
-#[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Eq, Error, Serialize, Deserialize)]
-pub enum ToolExecutionError {
-    #[error(transparent)]
-    Input(#[from] ToolInputError),
-    #[error("tool execution failed: {reason}")]
-    Execution { reason: String },
-}
-
-impl ToolExecutionError {
-    #[must_use]
-    pub fn execution(reason: impl Into<String>) -> Self {
-        Self::Execution {
-            reason: reason.into(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToolTier {
     Core,

@@ -1,31 +1,32 @@
 //! Runtime-owned typed tool lookup and granted dispatch.
 //!
 //! Concrete tools and policies remain outside this module. The registry only
-//! binds a plane-local path to an erased `RegisteredTool` and consumes a grant
-//! before dispatch, so storage choices cannot become tool identity.
+//! binds a plane-local path to an erased `RegisteredTool`. Runtime-owned
+//! `ToolInvocation` consumes the grant before calling the resolved entry, so
+//! storage choices cannot become tool identity.
 
 pub mod error;
+mod invocation;
+mod registered;
 
-use std::{
-    borrow::Cow,
-    collections::{BTreeMap, BTreeSet},
-    fmt,
-};
+pub use invocation::{ToolInvocation, ToolInvocationContext};
+pub use registered::RegisteredToolError;
 
-use async_trait::async_trait;
-use loong_contracts::{Capability, ToolSpec};
+use std::{borrow::Cow, collections::BTreeMap, fmt};
+
+use loong_contracts::{Capabilities, Capability};
 use loong_core::{
     policy::{
         action::{ActionMeta, ActionMetadata},
         context::ContextFactory,
-        grant::Granted,
     },
-    tool::{RegisteredTool, ToolImpl, ToolProvenance},
+    tool::ToolImpl,
 };
 use serde_json::{Value, json};
 use slotmap::{SlotMap, new_key_type};
 
-use self::error::{DispatchError, LookupError, RegistrationError};
+use self::error::{LookupError, RegistrationError};
+use self::registered::RegisteredTool;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// Path type chosen by the default runtime registry.
@@ -96,14 +97,10 @@ pub struct ToolInvocationAction {
 
 impl ToolInvocationAction {
     #[must_use]
-    pub fn new(
-        path: ToolPath,
-        required_capabilities: BTreeSet<Capability>,
-        payload: Value,
-    ) -> Self {
+    pub(crate) fn new(path: ToolPath, required_capabilities: Capabilities, payload: Value) -> Self {
         Self {
             path,
-            required_capabilities: required_capabilities.into_iter().collect(),
+            required_capabilities: required_capabilities.iter().collect(),
             payload,
         }
     }
@@ -119,8 +116,8 @@ impl ToolInvocationAction {
     }
 
     #[must_use]
-    pub fn into_parts(self) -> (ToolPath, Vec<Capability>, Value) {
-        (self.path, self.required_capabilities, self.payload)
+    pub fn payload(&self) -> &Value {
+        &self.payload
     }
 }
 
@@ -141,25 +138,19 @@ impl ActionMeta for ToolInvocationAction {
     }
 }
 
-/// Runtime tool-plane capability independent of its registry representation.
-#[async_trait]
-pub trait ToolPlane<C: ContextFactory>: Send + Sync {
-    type Path: Clone + fmt::Debug + Ord + fmt::Display + Send + Sync + 'static;
-    type InvocationAction: ActionMeta + Send + Sync + 'static;
+/// Runtime-internal storage capability independent of registry representation.
+///
+/// Resolution returns the concrete registered entry so one successful lookup
+/// remains valid through authorization and execution. Grant consumption belongs
+/// to `ToolInvocation`, not to the storage abstraction. This private substitution
+/// point intentionally permits a future trie or another path index without
+/// exposing registered dispatch outside Runtime.
+pub(crate) trait ToolPlane<C: ContextFactory>: Send + Sync {
+    type Path;
 
     fn registered_paths(&self) -> Vec<Self::Path>;
 
-    fn spec(&self, path: &Self::Path) -> Result<&ToolSpec, LookupError<Self::Path>>;
-
-    /// Consumes an already governed invocation grant.
-    ///
-    /// App orchestration should use `ctx.tool(path)?.invoke(payload).await` so
-    /// capability restriction, policy grant, audit, and dispatch remain paired.
-    async fn invoke(
-        &self,
-        grant: Granted<Self::InvocationAction>,
-        ctx: &C::Cx<'_>,
-    ) -> Result<Value, DispatchError<Self::Path>>;
+    fn resolve(&self, path: &Self::Path) -> Result<&RegisteredTool<C>, LookupError<Self::Path>>;
 }
 
 new_key_type! {
@@ -173,12 +164,8 @@ new_key_type! {
 /// The ordered path index provides stable lookup/enumeration while slots keep
 /// tool storage independent from externally visible identity.
 pub struct ToolPlaneRegistry<C: ContextFactory> {
-    entries: SlotMap<ToolSlot, ToolEntry<C>>,
+    entries: SlotMap<ToolSlot, RegisteredTool<C>>,
     paths: BTreeMap<ToolPath, ToolSlot>,
-}
-
-struct ToolEntry<C: ContextFactory> {
-    tool: RegisteredTool<C>,
 }
 
 impl<C> ToolPlaneRegistry<C>
@@ -197,33 +184,18 @@ where
     where
         T: ToolImpl<C>,
     {
-        self.register_with_provenance(path, ToolProvenance::Builtin, tool)
-    }
-
-    pub fn register_with_provenance<T>(
-        &mut self,
-        path: ToolPath,
-        provenance: ToolProvenance,
-        tool: T,
-    ) -> Result<(), RegistrationError>
-    where
-        T: ToolImpl<C>,
-    {
         if self.paths.contains_key(&path) {
             return Err(RegistrationError::AlreadyRegistered { path });
         }
 
-        let slot = self.entries.insert(ToolEntry {
-            tool: RegisteredTool::from_tool(provenance, tool),
-        });
+        let slot = self.entries.insert(RegisteredTool::from_tool(tool));
         self.paths.insert(path, slot);
         Ok(())
     }
 
-    pub fn register_with_provenance_and_success_observer<T, F>(
+    pub fn register_with_success_observer<T, F>(
         &mut self,
         path: ToolPath,
-        provenance: ToolProvenance,
         tool: T,
         observer: F,
     ) -> Result<(), RegistrationError>
@@ -235,11 +207,31 @@ where
             return Err(RegistrationError::AlreadyRegistered { path });
         }
 
-        let slot = self.entries.insert(ToolEntry {
-            tool: RegisteredTool::from_tool_with_success_observer(provenance, tool, observer),
-        });
+        let slot = self
+            .entries
+            .insert(RegisteredTool::from_tool_with_success_observer(
+                tool, observer,
+            ));
         self.paths.insert(path, slot);
         Ok(())
+    }
+
+    #[must_use]
+    pub fn registered_paths(&self) -> Vec<ToolPath> {
+        self.paths.keys().cloned().collect()
+    }
+
+    pub(crate) fn resolve(
+        &self,
+        path: &ToolPath,
+    ) -> Result<&RegisteredTool<C>, LookupError<ToolPath>> {
+        let slot = self
+            .paths
+            .get(path)
+            .ok_or_else(|| LookupError::NotRegistered { path: path.clone() })?;
+        self.entries
+            .get(*slot)
+            .ok_or_else(|| LookupError::RegistryInvariant { path: path.clone() })
     }
 
     #[cfg(test)]
@@ -264,51 +256,18 @@ where
     }
 }
 
-#[async_trait]
 impl<C> ToolPlane<C> for ToolPlaneRegistry<C>
 where
     C: ContextFactory,
 {
     type Path = ToolPath;
-    type InvocationAction = ToolInvocationAction;
 
     fn registered_paths(&self) -> Vec<ToolPath> {
-        self.paths.keys().cloned().collect()
+        ToolPlaneRegistry::registered_paths(self)
     }
 
-    fn spec(&self, path: &ToolPath) -> Result<&ToolSpec, LookupError<ToolPath>> {
-        let slot = self
-            .paths
-            .get(path)
-            .ok_or_else(|| LookupError::NotRegistered { path: path.clone() })?;
-        let entry = self
-            .entries
-            .get(*slot)
-            .ok_or_else(|| LookupError::RegistryInvariant { path: path.clone() })?;
-
-        Ok(entry.tool.spec())
-    }
-
-    async fn invoke(
-        &self,
-        grant: Granted<ToolInvocationAction>,
-        ctx: &C::Cx<'_>,
-    ) -> Result<Value, DispatchError<ToolPath>> {
-        let (path, _required_capabilities, payload) = grant.into_action().into_parts();
-        let slot = self
-            .paths
-            .get(&path)
-            .ok_or_else(|| DispatchError::RegistryInvariant { path: path.clone() })?;
-        let entry = self
-            .entries
-            .get(*slot)
-            .ok_or_else(|| DispatchError::RegistryInvariant { path })?;
-
-        entry
-            .tool
-            .invoke(ctx, payload)
-            .await
-            .map_err(|source| DispatchError::Tool { source })
+    fn resolve(&self, path: &ToolPath) -> Result<&RegisteredTool<C>, LookupError<ToolPath>> {
+        ToolPlaneRegistry::resolve(self, path)
     }
 }
 

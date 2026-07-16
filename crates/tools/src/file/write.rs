@@ -2,7 +2,10 @@ use std::{collections::BTreeSet, path::PathBuf};
 
 use async_trait::async_trait;
 use loong_contracts::{Capability, ToolInputError, ToolSpec};
-use loong_core::{policy::context::ContextFactory, tool::ToolImpl};
+use loong_core::{
+    policy::context::ContextFactory,
+    tool::{ToolFailureKind, ToolImpl},
+};
 use loong_kernel::{KernelAccess, access::fs::FsWriteOptions};
 use serde_json::{Value, json};
 
@@ -114,6 +117,10 @@ where
     fn parse_input(&self, payload: Value) -> Result<Self::Input, ToolInputError> {
         WriteRequest::parse_payload(self.tool_name.to_owned(), &payload)
             .map_err(ToolInputError::invalid_payload)
+    }
+
+    fn failure_kind(&self, error: &Self::Error) -> ToolFailureKind {
+        error.failure_kind()
     }
 
     async fn execute(

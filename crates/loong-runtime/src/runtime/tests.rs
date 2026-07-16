@@ -39,5 +39,5 @@ fn runtime_owns_kernel_and_selected_tool_plane() {
     );
 
     assert!(runtime.kernel().now_epoch_s() > 0);
-    assert_eq!(runtime.tools().registered_paths(), Vec::<ToolPath>::new());
+    assert_eq!(runtime.registered_tool_paths(), Vec::<ToolPath>::new());
 }

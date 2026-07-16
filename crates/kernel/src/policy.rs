@@ -16,29 +16,21 @@ use crate::{
 };
 use async_trait::async_trait;
 use loong_contracts::{
-    AuthorizationAttemptId, AuthorizationEvidence, Capability, CapabilityToken, GrantId,
-    PolicyDecision, PolicyEntry, PolicyEvaluation, PolicyGrant, PolicyId, PolicyOutcome,
-    PolicyRegistration, PolicyRegistrationSource, PolicyReport, VerticalPackManifest,
+    AuthorizationAttemptId, AuthorizationEvidence, Capability, GrantId, PolicyDecision,
+    PolicyEntry, PolicyEvaluation, PolicyGrant, PolicyId, PolicyOutcome, PolicyRegistration,
+    PolicyRegistrationSource, PolicyReport,
 };
 use loong_core::{
     error::AuthorizationError,
     policy::action::{ActionMeta, ActionMetadata},
     policy::{
-        context::{ContextFactory, PolicyContext},
+        context::ContextFactory,
         engine::PolicyEngineBackend,
         policy::{Policy, PolicyAny},
     },
 };
 
 const DEFAULT_DENY_REASON: &str = "No matching policy.";
-
-pub trait KernelInvocationContext: PolicyContext {
-    fn pack(&self) -> &VerticalPackManifest;
-
-    fn token(&self) -> &CapabilityToken;
-
-    fn now_epoch_s(&self) -> u64;
-}
 
 /// Compatibility action for legacy kernel envelopes.
 ///

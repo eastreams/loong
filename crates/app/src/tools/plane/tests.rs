@@ -1,43 +1,4 @@
-use std::{collections::BTreeSet, sync::Arc};
-
-use loong_contracts::Capability;
-use loong_core::{kernel::Kernel as CoreKernel, policy::engine::PolicyEngine};
-use loong_kernel::policy::PolicyPipelineBuilder;
-use loong_kernel::{FixedClock, InMemoryAuditSink, Kernel};
-use loong_runtime::tool_plane::{ToolInvocationAction, ToolPath, ToolPlane};
-use serde_json::json;
-
-use super::ToolInvocationAllowPolicy;
-use crate::context::{AppContextFactory, bootstrap_test_app_context};
-
-#[tokio::test]
-async fn app_policy_allows_registered_tool_invocation_after_capability_gate() {
-    let ctx = bootstrap_test_app_context("test-agent", 60).expect("bootstrap context");
-    let execution_context = ctx
-        .for_invocation(ctx.tool_runtime_config())
-        .expect("build execution context");
-    let mut policy = PolicyPipelineBuilder::<AppContextFactory>::new();
-    policy.push_policy(ToolInvocationAllowPolicy);
-    let kernel = Kernel::with_policy_runtime(
-        policy,
-        Arc::new(FixedClock::new(1)),
-        Arc::new(InMemoryAuditSink::default()),
-    );
-
-    let grant = kernel
-        .policy_engine()
-        .grant(
-            &execution_context,
-            ToolInvocationAction::new(
-                ToolPath::from("read"),
-                BTreeSet::from([Capability::InvokeTool]),
-                json!({ "path": "notes.txt" }),
-            ),
-        )
-        .await;
-
-    assert!(grant.is_ok());
-}
+use loong_runtime::tool_plane::ToolPath;
 
 #[cfg(feature = "tool-file")]
 #[test]
@@ -47,6 +8,7 @@ fn builtin_tool_plane_exposes_registered_file_paths() {
 
     assert!(paths.contains(&ToolPath::from("read")));
     assert!(paths.contains(&ToolPath::from("write")));
+    assert!(paths.contains(&ToolPath::from("edit")));
     assert!(paths.contains(&ToolPath::from("glob.search")));
     assert!(paths.contains(&ToolPath::from("content.search")));
 }

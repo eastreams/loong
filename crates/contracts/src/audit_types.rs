@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AuthorizationEvidence,
+    AuthorizationEvidence, AuthorizationSubject, Capabilities, GrantId, ToolInputError,
     contracts::{Capability, CapabilityToken, ExecutionRoute},
 };
 
@@ -38,11 +38,34 @@ pub enum PlaneTier {
     Extension,
 }
 
+/// Execution evidence for one granted typed action.
+///
+/// The authorization event referenced by `grant_id` owns action identity,
+/// required capabilities, policy report, and subject attribution. Repeating
+/// those fields here would permit the execution record to drift from its grant.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum InvocationOutcome {
-    /// Invocation reached the concrete handler and completed normally.
+pub enum ActionExecutionEvent {
+    /// The domain executor accepted the grant and is about to dispatch.
+    Started,
+    /// The concrete action completed normally.
     Completed,
-    /// Invocation reached the concrete handler, but execution failed.
+    /// Post-grant input parsing rejected the action payload.
+    InputRejected { error: ToolInputError },
+    /// Dispatch reached a terminal non-input failure.
+    Failed { reason: String },
+    /// Dispatch started, but its owner was dropped before observing an outcome.
+    ///
+    /// This deliberately records only the fact known by the owner. It does not
+    /// guess whether the action completed, failed, or was externally cancelled.
+    OutcomeUnknown,
+}
+
+/// Terminal shape used by tool invocation events written before grant-linked
+/// execution evidence existed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HistoricalToolInvocationOutcome {
+    Completed,
     Failed { error_kind: String, reason: String },
 }
 
@@ -80,18 +103,27 @@ pub enum AuditEventKind {
         operation: String,
         required_capabilities: Vec<Capability>,
     },
-    // TODO(tool-audit-owner): this event still marks the app typed-tool
-    // migration boundary. Keep the outcome generic here; richer app/runtime
-    // route schema should live with the app plane, not contracts.
+    /// Execution evidence correlated to one real typed action grant.
+    ActionExecution {
+        grant_id: GrantId,
+        event: ActionExecutionEvent,
+    },
+    /// A tool invocation requested authority outside its declared default.
+    ToolCapabilityOverrideRejected {
+        subject: AuthorizationSubject,
+        path_display: String,
+        requested: Capabilities,
+        declared: Capabilities,
+    },
+    /// Historical pre-grant-linked tool invocation journal record.
+    ///
+    /// New code must use `ActionExecution`; this variant remains decodable
+    /// because append-only audit journals are immutable input.
     ToolInvocation {
         pack_id: String,
-        /// Audit-facing display path for the app-owned tool plane.
-        ///
-        /// This is evidence for one invocation attempt, not a global route
-        /// model. The concrete plane still owns the registry key type.
         path_display: String,
         required_capabilities: Vec<Capability>,
-        outcome: InvocationOutcome,
+        outcome: HistoricalToolInvocationOutcome,
     },
     SecurityScanEvaluated {
         pack_id: String,

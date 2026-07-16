@@ -2,7 +2,10 @@ use std::{collections::BTreeSet, path::PathBuf};
 
 use async_trait::async_trait;
 use loong_contracts::{Capability, ToolInputError, ToolSpec};
-use loong_core::{policy::context::ContextFactory, tool::ToolImpl};
+use loong_core::{
+    policy::context::ContextFactory,
+    tool::{ToolFailureKind, ToolImpl},
+};
 use loong_kernel::{
     KernelAccess,
     access::fs::{FsContentSearchOptions, FsContentSearchOutput, FsGlobOutput, FsPathKind},
@@ -337,6 +340,10 @@ where
             .map_err(ToolInputError::invalid_payload)
     }
 
+    fn failure_kind(&self, error: &Self::Error) -> ToolFailureKind {
+        error.failure_kind()
+    }
+
     async fn execute(
         &self,
         ctx: &C::Cx<'_>,
@@ -396,6 +403,10 @@ where
             .map_err(ToolInputError::invalid_payload)?;
         ContentSearchReadRequest::parse_payload(self.tool_name.to_owned(), payload_object)
             .map_err(ToolInputError::invalid_payload)
+    }
+
+    fn failure_kind(&self, error: &Self::Error) -> ToolFailureKind {
+        error.failure_kind()
     }
 
     async fn execute(

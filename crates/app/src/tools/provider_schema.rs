@@ -47,8 +47,7 @@ fn provider_tool_definitions_for_view_with_config(
 ) -> Vec<Value> {
     let catalog = tool_catalog();
     let typed_tool_paths = runtime
-        .map(Runtime::tools)
-        .map(|tools| tools.registered_paths())
+        .map(Runtime::registered_tool_paths)
         .unwrap_or_default()
         .into_iter()
         .map(|path| path.to_string())
@@ -150,9 +149,9 @@ pub(super) fn typed_tool_spec_for_descriptor<'a>(
     descriptor: &ToolDescriptor,
 ) -> Option<&'a ToolSpec> {
     // Transitional bridge: legacy descriptors still enumerate provider-visible
-    // tools, while migrated tool metadata lives in the app-owned plane.
+    // tools, while migrated tool metadata lives in the runtime-owned plane.
     let path = ToolPath::from(descriptor.name);
-    runtime?.tools().spec(&path).ok()
+    runtime?.tool_spec(&path).ok()
 }
 
 fn sanitize_provider_parameter_combinators(mut definition: Value) -> Value {

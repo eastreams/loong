@@ -13,6 +13,7 @@ use loong_contracts::{
 };
 use loong_core::{
     AuthorizationError, PermissionRequestError, PolicyGrantError, kernel::Kernel as _,
+    policy::context::PolicyContext,
 };
 use serde_json::json;
 

@@ -151,7 +151,7 @@ fn agent_visible_summary_for_direct_state(
     // tool's payload or side effect boundary.
     let typed_path = ToolPath::from(state.surface_id.as_str());
     runtime
-        .and_then(|runtime| runtime.tools().spec(&typed_path).ok())
+        .and_then(|runtime| runtime.tool_spec(&typed_path).ok())
         .map(|spec| spec.description.clone())
         .unwrap_or_else(|| state.prompt_snippet.clone())
 }

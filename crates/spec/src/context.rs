@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use kernel::{CapabilityToken, KernelInvocationContext, VerticalPackManifest};
+use kernel::CapabilityToken;
 use loong_contracts::{AuthorizationScope, AuthorizationSubject, Capabilities};
 use loong_core::policy::context::{ContextFactory, PolicyContext};
 
@@ -12,23 +12,13 @@ impl ContextFactory for SpecContextFactory {
 }
 
 pub struct SpecExecutionContext<'a> {
-    pack: &'a VerticalPackManifest,
     token: &'a CapabilityToken,
-    now_epoch_s: u64,
 }
 
 impl<'a> SpecExecutionContext<'a> {
     #[must_use]
-    pub fn new(
-        pack: &'a VerticalPackManifest,
-        token: &'a CapabilityToken,
-        now_epoch_s: u64,
-    ) -> Self {
-        Self {
-            pack,
-            token,
-            now_epoch_s,
-        }
+    pub fn new(token: &'a CapabilityToken) -> Self {
+        Self { token }
     }
 }
 
@@ -48,19 +38,5 @@ impl PolicyContext for SpecExecutionContext<'_> {
                 token_id: self.token.token_id.clone(),
             },
         }
-    }
-}
-
-impl KernelInvocationContext for SpecExecutionContext<'_> {
-    fn pack(&self) -> &VerticalPackManifest {
-        self.pack
-    }
-
-    fn token(&self) -> &CapabilityToken {
-        self.token
-    }
-
-    fn now_epoch_s(&self) -> u64 {
-        self.now_epoch_s
     }
 }

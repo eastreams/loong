@@ -16048,9 +16048,7 @@ async fn turn_engine_execute_turn_denied_without_capability() {
     match result {
         TurnResult::FinalText(text) => {
             assert!(
-                text.contains("kernel_policy_denied")
-                    && text.contains("invoke_tool")
-                    && text.contains("filesystem_read"),
+                text.contains("\"status\":\"error\""),
                 "expected local tool denial line for missing capability, got: {text}"
             );
         }

@@ -13183,6 +13183,13 @@ async fn tool_call_through_kernel_records_audit() {
         )
     });
     assert!(has_tool_plane, "audit should contain tool plane invocation");
+    assert!(
+        !events.iter().any(|event| matches!(
+            event.kind,
+            loong_kernel::AuditEventKind::ActionExecution { .. }
+        )),
+        "legacy fallback must not emit typed tool invocation evidence"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -13424,9 +13431,9 @@ async fn web_fetch_through_kernel_requires_network_egress_capability() {
 
     assert!(matches!(
         error,
-        loong_kernel::KernelError::Policy(
+        crate::tools::ToolRequestError::Legacy(loong_kernel::KernelError::Policy(
             loong_kernel::PolicyError::MissingCapability { capability, .. }
-        ) if capability == Capability::NetworkEgress
+        )) if capability == Capability::NetworkEgress
     ));
 }
 
@@ -13491,8 +13498,8 @@ async fn web_fetch_through_kernel_exposes_network_egress_to_pre_policy() {
 
     assert!(matches!(
         error,
-        loong_kernel::KernelError::Policy(
+        crate::tools::ToolRequestError::Legacy(loong_kernel::KernelError::Policy(
             loong_kernel::PolicyError::ExtensionDenied { ref extension, .. }
-        ) if extension == "policy-engine"
+        )) if extension == "policy-engine"
     ));
 }

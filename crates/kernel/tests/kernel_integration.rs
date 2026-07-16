@@ -40,7 +40,7 @@ async fn integration_kernel_executes_task() {
             "sales-intel",
             &token,
             task,
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .unwrap();
@@ -74,7 +74,7 @@ async fn kernel_executes_task_and_connector_under_pack_policy() {
             "sales-intel",
             &token,
             task,
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect("task should dispatch");
@@ -95,7 +95,7 @@ async fn kernel_executes_task_and_connector_under_pack_policy() {
             &token,
             None,
             connector_command,
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect("connector dispatch should succeed");
@@ -131,7 +131,7 @@ async fn kernel_rejects_token_missing_capability() {
             "sales-intel",
             &token,
             task,
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect_err("missing capability should fail");
@@ -171,7 +171,7 @@ async fn kernel_rejects_connector_not_whitelisted_by_pack() {
             &token,
             None,
             command,
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect_err("non-whitelisted connector must fail");
@@ -210,7 +210,7 @@ async fn layered_connector_core_executes_through_core_plane() {
             &token,
             None,
             command,
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect("core connector plane should execute");
@@ -247,7 +247,7 @@ async fn layered_connector_extension_composes_over_core_plane() {
             "shielded-bridge",
             None,
             command,
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect("extension connector plane should execute");
@@ -283,7 +283,7 @@ async fn layered_connector_plane_still_enforces_pack_whitelist() {
             &token,
             None,
             command,
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect_err("connector outside whitelist should be denied");
@@ -323,7 +323,7 @@ async fn layered_connector_extension_requires_available_core_adapter() {
             "shielded-bridge",
             None,
             command,
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect_err("extension path must fail without core adapter");
@@ -363,7 +363,7 @@ async fn layered_connector_default_core_adapter_can_be_overridden() {
             &token,
             None,
             command,
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect("core connector plane should execute");
@@ -397,7 +397,7 @@ async fn layered_connector_core_panic_isolated_to_connector_error() {
             &token,
             None,
             failing_command,
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect_err("panicking core adapter should be isolated");
@@ -425,7 +425,7 @@ async fn layered_connector_core_panic_isolated_to_connector_error() {
             &token,
             None,
             recovery_command,
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect("kernel should continue serving connector work");
@@ -460,7 +460,7 @@ async fn layered_connector_extension_panic_isolated_to_connector_error() {
             "panic-extension",
             None,
             failing_command,
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect_err("panicking extension adapter should be isolated");
@@ -485,7 +485,7 @@ async fn layered_connector_extension_panic_isolated_to_connector_error() {
             &token,
             None,
             recovery_command,
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect("kernel should continue after extension panic");
@@ -521,7 +521,7 @@ async fn layered_connector_extension_isolates_nested_core_panic() {
             "shielded-bridge",
             None,
             failing_command,
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect_err("nested core panic should be isolated");
@@ -550,7 +550,7 @@ async fn layered_connector_extension_isolates_nested_core_panic() {
             "shielded-bridge",
             None,
             recovery_command,
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect("extension path should recover after nested core panic");
@@ -604,7 +604,7 @@ async fn kernel_auto_routes_by_harness_kind_when_adapter_is_not_pinned() {
             "code-review",
             &token,
             task,
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect("dispatch should succeed");
@@ -642,7 +642,7 @@ async fn revoked_token_is_denied_by_policy_engine() {
             "sales-intel",
             &token,
             task,
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect_err("revoked token should fail");
@@ -683,7 +683,7 @@ async fn audit_sink_receives_core_lifecycle_events() {
             "sales-intel",
             &token,
             task,
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect("task should dispatch");
@@ -699,7 +699,7 @@ async fn audit_sink_receives_core_lifecycle_events() {
                 required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
                 payload: json!({"ok": true}),
             },
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect("connector call should succeed");
@@ -1028,7 +1028,7 @@ async fn layered_runtime_tool_and_memory_paths_execute_via_core_and_extension() 
                 action: "start-session".to_owned(),
                 payload: json!({"session": "s-1"}),
             },
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect("runtime extension should execute");
@@ -1047,7 +1047,7 @@ async fn layered_runtime_tool_and_memory_paths_execute_via_core_and_extension() 
                 extension_action: "aggregate".to_owned(),
                 payload: json!({"metric": "revenue"}),
             },
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect("tool extension should execute");
@@ -1066,7 +1066,7 @@ async fn layered_runtime_tool_and_memory_paths_execute_via_core_and_extension() 
                 operation: "semantic_search".to_owned(),
                 payload: json!({"query": "top customer"}),
             },
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect("memory extension should execute");
@@ -1127,7 +1127,7 @@ async fn audit_sink_captures_runtime_tool_memory_and_connector_plane_events() {
                 required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
                 payload: json!({}),
             },
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect("connector core should execute");
@@ -1143,7 +1143,7 @@ async fn audit_sink_captures_runtime_tool_memory_and_connector_plane_events() {
                 required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
                 payload: json!({}),
             },
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect("connector extension should execute");
@@ -1158,7 +1158,7 @@ async fn audit_sink_captures_runtime_tool_memory_and_connector_plane_events() {
                 action: "start".to_owned(),
                 payload: json!({}),
             },
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect("runtime extension should execute");
@@ -1173,7 +1173,7 @@ async fn audit_sink_captures_runtime_tool_memory_and_connector_plane_events() {
                 extension_action: "aggregate".to_owned(),
                 payload: json!({}),
             },
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect("tool extension should execute");
@@ -1188,7 +1188,7 @@ async fn audit_sink_captures_runtime_tool_memory_and_connector_plane_events() {
                 operation: "semantic_search".to_owned(),
                 payload: json!({}),
             },
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect("memory extension should execute");
@@ -1290,7 +1290,7 @@ async fn policy_pipeline_pre_policy_can_block_high_risk_capabilities() {
             "strict-env",
             &token,
             risky_task,
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect_err("pre policy should block network egress");
@@ -1358,7 +1358,7 @@ async fn plane_audit_records_resolved_default_core_adapter_names() {
                 required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
                 payload: json!({}),
             },
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect("connector extension should execute");
@@ -1373,7 +1373,7 @@ async fn plane_audit_records_resolved_default_core_adapter_names() {
                 action: "boot".to_owned(),
                 payload: json!({}),
             },
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect("runtime core should execute");
@@ -1452,7 +1452,7 @@ async fn audit_event_json_schema_for_plane_invoked_is_stable() {
                 action: "boot".to_owned(),
                 payload: json!({"mode": "safe"}),
             },
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect("runtime core should execute");
@@ -1523,7 +1523,7 @@ async fn tool_core_call_is_denied_when_policy_engine_rejects_rule_of_two_gate() 
             &required,
             None,
             request,
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect_err("tool call should be denied by policy");
@@ -1601,7 +1601,7 @@ async fn tool_core_call_continues_when_gated_tool_has_no_string_command() {
                 tool_name: "shell.exec".to_owned(),
                 payload: json!({"command": ["ls"]}),
             },
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect("non-string command should not trigger the tool gate");
@@ -1635,7 +1635,7 @@ async fn task_supervisor_tracks_state_through_lifecycle() {
             &kernel,
             "sales-intel",
             &token,
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await;
     assert!(result.is_ok());
@@ -1664,7 +1664,7 @@ async fn task_supervisor_faults_on_kernel_error() {
             &kernel,
             "sales-intel",
             &token,
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await;
     assert!(result.is_err());
@@ -1731,7 +1731,7 @@ async fn kernel_is_usable_from_concurrent_tasks() {
                         required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
                         payload: json!({"id": format!("concurrent-{i}")}),
                     },
-                    &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+                    &TestPolicyContext::from_token(&token),
                 )
                 .await
         }));
@@ -1833,7 +1833,7 @@ async fn authorize_operation_succeeds_when_scoped_token_has_control_write() {
             None,
             "control/write-test",
             &required_capabilities,
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect("control-write authorization should succeed");
@@ -1868,7 +1868,7 @@ async fn authorize_operation_records_plane_invocation_for_control_plane_route() 
             None,
             "control/snapshot",
             &allowed_capabilities,
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect("control-plane authorization should succeed");
@@ -1917,7 +1917,7 @@ async fn authorize_operation_fails_closed_when_scoped_token_lacks_control_write(
             None,
             "control/write-test",
             &required_capabilities,
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect_err("missing control-write capability should fail");
@@ -1955,7 +1955,7 @@ async fn authorize_operation_fails_closed_when_scoped_token_lacks_capability() {
             None,
             "pairing/resolve",
             &required_capabilities,
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
+            &TestPolicyContext::from_token(&token),
         )
         .await
         .expect_err("missing capability should fail");

@@ -7,10 +7,8 @@ use std::sync::Arc;
 
 use loong_contracts::{
     AuthorizationScope, AuthorizationSubject, Capabilities, CapabilityToken, GovernedSessionMode,
-    InvocationOutcome, ToolPlaneError,
 };
 use loong_core::policy::context::{ContextFactory, PolicyContext};
-use loong_core::tool::RegisteredToolError;
 use loong_kernel::access::fs::{
     FsAtomicWriteAllowPolicy, FsCopyFileAllowPolicy, FsCreateDirAllAllowPolicy,
     FsPathAllowedRootsPolicy, FsPathPolicyContext, FsReadAllowPolicy, FsReadFilenameDenyPolicy,
@@ -18,8 +16,7 @@ use loong_kernel::access::fs::{
 };
 use loong_kernel::{
     AccessCx, AuditSink, Capability, Clock, ExecutionRoute, FanoutAuditSink, HarnessKind,
-    InMemoryAuditSink, JsonlAuditSink, Kernel, KernelAccess, KernelInvocationContext, SystemClock,
-    VerticalPackManifest,
+    InMemoryAuditSink, JsonlAuditSink, Kernel, KernelAccess, SystemClock, VerticalPackManifest,
     policy::{
         FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsInspectPathAllowPolicy,
         FsReadDirAllowPolicy, FsRemoveDirAllAllowPolicy, FsRenameAllowPolicy,
@@ -29,11 +26,10 @@ use loong_kernel::{
 use loong_runtime::{
     runtime::Runtime,
     tool_plane::{
-        ToolInvocationAction, ToolPath,
-        error::{DispatchError, LookupError},
+        ToolInvocation, ToolInvocationContext, ToolPath,
+        error::{CapabilityNarrowingError, LookupError},
     },
 };
-use serde_json::Value;
 
 use crate::config::{AuditMode, LoongConfig};
 use crate::conversation::{
@@ -80,7 +76,6 @@ impl fmt::Debug for AppContext {
 #[derive(Clone)]
 pub struct AppContextInner {
     pub(crate) runtime: Arc<Runtime<AppContextFactory>>,
-    pub(crate) pack: Arc<VerticalPackManifest>,
     pub(crate) token: Arc<CapabilityToken>,
     pub(crate) tool_runtime_config: Arc<crate::tools::runtime_config::ToolRuntimeConfig>,
     pub(crate) effective_capabilities: Capabilities,
@@ -126,11 +121,10 @@ impl AppContext {
         tool_view: ToolView,
         session_mode: GovernedSessionMode,
     ) -> Result<Self, String> {
-        let pack = runtime
+        runtime
             .kernel()
             .pack_manifest(&token.pack_id)
-            .map_err(|error| format!("app context pack lookup failed: {error}"))?
-            .clone();
+            .map_err(|error| format!("app context pack lookup failed: {error}"))?;
         let effective_capabilities = token.allowed_capabilities.iter().copied().collect();
         let (fs_resolution_root, fs_allowed_roots) = fs_access_root_view(&tool_runtime_config)?;
         let session_id = normalize_session_id(session_id.into());
@@ -138,7 +132,6 @@ impl AppContext {
         Ok(Self {
             inner: Arc::new(AppContextInner {
                 runtime,
-                pack: Arc::new(pack),
                 token: Arc::new(token),
                 tool_runtime_config: Arc::new(tool_runtime_config),
                 effective_capabilities,
@@ -477,11 +470,6 @@ impl AppContext {
     }
 
     #[must_use]
-    pub(crate) fn pack(&self) -> &VerticalPackManifest {
-        self.pack.as_ref()
-    }
-
-    #[must_use]
     pub fn token(&self) -> &CapabilityToken {
         self.token.as_ref()
     }
@@ -523,7 +511,6 @@ impl AppContext {
         Ok(Self {
             inner: Arc::new(AppContextInner {
                 runtime: self.runtime.clone(),
-                pack: self.pack.clone(),
                 token: self.token.clone(),
                 tool_runtime_config: Arc::new(tool_runtime_config.clone()),
                 effective_capabilities,
@@ -546,28 +533,6 @@ impl AppContext {
         })
     }
 
-    pub(crate) fn narrow_capabilities(
-        &self,
-        effective_capabilities: Capabilities,
-    ) -> Result<Self, String> {
-        if !effective_capabilities.is_subset(&self.effective_capabilities) {
-            let missing_capabilities = effective_capabilities
-                .difference(&self.effective_capabilities)
-                .map(|capability| capability.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(format!(
-                "child execution context cannot add capabilities: missing {missing_capabilities}"
-            ));
-        }
-
-        // Tool-to-tool and tool-to-access paths inherit runtime references but
-        // must not regain capabilities removed by the parent context.
-        let mut child = self.clone();
-        child.effective_capabilities = effective_capabilities;
-        Ok(child)
-    }
-
     #[must_use]
     pub(crate) fn access(&self) -> AccessCx<'_, '_, AppContextFactory> {
         // AccessCx construction is localized at the concrete context boundary.
@@ -576,150 +541,31 @@ impl AppContext {
         AccessCx::new(self.runtime.kernel(), self)
     }
 
-    pub(crate) fn tool(&self, path: ToolPath) -> Result<ToolInvocation<'_>, LookupError<ToolPath>> {
-        let spec = self.runtime.tools().spec(&path)?;
-        let mut required_capabilities = BTreeSet::from([Capability::InvokeTool]);
-        required_capabilities.extend(spec.required_capabilities.iter().copied());
-
-        Ok(ToolInvocation {
-            ctx: self,
-            path,
-            default_capabilities: required_capabilities,
-            capability_override: None,
-        })
+    pub(crate) fn tool(
+        &self,
+        path: ToolPath,
+    ) -> Result<ToolInvocation<'_, '_, AppContextFactory>, LookupError<ToolPath>> {
+        self.runtime.tool(self, path)
     }
 }
 
-/// App orchestration handle for one typed tool invocation.
-///
-/// Concrete tool implementations never receive this handle; they only receive
-/// parsed input after `invoke` has paired kernel grant, plane dispatch, and audit.
-// TODO(typed-tool-authorization-audit): Delete this app-owned wrapper once
-// mandatory grant audit and runtime invocation evidence are closed. Until then,
-// keep every typed-to-legacy downgrade local and do not add blanket From impls.
-pub(crate) struct ToolInvocation<'ctx> {
-    ctx: &'ctx AppContext,
-    path: ToolPath,
-    default_capabilities: BTreeSet<Capability>,
-    capability_override: Option<BTreeSet<Capability>>,
-}
-
-impl ToolInvocation<'_> {
-    /// Bind a narrowed capability set before payload dispatch.
-    ///
-    /// This proves the override cannot add authority before `invoke` builds the
-    /// child context and asks kernel for a `ToolInvocationAction` grant.
-    pub(crate) fn with_capabilities_override(
-        mut self,
-        capabilities: BTreeSet<Capability>,
-    ) -> Result<Self, loong_kernel::KernelError> {
-        let mut default_tool_capabilities = self.default_capabilities.clone();
-        default_tool_capabilities.remove(&Capability::InvokeTool);
-
-        if !capabilities.is_subset(&default_tool_capabilities) {
-            return Err(loong_kernel::KernelError::ToolPlane(
-                ToolPlaneError::Execution(
-                    "policy_denied: tool capability override cannot add capabilities".to_owned(),
-                ),
-            ));
+impl ToolInvocationContext for AppContext {
+    fn derive_tool_child(
+        &self,
+        capabilities: Capabilities,
+    ) -> Result<Self, CapabilityNarrowingError> {
+        if !capabilities.is_subset(&self.effective_capabilities) {
+            return Err(CapabilityNarrowingError {
+                allowed: self.effective_capabilities.clone(),
+                derived: capabilities,
+            });
         }
 
-        self.capability_override = Some(capabilities);
-        Ok(self)
-    }
-
-    pub(crate) async fn invoke(self, payload: Value) -> Result<Value, loong_kernel::KernelError> {
-        let mut default_tool_capabilities = self.default_capabilities.clone();
-        default_tool_capabilities.remove(&Capability::InvokeTool);
-        let tool_capabilities = self
-            .capability_override
-            .unwrap_or(default_tool_capabilities);
-
-        let mut required_capabilities = BTreeSet::from([Capability::InvokeTool]);
-        required_capabilities.extend(tool_capabilities);
-        let effective_capabilities = required_capabilities.iter().copied().collect();
-        let tool_ctx = self
-            .ctx
-            .narrow_capabilities(effective_capabilities)
-            .map_err(|error| {
-                loong_kernel::KernelError::ToolPlane(ToolPlaneError::Execution(format!(
-                    "policy_denied: {error}"
-                )))
-            })?;
-        let action = ToolInvocationAction::new(self.path, required_capabilities, payload);
-        let grant = self
-            .ctx
-            .runtime
-            .kernel()
-            .grant_action(tool_ctx.pack_id(), tool_ctx.token(), action, &tool_ctx)
-            .await?;
-        let granted = grant.into_granted();
-        let audit_path = granted.as_ref().path().to_string();
-        let audit_caps = granted
-            .as_ref()
-            .required_capabilities()
-            .iter()
-            .copied()
-            .collect::<BTreeSet<_>>();
-
-        match self.ctx.runtime.tools().invoke(granted, &tool_ctx).await {
-            Ok(output) => {
-                tool_ctx.runtime.kernel().record_tool_invocation(
-                    &tool_ctx,
-                    audit_path,
-                    &audit_caps,
-                    InvocationOutcome::Completed,
-                )?;
-                Ok(output)
-            }
-            Err(error) => {
-                let error_kind = if matches!(error, DispatchError::RegistryInvariant { .. }) {
-                    "registry_invariant"
-                } else if matches!(
-                    error,
-                    DispatchError::Tool {
-                        source: RegisteredToolError::Input(_),
-                    }
-                ) {
-                    "input_error"
-                } else {
-                    "execution"
-                };
-                let rendered = error.to_string();
-                #[cfg(feature = "tool-file")]
-                let policy_denied = matches!(
-                    &error,
-                    DispatchError::Tool {
-                        source: RegisteredToolError::Execution { source },
-                    } if matches!(
-                        source.downcast_ref::<loong_tools::file::FileToolError>(),
-                        Some(loong_tools::file::FileToolError::Access(
-                            loong_kernel::access::fs::FsAccessError::Authorization(_)
-                        ))
-                    )
-                );
-                #[cfg(not(feature = "tool-file"))]
-                let policy_denied = false;
-                let legacy_reason = if policy_denied {
-                    format!("policy_denied: {rendered}")
-                } else {
-                    rendered
-                };
-                tool_ctx.runtime.kernel().record_tool_invocation(
-                    &tool_ctx,
-                    audit_path,
-                    &audit_caps,
-                    InvocationOutcome::Failed {
-                        error_kind: error_kind.to_owned(),
-                        reason: legacy_reason.clone(),
-                    },
-                )?;
-                // This explicit downgrade belongs only to the temporary owner above.
-                Err(loong_kernel::KernelError::ToolPlane(
-                    ToolPlaneError::Execution(legacy_reason),
-                ))
-            }
-        }
+        // Recursive invocations inherit stable context state but cannot regain
+        // authority removed by their parent scope.
+        let mut child = self.clone();
+        child.effective_capabilities = capabilities;
+        Ok(child)
     }
 }
 
@@ -752,20 +598,6 @@ impl PolicyContext for AppContext {
             actor_id: self.agent_id().to_owned(),
             scope,
         }
-    }
-}
-
-impl KernelInvocationContext for AppContext {
-    fn pack(&self) -> &VerticalPackManifest {
-        self.pack()
-    }
-
-    fn token(&self) -> &CapabilityToken {
-        self.token()
-    }
-
-    fn now_epoch_s(&self) -> u64 {
-        self.runtime.kernel().now_epoch_s()
     }
 }
 
@@ -1268,7 +1100,7 @@ mod tests {
     }
 
     #[test]
-    fn narrow_capabilities_rejects_capabilities_removed_by_parent_context() {
+    fn tool_child_rejects_capabilities_removed_by_parent_context() {
         let context = bootstrap_test_app_context("test-agent", 60).expect("bootstrap context");
         let parent = context
             .for_invocation_with_capabilities(
@@ -1278,15 +1110,13 @@ mod tests {
             .expect("parent execution context should build");
         let child_caps = Capabilities::from([Capability::MemoryRead, Capability::FilesystemRead]);
 
-        let error = match parent.narrow_capabilities(child_caps) {
+        let error = match parent.derive_tool_child(child_caps.clone()) {
             Ok(_) => panic!("child context must not regain parent-removed capabilities"),
             Err(error) => error,
         };
 
-        assert_eq!(
-            error,
-            "child execution context cannot add capabilities: missing filesystem_read"
-        );
+        assert_eq!(error.derived, child_caps);
+        assert_eq!(error.allowed, Capabilities::from([Capability::MemoryRead]));
     }
 
     #[cfg(feature = "tool-file")]
@@ -1300,17 +1130,16 @@ mod tests {
             .tool(ToolPath::from("read"))
             .expect("read should be registered");
 
-        let error = match invocation
-            .with_capabilities_override(BTreeSet::from([Capability::FilesystemWrite]))
-        {
-            Ok(_) => panic!("override must not add capabilities"),
-            Err(error) => error,
-        };
+        let error = invocation
+            .with_capabilities_override(Capabilities::from([Capability::FilesystemWrite]))
+            .invoke(serde_json::json!({ "path": "notes.txt" }))
+            .await
+            .expect_err("override must not add capabilities");
 
         assert!(
             error
                 .to_string()
-                .contains("tool capability override cannot add capabilities"),
+                .contains("not a subset of declared capabilities"),
             "expected capability override rejection, got: {error}"
         );
     }
@@ -1332,8 +1161,7 @@ mod tests {
             .expect("read should be registered");
 
         let error = invocation
-            .with_capabilities_override(BTreeSet::new())
-            .expect("empty override is a valid narrowing")
+            .with_capabilities_override(Capabilities::new())
             .invoke(serde_json::json!({ "path": "notes.txt" }))
             .await
             .expect_err("filesystem read should lose FilesystemRead capability");
