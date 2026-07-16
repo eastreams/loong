@@ -11,17 +11,18 @@ use loong_contracts::{
 };
 use loong_core::policy::context::{ContextFactory, PolicyContext};
 use loong_core::tool::RegisteredToolError;
-use loong_kernel::access::fs::{FsPathPolicyContext, FsResolutionContext};
+use loong_kernel::access::fs::{
+    FsPathAllowedRootsPolicy, FsPathPolicyContext, FsResolutionContext, FsResolvePathAllowPolicy,
+};
 use loong_kernel::{
     AccessCx, AuditSink, Capability, Clock, ExecutionRoute, FanoutAuditSink, HarnessKind,
     InMemoryAuditSink, JsonlAuditSink, Kernel, KernelAccess, KernelInvocationContext, SystemClock,
     VerticalPackManifest,
     policy::{
         FsAtomicWriteAllowPolicy, FsContentSearchAllowPolicy, FsCopyFileAllowPolicy,
-        FsCreateDirAllAllowPolicy, FsGlobAllowPolicy, FsInspectPathAllowPolicy,
-        FsPathAllowedRootsPolicy, FsReadAllowPolicy, FsReadDirAllowPolicy,
-        FsReadFilenameDenyPolicy, FsRemoveDirAllAllowPolicy, FsRemoveFileAllowPolicy,
-        FsRenameAllowPolicy, FsResolvePathAllowPolicy, FsWriteAllowPolicy, PolicyPipelineBuilder,
+        FsCreateDirAllAllowPolicy, FsGlobAllowPolicy, FsInspectPathAllowPolicy, FsReadAllowPolicy,
+        FsReadDirAllowPolicy, FsReadFilenameDenyPolicy, FsRemoveDirAllAllowPolicy,
+        FsRemoveFileAllowPolicy, FsRenameAllowPolicy, FsWriteAllowPolicy, PolicyPipelineBuilder,
     },
 };
 use loong_runtime::{

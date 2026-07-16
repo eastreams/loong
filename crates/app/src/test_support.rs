@@ -6,12 +6,12 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use loong_contracts::{Capability, ExecutionRoute, HarnessKind};
 use loong_kernel::{
     FixedClock, InMemoryAuditSink, Kernel, VerticalPackManifest,
+    access::fs::{FsPathAllowedRootsPolicy, FsResolvePathAllowPolicy},
     policy::{
         FsAtomicWriteAllowPolicy, FsContentSearchAllowPolicy, FsCopyFileAllowPolicy,
-        FsCreateDirAllAllowPolicy, FsGlobAllowPolicy, FsInspectPathAllowPolicy,
-        FsPathAllowedRootsPolicy, FsReadAllowPolicy, FsReadDirAllowPolicy,
-        FsReadFilenameDenyPolicy, FsRemoveDirAllAllowPolicy, FsRemoveFileAllowPolicy,
-        FsRenameAllowPolicy, FsResolvePathAllowPolicy, FsWriteAllowPolicy, PolicyPipelineBuilder,
+        FsCreateDirAllAllowPolicy, FsGlobAllowPolicy, FsInspectPathAllowPolicy, FsReadAllowPolicy,
+        FsReadDirAllowPolicy, FsReadFilenameDenyPolicy, FsRemoveDirAllAllowPolicy,
+        FsRemoveFileAllowPolicy, FsRenameAllowPolicy, FsWriteAllowPolicy, PolicyPipelineBuilder,
     },
 };
 use loong_runtime::runtime::Runtime;

@@ -11,12 +11,10 @@ use loong_core::{
 use thiserror::Error;
 
 use super::{
-    FsResolutionContext,
     action::{
         FsAtomicWriteAction, FsContentSearchAction, FsContentSearchOptions, FsCopyFileAction,
-        FsCreateDirAllAction, FsGlobAction, FsInspectPathAction, FsPathAction, FsReadAction,
-        FsReadDirAction, FsRemoveDirAllAction, FsRemoveFileAction, FsRenameAction,
-        FsResolvePathAction, FsWriteAction, FsWriteOptions,
+        FsCreateDirAllAction, FsGlobAction, FsInspectPathAction, FsReadAction, FsReadDirAction,
+        FsRemoveDirAllAction, FsRemoveFileAction, FsRenameAction, FsWriteAction, FsWriteOptions,
     },
     content_search::FsContentSearchOutput,
     copy::FsCopyFileOutput,
@@ -24,7 +22,7 @@ use super::{
     error::FsActionError,
     glob::FsGlobOutput,
     inspect::FsInspectPathOutput,
-    path::{FsPathMode, GrantedEntryPath, GrantedFsPath, GrantedPath},
+    path::FsResolutionContext,
     read_dir::FsReadDirOutput,
     remove::FsRemoveFileOutput,
     remove_dir::FsRemoveDirAllOutput,
@@ -42,8 +40,8 @@ where
     P: PolicyEngine<C>,
     C::Cx<'ctx>: FsResolutionContext,
 {
-    policy_engine: &'a P,
-    ctx: &'a C::Cx<'ctx>,
+    pub(in crate::fs) policy_engine: &'a P,
+    pub(in crate::fs) ctx: &'a C::Cx<'ctx>,
 }
 
 impl<'a, 'ctx, C, P> FsAccess<'a, 'ctx, C, P>
@@ -56,66 +54,6 @@ where
     #[must_use]
     pub fn new(policy_engine: &'a P, ctx: &'a C::Cx<'ctx>) -> Self {
         Self { policy_engine, ctx }
-    }
-
-    /// Run the mandatory resolve and path-policy stages for a target path.
-    ///
-    /// Keeping this chain inside access prevents individual operations from
-    /// accidentally skipping either grant while keeping both stages visible as
-    /// distinct typed actions to policy.
-    async fn grant_target_path(
-        &self,
-        path: impl AsRef<Path>,
-    ) -> Result<GrantedPath, FsAccessError> {
-        self.grant_path(FsResolvePathAction::target(
-            path,
-            self.ctx.fs_resolution_root(),
-        ))
-        .await
-    }
-
-    /// Resolve and authorize a final-component no-follow entry path.
-    async fn grant_entry_path(
-        &self,
-        path: impl AsRef<Path>,
-    ) -> Result<GrantedEntryPath, FsAccessError> {
-        self.grant_path(FsResolvePathAction::entry(
-            path,
-            self.ctx.fs_resolution_root(),
-        ))
-        .await
-    }
-
-    // Keep the two mandatory grants in one implementation so new fs
-    // operations cannot accidentally authorize resolved facts in a different
-    // order or omit one of the stages.
-    async fn grant_path<M>(
-        &self,
-        resolve: FsResolvePathAction<M>,
-    ) -> Result<GrantedFsPath<M>, FsAccessError>
-    where
-        M: FsPathMode,
-    {
-        let resolved = self
-            .policy_engine
-            .grant(self.ctx, resolve)
-            .await
-            .map_err(AuthorizationError::from)
-            .map_err(FsAccessError::Authorization)?
-            .into_granted()
-            .run(self.ctx)
-            .await?;
-        let path_action = FsPathAction::new(resolved);
-        let path = self
-            .policy_engine
-            .grant(self.ctx, path_action)
-            .await
-            .map_err(AuthorizationError::from)
-            .map_err(FsAccessError::Authorization)?
-            .into_granted()
-            .run(self.ctx)
-            .await?;
-        Ok(path)
     }
 }
 
@@ -378,40 +316,6 @@ where
             .map_err(AuthorizationError::from)
             .map_err(FsAccessError::Authorization)?;
         grant.into_granted().run(self.ctx).await
-    }
-}
-
-/// Resolve one path only after policy grants the observation action.
-#[async_trait]
-impl<Cx, M> Action<Cx> for FsResolvePathAction<M>
-where
-    Cx: Sync,
-    M: FsPathMode,
-{
-    type Output = super::path::ResolvedFsPath<M>;
-    type Error = FsActionError;
-
-    async fn run(granted: Granted<Self>, _ctx: &Cx) -> Result<Self::Output, Self::Error> {
-        granted.into_action().resolve()
-    }
-}
-
-/// Mint a governed path from facts accepted by path policy.
-///
-/// This stage performs no filesystem observation. It only consumes the path
-/// authorization grant and preserves target/entry typestate for the concrete
-/// operation action.
-#[async_trait]
-impl<Cx, M> Action<Cx> for FsPathAction<M>
-where
-    Cx: Sync,
-    M: FsPathMode,
-{
-    type Output = GrantedFsPath<M>;
-    type Error = FsActionError;
-
-    async fn run(granted: Granted<Self>, _ctx: &Cx) -> Result<Self::Output, Self::Error> {
-        Ok(granted.into_action().into_granted_path())
     }
 }
 

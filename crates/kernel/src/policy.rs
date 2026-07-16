@@ -8,16 +8,14 @@ use std::{
 
 use crate::access::fs::{
     FsAtomicWriteAction, FsContentSearchAction, FsCopyFileAction, FsCreateDirAllAction,
-    FsGlobAction, FsInspectPathAction, FsPathAction, FsPathPolicyContext, FsReadAction,
-    FsReadDirAction, FsRemoveDirAllAction, FsRemoveFileAction, FsRenameAction, FsResolvePathAction,
-    FsWriteAction,
+    FsGlobAction, FsInspectPathAction, FsReadAction, FsReadDirAction, FsRemoveDirAllAction,
+    FsRemoveFileAction, FsRenameAction, FsWriteAction,
 };
 use crate::{
     audit::SharedAuditState,
     errors::{AuditError, PolicyError},
 };
 use async_trait::async_trait;
-use loong_access::fs::path::{EntryPath, FsPathMode, TargetPath};
 use loong_contracts::{
     AuthorizationAttemptId, AuthorizationEvidence, Capability, CapabilityToken, GrantId,
     PolicyDecision, PolicyEntry, PolicyEvaluation, PolicyGrant, PolicyId, PolicyOutcome,
@@ -584,112 +582,6 @@ pub struct FsReadDirAllowPolicy;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct FsContentSearchAllowPolicy;
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct FsResolvePathAllowPolicy<M = TargetPath>(PhantomData<fn() -> M>);
-
-impl FsResolvePathAllowPolicy<TargetPath> {
-    #[must_use]
-    pub const fn target() -> Self {
-        Self(PhantomData)
-    }
-}
-
-impl FsResolvePathAllowPolicy<EntryPath> {
-    #[must_use]
-    pub const fn entry() -> Self {
-        Self(PhantomData)
-    }
-}
-
-/// Explicitly permit access-internal path resolution.
-///
-/// Resolution produces opaque facts, not filesystem authority. The following
-/// `FsPathAction` still must pass allowed-roots policy before any concrete fs
-/// action can receive a granted path.
-#[async_trait]
-impl<C, M> Policy<C, FsResolvePathAction<M>> for FsResolvePathAllowPolicy<M>
-where
-    C: ContextFactory + Send + Sync,
-    M: FsPathMode,
-{
-    fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("fs-resolve-path-allow")
-    }
-
-    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &FsResolvePathAction<M>) -> PolicyGrant {
-        PolicyGrant {
-            decision: PolicyDecision::Allow,
-            predicate: Some("path resolution does not grant filesystem authority".into()),
-            reason: "filesystem path resolution allowed before path authorization".into(),
-        }
-    }
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct FsPathAllowedRootsPolicy<M = TargetPath>(PhantomData<fn() -> M>);
-
-impl FsPathAllowedRootsPolicy<TargetPath> {
-    #[must_use]
-    pub const fn target() -> Self {
-        Self(PhantomData)
-    }
-}
-
-impl FsPathAllowedRootsPolicy<EntryPath> {
-    #[must_use]
-    pub const fn entry() -> Self {
-        Self(PhantomData)
-    }
-}
-
-/// Default fs path containment policy.
-///
-/// A granted resolve action prepares path facts, but containment is a policy
-/// decision owned by the kernel pipeline so denials produce `PolicyReport`
-/// evidence instead of domain action errors. Target-following and entry/no-follow
-/// registrations share this implementation while retaining distinct grant
-/// types for their concrete fs actions.
-#[async_trait]
-impl<C, M> Policy<C, FsPathAction<M>> for FsPathAllowedRootsPolicy<M>
-where
-    C: ContextFactory + Send + Sync,
-    M: FsPathMode,
-    for<'a> C::Cx<'a>: FsPathPolicyContext,
-{
-    fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("fs-path-allowed-roots")
-    }
-
-    async fn grant(&self, ctx: &C::Cx<'_>, action: &FsPathAction<M>) -> PolicyGrant {
-        let allowed_roots = ctx.fs_allowed_roots();
-        if allowed_roots
-            .iter()
-            .any(|allowed_root| action.resolved_path().starts_with(allowed_root))
-        {
-            return PolicyGrant {
-                decision: PolicyDecision::Allow,
-                predicate: Some("resolved fs path starts with an allowed root".into()),
-                reason: "resolved fs path is within allowed roots".into(),
-            };
-        }
-
-        PolicyGrant {
-            decision: PolicyDecision::Deny,
-            predicate: Some("resolved fs path must start with an allowed root".into()),
-            reason: format!(
-                "filesystem path {} escapes allowed filesystem roots [{}]",
-                action.resolved_path().display(),
-                allowed_roots
-                    .iter()
-                    .map(|path| path.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-            .into(),
-        }
-    }
-}
 
 impl FsReadFilenameDenyPolicy {
     #[must_use]

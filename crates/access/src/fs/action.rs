@@ -1,18 +1,11 @@
-use std::{
-    borrow::Cow,
-    path::{Path, PathBuf},
-};
+use std::{borrow::Cow, path::Path};
 
 use loong_contracts::Capability;
 use loong_core::policy::action::{ActionMeta, ActionMetadata};
 use serde_json::{Value, json};
 
-use super::path::{
-    EntryPath, FsPathMode, GrantedEntryPath, GrantedFsPath, GrantedPath, ResolvedFsPath,
-    TargetPath, resolve_entry_path, resolve_target_path,
-};
+use super::path::{GrantedEntryPath, GrantedPath};
 
-const FS_PATH_REQUIRED_CAPABILITIES: [Capability; 0] = [];
 const FS_READ_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 const FS_WRITE_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
 const FS_COPY_FILE_REQUIRED_CAPABILITIES: [Capability; 2] =
@@ -25,147 +18,6 @@ const FS_GLOB_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRe
 const FS_READ_DIR_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 const FS_CONTENT_SEARCH_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 const FS_INSPECT_PATH_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
-
-/// Typed action for resolving one requested path into filesystem facts.
-///
-/// Construction is pure. Canonicalization and symlink observation happen only
-/// when a granted action runs. Its output is resolved but not yet authorized;
-/// callers must pass it through `FsPathAction` before a concrete fs action.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FsResolvePathAction<M = TargetPath> {
-    raw_path: PathBuf,
-    resolution_root: PathBuf,
-    _mode: std::marker::PhantomData<fn() -> M>,
-}
-
-impl FsResolvePathAction<TargetPath> {
-    #[must_use]
-    pub(in crate::fs) fn target(path: impl AsRef<Path>, resolution_root: impl AsRef<Path>) -> Self {
-        Self::new(path, resolution_root)
-    }
-}
-
-impl FsResolvePathAction<EntryPath> {
-    #[must_use]
-    pub(in crate::fs) fn entry(path: impl AsRef<Path>, resolution_root: impl AsRef<Path>) -> Self {
-        Self::new(path, resolution_root)
-    }
-}
-
-impl<M> FsResolvePathAction<M>
-where
-    M: FsPathMode,
-{
-    fn new(path: impl AsRef<Path>, resolution_root: impl AsRef<Path>) -> Self {
-        Self {
-            raw_path: path.as_ref().to_path_buf(),
-            resolution_root: resolution_root.as_ref().to_path_buf(),
-            _mode: std::marker::PhantomData,
-        }
-    }
-
-    #[must_use]
-    pub fn raw_path(&self) -> &Path {
-        &self.raw_path
-    }
-
-    #[must_use]
-    pub fn resolution_root(&self) -> &Path {
-        &self.resolution_root
-    }
-
-    pub(in crate::fs) fn resolve(self) -> Result<ResolvedFsPath<M>, super::error::FsActionError> {
-        let resolved = if M::FOLLOWS_FINAL_COMPONENT {
-            resolve_target_path(&self.raw_path, &self.resolution_root)?
-        } else {
-            resolve_entry_path(&self.raw_path, &self.resolution_root)?
-        };
-        Ok(ResolvedFsPath::new(self.raw_path, resolved))
-    }
-}
-
-impl<M> ActionMeta for FsResolvePathAction<M>
-where
-    M: FsPathMode,
-{
-    fn metadata(&self) -> ActionMetadata<'_> {
-        ActionMetadata {
-            kind: "fs.resolve_path",
-            operation: Cow::Borrowed(M::RESOLVE_OPERATION),
-            required_capabilities: Cow::Borrowed(&FS_PATH_REQUIRED_CAPABILITIES),
-        }
-    }
-
-    fn audit_resource(&self) -> Option<Cow<'_, str>> {
-        Some(self.raw_path.display().to_string().into())
-    }
-
-    fn payload(&self) -> Cow<'_, Value> {
-        Cow::Owned(json!({
-            "path": self.raw_path.display().to_string(),
-            "resolution_root": self.resolution_root.display().to_string(),
-            "semantics": M::NAME,
-        }))
-    }
-}
-
-/// Typed action for authorizing one already-resolved filesystem path.
-///
-/// This action performs no filesystem observation. It presents resolved facts
-/// to path policy and mints a `GrantedFsPath` only after policy accepts them.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FsPathAction<M = TargetPath> {
-    resolved: ResolvedFsPath<M>,
-}
-
-impl<M> FsPathAction<M>
-where
-    M: FsPathMode,
-{
-    #[must_use]
-    pub(in crate::fs) fn new(resolved: ResolvedFsPath<M>) -> Self {
-        Self { resolved }
-    }
-
-    #[must_use]
-    pub fn requested_path(&self) -> &Path {
-        self.resolved.requested_path()
-    }
-
-    #[must_use]
-    pub fn resolved_path(&self) -> &Path {
-        self.resolved.path()
-    }
-
-    pub(in crate::fs) fn into_granted_path(self) -> GrantedFsPath<M> {
-        GrantedFsPath::new(self.resolved.into_path_buf())
-    }
-}
-
-impl<M> ActionMeta for FsPathAction<M>
-where
-    M: FsPathMode,
-{
-    fn metadata(&self) -> ActionMetadata<'_> {
-        ActionMetadata {
-            kind: "fs.path",
-            operation: Cow::Borrowed(M::AUTHORIZE_OPERATION),
-            required_capabilities: Cow::Borrowed(&FS_PATH_REQUIRED_CAPABILITIES),
-        }
-    }
-
-    fn audit_resource(&self) -> Option<Cow<'_, str>> {
-        Some(self.requested_path().display().to_string().into())
-    }
-
-    fn payload(&self) -> Cow<'_, Value> {
-        Cow::Owned(json!({
-            "path": self.requested_path().display().to_string(),
-            "resolved_path": self.resolved_path().display().to_string(),
-            "semantics": M::NAME,
-        }))
-    }
-}
 
 /// Typed action for reading one governed filesystem path.
 ///

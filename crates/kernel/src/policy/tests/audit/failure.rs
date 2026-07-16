@@ -1,4 +1,5 @@
 use super::*;
+use crate::access::fs::FsResolvePathAllowPolicy;
 
 #[tokio::test]
 async fn missing_capability_and_policy_deny_each_record_one_terminal_event() {

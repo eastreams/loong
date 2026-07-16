@@ -5,10 +5,10 @@ use std::sync::Arc;
 use loong_contracts::{Capability, ExecutionRoute, HarnessKind, ToolCoreOutcome, ToolCoreRequest};
 use loong_kernel::{
     InMemoryAuditSink, Kernel, SystemClock, VerticalPackManifest,
+    access::fs::{FsPathAllowedRootsPolicy, FsResolvePathAllowPolicy},
     policy::{
-        FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsPathAllowedRootsPolicy, FsReadAllowPolicy,
-        FsReadFilenameDenyPolicy, FsResolvePathAllowPolicy, FsWriteAllowPolicy,
-        PolicyPipelineBuilder,
+        FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsReadAllowPolicy, FsReadFilenameDenyPolicy,
+        FsWriteAllowPolicy, PolicyPipelineBuilder,
     },
 };
 use serde_json::json;
