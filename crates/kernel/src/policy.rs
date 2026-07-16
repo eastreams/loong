@@ -8,7 +8,7 @@ use std::{
 
 use crate::access::fs::{
     FsContentSearchAction, FsGlobAction, FsInspectPathAction, FsReadDirAction,
-    FsRemoveDirAllAction, FsRemoveFileAction, FsRenameAction,
+    FsRemoveDirAllAction, FsRenameAction,
 };
 use crate::{
     audit::SharedAuditState,
@@ -542,9 +542,6 @@ where
 }
 
 #[derive(Debug, Default, Clone, Copy)]
-pub struct FsRemoveFileAllowPolicy;
-
-#[derive(Debug, Default, Clone, Copy)]
 pub struct FsRemoveDirAllAllowPolicy;
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -561,24 +558,6 @@ pub struct FsReadDirAllowPolicy;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct FsContentSearchAllowPolicy;
-
-#[async_trait]
-impl<C> Policy<C, FsRemoveFileAction> for FsRemoveFileAllowPolicy
-where
-    C: ContextFactory + Send + Sync,
-{
-    fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("fs-remove-file-allow")
-    }
-
-    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &FsRemoveFileAction) -> PolicyGrant {
-        PolicyGrant {
-            decision: PolicyDecision::Allow,
-            predicate: Some("fs.remove_file reached terminal allow policy".into()),
-            reason: "filesystem file removal allowed after configured deny policies".into(),
-        }
-    }
-}
 
 #[async_trait]
 impl<C> Policy<C, FsRemoveDirAllAction> for FsRemoveDirAllAllowPolicy

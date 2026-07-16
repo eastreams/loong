@@ -17,7 +17,7 @@ pub mod write;
 pub use access::{FsAccess, FsAccessError};
 pub use action::{
     FsContentSearchAction, FsContentSearchOptions, FsGlobAction, FsInspectPathAction,
-    FsReadDirAction, FsRemoveDirAllAction, FsRemoveFileAction, FsRenameAction,
+    FsReadDirAction, FsRemoveDirAllAction, FsRenameAction,
 };
 pub use content_search::{FsContentSearchMatch, FsContentSearchOutput};
 pub use copy::{FsCopyFileAction, FsCopyFileAllowPolicy, FsCopyFileOutput};
@@ -32,7 +32,9 @@ pub use path::{
 };
 pub use read::{FsReadAction, FsReadAllowPolicy, FsReadFilenameDenyPolicy, FsReadOutput};
 pub use read_dir::{FsReadDirEntry, FsReadDirOutput};
-pub use remove::{FsRemoveFileKind, FsRemoveFileOutput};
+pub use remove::{
+    FsRemoveFileAction, FsRemoveFileAllowPolicy, FsRemoveFileKind, FsRemoveFileOutput,
+};
 pub use remove_dir::FsRemoveDirAllOutput;
 pub use rename::FsRenameOutput;
 pub use write::{

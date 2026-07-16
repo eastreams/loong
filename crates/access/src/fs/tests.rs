@@ -30,13 +30,13 @@ use super::{
     access::{FsAccess, FsAccessError},
     action::{
         FsContentSearchAction, FsContentSearchOptions, FsGlobAction, FsInspectPathAction,
-        FsReadDirAction, FsRemoveDirAllAction, FsRemoveFileAction, FsRenameAction,
+        FsReadDirAction, FsRemoveDirAllAction, FsRenameAction,
     },
     copy::FsCopyFileAction,
     directory::FsCreateDirAllAction,
     path::{FsPathAction, FsResolvePathAction, GrantedEntryPath, GrantedPath},
     read::FsReadAction,
-    remove::FsRemoveFileKind,
+    remove::{FsRemoveFileAction, FsRemoveFileKind},
     write::{FsAtomicWriteAction, FsWriteAction, FsWriteOptions},
 };
 

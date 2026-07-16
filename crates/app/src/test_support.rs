@@ -9,12 +9,12 @@ use loong_kernel::{
     access::fs::{
         FsAtomicWriteAllowPolicy, FsCopyFileAllowPolicy, FsCreateDirAllAllowPolicy,
         FsPathAllowedRootsPolicy, FsReadAllowPolicy, FsReadFilenameDenyPolicy,
-        FsResolvePathAllowPolicy, FsWriteAllowPolicy,
+        FsRemoveFileAllowPolicy, FsResolvePathAllowPolicy, FsWriteAllowPolicy,
     },
     policy::{
         FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsInspectPathAllowPolicy,
-        FsReadDirAllowPolicy, FsRemoveDirAllAllowPolicy, FsRemoveFileAllowPolicy,
-        FsRenameAllowPolicy, PolicyPipelineBuilder,
+        FsReadDirAllowPolicy, FsRemoveDirAllAllowPolicy, FsRenameAllowPolicy,
+        PolicyPipelineBuilder,
     },
 };
 use loong_runtime::runtime::Runtime;

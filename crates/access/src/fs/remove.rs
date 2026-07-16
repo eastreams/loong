@@ -1,9 +1,120 @@
-use std::path::PathBuf;
+use std::{
+    borrow::Cow,
+    path::{Path, PathBuf},
+};
 
 use async_trait::async_trait;
-use loong_core::policy::{action::Action, grant::Granted};
+use loong_contracts::{Capability, PolicyDecision, PolicyGrant};
+use loong_core::{
+    error::AuthorizationError,
+    policy::{
+        action::{Action, ActionMeta, ActionMetadata},
+        context::ContextFactory,
+        engine::PolicyEngine,
+        grant::Granted,
+        policy::Policy,
+    },
+};
+use serde_json::{Value, json};
 
-use super::{access::FsAccessError, action::FsRemoveFileAction};
+use super::{
+    access::{FsAccess, FsAccessError},
+    path::{FsResolutionContext, GrantedEntryPath},
+};
+
+const FS_REMOVE_FILE_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
+
+/// Typed action for removing one governed file or symlink.
+///
+/// Deletion needs final-component no-follow semantics, so this action consumes
+/// `GrantedEntryPath` rather than the canonical-target `GrantedPath` used by
+/// read and write operations. Path policy therefore authorizes the directory
+/// entry that the side-effect boundary will actually remove.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsRemoveFileAction {
+    path: GrantedEntryPath,
+}
+
+impl FsRemoveFileAction {
+    #[must_use]
+    pub fn new(path: GrantedEntryPath) -> Self {
+        Self { path }
+    }
+
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        self.path.as_path()
+    }
+}
+
+impl ActionMeta for FsRemoveFileAction {
+    fn metadata(&self) -> ActionMetadata<'_> {
+        ActionMetadata {
+            kind: "fs.remove_file",
+            operation: Cow::Borrowed("remove_file"),
+            required_capabilities: Cow::Borrowed(&FS_REMOVE_FILE_REQUIRED_CAPABILITIES),
+        }
+    }
+
+    fn audit_resource(&self) -> Option<Cow<'_, str>> {
+        Some(self.path.as_path().display().to_string().into())
+    }
+
+    fn payload(&self) -> Cow<'_, Value> {
+        Cow::Owned(json!({
+            "path": self.path.as_path().display().to_string(),
+        }))
+    }
+}
+
+/// Terminal file-removal policy installed after configured deny policies.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct FsRemoveFileAllowPolicy;
+
+#[async_trait]
+impl<C> Policy<C, FsRemoveFileAction> for FsRemoveFileAllowPolicy
+where
+    C: ContextFactory + Send + Sync,
+{
+    fn name(&self) -> Cow<'static, str> {
+        Cow::Borrowed("fs-remove-file-allow")
+    }
+
+    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &FsRemoveFileAction) -> PolicyGrant {
+        PolicyGrant {
+            decision: PolicyDecision::Allow,
+            predicate: Some("fs.remove_file reached terminal allow policy".into()),
+            reason: "filesystem file removal allowed after configured deny policies".into(),
+        }
+    }
+}
+
+impl<'a, 'ctx, C, P> FsAccess<'a, 'ctx, C, P>
+where
+    C: ContextFactory + 'ctx,
+    P: PolicyEngine<C>,
+    C::Cx<'ctx>: FsResolutionContext,
+{
+    /// Remove one file or symlink through entry-path and write policy.
+    ///
+    /// The final component is deliberately not followed, so removing a symlink
+    /// deletes the link itself rather than its target.
+    pub async fn remove_file(
+        self,
+        path: impl AsRef<Path>,
+    ) -> Result<FsRemoveFileOutput, FsAccessError> {
+        let path = self.grant_entry_path(path).await?;
+
+        let action = FsRemoveFileAction::new(path);
+        let grant = self
+            .policy_engine
+            .grant(self.ctx, action)
+            .await
+            .map_err(AuthorizationError::from)
+            .map_err(FsAccessError::Authorization)?;
+        grant.into_granted().run(self.ctx).await
+    }
+}
 
 /// Execute an already-authorized file or symlink removal.
 ///

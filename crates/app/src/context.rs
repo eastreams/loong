@@ -14,7 +14,7 @@ use loong_core::tool::RegisteredToolError;
 use loong_kernel::access::fs::{
     FsAtomicWriteAllowPolicy, FsCopyFileAllowPolicy, FsCreateDirAllAllowPolicy,
     FsPathAllowedRootsPolicy, FsPathPolicyContext, FsReadAllowPolicy, FsReadFilenameDenyPolicy,
-    FsResolutionContext, FsResolvePathAllowPolicy, FsWriteAllowPolicy,
+    FsRemoveFileAllowPolicy, FsResolutionContext, FsResolvePathAllowPolicy, FsWriteAllowPolicy,
 };
 use loong_kernel::{
     AccessCx, AuditSink, Capability, Clock, ExecutionRoute, FanoutAuditSink, HarnessKind,
@@ -22,8 +22,8 @@ use loong_kernel::{
     VerticalPackManifest,
     policy::{
         FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsInspectPathAllowPolicy,
-        FsReadDirAllowPolicy, FsRemoveDirAllAllowPolicy, FsRemoveFileAllowPolicy,
-        FsRenameAllowPolicy, PolicyPipelineBuilder,
+        FsReadDirAllowPolicy, FsRemoveDirAllAllowPolicy, FsRenameAllowPolicy,
+        PolicyPipelineBuilder,
     },
 };
 use loong_runtime::{

@@ -9,7 +9,7 @@ use thiserror::Error;
 use super::{
     action::{
         FsContentSearchAction, FsContentSearchOptions, FsGlobAction, FsInspectPathAction,
-        FsReadDirAction, FsRemoveDirAllAction, FsRemoveFileAction, FsRenameAction,
+        FsReadDirAction, FsRemoveDirAllAction, FsRenameAction,
     },
     content_search::FsContentSearchOutput,
     error::FsActionError,
@@ -17,7 +17,6 @@ use super::{
     inspect::FsInspectPathOutput,
     path::FsResolutionContext,
     read_dir::FsReadDirOutput,
-    remove::FsRemoveFileOutput,
     remove_dir::FsRemoveDirAllOutput,
     rename::FsRenameOutput,
     write::FsWriteOptions,
@@ -57,27 +56,6 @@ where
     P: PolicyEngine<C>,
     C::Cx<'ctx>: FsResolutionContext,
 {
-    /// Remove one file or symlink through remove-path policy and write policy.
-    ///
-    /// Unlike read/write/copy, removal does not use `GrantedPath`: the action
-    /// must preserve final-component no-follow semantics so symlink deletion
-    /// cannot accidentally become target deletion.
-    pub async fn remove_file(
-        self,
-        path: impl AsRef<Path>,
-    ) -> Result<FsRemoveFileOutput, FsAccessError> {
-        let path = self.grant_entry_path(path).await?;
-
-        let action = FsRemoveFileAction::new(path);
-        let grant = self
-            .policy_engine
-            .grant(self.ctx, action)
-            .await
-            .map_err(AuthorizationError::from)
-            .map_err(FsAccessError::Authorization)?;
-        grant.into_granted().run(self.ctx).await
-    }
-
     /// Recursively remove one governed directory tree.
     ///
     /// This operation is intentionally distinct from `remove_file`: recursive

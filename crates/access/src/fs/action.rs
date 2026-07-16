@@ -9,56 +9,12 @@ use super::{
     write::FsWriteOptions,
 };
 
-const FS_REMOVE_FILE_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
 const FS_REMOVE_DIR_ALL_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
 const FS_RENAME_PATH_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
 const FS_GLOB_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 const FS_READ_DIR_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 const FS_CONTENT_SEARCH_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 const FS_INSPECT_PATH_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
-
-/// Typed action for removing one governed file or symlink.
-///
-/// This action does not consume `GrantedPath`: deletion needs final-component
-/// no-follow semantics, while `GrantedPath` represents a canonical target.
-/// `FsPathAction` prepares and authorizes the entry path first; this action
-/// only carries the operation-specific capability and side-effect intent.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FsRemoveFileAction {
-    path: GrantedEntryPath,
-}
-
-impl FsRemoveFileAction {
-    #[must_use]
-    pub fn new(path: GrantedEntryPath) -> Self {
-        Self { path }
-    }
-
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        self.path.as_path()
-    }
-}
-
-impl ActionMeta for FsRemoveFileAction {
-    fn metadata(&self) -> ActionMetadata<'_> {
-        ActionMetadata {
-            kind: "fs.remove_file",
-            operation: Cow::Borrowed("remove_file"),
-            required_capabilities: Cow::Borrowed(&FS_REMOVE_FILE_REQUIRED_CAPABILITIES),
-        }
-    }
-
-    fn audit_resource(&self) -> Option<Cow<'_, str>> {
-        Some(self.path.as_path().display().to_string().into())
-    }
-
-    fn payload(&self) -> Cow<'_, Value> {
-        Cow::Owned(json!({
-            "path": self.path.as_path().display().to_string(),
-        }))
-    }
-}
 
 /// Typed action for removing one governed directory tree.
 ///
