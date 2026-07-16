@@ -1,4 +1,15 @@
-use super::*;
+use std::{borrow::Cow, error::Error, sync::atomic::Ordering};
+
+use loong_contracts::{
+    AuthorizationActionSnapshot, AuthorizationAttempt, AuthorizationAttemptEvent,
+    AuthorizationAttemptId, AuthorizationDenial, AuthorizationFailure, AuthorizationPolicyEvent,
+    AuthorizationScope, AuthorizationSubject, AuthorizationTerminalOutcome, Capabilities,
+    Capability, PolicyOutcome, PolicyReport,
+};
+
+use crate::{error::AuthorizationIdentityKind, policy::engine::PolicyEngine};
+
+use super::test_support::*;
 
 #[tokio::test]
 async fn missing_capability_is_terminally_audited_before_policy_evaluation() {
@@ -81,10 +92,8 @@ async fn allow_evidence_is_written_with_the_minted_grant_id() {
 #[tokio::test]
 async fn direct_allow_rechecks_capabilities_changed_during_decide() {
     let report = allow_report();
-    let backend = CollectingBackend {
-        revoke_capabilities_during_decide: true,
-        ..CollectingBackend::new(report.clone())
-    };
+    let mut backend = CollectingBackend::new(report.clone());
+    backend.revoke_capabilities_during_decide = true;
     let context = TestContext::with_capabilities(Capabilities::from([Capability::FilesystemRead]));
 
     let error = backend
@@ -165,10 +174,8 @@ async fn policy_deny_preserves_report_and_reason_in_error_and_evidence() {
 
 #[tokio::test]
 async fn terminal_audit_failure_returns_typed_source_without_minting_grant() {
-    let backend = CollectingBackend {
-        fail_write_at: Some(1),
-        ..CollectingBackend::new(allow_report())
-    };
+    let mut backend = CollectingBackend::new(allow_report());
+    backend.fail_write_at = Some(1);
     let context = TestContext::with_capabilities(Capabilities::from([Capability::FilesystemRead]));
 
     let error = backend
@@ -201,10 +208,8 @@ async fn terminal_audit_failure_returns_typed_source_without_minting_grant() {
 
 #[tokio::test]
 async fn attempt_allocation_failure_records_failed_context_without_fake_id() {
-    let backend = CollectingBackend {
-        fail_attempt: true,
-        ..CollectingBackend::new(allow_report())
-    };
+    let mut backend = CollectingBackend::new(allow_report());
+    backend.fail_attempt = true;
     let context = TestContext::with_capabilities(Capabilities::new());
 
     let error = backend
@@ -226,11 +231,9 @@ async fn attempt_allocation_failure_records_failed_context_without_fake_id() {
 
 #[tokio::test]
 async fn attempt_allocation_and_failure_evidence_write_preserve_both_sources() {
-    let backend = CollectingBackend {
-        fail_attempt: true,
-        fail_write_at: Some(1),
-        ..CollectingBackend::new(allow_report())
-    };
+    let mut backend = CollectingBackend::new(allow_report());
+    backend.fail_attempt = true;
+    backend.fail_write_at = Some(1);
     let context = TestContext::with_capabilities(Capabilities::new());
 
     let error = backend
@@ -264,10 +267,8 @@ async fn attempt_allocation_and_failure_evidence_write_preserve_both_sources() {
 #[tokio::test]
 async fn grant_id_allocation_failure_is_terminally_audited() {
     let report = allow_report();
-    let backend = CollectingBackend {
-        fail_grant: true,
-        ..CollectingBackend::new(report.clone())
-    };
+    let mut backend = CollectingBackend::new(report.clone());
+    backend.fail_grant = true;
     let context = TestContext::with_capabilities(Capabilities::from([Capability::FilesystemRead]));
 
     let error = backend
@@ -302,11 +303,9 @@ async fn grant_id_allocation_failure_is_terminally_audited() {
 #[tokio::test]
 async fn grant_allocation_and_failure_evidence_write_preserve_both_sources() {
     let report = allow_report();
-    let backend = CollectingBackend {
-        fail_grant: true,
-        fail_write_at: Some(1),
-        ..CollectingBackend::new(report.clone())
-    };
+    let mut backend = CollectingBackend::new(report.clone());
+    backend.fail_grant = true;
+    backend.fail_write_at = Some(1);
     let context = TestContext::with_capabilities(Capabilities::from([Capability::FilesystemRead]));
 
     let error = backend

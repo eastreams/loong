@@ -1,4 +1,15 @@
-use super::*;
+use std::{borrow::Cow, sync::atomic::Ordering};
+
+use loong_contracts::{
+    AuthorizationAttempt, AuthorizationAttemptEvent, AuthorizationAttemptId, AuthorizationDenial,
+    AuthorizationFailure, AuthorizationPermissionAuthority, AuthorizationPermissionInteraction,
+    AuthorizationPolicyEvent, AuthorizationTerminalOutcome, Capabilities, Capability,
+    PermissionResolution, PolicyOutcome, PolicyReport,
+};
+
+use crate::{error::PermissionRequestError, policy::engine::PolicyEngine};
+
+use super::test_support::*;
 
 #[tokio::test]
 // The five-event escalation trail is the assertion; splitting setup or checks
