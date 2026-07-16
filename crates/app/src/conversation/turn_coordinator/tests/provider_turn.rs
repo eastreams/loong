@@ -504,6 +504,7 @@ fn provider_continuation_test_intent(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn provider_continuation_recovers_malformed_parse_followup_without_real_tool_call() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
+    let recovered_path = temp_dir.path().join("recovered.txt");
     let mut config = LoongConfig::default();
     config.tools.file_root = Some(temp_dir.path().display().to_string());
 
@@ -527,7 +528,7 @@ async fn provider_continuation_recovers_malformed_parse_followup_without_real_to
                     "call-write",
                     "write",
                     json!({
-                        "path": "recovered.txt",
+                        "path": recovered_path,
                         "content": "recovered body"
                     }),
                 )],
