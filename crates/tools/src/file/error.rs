@@ -16,6 +16,8 @@ pub enum FileToolError {
         #[source]
         FsAccessError,
     ),
+    /// File editing currently requires UTF-8 text. Supporting other encodings
+    /// may require an explicit decoding policy later; this path does not guess one yet.
     #[error("failed to decode {path} as UTF-8: {source}", path = .path.display())]
     InvalidUtf8 {
         path: PathBuf,

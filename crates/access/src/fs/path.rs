@@ -31,11 +31,15 @@ mod sealed {
 }
 
 /// Marker for target-following path resolution.
+/// Follows the final symlink and authorizes the object reached by the path.
+/// Use this when an operation acts on that target rather than its directory entry.
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TargetPath;
 
 /// Marker for final-component no-follow path resolution.
+/// Preserves the final component as a directory entry instead of following it.
+/// Use this for unlink and rename operations that act on the entry itself.
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EntryPath;
