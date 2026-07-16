@@ -11,14 +11,15 @@ pub mod fs {
         FsAccess, FsAccessError, FsAtomicWriteAction, FsAtomicWriteAllowPolicy,
         FsContentSearchAction, FsContentSearchMatch, FsContentSearchOptions, FsContentSearchOutput,
         FsCopyFileAction, FsCopyFileAllowPolicy, FsCopyFileOutput, FsCreateDirAllAction,
-        FsCreateDirAllOutput, FsGlobAction, FsGlobOutput, FsInspectPathAction, FsInspectPathOutput,
-        FsPathAction, FsPathAllowedRootsPolicy, FsPathKind, FsPathMatch, FsPathPolicyContext,
-        FsReadAction, FsReadAllowPolicy, FsReadDirAction, FsReadDirEntry, FsReadDirOutput,
-        FsReadFilenameDenyPolicy, FsReadOutput, FsRemoveDirAllAction, FsRemoveDirAllOutput,
-        FsRemoveFileAction, FsRemoveFileKind, FsRemoveFileOutput, FsRenameAction, FsRenameOutput,
-        FsResolutionContext, FsResolvePathAction, FsResolvePathAllowPolicy, FsWriteAction,
-        FsWriteAllowPolicy, FsWriteOptions, FsWriteOutput, GrantedEntryPath, GrantedPath,
-        ResolvedEntryPath, ResolvedPath,
+        FsCreateDirAllAllowPolicy, FsCreateDirAllOutput, FsGlobAction, FsGlobOutput,
+        FsInspectPathAction, FsInspectPathOutput, FsPathAction, FsPathAllowedRootsPolicy,
+        FsPathKind, FsPathMatch, FsPathPolicyContext, FsReadAction, FsReadAllowPolicy,
+        FsReadDirAction, FsReadDirEntry, FsReadDirOutput, FsReadFilenameDenyPolicy, FsReadOutput,
+        FsRemoveDirAllAction, FsRemoveDirAllOutput, FsRemoveFileAction, FsRemoveFileKind,
+        FsRemoveFileOutput, FsRenameAction, FsRenameOutput, FsResolutionContext,
+        FsResolvePathAction, FsResolvePathAllowPolicy, FsWriteAction, FsWriteAllowPolicy,
+        FsWriteOptions, FsWriteOutput, GrantedEntryPath, GrantedPath, ResolvedEntryPath,
+        ResolvedPath,
     };
 }
 

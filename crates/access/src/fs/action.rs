@@ -9,7 +9,6 @@ use super::{
     write::FsWriteOptions,
 };
 
-const FS_CREATE_DIR_ALL_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
 const FS_REMOVE_FILE_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
 const FS_REMOVE_DIR_ALL_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
 const FS_RENAME_PATH_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
@@ -17,48 +16,6 @@ const FS_GLOB_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRe
 const FS_READ_DIR_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 const FS_CONTENT_SEARCH_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 const FS_INSPECT_PATH_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
-
-/// Typed action for creating one governed directory tree.
-///
-/// Directory creation is a write side effect, so the action declares
-/// `FilesystemWrite` and can only run after path resolution has produced a
-/// `GrantedPath`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FsCreateDirAllAction {
-    path: GrantedPath,
-}
-
-impl FsCreateDirAllAction {
-    #[must_use]
-    pub fn new(path: GrantedPath) -> Self {
-        Self { path }
-    }
-
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        self.path.as_path()
-    }
-}
-
-impl ActionMeta for FsCreateDirAllAction {
-    fn metadata(&self) -> ActionMetadata<'_> {
-        ActionMetadata {
-            kind: "fs.create_dir_all",
-            operation: Cow::Borrowed("create_dir_all"),
-            required_capabilities: Cow::Borrowed(&FS_CREATE_DIR_ALL_REQUIRED_CAPABILITIES),
-        }
-    }
-
-    fn audit_resource(&self) -> Option<Cow<'_, str>> {
-        Some(self.path.as_path().display().to_string().into())
-    }
-
-    fn payload(&self) -> Cow<'_, Value> {
-        Cow::Owned(json!({
-            "path": self.path.as_path().display().to_string(),
-        }))
-    }
-}
 
 /// Typed action for removing one governed file or symlink.
 ///

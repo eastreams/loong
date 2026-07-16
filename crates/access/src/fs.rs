@@ -16,12 +16,12 @@ pub mod write;
 
 pub use access::{FsAccess, FsAccessError};
 pub use action::{
-    FsContentSearchAction, FsContentSearchOptions, FsCreateDirAllAction, FsGlobAction,
-    FsInspectPathAction, FsReadDirAction, FsRemoveDirAllAction, FsRemoveFileAction, FsRenameAction,
+    FsContentSearchAction, FsContentSearchOptions, FsGlobAction, FsInspectPathAction,
+    FsReadDirAction, FsRemoveDirAllAction, FsRemoveFileAction, FsRenameAction,
 };
 pub use content_search::{FsContentSearchMatch, FsContentSearchOutput};
 pub use copy::{FsCopyFileAction, FsCopyFileAllowPolicy, FsCopyFileOutput};
-pub use directory::FsCreateDirAllOutput;
+pub use directory::{FsCreateDirAllAction, FsCreateDirAllAllowPolicy, FsCreateDirAllOutput};
 pub use error::FsActionError;
 pub use glob::{FsGlobOutput, FsPathKind, FsPathMatch};
 pub use inspect::FsInspectPathOutput;

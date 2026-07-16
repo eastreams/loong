@@ -8,12 +8,10 @@ use thiserror::Error;
 
 use super::{
     action::{
-        FsContentSearchAction, FsContentSearchOptions, FsCreateDirAllAction, FsGlobAction,
-        FsInspectPathAction, FsReadDirAction, FsRemoveDirAllAction, FsRemoveFileAction,
-        FsRenameAction,
+        FsContentSearchAction, FsContentSearchOptions, FsGlobAction, FsInspectPathAction,
+        FsReadDirAction, FsRemoveDirAllAction, FsRemoveFileAction, FsRenameAction,
     },
     content_search::FsContentSearchOutput,
-    directory::FsCreateDirAllOutput,
     error::FsActionError,
     glob::FsGlobOutput,
     inspect::FsInspectPathOutput,
@@ -59,23 +57,6 @@ where
     P: PolicyEngine<C>,
     C::Cx<'ctx>: FsResolutionContext,
 {
-    /// Create a directory tree through resolution, path, and write policy.
-    pub async fn create_dir_all(
-        self,
-        path: impl AsRef<Path>,
-    ) -> Result<FsCreateDirAllOutput, FsAccessError> {
-        let path = self.grant_target_path(path).await?;
-
-        let action = FsCreateDirAllAction::new(path);
-        let grant = self
-            .policy_engine
-            .grant(self.ctx, action)
-            .await
-            .map_err(AuthorizationError::from)
-            .map_err(FsAccessError::Authorization)?;
-        grant.into_granted().run(self.ctx).await
-    }
-
     /// Remove one file or symlink through remove-path policy and write policy.
     ///
     /// Unlike read/write/copy, removal does not use `GrantedPath`: the action
