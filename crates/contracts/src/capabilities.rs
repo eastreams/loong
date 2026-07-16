@@ -32,6 +32,10 @@ impl Capabilities {
         self.0.difference(&other.0).copied()
     }
 
+    pub fn intersection<'a>(&'a self, other: &'a Self) -> impl Iterator<Item = Capability> + 'a {
+        self.0.intersection(&other.0).copied()
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = Capability> + '_ {
         self.0.iter().copied()
     }
@@ -80,6 +84,10 @@ mod tests {
         assert_eq!(
             parent.difference(&child).collect::<Vec<_>>(),
             vec![Capability::FilesystemWrite]
+        );
+        assert_eq!(
+            parent.intersection(&child).collect::<Vec<_>>(),
+            vec![Capability::FilesystemRead, Capability::NetworkEgress]
         );
         assert_eq!(
             parent.iter().collect::<Vec<_>>(),
