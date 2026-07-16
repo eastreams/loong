@@ -224,7 +224,10 @@ async fn integ_file_read_sandbox_rejects_path_escape() {
         .build();
     let result = harness.execute(&turn).await;
 
-    assert_final_tool_error_contains(result, &["kernel_policy_denied", "escapes"]);
+    assert_final_tool_error_contains(
+        result,
+        &["tool_execution_denied", "escapes allowed filesystem roots"],
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -238,7 +241,10 @@ async fn integ_missing_capability_denies_tool() {
 
     assert_final_tool_error_contains(
         result,
-        &["kernel_policy_denied", "invoke_tool", "filesystem_read"],
+        &[
+            "tool_authorization_denied",
+            "missing capability: InvokeTool",
+        ],
     );
 }
 
@@ -330,5 +336,11 @@ async fn integ_file_write_denied_without_capability() {
         .build();
     let result = harness.execute(&turn).await;
 
-    assert_final_tool_error_contains(result, &["kernel_policy_denied", "filesystem_write"]);
+    assert_final_tool_error_contains(
+        result,
+        &[
+            "tool_authorization_denied",
+            "missing capability: FilesystemWrite",
+        ],
+    );
 }
