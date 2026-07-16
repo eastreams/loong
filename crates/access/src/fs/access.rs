@@ -13,7 +13,7 @@ use thiserror::Error;
 use super::{
     action::{
         FsAtomicWriteAction, FsContentSearchAction, FsContentSearchOptions, FsCopyFileAction,
-        FsCreateDirAllAction, FsGlobAction, FsInspectPathAction, FsReadAction, FsReadDirAction,
+        FsCreateDirAllAction, FsGlobAction, FsInspectPathAction, FsReadDirAction,
         FsRemoveDirAllAction, FsRemoveFileAction, FsRenameAction, FsWriteAction, FsWriteOptions,
     },
     content_search::FsContentSearchOutput,
@@ -63,24 +63,6 @@ where
     P: PolicyEngine<C>,
     C::Cx<'ctx>: FsResolutionContext,
 {
-    /// Read a file through resolution, path authorization, and read policy.
-    ///
-    /// A granted resolve action prepares filesystem facts; kernel path policy
-    /// decides whether those facts are allowed; only then can `FsReadAction`
-    /// receive a `GrantedPath` and perform the file read.
-    pub async fn read_file(self, path: impl AsRef<Path>) -> Result<FsReadOutput, FsAccessError> {
-        let path = self.grant_target_path(path).await?;
-
-        let action = FsReadAction::new(path);
-        let grant = self
-            .policy_engine
-            .grant(self.ctx, action)
-            .await
-            .map_err(AuthorizationError::from)
-            .map_err(FsAccessError::Authorization)?;
-        grant.into_granted().run(self.ctx).await
-    }
-
     /// Write bytes through resolution, path authorization, and write policy.
     ///
     /// This only prepares the access-backed primitive. App write/edit tools
@@ -319,29 +301,6 @@ where
     }
 }
 
-/// Execute an already-authorized fs read.
-///
-/// This is the concrete side-effect boundary for fs reads. It deliberately
-/// consumes `Granted<FsReadAction>` so raw actions cannot reach the filesystem.
-#[async_trait]
-impl<Cx> Action<Cx> for FsReadAction
-where
-    Cx: Sync,
-{
-    type Output = FsReadOutput;
-    type Error = FsAccessError;
-
-    async fn run(granted: Granted<Self>, _ctx: &Cx) -> Result<Self::Output, Self::Error> {
-        let action = granted.into_action();
-        let path = action.path().to_path_buf();
-        let bytes = std::fs::read(&path).map_err(|source| FsAccessError::ReadFile {
-            path: path.clone(),
-            source,
-        })?;
-        Ok(FsReadOutput { path, bytes })
-    }
-}
-
 /// Execute an already-authorized fs write.
 ///
 /// This consumes `Granted<FsWriteAction>` so write side effects cannot be
@@ -513,16 +472,6 @@ fn open_write_target(path: &Path, overwrite: bool) -> Result<std::fs::File, FsAc
             source,
         }
     })
-}
-
-/// Bytes returned by a governed fs read.
-///
-/// `path` is the resolved path actually read, suitable for response metadata
-/// and audit output.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FsReadOutput {
-    pub path: PathBuf,
-    pub bytes: Vec<u8>,
 }
 
 /// Result returned after a governed fs write.

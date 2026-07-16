@@ -30,11 +30,11 @@ use super::{
     access::{FsAccess, FsAccessError},
     action::{
         FsAction, FsAtomicWriteAction, FsContentSearchAction, FsContentSearchOptions,
-        FsCopyFileAction, FsCreateDirAllAction, FsGlobAction, FsInspectPathAction, FsReadAction,
-        FsReadDirAction, FsRemoveDirAllAction, FsRemoveFileAction, FsRenameAction, FsWriteAction,
-        FsWriteOptions,
+        FsCopyFileAction, FsCreateDirAllAction, FsGlobAction, FsInspectPathAction, FsReadDirAction,
+        FsRemoveDirAllAction, FsRemoveFileAction, FsRenameAction, FsWriteAction, FsWriteOptions,
     },
     path::{FsPathAction, FsResolvePathAction, GrantedEntryPath, GrantedPath},
+    read::FsReadAction,
     remove::FsRemoveFileKind,
 };
 

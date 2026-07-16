@@ -7,16 +7,17 @@ pub mod error;
 pub mod glob;
 pub mod inspect;
 pub mod path;
+pub mod read;
 pub mod read_dir;
 pub mod remove;
 pub mod remove_dir;
 pub mod rename;
 
-pub use access::{FsAccess, FsAccessError, FsReadOutput, FsWriteOutput};
+pub use access::{FsAccess, FsAccessError, FsWriteOutput};
 pub use action::{
     FsAction, FsAtomicWriteAction, FsContentSearchAction, FsContentSearchOptions, FsCopyFileAction,
-    FsCreateDirAllAction, FsGlobAction, FsInspectPathAction, FsReadAction, FsReadDirAction,
-    FsRemoveDirAllAction, FsRemoveFileAction, FsRenameAction, FsWriteAction, FsWriteOptions,
+    FsCreateDirAllAction, FsGlobAction, FsInspectPathAction, FsReadDirAction, FsRemoveDirAllAction,
+    FsRemoveFileAction, FsRenameAction, FsWriteAction, FsWriteOptions,
 };
 pub use content_search::{FsContentSearchMatch, FsContentSearchOutput};
 pub use copy::FsCopyFileOutput;
@@ -29,6 +30,7 @@ pub use path::{
     FsResolvePathAction, FsResolvePathAllowPolicy, GrantedEntryPath, GrantedPath,
     ResolvedEntryPath, ResolvedPath,
 };
+pub use read::{FsReadAction, FsReadAllowPolicy, FsReadFilenameDenyPolicy, FsReadOutput};
 pub use read_dir::{FsReadDirEntry, FsReadDirOutput};
 pub use remove::{FsRemoveFileKind, FsRemoveFileOutput};
 pub use remove_dir::FsRemoveDirAllOutput;

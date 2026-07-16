@@ -12,12 +12,12 @@ use loong_core::{
 
 use super::AccessCx;
 use crate::access::fs::{
-    FsAccessError, FsPathAllowedRootsPolicy, FsPathPolicyContext, FsResolutionContext,
-    FsResolvePathAllowPolicy,
+    FsAccessError, FsPathAllowedRootsPolicy, FsPathPolicyContext, FsReadAllowPolicy,
+    FsResolutionContext, FsResolvePathAllowPolicy,
 };
 use crate::policy::{
-    FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsReadAllowPolicy, FsReadDirAllowPolicy,
-    FsRemoveDirAllAllowPolicy, FsRemoveFileAllowPolicy, FsRenameAllowPolicy,
+    FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsReadDirAllowPolicy, FsRemoveDirAllAllowPolicy,
+    FsRemoveFileAllowPolicy, FsRenameAllowPolicy,
 };
 
 #[derive(Debug, Clone)]

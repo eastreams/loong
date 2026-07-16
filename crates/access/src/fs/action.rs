@@ -4,9 +4,11 @@ use loong_contracts::Capability;
 use loong_core::policy::action::{ActionMeta, ActionMetadata};
 use serde_json::{Value, json};
 
-use super::path::{GrantedEntryPath, GrantedPath};
+use super::{
+    path::{GrantedEntryPath, GrantedPath},
+    read::FsReadAction,
+};
 
-const FS_READ_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 const FS_WRITE_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
 const FS_COPY_FILE_REQUIRED_CAPABILITIES: [Capability; 2] =
     [Capability::FilesystemRead, Capability::FilesystemWrite];
@@ -18,49 +20,6 @@ const FS_GLOB_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRe
 const FS_READ_DIR_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 const FS_CONTENT_SEARCH_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
 const FS_INSPECT_PATH_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
-
-/// Typed action for reading one governed filesystem path.
-///
-/// The action declares the required capability and audit resource. It does not
-/// carry workspace roots; roots belong to the invocation context and path
-/// resolver. Its constructor accepts `GrantedPath` so path policy cannot be
-/// bypassed with a raw or merely canonical `PathBuf`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FsReadAction {
-    path: GrantedPath,
-}
-
-impl FsReadAction {
-    #[must_use]
-    pub fn new(path: GrantedPath) -> Self {
-        Self { path }
-    }
-
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        self.path.as_path()
-    }
-}
-
-impl ActionMeta for FsReadAction {
-    fn metadata(&self) -> ActionMetadata<'_> {
-        ActionMetadata {
-            kind: "fs.read",
-            operation: Cow::Borrowed("read_file"),
-            required_capabilities: Cow::Borrowed(&FS_READ_REQUIRED_CAPABILITIES),
-        }
-    }
-
-    fn audit_resource(&self) -> Option<Cow<'_, str>> {
-        Some(self.path.as_path().display().to_string().into())
-    }
-
-    fn payload(&self) -> Cow<'_, Value> {
-        Cow::Owned(json!({
-            "path": self.path.as_path().display().to_string(),
-        }))
-    }
-}
 
 /// Policy-visible options for writing one governed filesystem path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

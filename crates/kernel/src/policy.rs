@@ -8,8 +8,8 @@ use std::{
 
 use crate::access::fs::{
     FsAtomicWriteAction, FsContentSearchAction, FsCopyFileAction, FsCreateDirAllAction,
-    FsGlobAction, FsInspectPathAction, FsReadAction, FsReadDirAction, FsRemoveDirAllAction,
-    FsRemoveFileAction, FsRenameAction, FsWriteAction,
+    FsGlobAction, FsInspectPathAction, FsReadDirAction, FsRemoveDirAllAction, FsRemoveFileAction,
+    FsRenameAction, FsWriteAction,
 };
 use crate::{
     audit::SharedAuditState,
@@ -542,14 +542,6 @@ where
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct FsReadFilenameDenyPolicy {
-    denied_filenames: BTreeSet<String>,
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct FsReadAllowPolicy;
-
 #[derive(Debug, Default, Clone, Copy)]
 pub struct FsWriteAllowPolicy;
 
@@ -582,69 +574,6 @@ pub struct FsReadDirAllowPolicy;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct FsContentSearchAllowPolicy;
-
-impl FsReadFilenameDenyPolicy {
-    #[must_use]
-    pub fn new(denied_filenames: BTreeSet<String>) -> Self {
-        let denied_filenames = denied_filenames
-            .into_iter()
-            .filter_map(|filename| normalize_policy_filename(filename.as_str()))
-            .collect();
-        Self { denied_filenames }
-    }
-}
-
-#[async_trait]
-impl<C> Policy<C, FsReadAction> for FsReadFilenameDenyPolicy
-where
-    C: ContextFactory + Send + Sync,
-{
-    fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("fs-read-filename-deny")
-    }
-
-    async fn grant(&self, _ctx: &C::Cx<'_>, action: &FsReadAction) -> PolicyGrant {
-        let denied_filename = action
-            .path()
-            .file_name()
-            .and_then(|filename| filename.to_str())
-            .and_then(normalize_policy_filename)
-            .filter(|filename| self.denied_filenames.contains(filename));
-
-        if let Some(filename) = denied_filename {
-            return PolicyGrant {
-                decision: PolicyDecision::Deny,
-                predicate: Some(format!("fs.read filename == {filename:?}").into()),
-                reason: format!("file read denied by configured filename policy: {filename}")
-                    .into(),
-            };
-        }
-
-        PolicyGrant {
-            decision: PolicyDecision::Continue,
-            predicate: None,
-            reason: "filename did not match configured read deny policy".into(),
-        }
-    }
-}
-
-#[async_trait]
-impl<C> Policy<C, FsReadAction> for FsReadAllowPolicy
-where
-    C: ContextFactory + Send + Sync,
-{
-    fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("fs-read-allow")
-    }
-
-    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &FsReadAction) -> PolicyGrant {
-        PolicyGrant {
-            decision: PolicyDecision::Allow,
-            predicate: Some("fs.read reached terminal allow policy".into()),
-            reason: "filesystem read allowed after configured deny policies".into(),
-        }
-    }
-}
 
 #[async_trait]
 impl<C> Policy<C, FsWriteAction> for FsWriteAllowPolicy
@@ -842,11 +771,6 @@ where
             reason: "filesystem content search allowed after configured deny policies".into(),
         }
     }
-}
-
-fn normalize_policy_filename(filename: &str) -> Option<String> {
-    let normalized = filename.trim().to_ascii_lowercase();
-    (!normalized.is_empty()).then_some(normalized)
 }
 
 #[cfg(test)]

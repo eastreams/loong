@@ -8,10 +8,12 @@ use loong_contracts::{Capability, ExecutionRoute, HarnessKind, ToolCoreOutcome, 
 use loong_core::tool::{RegisteredTool, RegisteredToolError, ToolProvenance};
 use loong_kernel::{
     InMemoryAuditSink, Kernel, SystemClock, VerticalPackManifest,
-    access::fs::{FsPathAllowedRootsPolicy, FsResolvePathAllowPolicy},
+    access::fs::{
+        FsPathAllowedRootsPolicy, FsReadAllowPolicy, FsReadFilenameDenyPolicy,
+        FsResolvePathAllowPolicy,
+    },
     policy::{
-        FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsReadAllowPolicy, FsReadFilenameDenyPolicy,
-        FsWriteAllowPolicy, PolicyPipelineBuilder,
+        FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsWriteAllowPolicy, PolicyPipelineBuilder,
     },
 };
 use loong_tools::file::ReadTool;
