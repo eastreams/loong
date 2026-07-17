@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use loong_contracts::{Capabilities, ToolCoreOutcome, ToolCoreRequest};
-use loong_runtime::tool_plane::ToolPath;
+use loong_runtime::tool_plane::{ToolPath, error::LookupError};
 use serde_json::{Value, json};
 pub(crate) use tool_internal_context::{
     ensure_untrusted_payload_does_not_use_reserved_internal_tool_context,
@@ -134,9 +134,9 @@ pub(crate) use tool_dispatch::{
     is_expected_tool_request_error, run_blocking_with_timeout, tool_uses_dedicated_timeout,
 };
 pub(crate) use tool_identity::{
-    ResolvedToolExecution, direct_tool_name_for_hidden_tool, is_provider_exposed_tool_name,
-    model_visible_tool_name, required_capabilities_for_request,
-    required_capabilities_for_tool_name_and_payload, resolve_tool_execution,
+    direct_tool_name_for_hidden_tool, is_provider_exposed_tool_name, model_visible_tool_name,
+    required_capabilities_for_request, required_capabilities_for_tool_name_and_payload,
+    resolve_legacy_tool_execution,
 };
 
 pub use tool_identity::{
@@ -144,7 +144,6 @@ pub use tool_identity::{
 };
 pub(crate) use tool_lease::{
     ToolInvokeProviderExposure, peek_tool_invoke_request, resolve_tool_invoke_request,
-    tool_invoke_capabilities_override,
 };
 pub(crate) use tool_lease::{bridge_provider_tool_call_with_scope, issue_tool_lease};
 #[cfg(test)]
@@ -365,15 +364,15 @@ pub(crate) fn resolve_installable_skill_id(root: &Path) -> Result<String, String
     skills::resolve_installable_skill_id(root)
 }
 
-/// Execute a tool request, routing through the kernel for
-/// policy enforcement and audit recording.
+/// Execute the legacy `ToolCoreRequest` envelope during migration.
 ///
-/// Legacy requests are dispatched via `kernel.execute_tool_core`; typed tools
-/// should enter through the app-owned tool plane instead.
+/// Registered tools are handed to the runtime-owned plane first; only an
+/// ordinary typed lookup miss may reach `kernel.execute_tool_core`. New callers
+/// must use `ctx.tool(path)?.invoke(payload)` instead of this ingress boundary.
 // TODO(tool-plane): delete this legacy ToolCoreRequest/ToolCoreOutcome envelope
 // after every app runtime caller holds AppContext and invokes tools via
 // ctx.tool(path)?.invoke(...). Typed tools must not add new behavior here.
-pub async fn execute_tool(
+pub async fn execute_legacy_tool_envelope(
     request: ToolCoreRequest,
     app_ctx: &AppContext,
 ) -> Result<ToolCoreOutcome, String> {
@@ -384,12 +383,12 @@ pub async fn execute_tool(
         None,
         None,
     );
-    execute_kernel_tool_request(app_ctx, request, false)
+    execute_kernel_tool_request(app_ctx, request, None, false)
         .await
         .map_err(|e| format!("{e}"))
 }
 
-// TODO(tool-plane): collapse this bridge into AppContext::tool(...)
+// TODO(tool-plane): collapse this bridge into Context::tool(...)
 // call sites. During migration this legacy envelope ingress first attempts the
 // runtime-owned typed plane through ctx.tool(path)?.invoke(payload), then falls back
 // to the legacy kernel adapter plane only for tools that are not registered yet.
@@ -397,6 +396,7 @@ pub async fn execute_tool(
 pub(crate) async fn execute_kernel_tool_request(
     ctx: &AppContext,
     request: ToolCoreRequest,
+    capabilities_override: Option<Capabilities>,
     trusted_internal_payload: bool,
 ) -> Result<ToolCoreOutcome, ToolRequestError> {
     let request = ToolCoreRequest {
@@ -410,85 +410,98 @@ pub(crate) async fn execute_kernel_tool_request(
         )
         .map_err(ToolRequestError::Input)?;
 
-        let typed_path = ToolPath::from(request.tool_name.clone());
         let execution_context = ctx
             .for_invocation(&effective_config)
             .map_err(ToolRequestError::Context)?;
 
-        if request.tool_name == "tool.invoke" {
-            ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
-                request.tool_name.as_str(),
-                &request.payload,
-                "payload",
-            )
-            .map_err(ToolRequestError::ReservedContext)?;
-            let inner_arguments = request.payload.get("arguments").unwrap_or(&Value::Null);
-            ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
-                request.tool_name.as_str(),
-                inner_arguments,
-                "payload.arguments",
-            )
-            .map_err(ToolRequestError::ReservedContext)?;
-            let (_resolved_tool, effective_request) = resolve_tool_invoke_request(
-                &request,
-                ToolInvokeProviderExposure::AllowProviderExposed,
-            )
-            .map_err(ToolRequestError::Input)?;
-            let capability_override = tool_invoke_capabilities_override(&request.payload)
-                .map_err(ToolRequestError::Input)?;
-            let typed_path = ToolPath::from(effective_request.tool_name.clone());
-            match execution_context.tool(typed_path) {
-                Ok(invocation) => {
-                    // `tool.invoke` is only an invocation envelope here; trusted
-                    // overlays shape the AppContext and should not leak
-                    // into concrete typed tool payload parsing.
-                    let mut typed_payload = effective_request.payload;
-                    if let Some(body) = typed_payload.as_object_mut() {
-                        let _trusted_overlay = take_trusted_internal_tool_context(body);
+        ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
+            request.tool_name.as_str(),
+            &request.payload,
+            "payload",
+        )
+        .map_err(ToolRequestError::ReservedContext)?;
+
+        let outer_path = ToolPath::from(request.tool_name.clone());
+        let (typed_path, effective_request, capability_override, typed_invocation) =
+            match execution_context.tool(outer_path.clone()) {
+                Ok(invocation) => (outer_path, request, capabilities_override, Some(invocation)),
+                Err(LookupError::NotRegistered { .. }) if request.tool_name == "tool.invoke" => {
+                    let inner_arguments = request.payload.get("arguments").unwrap_or(&Value::Null);
+                    ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
+                        request.tool_name.as_str(),
+                        inner_arguments,
+                        "payload.arguments",
+                    )
+                    .map_err(ToolRequestError::ReservedContext)?;
+                    if capabilities_override.is_some() {
+                        return Err(ToolRequestError::Input(
+                            "capability override was supplied both outside and inside tool.invoke"
+                                .to_owned(),
+                        ));
                     }
-                    let invocation = match capability_override {
-                        Some(capabilities) => invocation.with_capabilities_override(
-                            capabilities.into_iter().collect::<Capabilities>(),
-                        ),
-                        None => invocation,
+                    let resolved = resolve_tool_invoke_request(
+                        &request,
+                        ToolInvokeProviderExposure::AllowProviderExposed,
+                    )
+                    .map_err(ToolRequestError::Input)?;
+                    let typed_path = ToolPath::from(resolved.request.tool_name.clone());
+                    let typed_invocation = match execution_context.tool(typed_path.clone()) {
+                        Ok(invocation) => Some(invocation),
+                        Err(LookupError::NotRegistered { .. }) => None,
+                        Err(error) => return Err(error.into()),
                     };
-                    let payload = invocation.invoke(typed_payload).await?;
-                    return Ok(ToolCoreOutcome {
-                        status: "ok".to_owned(),
-                        payload,
-                    });
+                    (
+                        typed_path,
+                        resolved.request,
+                        resolved.capabilities_override,
+                        typed_invocation,
+                    )
                 }
-                Err(loong_runtime::tool_plane::error::LookupError::NotRegistered { .. }) => {}
+                Err(LookupError::NotRegistered { .. }) => {
+                    (outer_path, request, capabilities_override, None)
+                }
                 Err(error) => return Err(error.into()),
+            };
+
+        if let Some(invocation) = typed_invocation {
+            // A legacy envelope may shape Context, but runtime-owned overlay
+            // fields never enter the concrete tool's input contract.
+            let mut typed_payload = effective_request.payload;
+            if let Some(body) = typed_payload.as_object_mut() {
+                let _trusted_overlay = take_trusted_internal_tool_context(body);
             }
+            let invocation = match capability_override {
+                Some(capabilities) => invocation.with_capabilities_override(capabilities),
+                None => invocation,
+            };
+            let payload = invocation.invoke(typed_payload).await?;
+            return Ok(ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload,
+            });
+        }
+        if capability_override.is_some() {
+            return Err(ToolRequestError::Input(format!(
+                "tool.invoke capabilities_override requires a registered typed tool; `{typed_path}` is legacy-only"
+            )));
         }
 
-        match execution_context.tool(typed_path) {
-            Ok(invocation) => {
-                // Typed migration path: app context owns tool lookup, grant,
-                // plane invocation, and audit. Unmigrated tools fall through
-                // below instead of being wrapped into the typed path.
-                ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
-                    request.tool_name.as_str(),
-                    &request.payload,
-                    "payload",
-                )
-                .map_err(ToolRequestError::ReservedContext)?;
-                let mut typed_payload = request.payload;
-                if let Some(body) = typed_payload.as_object_mut() {
-                    let _trusted_overlay = take_trusted_internal_tool_context(body);
-                }
-                let payload = invocation.invoke(typed_payload).await?;
-                return Ok(ToolCoreOutcome {
-                    status: "ok".to_owned(),
-                    payload,
+        let Some(resolved) = resolve_legacy_tool_execution(effective_request.tool_name.as_str())
+        else {
+            return Err(ToolRequestError::NotFound {
+                tool_name: effective_request.tool_name,
+            });
+        };
+        match resolved.execution_kind {
+            ToolExecutionKind::App => {
+                return Err(ToolRequestError::LegacyAppDispatch {
+                    tool_name: effective_request.tool_name,
                 });
             }
-            Err(loong_runtime::tool_plane::error::LookupError::NotRegistered { .. }) => {}
-            Err(error) => return Err(error.into()),
+            ToolExecutionKind::Core => {}
         }
 
-        let caps = required_capabilities_for_request(&request);
+        let caps = required_capabilities_for_request(&effective_request);
         let outcome = ctx
             .runtime()
             .kernel()
@@ -497,7 +510,7 @@ pub(crate) async fn execute_kernel_tool_request(
                 ctx.token(),
                 &caps,
                 None,
-                request,
+                effective_request,
                 &execution_context,
             )
             .await?;
@@ -507,6 +520,117 @@ pub(crate) async fn execute_kernel_tool_request(
         return with_trusted_internal_tool_payload_async(execute).await;
     }
 
+    execute.await
+}
+
+/// Execute a request whose owner was already fixed as a registered typed tool.
+///
+/// This boundary never falls back. It is used after preparation or approval
+/// replay has persisted typed ownership, so a missing registration is a
+/// terminal lookup error rather than permission to reinterpret the request.
+pub(crate) async fn execute_registered_tool_request(
+    ctx: &AppContext,
+    request: ToolCoreRequest,
+    capabilities_override: Option<Capabilities>,
+    trusted_internal_payload: bool,
+) -> Result<ToolCoreOutcome, ToolRequestError> {
+    let execute = async {
+        let effective_config = tool_dispatch::effective_tool_runtime_config_for_payload(
+            &request.payload,
+            ctx.tool_runtime_config(),
+        )
+        .map_err(ToolRequestError::Input)?;
+        let execution_context = ctx
+            .for_invocation(&effective_config)
+            .map_err(ToolRequestError::Context)?;
+        ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
+            request.tool_name.as_str(),
+            &request.payload,
+            "payload",
+        )
+        .map_err(ToolRequestError::ReservedContext)?;
+
+        let path = ToolPath::from(request.tool_name);
+        // The trusted overlay has already shaped `execution_context`; it is
+        // runtime state, never part of the concrete tool's input contract.
+        let mut payload = request.payload;
+        if let Some(body) = payload.as_object_mut() {
+            let _trusted_overlay = take_trusted_internal_tool_context(body);
+        }
+        let invocation = match execution_context.tool(path.clone()) {
+            Ok(invocation) => invocation,
+            Err(LookupError::NotRegistered { .. }) => {
+                return Err(ToolRequestError::RegistryMissing { path });
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let invocation = match capabilities_override {
+            Some(capabilities) => invocation.with_capabilities_override(capabilities),
+            None => invocation,
+        };
+        let payload = invocation.invoke(payload).await?;
+        Ok(ToolCoreOutcome {
+            status: "ok".to_owned(),
+            payload,
+        })
+    };
+    if trusted_internal_payload {
+        return with_trusted_internal_tool_payload_async(execute).await;
+    }
+    execute.await
+}
+
+/// Execute a request whose dispatch owner was already fixed as legacy kernel.
+///
+/// Approval replay uses this boundary so a persisted legacy decision cannot be
+/// reinterpreted as a typed invocation after registrations change. Delete it
+/// with the remaining `ToolCoreRequest` fallback.
+pub(crate) async fn execute_legacy_kernel_tool_request(
+    ctx: &AppContext,
+    request: ToolCoreRequest,
+    trusted_internal_payload: bool,
+) -> Result<ToolCoreOutcome, ToolRequestError> {
+    let request = ToolCoreRequest {
+        tool_name: canonical_tool_name(request.tool_name.as_str()).to_owned(),
+        payload: request.payload,
+    };
+    let execute = async {
+        if request.tool_name == "tool.invoke" {
+            return Err(ToolRequestError::Input(
+                "legacy kernel replay requires a normalized concrete request".to_owned(),
+            ));
+        }
+        let effective_config = tool_dispatch::effective_tool_runtime_config_for_payload(
+            &request.payload,
+            ctx.tool_runtime_config(),
+        )
+        .map_err(ToolRequestError::Input)?;
+        let execution_context = ctx
+            .for_invocation(&effective_config)
+            .map_err(ToolRequestError::Context)?;
+        ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
+            request.tool_name.as_str(),
+            &request.payload,
+            "payload",
+        )
+        .map_err(ToolRequestError::ReservedContext)?;
+        let caps = required_capabilities_for_request(&request);
+        ctx.runtime()
+            .kernel()
+            .execute_tool_core(
+                ctx.pack_id(),
+                ctx.token(),
+                &caps,
+                None,
+                request,
+                &execution_context,
+            )
+            .await
+            .map_err(ToolRequestError::Legacy)
+    };
+    if trusted_internal_payload {
+        return with_trusted_internal_tool_payload_async(execute).await;
+    }
     execute.await
 }
 

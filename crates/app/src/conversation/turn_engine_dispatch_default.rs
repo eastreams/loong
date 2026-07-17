@@ -190,10 +190,17 @@ impl DefaultAppToolDispatcher {
     }
 
     #[cfg(feature = "memory-sqlite")]
+    /// Build the persisted replay protocol in one place so every approval
+    /// producer records the exact owner, effective request, trust state, and
+    /// capability narrowing selected during preparation.
     fn approval_request_payload_json(
         session_context: &AppContext,
         intent: &ToolIntent,
+        execution_request: &ToolCoreRequest,
+        trusted_internal_context: bool,
         descriptor: &crate::tools::ToolDescriptor,
+        dispatch_kind: ToolDispatchKind,
+        capabilities_override: Option<&Capabilities>,
         approval_request_id: &str,
         approval_key: &str,
         rule_id: &str,
@@ -204,14 +211,17 @@ impl DefaultAppToolDispatcher {
             "parent_session_id": session_context.parent_session_id,
             "turn_id": intent.turn_id,
             "tool_call_id": intent.tool_call_id,
-            "tool_name": descriptor.name,
+            "tool_name": execution_request.tool_name,
             "approval_key": approval_key,
             "approval_request_id": approval_request_id,
-            "args_json": intent.args_json,
+            "args_json": execution_request.payload,
+            "trusted_internal_context": trusted_internal_context,
+            "capabilities_override": capabilities_override,
             "source": intent.source,
-            "execution_kind": match descriptor.execution_kind {
-                ToolExecutionKind::Core => "core",
-                ToolExecutionKind::App => "app",
+            "dispatch_kind": match dispatch_kind {
+                ToolDispatchKind::Typed => "typed",
+                ToolDispatchKind::LegacyCore => "legacy_core",
+                ToolDispatchKind::LegacyApp => "legacy_app",
             },
         });
         let provenance_ref = approval_request_provenance_ref(binding);
@@ -232,7 +242,11 @@ impl DefaultAppToolDispatcher {
         &self,
         session_context: &AppContext,
         intent: &ToolIntent,
+        execution_request: &ToolCoreRequest,
+        trusted_internal_context: bool,
         descriptor: &crate::tools::ToolDescriptor,
+        dispatch_kind: ToolDispatchKind,
+        capabilities_override: Option<&Capabilities>,
         approval_key: &str,
         reason: &str,
         rule_id: &str,
@@ -258,7 +272,11 @@ impl DefaultAppToolDispatcher {
         let request_payload_json = Self::approval_request_payload_json(
             session_context,
             intent,
+            execution_request,
+            trusted_internal_context,
             descriptor,
+            dispatch_kind,
+            capabilities_override,
             &approval_request_id,
             approval_key,
             rule_id,
@@ -305,7 +323,11 @@ impl DefaultAppToolDispatcher {
         &self,
         session_context: &AppContext,
         intent: &ToolIntent,
+        execution_request: &ToolCoreRequest,
+        trusted_internal_context: bool,
         descriptor: &crate::tools::ToolDescriptor,
+        dispatch_kind: ToolDispatchKind,
+        capabilities_override: Option<&Capabilities>,
         binding: ConversationRuntimeBinding<'_>,
     ) -> Result<Option<ApprovalRequirement>, String> {
         let governance = governance_profile_for_descriptor(descriptor);
@@ -353,29 +375,27 @@ impl DefaultAppToolDispatcher {
             descriptor.name
         );
         let rule_id = "governed_tool_requires_approval";
-        let approval_request = GovernedToolApprovalRequest {
-            session_id: &session_context.session_id,
-            parent_session_id: session_context.parent_session_id.as_deref(),
-            turn_id: &intent.turn_id,
-            tool_call_id: &intent.tool_call_id,
-            tool_name: descriptor.name,
-            args_json: intent.args_json.clone(),
-            source: &intent.source,
-            governance_scope: governance.scope.as_str(),
-            risk_class: governance.risk_class.as_str(),
-            approval_mode: governance.approval_mode.as_str(),
-            reason: &reason,
+        let governance_snapshot_json = json!({
+            "governance_scope": governance.scope.as_str(),
+            "risk_class": governance.risk_class.as_str(),
+            "approval_mode": governance.approval_mode.as_str(),
+            "rule_id": rule_id,
+            "reason": reason,
+        });
+        let requirement = self.persist_approval_request(
+            session_context,
+            intent,
+            execution_request,
+            trusted_internal_context,
+            descriptor,
+            dispatch_kind,
+            capabilities_override,
+            approval_key.as_str(),
+            reason.as_str(),
             rule_id,
-            provenance_ref: approval_request_provenance_ref(binding),
-        };
-        let stored = approval_runtime.ensure_governed_tool_approval_request(approval_request)?;
-        let requirement = ApprovalRequirement::governed_tool(
-            descriptor.name,
-            approval_key,
-            reason,
-            rule_id,
-            Some(stored.approval_request_id),
-        );
+            governance_snapshot_json,
+            binding,
+        )?;
         Ok(Some(requirement))
     }
 
@@ -384,10 +404,23 @@ impl DefaultAppToolDispatcher {
         &self,
         session_context: &AppContext,
         intent: &ToolIntent,
+        execution_request: &ToolCoreRequest,
+        trusted_internal_context: bool,
         descriptor: &crate::tools::ToolDescriptor,
+        dispatch_kind: ToolDispatchKind,
+        capabilities_override: Option<&Capabilities>,
         binding: ConversationRuntimeBinding<'_>,
     ) -> Result<Option<ApprovalRequirement>, String> {
-        let _ = (session_context, intent, descriptor, binding);
+        let _ = (
+            session_context,
+            intent,
+            descriptor,
+            execution_request,
+            trusted_internal_context,
+            dispatch_kind,
+            capabilities_override,
+            binding,
+        );
         Ok(None)
     }
 
@@ -434,6 +467,8 @@ impl DefaultAppToolDispatcher {
         &self,
         session_context: &AppContext,
         intent: &ToolIntent,
+        execution_request: &ToolCoreRequest,
+        trusted_internal_context: bool,
         descriptor: &crate::tools::ToolDescriptor,
         binding: ConversationRuntimeBinding<'_>,
     ) -> Result<GovernedToolPreflight, String> {
@@ -482,7 +517,11 @@ impl DefaultAppToolDispatcher {
         let request_payload_json = Self::approval_request_payload_json(
             session_context,
             intent,
+            execution_request,
+            trusted_internal_context,
             descriptor,
+            ToolDispatchKind::LegacyApp,
+            None,
             &approval_request_id,
             &approval_key,
             rule_id,
@@ -626,7 +665,11 @@ impl DefaultAppToolDispatcher {
         let request_payload_json = Self::approval_request_payload_json(
             session_context,
             intent,
+            request,
+            crate::tools::payload_uses_reserved_internal_tool_context(&request.payload),
             descriptor,
+            ToolDispatchKind::LegacyCore,
+            None,
             &approval_request_id,
             &approval_key,
             rule_id,
@@ -684,7 +727,14 @@ impl DefaultAppToolDispatcher {
             );
         }
 
-        self.governed_app_tool_preflight(session_context, intent, descriptor, binding)
+        self.governed_app_tool_preflight(
+            session_context,
+            intent,
+            request,
+            crate::tools::payload_uses_reserved_internal_tool_context(&request.payload),
+            descriptor,
+            binding,
+        )
     }
 }
 
@@ -704,7 +754,11 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
         &self,
         session_context: &AppContext,
         intent: &ToolIntent,
+        execution_request: &ToolCoreRequest,
+        trusted_internal_context: bool,
         descriptor: &crate::tools::ToolDescriptor,
+        dispatch_kind: ToolDispatchKind,
+        capabilities_override: Option<&Capabilities>,
         binding: ConversationRuntimeBinding<'_>,
         budget_state: &AutonomyTurnBudgetState,
     ) -> Result<ToolPreflightOutcome, String> {
@@ -785,7 +839,11 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
                         let requirement = self.persist_approval_request(
                             session_context,
                             intent,
+                            execution_request,
+                            trusted_internal_context,
                             descriptor,
+                            dispatch_kind,
+                            capabilities_override,
                             approval_key.as_str(),
                             reason.as_str(),
                             rule_id,
@@ -850,7 +908,16 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
         }
 
         match self
-            .maybe_require_approval_with_binding(session_context, intent, descriptor, binding)
+            .maybe_require_approval_with_binding(
+                session_context,
+                intent,
+                execution_request,
+                trusted_internal_context,
+                descriptor,
+                dispatch_kind,
+                capabilities_override,
+                binding,
+            )
             .await
         {
             Ok(Some(requirement)) => {
@@ -873,12 +940,25 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
         &self,
         session_context: &AppContext,
         intent: &ToolIntent,
+        execution_request: &ToolCoreRequest,
+        trusted_internal_context: bool,
         descriptor: &crate::tools::ToolDescriptor,
+        dispatch_kind: ToolDispatchKind,
+        capabilities_override: Option<&Capabilities>,
         binding: ConversationRuntimeBinding<'_>,
     ) -> Result<Option<ApprovalRequirement>, String> {
         #[cfg(not(feature = "memory-sqlite"))]
         {
-            let _ = (session_context, intent, descriptor, binding);
+            let _ = (
+                session_context,
+                intent,
+                execution_request,
+                trusted_internal_context,
+                descriptor,
+                dispatch_kind,
+                capabilities_override,
+                binding,
+            );
             Ok(None)
         }
 
@@ -950,7 +1030,11 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
                 return self.maybe_require_governed_tool_approval_with_binding(
                     session_context,
                     intent,
+                    execution_request,
+                    trusted_internal_context,
                     descriptor,
+                    dispatch_kind,
+                    capabilities_override,
                     binding,
                 );
             };
@@ -966,7 +1050,11 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
             let requirement = self.persist_approval_request(
                 session_context,
                 intent,
+                execution_request,
+                trusted_internal_context,
                 descriptor,
+                dispatch_kind,
+                capabilities_override,
                 approval_key.as_str(),
                 reason.as_str(),
                 rule_id,

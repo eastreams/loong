@@ -20,21 +20,9 @@ impl ToolRuntimeEventSink for ObserverToolRuntimeEventSink {
     }
 }
 
-fn build_observer_tool_runtime_event_sink(
-    observer: &ConversationTurnObserverHandle,
-    tool_call_id: &str,
-) -> Arc<dyn ToolRuntimeEventSink> {
-    let observer_sink = ObserverToolRuntimeEventSink {
-        observer: Arc::clone(observer),
-        tool_call_id: tool_call_id.to_owned(),
-    };
-    Arc::new(observer_sink)
-}
-
 /// Collapse the temporary typed-or-legacy request sum at the turn boundary.
-///
-/// Typed errors keep their runtime owner here; only the explicit `Legacy`
-/// branch enters the old Kernel error classifier.
+/// Typed errors keep their runtime owner; only the explicit `Legacy` variant
+/// enters the old Kernel error classifier.
 impl From<crate::tools::ToolRequestError> for TurnFailure {
     fn from(error: crate::tools::ToolRequestError) -> Self {
         match error {
@@ -43,82 +31,85 @@ impl From<crate::tools::ToolRequestError> for TurnFailure {
                     && let Some(stripped) = RepairableToolPreflight::parse(reason.as_str())
                 {
                     let human_reason = RepairableToolPreflight::render(stripped);
-                    return Self::retryable("tool_preflight_denied", human_reason);
+                    return TurnFailure::retryable("tool_preflight_denied", human_reason);
                 }
 
                 let reason = render_kernel_error_reason(&error);
                 match classify_kernel_error(&error) {
                     KernelFailureClass::PolicyDenied => {
-                        Self::policy_denied("kernel_policy_denied", reason)
+                        TurnFailure::policy_denied("kernel_policy_denied", reason)
                     }
                     KernelFailureClass::RetryableExecution => {
-                        Self::retryable("tool_execution_failed", reason)
+                        TurnFailure::retryable("tool_execution_failed", reason)
                     }
                     KernelFailureClass::NonRetryable => {
-                        Self::non_retryable("kernel_execution_failed", reason)
+                        TurnFailure::non_retryable("kernel_execution_failed", reason)
                     }
                 }
             }
             crate::tools::ToolRequestError::Input(reason) => {
-                Self::retryable("tool_input_invalid", reason)
+                TurnFailure::retryable("tool_input_invalid", reason)
             }
             crate::tools::ToolRequestError::ReservedContext(reason) => {
-                Self::policy_denied("tool_context_denied", reason)
+                TurnFailure::policy_denied("tool_context_denied", reason)
             }
             crate::tools::ToolRequestError::Context(reason) => {
-                Self::non_retryable("tool_context_failed", reason)
+                TurnFailure::non_retryable("tool_context_failed", reason)
             }
             crate::tools::ToolRequestError::Lookup(error) => {
-                Self::non_retryable("tool_registry_failed", error.to_string())
+                TurnFailure::non_retryable("tool_registry_failed", error.to_string())
+            }
+            crate::tools::ToolRequestError::RegistryMissing { path } => TurnFailure::non_retryable(
+                "tool_registry_missing",
+                format!("typed tool `{path}` is missing its runtime registration"),
+            ),
+            crate::tools::ToolRequestError::NotFound { tool_name } => {
+                TurnFailure::policy_denied("tool_not_found", format!("tool_not_found: {tool_name}"))
+            }
+            crate::tools::ToolRequestError::LegacyAppDispatch { tool_name } => {
+                TurnFailure::non_retryable(
+                    "legacy_app_dispatch_required",
+                    format!("legacy app tool `{tool_name}` requires the app dispatcher"),
+                )
             }
             crate::tools::ToolRequestError::Invocation(error) => {
                 let reason = error.to_string();
                 match &error {
                     ToolInvocationError::CapabilityOverride(_) => {
-                        Self::policy_denied("tool_capability_override_denied", reason)
+                        TurnFailure::policy_denied("tool_capability_override_denied", reason)
                     }
                     ToolInvocationError::Authorization(
                         PolicyGrantError::MissingCapability { .. }
                         | PolicyGrantError::Denied { .. }
                         | PolicyGrantError::PermissionDenied { .. },
-                    ) => Self::policy_denied("tool_authorization_denied", reason),
+                    ) => TurnFailure::policy_denied("tool_authorization_denied", reason),
                     ToolInvocationError::Dispatch {
                         source: RegisteredToolError::Denied { .. },
                         ..
-                    } => Self::policy_denied("tool_execution_denied", reason),
+                    } => TurnFailure::policy_denied("tool_execution_denied", reason),
                     ToolInvocationError::Dispatch {
                         source: RegisteredToolError::Input(_),
                         ..
-                    } => Self::retryable("tool_input_invalid", reason),
+                    } => TurnFailure::retryable("tool_input_invalid", reason),
                     ToolInvocationError::CapabilityNarrowing(_) => {
-                        Self::non_retryable("tool_capability_narrowing_failed", reason)
+                        TurnFailure::non_retryable("tool_capability_narrowing_failed", reason)
                     }
                     ToolInvocationError::Authorization(_) => {
-                        Self::non_retryable("tool_authorization_failed", reason)
+                        TurnFailure::non_retryable("tool_authorization_failed", reason)
                     }
                     ToolInvocationError::CapabilityOverrideAndAudit { .. }
                     | ToolInvocationError::StartAudit { .. }
                     | ToolInvocationError::CompletedAudit { .. }
                     | ToolInvocationError::DispatchAndAudit { .. } => {
-                        Self::non_retryable("tool_execution_audit_failed", reason)
+                        TurnFailure::non_retryable("tool_execution_audit_failed", reason)
                     }
                     ToolInvocationError::Dispatch { .. } => {
-                        Self::non_retryable("tool_execution_failed", reason)
+                        TurnFailure::non_retryable("tool_execution_failed", reason)
                     }
                 }
             }
         }
     }
-}
-
-async fn execute_tool_intent_via_kernel(
-    request: ToolCoreRequest,
-    app_ctx: &AppContext,
-    trusted_internal_context: bool,
-) -> Result<ToolCoreOutcome, TurnFailure> {
-    crate::tools::execute_kernel_tool_request(app_ctx, request, trusted_internal_context)
-        .await
-        .map_err(TurnFailure::from)
 }
 
 impl TurnEngine {
@@ -297,25 +288,44 @@ impl TurnEngine {
         binding: ConversationRuntimeBinding<'_>,
         observer: Option<&ConversationTurnObserverHandle>,
     ) -> PreparedToolExecutionOutcome {
-        match prepared_intent.execution_kind {
-            ToolExecutionKind::Core => {
-                let Some(app_ctx) = binding.context() else {
-                    return PreparedToolExecutionOutcome::Interrupted(TurnResult::policy_denied(
-                        "no_app_context",
-                        "no_app_context",
-                    ));
+        match prepared_intent.dispatch_kind {
+            ToolDispatchKind::Typed | ToolDispatchKind::LegacyCore => {
+                let execution_ctx = if prepared_intent.dispatch_kind == ToolDispatchKind::Typed {
+                    session_context
+                } else {
+                    let Some(app_ctx) = binding.context() else {
+                        return PreparedToolExecutionOutcome::Interrupted(
+                            TurnResult::policy_denied("no_app_context", "no_app_context"),
+                        );
+                    };
+                    app_ctx
                 };
-                let execution = execute_tool_intent_via_kernel(
-                    prepared_intent.request.clone(),
-                    app_ctx,
-                    prepared_intent.trusted_internal_context,
-                );
+                let execution = async {
+                    let result = if prepared_intent.dispatch_kind == ToolDispatchKind::Typed {
+                        crate::tools::execute_registered_tool_request(
+                            session_context,
+                            prepared_intent.request.clone(),
+                            prepared_intent.capabilities_override.clone(),
+                            prepared_intent.trusted_internal_context,
+                        )
+                        .await
+                    } else {
+                        crate::tools::execute_legacy_kernel_tool_request(
+                            execution_ctx,
+                            prepared_intent.request.clone(),
+                            prepared_intent.trusted_internal_context,
+                        )
+                        .await
+                    };
+                    result.map_err(TurnFailure::from)
+                };
                 let outcome = match observer {
                     Some(observer) => {
-                        let sink = build_observer_tool_runtime_event_sink(
-                            observer,
-                            prepared_intent.intent.tool_call_id.as_str(),
-                        );
+                        let sink: Arc<dyn ToolRuntimeEventSink> =
+                            Arc::new(ObserverToolRuntimeEventSink {
+                                observer: Arc::clone(observer),
+                                tool_call_id: prepared_intent.intent.tool_call_id.clone(),
+                            });
 
                         with_tool_runtime_event_sink(sink, execution).await
                     }
@@ -332,7 +342,7 @@ impl TurnEngine {
                     ),
                 }
             }
-            ToolExecutionKind::App => match app_dispatcher
+            ToolDispatchKind::LegacyApp => match app_dispatcher
                 .execute_app_tool(session_context, prepared_intent.request.clone(), binding)
                 .await
             {
@@ -412,7 +422,8 @@ mod execution_tests {
                 tool_name: "sessions_list".to_owned(),
                 payload: json!({}),
             },
-            execution_kind: ToolExecutionKind::App,
+            capabilities_override: None,
+            dispatch_kind: ToolDispatchKind::LegacyApp,
             capability_action_class: crate::tools::CapabilityActionClass::ExecuteExisting,
             scheduling_class: crate::tools::ToolSchedulingClass::SerialOnly,
             trusted_internal_context: false,

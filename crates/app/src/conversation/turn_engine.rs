@@ -1,4 +1,6 @@
-use loong_contracts::{KernelError, ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
+use loong_contracts::{
+    Capabilities, KernelError, ToolCoreOutcome, ToolCoreRequest, ToolPlaneError,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -6,7 +8,7 @@ use sha2::{Digest, Sha256};
 use crate::config::{GovernedToolApprovalMode, SessionVisibility, ToolConfig, ToolConsentMode};
 use crate::context::AppContext;
 #[cfg(feature = "memory-sqlite")]
-use crate::operator::approval_runtime::{GovernedToolApprovalRequest, OperatorApprovalRuntime};
+use crate::operator::approval_runtime::OperatorApprovalRuntime;
 #[cfg(feature = "memory-sqlite")]
 use crate::operator::delegate_runtime::resolve_delegate_child_contract;
 #[cfg(feature = "memory-sqlite")]
@@ -19,9 +21,9 @@ use crate::session::store::{self, SessionStoreConfig};
 #[cfg(all(feature = "memory-sqlite", test))]
 use crate::task_progress::TASK_PROGRESS_EVENT_KIND;
 use crate::tools::{
-    ToolApprovalMode, ToolDescriptor, ToolExecutionKind, ToolView,
-    delegate_child_tool_view_for_contract, governance_profile_for_descriptor, runtime_tool_view,
-    runtime_tool_view_for_config, tool_catalog,
+    ToolApprovalMode, ToolExecutionKind, ToolView, delegate_child_tool_view_for_contract,
+    governance_profile_for_descriptor, runtime_tool_view, runtime_tool_view_for_config,
+    tool_catalog,
 };
 #[cfg(feature = "memory-sqlite")]
 use crate::trust::{approval_required_trust_event, embed_trust_event_payload};
@@ -57,8 +59,6 @@ mod prepare;
 mod result;
 #[path = "turn_engine_support.rs"]
 mod support;
-#[path = "turn_engine_target.rs"]
-mod target;
 #[path = "turn_engine_trace.rs"]
 mod trace;
 #[path = "turn_engine_validate.rs"]
@@ -70,7 +70,8 @@ pub(crate) use decision::ToolOutcomeTelemetry;
 pub use decision::{ToolDecision, ToolDecisionKind, ToolDecisionTelemetry, ToolOutcome};
 use dispatcher::GovernedToolPreflight;
 pub use dispatcher::{
-    AppToolDispatcher, DefaultAppToolDispatcher, NoopAppToolDispatcher, ToolExecutionPreflight,
+    AppToolDispatcher, DefaultAppToolDispatcher, NoopAppToolDispatcher, ToolDispatchKind,
+    ToolExecutionPreflight,
 };
 pub use outcome::{
     ApprovalRequirement, ApprovalRequirementKind, ToolPreflightOutcome, ToolResultEnvelope,

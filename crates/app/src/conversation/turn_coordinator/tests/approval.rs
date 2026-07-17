@@ -25,7 +25,13 @@ async fn pending_approval_control_turn_bootstraps_once_and_emits_terminal_phases
         state: SessionState::Ready,
     })
     .expect("ensure root session");
-    seed_pending_approval_request(&repo, "root-session", "apr-deny-1", "delegate_async", "app");
+    seed_pending_approval_request(
+        &repo,
+        "root-session",
+        "apr-deny-1",
+        "delegate_async",
+        "legacy_app",
+    );
 
     let acp_options = AcpConversationTurnOptions::automatic();
     let address = ConversationSessionAddress::from_session_id("root-session");
@@ -109,7 +115,7 @@ async fn pending_approval_control_turn_does_not_persist_session_mode_when_resolu
         "root-session",
         "apr-auto-failure",
         "delegate_async",
-        "app",
+        "legacy_app",
     );
 
     let db_path = memory_config
@@ -192,7 +198,13 @@ async fn pending_approval_control_turn_resolves_delegate_request_after_yes_confi
         state: SessionState::Ready,
     })
     .expect("ensure root session");
-    seed_pending_approval_request(&repo, "root-session", "apr-delegate-yes", "delegate", "app");
+    seed_pending_approval_request(
+        &repo,
+        "root-session",
+        "apr-delegate-yes",
+        "delegate",
+        "legacy_app",
+    );
 
     let acp_options = AcpConversationTurnOptions::automatic();
     let address = ConversationSessionAddress::from_session_id("root-session");
@@ -263,7 +275,7 @@ async fn approval_request_resolve_persists_session_mode_on_success() {
         "root-session",
         "apr-auto-success",
         "sessions_list",
-        "app",
+        "legacy_app",
     );
     let fallback = DefaultAppToolDispatcher::new(memory_config.clone(), ToolConfig::default());
     let approval_runtime = CoordinatorApprovalResolutionRuntime::new(
@@ -341,7 +353,7 @@ async fn approval_request_resolve_retries_missing_session_mode_after_approval() 
         "root-session",
         "apr-auto-retry",
         "sessions_list",
-        "app",
+        "legacy_app",
     );
     repo.transition_approval_request_if_current(
         "apr-auto-retry",
@@ -433,7 +445,9 @@ async fn core_approval_replay_skips_app_session_context_loading() {
                 "selector": "openai"
             },
             "source": "test",
-            "execution_kind": "core",
+            "capabilities_override": null,
+            "dispatch_kind": "legacy_core",
+            "trusted_internal_context": false,
         }),
         governance_snapshot_json: json!({
             "rule_id": "session_tool_consent_auto_blocked",

@@ -98,7 +98,7 @@ async fn execute_tool_core_with_test_context(
         loong_contracts::GovernedSessionMode::MutatingCapable,
     )?;
 
-    execute_kernel_tool_request(&app_ctx, request, trusted_internal_payload)
+    execute_kernel_tool_request(&app_ctx, request, None, trusted_internal_payload)
         .await
         .map_err(|error| format!("{error}"))
 }

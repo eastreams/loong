@@ -664,7 +664,7 @@ mod tests {
 
         assert!(reply.contains("execution trace:"));
         assert!(
-            reply.contains("discovery denied: tool_not_found: tool.search"),
+            reply.contains("discovery denied: tool_not_visible: tool.search"),
             "discovery denial trace should surface the current provider-visible contract: {reply}"
         );
 
@@ -732,7 +732,7 @@ mod tests {
         .await
         .expect("channel reply should succeed when trace rendering is disabled");
 
-        assert_eq!(reply, "tool_not_found: tool.search");
+        assert_eq!(reply, "tool_not_visible: tool.search");
     }
 
     #[cfg(any(

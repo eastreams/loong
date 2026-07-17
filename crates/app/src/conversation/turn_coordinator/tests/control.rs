@@ -255,7 +255,7 @@ pub(super) fn seed_pending_approval_request(
     session_id: &str,
     approval_request_id: &str,
     tool_name: &str,
-    execution_kind: &str,
+    dispatch_kind: &str,
 ) {
     repo.ensure_approval_request(crate::session::repository::NewApprovalRequestRecord {
         approval_request_id: approval_request_id.to_owned(),
@@ -271,7 +271,9 @@ pub(super) fn seed_pending_approval_request(
             "tool_name": tool_name,
             "args_json": {},
             "source": "test",
-            "execution_kind": execution_kind,
+            "capabilities_override": null,
+            "dispatch_kind": dispatch_kind,
+            "trusted_internal_context": false,
         }),
         governance_snapshot_json: json!({
             "rule_id": "governed_tool_requires_approval",

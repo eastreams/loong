@@ -78,6 +78,19 @@ fn safe_lane_route_discovery_recovery_tool_not_found_replans() {
 }
 
 #[test]
+fn safe_lane_route_discovery_recovery_invalid_lease_replans() {
+    let failure = TurnFailure::policy_denied_with_discovery_recovery(
+        "invalid_tool_lease",
+        "invalid_tool_lease: signature mismatch",
+    );
+    let route = SafeLaneFailureRoute::from_failure(&failure, SafeLaneReplanBudget::new(2));
+
+    assert_eq!(route.decision, SafeLaneFailureRouteDecision::Replan);
+    assert_eq!(route.reason, SafeLaneFailureRouteReason::RetryableFailure);
+    assert_eq!(route.source, SafeLaneFailureRouteSource::BaseRouting);
+}
+
+#[test]
 fn safe_lane_route_non_retryable_failure_is_terminal() {
     let failure = TurnFailure::non_retryable("safe_lane_plan_node_non_retryable_error", "bad");
     let route = SafeLaneFailureRoute::from_failure(&failure, SafeLaneReplanBudget::new(3));

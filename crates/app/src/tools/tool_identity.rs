@@ -183,22 +183,43 @@ pub(crate) fn is_tool_surface_id(surface_id: &str) -> bool {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct ResolvedToolExecution {
+pub(crate) struct ResolvedLegacyToolExecution {
     pub canonical_name: &'static str,
     pub execution_kind: ToolExecutionKind,
 }
 
-pub(crate) fn resolve_tool_execution(raw: &str) -> Option<ResolvedToolExecution> {
+pub(crate) fn resolve_legacy_tool_execution(raw: &str) -> Option<ResolvedLegacyToolExecution> {
+    let canonical_name = canonical_tool_name(raw);
+    // These catalog rows remain only as legacy metadata projections. Their
+    // side effects moved to registered tools, so a registry miss must not
+    // reactivate the old CoreTool adapter implementation.
+    if matches!(
+        canonical_name,
+        "read" | "write" | "edit" | "glob.search" | "content.search"
+    ) {
+        return None;
+    }
+
+    // `tool.search` is the legacy lease-refresh gateway, not a catalog tool.
+    // Keep its exceptional owner inside this legacy-only resolver until the
+    // gateway itself is registered in the typed plane.
+    if canonical_name == "tool.search" {
+        return Some(ResolvedLegacyToolExecution {
+            canonical_name: "tool.search",
+            execution_kind: ToolExecutionKind::Core,
+        });
+    }
+
     let catalog = tool_catalog();
     if let Some(descriptor) = catalog.resolve(raw) {
-        return Some(ResolvedToolExecution {
+        return Some(ResolvedLegacyToolExecution {
             canonical_name: descriptor.name,
             execution_kind: descriptor.execution_kind,
         });
     }
     #[cfg(feature = "feishu-integration")]
     if let Some(canonical_name) = feishu::canonical_feishu_tool_name(raw) {
-        return Some(ResolvedToolExecution {
+        return Some(ResolvedLegacyToolExecution {
             canonical_name,
             execution_kind: ToolExecutionKind::Core,
         });

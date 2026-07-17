@@ -16,7 +16,7 @@ impl SafeLaneFailureRoute {
         }
 
         match failure.code.as_str() {
-            "tool_not_found" if failure.supports_discovery_recovery => {
+            "tool_not_found" | "invalid_tool_lease" if failure.supports_discovery_recovery => {
                 return Self::replan(SafeLaneFailureRouteReason::RetryableFailure);
             }
             "kernel_policy_denied"

@@ -33,6 +33,132 @@ fn app_context(agent_id: &str) -> AppContext {
     test_app_context(agent_id)
 }
 
+struct TypedOnlyPrepareTool;
+
+#[async_trait::async_trait]
+impl<C> loong_core::tool::ToolImpl<C> for TypedOnlyPrepareTool
+where
+    C: loong_core::policy::context::ContextFactory,
+{
+    type Input = serde_json::Value;
+    type Output = serde_json::Value;
+    type Error = std::convert::Infallible;
+
+    fn spec(&self) -> loong_contracts::ToolSpec {
+        loong_contracts::ToolSpec {
+            description: "Typed-only preparation test tool.".to_owned(),
+            input_schema: json!({ "type": "object" }),
+            required_capabilities: std::collections::BTreeSet::new(),
+            argument_hint: None,
+            search_hint: None,
+            tags: Vec::new(),
+        }
+    }
+
+    fn parse_input(
+        &self,
+        payload: serde_json::Value,
+    ) -> Result<Self::Input, loong_contracts::ToolInputError> {
+        Ok(payload)
+    }
+
+    async fn execute(
+        &self,
+        _ctx: &C::Cx<'_>,
+        input: Self::Input,
+    ) -> Result<Self::Output, Self::Error> {
+        Ok(input)
+    }
+}
+
+/// Build the shared typed-ingress fixture while varying only registry contents
+/// and visibility. Keeping pack/token setup identical makes fallback failures
+/// attributable to dispatch identity rather than test authority drift.
+fn typed_ingress_test_context(
+    tools: loong_runtime::tool_plane::ToolPlaneRegistry<crate::context::AppContextFactory>,
+    tool_view: crate::tools::ToolView,
+) -> (AppContext, std::sync::Arc<loong_kernel::InMemoryAuditSink>) {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::Arc;
+
+    use loong_contracts::{Capability, ExecutionRoute, GovernedSessionMode, HarnessKind};
+    use loong_kernel::{FixedClock, InMemoryAuditSink, Kernel, VerticalPackManifest};
+    use loong_runtime::runtime::Runtime;
+
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let policy = loong_kernel::policy::PolicyPipelineBuilder::<
+        crate::context::AppContextFactory,
+    >::new_legacy_allow_fallback()
+    .with_policy(crate::tools::plane::ToolInvocationAllowPolicy);
+    let mut kernel = Kernel::<crate::context::AppContextFactory>::with_policy_runtime(
+        policy,
+        Arc::new(FixedClock::new(1_700_000_000)),
+        audit.clone(),
+    );
+    kernel
+        .register_pack(VerticalPackManifest {
+            pack_id: "typed-ingress-test".to_owned(),
+            domain: "testing".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: None,
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
+            metadata: BTreeMap::new(),
+        })
+        .expect("register typed ingress test pack");
+    let token = kernel
+        .issue_token("typed-ingress-test", "typed-ingress-agent", 60)
+        .expect("issue typed ingress test token");
+    let context = AppContext::new(
+        Arc::new(Runtime::new(kernel, tools)),
+        token,
+        crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        "typed-ingress-session",
+        tool_view,
+        GovernedSessionMode::MutatingCapable,
+    )
+    .expect("build typed ingress test context");
+    (context, audit)
+}
+
+#[cfg(feature = "tool-file")]
+async fn assert_migrated_tool_has_no_legacy_fallback(tool_name: &str, payload: serde_json::Value) {
+    let (session_context, _) = typed_ingress_test_context(
+        loong_runtime::tool_plane::ToolPlaneRegistry::new(),
+        crate::tools::ToolView::from_tool_names([tool_name]),
+    );
+    let intent = ToolIntent {
+        tool_name: tool_name.to_owned(),
+        args_json: payload,
+        source: "assistant".to_owned(),
+        session_id: "typed-ingress-session".to_owned(),
+        turn_id: format!("missing-{tool_name}-turn"),
+        tool_call_id: format!("missing-{tool_name}-call"),
+    };
+
+    let failure = TurnEngine::new(1)
+        .prepare_tool_intent(
+            &intent,
+            0,
+            &session_context,
+            &NoopAppToolDispatcher,
+            ConversationRuntimeBinding::Context(&session_context),
+            &AutonomyTurnBudgetState::default(),
+            None,
+        )
+        .await
+        .expect_err("migrated typed tool must not fall back when registration is absent");
+
+    assert!(matches!(
+        failure.turn_result,
+        TurnResult::ToolDenied(ref error)
+            if error.code == "tool_not_found" && error.reason.contains(tool_name)
+    ));
+}
+
 #[test]
 fn tool_decision_telemetry_builder_chain_preserves_policy_metadata() {
     let decision = ToolDecisionTelemetry::allow("shell.exec", "allowed", "rule-allow")
@@ -203,6 +329,279 @@ fn prepare_tool_intent_uses_direct_shell_metadata_for_provider_shell_requests() 
             "command": "echo",
             "args": ["hello"],
         })
+    );
+}
+
+#[tokio::test]
+async fn typed_only_registration_executes_without_a_legacy_catalog_row() {
+    use crate::tools::ToolSchedulingClass;
+    use loong_runtime::tool_plane::{ToolPath, ToolPlaneRegistry};
+
+    let mut tools = ToolPlaneRegistry::new();
+    tools
+        .register(ToolPath::from("typed.only"), TypedOnlyPrepareTool)
+        .expect("register typed-only tool");
+    let (session_context, audit) = typed_ingress_test_context(
+        tools,
+        crate::tools::ToolView::from_tool_names(["typed.only"]),
+    );
+    let intent = ToolIntent {
+        tool_name: "typed.only".to_owned(),
+        args_json: json!({}),
+        source: "assistant".to_owned(),
+        session_id: "typed-ingress-session".to_owned(),
+        turn_id: "typed-only-turn".to_owned(),
+        tool_call_id: "typed-only-call".to_owned(),
+    };
+
+    let prepared = TurnEngine::new(1)
+        .prepare_tool_intent(
+            &intent,
+            0,
+            &session_context,
+            &NoopAppToolDispatcher,
+            ConversationRuntimeBinding::Context(&session_context),
+            &AutonomyTurnBudgetState::default(),
+            None,
+        )
+        .await
+        .expect("typed-only registration should not require a legacy descriptor");
+
+    assert_eq!(prepared.dispatch_kind, ToolDispatchKind::Typed);
+    assert_eq!(prepared.request.tool_name, "typed.only");
+    assert_eq!(prepared.scheduling_class, ToolSchedulingClass::SerialOnly);
+    assert_eq!(prepared.decision.rule_id, "typed_runtime_policy");
+
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![intent],
+        raw_meta: serde_json::Value::Null,
+    };
+    let result = TurnEngine::new(1)
+        .execute_turn_in_context(
+            &turn,
+            &session_context,
+            &NoopAppToolDispatcher,
+            ConversationRuntimeBinding::Context(&session_context),
+            None,
+        )
+        .await;
+
+    assert!(matches!(
+        result,
+        TurnResult::FinalText(ref output) if output.contains("typed-only-call")
+    ));
+    let events = audit.snapshot();
+    assert!(
+        events.iter().any(|event| matches!(
+            event.kind,
+            loong_contracts::AuditEventKind::ActionExecution { .. }
+        )),
+        "typed execution audit: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn typed_execution_consumes_runtime_overlay_before_parsing_input() {
+    use loong_runtime::tool_plane::{ToolPath, ToolPlaneRegistry};
+
+    let mut tools = ToolPlaneRegistry::new();
+    tools
+        .register(ToolPath::from("typed.only"), TypedOnlyPrepareTool)
+        .expect("register typed-only tool");
+    let (context, _) = typed_ingress_test_context(
+        tools,
+        crate::tools::ToolView::from_tool_names(["typed.only"]),
+    );
+
+    let outcome = crate::tools::execute_registered_tool_request(
+        &context,
+        loong_contracts::ToolCoreRequest {
+            tool_name: "typed.only".to_owned(),
+            payload: json!({
+                "_loong": {},
+                "visible_input": true,
+            }),
+        },
+        None,
+        true,
+    )
+    .await
+    .expect("trusted runtime overlay should not enter typed input");
+
+    assert_eq!(outcome.payload, json!({ "visible_input": true }));
+}
+
+#[tokio::test]
+async fn registered_tool_invoke_path_precedes_the_legacy_envelope() {
+    use loong_runtime::tool_plane::{ToolPath, ToolPlaneRegistry};
+
+    let mut tools = ToolPlaneRegistry::new();
+    tools
+        .register(ToolPath::from("tool.invoke"), TypedOnlyPrepareTool)
+        .expect("register concrete tool.invoke tool");
+    let (context, _) = typed_ingress_test_context(
+        tools,
+        crate::tools::ToolView::from_tool_names(["tool.invoke"]),
+    );
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![ToolIntent {
+            tool_name: "tool.invoke".to_owned(),
+            args_json: json!({ "visible_input": true }),
+            source: "assistant".to_owned(),
+            session_id: "typed-ingress-session".to_owned(),
+            turn_id: "registered-tool-invoke-turn".to_owned(),
+            tool_call_id: "registered-tool-invoke-call".to_owned(),
+        }],
+        raw_meta: serde_json::Value::Null,
+    };
+
+    let result = TurnEngine::new(1)
+        .execute_turn_in_context(
+            &turn,
+            &context,
+            &NoopAppToolDispatcher,
+            ConversationRuntimeBinding::Context(&context),
+            None,
+        )
+        .await;
+
+    assert!(matches!(
+        result,
+        TurnResult::FinalText(ref output)
+            if output.contains("registered-tool-invoke-call")
+                && output.contains("visible_input")
+    ));
+}
+
+#[tokio::test]
+async fn registered_tool_invoke_path_still_requires_visibility() {
+    use loong_runtime::tool_plane::{ToolPath, ToolPlaneRegistry};
+
+    let mut tools = ToolPlaneRegistry::new();
+    tools
+        .register(ToolPath::from("tool.invoke"), TypedOnlyPrepareTool)
+        .expect("register concrete tool.invoke tool");
+    let (context, _) = typed_ingress_test_context(tools, crate::tools::ToolView::default());
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![ToolIntent {
+            tool_name: "tool.invoke".to_owned(),
+            args_json: json!({}),
+            source: "assistant".to_owned(),
+            session_id: "typed-ingress-session".to_owned(),
+            turn_id: "hidden-tool-invoke-turn".to_owned(),
+            tool_call_id: "hidden-tool-invoke-call".to_owned(),
+        }],
+        raw_meta: serde_json::Value::Null,
+    };
+
+    let result = TurnEngine::new(1)
+        .execute_turn_in_context(
+            &turn,
+            &context,
+            &NoopAppToolDispatcher,
+            ConversationRuntimeBinding::Context(&context),
+            None,
+        )
+        .await;
+
+    assert!(matches!(
+        result,
+        TurnResult::ToolDenied(ref failure) if failure.code == "tool_not_visible"
+    ));
+}
+
+#[cfg(feature = "tool-file")]
+#[tokio::test]
+async fn read_requires_its_typed_runtime_registration() {
+    assert_migrated_tool_has_no_legacy_fallback("read", json!({ "path": "README.md" })).await;
+}
+
+#[cfg(feature = "tool-file")]
+#[tokio::test]
+async fn write_requires_its_typed_runtime_registration() {
+    assert_migrated_tool_has_no_legacy_fallback(
+        "write",
+        json!({ "path": "notes.txt", "content": "text" }),
+    )
+    .await;
+}
+
+#[cfg(feature = "tool-file")]
+#[tokio::test]
+async fn edit_requires_its_typed_runtime_registration() {
+    assert_migrated_tool_has_no_legacy_fallback(
+        "edit",
+        json!({
+            "path": "notes.txt",
+            "edits": [{ "old_text": "old", "new_text": "new" }],
+        }),
+    )
+    .await;
+}
+
+#[cfg(feature = "tool-file")]
+#[tokio::test]
+async fn glob_search_requires_its_typed_runtime_registration() {
+    assert_migrated_tool_has_no_legacy_fallback("glob.search", json!({ "pattern": "**/*.rs" }))
+        .await;
+}
+
+#[cfg(feature = "tool-file")]
+#[tokio::test]
+async fn content_search_requires_its_typed_runtime_registration() {
+    assert_migrated_tool_has_no_legacy_fallback("content.search", json!({ "query": "needle" }))
+        .await;
+}
+
+#[tokio::test]
+async fn turn_validates_lease_before_resolving_an_unknown_target() {
+    let session_context =
+        crate::test_support::app_context_for_session("invalid-lease-session", runtime_tool_view());
+    let intent = ToolIntent {
+        tool_name: "tool.invoke".to_owned(),
+        args_json: json!({
+            "tool_id": "typed.missing",
+            "lease": "invalid-lease",
+            "arguments": {},
+        }),
+        source: "assistant".to_owned(),
+        session_id: "invalid-lease-session".to_owned(),
+        turn_id: "invalid-lease-turn".to_owned(),
+        tool_call_id: "invalid-lease-call".to_owned(),
+    };
+
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![intent],
+        raw_meta: serde_json::Value::Null,
+    };
+    let engine = TurnEngine::new(1);
+    let validation = engine.validate_turn_in_context(&turn, &session_context);
+    assert!(
+        matches!(validation, Ok(TurnValidation::ToolExecutionRequired)),
+        "turn validation: {validation:?}"
+    );
+    let result = engine
+        .execute_turn_in_context(
+            &turn,
+            &session_context,
+            &NoopAppToolDispatcher,
+            ConversationRuntimeBinding::Context(&session_context),
+            None,
+        )
+        .await;
+
+    let TurnResult::ToolDenied(failure) = &result else {
+        panic!("expected tool denial, got {result:?}")
+    };
+    assert_eq!(failure.code, "invalid_tool_lease");
+    assert!(failure.supports_discovery_recovery);
+    assert!(
+        !failure.reason.contains("typed.missing"),
+        "invalid lease denial must not disclose the unresolved target: {failure:?}"
     );
 }
 
@@ -658,6 +1057,65 @@ async fn autonomy_policy_approval_request_is_persisted_for_discovered_delegate_a
     );
 }
 
+#[cfg(feature = "tool-file")]
+#[tokio::test]
+async fn typed_approval_persists_the_effective_request_and_runtime_overlay() {
+    let memory_config = isolated_memory_config("typed-effective-request");
+    let repo = SessionRepository::new(&memory_config).expect("repository");
+    let mut tool_config = ToolConfig::default();
+    tool_config.consent.default_mode = ToolConsentMode::Prompt;
+    let workspace_root = std::env::temp_dir().join("loong-typed-approval-workspace");
+    let session_context = crate::test_support::app_context_for_session(
+        "typed-approval-session",
+        runtime_tool_view_for_config(&tool_config),
+    )
+    .with_workspace_root(workspace_root.clone());
+    let dispatcher = DefaultAppToolDispatcher::new(memory_config, tool_config);
+
+    let result = TurnEngine::new(1)
+        .execute_turn_in_context(
+            &provider_tool_turn(
+                "write",
+                json!({ "path": "notes.txt", "content": "approved" }),
+                "typed-approval-session",
+                "typed-approval-turn",
+                "typed-approval-call",
+            ),
+            &session_context,
+            &dispatcher,
+            ConversationRuntimeBinding::Context(&session_context),
+            None,
+        )
+        .await;
+
+    let TurnResult::NeedsApproval(requirement) = result else {
+        panic!("expected typed write approval, got {result:?}");
+    };
+    let stored = repo
+        .load_approval_request(
+            requirement
+                .approval_request_id
+                .as_deref()
+                .expect("approval request id"),
+        )
+        .expect("load approval request")
+        .expect("approval request row");
+
+    assert_eq!(stored.request_payload_json["dispatch_kind"], "typed");
+    assert_eq!(
+        stored.request_payload_json["trusted_internal_context"],
+        true
+    );
+    assert_eq!(
+        stored.request_payload_json["args_json"]["path"],
+        "notes.txt"
+    );
+    assert_eq!(
+        stored.request_payload_json["args_json"]["_loong"]["workspace_root"],
+        workspace_root.display().to_string()
+    );
+}
+
 #[tokio::test]
 async fn auto_mode_requires_approval_for_high_risk_core_tool() {
     let memory_config = isolated_memory_config("claw-migrate-core-approval");
@@ -716,7 +1174,7 @@ async fn auto_mode_requires_approval_for_high_risk_core_tool() {
         .expect("approval request row");
     assert_eq!(stored.status, ApprovalRequestStatus::Pending);
     assert_eq!(stored.tool_name, "config.import");
-    assert_eq!(stored.request_payload_json["execution_kind"], "core");
+    assert_eq!(stored.request_payload_json["dispatch_kind"], "legacy_core");
 }
 
 #[tokio::test]
@@ -1028,7 +1486,7 @@ async fn governed_tool_approval_request_is_persisted_for_discovered_shell_exec()
     assert_eq!(stored.tool_call_id, "call-shell-discovered");
     assert_eq!(stored.approval_key, "tool:shell.exec");
     assert_eq!(stored.request_payload_json["tool_name"], "shell.exec");
-    assert_eq!(stored.request_payload_json["execution_kind"], "core");
+    assert_eq!(stored.request_payload_json["dispatch_kind"], "legacy_core");
     assert_eq!(
         stored.request_payload_json["args_json"],
         json!({

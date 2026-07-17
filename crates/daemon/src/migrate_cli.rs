@@ -72,7 +72,7 @@ async fn run_migrate_cli_async(options: MigrateCommandOptions) -> CliResult<()> 
         mvp::context::DEFAULT_TOKEN_TTL_S,
         &config,
     )?;
-    let outcome = mvp::tools::execute_tool(
+    let outcome = mvp::tools::execute_legacy_tool_envelope(
         ToolCoreRequest {
             tool_name: "config.import".to_owned(),
             payload: build_migrate_tool_payload(&options),

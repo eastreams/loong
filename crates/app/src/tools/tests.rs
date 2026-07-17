@@ -13158,10 +13158,10 @@ async fn tool_call_through_kernel_records_audit() {
         build_tool_app_context(audit.clone(), BTreeSet::from([Capability::InvokeTool]));
 
     let request = ToolCoreRequest {
-        tool_name: "echo".to_owned(),
+        tool_name: "tool.search".to_owned(),
         payload: json!({"msg": "hello"}),
     };
-    let outcome = execute_tool(request, &ctx)
+    let outcome = execute_legacy_tool_envelope(request, &ctx)
         .await
         .expect("tool call via kernel should succeed");
     assert_eq!(outcome.status, "ok");
@@ -13169,7 +13169,7 @@ async fn tool_call_through_kernel_records_audit() {
     // Verify the tool adapter received the request.
     let captured = invocations.lock().expect("invocations lock");
     assert_eq!(captured.len(), 1);
-    assert_eq!(captured[0].tool_name, "echo");
+    assert_eq!(captured[0].tool_name, "tool.search");
 
     // Verify audit events contain a tool plane invocation.
     let events = audit.snapshot();
@@ -13189,6 +13189,91 @@ async fn tool_call_through_kernel_records_audit() {
             loong_kernel::AuditEventKind::ActionExecution { .. }
         )),
         "legacy fallback must not emit typed tool invocation evidence"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_invoke_capability_override_fails_closed_for_legacy_target() {
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let (ctx, invocations) =
+        build_tool_app_context(audit, BTreeSet::from([Capability::InvokeTool]));
+    let arguments = serde_json::Map::new();
+    let lease = issue_tool_lease("config.import", &arguments)
+        .expect("legacy config import lease should be issued");
+    let request = ToolCoreRequest {
+        tool_name: "tool.invoke".to_owned(),
+        payload: json!({
+            "tool_id": "config.import",
+            "arguments": arguments,
+            "lease": lease,
+            "capabilities_override": [],
+        }),
+    };
+
+    let error = execute_kernel_tool_request(&ctx, request, None, false)
+        .await
+        .expect_err("legacy tools must not silently discard capability narrowing");
+
+    assert!(matches!(
+        error,
+        ToolRequestError::Input(ref reason)
+            if reason.contains("capabilities_override requires a registered typed tool")
+    ));
+    assert!(invocations.lock().expect("invocations lock").is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn registered_tool_execution_never_falls_back_when_registration_is_missing() {
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let (ctx, invocations) =
+        build_tool_app_context(audit, BTreeSet::from([Capability::InvokeTool]));
+    let request = ToolCoreRequest {
+        tool_name: "config.import".to_owned(),
+        payload: json!({}),
+    };
+
+    let error = execute_registered_tool_request(&ctx, request, None, false)
+        .await
+        .expect_err("typed ownership must not be reinterpreted as legacy fallback");
+
+    assert!(matches!(
+        error,
+        ToolRequestError::RegistryMissing { path }
+            if path == loong_runtime::tool_plane::ToolPath::from("config.import")
+    ));
+    assert!(invocations.lock().expect("invocations lock").is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_invoke_legacy_core_fallback_forwards_the_normalized_request() {
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let (ctx, invocations) = build_tool_app_context(
+        audit,
+        BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead]),
+    );
+    let arguments = serde_json::Map::from_iter([("mode".to_owned(), json!("inspect"))]);
+    let lease = issue_tool_lease("config.import", &arguments)
+        .expect("legacy config import lease should be issued");
+    let request = ToolCoreRequest {
+        tool_name: "tool.invoke".to_owned(),
+        payload: json!({
+            "tool_id": "config.import",
+            "arguments": arguments,
+            "lease": lease,
+        }),
+    };
+
+    execute_kernel_tool_request(&ctx, request, None, false)
+        .await
+        .expect("normalized legacy core request should reach the existing adapter");
+
+    let captured = invocations.lock().expect("invocations lock");
+    assert_eq!(
+        captured.as_slice(),
+        [ToolCoreRequest {
+            tool_name: "config.import".to_owned(),
+            payload: json!({ "mode": "inspect" }),
+        }]
     );
 }
 
@@ -13353,10 +13438,10 @@ async fn tool_call_through_kernel_denied_without_capability() {
         build_tool_app_context(audit, BTreeSet::from([Capability::MemoryRead]));
 
     let request = ToolCoreRequest {
-        tool_name: "echo".to_owned(),
+        tool_name: "tool.search".to_owned(),
         payload: json!({"msg": "hello"}),
     };
-    let err = execute_tool(request, &ctx)
+    let err = execute_legacy_tool_envelope(request, &ctx)
         .await
         .expect_err("should be denied without InvokeTool capability");
 
@@ -13425,7 +13510,7 @@ async fn web_fetch_through_kernel_requires_network_egress_capability() {
         payload: json!({"url": "https://example.com"}),
     };
 
-    let error = execute_kernel_tool_request(&ctx, request, false)
+    let error = execute_kernel_tool_request(&ctx, request, None, false)
         .await
         .expect_err("web.fetch should fail closed without network egress capability");
 
@@ -13492,7 +13577,7 @@ async fn web_fetch_through_kernel_exposes_network_egress_to_pre_policy() {
         payload: json!({"url": "https://example.com"}),
     };
 
-    let error = execute_kernel_tool_request(&ctx, request, false)
+    let error = execute_kernel_tool_request(&ctx, request, None, false)
         .await
         .expect_err("pre policy should block web.fetch network egress");
 

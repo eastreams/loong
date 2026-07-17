@@ -6,7 +6,7 @@ use super::{
     provider_tool_denial_should_conceal_name, tool_intent_is_visible,
     tool_intent_skips_provider_exposed_gate,
 };
-use loong_contracts::ToolCoreRequest;
+use loong_runtime::tool_plane::{ToolPath, error::LookupError};
 
 impl TurnEngine {
     #[cfg(test)]
@@ -59,47 +59,30 @@ impl TurnEngine {
 
         let catalog = crate::tools::tool_catalog();
         for intent in &turn.tool_intents {
-            let outer_request = ToolCoreRequest {
-                tool_name: intent.tool_name.clone(),
-                payload: intent.args_json.clone(),
+            let canonical_tool_name = crate::tools::canonical_tool_name(intent.tool_name.as_str());
+            let typed_path = ToolPath::from(canonical_tool_name);
+            let typed_registered = match session_context.runtime().tool_spec(&typed_path) {
+                Ok(_) => true,
+                Err(LookupError::NotRegistered { .. }) => false,
+                Err(error) => {
+                    return Err(TurnFailure::non_retryable(
+                        "tool_registry_failed",
+                        error.to_string(),
+                    ));
+                }
             };
-            if let Some(peeked_request) = crate::tools::peek_tool_invoke_request(&outer_request) {
-                let Some(descriptor) = catalog.resolve(peeked_request.tool_name) else {
-                    let reason = provider_tool_denial_reason(
-                        "tool_not_found: tool.invoke",
-                        intent.source.as_str(),
-                    );
-                    return Err(TurnFailure::policy_denied_with_discovery_recovery(
-                        "tool_not_found",
-                        reason,
-                    ));
-                };
-
-                let wrapped_shell_exec = descriptor.name == crate::tools::SHELL_EXEC_TOOL_NAME;
-                if !wrapped_shell_exec
-                    && (descriptor.is_provider_exposed()
-                        || crate::tools::direct_tool_name_for_hidden_tool(descriptor.name)
-                            .is_some())
-                {
-                    let reason = provider_tool_denial_reason(
-                        "tool_not_found: tool.invoke",
-                        intent.source.as_str(),
-                    );
-                    return Err(TurnFailure::policy_denied_with_discovery_recovery(
-                        "tool_not_found",
-                        reason,
-                    ));
-                }
-
-                if !session_context.tool_view.contains(descriptor.name) {
-                    return Err(concealed_provider_tool_denial());
-                }
-
+            if canonical_tool_name == "tool.invoke" && !typed_registered {
+                // An unregistered envelope is not authority of its own. Lease
+                // validation, inner lookup, and target visibility stay together
+                // in preparation so invalid leases cannot probe registry state.
                 continue;
             }
-
-            let Some(resolved_tool) = crate::tools::resolve_tool_execution(&intent.tool_name)
-            else {
+            let legacy_execution = if typed_registered {
+                None
+            } else {
+                crate::tools::resolve_legacy_tool_execution(&intent.tool_name)
+            };
+            if !typed_registered && legacy_execution.is_none() {
                 let raw_reason = format!("tool_not_found: {}", intent.tool_name);
                 let reason =
                     provider_tool_denial_reason(raw_reason.as_str(), intent.source.as_str());
@@ -109,8 +92,7 @@ impl TurnEngine {
                     TurnFailure::policy_denied("tool_not_found", reason)
                 };
                 return Err(failure);
-            };
-
+            }
             if let Some(descriptor) = catalog.resolve(&intent.tool_name) {
                 let tool_is_visible = tool_intent_is_visible(session_context, intent, descriptor);
                 if !tool_is_visible {
@@ -139,7 +121,15 @@ impl TurnEngine {
                         reason,
                     ));
                 }
-            } else {
+            } else if typed_registered {
+                if intent.source.starts_with("provider_") {
+                    return Err(concealed_provider_tool_denial());
+                }
+                if !session_context.tool_view.contains(canonical_tool_name) {
+                    let reason = format!("tool_not_visible: {}", intent.tool_name);
+                    return Err(TurnFailure::policy_denied("tool_not_visible", reason));
+                }
+            } else if let Some(resolved_tool) = legacy_execution {
                 if intent.source.starts_with("provider_") {
                     return Err(concealed_provider_tool_denial());
                 }

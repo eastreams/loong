@@ -935,6 +935,23 @@ fn migrated_file_descriptors_require_typed_plane_metadata() {
     );
 }
 
+#[cfg(feature = "tool-file")]
+#[test]
+fn migrated_file_tools_have_no_legacy_execution_owner() {
+    let catalog = tool_catalog();
+
+    for name in ["read", "write", "edit", "glob.search", "content.search"] {
+        assert_eq!(
+            catalog
+                .descriptor(name)
+                .expect("migrated file descriptor")
+                .execution_kind,
+            ToolExecutionKind::Core,
+            "{name} must fail closed when its runtime registration is absent"
+        );
+    }
+}
+
 #[test]
 fn top_level_catalog_no_longer_exposes_public_exec_descriptor() {
     let catalog = tool_catalog();

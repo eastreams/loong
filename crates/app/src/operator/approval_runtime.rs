@@ -1,7 +1,5 @@
 #[cfg(feature = "memory-sqlite")]
-use serde_json::{Value, json};
-#[cfg(feature = "memory-sqlite")]
-use sha2::{Digest, Sha256};
+use serde_json::Value;
 
 #[cfg(feature = "memory-sqlite")]
 use crate::operator::session_graph::OperatorSessionGraph;
@@ -11,29 +9,7 @@ use crate::session::repository::{
     TransitionApprovalRequestIfCurrentRequest,
 };
 #[cfg(feature = "memory-sqlite")]
-use crate::session::repository::{
-    ApprovalGrantRecord, ApprovalRequestRecord, NewApprovalRequestRecord, NewSessionRecord,
-    SessionKind, SessionRepository, SessionState,
-};
-#[cfg(feature = "memory-sqlite")]
-use crate::trust::{approval_required_trust_event, embed_trust_event_payload};
-
-#[cfg(feature = "memory-sqlite")]
-pub(crate) struct GovernedToolApprovalRequest<'a> {
-    pub session_id: &'a str,
-    pub parent_session_id: Option<&'a str>,
-    pub turn_id: &'a str,
-    pub tool_call_id: &'a str,
-    pub tool_name: &'a str,
-    pub args_json: Value,
-    pub source: &'a str,
-    pub governance_scope: &'a str,
-    pub risk_class: &'a str,
-    pub approval_mode: &'a str,
-    pub reason: &'a str,
-    pub rule_id: &'a str,
-    pub provenance_ref: &'a str,
-}
+use crate::session::repository::{ApprovalGrantRecord, ApprovalRequestRecord, SessionRepository};
 
 #[cfg(feature = "memory-sqlite")]
 pub(crate) struct OperatorApprovalRuntime<'a> {
@@ -54,84 +30,6 @@ impl<'a> OperatorApprovalRuntime<'a> {
 
     pub(crate) fn approval_key_for_tool_name(tool_name: &str) -> String {
         format!("tool:{tool_name}")
-    }
-
-    pub(crate) fn governed_approval_request_id(
-        session_id: &str,
-        turn_id: &str,
-        tool_call_id: &str,
-        tool_name: &str,
-    ) -> String {
-        let mut hasher = Sha256::new();
-
-        hasher.update(session_id.as_bytes());
-        hasher.update([0]);
-        hasher.update(turn_id.as_bytes());
-        hasher.update([0]);
-        hasher.update(tool_call_id.as_bytes());
-        hasher.update([0]);
-        hasher.update(tool_name.as_bytes());
-
-        let digest = hasher.finalize();
-        let digest = hex::encode(digest);
-        let request_id = format!("apr_{digest}");
-
-        request_id
-    }
-
-    pub(crate) fn ensure_governed_tool_approval_request(
-        &self,
-        request: GovernedToolApprovalRequest<'_>,
-    ) -> Result<ApprovalRequestRecord, String> {
-        self.ensure_session_boundary(request.session_id, request.parent_session_id)?;
-
-        let approval_key = Self::approval_key_for_tool_name(request.tool_name);
-        let approval_request_id = Self::governed_approval_request_id(
-            request.session_id,
-            request.turn_id,
-            request.tool_call_id,
-            request.tool_name,
-        );
-        let request_payload_json = json!({
-            "session_id": request.session_id,
-            "parent_session_id": request.parent_session_id,
-            "turn_id": request.turn_id,
-            "tool_call_id": request.tool_call_id,
-            "tool_name": request.tool_name,
-            "approval_key": approval_key,
-            "approval_request_id": approval_request_id,
-            "args_json": request.args_json,
-            "source": request.source,
-            "execution_kind": "app",
-        });
-        let trust_event = approval_required_trust_event(
-            request.session_id,
-            "conversation.approval",
-            request.provenance_ref,
-            request.rule_id,
-            Some(approval_request_id.as_str()),
-            Some(request.tool_name),
-        );
-        let request_payload_json = embed_trust_event_payload(request_payload_json, trust_event);
-        let governance_snapshot_json = json!({
-            "governance_scope": request.governance_scope,
-            "risk_class": request.risk_class,
-            "approval_mode": request.approval_mode,
-            "rule_id": request.rule_id,
-            "reason": request.reason,
-        });
-        let approval_request_record = NewApprovalRequestRecord {
-            approval_request_id,
-            session_id: request.session_id.to_owned(),
-            turn_id: request.turn_id.to_owned(),
-            tool_call_id: request.tool_call_id.to_owned(),
-            tool_name: request.tool_name.to_owned(),
-            approval_key,
-            request_payload_json,
-            governance_snapshot_json,
-        };
-
-        self.repo.ensure_approval_request(approval_request_record)
     }
 
     pub(crate) fn load_runtime_grant_for_context(
@@ -223,33 +121,6 @@ impl<'a> OperatorApprovalRuntime<'a> {
         Ok(resolved)
     }
 
-    fn session_kind_for_parent(parent_session_id: Option<&str>) -> SessionKind {
-        if parent_session_id.is_some() {
-            return SessionKind::DelegateChild;
-        }
-
-        SessionKind::Root
-    }
-
-    fn ensure_session_boundary(
-        &self,
-        session_id: &str,
-        parent_session_id: Option<&str>,
-    ) -> Result<(), String> {
-        let session_kind = Self::session_kind_for_parent(parent_session_id);
-        let session_record = NewSessionRecord {
-            session_id: session_id.to_owned(),
-            kind: session_kind,
-            parent_session_id: parent_session_id.map(str::to_owned),
-            label: None,
-            state: SessionState::Ready,
-        };
-
-        let _ = self.repo.ensure_session(session_record)?;
-
-        Ok(())
-    }
-
     #[cfg(test)]
     fn next_status_for_decision(decision: ApprovalDecision) -> ApprovalRequestStatus {
         match decision {
@@ -285,13 +156,13 @@ impl<'a> OperatorApprovalRuntime<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{GovernedToolApprovalRequest, OperatorApprovalRuntime};
+    use super::OperatorApprovalRuntime;
 
     use serde_json::json;
 
     use crate::session::repository::{
-        ApprovalDecision, ApprovalRequestStatus, NewApprovalGrantRecord, NewSessionRecord,
-        SessionKind, SessionRepository, SessionState,
+        ApprovalDecision, ApprovalRequestRecord, ApprovalRequestStatus, NewApprovalGrantRecord,
+        NewApprovalRequestRecord, NewSessionRecord, SessionKind, SessionRepository, SessionState,
     };
     use crate::session::store::SessionStoreConfig;
 
@@ -360,38 +231,29 @@ mod tests {
             .expect("upsert runtime grant");
     }
 
-    #[test]
-    fn operator_approval_runtime_persists_governed_tool_request() {
-        let memory_config = isolated_memory_config("persist-request");
-        let repo = SessionRepository::new(&memory_config).expect("create session repository");
-        let approval_runtime = OperatorApprovalRuntime::new(&repo);
-
-        let request = GovernedToolApprovalRequest {
-            session_id: "root-session",
-            parent_session_id: None,
-            turn_id: "turn-1",
-            tool_call_id: "call-1",
-            tool_name: "delegate",
-            args_json: json!({
-                "task": "run delegate task"
+    /// Seed the persisted boundary consumed by this runtime without recreating
+    /// the conversation-owned request construction path in product code.
+    fn seed_approval_request(
+        repo: &SessionRepository,
+        session_id: &str,
+        parent_session_id: Option<&str>,
+    ) -> ApprovalRequestRecord {
+        repo.ensure_approval_request(NewApprovalRequestRecord {
+            approval_request_id: format!("approval-{session_id}"),
+            session_id: session_id.to_owned(),
+            turn_id: "turn-1".to_owned(),
+            tool_call_id: "call-1".to_owned(),
+            tool_name: "delegate".to_owned(),
+            approval_key: "tool:delegate".to_owned(),
+            request_payload_json: json!({
+                "parent_session_id": parent_session_id,
+                "dispatch_kind": "legacy_app",
+                "trusted_internal_context": false,
+                "capabilities_override": null,
             }),
-            source: "assistant",
-            governance_scope: "session",
-            risk_class: "high",
-            approval_mode: "policy_driven",
-            reason: "operator approval required before running `delegate`",
-            rule_id: "governed_tool_requires_approval",
-            provenance_ref: "kernel",
-        };
-
-        let stored = approval_runtime
-            .ensure_governed_tool_approval_request(request)
-            .expect("persist approval request");
-
-        assert_eq!(stored.session_id, "root-session");
-        assert_eq!(stored.tool_name, "delegate");
-        assert_eq!(stored.status, ApprovalRequestStatus::Pending);
-        assert_eq!(stored.approval_key, "tool:delegate");
+            governance_snapshot_json: json!({}),
+        })
+        .expect("seed approval request")
     }
 
     #[test]
@@ -433,27 +295,7 @@ mod tests {
         );
 
         let approval_runtime = OperatorApprovalRuntime::new(&repo);
-        let request = GovernedToolApprovalRequest {
-            session_id: "child-session",
-            parent_session_id: Some("root-session"),
-            turn_id: "turn-1",
-            tool_call_id: "call-1",
-            tool_name: "delegate",
-            args_json: json!({
-                "task": "run delegate task"
-            }),
-            source: "assistant",
-            governance_scope: "session",
-            risk_class: "high",
-            approval_mode: "policy_driven",
-            reason: "operator approval required before running `delegate`",
-            rule_id: "governed_tool_requires_approval",
-            provenance_ref: "kernel",
-        };
-
-        let stored = approval_runtime
-            .ensure_governed_tool_approval_request(request)
-            .expect("persist approval request");
+        let stored = seed_approval_request(&repo, "child-session", Some("root-session"));
         let resolved = approval_runtime
             .resolve_pending_request(
                 &stored.approval_request_id,
@@ -510,26 +352,7 @@ mod tests {
         );
 
         let approval_runtime = OperatorApprovalRuntime::new(&repo);
-        let request = GovernedToolApprovalRequest {
-            session_id: "child-session",
-            parent_session_id: Some("root-session"),
-            turn_id: "turn-1",
-            tool_call_id: "call-1",
-            tool_name: "delegate",
-            args_json: json!({
-                "task": "run delegate task"
-            }),
-            source: "assistant",
-            governance_scope: "session",
-            risk_class: "high",
-            approval_mode: "policy_driven",
-            reason: "operator approval required before running `delegate`",
-            rule_id: "governed_tool_requires_approval",
-            provenance_ref: "kernel",
-        };
-        let stored = approval_runtime
-            .ensure_governed_tool_approval_request(request)
-            .expect("persist approval request");
+        let stored = seed_approval_request(&repo, "child-session", Some("root-session"));
 
         delete_session_row(&memory_config, "child-session");
 
@@ -559,26 +382,7 @@ mod tests {
         seed_session(&repo, "root-session", SessionKind::Root, None);
 
         let approval_runtime = OperatorApprovalRuntime::new(&repo);
-        let request = GovernedToolApprovalRequest {
-            session_id: "root-session",
-            parent_session_id: None,
-            turn_id: "turn-1",
-            tool_call_id: "call-1",
-            tool_name: "delegate",
-            args_json: json!({
-                "task": "run delegate task"
-            }),
-            source: "assistant",
-            governance_scope: "session",
-            risk_class: "high",
-            approval_mode: "policy_driven",
-            reason: "operator approval required before running `delegate`",
-            rule_id: "governed_tool_requires_approval",
-            provenance_ref: "kernel",
-        };
-        let stored = approval_runtime
-            .ensure_governed_tool_approval_request(request)
-            .expect("persist approval request");
+        let stored = seed_approval_request(&repo, "root-session", None);
 
         delete_session_row(&memory_config, "root-session");
 

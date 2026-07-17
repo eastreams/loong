@@ -1,13 +1,14 @@
 use async_trait::async_trait;
+#[cfg(feature = "memory-sqlite")]
+use loong_contracts::Capabilities;
 use serde_json::Value;
 
 use super::runtime::ConversationRuntime;
 use super::runtime_binding::ConversationRuntimeBinding;
 use super::turn_coordinator::{execute_delegate_async_tool, execute_delegate_tool};
-use super::turn_engine::{AppToolDispatcher, DefaultAppToolDispatcher};
+use super::turn_engine::{AppToolDispatcher, DefaultAppToolDispatcher, ToolDispatchKind};
 use crate::config::LoongConfig;
 use crate::session::repository::{ApprovalDecision, ApprovalRequestRecord};
-use crate::tools::ToolExecutionKind;
 
 #[cfg(feature = "memory-sqlite")]
 pub(super) struct CoordinatorApprovalResolutionRuntime<'a, R: ?Sized> {
@@ -21,7 +22,8 @@ pub(super) struct CoordinatorApprovalResolutionRuntime<'a, R: ?Sized> {
 #[cfg(feature = "memory-sqlite")]
 struct ApprovalReplayRequest {
     request: loong_contracts::ToolCoreRequest,
-    execution_kind: crate::tools::ToolExecutionKind,
+    dispatch_kind: ToolDispatchKind,
+    capabilities_override: Option<Capabilities>,
     trusted_internal_context: bool,
 }
 
@@ -94,7 +96,8 @@ where
                 tool_name: crate::tools::SHELL_EXEC_TOOL_NAME.to_owned(),
                 payload,
             },
-            execution_kind: crate::tools::ToolExecutionKind::Core,
+            dispatch_kind: ToolDispatchKind::LegacyCore,
+            capabilities_override: None,
             trusted_internal_context: true,
         })
     }
@@ -103,7 +106,7 @@ where
         &self,
         approval_request: &ApprovalRequestRecord,
     ) -> Result<ApprovalReplayRequest, String> {
-        let execution_kind = self.replay_execution_kind(approval_request)?;
+        let dispatch_kind = self.replay_dispatch_kind(approval_request)?;
         let tool_name = approval_request
             .request_payload_json
             .get("tool_name")
@@ -116,19 +119,47 @@ where
             .get("args_json")
             .cloned()
             .ok_or_else(|| "approval_request_invalid_payload: missing args_json".to_owned())?;
+        let capabilities_override = serde_json::from_value::<Option<Capabilities>>(
+            approval_request
+                .request_payload_json
+                .get("capabilities_override")
+                .cloned()
+                .ok_or_else(|| {
+                    "approval_request_invalid_payload: missing capabilities_override".to_owned()
+                })?,
+        )
+        .map_err(|error| {
+            format!("approval_request_invalid_payload: invalid capabilities_override: {error}")
+        })?;
+        let trusted_internal_context = approval_request
+            .request_payload_json
+            .get("trusted_internal_context")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| {
+                "approval_request_invalid_payload: missing trusted_internal_context".to_owned()
+            })?;
+        if dispatch_kind != ToolDispatchKind::Typed && capabilities_override.is_some() {
+            return Err(
+                "approval_request_invalid_payload: capabilities_override requires a registered typed tool"
+                    .to_owned(),
+            );
+        }
 
-        match execution_kind {
-            ToolExecutionKind::App => Ok(ApprovalReplayRequest {
+        match dispatch_kind {
+            ToolDispatchKind::LegacyApp => Ok(ApprovalReplayRequest {
                 request: loong_contracts::ToolCoreRequest {
                     tool_name: tool_name.to_owned(),
                     payload,
                 },
-                execution_kind: crate::tools::ToolExecutionKind::App,
-                trusted_internal_context: false,
+                dispatch_kind,
+                capabilities_override,
+                trusted_internal_context,
             }),
-            ToolExecutionKind::Core => {
+            ToolDispatchKind::Typed | ToolDispatchKind::LegacyCore => {
                 let canonical_tool_name = crate::tools::canonical_tool_name(tool_name);
-                if canonical_tool_name == crate::tools::SHELL_EXEC_TOOL_NAME {
+                if dispatch_kind == ToolDispatchKind::LegacyCore
+                    && canonical_tool_name == crate::tools::SHELL_EXEC_TOOL_NAME
+                {
                     return self.replay_shell_request(approval_request, tool_name, &payload);
                 }
 
@@ -137,29 +168,33 @@ where
                         tool_name: tool_name.to_owned(),
                         payload,
                     },
-                    execution_kind: crate::tools::ToolExecutionKind::Core,
-                    trusted_internal_context: false,
+                    dispatch_kind,
+                    capabilities_override,
+                    trusted_internal_context,
                 })
             }
         }
     }
 
-    fn replay_execution_kind(
+    fn replay_dispatch_kind(
         &self,
         approval_request: &ApprovalRequestRecord,
-    ) -> Result<ToolExecutionKind, String> {
-        let execution_kind = approval_request
+    ) -> Result<ToolDispatchKind, String> {
+        // Replay requires the owner persisted by typed preparation. Older
+        // `execution_kind` values cannot prove typed ownership and fail closed.
+        let dispatch_kind = approval_request
             .request_payload_json
-            .get("execution_kind")
+            .get("dispatch_kind")
             .and_then(Value::as_str)
-            .ok_or_else(|| "approval_request_invalid_payload: missing execution_kind".to_owned())?;
+            .ok_or_else(|| "approval_request_invalid_payload: missing dispatch_kind".to_owned())?;
 
-        match execution_kind {
-            "core" => Ok(ToolExecutionKind::Core),
-            "app" => Ok(ToolExecutionKind::App),
+        match dispatch_kind {
+            "typed" => Ok(ToolDispatchKind::Typed),
+            "legacy_core" => Ok(ToolDispatchKind::LegacyCore),
+            "legacy_app" => Ok(ToolDispatchKind::LegacyApp),
             _ => {
                 let error = format!(
-                    "approval_request_invalid_execution_kind: expected `core` or `app`, got `{execution_kind}`"
+                    "approval_request_invalid_dispatch_kind: expected `typed`, `legacy_core`, or `legacy_app`, got `{dispatch_kind}`"
                 );
                 Err(error)
             }
@@ -170,8 +205,11 @@ where
         &self,
         approval_request: &ApprovalRequestRecord,
     ) -> Result<bool, String> {
-        let execution_kind = self.replay_execution_kind(approval_request)?;
-        if execution_kind == ToolExecutionKind::Core {
+        let dispatch_kind = self.replay_dispatch_kind(approval_request)?;
+        if matches!(
+            dispatch_kind,
+            ToolDispatchKind::Typed | ToolDispatchKind::LegacyCore
+        ) {
             return Ok(true);
         }
 
@@ -215,16 +253,15 @@ where
         approval_request: &ApprovalRequestRecord,
     ) -> Result<loong_contracts::ToolCoreOutcome, String> {
         let replay_request = self.replay_request(approval_request)?;
+        let ApprovalReplayRequest {
+            request,
+            dispatch_kind,
+            capabilities_override,
+            trusted_internal_context,
+        } = replay_request;
 
-        match replay_request.execution_kind {
-            crate::tools::ToolExecutionKind::Core => crate::tools::execute_kernel_tool_request(
-                self.app_ctx,
-                replay_request.request,
-                replay_request.trusted_internal_context,
-            )
-            .await
-            .map_err(|error| error.to_string()),
-            crate::tools::ToolExecutionKind::App => {
+        match dispatch_kind {
+            ToolDispatchKind::Typed => {
                 let session_context = self
                     .runtime
                     .session_context(
@@ -236,14 +273,41 @@ where
                     .map_err(|error| {
                         format!("load approval request session context failed: {error}")
                     })?;
-
-                match crate::tools::canonical_tool_name(replay_request.request.tool_name.as_str()) {
+                crate::tools::execute_registered_tool_request(
+                    &session_context,
+                    request,
+                    capabilities_override,
+                    trusted_internal_context,
+                )
+                .await
+                .map_err(|error| error.to_string())
+            }
+            ToolDispatchKind::LegacyCore => crate::tools::execute_legacy_kernel_tool_request(
+                self.app_ctx,
+                request,
+                trusted_internal_context,
+            )
+            .await
+            .map_err(|error| error.to_string()),
+            ToolDispatchKind::LegacyApp => {
+                let session_context = self
+                    .runtime
+                    .session_context(
+                        self.config,
+                        self.app_ctx,
+                        &approval_request.session_id,
+                        self.binding,
+                    )
+                    .map_err(|error| {
+                        format!("load approval request session context failed: {error}")
+                    })?;
+                match crate::tools::canonical_tool_name(request.tool_name.as_str()) {
                     "delegate" => {
                         execute_delegate_tool(
                             self.config,
                             self.runtime,
                             &session_context,
-                            replay_request.request.payload,
+                            request.payload,
                             self.binding,
                         )
                         .await
@@ -253,18 +317,14 @@ where
                             self.config,
                             self.runtime,
                             &session_context,
-                            replay_request.request.payload,
+                            request.payload,
                             self.binding,
                         )
                         .await
                     }
                     _ => {
                         self.fallback
-                            .execute_app_tool(
-                                &session_context,
-                                replay_request.request,
-                                self.binding,
-                            )
+                            .execute_app_tool(&session_context, request, self.binding)
                             .await
                     }
                 }
@@ -303,3 +363,7 @@ where
         CoordinatorApprovalResolutionRuntime::replay_approved_request(self, approval_request).await
     }
 }
+
+#[cfg(all(test, feature = "memory-sqlite"))]
+#[path = "approval_resolution/tests.rs"]
+mod tests;

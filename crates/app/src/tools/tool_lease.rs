@@ -1,6 +1,4 @@
-use std::collections::BTreeSet;
-
-use loong_contracts::Capability;
+use loong_contracts::{Capabilities, Capability};
 
 use super::*;
 
@@ -8,8 +6,21 @@ const TOOL_INVOKE_CAPABILITIES_OVERRIDE_FIELD: &str = "capabilities_override";
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PeekedToolInvokeRequest<'a> {
+    /// Canonical tool name suitable for constructing the runtime plane path.
     pub(crate) tool_name: &'a str,
     pub(crate) arguments: &'a Value,
+}
+
+/// Validated contents of the legacy `tool.invoke` ingress envelope.
+///
+/// Keeping the capability override beside the resolved request prevents
+/// normalization from silently restoring the selected tool's default authority.
+/// `request.tool_name` is canonicalized for runtime lookup, but this resolver
+/// deliberately does not consult legacy execution ownership.
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedToolInvokeRequest {
+    pub(crate) request: ToolCoreRequest,
+    pub(crate) capabilities_override: Option<Capabilities>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,40 +77,10 @@ pub(crate) fn peek_tool_invoke_request(
     })
 }
 
-pub(crate) fn tool_invoke_capabilities_override(
-    payload: &Value,
-) -> Result<Option<BTreeSet<Capability>>, String> {
-    let Some(raw_override) = payload.get(TOOL_INVOKE_CAPABILITIES_OVERRIDE_FIELD) else {
-        return Ok(None);
-    };
-    if raw_override.is_null() {
-        return Ok(None);
-    }
-
-    let values = raw_override.as_array().ok_or_else(|| {
-        "tool.invoke payload.capabilities_override must be an array of capability strings"
-            .to_owned()
-    })?;
-    let mut capabilities = BTreeSet::new();
-    for value in values {
-        let raw_capability = value.as_str().ok_or_else(|| {
-            "tool.invoke payload.capabilities_override must contain only strings".to_owned()
-        })?;
-        let Some(capability) = Capability::parse(raw_capability) else {
-            return Err(format!(
-                "tool.invoke payload.capabilities_override contains unknown capability `{raw_capability}`"
-            ));
-        };
-        capabilities.insert(capability);
-    }
-
-    Ok(Some(capabilities))
-}
-
 pub(crate) fn resolve_tool_invoke_request(
     request: &ToolCoreRequest,
     provider_exposure: ToolInvokeProviderExposure,
-) -> Result<(ResolvedToolExecution, ToolCoreRequest), String> {
+) -> Result<ResolvedToolInvokeRequest, String> {
     let Some(peeked_request) = peek_tool_invoke_request(request) else {
         return Err(format!(
             "tool_invoke_required: expected `tool.invoke`, got `{}`",
@@ -111,7 +92,7 @@ pub(crate) fn resolve_tool_invoke_request(
         .payload
         .as_object()
         .ok_or_else(|| "tool.invoke payload must be an object".to_owned())?;
-    let tool_id = peeked_request.tool_name;
+    let canonical_tool_name = peeked_request.tool_name;
     let lease = payload
         .get("lease")
         .and_then(Value::as_str)
@@ -124,35 +105,53 @@ pub(crate) fn resolve_tool_invoke_request(
         let arguments_object = arguments
             .as_object_mut()
             .ok_or_else(|| "tool.invoke payload.arguments must be an object".to_owned())?;
-        if let Some(internal_context) = payload
-            .get(LOONG_INTERNAL_TOOL_CONTEXT_KEY)
-            .or_else(|| payload.get(LOONG_INTERNAL_TOOL_CONTEXT_KEY))
-        {
+        if let Some(internal_context) = payload.get(LOONG_INTERNAL_TOOL_CONTEXT_KEY) {
             merge_trusted_internal_tool_context_into_arguments(arguments_object, internal_context)?;
         }
     }
 
-    tool_lease_authority::validate_tool_lease(tool_id, lease, payload)?;
+    tool_lease_authority::validate_tool_lease(canonical_tool_name, lease, payload)?;
+    let capabilities_override = match payload.get(TOOL_INVOKE_CAPABILITIES_OVERRIDE_FIELD) {
+        None | Some(Value::Null) => None,
+        Some(raw_override) => {
+            let values = raw_override.as_array().ok_or_else(|| {
+                "tool.invoke payload.capabilities_override must be an array of capability strings"
+                    .to_owned()
+            })?;
+            let capabilities = values
+                .iter()
+                .map(|value| {
+                    let raw_capability = value.as_str().ok_or_else(|| {
+                        "tool.invoke payload.capabilities_override must contain only strings"
+                            .to_owned()
+                    })?;
+                    Capability::parse(raw_capability).ok_or_else(|| {
+                        format!(
+                            "tool.invoke payload.capabilities_override contains unknown capability `{raw_capability}`"
+                        )
+                    })
+                })
+                .collect::<Result<Capabilities, String>>()?;
+            Some(capabilities)
+        }
+    };
 
-    let resolved = resolve_tool_execution(tool_id)
-        .ok_or_else(|| format!("tool_not_found: unknown tool `{tool_id}`"))?;
-    let resolved_tool_name = resolved.canonical_name;
     if provider_exposure == ToolInvokeProviderExposure::RejectProviderExposed
-        && is_provider_exposed_tool_name(resolved_tool_name)
+        && is_provider_exposed_tool_name(canonical_tool_name)
     {
         return Err(format!(
             "tool_not_provider_exposed: {} must be called directly as a core tool",
-            resolved_tool_name
+            canonical_tool_name
         ));
     }
 
-    Ok((
-        resolved,
-        ToolCoreRequest {
-            tool_name: resolved_tool_name.to_owned(),
+    Ok(ResolvedToolInvokeRequest {
+        request: ToolCoreRequest {
+            tool_name: canonical_tool_name.to_owned(),
             payload: arguments,
         },
-    ))
+        capabilities_override,
+    })
 }
 
 pub(crate) fn execute_tool_invoke_tool_with_config(
@@ -165,15 +164,28 @@ pub(crate) fn execute_tool_invoke_tool_with_config(
         inner_arguments,
         "payload.arguments",
     )?;
-    let (entry, effective_request) =
+    let resolved =
         resolve_tool_invoke_request(&request, ToolInvokeProviderExposure::RejectProviderExposed)?;
-    match entry.execution_kind {
+    if resolved.capabilities_override.is_some() {
+        return Err(format!(
+            "tool.invoke capabilities_override requires a registered typed tool; `{}` is legacy-only",
+            resolved.request.tool_name
+        ));
+    }
+    let execution =
+        resolve_legacy_tool_execution(resolved.request.tool_name.as_str()).ok_or_else(|| {
+            format!(
+                "tool_not_found: unknown tool `{}`",
+                resolved.request.tool_name
+            )
+        })?;
+    match execution.execution_kind {
         ToolExecutionKind::Core => {
-            execute_discoverable_tool_core_with_config(effective_request, config)
+            execute_discoverable_tool_core_with_config(resolved.request, config)
         }
         ToolExecutionKind::App => Err(format!(
             "tool_requires_app_dispatcher: {}",
-            entry.canonical_name
+            execution.canonical_name
         )),
     }
 }
@@ -242,3 +254,7 @@ pub(crate) fn synthesize_test_provider_tool_call_with_scope(
 ) -> (String, Value) {
     bridge_provider_tool_call_with_scope(tool_name, args_json, session_id, turn_id)
 }
+
+#[cfg(test)]
+#[path = "tool_lease/tests.rs"]
+mod tests;

@@ -8102,7 +8102,7 @@ async fn handle_turn_with_runtime_includes_same_tool_warning_in_followup_provide
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
-            &test_app_context("advisory-conversation"),
+            &harness.app_ctx,
             "session-tool-search-warning",
             "search for the right tool, then read and summarize note.md",
             ProviderErrorMode::Propagate,
@@ -8235,7 +8235,7 @@ async fn handle_turn_with_runtime_continues_direct_tool_chain_after_initial_tool
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn handle_turn_with_runtime_rejects_legacy_tool_invoke_wrapper_and_recovers_with_direct_tool_guidance()
+async fn handle_turn_with_runtime_rejects_invalid_tool_lease_and_recovers_with_direct_tool_guidance()
  {
     use crate::test_support::TurnTestHarness;
 
@@ -8311,7 +8311,7 @@ async fn handle_turn_with_runtime_rejects_legacy_tool_invoke_wrapper_and_recover
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
-            &test_app_context("advisory-conversation"),
+            &harness.app_ctx,
             "session-invalid-lease-recovery",
             "read note.md",
             ProviderErrorMode::Propagate,
@@ -8338,7 +8338,7 @@ async fn handle_turn_with_runtime_rejects_legacy_tool_invoke_wrapper_and_recover
                     .and_then(Value::as_str)
                     .is_some_and(|content| {
                         content.starts_with("[tool_recovery]\n")
-                            && content.contains("tool_not_found: tool.invoke")
+                            && content.contains("invalid_tool_lease")
                     })
         }),
         "second provider turn should receive bounded legacy-wrapper recovery context: {requested_turn_messages:?}"
@@ -8350,7 +8350,7 @@ async fn handle_turn_with_runtime_rejects_legacy_tool_invoke_wrapper_and_recover
                     .get("content")
                     .and_then(Value::as_str)
                     .is_some_and(|content| {
-                        content.contains("tool_not_found: tool.invoke")
+                        content.contains("invalid_tool_lease")
                             && content.contains("direct tool call")
                     })
         }),
@@ -8963,6 +8963,11 @@ async fn handle_turn_with_runtime_honors_configured_tool_result_summary_limit_on
 
 #[tokio::test]
 async fn handle_turn_with_runtime_safe_lane_honors_configured_tool_step_budget() {
+    use crate::test_support::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+    std::fs::write(harness.temp_dir.join("note.md"), "note").expect("seed note");
+    std::fs::write(harness.temp_dir.join("checklist.md"), "checklist").expect("seed checklist");
     let runtime = FakeRuntime::with_turn_and_completion(
         vec![],
         Ok(ProviderTurn {
@@ -8994,19 +8999,23 @@ async fn handle_turn_with_runtime_safe_lane_honors_configured_tool_step_budget()
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
-            &test_app_context("advisory-conversation"),
+            &harness.app_ctx,
             "session-safe-budget",
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::AdvisoryOnly,
+            ConversationRuntimeBinding::Context(&harness.app_ctx),
         )
         .await
         .expect("safe lane should execute with the internal step budget");
 
-    assert!(
-        reply.contains("no_app_context"),
-        "expected app-context denial once tool-step budget is honored, got: {reply}"
+    assert_eq!(
+        reply
+            .lines()
+            .filter(|line| line.starts_with("[ok] "))
+            .count(),
+        2,
+        "safe lane should execute both typed reads within its internal budget: {reply}"
     );
     assert!(
         !reply.contains("max_tool_steps_exceeded"),
@@ -9157,6 +9166,12 @@ async fn handle_turn_with_runtime_safe_lane_plan_path_does_not_parallelize_fast_
 
 #[tokio::test]
 async fn handle_turn_with_runtime_safe_lane_plan_path_bypasses_turn_step_limit() {
+    use crate::test_support::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+    for path in ["note.md", "checklist.md", "rollout.md"] {
+        std::fs::write(harness.temp_dir.join(path), path).expect("seed plan input");
+    }
     let runtime = FakeRuntime::with_turn_and_completion(
         vec![],
         Ok(ProviderTurn {
@@ -9195,32 +9210,28 @@ async fn handle_turn_with_runtime_safe_lane_plan_path_bypasses_turn_step_limit()
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
-            &test_app_context("advisory-conversation"),
+            &harness.app_ctx,
             "session-safe-plan",
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::AdvisoryOnly,
+            ConversationRuntimeBinding::Context(&harness.app_ctx),
         )
         .await
-        .expect("safe lane plan path should return inline tool error");
+        .expect("safe lane plan path should execute typed reads");
 
-    assert!(
-        reply.contains("no_app_context"),
-        "expected app-context denial from plan execution path, got: {reply}"
+    assert_eq!(
+        reply
+            .lines()
+            .filter(|line| line.starts_with("[ok] "))
+            .count(),
+        3,
+        "plan path should execute all typed reads beyond TurnEngine's ordinary step limit: {reply}"
     );
     assert!(
         !reply.contains("max_tool_steps_exceeded"),
         "plan path should not use TurnEngine max_tool_steps gate, got: {reply}"
     );
-
-    let persisted = runtime.persisted.lock().expect("persisted lock").clone();
-    let payloads =
-        persisted_conversation_event_payloads_by_name(&persisted, "trust_binding_missing");
-
-    assert_eq!(payloads.len(), 1);
-    assert_eq!(payloads[0]["failure_code"], "no_app_context");
-    assert_eq!(payloads[0]["trust_event"]["provenance_ref"], "direct");
 }
 
 #[tokio::test]
@@ -11014,7 +11025,7 @@ async fn handle_turn_with_runtime_tool_error_returns_natural_language_fallback()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn handle_turn_with_runtime_file_read_repair_followup_includes_failed_request_context() {
+async fn handle_turn_with_runtime_file_read_input_failure_includes_typed_error_context() {
     use crate::test_support::TurnTestHarness;
 
     let harness = TurnTestHarness::new();
@@ -11079,34 +11090,18 @@ async fn handle_turn_with_runtime_file_read_repair_followup_includes_failed_requ
             let is_assistant = role == Some("assistant");
             let has_failure_marker =
                 content.is_some_and(|value| value.starts_with("[tool_failure]\n"));
-            let mentions_repair =
-                content.is_some_and(|value| value.contains("tool input needs repair"));
+            let identifies_typed_input =
+                content.is_some_and(|value| value.contains("invalid tool input"));
             let mentions_direct_read_shape = content.is_some_and(|value| {
                 value.contains("direct_read_requires_one_of")
                     && value.contains("expected exactly one of `path`, `query`, or `pattern`")
             });
-            is_assistant && has_failure_marker && mentions_repair && mentions_direct_read_shape
+            is_assistant
+                && has_failure_marker
+                && identifies_typed_input
+                && mentions_direct_read_shape
         }),
-        "completion followup should include the repairable file.read failure reason: {followup_messages:?}"
-    );
-    assert!(
-        followup_messages.iter().any(|message| {
-            let role = message.get("role").and_then(Value::as_str);
-            let content = message.get("content").and_then(Value::as_str);
-            let is_user = role == Some("user");
-            let has_guidance =
-                content.is_some_and(|value| value.contains("Repair guidance for read:"));
-            let mentions_mode = content.is_some_and(|value| {
-                value.contains("Provide exactly one read mode")
-                    && value.contains("`path` for a file")
-                    && value.contains("`query` for content search")
-                    && value.contains("`pattern` for glob-style path matching")
-            });
-            let mentions_preview =
-                content.is_some_and(|value| value.contains("Current request preview: {}"));
-            is_user && has_guidance && mentions_mode && mentions_preview
-        }),
-        "completion followup should include file.read repair guidance: {followup_messages:?}"
+        "completion followup should preserve the typed file.read input error: {followup_messages:?}"
     );
 }
 
@@ -11284,13 +11279,16 @@ async fn handle_turn_with_runtime_multi_intent_shell_failure_followup_uses_faile
 }
 #[tokio::test]
 async fn handle_turn_with_runtime_tool_failure_completion_error_uses_raw_reason_without_markers() {
+    use crate::test_support::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
     let runtime = FakeRuntime::with_turn_and_completion(
         vec![],
         Ok(ProviderTurn {
             assistant_text: "Reading the file now.".to_owned(),
             tool_intents: vec![provider_tool_intent(
                 "file.read",
-                json!({"path": "note.md"}),
+                json!({}),
                 "session-denied-fallback",
                 "turn-denied-fallback",
                 "call-denied-fallback",
@@ -11304,12 +11302,12 @@ async fn handle_turn_with_runtime_tool_failure_completion_error_uses_raw_reason_
     let reply = coordinator
         .handle_turn_with_runtime(
             &test_config(),
-            &test_app_context("advisory-conversation"),
+            &harness.app_ctx,
             "session-denied-fallback",
             "read note.md",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::AdvisoryOnly,
+            ConversationRuntimeBinding::Context(&harness.app_ctx),
         )
         .await
         .expect("fallback should still return assistant text");
@@ -11319,8 +11317,8 @@ async fn handle_turn_with_runtime_tool_failure_completion_error_uses_raw_reason_
         "expected assistant preface, got: {reply}"
     );
     assert!(
-        reply.contains("no_app_context"),
-        "expected raw denial reason when completion fails, got: {reply}"
+        reply.contains("invalid tool input") && reply.contains("direct_read_requires_one_of"),
+        "expected raw typed input reason when completion fails, got: {reply}"
     );
     assert!(
         !reply.contains("[tool_denied]"),
@@ -11566,14 +11564,14 @@ async fn handle_turn_with_runtime_salvages_browse_repair_wrapper_reply() {
 }
 
 #[tokio::test]
-async fn handle_turn_with_runtime_direct_core_tool_persists_trust_binding_missing_event() {
+async fn handle_turn_with_runtime_legacy_core_tool_persists_trust_binding_missing_event() {
     let runtime = FakeRuntime::with_turn_and_completion(
         vec![],
         Ok(ProviderTurn {
-            assistant_text: "Reading the file now.".to_owned(),
+            assistant_text: "Searching memory now.".to_owned(),
             tool_intents: vec![provider_tool_intent(
-                "file.read",
-                json!({"path": "note.md"}),
+                "memory",
+                json!({"query": "note"}),
                 "session-trust-binding",
                 "turn-trust-binding",
                 "call-trust-binding",
@@ -11589,7 +11587,7 @@ async fn handle_turn_with_runtime_direct_core_tool_persists_trust_binding_missin
             &test_config(),
             &test_app_context("advisory-conversation"),
             "session-trust-binding",
-            "read note.md",
+            "search memory for note",
             ProviderErrorMode::Propagate,
             &runtime,
             ConversationRuntimeBinding::AdvisoryOnly,
@@ -11829,59 +11827,6 @@ fn provider_hidden_alias_without_search_falls_back_to_visible_direct_tool() {
     engine
         .validate_turn(&turn)
         .expect("direct read alias should validate");
-}
-
-#[test]
-fn provider_hidden_tool_denial_does_not_leak_name() {
-    use crate::conversation::turn_engine::{
-        ProviderTurn, ToolIntent, TurnEngine, TurnFailureKind, TurnResult,
-    };
-
-    let turn = ProviderTurn {
-        assistant_text: String::new(),
-        tool_intents: vec![ToolIntent {
-            tool_name: "tool.invoke".to_owned(),
-            args_json: serde_json::json!({
-                "tool_id": "sessions_send",
-                "lease": "guessed.invalid",
-                "arguments": {"session_id": "child", "text": "hi"}
-            }),
-            source: "provider_tool_call".to_owned(),
-            session_id: "child-session".to_owned(),
-            turn_id: "turn-hidden".to_owned(),
-            tool_call_id: "call-hidden".to_owned(),
-        }],
-        raw_meta: Value::Null,
-    };
-
-    let engine = TurnEngine::new(1);
-    let result = engine.evaluate_turn_in_view(
-        &turn,
-        &crate::tools::ToolView::from_tool_names(["read", "file.read"]),
-    );
-
-    match result {
-        TurnResult::ToolDenied(failure) => {
-            assert_eq!(failure.kind, TurnFailureKind::PolicyDenied);
-            assert_eq!(failure.code, "tool_not_found");
-            assert!(
-                !failure.reason.contains("sessions_send"),
-                "provider denial should not leak hidden tool ids: {failure:?}"
-            );
-            assert!(
-                failure.reason.contains("requested tool is not available"),
-                "provider denial should stay generic: {failure:?}"
-            );
-        }
-        other @ TurnResult::FinalText(_)
-        | other @ TurnResult::StreamingText(_)
-        | other @ TurnResult::StreamingDone(_)
-        | other @ TurnResult::NeedsApproval(_)
-        | other @ TurnResult::ToolError(_)
-        | other @ TurnResult::ProviderError(_) => {
-            panic!("expected ToolDenied, got {:?}", other)
-        }
-    }
 }
 
 #[test]
@@ -12340,7 +12285,11 @@ async fn turn_engine_requires_governed_approval_before_later_app_intent_executio
             &self,
             _session_context: &crate::AppContext,
             _intent: &crate::conversation::ToolIntent,
+            _execution_request: &loong_contracts::ToolCoreRequest,
+            _trusted_internal_context: bool,
             descriptor: &crate::tools::ToolDescriptor,
+            _dispatch_kind: crate::conversation::turn_engine::ToolDispatchKind,
+            _capabilities_override: Option<&loong_contracts::Capabilities>,
             _binding: crate::conversation::ConversationRuntimeBinding<'_>,
         ) -> Result<Option<crate::conversation::turn_engine::ApprovalRequirement>, String> {
             if descriptor.name == "delegate_async" {
@@ -12499,7 +12448,11 @@ async fn governed_runtime_binding_routes_mutating_app_intent_to_approval_on_advi
             &self,
             _session_context: &crate::AppContext,
             _intent: &crate::conversation::ToolIntent,
+            _execution_request: &loong_contracts::ToolCoreRequest,
+            _trusted_internal_context: bool,
             _descriptor: &crate::tools::ToolDescriptor,
+            _dispatch_kind: crate::conversation::turn_engine::ToolDispatchKind,
+            _capabilities_override: Option<&loong_contracts::Capabilities>,
             _binding: crate::conversation::ConversationRuntimeBinding<'_>,
         ) -> Result<Option<crate::conversation::turn_engine::ApprovalRequirement>, String> {
             *self.approval_checks.lock().expect("approval checks lock") += 1;
@@ -12654,9 +12607,9 @@ async fn turn_engine_fails_closed_before_kernel_binding_error_for_later_core_int
                 "call-kernel-barrier-1",
             ),
             provider_tool_intent(
-                "file.read",
+                "memory",
                 json!({
-                    "path": "README.md"
+                    "query": "README"
                 }),
                 "root-session",
                 "turn-kernel-barrier",
@@ -21279,7 +21232,9 @@ async fn handle_turn_with_runtime_approval_request_resolve_approve_once_preserve
                 "label": "research-subtask"
             },
             "source": "provider_tool_call",
-            "execution_kind": "app"
+            "capabilities_override": null,
+            "dispatch_kind": "legacy_app",
+            "trusted_internal_context": false,
         }),
         governance_snapshot_json: json!({
             "governance_scope": "topology_mutation",
@@ -21413,7 +21368,9 @@ async fn handle_turn_with_runtime_approval_request_resolve_rejects_core_replay_f
                 "selector": "openai"
             },
             "source": "provider_tool_call",
-            "execution_kind": "core"
+            "capabilities_override": null,
+            "dispatch_kind": "legacy_core",
+            "trusted_internal_context": false,
         }),
         governance_snapshot_json: json!({
             "governance_scope": "routine",
@@ -21530,7 +21487,9 @@ async fn handle_turn_with_runtime_approval_request_resolve_kernel_replays_previo
                 "label": "research-subtask"
             },
             "source": "provider_tool_call",
-            "execution_kind": "app"
+            "capabilities_override": null,
+            "dispatch_kind": "legacy_app",
+            "trusted_internal_context": false,
         }),
         governance_snapshot_json: json!({
             "governance_scope": "topology_mutation",
@@ -21828,7 +21787,9 @@ async fn handle_turn_with_runtime_approval_request_resolve_replays_shell_exec_fo
             "tool_name": "shell.exec",
             "args_json": args_json,
             "source": "provider_tool_call",
-            "execution_kind": "core"
+            "capabilities_override": null,
+            "dispatch_kind": "legacy_core",
+            "trusted_internal_context": false,
         }),
         governance_snapshot_json: json!({
             "governance_scope": "routine",
@@ -21963,7 +21924,9 @@ async fn handle_turn_with_runtime_approval_request_resolve_approve_always_reuses
             "tool_name": "shell.exec",
             "args_json": args_json,
             "source": "provider_tool_call",
-            "execution_kind": "core"
+            "capabilities_override": null,
+            "dispatch_kind": "legacy_core",
+            "trusted_internal_context": false,
         }),
         governance_snapshot_json: json!({
             "governance_scope": "routine",
@@ -22140,7 +22103,9 @@ async fn handle_turn_with_runtime_approval_request_resolve_deny_does_not_replay_
             "tool_name": "shell.exec",
             "args_json": args_json,
             "source": "provider_tool_call",
-            "execution_kind": "core"
+            "capabilities_override": null,
+            "dispatch_kind": "legacy_core",
+            "trusted_internal_context": false,
         }),
         governance_snapshot_json: json!({
             "governance_scope": "routine",
@@ -22268,7 +22233,9 @@ async fn handle_turn_with_runtime_approval_request_resolve_approve_always_reuses
                 "label": "research-subtask"
             },
             "source": "provider_tool_call",
-            "execution_kind": "app"
+            "capabilities_override": null,
+            "dispatch_kind": "legacy_app",
+            "trusted_internal_context": false,
         }),
         governance_snapshot_json: json!({
             "governance_scope": "topology_mutation",
@@ -22452,7 +22419,9 @@ async fn handle_turn_with_runtime_approval_request_resolve_approve_always_persis
                 "label": "research-subtask"
             },
             "source": "provider_tool_call",
-            "execution_kind": "app"
+            "capabilities_override": null,
+            "dispatch_kind": "legacy_app",
+            "trusted_internal_context": false,
         }),
         governance_snapshot_json: json!({
             "governance_scope": "topology_mutation",
@@ -22589,7 +22558,9 @@ async fn handle_turn_with_runtime_approval_request_resolve_kernel_replay_surface
                 "label": "finalize-conflict"
             },
             "source": "provider_tool_call",
-            "execution_kind": "app"
+            "capabilities_override": null,
+            "dispatch_kind": "legacy_app",
+            "trusted_internal_context": false,
         }),
         governance_snapshot_json: json!({
             "governance_scope": "topology_mutation",
@@ -22700,7 +22671,9 @@ async fn handle_turn_with_runtime_approval_request_resolve_deny_does_not_replay_
                 "label": "research-subtask"
             },
             "source": "provider_tool_call",
-            "execution_kind": "app"
+            "capabilities_override": null,
+            "dispatch_kind": "legacy_app",
+            "trusted_internal_context": false,
         }),
         governance_snapshot_json: json!({
             "governance_scope": "topology_mutation",
@@ -23206,7 +23179,9 @@ async fn handle_turn_with_runtime_approval_request_resolve_keeps_delegate_async_
                 "label": "async-child"
             },
             "source": "provider_tool_call",
-            "execution_kind": "app"
+            "capabilities_override": null,
+            "dispatch_kind": "legacy_app",
+            "trusted_internal_context": false,
         }),
         governance_snapshot_json: json!({
             "governance_scope": "topology_mutation",

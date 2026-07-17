@@ -404,7 +404,7 @@ impl ToolDescriptor {
     }
 
     pub fn is_provider_invokable_discoverable(&self) -> bool {
-        self.is_discoverable() && self.execution_kind == ToolExecutionKind::Core
+        self.is_discoverable() && matches!(self.execution_kind, ToolExecutionKind::Core)
     }
 
     pub fn capability_action_class(&self) -> CapabilityActionClass {
@@ -2139,7 +2139,7 @@ fn build_delegate_child_tool_view(
     let allowlist = BTreeSet::<&str>::from_iter(child_tool_allowlist.iter().map(String::as_str));
 
     for descriptor in catalog.descriptors().iter().filter(|descriptor| {
-        descriptor.execution_kind == ToolExecutionKind::Core
+        matches!(descriptor.execution_kind, ToolExecutionKind::Core)
             && descriptor.availability == ToolAvailability::Runtime
     }) {
         match descriptor.name {

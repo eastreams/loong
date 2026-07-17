@@ -549,38 +549,8 @@ fn render_repair_guidance_for_issue(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ToolInputContractIssue, detect_repairable_tool_request_issue,
-        render_tool_input_repair_guidance, render_tool_input_repair_guidance_from_reason,
-    };
-    use crate::tools;
-    use loong_contracts::ToolCoreRequest;
+    use super::{render_tool_input_repair_guidance, render_tool_input_repair_guidance_from_reason};
     use serde_json::json;
-
-    #[test]
-    fn detect_repairable_tool_request_issue_unwraps_tool_invoke_for_core_tools() {
-        let descriptor = tools::tool_catalog()
-            .resolve("file.read")
-            .expect("file.read descriptor");
-        let request = ToolCoreRequest {
-            tool_name: "tool.invoke".to_owned(),
-            payload: json!({
-                "tool_id": "file.read",
-                "lease": "lease-a",
-                "arguments": {}
-            }),
-        };
-
-        let issue = detect_repairable_tool_request_issue(descriptor, &request);
-
-        assert_eq!(
-            issue,
-            Some(ToolInputContractIssue::MissingRequiredField {
-                field: "path",
-                expected_type: Some("string"),
-            })
-        );
-    }
 
     #[test]
     fn render_tool_input_repair_guidance_uses_descriptor_argument_hint() {
@@ -599,51 +569,6 @@ mod tests {
         assert!(guidance.contains(
             "Expected payload shape: path:string,offset?:integer,limit?:integer,max_bytes?:integer."
         ));
-    }
-
-    #[test]
-    fn detect_repairable_tool_request_issue_preserves_invalid_required_field_types() {
-        let (tool_name, payload) = tools::synthesize_test_provider_tool_call_with_scope(
-            "file.read",
-            json!({
-                "path": 7
-            }),
-            Some("session-a"),
-            Some("turn-a"),
-        );
-        let descriptor = tools::tool_catalog()
-            .resolve("read")
-            .expect("read descriptor");
-        let request = ToolCoreRequest { tool_name, payload };
-
-        let issue = detect_repairable_tool_request_issue(descriptor, &request);
-
-        assert_eq!(
-            issue,
-            Some(ToolInputContractIssue::InvalidFieldType {
-                field: "path",
-                expected_type: "string",
-            })
-        );
-    }
-
-    #[test]
-    fn detect_repairable_tool_request_issue_marks_scalar_tool_invoke_arguments_repairable() {
-        let descriptor = tools::tool_catalog()
-            .resolve("file.read")
-            .expect("file.read descriptor");
-        let request = ToolCoreRequest {
-            tool_name: "tool.invoke".to_owned(),
-            payload: json!({
-                "tool_id": "file.read",
-                "lease": "lease-a",
-                "arguments": "README.md"
-            }),
-        };
-
-        let issue = detect_repairable_tool_request_issue(descriptor, &request);
-
-        assert_eq!(issue, Some(ToolInputContractIssue::PayloadMustBeObject));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loong_contracts::{Capabilities, ToolCoreOutcome, ToolCoreRequest};
 use serde_json::Value;
 
 use crate::config::{LoongConfig, ToolConfig};
@@ -11,6 +11,17 @@ use super::super::autonomy_policy::AutonomyTurnBudgetState;
 use super::super::runtime_binding::ConversationRuntimeBinding;
 use super::support::{approval_required_tool_decision, generic_allow_tool_decision};
 use super::{AppContext, ApprovalRequirement, ToolIntent, ToolPreflightOutcome};
+
+/// Execution owner selected after the runtime registry has been queried.
+///
+/// This is orchestration state, not an audit route. `Typed` always enters the
+/// runtime plane even when a legacy catalog descriptor names a different owner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolDispatchKind {
+    Typed,
+    LegacyCore,
+    LegacyApp,
+}
 
 #[async_trait]
 pub trait AppToolDispatcher: Send + Sync {
@@ -22,12 +33,25 @@ pub trait AppToolDispatcher: Send + Sync {
         &self,
         session_context: &AppContext,
         intent: &ToolIntent,
+        execution_request: &ToolCoreRequest,
+        trusted_internal_context: bool,
         descriptor: &crate::tools::ToolDescriptor,
+        dispatch_kind: ToolDispatchKind,
+        capabilities_override: Option<&Capabilities>,
         binding: ConversationRuntimeBinding<'_>,
         _budget_state: &AutonomyTurnBudgetState,
     ) -> Result<ToolPreflightOutcome, String> {
         match self
-            .maybe_require_approval_with_binding(session_context, intent, descriptor, binding)
+            .maybe_require_approval_with_binding(
+                session_context,
+                intent,
+                execution_request,
+                trusted_internal_context,
+                descriptor,
+                dispatch_kind,
+                capabilities_override,
+                binding,
+            )
             .await
         {
             Ok(Some(requirement)) => {
@@ -49,7 +73,11 @@ pub trait AppToolDispatcher: Send + Sync {
         &self,
         session_context: &AppContext,
         intent: &ToolIntent,
+        _execution_request: &ToolCoreRequest,
+        _trusted_internal_context: bool,
         descriptor: &crate::tools::ToolDescriptor,
+        _dispatch_kind: ToolDispatchKind,
+        _capabilities_override: Option<&Capabilities>,
         binding: ConversationRuntimeBinding<'_>,
     ) -> Result<Option<ApprovalRequirement>, String> {
         let _ = (session_context, intent, descriptor, binding);

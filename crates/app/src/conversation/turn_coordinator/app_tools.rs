@@ -32,7 +32,11 @@ where
         &self,
         session_context: &AppContext,
         intent: &ToolIntent,
+        execution_request: &loong_contracts::ToolCoreRequest,
+        trusted_internal_context: bool,
         descriptor: &crate::tools::ToolDescriptor,
+        dispatch_kind: crate::conversation::turn_engine::ToolDispatchKind,
+        capabilities_override: Option<&loong_contracts::Capabilities>,
         binding: ConversationRuntimeBinding<'_>,
         budget_state: &AutonomyTurnBudgetState,
     ) -> Result<ToolPreflightOutcome, String> {
@@ -40,7 +44,11 @@ where
             .preflight_tool_intent_with_binding(
                 session_context,
                 intent,
+                execution_request,
+                trusted_internal_context,
                 descriptor,
+                dispatch_kind,
+                capabilities_override,
                 binding,
                 budget_state,
             )
@@ -51,11 +59,24 @@ where
         &self,
         session_context: &AppContext,
         intent: &ToolIntent,
+        execution_request: &loong_contracts::ToolCoreRequest,
+        trusted_internal_context: bool,
         descriptor: &crate::tools::ToolDescriptor,
+        dispatch_kind: crate::conversation::turn_engine::ToolDispatchKind,
+        capabilities_override: Option<&loong_contracts::Capabilities>,
         binding: ConversationRuntimeBinding<'_>,
     ) -> Result<Option<ApprovalRequirement>, String> {
         self.fallback
-            .maybe_require_approval_with_binding(session_context, intent, descriptor, binding)
+            .maybe_require_approval_with_binding(
+                session_context,
+                intent,
+                execution_request,
+                trusted_internal_context,
+                descriptor,
+                dispatch_kind,
+                capabilities_override,
+                binding,
+            )
             .await
     }
 

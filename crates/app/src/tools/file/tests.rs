@@ -283,7 +283,7 @@ async fn execute_request_via_kernel_tool_registry_with_capabilities_result(
         loong_contracts::GovernedSessionMode::MutatingCapable,
     )
     .expect("test app context");
-    let outcome = crate::tools::execute_kernel_tool_request(&app_ctx, request, false).await;
+    let outcome = crate::tools::execute_kernel_tool_request(&app_ctx, request, None, false).await;
     (outcome, audit)
 }
 
@@ -742,6 +742,132 @@ async fn kernel_routed_file_read_reports_typed_input_error() {
 }
 
 #[tokio::test]
+async fn conversation_read_input_error_is_owned_and_audited_by_typed_tool() {
+    use crate::conversation::turn_engine::{ProviderTurn, ToolIntent, TurnResult};
+    use crate::test_support::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![ToolIntent {
+            tool_name: "read".to_owned(),
+            args_json: json!({}),
+            source: "provider_tool_call".to_owned(),
+            session_id: "test-session".to_owned(),
+            turn_id: "typed-read-input-turn".to_owned(),
+            tool_call_id: "typed-read-input-call".to_owned(),
+        }],
+        raw_meta: serde_json::Value::Null,
+    };
+
+    let result = harness.execute(&turn).await;
+
+    let TurnResult::ToolError(failure) = result else {
+        panic!("typed input rejection should interrupt the turn as a tool error");
+    };
+    assert!(failure.reason.contains("direct_read_requires_one_of"));
+    let events = harness.audit.snapshot();
+    assert!(matches!(
+        terminal_action_execution(&events, "read"),
+        Some(ActionExecutionEvent::InputRejected { error })
+            if error.to_string().contains("direct_read_requires_one_of")
+    ));
+}
+
+#[tokio::test]
+async fn conversation_tool_invoke_preserves_empty_capability_override() {
+    use crate::conversation::ConversationRuntimeBinding;
+    use crate::conversation::turn_engine::{
+        NoopAppToolDispatcher, ProviderTurn, ToolIntent, TurnEngine, TurnResult,
+    };
+
+    let root = unique_temp_dir("loong-conversation-tool-invoke-override");
+    fs::create_dir_all(&root).expect("create fixture root");
+    fs::write(root.join("notes.txt"), "authority must stay narrowed").expect("write fixture file");
+    let config = ToolRuntimeConfig {
+        file_root: Some(root.clone()),
+        ..ToolRuntimeConfig::default()
+    };
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let policy = PolicyPipelineBuilder::<AppContextFactory>::new_legacy_allow_fallback()
+        .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
+        .with_policy(FsResolvePathAllowPolicy::target())
+        .with_policy(FsPathAllowedRootsPolicy::target())
+        .with_policy(FsReadAllowPolicy);
+    let mut kernel = Kernel::<AppContextFactory>::with_policy_runtime(
+        policy,
+        Arc::new(SystemClock),
+        audit.clone(),
+    );
+    kernel
+        .register_pack(test_pack())
+        .expect("register test pack");
+    let token = kernel
+        .issue_token("test-pack", "test-agent", 60)
+        .expect("issue test token");
+    let mut tools = loong_runtime::tool_plane::ToolPlaneRegistry::new();
+    // `tool.invoke` rejects provider-exposed paths. Bind the read implementation
+    // to a hidden catalog path so this fixture exercises the envelope boundary.
+    tools
+        .register(
+            ToolPath::from("config.import"),
+            loong_tools::file::ReadTool::new("config.import"),
+        )
+        .expect("register hidden typed test tool");
+    let app_ctx = crate::AppContext::new(
+        Arc::new(loong_runtime::runtime::Runtime::new(kernel, tools)),
+        token,
+        config,
+        "test-session",
+        crate::tools::runtime_tool_view(),
+        loong_contracts::GovernedSessionMode::MutatingCapable,
+    )
+    .expect("build test context");
+    let arguments = serde_json::Map::from_iter([("path".to_owned(), json!("notes.txt"))]);
+    let lease = crate::tools::issue_tool_lease("config.import", &arguments)
+        .expect("hidden typed tool lease should be issued");
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![ToolIntent {
+            tool_name: "tool.invoke".to_owned(),
+            args_json: json!({
+                "tool_id": "config.import",
+                "lease": lease,
+                "arguments": arguments,
+                "capabilities_override": [],
+            }),
+            source: "provider_tool_call".to_owned(),
+            session_id: "test-session".to_owned(),
+            turn_id: "typed-override-turn".to_owned(),
+            tool_call_id: "typed-override-call".to_owned(),
+        }],
+        raw_meta: serde_json::Value::Null,
+    };
+
+    let result = TurnEngine::new(1)
+        .execute_turn_in_context(
+            &turn,
+            &app_ctx,
+            &NoopAppToolDispatcher,
+            ConversationRuntimeBinding::Context(&app_ctx),
+            None,
+        )
+        .await;
+
+    let TurnResult::FinalText(output) = result else {
+        panic!("a per-tool capability denial should remain local to the batch: {result:?}");
+    };
+    assert!(output.contains("missing capability: FilesystemRead"));
+    let events = audit.snapshot();
+    assert!(matches!(
+        terminal_action_execution(&events, "config.import"),
+        Some(ActionExecutionEvent::Failed { reason })
+            if reason.contains("missing capability: FilesystemRead")
+    ));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
 async fn kernel_routed_glob_search_uses_typed_tool_registry() {
     let base = unique_temp_dir("loong-glob-search-typed-registry");
     let root = base.join("root");
@@ -1128,7 +1254,6 @@ async fn kernel_routed_file_write_requires_filesystem_write_capability() {
     )
     .await
     .expect_err("filesystem write capability should be required");
-
     assert!(
         !root.join("notes.txt").exists(),
         "denied write must not create a file"

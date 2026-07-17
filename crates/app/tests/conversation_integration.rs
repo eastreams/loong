@@ -309,16 +309,14 @@ async fn integ_malformed_tool_args_returns_error() {
     #[allow(clippy::wildcard_enum_match_arm)]
     match result {
         TurnResult::ToolError(err) => {
-            let mentions_repairable_shape = err.contains("tool input needs repair");
-            let mentions_current_direct_read_contract = err.contains("direct_read_requires_one_of")
-                || err.contains("expected exactly one of `path`, `query`, or `pattern`");
             assert!(
-                mentions_repairable_shape && mentions_current_direct_read_contract,
-                "expected repairable direct-read guidance, got: {err}"
+                err.contains("invalid tool input")
+                    && err.contains("read payload must be an object"),
+                "expected typed read input error, got: {err}"
             );
         }
         other => {
-            panic!("expected ToolError with repairable object-shape guidance, got: {other:?}");
+            panic!("expected ToolError with typed object-shape error, got: {other:?}");
         }
     }
 }

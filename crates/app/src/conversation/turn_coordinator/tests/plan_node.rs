@@ -3,9 +3,9 @@ use super::*;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn execute_single_tool_intent_advisory_only_binding_reports_no_app_context() {
     let (tool_name, args_json) = crate::tools::synthesize_test_provider_tool_call_with_scope(
-        "file.read",
+        "browse",
         json!({
-            "path": "README.md",
+            "url": "https://example.com",
         }),
         Some("root-session"),
         Some("turn-direct-core"),
@@ -73,7 +73,7 @@ async fn execute_single_tool_intent_marks_repairable_file_read_failure_retryable
     .expect_err("repairable file.read preflight should return a plan-node error");
 
     assert_eq!(error.kind, PlanNodeErrorKind::Retryable);
-    assert!(error.message.contains("tool input needs repair"));
+    assert!(error.message.contains("invalid tool input"));
     assert!(error.message.contains("direct_read_requires_one_of"));
 }
 
