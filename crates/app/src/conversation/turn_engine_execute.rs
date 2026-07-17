@@ -425,7 +425,7 @@ mod execution_tests {
             capabilities_override: None,
             dispatch_kind: ToolDispatchKind::LegacyApp,
             capability_action_class: crate::tools::CapabilityActionClass::ExecuteExisting,
-            scheduling_class: crate::tools::ToolSchedulingClass::SerialOnly,
+            scheduling_class: loong_contracts::ToolSchedulingClass::SerialOnly,
             trusted_internal_context: false,
             decision: ToolDecisionTelemetry::allow(
                 "sessions_list",

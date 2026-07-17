@@ -10,7 +10,7 @@ use super::{
     ToolExecutionPreflight, ToolIntent, ToolPreflightOutcome, TurnResult,
     effective_denied_tool_name,
 };
-use loong_contracts::{Capabilities, ToolCoreRequest};
+use loong_contracts::{Capabilities, ToolCoreRequest, ToolSchedulingClass};
 use loong_runtime::tool_plane::{ToolPath, error::LookupError};
 
 #[derive(Debug, Clone)]
@@ -21,7 +21,7 @@ pub(super) struct PreparedToolIntent {
     pub(super) capabilities_override: Option<Capabilities>,
     pub(super) dispatch_kind: ToolDispatchKind,
     pub(super) capability_action_class: crate::tools::CapabilityActionClass,
-    pub(super) scheduling_class: crate::tools::ToolSchedulingClass,
+    pub(super) scheduling_class: ToolSchedulingClass,
     pub(super) trusted_internal_context: bool,
     pub(super) decision: ToolDecisionTelemetry,
 }
@@ -74,9 +74,9 @@ impl<'a, 'b, D: AppToolDispatcher + ?Sized> ToolIntentPreparationHarness<'a, 'b,
         let outer_tool_name =
             crate::tools::canonical_tool_name(intent.tool_name.as_str()).to_owned();
         let outer_path = ToolPath::from(outer_tool_name.clone());
-        let outer_registered = match self.session_context.runtime().tool_spec(&outer_path) {
-            Ok(_) => true,
-            Err(LookupError::NotRegistered { .. }) => false,
+        let outer_scheduling = match self.session_context.runtime().tool_spec(&outer_path) {
+            Ok(spec) => Some(spec.scheduling),
+            Err(LookupError::NotRegistered { .. }) => None,
             Err(error) => {
                 let reason = error.to_string();
                 return Err(PreparedToolIntentFailure {
@@ -96,6 +96,7 @@ impl<'a, 'b, D: AppToolDispatcher + ?Sized> ToolIntentPreparationHarness<'a, 'b,
         // `tool.invoke` is only a legacy envelope when no concrete registered
         // tool owns that exact path. Lease validation still precedes inner-path
         // lookup, so an invalid lease cannot probe registry membership.
+        let outer_registered = outer_scheduling.is_some();
         let leased_invocation = !outer_registered && outer_tool_name == "tool.invoke";
         let (requested_tool_name, raw_payload, capabilities_override) = if leased_invocation {
             match crate::tools::resolve_tool_invoke_request(
@@ -161,12 +162,12 @@ impl<'a, 'b, D: AppToolDispatcher + ?Sized> ToolIntentPreparationHarness<'a, 'b,
         };
 
         let typed_path = ToolPath::from(requested_tool_name.as_str());
-        let typed_registered = if outer_registered {
-            true
+        let typed_scheduling = if outer_registered {
+            outer_scheduling
         } else if leased_invocation {
             match self.session_context.runtime().tool_spec(&typed_path) {
-                Ok(_) => true,
-                Err(LookupError::NotRegistered { .. }) => false,
+                Ok(spec) => Some(spec.scheduling),
+                Err(LookupError::NotRegistered { .. }) => None,
                 Err(error) => {
                     let reason = error.to_string();
                     return Err(PreparedToolIntentFailure {
@@ -184,8 +185,9 @@ impl<'a, 'b, D: AppToolDispatcher + ?Sized> ToolIntentPreparationHarness<'a, 'b,
                 }
             }
         } else {
-            false
+            None
         };
+        let typed_registered = typed_scheduling.is_some();
         let (dispatch_kind, effective_tool_name) = if typed_registered {
             (ToolDispatchKind::Typed, requested_tool_name)
         } else if let Some(resolved) =
@@ -316,13 +318,12 @@ impl<'a, 'b, D: AppToolDispatcher + ?Sized> ToolIntentPreparationHarness<'a, 'b,
             crate::tools::CapabilityActionClass::ExecuteExisting,
             |descriptor| descriptor.capability_action_class(),
         );
-        // TODO(typed-tool-metadata): take scheduling from the registered ToolSpec
-        // once that type becomes the metadata owner. Descriptorless typed tools
-        // remain serial until then so this dispatch commit cannot over-parallelize.
-        let scheduling_class = descriptor.map_or(
-            crate::tools::ToolSchedulingClass::SerialOnly,
-            |descriptor| descriptor.scheduling_class(),
-        );
+        let scheduling_class = match typed_scheduling {
+            Some(scheduling) => scheduling,
+            None => descriptor.map_or(ToolSchedulingClass::SerialOnly, |descriptor| {
+                descriptor.scheduling_class()
+            }),
+        };
 
         // TODO(typed-tool-permission): Migrated tools still use the old autonomy
         // approval surface until its decisions become ToolInvocationAction

@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use futures_util::stream::{self, StreamExt};
+use loong_contracts::ToolSchedulingClass;
 
 use super::prepare::PreparedToolIntent;
 use super::{
@@ -15,8 +16,6 @@ use super::{
     format_tool_denied_result_line_with_limit, format_tool_result_line_with_limit,
     observe_peak_in_flight,
 };
-use crate::tools::ToolSchedulingClass;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct PreparedBatchSegment {
     pub(super) len: usize,

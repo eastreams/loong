@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::OnceLock;
 
+use loong_contracts::ToolSchedulingClass;
 use loong_kernel::ToolConcurrencyClass;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -85,21 +86,6 @@ pub enum ToolExecutionKind {
 pub enum ToolAvailability {
     Runtime,
     Planned,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub enum ToolSchedulingClass {
-    SerialOnly,
-    ParallelSafe,
-}
-
-impl ToolSchedulingClass {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::SerialOnly => "serial_only",
-            Self::ParallelSafe => "parallel_safe",
-        }
-    }
 }
 
 /// Semantic action families for the autonomy-policy kernel.

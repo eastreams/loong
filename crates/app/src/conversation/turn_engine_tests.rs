@@ -334,7 +334,7 @@ fn prepare_tool_intent_uses_direct_shell_metadata_for_provider_shell_requests() 
 
 #[tokio::test]
 async fn typed_only_registration_executes_without_a_legacy_catalog_row() {
-    use crate::tools::ToolSchedulingClass;
+    use loong_contracts::ToolSchedulingClass;
     use loong_runtime::tool_plane::{ToolPath, ToolPlaneRegistry};
 
     let mut tools = ToolPlaneRegistry::new();
@@ -369,7 +369,7 @@ async fn typed_only_registration_executes_without_a_legacy_catalog_row() {
 
     assert_eq!(prepared.dispatch_kind, ToolDispatchKind::Typed);
     assert_eq!(prepared.request.tool_name, "typed.only");
-    assert_eq!(prepared.scheduling_class, ToolSchedulingClass::SerialOnly);
+    assert_eq!(prepared.scheduling_class, ToolSchedulingClass::ParallelSafe);
     assert_eq!(prepared.decision.rule_id, "typed_runtime_policy");
 
     let turn = ProviderTurn {
