@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::Capability;
 
@@ -8,42 +9,74 @@ use crate::Capability;
 ///
 /// The collection is opaque so policy consumers depend on set semantics rather
 /// than its current storage representation.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct Capabilities(BTreeSet<Capability>);
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Capabilities(Option<Arc<BTreeSet<Capability>>>);
 
 impl Capabilities {
     #[must_use]
     pub const fn new() -> Self {
-        Self(BTreeSet::new())
+        // Recursive Context clones must not copy the current set-backed
+        // representation. The wrapper remains opaque so a future bitset can
+        // replace this shared storage without changing policy-facing APIs.
+        Self(None)
     }
 
     #[must_use]
     pub fn contains(&self, capability: Capability) -> bool {
-        self.0.contains(&capability)
+        self.0
+            .as_ref()
+            .is_some_and(|capabilities| capabilities.contains(&capability))
     }
 
     #[must_use]
     pub fn is_subset(&self, other: &Self) -> bool {
-        self.0.is_subset(&other.0)
+        self.iter().all(|capability| other.contains(capability))
     }
 
     pub fn difference<'a>(&'a self, other: &'a Self) -> impl Iterator<Item = Capability> + 'a {
-        self.0.difference(&other.0).copied()
+        self.iter()
+            .filter(move |capability| !other.contains(*capability))
     }
 
     pub fn intersection<'a>(&'a self, other: &'a Self) -> impl Iterator<Item = Capability> + 'a {
-        self.0.intersection(&other.0).copied()
+        self.iter()
+            .filter(move |capability| other.contains(*capability))
     }
 
     pub fn iter(&self) -> impl Iterator<Item = Capability> + '_ {
-        self.0.iter().copied()
+        self.0
+            .iter()
+            .flat_map(|capabilities| capabilities.iter())
+            .copied()
     }
 }
 
 impl FromIterator<Capability> for Capabilities {
     fn from_iter<T: IntoIterator<Item = Capability>>(iter: T) -> Self {
-        Self(iter.into_iter().collect())
+        let capabilities = iter.into_iter().collect::<BTreeSet<_>>();
+        if capabilities.is_empty() {
+            Self::new()
+        } else {
+            Self(Some(Arc::new(capabilities)))
+        }
+    }
+}
+
+impl Serialize for Capabilities {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.collect_seq(self.iter())
+    }
+}
+
+impl<'de> Deserialize<'de> for Capabilities {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        BTreeSet::deserialize(deserializer).map(|capabilities| capabilities.into_iter().collect())
     }
 }
 
@@ -116,5 +149,17 @@ mod tests {
         let round_trip: Capabilities =
             serde_json::from_value(wire).expect("deserialize Capabilities");
         assert_eq!(round_trip, capabilities);
+    }
+
+    #[test]
+    fn non_empty_capability_clones_share_the_current_storage() {
+        let capabilities =
+            Capabilities::from([Capability::FilesystemRead, Capability::FilesystemWrite]);
+        let cloned = capabilities.clone();
+
+        assert!(std::sync::Arc::ptr_eq(
+            capabilities.0.as_ref().expect("non-empty storage"),
+            cloned.0.as_ref().expect("cloned non-empty storage"),
+        ));
     }
 }
