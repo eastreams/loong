@@ -12,7 +12,8 @@ use async_trait::async_trait;
 use loong_contracts::{
     ActionExecutionEvent, AuditError, AuditEvent, AuditEventKind, AuthorizationAttempt,
     AuthorizationAttemptEvent, AuthorizationPolicyEvent, AuthorizationScope, AuthorizationSubject,
-    AuthorizationTerminalOutcome, Capabilities, Capability, ToolInputError, ToolSpec,
+    AuthorizationTerminalOutcome, Capabilities, Capability, ToolInputError, ToolSchedulingClass,
+    ToolSpec,
 };
 use loong_core::{
     error::PolicyGrantError,
@@ -107,6 +108,7 @@ impl ToolImpl<TestContextFactory> for TestTool {
             description: "Test runtime invocation.".to_owned(),
             input_schema: json!({ "type": "object" }),
             required_capabilities: self.required_capabilities.clone(),
+            scheduling: ToolSchedulingClass::SerialOnly,
             argument_hint: None,
             search_hint: None,
             tags: Vec::new(),
@@ -145,6 +147,7 @@ impl ToolImpl<TestContextFactory> for PendingTool {
             description: "Never completes after dispatch starts.".to_owned(),
             input_schema: json!({ "type": "object" }),
             required_capabilities: BTreeSet::new(),
+            scheduling: ToolSchedulingClass::SerialOnly,
             argument_hint: None,
             search_hint: None,
             tags: Vec::new(),

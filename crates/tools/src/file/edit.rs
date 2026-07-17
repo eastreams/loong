@@ -1,7 +1,7 @@
 use std::{collections::BTreeSet, path::PathBuf};
 
 use async_trait::async_trait;
-use loong_contracts::{Capability, ToolInputError, ToolSpec};
+use loong_contracts::{Capability, ToolInputError, ToolSchedulingClass, ToolSpec};
 use loong_core::{
     policy::context::ContextFactory,
     tool::{ToolFailureKind, ToolImpl},
@@ -167,6 +167,7 @@ where
                 Capability::FilesystemRead,
                 Capability::FilesystemWrite,
             ]),
+            scheduling: ToolSchedulingClass::SerialOnly,
             argument_hint: Some("path:string,edits:[{old_text:string,new_text:string}]".to_owned()),
             search_hint: Some(
                 "replace one or more uniquely matching exact text blocks in a file".to_owned(),

@@ -1,7 +1,7 @@
 use std::{collections::BTreeSet, path::PathBuf};
 
 use async_trait::async_trait;
-use loong_contracts::{Capability, ToolInputError, ToolSpec};
+use loong_contracts::{Capability, ToolInputError, ToolSchedulingClass, ToolSpec};
 use loong_core::{
     policy::context::ContextFactory,
     tool::{ToolFailureKind, ToolImpl},
@@ -201,6 +201,7 @@ where
                 .to_owned(),
             input_schema: Self::input_schema(),
             required_capabilities: BTreeSet::from([Capability::FilesystemRead]),
+            scheduling: ToolSchedulingClass::ParallelSafe,
             argument_hint: Some(
                 "path?:string,offset?:integer,limit?:integer,max_bytes?:integer,query?:string,pattern?:string,root?:string,glob?:string,max_results?:integer,max_bytes_per_file?:integer,case_sensitive?:boolean,include_directories?:boolean"
                     .to_owned(),

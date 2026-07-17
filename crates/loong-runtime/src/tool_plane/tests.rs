@@ -9,7 +9,8 @@ use std::{
 
 use async_trait::async_trait;
 use loong_contracts::{
-    AuthorizationScope, AuthorizationSubject, Capabilities, Capability, ToolInputError, ToolSpec,
+    AuthorizationScope, AuthorizationSubject, Capabilities, Capability, ToolInputError,
+    ToolSchedulingClass, ToolSpec,
 };
 use loong_core::{
     policy::{
@@ -71,6 +72,7 @@ impl ToolImpl<TestContextFactory> for EchoTool {
                 "additionalProperties": false
             }),
             required_capabilities: BTreeSet::new(),
+            scheduling: ToolSchedulingClass::SerialOnly,
             argument_hint: None,
             search_hint: None,
             tags: Vec::new(),

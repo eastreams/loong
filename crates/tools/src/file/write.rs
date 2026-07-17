@@ -1,7 +1,7 @@
 use std::{collections::BTreeSet, path::PathBuf};
 
 use async_trait::async_trait;
-use loong_contracts::{Capability, ToolInputError, ToolSpec};
+use loong_contracts::{Capability, ToolInputError, ToolSchedulingClass, ToolSpec};
 use loong_core::{
     policy::context::ContextFactory,
     tool::{ToolFailureKind, ToolImpl},
@@ -100,6 +100,7 @@ where
             description: "Write file contents in allowed roots.".to_owned(),
             input_schema: Self::input_schema(),
             required_capabilities: BTreeSet::from([Capability::FilesystemWrite]),
+            scheduling: ToolSchedulingClass::SerialOnly,
             argument_hint: Some(
                 "path:string,content:string,create_dirs?:boolean,overwrite?:boolean".to_owned(),
             ),

@@ -6,6 +6,28 @@ use thiserror::Error;
 
 use crate::Capability;
 
+/// How orchestration may schedule independent invocations of a tool.
+///
+/// This metadata describes execution ordering only. It does not grant any
+/// capability and must not be used as an authorization decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolSchedulingClass {
+    ParallelSafe,
+    SerialOnly,
+}
+
+impl ToolSchedulingClass {
+    /// Stable label used by execution telemetry and operator-facing metadata.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ParallelSafe => "parallel_safe",
+            Self::SerialOnly => "serial_only",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolSpec {
     pub description: String,
@@ -15,6 +37,8 @@ pub struct ToolSpec {
     /// app-owned planes provide identity, while concrete tools describe input.
     pub input_schema: Value,
     pub required_capabilities: BTreeSet<Capability>,
+    /// Execution ordering metadata for orchestration, never authorization input.
+    pub scheduling: ToolSchedulingClass,
     /// Optional compact argument hint owned by the concrete tool.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub argument_hint: Option<String>,
