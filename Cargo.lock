@@ -3044,7 +3044,6 @@ dependencies = [
  "hex",
  "libc",
  "loong-app",
- "loong-app-protocol",
  "loong-bench",
  "loong-bridge-runtime",
  "loong-contracts",
@@ -3169,12 +3168,8 @@ dependencies = [
 name = "loong-app-protocol"
 version = "0.1.2-alpha.1"
 dependencies = [
- "async-trait",
- "dunce",
- "loong-runtime",
+ "loong-core",
  "serde",
- "serde_json",
- "tokio",
 ]
 
 [[package]]
@@ -3286,7 +3281,6 @@ dependencies = [
  "loong-contracts",
  "loong-core",
  "loong-kernel",
- "serde",
  "serde_json",
  "slotmap",
  "thiserror 2.0.18",

@@ -38,26 +38,6 @@ pub enum TurnCommands {
 pub async fn run_chat_cli(
     config_path: Option<&str>,
     session: Option<&str>,
-    _acp: bool,
-    _acp_event_stream: bool,
-    _acp_bootstrap_mcp_server: &[String],
-    _acp_cwd: Option<&str>,
-) -> CliResult<()> {
-    // TODO: Should this be run directly?
-    run_spine_chat_cli(
-        config_path,
-        session,
-        _acp,
-        _acp_event_stream,
-        _acp_bootstrap_mcp_server,
-        _acp_cwd,
-    )
-    .await
-}
-
-async fn run_spine_chat_cli(
-    config_path: Option<&str>,
-    session: Option<&str>,
     acp: bool,
     acp_event_stream: bool,
     acp_bootstrap_mcp_server: &[String],
@@ -76,48 +56,6 @@ pub async fn run_ask_cli(
     config_path: Option<&str>,
     session: Option<&str>,
     message: &str,
-    _acp: bool,
-    _acp_event_stream: bool,
-    _acp_bootstrap_mcp_server: &[String],
-    _acp_cwd: Option<&str>,
-) -> CliResult<()> {
-    run_spine_oneshot_cli(
-        config_path,
-        session,
-        message,
-        _acp,
-        _acp_event_stream,
-        _acp_bootstrap_mcp_server,
-        _acp_cwd,
-    )
-    .await
-}
-
-pub async fn run_turn_run_cli(
-    config_path: Option<&str>,
-    session: Option<&str>,
-    message: &str,
-    _acp: bool,
-    _acp_event_stream: bool,
-    _acp_bootstrap_mcp_server: &[String],
-    _acp_cwd: Option<&str>,
-) -> CliResult<()> {
-    run_spine_oneshot_cli(
-        config_path,
-        session,
-        message,
-        _acp,
-        _acp_event_stream,
-        _acp_bootstrap_mcp_server,
-        _acp_cwd,
-    )
-    .await
-}
-
-async fn run_spine_oneshot_cli(
-    config_path: Option<&str>,
-    session: Option<&str>,
-    message: &str,
     acp: bool,
     acp_event_stream: bool,
     acp_bootstrap_mcp_server: &[String],
@@ -130,4 +68,25 @@ async fn run_spine_oneshot_cli(
         acp_working_directory: acp_cwd.map(PathBuf::from),
     };
     mvp::chat::run_cli_ask(config_path, session, message, &options).await
+}
+
+pub async fn run_turn_run_cli(
+    config_path: Option<&str>,
+    session: Option<&str>,
+    message: &str,
+    _acp: bool,
+    _acp_event_stream: bool,
+    _acp_bootstrap_mcp_server: &[String],
+    _acp_cwd: Option<&str>,
+) -> CliResult<()> {
+    run_ask_cli(
+        config_path,
+        session,
+        message,
+        _acp,
+        _acp_event_stream,
+        _acp_bootstrap_mcp_server,
+        _acp_cwd,
+    )
+    .await
 }

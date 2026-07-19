@@ -23,8 +23,8 @@ crate 清理。
   `AppContextFactory` 出现 78 次；这是 workspace-wide replacement，不是局部 rename。
 - channel/conversation 仍大量传播 `ConversationRuntimeBinding`，provider 仍传播
   `ProviderRuntimeBinding`。这些 enum 把“advisory 权限”错误表达成“可能没有 Context”。
-- `loong-runtime` crate root 仍保留 `RuntimeSpine`、one-shot/interactive transitional API，并
-  re-export `loong_core::Session`；新的 `runtime` / `tool_plane` owner 与旧 spine 尚未收敛。
+- `loong-runtime` crate root 只公开真实的 `runtime` / `tool_plane` owner；`RuntimeSpine`、
+  one-shot/interactive/task-status projection 和 core Session re-export 已删除。
 - typed policy pipeline 已支持 terminal parent/user permission decision，grant 保留完整
   `PolicyReport`，并在外部 permission await 后复查 effective capabilities。sealed grant algorithm
   已经自动记录 mandatory authorization evidence；当前 typed tool grant 仍错误地接收 legacy
@@ -278,21 +278,18 @@ blanket forwarding trait 拆小该切片；这些做法只会把错误 owner 固
 - `loong-kernel`：governance authority。
 - `loong-access`：side-effect physical boundary。
 - `loong-tools`：concrete builtin implementations。
-- `loong-runtime`：已经拥有 `Runtime<C>` 和 ToolPlane primitive；删除旧 spine，而不是放弃
-  runtime owner。
+- `loong-runtime`：已经拥有 `Runtime<C>` 和 ToolPlane primitive；旧 projection spine 已删除，
+  runtime owner 保留并继续承接 Session/Context。
 - `loong-contracts` / `loong-core`：继续按稳定 data 与 behavior contract 分工。
 
 剩余收敛候选：
 
-1. 删除 `loong-runtime` crate root 的 `RuntimeSpine`、one-shot/interactive transitional API 和
-   仅为 phase spine 存在的 re-export；保留 `runtime` / `tool_plane` owner。
-2. 审计 `loong-cli` 与 `loong-app-protocol`。如果只是 transitional CLI/protocol forwarding
+1. 审计 `loong-cli` 与 `loong-app-protocol`。如果只是 transitional CLI/protocol forwarding
    shell，合并到 daemon 或真实 protocol owner。
-3. 修正 kernel -> `loong-plugin-sdk` 的反向依赖。kernel 所需 contract 下沉到 leaf；SDK 只保留
+2. 修正 kernel -> `loong-plugin-sdk` 的反向依赖。kernel 所需 contract 下沉到 leaf；SDK 只保留
    plugin author-facing API。
-4. 审计 `protocol` / `bridge-runtime` 是否拥有稳定 wire/bridge primitive；只转发的壳合并，
+3. 审计 `protocol` / `bridge-runtime` 是否拥有稳定 wire/bridge primitive；只转发的壳合并，
    真实协议边界保留。
 
-workspace 目前有 15 个 crate，而 `AGENTS.md`、`CLAUDE.md` 和部分 architecture docs 仍写 13。
-crate 事实修正必须从 `Cargo.toml` / `cargo metadata --no-deps` 重建真实 DAG，并同步镜像文档、
-architecture checks 和 public/release docs。
+workspace 当前 15-crate DAG 已从 `cargo metadata --no-deps` 重建，并同步到镜像文档与
+fail-closed architecture check。后续 manifest 变更必须在同一提交继续同步这些事实。

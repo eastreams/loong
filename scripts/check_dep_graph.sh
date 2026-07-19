@@ -15,17 +15,14 @@ set -euo pipefail
 #   ├── app → contracts, loong-core, kernel, loong-runtime, loong-tools
 #   ├── spec → contracts, loong-core, kernel, protocol, bridge-runtime
 #   ├── bench → kernel, spec
-#   └── daemon (binary) → app, app-protocol, bench, contracts, loong-core, kernel, protocol, spec, bridge-runtime
+#   └── daemon (binary) → app, bench, contracts, loong-core, kernel, protocol, spec, bridge-runtime
 #
 # Additive spine:
 #   loong-core
 #   ├── loong-runtime → contracts, loong-core, kernel
-#   ├── loong-app-protocol → loong-runtime
+#   ├── loong-app-protocol → loong-core
 #   ├── loong-cli → loong-app-protocol
 #   └── loong-plugin-sdk → loong-core
-#
-# Transitional shipping edge:
-#   daemon -> loong-app-protocol for the task-status projection
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
@@ -111,12 +108,11 @@ allowed=(
   "daemon -> bridge-runtime"
   "daemon -> spec"
   "daemon -> bench"
-  "daemon -> app-protocol"
   "core -> contracts"
   "runtime -> contracts"
   "runtime -> core"
   "runtime -> kernel"
-  "app-protocol -> runtime"
+  "app-protocol -> core"
   "cli -> app-protocol"
   "plugin-sdk -> core"
   "tools -> contracts"

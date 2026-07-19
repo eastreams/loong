@@ -600,20 +600,22 @@ cargo fmt --all -- --check
 git diff --check
 ```
 
-## 19. 删除 runtime transitional spine 并收敛 crates/docs
+## 19. 收敛 Runtime 之外的剩余 crates 与架构文档
 
 **范围**
 
-- 删除/迁移 `loong-runtime` crate root 的 `RuntimeSpine`、one-shot/interactive phase API 和无 owner
-  re-export，保留 `Runtime<C>` / ToolPlane owner。
+- `loong-runtime` 的旧 one-shot/interactive/task-status projection 已删除；后续不得恢复 phase spine、
+  executor adapter 或 core type re-export。
 - 逐个审计 `loong-cli`、`loong-app-protocol`、`loong-plugin-sdk`、`protocol`、
-  `bridge-runtime`；每次只处理一个 owner 明确的 forwarding shell。
-- 从 `Cargo.toml` / `cargo metadata --no-deps` 重建真实 crate DAG，同步 `AGENTS.md`、
-  `CLAUDE.md`、`ARCHITECTURE.md`、reader-facing docs 和 architecture checks。
+  `bridge-runtime`。每个提交只处理一个 owner 明确的 forwarding shell；有真实 command、wire 或 bridge
+  contract 的 crate 保留并收窄。
+- 修正 kernel -> author-facing SDK 的反向依赖；kernel 所需 contract 下沉，SDK 只保留 author API。
+- 每次 manifest 变化都从 `cargo metadata --no-deps` 重建真实 DAG，并同步 `AGENTS.md`、
+  `CLAUDE.md`、`ARCHITECTURE.md`、reader-facing docs 与 fail-closed architecture checks。
 
 **完成线**
 
-- 没有 phase spine、compatibility facade 或 kernel -> author-facing SDK 反向依赖；
+- 没有无 owner forwarding shell、compatibility facade 或 kernel -> author-facing SDK 反向依赖；
 - workspace DAG、文档和 architecture checks 一致；
 - `AGENTS.md` 与 `CLAUDE.md` 保持镜像。
 

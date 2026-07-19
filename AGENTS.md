@@ -29,7 +29,7 @@ additive spine
 loong-core
 ├── loong-plugin-sdk → loong-core
 ├── loong-runtime → contracts, loong-core, kernel
-├── loong-app-protocol → loong-runtime
+├── loong-app-protocol → loong-core
 └── loong-cli → loong-app-protocol
 
 governed runtime
@@ -42,7 +42,7 @@ contracts (leaf)
 ├── app → contracts, loong-core, kernel, loong-runtime, loong-tools
 ├── spec → contracts, loong-core, kernel, protocol, bridge-runtime
 ├── bench → kernel, spec
-└── daemon (`loong`) → app, loong-app-protocol, bench, bridge-runtime, contracts, loong-core, kernel, protocol, spec
+└── daemon (`loong`) → app, bench, bridge-runtime, contracts, loong-core, kernel, protocol, spec
 ```
 
 Non-negotiable: no dependency cycles. See [Core Beliefs](docs/design-docs/core-beliefs.md).

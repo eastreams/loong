@@ -5,15 +5,9 @@ use async_trait::async_trait;
 use clap::Subcommand;
 use kernel::ToolCoreRequest;
 use loong_app as mvp;
-use loong_app_protocol::{
-    AppProtocolRuntimeTaskStatusExecutorResult, AppProtocolRuntimeTaskStatusRequest,
-    AppProtocolTaskStatusExecutor, AppProtocolWorkspaceContext, TaskStatusRequest,
-    execute_task_status,
-};
 use loong_contracts::ToolCoreOutcome;
 use loong_spec::CliResult;
 use serde_json::{Value, json};
-use std::path::PathBuf;
 
 #[path = "tasks_cli_render.rs"]
 mod render_support;
@@ -390,36 +384,7 @@ async fn execute_status_command(
     tool_config: &mvp::config::ToolConfig,
     task_id: &str,
 ) -> CliResult<Value> {
-    let executor = LegacyTaskStatusExecutor::new(
-        memory_config.clone(),
-        tool_config.clone(),
-        current_session_id.to_owned(),
-    );
-    let workspace = task_status_workspace_context(tool_config)?;
-    let execution = execute_task_status(
-        &TaskStatusRequest {
-            current_session_id: current_session_id.to_owned(),
-            task_id: task_id.to_owned(),
-        },
-        workspace,
-        &executor,
-    )
-    .await?;
-    let mut task = execution.detail;
-    if let Some(task_object) = task.as_object_mut() {
-        task_object.insert(
-            "spine".to_owned(),
-            json!({
-                "session_id": execution.session.session_id,
-                "workspace": execution.session.workspace,
-                "task_id": execution.task.task_id,
-                "objective": execution.task.objective,
-                "lifecycle": execution.task.lifecycle,
-                "execution_mode": execution.task.execution_mode,
-                "current_turn_id": execution.task.current_turn_id,
-            }),
-        );
-    }
+    let task = build_task_detail(memory_config, tool_config, current_session_id, task_id).await?;
     let payload = json!({
         "command": "status",
         "config": resolved_config_path,
@@ -427,109 +392,6 @@ async fn execute_status_command(
         "task": task,
     });
     Ok(payload)
-}
-
-struct LegacyTaskStatusExecutor {
-    memory_config: mvp::memory::runtime_config::MemoryRuntimeConfig,
-    tool_config: mvp::config::ToolConfig,
-    current_session_id: String,
-}
-
-impl LegacyTaskStatusExecutor {
-    fn new(
-        memory_config: mvp::memory::runtime_config::MemoryRuntimeConfig,
-        tool_config: mvp::config::ToolConfig,
-        current_session_id: String,
-    ) -> Self {
-        Self {
-            memory_config,
-            tool_config,
-            current_session_id,
-        }
-    }
-}
-
-#[async_trait]
-impl AppProtocolTaskStatusExecutor for LegacyTaskStatusExecutor {
-    async fn load_task_status(
-        &self,
-        request: AppProtocolRuntimeTaskStatusRequest,
-    ) -> Result<AppProtocolRuntimeTaskStatusExecutorResult, String> {
-        let detail = build_task_detail(
-            &self.memory_config,
-            &self.tool_config,
-            self.current_session_id.as_str(),
-            request.task_id.as_str(),
-        )
-        .await?;
-        Ok(AppProtocolRuntimeTaskStatusExecutorResult { detail })
-    }
-}
-
-fn task_status_workspace_context(
-    tool_config: &mvp::config::ToolConfig,
-) -> CliResult<AppProtocolWorkspaceContext> {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let workspace_root = tool_config
-        .configured_runtime_workspace_root()
-        .or_else(|| tool_config.configured_file_root())
-        .unwrap_or_else(|| cwd.clone());
-    let workspace_root = dunce::canonicalize(&workspace_root).unwrap_or(workspace_root);
-    let repo_root =
-        resolve_git_repo_root(workspace_root.as_path()).unwrap_or_else(|_| workspace_root.clone());
-    let worktree_root = workspace_root.clone();
-    Ok(AppProtocolWorkspaceContext::new(
-        workspace_root.clone(),
-        repo_root,
-        worktree_root,
-        cwd,
-        current_branch_identity(&workspace_root),
-    ))
-}
-
-fn current_branch_identity(workspace_root: &std::path::Path) -> String {
-    std::process::Command::new("git")
-        .args(["-C"])
-        .arg(workspace_root)
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .output()
-        .ok()
-        .and_then(|output| {
-            if output.status.success() {
-                Some(String::from_utf8_lossy(&output.stdout).trim().to_owned())
-            } else {
-                None
-            }
-        })
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "unknown".to_owned())
-}
-
-fn resolve_git_repo_root(base_root: &std::path::Path) -> Result<PathBuf, String> {
-    let output = std::process::Command::new("git")
-        .args(["-C"])
-        .arg(base_root)
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
-        .map_err(|error| format!("spawn git command failed: {error}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let display_path = base_root.display();
-        return Err(format!(
-            "resolve git repo root from `{display_path}` failed: {stderr}"
-        ));
-    }
-
-    let raw_stdout = String::from_utf8_lossy(&output.stdout);
-    let trimmed_stdout = raw_stdout.trim();
-    if trimmed_stdout.is_empty() {
-        let display_path = base_root.display();
-        return Err(format!(
-            "resolve git repo root from `{display_path}` returned empty output"
-        ));
-    }
-
-    Ok(PathBuf::from(trimmed_stdout))
 }
 
 async fn execute_events_command(

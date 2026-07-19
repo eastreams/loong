@@ -17,8 +17,8 @@ The repository already contains a landed additive SDK spine
 This document defines the current convergence lane:
 
 - keep the current 15-crate DAG intact
-- treat the additive spine as already-landed transitional structure, not as a
-  hypothetical future split
+- treat the additive SDK family as landed structure while deleting temporary
+  projection APIs that have no durable owner
 - separate **session core** from **memory augmentation** semantically before
   any further entry-surface migration
 - converge turn-bearing hosts on shared runtime seams before moving live
@@ -32,8 +32,9 @@ The current repository already has a strong lower-layer shape:
 - kernel governance remains explicit in [ARCHITECTURE.md](../../ARCHITECTURE.md)
 - the 15-crate DAG is now the repository truth in
   [ARCHITECTURE.md](../../ARCHITECTURE.md)
-- the additive spine crates already define task/session/runtime/protocol/CLI
-  contracts, but they do not yet own the shipped bootstrap path
+- `loong-runtime` already owns the typed kernel/tool-plane root, while
+  `loong-app-protocol` is limited to host command/response contracts; the
+  Session/Context production bootstrap has not yet moved into runtime
 
 The pressure is above that layer:
 
@@ -59,7 +60,8 @@ The first refactor phase must preserve all of the following:
 
 1. The 15-crate DAG remains the repository contract for now.
 2. No new public product split. The user-facing entry remains `loong`.
-3. No breaking changes to existing external CLI or protocol behavior.
+3. Preserve shipped CLI behavior. Transitional crate APIs may break when their
+   runtime ownership is deleted or moved explicitly.
 4. Kernel-first routing and policy boundaries remain intact.
 5. No new dependency is introduced solely for refactor convenience.
 

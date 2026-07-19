@@ -50,12 +50,12 @@ loong-core          -> contracts
 ├── kernel             -> access, contracts, loong-core, plugin-sdk
 ├── protocol           (independent transport foundation)
 ├── bridge-runtime     -> contracts, kernel, protocol
-├── loong-app-protocol -> loong-runtime
+├── loong-app-protocol -> loong-core
 ├── loong-cli          -> loong-app-protocol
 ├── app                -> contracts, loong-core, kernel, loong-runtime, loong-tools
 ├── spec               -> contracts, loong-core, kernel, protocol, bridge-runtime
 ├── bench              -> kernel, spec
-└── daemon             -> app, app-protocol, bench, bridge-runtime, contracts, loong-core, kernel, protocol, spec
+└── daemon             -> app, bench, bridge-runtime, contracts, loong-core, kernel, protocol, spec
 ```
 
 ## Crate Roles

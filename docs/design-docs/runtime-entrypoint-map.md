@@ -7,12 +7,11 @@ It exists for contributors who can already find the code, but want to know
 which bootstrap/helper surface to open first and what each one deliberately
 owns or does **not** own.
 
-The current workspace also contains a transitional additive spine
-(`loong-core`, `loong-plugin-sdk`, `loong-runtime`, `loong-app-protocol`,
-`loong-cli`). For runtime-entry work, the important truth is that the shipped
-`loong` product path still bootstraps through `crates/app` and `crates/daemon`;
-the spine crates currently describe contract and migration seams rather than
-owning the live bootstrap path end-to-end.
+The workspace also contains an additive SDK family (`loong-core`,
+`loong-plugin-sdk`, `loong-runtime`, `loong-app-protocol`, `loong-cli`).
+`loong-runtime` owns the typed kernel/tool-plane root, but the shipped `loong`
+product path still bootstraps through `crates/app` and `crates/daemon` while
+Session and Context ownership migrate into that runtime.
 
 ## Read This Document When
 
@@ -42,7 +41,7 @@ the fastest mental model.
 
 | Surface | Main entrypoint | Shared pieces it reuses | What makes it different |
 | --- | --- | --- | --- |
-| Transitional CLI shell / additive spine | `crates/daemon/src/turn_cli.rs` → `run_chat_cli`, `run_ask_cli`, `run_turn_run_cli`; contracts in `crates/loong-app-protocol` and `crates/loong-runtime` | delegates to the normal CLI chat/ask helpers today | names the target contract surface and keeps migration pressure visible, but does not yet own the live bootstrap path |
+| CLI turn wrappers | `crates/daemon/src/turn_cli.rs` → `run_chat_cli`, `run_ask_cli`, `run_turn_run_cli` | delegates to the normal CLI chat/ask helpers today | remains a daemon entry surface; it no longer routes through a synthetic runtime projection |
 | CLI chat / ask | `crates/app/src/chat.rs` → `run_cli_chat`, `run_cli_ask` | `initialize_cli_turn_runtime`, `AgentRuntime`, conversation runtime | owns the full user-facing runtime shell, can fall back to implicit/default session |
 | Generic agent runtime | `crates/app/src/agent_runtime.rs` → `run_turn`, `run_turn_with_loaded_config`, `run_turn_with_loaded_config_and_acp_manager` | chat runtime assembly + provider/ACP execution | transport-neutral wrapper used by multiple outer surfaces |
 | Long-running channel serve | `crates/app/src/channel/commands/serve.rs` and `channel/runtime/serve.rs` | `initialize_runtime_environment`, `bootstrap_app_context_with_config` | owns serve-loop governance authority and singleton runtime slot tracking |
@@ -54,22 +53,16 @@ the fastest mental model.
 
 ## Call Paths by Surface
 
-### 0. `turn_cli` wrappers and the additive spine
+### 0. `turn_cli` wrappers
 
 ```text
 run_turn_run_cli / run_ask_cli / run_chat_cli
-  -> run_spine_* helpers
   -> mvp::chat::run_cli_*
 ```
 
-Important distinction:
-
-- the `spine` naming in `turn_cli.rs` is truthful about the intended direction
-  of travel
-- the real shipped CLI turn/chat bootstrap still terminates in the `app`-layer
-  runtime helpers today
-- `loong-app-protocol` and `loong-runtime` already carry the contract/projection
-  layer, but they are not yet the sole owners of live turn bootstrap
+The shipped CLI turn/chat bootstrap still terminates in the app-layer runtime
+helpers today. `loong-app-protocol` contains host command/response contracts;
+it is not a turn executor or runtime projection layer.
 
 ### 1. CLI chat / ask
 

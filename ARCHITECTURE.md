@@ -65,7 +65,7 @@ core foundation
 additive spine
 - loong-plugin-sdk -> loong-core
 - loong-runtime -> contracts, loong-core, kernel
-- loong-app-protocol -> loong-runtime
+- loong-app-protocol -> loong-core
 - loong-cli -> loong-app-protocol
 
 governed runtime rail
@@ -76,7 +76,7 @@ governed runtime rail
 - app -> contracts, loong-core, kernel, loong-runtime, loong-tools
 - spec -> contracts, loong-core, kernel, protocol, bridge-runtime
 - bench -> kernel, spec
-- daemon (`loong`) -> app, loong-app-protocol, bench, bridge-runtime, contracts, loong-core, kernel, protocol, spec
+- daemon (`loong`) -> app, bench, bridge-runtime, contracts, loong-core, kernel, protocol, spec
 ```
 
 No dependency cycles. This is non-negotiable.
@@ -89,18 +89,18 @@ The 15 packages fall into two ownership families:
   `protocol`, `bridge-runtime`, `app`, `spec`, `bench`, and `daemon` own the
   shipping product path and the policy-governed runtime.
 - Additive SDK spine: `loong-core`, `loong-plugin-sdk`, `loong-runtime`,
-  `loong-app-protocol`, and `loong-cli` define the newer task/session/runtime
-  contract spine. They already participate in the live graph through `kernel`
-  and `daemon`, but they do not yet own the shipped bootstrap path end-to-end.
+  `loong-app-protocol`, and `loong-cli` define the newer core/runtime/host
+  boundaries. The runtime and plugin portions participate in the shipping graph;
+  the protocol/CLI pair remains a non-shipping host surface.
 
 | Crate | Role |
 |-------|------|
 | `loong-core` | Core action/policy/grant foundation plus sessions, tasks, turns, artifacts, workspace context, and execution lifecycle facts used by the additive spine. |
 | `loong-plugin-sdk` | Plugin contract spine above `loong-core`. Owns the additive plugin-facing contract that `kernel` already consumes. |
 | `loong-access` | Typed physical side-effect boundary. Owns Access facades, concrete Actions, and operation-local execution errors above core grant contracts. |
-| `loong-runtime` | Runtime ownership spine above `loong-core` and `kernel`. Defines the shared kernel/tool-plane owner plus oneshot, interactive, and task-status runtime contracts while the shipped bootstrap path migrates onto that owner. |
+| `loong-runtime` | Long-lived runtime owner above `loong-core` and `kernel`. Owns the shared kernel and typed tool plane; session/context ownership is converging here without preserving the deleted one-shot projection API. |
 | `loong-tools` | Concrete builtin typed tool implementations. It composes governed Access and kernel-facing tool contracts without owning orchestration. |
-| `loong-app-protocol` | App-facing task/session/turn protocol built on `loong-runtime`. This is the transitional boundary that `daemon` already consumes directly. |
+| `loong-app-protocol` | Host-facing task/session command and response contracts built directly on `loong-core`. It does not execute turns or project runtime state. |
 | `loong-cli` | First-party CLI shell spine library. Exists as Phase 2 scaffolding; it is not the shipping `loong` binary entrypoint today. |
 | `contracts` | Shared governed-runtime vocabulary: capability tokens, policy/audit types, runtime/tool/memory request-outcome shapes, task state, namespaces, and pack manifests. Zero internal dependencies. |
 | `kernel` | Governed execution core. Owns audit, policy, runtime/tool/memory/connector planes, harness brokerage, task supervision, plugin and integration control, bootstrap execution, architecture awareness, and canonical plugin contract translation. |

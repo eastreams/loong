@@ -844,29 +844,9 @@ async fn execute_tasks_command_status_surfaces_approval_and_tool_policy() {
         execution.payload["task"]["turn_checkpoint"]["summary"]["requires_recovery"],
         true
     );
-    assert_eq!(
-        execution.payload["task"]["spine"]["session_id"],
-        "delegate:task-1"
-    );
-    assert_eq!(
-        execution.payload["task"]["spine"]["task_id"],
-        "delegate:task-1"
-    );
-    assert_eq!(
-        execution.payload["task"]["spine"]["objective"],
-        "Release Check"
-    );
-    assert_eq!(
-        execution.payload["task"]["spine"]["lifecycle"],
-        "waiting_for_approval"
-    );
-    assert_eq!(
-        execution.payload["task"]["spine"]["execution_mode"],
-        "detached_background"
-    );
-    assert_eq!(
-        execution.payload["task"]["spine"]["workspace"]["workspace_root"],
-        "/tmp/loong/tasks-cli/delegate:task-1"
+    assert!(
+        execution.payload["task"].get("spine").is_none(),
+        "task status must not fabricate a second runtime Session/Task projection"
     );
 
     let rendered =
