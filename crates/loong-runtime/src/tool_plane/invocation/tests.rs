@@ -12,8 +12,8 @@ use async_trait::async_trait;
 use loong_contracts::{
     ActionExecutionEvent, AuditError, AuditEvent, AuditEventKind, AuthorizationAttempt,
     AuthorizationAttemptEvent, AuthorizationPolicyEvent, AuthorizationScope, AuthorizationSubject,
-    AuthorizationTerminalOutcome, Capabilities, Capability, ToolInputError, ToolSchedulingClass,
-    ToolSpec,
+    AuthorizationTerminalOutcome, Capabilities, Capability, ToolInputError, ToolPath,
+    ToolSchedulingClass, ToolSpec,
 };
 use loong_core::{
     error::PolicyGrantError,
@@ -29,10 +29,17 @@ use super::ToolInvocationContext;
 use crate::{
     runtime::Runtime,
     tool_plane::{
-        RegisteredToolError, ToolPath, ToolPlaneRegistry,
+        RegisteredToolError, ToolPlaneRegistry,
         error::{CapabilityNarrowingError, ToolInvocationError},
     },
 };
+
+// Path validation belongs to contracts tests; invocation tests use valid
+// literal identities so they can focus on grant, dispatch, and audit order.
+#[allow(clippy::expect_used)]
+fn tool_path(segment: &str) -> ToolPath {
+    ToolPath::new([segment]).expect("test tool path must be valid")
+}
 
 struct TestContextFactory;
 
@@ -223,7 +230,7 @@ fn test_runtime(
     let mut tools = ToolPlaneRegistry::new();
     tools
         .register(
-            ToolPath::from("test.echo"),
+            tool_path("test.echo"),
             TestTool {
                 executions: executions.clone(),
                 fail: tool_fails,
@@ -247,7 +254,7 @@ async fn capability_override_escalation_is_audited_before_grant() {
     let requested = Capabilities::from([Capability::FilesystemRead]);
 
     let error = runtime
-        .tool(&context(), ToolPath::from("test.echo"))
+        .tool(&context(), tool_path("test.echo"))
         .expect("registered tool should resolve")
         .with_capabilities_override(requested.clone())
         .invoke(json!({ "message": "hello" }))
@@ -257,7 +264,7 @@ async fn capability_override_escalation_is_audited_before_grant() {
     assert!(matches!(
         error,
         ToolInvocationError::CapabilityOverride(ref rejection)
-            if rejection.path == ToolPath::from("test.echo")
+            if rejection.path == tool_path("test.echo")
                 && rejection.requested == requested
                 && rejection.declared == Capabilities::new()
     ));
@@ -272,7 +279,7 @@ async fn capability_override_escalation_is_audited_before_grant() {
                 ..
             },
             ..
-        }] if path_display == "test.echo"
+        }] if path_display == "/test.echo"
             && event_requested == &requested
             && declared == &Capabilities::new()
     ));
@@ -283,7 +290,7 @@ async fn capability_override_rejection_and_audit_failure_keep_both_sources() {
     let (runtime, _audit, executions) = test_runtime(Some(1), false);
 
     let error = runtime
-        .tool(&context(), ToolPath::from("test.echo"))
+        .tool(&context(), tool_path("test.echo"))
         .expect("registered tool should resolve")
         .with_capabilities_override(Capabilities::from([Capability::FilesystemRead]))
         .invoke(json!({ "message": "hello" }))
@@ -295,7 +302,7 @@ async fn capability_override_rejection_and_audit_failure_keep_both_sources() {
         ToolInvocationError::CapabilityOverrideAndAudit {
             rejection,
             audit_source: AuditError::Sink(ref reason),
-        } if rejection.path == ToolPath::from("test.echo") && reason.contains("call 1")
+        } if rejection.path == tool_path("test.echo") && reason.contains("call 1")
     ));
     assert_eq!(executions.load(Ordering::Relaxed), 0);
 }
@@ -309,7 +316,7 @@ async fn derived_child_cannot_exceed_runtime_selected_authority() {
     };
 
     let error = runtime
-        .tool(&parent, ToolPath::from("test.echo"))
+        .tool(&parent, tool_path("test.echo"))
         .expect("registered tool should resolve")
         .invoke(json!({ "message": "hello" }))
         .await
@@ -336,7 +343,7 @@ async fn missing_tool_capability_is_denied_and_audited_by_policy_engine() {
     let mut tools = ToolPlaneRegistry::new();
     tools
         .register(
-            ToolPath::from("test.read"),
+            tool_path("test.read"),
             TestTool {
                 executions: executions.clone(),
                 fail: false,
@@ -347,7 +354,7 @@ async fn missing_tool_capability_is_denied_and_audited_by_policy_engine() {
     let runtime = Runtime::new(kernel, tools);
 
     let error = runtime
-        .tool(&context(), ToolPath::from("test.read"))
+        .tool(&context(), tool_path("test.read"))
         .expect("registered tool should resolve")
         .invoke(json!({ "message": "hello" }))
         .await
@@ -387,7 +394,7 @@ async fn invocation_correlates_authorization_start_and_completion() {
     let (runtime, audit, executions) = test_runtime(None, false);
 
     let output = runtime
-        .tool(&context(), ToolPath::from("test.echo"))
+        .tool(&context(), tool_path("test.echo"))
         .expect("registered tool should resolve")
         .invoke(json!({ "message": "hello" }))
         .await
@@ -441,7 +448,7 @@ async fn invalid_input_is_audited_without_executing_the_tool() {
     let (runtime, audit, executions) = test_runtime(None, false);
 
     let error = runtime
-        .tool(&context(), ToolPath::from("test.echo"))
+        .tool(&context(), tool_path("test.echo"))
         .expect("registered tool should resolve")
         .invoke(json!({}))
         .await
@@ -479,7 +486,7 @@ async fn bound_registered_tool_runs_its_success_observer() {
     let mut tools = ToolPlaneRegistry::new();
     tools
         .register_with_success_observer(
-            ToolPath::from("test.echo"),
+            tool_path("test.echo"),
             TestTool {
                 executions: executions.clone(),
                 fail: false,
@@ -499,7 +506,7 @@ async fn bound_registered_tool_runs_its_success_observer() {
     let runtime = Runtime::new(kernel, tools);
 
     runtime
-        .tool(&context(), ToolPath::from("test.echo"))
+        .tool(&context(), tool_path("test.echo"))
         .expect("registered tool should resolve")
         .invoke(json!({ "message": "hello" }))
         .await
@@ -528,7 +535,7 @@ async fn dropping_started_invocation_records_unknown_outcome() {
     let mut tools = ToolPlaneRegistry::new();
     tools
         .register(
-            ToolPath::from("test.pending"),
+            tool_path("test.pending"),
             PendingTool {
                 entered: entered.clone(),
                 executions: executions.clone(),
@@ -539,7 +546,7 @@ async fn dropping_started_invocation_records_unknown_outcome() {
     let context = context();
     let mut invocation = Box::pin(
         runtime
-            .tool(&context, ToolPath::from("test.pending"))
+            .tool(&context, tool_path("test.pending"))
             .expect("registered tool should resolve")
             .invoke(json!({})),
     );
@@ -586,7 +593,7 @@ async fn dropping_started_invocation_cannot_propagate_terminal_audit_failure() {
     let mut tools = ToolPlaneRegistry::new();
     tools
         .register(
-            ToolPath::from("test.pending"),
+            tool_path("test.pending"),
             PendingTool {
                 entered: entered.clone(),
                 executions: executions.clone(),
@@ -597,7 +604,7 @@ async fn dropping_started_invocation_cannot_propagate_terminal_audit_failure() {
     let context = context();
     let mut invocation = Box::pin(
         runtime
-            .tool(&context, ToolPath::from("test.pending"))
+            .tool(&context, tool_path("test.pending"))
             .expect("registered tool should resolve")
             .invoke(json!({})),
     );
@@ -629,7 +636,7 @@ async fn start_audit_failure_prevents_dispatch() {
     let (runtime, _audit, executions) = test_runtime(Some(2), false);
 
     let error = runtime
-        .tool(&context(), ToolPath::from("test.echo"))
+        .tool(&context(), tool_path("test.echo"))
         .expect("registered tool should resolve")
         .invoke(json!({ "message": "hello" }))
         .await
@@ -657,7 +664,7 @@ async fn policy_denial_stays_typed_and_emits_no_execution_event() {
     let mut tools = ToolPlaneRegistry::new();
     tools
         .register(
-            ToolPath::from("test.echo"),
+            tool_path("test.echo"),
             TestTool {
                 executions: executions.clone(),
                 fail: false,
@@ -668,7 +675,7 @@ async fn policy_denial_stays_typed_and_emits_no_execution_event() {
     let runtime = Runtime::new(kernel, tools);
 
     let error = runtime
-        .tool(&context(), ToolPath::from("test.echo"))
+        .tool(&context(), tool_path("test.echo"))
         .expect("registered tool should resolve")
         .invoke(json!({ "message": "hello" }))
         .await
@@ -693,7 +700,7 @@ async fn completed_audit_error_preserves_output_without_leaking_it_through_debug
     let sentinel = "sensitive-file-content";
 
     let error = runtime
-        .tool(&context(), ToolPath::from("test.echo"))
+        .tool(&context(), tool_path("test.echo"))
         .expect("registered tool should resolve")
         .invoke(json!({ "message": sentinel }))
         .await
@@ -718,7 +725,7 @@ async fn dispatch_and_terminal_audit_failures_keep_both_sources() {
     let (runtime, _audit, executions) = test_runtime(Some(3), true);
 
     let error = runtime
-        .tool(&context(), ToolPath::from("test.echo"))
+        .tool(&context(), tool_path("test.echo"))
         .expect("registered tool should resolve")
         .invoke(json!({ "message": "hello" }))
         .await

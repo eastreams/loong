@@ -444,7 +444,7 @@ impl ConversationContextEngine for DefaultContextEngine {
                 provider_binding,
                 &envelope,
             )
-            .await;
+            .await?;
             return Ok(AssembledConversationContext {
                 messages: projected.messages,
                 artifacts: projected.artifacts,

@@ -24,6 +24,15 @@ const OPENAI_AUTH_ENV_KEYS: &[&str] = &[
 ];
 const VOLCENGINE_AUTH_ENV_KEYS: &[&str] = &["ARK_API_KEY"];
 
+// Request-shape tests are not metadata-error tests; keep their repeated setup
+// focused on the provider payload after successful schema materialization.
+fn test_provider_tool_definitions(
+    runtime: Option<&loong_runtime::runtime::Runtime<crate::context::AppContextFactory>>,
+) -> Vec<Value> {
+    crate::tools::provider_tool_definitions(runtime)
+        .expect("provider tool definitions should materialize")
+}
+
 fn build_provider_failover_test_app_context(
     agent_id: &str,
 ) -> (AppContext, Arc<InMemoryAuditSink>) {
@@ -1781,7 +1790,7 @@ fn turn_body_includes_tool_schema_and_auto_choice() {
         "model-latest",
         CompletionPayloadMode::default_for(&config.provider),
         true,
-        &crate::tools::provider_tool_definitions(Some(app_ctx.runtime())),
+        &test_provider_tool_definitions(Some(app_ctx.runtime())),
     );
     let tools = body
         .get("tools")
@@ -1845,7 +1854,7 @@ fn anthropic_turn_body_uses_native_messages_shape_and_tool_schema() {
         "claude-3-7-sonnet-latest",
         CompletionPayloadMode::default_for(&config.provider),
         true,
-        &crate::tools::provider_tool_definitions(None),
+        &test_provider_tool_definitions(None),
     );
 
     assert_eq!(body["system"], "system rules");
@@ -1883,7 +1892,7 @@ fn anthropic_turn_body_converts_tool_schema_to_native_format() {
         "claude-test",
         CompletionPayloadMode::default_for(&config.provider),
         true,
-        &crate::tools::provider_tool_definitions(None),
+        &test_provider_tool_definitions(None),
     );
     let tools = body
         .get("tools")
@@ -1944,7 +1953,7 @@ fn anthropic_turn_body_preserves_native_tool_use_and_tool_result_blocks() {
         "claude-test",
         CompletionPayloadMode::default_for(&config.provider),
         true,
-        &crate::tools::provider_tool_definitions(None),
+        &test_provider_tool_definitions(None),
     );
 
     let adapted_messages = body["messages"].as_array().expect("anthropic messages");
@@ -2004,7 +2013,7 @@ fn opencode_zen_gemini_turn_body_uses_google_generate_content_shape() {
         runtime_contract,
         capability,
         true,
-        &crate::tools::provider_tool_definitions(None),
+        &test_provider_tool_definitions(None),
         false,
     );
 
@@ -2088,7 +2097,7 @@ fn opencode_zen_gemini_turn_body_preserves_native_tool_result_blocks() {
         runtime_contract,
         capability,
         true,
-        &crate::tools::provider_tool_definitions(None),
+        &test_provider_tool_definitions(None),
         false,
     );
 
@@ -2255,7 +2264,7 @@ fn bedrock_turn_body_uses_native_tool_blocks_and_tool_config() {
         "anthropic.claude-3-7-sonnet-20250219-v1:0",
         CompletionPayloadMode::default_for(&config.provider),
         true,
-        &crate::tools::provider_tool_definitions(None),
+        &test_provider_tool_definitions(None),
     );
 
     let adapted_messages = body["messages"].as_array().expect("bedrock messages");
@@ -2350,7 +2359,7 @@ fn responses_turn_body_keeps_tool_schema_with_responses_input_shape() {
         "gpt-5.1-mini",
         CompletionPayloadMode::default_for(&config.provider),
         true,
-        &crate::tools::provider_tool_definitions(None),
+        &test_provider_tool_definitions(None),
     );
 
     assert_eq!(body["input"][0]["role"], "user");
@@ -2602,7 +2611,7 @@ fn responses_turn_body_preserves_native_function_call_roundtrip_items() {
         "gpt-5.1-mini",
         CompletionPayloadMode::default_for(&config.provider),
         true,
-        &crate::tools::provider_tool_definitions(None),
+        &test_provider_tool_definitions(None),
     );
 
     let input = body["input"].as_array().expect("responses input array");

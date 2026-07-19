@@ -6,12 +6,12 @@
 
 use std::fmt;
 
-use loong_contracts::{AuditError, Capabilities, GrantId};
+use loong_contracts::{AuditError, Capabilities, GrantId, ToolPath};
 use loong_core::error::PolicyGrantError;
 use serde_json::Value;
 use thiserror::Error;
 
-use super::{RegisteredToolError, ToolPath};
+use super::RegisteredToolError;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 #[non_exhaustive]
@@ -22,11 +22,11 @@ pub enum RegistrationError {
 
 #[derive(Debug, Error, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum LookupError<P> {
+pub enum LookupError {
     #[error("tool is not registered: {path}")]
-    NotRegistered { path: P },
+    NotRegistered { path: ToolPath },
     #[error("tool registry invariant failed for {path}")]
-    RegistryInvariant { path: P },
+    RegistryInvariant { path: ToolPath },
 }
 
 /// A requested tool override exceeded the tool's declared default authority.

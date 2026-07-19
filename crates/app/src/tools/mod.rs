@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use loong_contracts::{Capabilities, ToolCoreOutcome, ToolCoreRequest};
-use loong_runtime::tool_plane::{ToolPath, error::LookupError};
+use loong_contracts::{Capabilities, ToolCoreOutcome, ToolCoreRequest, ToolPath};
+use loong_runtime::tool_plane::error::LookupError;
 use serde_json::{Value, json};
 pub(crate) use tool_internal_context::{
     ensure_untrusted_payload_does_not_use_reserved_internal_tool_context,
@@ -139,6 +139,7 @@ pub(crate) use tool_identity::{
     resolve_legacy_tool_execution,
 };
 
+pub use error::ToolMetadataError;
 pub use tool_identity::{
     canonical_tool_name, is_known_tool_name, is_known_tool_name_in_view, legacy_display_tool_name,
 };
@@ -158,7 +159,6 @@ pub(crate) use tool_runtime_view::{
     model_visible_skill_roots_for_runtime_config, runtime_tool_view_with_runtime_config,
 };
 pub(crate) use tool_snapshot::capability_snapshot_for_direct_states_with_config;
-pub(crate) use tool_snapshot::capability_snapshot_for_view_with_config;
 pub use tool_snapshot::{
     DiscoverableToolSurfaceSummary, ToolRegistryEntry,
     runtime_discoverable_tool_surface_summary_with_config, tool_registry_with_config,
@@ -421,7 +421,7 @@ pub(crate) async fn execute_kernel_tool_request(
         )
         .map_err(ToolRequestError::ReservedContext)?;
 
-        let outer_path = ToolPath::from(request.tool_name.clone());
+        let outer_path = ToolPath::new([request.tool_name.clone()])?;
         let (typed_path, effective_request, capability_override, typed_invocation) =
             match execution_context.tool(outer_path.clone()) {
                 Ok(invocation) => (outer_path, request, capabilities_override, Some(invocation)),
@@ -444,7 +444,7 @@ pub(crate) async fn execute_kernel_tool_request(
                         ToolInvokeProviderExposure::AllowProviderExposed,
                     )
                     .map_err(ToolRequestError::Input)?;
-                    let typed_path = ToolPath::from(resolved.request.tool_name.clone());
+                    let typed_path = ToolPath::new([resolved.request.tool_name.clone()])?;
                     let typed_invocation = match execution_context.tool(typed_path.clone()) {
                         Ok(invocation) => Some(invocation),
                         Err(LookupError::NotRegistered { .. }) => None,
@@ -550,7 +550,7 @@ pub(crate) async fn execute_registered_tool_request(
         )
         .map_err(ToolRequestError::ReservedContext)?;
 
-        let path = ToolPath::from(request.tool_name);
+        let path = ToolPath::new([request.tool_name])?;
         // The trusted overlay has already shaped `execution_context`; it is
         // runtime state, never part of the concrete tool's input contract.
         let mut payload = request.payload;

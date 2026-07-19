@@ -4,18 +4,24 @@
 
 ## Plane Ownership
 
-- `loong-runtime::tool_plane` 拥有 default plane 的 `ToolPath`、`ToolInvocationAction`、
-  runtime-internal `ToolPlane` trait、`ToolPlaneRegistry` 以及
-  `error::{RegistrationError, LookupError<P>, DispatchError<P>}`。
+- `loong-contracts` 拥有唯一 `ToolPath` identity；`loong-runtime::tool_plane` 拥有
+  `ToolInvocationAction`、runtime-internal `ToolPlane` trait、`ToolPlaneRegistry` 以及
+  `error::{RegistrationError, LookupError, ToolInvocationError}`。
 - runtime `ToolInvocation` wrapper 与 `ToolInvocationContext` 也必须归属 `loong-runtime`；当前
   app-owned wrapper 是步骤 5 要删除的实现偏差，不能再增加第二个 bridge。
-- `ToolPlane` 不是外部扩展点。它只允许 runtime crate 内部替换 registry/storage strategy；default
-  `ToolPath` 使用 segment path，contracts/core 不作全局规定。`Runtime` 不接受 caller-provided plane，
-  也不向 crate 外暴露能消费 invocation grant 的 trait object。
+- `ToolPlane` 不是外部扩展点。它只允许 runtime crate 内部替换 registry/storage strategy；path
+  identity、比较和序列化不随 BTreeMap/slot map/Trie 实现变化。`Runtime` 不接受 caller-provided
+  plane，也不向 crate 外暴露能消费 invocation grant 的 trait object。
 - app bootstrap 注册 concrete builtin tools 和 app-owned policy/success observer；kernel 不持有
   typed registry，concrete tool crate 不持有 registry。
 - `Runtime<C>` 持有构造完成的 plane。registration 是 fallible bootstrap，duplicate path 不能变成
   lazy global panic。
+
+`ToolPath` 是有序、非空的 opaque segments；每个 segment 非空且不含 `/` 或控制字符。canonical
+text/serde 固定为 `/a/b/c/tool`，大小写敏感且不做 Unicode normalization。`.`、`..` 只是逻辑
+segment，没有 filesystem navigation 语义。当前 dotted catalog id 是一个完整 segment，例如
+`glob.search -> /glob.search`，不能隐式拆成 `/glob/search`；真正的层级 namespace 必须在注册时显式
+传入多个 segments。contracts 不提供 `From<&str>` 或其它隐式 dotted conversion。
 
 ## Registry Invariant
 
@@ -40,14 +46,14 @@ ToolPath -> private ToolSlot -> RegisteredTool<C>
   压成字符串；
 - private erasure 使用 `RegisteredToolError::{Input, Execution}`，其中 execution variant 保留
   concrete tool error source；
-- runtime plane 分开拥有 `RegistrationError`、`LookupError<P>` 与 `DispatchError<P>`，lookup 和
-  granted dispatch 的 registry invariant 不再混成同一个 fallback signal；
+- runtime plane 分开拥有 concrete `RegistrationError`、`LookupError`、`RegisteredToolError` 与
+  composite `ToolInvocationError`，lookup 和 granted dispatch failure 不再混成同一个 fallback signal；
 - 只有 `LookupError::NotRegistered` 可以由 legacy ingress 选择 fallback；
-  `LookupError::RegistryInvariant`、任何 `DispatchError` 和 `RegisteredToolError` 都不得 fallback。
+  `LookupError::RegistryInvariant`、`RegisteredToolError` 和 `ToolInvocationError` 都不得 fallback。
 
-composite `ToolInvocationError` 尚未定义。它只能在步骤 5 把 runtime wrapper、child narrowing、
-direct grant、granted dispatch 和 execution audit 真正接线的同一个 owner-driven 提交中定义并被
-调用路径使用；不安排独立 public error scaffold commit。
+composite `ToolInvocationError` 已由 runtime invocation wrapper 使用，保留 caps override、child
+narrowing、grant、dispatch 与 execution audit 的 concrete source；它不是 registry lookup error，
+因此不能成为 legacy fallback signal。
 
 ## Invocation Contract
 
@@ -136,7 +142,8 @@ helper。不能再增加第二个 app/runtime Context bridge。
   fallback；caps override、narrowing、grant、parse/input 和 execution error 一律不 fallback。
   legacy tool 不能注册进 typed plane 冒充迁移。
 - concrete descriptor 迁入 tool/registration owner 后，删除 app static catalog 重复 metadata。
-- display name 来自 plane-local path formatter；删除 `file.read -> read` 等 display alias helper。
+- identity display 来自 contracts-owned canonical `ToolPath` formatter；删除 `file.read -> read` 等
+  display alias helper。
 - 所有 concrete tools 迁完后删除 `ToolCoreRequest` / `ToolCoreOutcome`、`LegacyToolPlane`、
   `CoreToolAdapter` / `ToolExtensionAdapter` 和 `Kernel::execute_tool_core`。
 

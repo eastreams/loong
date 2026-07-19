@@ -1,12 +1,11 @@
 //! Long-lived owner for governance and runtime registries.
 
-use loong_contracts::{Capabilities, ToolSpec};
+use loong_contracts::{Capabilities, ToolPath, ToolSpec};
 use loong_core::policy::context::ContextFactory;
 use loong_kernel::Kernel;
 
 use crate::tool_plane::{
-    ToolInvocation, ToolInvocationContext, ToolPath, ToolPlane, ToolPlaneRegistry,
-    error::LookupError,
+    ToolInvocation, ToolInvocationContext, ToolPlane, ToolPlaneRegistry, error::LookupError,
 };
 
 /// Owns the kernel and tool plane shared by app sessions and execution contexts.
@@ -17,7 +16,7 @@ use crate::tool_plane::{
 /// external extension point.
 pub struct Runtime<C: ContextFactory> {
     kernel: Kernel<C>,
-    tools: Box<dyn ToolPlane<C, Path = ToolPath> + 'static>,
+    tools: Box<dyn ToolPlane<C> + 'static>,
 }
 
 impl<C> Runtime<C>
@@ -42,7 +41,7 @@ where
     }
 
     /// Query registered metadata without exposing granted dispatch.
-    pub fn tool_spec(&self, path: &ToolPath) -> Result<&ToolSpec, LookupError<ToolPath>> {
+    pub fn tool_spec(&self, path: &ToolPath) -> Result<&ToolSpec, LookupError> {
         self.tools.resolve(path).map(|tool| tool.spec())
     }
 
@@ -51,7 +50,7 @@ where
         &'runtime self,
         context: &'runtime C::Cx<'context>,
         path: ToolPath,
-    ) -> Result<ToolInvocation<'runtime, 'context, C>, LookupError<ToolPath>>
+    ) -> Result<ToolInvocation<'runtime, 'context, C>, LookupError>
     where
         C: 'context,
         C::Cx<'context>: ToolInvocationContext,

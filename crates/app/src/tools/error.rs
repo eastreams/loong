@@ -1,11 +1,25 @@
-//! Error boundary for the temporary typed-first legacy tool ingress.
+//! Typed app-tool boundary errors.
 
-use loong_contracts::KernelError;
-use loong_runtime::tool_plane::{
-    ToolPath,
-    error::{LookupError, ToolInvocationError},
-};
+use loong_contracts::{KernelError, ToolPath, ToolPathError};
+use loong_runtime::tool_plane::error::{LookupError, ToolInvocationError};
 use thiserror::Error;
+
+/// Failure before provider, search, or prompt metadata can be published.
+///
+/// Only ordinary absence may select legacy catalog metadata. Invalid identity
+/// and registry corruption must remain visible so the agent never receives a
+/// tool surface assembled from untrusted or inconsistent metadata.
+#[derive(Debug, Error)]
+pub enum ToolMetadataError {
+    #[error("invalid tool catalog path `{tool_name}`: {source}")]
+    InvalidPath {
+        tool_name: String,
+        #[source]
+        source: ToolPathError,
+    },
+    #[error(transparent)]
+    Lookup(#[from] LookupError),
+}
 
 /// Distinguishes the new typed runtime path from the explicit legacy fallback.
 ///
@@ -22,9 +36,12 @@ pub(crate) enum ToolRequestError {
     /// The transitional app context could not derive this invocation scope.
     #[error("tool execution context could not be derived: {0}")]
     Context(String),
+    /// The typed identity violated the contracts-owned path invariant.
+    #[error(transparent)]
+    InvalidPath(#[from] ToolPathError),
     /// Typed registry lookup failed for a reason other than ordinary absence.
     #[error(transparent)]
-    Lookup(#[from] LookupError<ToolPath>),
+    Lookup(#[from] LookupError),
     /// A catalog identity already belongs to the typed plane, so absence cannot
     /// be reinterpreted as permission to enter a legacy dispatcher.
     #[error("typed tool `{path}` is missing its runtime registration")]

@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use loong_contracts::{
     AuthorizationScope, AuthorizationSubject, Capabilities, CapabilityToken, GovernedSessionMode,
+    ToolPath,
 };
 use loong_core::policy::context::{ContextFactory, PolicyContext};
 use loong_kernel::access::fs::{
@@ -26,7 +27,7 @@ use loong_kernel::{
 use loong_runtime::{
     runtime::Runtime,
     tool_plane::{
-        ToolInvocation, ToolInvocationContext, ToolPath,
+        ToolInvocation, ToolInvocationContext,
         error::{CapabilityNarrowingError, LookupError},
     },
 };
@@ -544,7 +545,7 @@ impl AppContext {
     pub(crate) fn tool(
         &self,
         path: ToolPath,
-    ) -> Result<ToolInvocation<'_, '_, AppContextFactory>, LookupError<ToolPath>> {
+    ) -> Result<ToolInvocation<'_, '_, AppContextFactory>, LookupError> {
         self.runtime.tool(self, path)
     }
 }
@@ -877,6 +878,13 @@ mod tests {
     use crate::memory::runtime_config::MemoryRuntimeConfig;
     use crate::test_utils::ScopedEnv;
 
+    // Path validation is covered by contracts; context tests use valid
+    // registered identities so they can focus on authority derivation.
+    #[allow(clippy::expect_used)]
+    fn tool_path(segment: &str) -> ToolPath {
+        ToolPath::new([segment]).expect("test tool path must be valid")
+    }
+
     #[test]
     fn runtime_bootstrap_does_not_issue_a_host_token() {
         let audit = Arc::new(InMemoryAuditSink::default());
@@ -1127,7 +1135,7 @@ mod tests {
             .for_invocation(context.tool_runtime_config())
             .expect("build execution context");
         let invocation = execution_context
-            .tool(ToolPath::from("read"))
+            .tool(tool_path("read"))
             .expect("read should be registered");
 
         let error = invocation
@@ -1157,7 +1165,7 @@ mod tests {
             .for_invocation(context.tool_runtime_config())
             .expect("build execution context");
         let invocation = execution_context
-            .tool(ToolPath::from("read"))
+            .tool(tool_path("read"))
             .expect("read should be registered");
 
         let error = invocation

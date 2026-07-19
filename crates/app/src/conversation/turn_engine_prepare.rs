@@ -10,8 +10,8 @@ use super::{
     ToolExecutionPreflight, ToolIntent, ToolPreflightOutcome, TurnResult,
     effective_denied_tool_name,
 };
-use loong_contracts::{Capabilities, ToolCoreRequest, ToolSchedulingClass};
-use loong_runtime::tool_plane::{ToolPath, error::LookupError};
+use loong_contracts::{Capabilities, ToolCoreRequest, ToolPath, ToolSchedulingClass};
+use loong_runtime::tool_plane::error::LookupError;
 
 #[derive(Debug, Clone)]
 pub(super) struct PreparedToolIntent {
@@ -73,7 +73,24 @@ impl<'a, 'b, D: AppToolDispatcher + ?Sized> ToolIntentPreparationHarness<'a, 'b,
         };
         let outer_tool_name =
             crate::tools::canonical_tool_name(intent.tool_name.as_str()).to_owned();
-        let outer_path = ToolPath::from(outer_tool_name.clone());
+        let outer_path = match ToolPath::new([outer_tool_name.clone()]) {
+            Ok(path) => path,
+            Err(error) => {
+                let reason = error.to_string();
+                return Err(PreparedToolIntentFailure {
+                    intent: intent.clone(),
+                    turn_result: TurnResult::non_retryable_tool_error(
+                        "tool_path_invalid",
+                        reason.clone(),
+                    ),
+                    decision: ToolDecisionTelemetry::deny(
+                        outer_tool_name,
+                        reason,
+                        "tool_path_invalid",
+                    ),
+                });
+            }
+        };
         let outer_scheduling = match self.session_context.runtime().tool_spec(&outer_path) {
             Ok(spec) => Some(spec.scheduling),
             Err(LookupError::NotRegistered { .. }) => None,
@@ -161,7 +178,28 @@ impl<'a, 'b, D: AppToolDispatcher + ?Sized> ToolIntentPreparationHarness<'a, 'b,
             (outer_tool_name, intent.args_json.clone(), None)
         };
 
-        let typed_path = ToolPath::from(requested_tool_name.as_str());
+        let typed_path = if leased_invocation {
+            match ToolPath::new([requested_tool_name.clone()]) {
+                Ok(path) => path,
+                Err(error) => {
+                    let reason = error.to_string();
+                    return Err(PreparedToolIntentFailure {
+                        intent: intent.clone(),
+                        turn_result: TurnResult::non_retryable_tool_error(
+                            "tool_path_invalid",
+                            reason.clone(),
+                        ),
+                        decision: ToolDecisionTelemetry::deny(
+                            requested_tool_name,
+                            reason,
+                            "tool_path_invalid",
+                        ),
+                    });
+                }
+            }
+        } else {
+            outer_path
+        };
         let typed_scheduling = if outer_registered {
             outer_scheduling
         } else if leased_invocation {

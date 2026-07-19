@@ -9,7 +9,7 @@ use std::{
 
 use async_trait::async_trait;
 use loong_contracts::{
-    AuthorizationScope, AuthorizationSubject, Capabilities, Capability, ToolInputError,
+    AuthorizationScope, AuthorizationSubject, Capabilities, Capability, ToolInputError, ToolPath,
     ToolSchedulingClass, ToolSpec,
 };
 use loong_core::{
@@ -22,7 +22,7 @@ use loong_core::{
 use serde_json::{Value, json};
 
 use super::{
-    ToolInvocationAction, ToolPath, ToolPlaneRegistry,
+    ToolInvocationAction, ToolPlaneRegistry,
     error::{LookupError, RegistrationError},
 };
 
@@ -97,24 +97,23 @@ impl ToolImpl<TestContextFactory> for EchoTool {
     }
 }
 
-#[test]
-fn tool_path_keeps_plane_local_segments() {
-    let path = ToolPath::from("test.echo");
-
-    assert_eq!(path.segments(), ["test", "echo"]);
-    assert_eq!(path.to_string(), "test.echo");
+// Path validation belongs to contracts tests; registry tests use valid literal
+// identities so they can stay focused on lookup and slot invariants.
+#[allow(clippy::expect_used)]
+fn tool_path(segment: &str) -> ToolPath {
+    ToolPath::new([segment]).expect("test tool path must be valid")
 }
 
 #[test]
 fn tool_invocation_action_exposes_policy_metadata() {
     let action = ToolInvocationAction::new(
-        ToolPath::from("read"),
+        tool_path("read"),
         Capabilities::from([Capability::InvokeTool, Capability::FilesystemRead]),
         json!({ "path": "notes.txt" }),
     );
     let metadata = action.metadata();
 
-    assert_eq!(action.path(), &ToolPath::from("read"));
+    assert_eq!(action.path(), &tool_path("read"));
     assert_eq!(
         action
             .required_capabilities()
@@ -125,7 +124,7 @@ fn tool_invocation_action_exposes_policy_metadata() {
     );
     assert_eq!(action.payload(), &json!({ "path": "notes.txt" }));
     assert_eq!(metadata.kind, "tool.invoke");
-    assert_eq!(metadata.operation.as_ref(), "read");
+    assert_eq!(metadata.operation.as_ref(), "/read");
     assert_eq!(
         metadata
             .required_capabilities
@@ -137,7 +136,7 @@ fn tool_invocation_action_exposes_policy_metadata() {
     assert_eq!(
         ActionMeta::payload(&action).as_ref(),
         &json!({
-            "tool_path": "read",
+            "tool_path": "/read",
             "payload": { "path": "notes.txt" }
         })
     );
@@ -147,7 +146,7 @@ fn tool_invocation_action_exposes_policy_metadata() {
 fn registry_resolves_registered_tool_metadata() {
     let executions = Arc::new(AtomicUsize::new(0));
     let mut plane = ToolPlaneRegistry::<TestContextFactory>::new();
-    let path = ToolPath::from("test.echo");
+    let path = tool_path("test.echo");
     plane
         .register(
             path.clone(),
@@ -167,7 +166,7 @@ fn registry_resolves_registered_tool_metadata() {
 #[test]
 fn registry_rejects_duplicate_paths_without_leaking_slots() {
     let mut plane = ToolPlaneRegistry::<TestContextFactory>::new();
-    let path = ToolPath::from("test.echo");
+    let path = tool_path("test.echo");
     plane
         .register(
             path.clone(),
@@ -189,7 +188,7 @@ fn registry_rejects_duplicate_paths_without_leaking_slots() {
     assert!(matches!(
         error,
         RegistrationError::AlreadyRegistered { path }
-            if path == ToolPath::from("test.echo")
+            if path == tool_path("test.echo")
     ));
     assert_eq!(plane.entry_count(), 1);
     assert_eq!(plane.path_count(), 1);
@@ -201,7 +200,7 @@ fn registry_enumerates_paths_in_path_order() {
     for path in ["test.beta", "test.alpha"] {
         plane
             .register(
-                ToolPath::from(path),
+                tool_path(path),
                 EchoTool {
                     executions: Arc::new(AtomicUsize::new(0)),
                 },
@@ -211,7 +210,7 @@ fn registry_enumerates_paths_in_path_order() {
 
     assert_eq!(
         plane.registered_paths(),
-        vec![ToolPath::from("test.alpha"), ToolPath::from("test.beta")]
+        vec![tool_path("test.alpha"), tool_path("test.beta")]
     );
 }
 
@@ -220,14 +219,14 @@ fn registry_reports_unregistered_path_before_invocation() {
     let mut plane = ToolPlaneRegistry::<TestContextFactory>::new();
     plane
         .register(
-            ToolPath::from("test.echo"),
+            tool_path("test.echo"),
             EchoTool {
                 executions: Arc::new(AtomicUsize::new(0)),
             },
         )
         .expect("test tool registration should succeed");
 
-    let path = ToolPath::from("test.missing");
+    let path = tool_path("test.missing");
     let error = match plane.resolve(&path) {
         Ok(_) => panic!("unregistered path should fail before invocation"),
         Err(error) => error,

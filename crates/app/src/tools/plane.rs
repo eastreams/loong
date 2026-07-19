@@ -1,13 +1,24 @@
 use std::borrow::Cow;
 
 use async_trait::async_trait;
-use loong_contracts::{PolicyDecision, PolicyGrant};
+use loong_contracts::{PolicyDecision, PolicyGrant, ToolPath, ToolPathError};
 use loong_core::policy::{context::ContextFactory, policy::Policy};
 use loong_runtime::tool_plane::{
-    ToolInvocationAction, ToolPath, ToolPlaneRegistry, error::RegistrationError,
+    ToolInvocationAction, ToolPlaneRegistry, error::RegistrationError,
 };
+use thiserror::Error;
 
 use crate::context::AppContextFactory;
+
+/// Preserves the failing stage while app bootstrap composes path construction
+/// with runtime registry insertion.
+#[derive(Debug, Error)]
+pub(crate) enum BuiltinToolPlaneError {
+    #[error("invalid builtin tool path: {0}")]
+    InvalidPath(#[from] ToolPathError),
+    #[error(transparent)]
+    Registration(#[from] RegistrationError),
+}
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ToolInvocationAllowPolicy;
@@ -34,8 +45,8 @@ where
 ///
 /// Registration is deliberately fallible: a duplicate builtin path is a
 /// bootstrap error, not a process-global initialization panic.
-pub(crate) fn builtin_tool_plane() -> Result<ToolPlaneRegistry<AppContextFactory>, RegistrationError>
-{
+pub(crate) fn builtin_tool_plane()
+-> Result<ToolPlaneRegistry<AppContextFactory>, BuiltinToolPlaneError> {
     let plane = ToolPlaneRegistry::new();
     #[cfg(feature = "tool-file")]
     let plane = {
@@ -43,17 +54,17 @@ pub(crate) fn builtin_tool_plane() -> Result<ToolPlaneRegistry<AppContextFactory
         // `read` is the aggregate typed facade; provider aliases such as
         // `file.read` canonicalize to this path before plane lookup.
         plane.register(
-            ToolPath::from("read"),
+            ToolPath::new(["read"])?,
             loong_tools::file::ReadTool::new("read"),
         )?;
 
         plane.register(
-            ToolPath::from("write"),
+            ToolPath::new(["write"])?,
             loong_tools::file::WriteTool::new("write"),
         )?;
 
         plane.register_with_success_observer(
-            ToolPath::from("edit"),
+            ToolPath::new(["edit"])?,
             loong_tools::file::EditTool::new("edit"),
             |_ctx, output: &loong_tools::file::EditOutput| {
                 // Preview events are an app-runtime side channel; the
@@ -71,12 +82,12 @@ pub(crate) fn builtin_tool_plane() -> Result<ToolPlaneRegistry<AppContextFactory
         // audit path and response metadata do not collapse into `read` while fs
         // side effects continue moving to access actions.
         plane.register(
-            ToolPath::from("glob.search"),
+            ToolPath::new(["glob.search"])?,
             loong_tools::file::GlobSearchTool::new("glob.search"),
         )?;
 
         plane.register(
-            ToolPath::from("content.search"),
+            ToolPath::new(["content.search"])?,
             loong_tools::file::ContentSearchTool::new("content.search"),
         )?;
         plane

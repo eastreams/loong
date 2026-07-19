@@ -8,8 +8,9 @@ crate 清理。
 
 - `loong-runtime::Runtime<C>` 已经持有 `Kernel<C>` 和 erased typed `ToolPlane<C>`；这个 public
   caller-provided plane 会暴露 raw dispatch，是步骤 5 必须删除的实现偏差。
-- `loong-runtime::tool_plane` 已经拥有 plane-local `ToolPath`、`ToolInvocationAction`、
-  `ToolPlane` trait 和 slot-backed `ToolPlaneRegistry`。
+- `loong-contracts::ToolPath` 是唯一 tool identity；`loong-runtime::tool_plane` 拥有
+  `ToolInvocationAction`、固定使用该 path contract 的 internal `ToolPlane` trait，以及 slot-backed
+  `ToolPlaneRegistry`。registry 可以替换索引结构，不能替换 identity 类型或 wire 语义。
 - app bootstrap 已使用 fallible `builtin_tool_plane()` 构造 registry；不存在需要迁移的全局
   `OnceLock` tool plane。
 - Context 不再保存 action payload 或 execution plane metadata；`PolicyAny` 读取

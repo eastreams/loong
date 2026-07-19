@@ -2,6 +2,7 @@ use crate::context::bootstrap_test_app_context;
 use std::fs;
 use std::time::Duration;
 
+use loong_contracts::ToolPath;
 use serde_json::json;
 
 use super::*;
@@ -31,6 +32,13 @@ fn test_app_context(agent_id: &str) -> AppContext {
 
 fn app_context(agent_id: &str) -> AppContext {
     test_app_context(agent_id)
+}
+
+// Path validation is covered by contracts; typed-ingress tests use valid
+// single-segment catalog identities.
+#[allow(clippy::expect_used)]
+fn tool_path(segment: &str) -> ToolPath {
+    ToolPath::new([segment]).expect("test tool path must be valid")
 }
 
 struct TypedOnlyPrepareTool;
@@ -336,11 +344,11 @@ fn prepare_tool_intent_uses_direct_shell_metadata_for_provider_shell_requests() 
 #[tokio::test]
 async fn typed_only_registration_executes_without_a_legacy_catalog_row() {
     use loong_contracts::ToolSchedulingClass;
-    use loong_runtime::tool_plane::{ToolPath, ToolPlaneRegistry};
+    use loong_runtime::tool_plane::ToolPlaneRegistry;
 
     let mut tools = ToolPlaneRegistry::new();
     tools
-        .register(ToolPath::from("typed.only"), TypedOnlyPrepareTool)
+        .register(tool_path("typed.only"), TypedOnlyPrepareTool)
         .expect("register typed-only tool");
     let (session_context, audit) = typed_ingress_test_context(
         tools,
@@ -404,11 +412,11 @@ async fn typed_only_registration_executes_without_a_legacy_catalog_row() {
 
 #[tokio::test]
 async fn typed_execution_consumes_runtime_overlay_before_parsing_input() {
-    use loong_runtime::tool_plane::{ToolPath, ToolPlaneRegistry};
+    use loong_runtime::tool_plane::ToolPlaneRegistry;
 
     let mut tools = ToolPlaneRegistry::new();
     tools
-        .register(ToolPath::from("typed.only"), TypedOnlyPrepareTool)
+        .register(tool_path("typed.only"), TypedOnlyPrepareTool)
         .expect("register typed-only tool");
     let (context, _) = typed_ingress_test_context(
         tools,
@@ -435,11 +443,11 @@ async fn typed_execution_consumes_runtime_overlay_before_parsing_input() {
 
 #[tokio::test]
 async fn registered_tool_invoke_path_precedes_the_legacy_envelope() {
-    use loong_runtime::tool_plane::{ToolPath, ToolPlaneRegistry};
+    use loong_runtime::tool_plane::ToolPlaneRegistry;
 
     let mut tools = ToolPlaneRegistry::new();
     tools
-        .register(ToolPath::from("tool.invoke"), TypedOnlyPrepareTool)
+        .register(tool_path("tool.invoke"), TypedOnlyPrepareTool)
         .expect("register concrete tool.invoke tool");
     let (context, _) = typed_ingress_test_context(
         tools,
@@ -478,11 +486,11 @@ async fn registered_tool_invoke_path_precedes_the_legacy_envelope() {
 
 #[tokio::test]
 async fn registered_tool_invoke_path_still_requires_visibility() {
-    use loong_runtime::tool_plane::{ToolPath, ToolPlaneRegistry};
+    use loong_runtime::tool_plane::ToolPlaneRegistry;
 
     let mut tools = ToolPlaneRegistry::new();
     tools
-        .register(ToolPath::from("tool.invoke"), TypedOnlyPrepareTool)
+        .register(tool_path("tool.invoke"), TypedOnlyPrepareTool)
         .expect("register concrete tool.invoke tool");
     let (context, _) = typed_ingress_test_context(tools, crate::tools::ToolView::default());
     let turn = ProviderTurn {
@@ -511,6 +519,81 @@ async fn registered_tool_invoke_path_still_requires_visibility() {
     assert!(matches!(
         result,
         TurnResult::ToolDenied(ref failure) if failure.code == "tool_not_visible"
+    ));
+}
+
+#[tokio::test]
+async fn invalid_outer_tool_path_does_not_enter_legacy_fallback() {
+    let (context, _) = typed_ingress_test_context(
+        loong_runtime::tool_plane::ToolPlaneRegistry::new(),
+        crate::tools::ToolView::default(),
+    );
+    let intent = ToolIntent {
+        tool_name: "invalid/name".to_owned(),
+        args_json: json!({}),
+        source: "assistant".to_owned(),
+        session_id: "typed-ingress-session".to_owned(),
+        turn_id: "invalid-outer-path-turn".to_owned(),
+        tool_call_id: "invalid-outer-path-call".to_owned(),
+    };
+
+    let failure = TurnEngine::new(1)
+        .prepare_tool_intent(
+            &intent,
+            0,
+            &context,
+            &NoopAppToolDispatcher,
+            ConversationRuntimeBinding::Context(&context),
+            &AutonomyTurnBudgetState::default(),
+            None,
+        )
+        .await
+        .expect_err("invalid path must fail before typed or legacy lookup");
+
+    assert!(matches!(
+        failure.turn_result,
+        TurnResult::ToolError(ref error) if error.code == "tool_path_invalid"
+    ));
+}
+
+#[tokio::test]
+async fn invalid_leased_inner_tool_path_does_not_enter_legacy_fallback() {
+    let (context, _) = typed_ingress_test_context(
+        loong_runtime::tool_plane::ToolPlaneRegistry::new(),
+        crate::tools::ToolView::from_tool_names(["tool.invoke"]),
+    );
+    let arguments = serde_json::Map::new();
+    let lease =
+        crate::tools::issue_tool_lease("invalid/name", &arguments).expect("issue test lease");
+    let intent = ToolIntent {
+        tool_name: "tool.invoke".to_owned(),
+        args_json: json!({
+            "tool_id": "invalid/name",
+            "lease": lease,
+            "arguments": arguments,
+        }),
+        source: "assistant".to_owned(),
+        session_id: "typed-ingress-session".to_owned(),
+        turn_id: "invalid-inner-path-turn".to_owned(),
+        tool_call_id: "invalid-inner-path-call".to_owned(),
+    };
+
+    let failure = TurnEngine::new(1)
+        .prepare_tool_intent(
+            &intent,
+            0,
+            &context,
+            &NoopAppToolDispatcher,
+            ConversationRuntimeBinding::Context(&context),
+            &AutonomyTurnBudgetState::default(),
+            None,
+        )
+        .await
+        .expect_err("invalid inner path must fail before typed or legacy lookup");
+
+    assert!(matches!(
+        failure.turn_result,
+        TurnResult::ToolError(ref error) if error.code == "tool_path_invalid"
     ));
 }
 

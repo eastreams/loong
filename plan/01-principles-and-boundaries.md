@@ -139,14 +139,14 @@
 
 ## Crate Ownership
 
-- `loong-contracts`：稳定数据、error/report/audit primitives；不定义全局 ToolPath，不承载
-  concrete ToolPlane registry key。
+- `loong-contracts`：稳定数据、error/report/audit primitives，以及跨 registration、policy、audit
+  和 host 使用的唯一 `ToolPath` identity；不承载 concrete ToolPlane registry/storage。
 - `loong-core`：`ContextFactory`、Action/Granted/Policy/ToolImpl 等行为 contract 和不可伪造授权。
 - `loong-kernel`：typed capability/policy/grant/audit authority；不执行 typed tool。pack/token 与
   manual authorization 只属于仍在运行的 legacy fallback，不能进入新的 Kernel/Access/Tool
   contract。
 - `loong-access`：domain side-effect boundary。
-- `loong-runtime`：`Runtime<C>`、ToolPlane primitive 和 plane-local default registry；不得保留与
+- `loong-runtime`：`Runtime<C>`、ToolPlane primitive 和 default registry；不得保留与
   `Runtime<C>` 并行的第二套 runtime spine。
 - `loong-app`：concrete `Context<'a>`、`RuntimeContextFactory`、Session/Turn option 装配、builtin
   registration、provider/channel/conversation integration 和 legacy ingress migration。

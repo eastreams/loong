@@ -1,10 +1,17 @@
-use loong_contracts::Capabilities;
-use loong_runtime::tool_plane::{ToolPath, error::LookupError};
+use loong_contracts::{Capabilities, ToolPath};
+use loong_runtime::tool_plane::error::LookupError;
 use serde_json::json;
 
 use super::*;
 use crate::conversation::runtime::DefaultConversationRuntime;
 use crate::session::repository::ApprovalRequestStatus;
+
+// Path validation is covered by contracts; these tests focus on replay owner
+// selection for valid catalog identities.
+#[allow(clippy::expect_used)]
+fn tool_path(segment: &str) -> ToolPath {
+    ToolPath::new([segment]).expect("test tool path must be valid")
+}
 
 #[test]
 fn approval_replay_restores_empty_capability_override() {
@@ -67,9 +74,9 @@ fn approval_replay_restores_empty_capability_override() {
 async fn typed_approval_replay_uses_the_exact_persisted_path() {
     let app_ctx = crate::context::bootstrap_test_app_context("approval-exact-path", 60)
         .expect("bootstrap test context");
-    assert!(app_ctx.runtime().tool_spec(&ToolPath::from("read")).is_ok());
+    assert!(app_ctx.runtime().tool_spec(&tool_path("read")).is_ok());
     assert!(matches!(
-        app_ctx.runtime().tool_spec(&ToolPath::from("file.read")),
+        app_ctx.runtime().tool_spec(&tool_path("file.read")),
         Err(LookupError::NotRegistered { .. })
     ));
     let config = LoongConfig::default();
@@ -112,7 +119,7 @@ async fn typed_approval_replay_uses_the_exact_persisted_path() {
         .expect_err("typed replay must not reinterpret the persisted path through aliases");
 
     assert!(
-        error.contains("typed tool `file.read` is missing its runtime registration"),
+        error.contains("typed tool `/file.read` is missing its runtime registration"),
         "unexpected replay error: {error}"
     );
 }
@@ -123,13 +130,11 @@ fn approval_replay_keeps_the_persisted_owner_when_registrations_change() {
     let app_ctx = crate::context::bootstrap_test_app_context("approval-owner-replay", 60)
         .expect("bootstrap test context");
     assert!(
-        app_ctx.runtime().tool_spec(&ToolPath::from("read")).is_ok(),
+        app_ctx.runtime().tool_spec(&tool_path("read")).is_ok(),
         "read must currently be registered to prove replay ignores a new typed owner"
     );
     assert!(matches!(
-        app_ctx
-            .runtime()
-            .tool_spec(&ToolPath::from("config.import")),
+        app_ctx.runtime().tool_spec(&tool_path("config.import")),
         Err(LookupError::NotRegistered { .. })
     ));
     let config = LoongConfig::default();

@@ -7,6 +7,8 @@ use crate::tools::{
 };
 use loong_runtime::runtime::Runtime;
 
+use crate::tools::error::ToolMetadataError;
+
 #[cfg(test)]
 pub(crate) fn tool_id_visible_in_view(tool_id: &str, view: &ToolView) -> bool {
     let canonical_tool_id = super::canonical_tool_name(tool_id);
@@ -27,7 +29,7 @@ pub(crate) fn runtime_tool_search_entries(
     config: &runtime_config::ToolRuntimeConfig,
     visible_tool_view: Option<&ToolView>,
     _collapse_hidden_surfaces: bool,
-) -> Vec<SearchableToolEntry> {
+) -> Result<Vec<SearchableToolEntry>, ToolMetadataError> {
     let visible_tool_view = effective_runtime_visible_tool_view(config, visible_tool_view);
     let mut entries = Vec::new();
 
@@ -47,15 +49,15 @@ pub(crate) fn runtime_tool_search_entries(
                 runtime,
                 descriptor,
                 &visible_tool_view,
-            );
+            )?;
             entries.push(entry);
         }
     }
 
     let hidden_entries =
-        runtime_discoverable_tool_entries(runtime, config, Some(&visible_tool_view), true);
+        runtime_discoverable_tool_entries(runtime, config, Some(&visible_tool_view), true)?;
     entries.extend(hidden_entries);
-    entries
+    Ok(entries)
 }
 
 pub(crate) fn runtime_discoverable_tool_entries(
@@ -63,7 +65,7 @@ pub(crate) fn runtime_discoverable_tool_entries(
     config: &runtime_config::ToolRuntimeConfig,
     visible_tool_view: Option<&ToolView>,
     provider_invokable_only: bool,
-) -> Vec<SearchableToolEntry> {
+) -> Result<Vec<SearchableToolEntry>, ToolMetadataError> {
     let visible_tool_view = effective_runtime_visible_tool_view(config, visible_tool_view);
     catalog::tool_catalog()
         .descriptors()
@@ -99,14 +101,14 @@ pub(crate) fn runtime_discoverable_tool_entries(
                 &visible_tool_view,
             )
         })
-        .collect::<Vec<_>>()
+        .collect::<Result<Vec<_>, _>>()
 }
 
 fn searchable_entry_from_descriptor_for_runtime_view(
     runtime: Option<&Runtime<crate::context::AppContextFactory>>,
     descriptor: &ToolDescriptor,
     view: &ToolView,
-) -> SearchableToolEntry {
+) -> Result<SearchableToolEntry, ToolMetadataError> {
     searchable_entry_from_descriptor_for_view(runtime, descriptor, view)
 }
 
@@ -114,8 +116,8 @@ fn searchable_entry_from_descriptor_for_view(
     runtime: Option<&Runtime<crate::context::AppContextFactory>>,
     descriptor: &ToolDescriptor,
     view: &ToolView,
-) -> SearchableToolEntry {
-    let definition = crate::tools::tool_metadata_definition_for_view(runtime, descriptor, view);
+) -> Result<SearchableToolEntry, ToolMetadataError> {
+    let definition = crate::tools::tool_metadata_definition_for_view(runtime, descriptor, view)?;
     let function = definition.get("function");
 
     let summary_value = function.and_then(|value: &serde_json::Value| value.get("description"));
@@ -126,7 +128,7 @@ fn searchable_entry_from_descriptor_for_view(
 
     let parameters_value = function.and_then(|value: &serde_json::Value| value.get("parameters"));
     let parameters = parameters_value.unwrap_or(&serde_json::Value::Null);
-    let typed_spec = crate::tools::typed_tool_spec_for_descriptor(runtime, descriptor);
+    let typed_spec = crate::tools::typed_tool_spec_for_descriptor(runtime, descriptor)?;
     let tags = typed_spec
         .map(|spec| spec.tags.clone())
         .filter(|tags| !tags.is_empty())
@@ -146,7 +148,7 @@ fn searchable_entry_from_descriptor_for_view(
     let requires_lease = !descriptor.is_provider_exposed();
     let tool_id = tool_surface::discovery_tool_name_for_tool_name(descriptor.name);
 
-    super::searchable_entry_from_provider_definition(
+    Ok(super::searchable_entry_from_provider_definition(
         descriptor.name,
         descriptor.provider_name,
         descriptor.aliases,
@@ -160,7 +162,7 @@ fn searchable_entry_from_descriptor_for_view(
         surface_id,
         usage_guidance,
         requires_lease,
-    )
+    ))
 }
 
 fn direct_search_hint_for_runtime_view(

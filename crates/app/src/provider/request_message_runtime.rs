@@ -53,7 +53,7 @@ struct SessionPathProjection {
 pub(super) fn build_system_message(
     config: &LoongConfig,
     include_system_prompt: bool,
-) -> Option<Value> {
+) -> CliResult<Option<Value>> {
     let runtime_tool_view = tools::runtime_tool_view_from_loong_config(config);
 
     build_system_message_for_view(config, include_system_prompt, &runtime_tool_view)
@@ -63,7 +63,7 @@ pub(super) fn build_system_message_for_view(
     config: &LoongConfig,
     include_system_prompt: bool,
     tool_view: &ToolView,
-) -> Option<Value> {
+) -> CliResult<Option<Value>> {
     let projection = build_base_prompt_projection_with_tool_runtime_config(
         config,
         include_system_prompt,
@@ -71,7 +71,7 @@ pub(super) fn build_system_message_for_view(
         &tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None),
     );
 
-    projection.system_message
+    Ok(projection?.system_message)
 }
 
 #[cfg(test)]
@@ -79,9 +79,9 @@ pub(super) async fn build_base_messages_with_binding(
     config: &LoongConfig,
     include_system_prompt: bool,
     binding: ProviderRuntimeBinding<'_>,
-) -> Vec<Value> {
+) -> CliResult<Vec<Value>> {
     if !include_system_prompt {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let runtime_tool_view = tools::runtime_tool_view_from_loong_config(config);
@@ -91,9 +91,9 @@ pub(super) async fn build_base_messages_with_binding(
         &runtime_tool_view,
         binding,
     )
-    .await;
+    .await?;
 
-    projection.system_message.into_iter().collect()
+    Ok(projection.system_message.into_iter().collect())
 }
 
 async fn build_base_prompt_projection_for_view_with_binding(
@@ -101,7 +101,7 @@ async fn build_base_prompt_projection_for_view_with_binding(
     include_system_prompt: bool,
     tool_view: &ToolView,
     binding: ProviderRuntimeBinding<'_>,
-) -> BasePromptProjection {
+) -> CliResult<BasePromptProjection> {
     build_base_prompt_projection_with_binding_and_tool_runtime_config(
         config,
         include_system_prompt,
@@ -117,9 +117,9 @@ fn build_base_prompt_projection_with_tool_runtime_config(
     include_system_prompt: bool,
     tool_view: &ToolView,
     tool_runtime_config: &tools::runtime_config::ToolRuntimeConfig,
-) -> BasePromptProjection {
+) -> CliResult<BasePromptProjection> {
     if !include_system_prompt {
-        return BasePromptProjection::default();
+        return Ok(BasePromptProjection::default());
     }
 
     // TODO(deprecate-no-kernel-live-source): callers without a context binding
@@ -153,7 +153,7 @@ fn build_system_message_with_tool_runtime_config(
     include_system_prompt: bool,
     tool_view: &ToolView,
     tool_runtime_config: &tools::runtime_config::ToolRuntimeConfig,
-) -> Option<Value> {
+) -> CliResult<Option<Value>> {
     let projection = build_base_prompt_projection_with_tool_runtime_config(
         config,
         include_system_prompt,
@@ -161,7 +161,7 @@ fn build_system_message_with_tool_runtime_config(
         tool_runtime_config,
     );
 
-    projection.system_message
+    Ok(projection?.system_message)
 }
 
 async fn build_base_prompt_projection_with_binding_and_tool_runtime_config(
@@ -170,9 +170,9 @@ async fn build_base_prompt_projection_with_binding_and_tool_runtime_config(
     tool_view: &ToolView,
     tool_runtime_config: &tools::runtime_config::ToolRuntimeConfig,
     binding: ProviderRuntimeBinding<'_>,
-) -> BasePromptProjection {
+) -> CliResult<BasePromptProjection> {
     if !include_system_prompt {
-        return BasePromptProjection::default();
+        return Ok(BasePromptProjection::default());
     }
 
     let workspace_root = tool_runtime_config.effective_workspace_root();
@@ -229,9 +229,9 @@ fn build_base_prompt_projection_from_prompt_sources(
     workspace_guidance_model: Option<workspace_guidance::WorkspaceGuidanceModel>,
     runtime_self_model: Option<runtime_self::RuntimeSelfModel>,
     extra_section: Option<String>,
-) -> BasePromptProjection {
+) -> CliResult<BasePromptProjection> {
     if !include_system_prompt {
-        return BasePromptProjection::default();
+        return Ok(BasePromptProjection::default());
     }
 
     let profile_note = config.memory.trimmed_profile_note();
@@ -259,17 +259,17 @@ fn build_base_prompt_projection_from_prompt_sources(
         workspace_guidance_model,
         runtime_self_model,
         extra_section,
-    );
+    )?;
     let compiler = PromptCompiler;
     let compilation = compiler.compile(prompt_fragments.clone());
     let system_text = compilation.system_text;
 
     if system_text.is_empty() {
-        return BasePromptProjection {
+        return Ok(BasePromptProjection {
             system_message: None,
             prompt_fragments,
             runtime_self_continuity,
-        };
+        });
     }
 
     let system_message = json!({
@@ -277,11 +277,11 @@ fn build_base_prompt_projection_from_prompt_sources(
         "content": system_text,
     });
 
-    BasePromptProjection {
+    Ok(BasePromptProjection {
         system_message: Some(system_message),
         prompt_fragments,
         runtime_self_continuity,
-    }
+    })
 }
 
 fn build_prompt_fragments_from_prompt_sources(
@@ -292,21 +292,13 @@ fn build_prompt_fragments_from_prompt_sources(
     workspace_guidance_model: Option<workspace_guidance::WorkspaceGuidanceModel>,
     runtime_self_model: Option<runtime_self::RuntimeSelfModel>,
     extra_section: Option<String>,
-) -> Vec<PromptFragment> {
+) -> CliResult<Vec<PromptFragment>> {
     let system_prompt = config.cli.resolved_system_prompt();
     let system_text = system_prompt.trim().to_owned();
     let provider_tool_surface = super::native_tool_surface::provider_tool_surface(config);
     let prompt_surface = provider_tool_surface
         .materialize(runtime, config, tool_view, tool_runtime_config)
-        .map(|surface_plan| surface_plan.prompt)
-        .unwrap_or_else(|_| super::native_tool_surface::ProviderToolPromptSurface {
-            capability_snapshot: tools::capability_snapshot_for_view_with_config(
-                runtime,
-                tool_view,
-                tool_runtime_config,
-            ),
-            prompt_sections: Vec::new(),
-        });
+        .map(|surface_plan| surface_plan.prompt)?;
     let capability_snapshot = prompt_surface.capability_snapshot;
     let native_tool_sections = prompt_surface.prompt_sections;
     let workspace_guidance_section = workspace_guidance_model
@@ -325,7 +317,7 @@ fn build_prompt_fragments_from_prompt_sources(
         .map(runtime_identity::render_runtime_identity_section);
     let runtime_scope_section = Some(prompt_contract::render_runtime_scope_section(config));
 
-    prompt_contract::build_prompt_fragments_from_prompt_sources(
+    Ok(prompt_contract::build_prompt_fragments_from_prompt_sources(
         config,
         system_text,
         workspace_guidance_section,
@@ -335,7 +327,7 @@ fn build_prompt_fragments_from_prompt_sources(
         extra_section,
         capability_snapshot,
         native_tool_sections,
-    )
+    ))
 }
 
 async fn load_workspace_guidance_model_with_budget(
@@ -562,7 +554,7 @@ pub(crate) fn build_projected_context_for_session_in_view(
             tool_view,
             &envelope.hydrated,
             session_path_projection.as_ref(),
-        );
+        )?;
         if include_system_prompt
             && let Some(retrieval_outcome) = envelope.retrieval_outcome.as_ref()
         {
@@ -583,7 +575,7 @@ pub(crate) fn build_projected_context_for_session_in_view(
             include_system_prompt,
             tool_view,
             &tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None),
-        );
+        )?;
         let system_message = projection.system_message;
         let prompt_fragments = projection.prompt_fragments;
         let runtime_self_continuity = projection.runtime_self_continuity;
@@ -613,27 +605,26 @@ pub(crate) async fn build_projected_context_for_session_in_view_with_binding(
             &config.memory,
         )
         .map_err(|error| format!("hydrate prompt memory stage envelope failed: {error}"))?;
-        Ok(project_stage_envelope_for_view_with_binding(
+        project_stage_envelope_for_view_with_binding(
             config,
             include_system_prompt,
             tool_view,
             binding,
             &envelope,
         )
-        .await)
+        .await
     }
 
     #[cfg(not(feature = "memory-sqlite"))]
     {
         let _ = session_id;
-        let projected = project_hydrated_memory_context_for_view_with_binding(
+        project_hydrated_memory_context_for_view_with_binding(
             config,
             include_system_prompt,
             tool_view,
             binding,
         )
-        .await;
-        Ok(projected)
+        .await
     }
 }
 
@@ -653,7 +644,7 @@ pub(crate) async fn project_hydrated_memory_context_for_view_with_binding(
     tool_view: &ToolView,
     binding: ProviderRuntimeBinding<'_>,
     #[cfg(feature = "memory-sqlite")] hydrated: &memory::HydratedMemoryContext,
-) -> ProjectedMessageContext {
+) -> CliResult<ProjectedMessageContext> {
     project_hydrated_memory_context_for_view_with_binding_and_session_path(
         config,
         include_system_prompt,
@@ -674,7 +665,7 @@ pub(crate) async fn project_stage_envelope_for_view_with_binding(
     tool_view: &ToolView,
     binding: ProviderRuntimeBinding<'_>,
     envelope: &memory::StageEnvelope,
-) -> ProjectedMessageContext {
+) -> CliResult<ProjectedMessageContext> {
     let mut projected = project_hydrated_memory_context_for_view_with_binding_and_session_path(
         config,
         include_system_prompt,
@@ -683,7 +674,7 @@ pub(crate) async fn project_stage_envelope_for_view_with_binding(
         &envelope.hydrated,
         None,
     )
-    .await;
+    .await?;
 
     if include_system_prompt && let Some(retrieval_outcome) = envelope.retrieval_outcome.as_ref() {
         append_stage_envelope_retrieval_outcome_fragment(
@@ -693,7 +684,7 @@ pub(crate) async fn project_stage_envelope_for_view_with_binding(
         sync_projected_prompt_fragments_into_messages(&mut projected);
     }
 
-    projected
+    Ok(projected)
 }
 
 async fn project_hydrated_memory_context_for_view_with_binding_and_session_path(
@@ -703,14 +694,14 @@ async fn project_hydrated_memory_context_for_view_with_binding_and_session_path(
     binding: ProviderRuntimeBinding<'_>,
     #[cfg(feature = "memory-sqlite")] hydrated: &memory::HydratedMemoryContext,
     #[cfg(feature = "memory-sqlite")] session_path_projection: Option<&SessionPathProjection>,
-) -> ProjectedMessageContext {
+) -> CliResult<ProjectedMessageContext> {
     let projection = build_base_prompt_projection_for_view_with_binding(
         config,
         include_system_prompt,
         tool_view,
         binding,
     )
-    .await;
+    .await?;
     let system_message = projection.system_message;
     let mut prompt_fragments = projection.prompt_fragments;
     let runtime_self_continuity = projection.runtime_self_continuity;
@@ -736,12 +727,12 @@ async fn project_hydrated_memory_context_for_view_with_binding_and_session_path(
         );
     }
 
-    ProjectedMessageContext {
+    Ok(ProjectedMessageContext {
         messages,
         artifacts,
         prompt_fragments,
         runtime_self_continuity,
-    }
+    })
 }
 
 fn sync_projected_prompt_fragments_into_messages(projected: &mut ProjectedMessageContext) {
@@ -841,7 +832,7 @@ pub(crate) fn project_hydrated_memory_context_for_view(
     include_system_prompt: bool,
     tool_view: &ToolView,
     #[cfg(feature = "memory-sqlite")] hydrated: &memory::HydratedMemoryContext,
-) -> ProjectedMessageContext {
+) -> CliResult<ProjectedMessageContext> {
     project_hydrated_memory_context_for_view_and_session_path(
         config,
         include_system_prompt,
@@ -859,13 +850,13 @@ fn project_hydrated_memory_context_for_view_and_session_path(
     tool_view: &ToolView,
     #[cfg(feature = "memory-sqlite")] hydrated: &memory::HydratedMemoryContext,
     #[cfg(feature = "memory-sqlite")] session_path_projection: Option<&SessionPathProjection>,
-) -> ProjectedMessageContext {
+) -> CliResult<ProjectedMessageContext> {
     let projection = build_base_prompt_projection_with_tool_runtime_config(
         config,
         include_system_prompt,
         tool_view,
         &tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None),
-    );
+    )?;
     let system_message = projection.system_message;
     let mut prompt_fragments = projection.prompt_fragments;
     let runtime_self_continuity = projection.runtime_self_continuity;
@@ -890,12 +881,12 @@ fn project_hydrated_memory_context_for_view_and_session_path(
         );
     }
 
-    ProjectedMessageContext {
+    Ok(ProjectedMessageContext {
         messages,
         artifacts,
         prompt_fragments,
         runtime_self_continuity,
-    }
+    })
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -1152,7 +1143,7 @@ mod tests {
     #[test]
     fn build_system_message_returns_none_when_disabled() {
         let config = LoongConfig::default();
-        assert_eq!(build_system_message(&config, false), None);
+        assert_eq!(build_system_message(&config, false), Ok(None));
     }
 
     #[test]
@@ -1213,7 +1204,8 @@ mod tests {
             false,
             &crate::tools::runtime_tool_view(),
             &hydrated,
-        );
+        )
+        .expect("project hydrated memory context");
 
         assert!(projected.messages.is_empty());
         assert!(projected.prompt_fragments.is_empty());
@@ -1232,7 +1224,8 @@ mod tests {
             ProviderRuntimeBinding::AdvisoryOnly,
             &hydrated,
         )
-        .await;
+        .await
+        .expect("project hydrated memory context");
 
         assert!(projected.messages.is_empty());
         assert!(projected.prompt_fragments.is_empty());
@@ -1293,7 +1286,8 @@ mod tests {
             true,
             &crate::tools::runtime_tool_view(),
             &hydrated,
-        );
+        )
+        .expect("project hydrated memory context");
         assert!(
             projected
                 .prompt_fragments
@@ -1343,7 +1337,8 @@ mod tests {
             ProviderRuntimeBinding::AdvisoryOnly,
             &envelope,
         )
-        .await;
+        .await
+        .expect("project stage envelope");
 
         assert!(projected.prompt_fragments.iter().any(|fragment| {
             fragment.fragment_id == "memory-retrieval-outcome"
@@ -1370,7 +1365,9 @@ mod tests {
         config.tools.file_root = Some(harness.temp_dir.display().to_string());
 
         let binding = ProviderRuntimeBinding::Context(&harness.app_ctx);
-        let messages = build_base_messages_with_binding(&config, false, binding).await;
+        let messages = build_base_messages_with_binding(&config, false, binding)
+            .await
+            .expect("build base messages");
 
         assert!(
             messages.is_empty(),
@@ -1421,7 +1418,9 @@ mod tests {
         config.tools.file_root = Some(harness.temp_dir.display().to_string());
 
         let binding = ProviderRuntimeBinding::Context(&harness.app_ctx);
-        let messages = build_base_messages_with_binding(&config, true, binding).await;
+        let messages = build_base_messages_with_binding(&config, true, binding)
+            .await
+            .expect("build base messages");
         let system_content = workspace_guidance_system_content(&messages);
 
         assert!(system_content.contains(agents_text));
@@ -1478,7 +1477,9 @@ mod tests {
         config.tools.file_root = Some(harness.temp_dir.display().to_string());
 
         let binding = ProviderRuntimeBinding::Context(&harness.app_ctx);
-        let messages = build_base_messages_with_binding(&config, true, binding).await;
+        let messages = build_base_messages_with_binding(&config, true, binding)
+            .await
+            .expect("build base messages");
         let system_content = system_prompt_content(&messages);
 
         assert!(!system_content.contains(agents_marker));
@@ -1505,7 +1506,9 @@ mod tests {
         config.tools.runtime_workspace_root = Some(harness.temp_dir.display().to_string());
 
         let binding = ProviderRuntimeBinding::Context(&harness.app_ctx);
-        let messages = build_base_messages_with_binding(&config, true, binding).await;
+        let messages = build_base_messages_with_binding(&config, true, binding)
+            .await
+            .expect("build base messages");
         let runtime_self_content = workspace_guidance_system_content(&messages);
 
         assert!(runtime_self_content.contains(agents_text));
@@ -1688,8 +1691,9 @@ mod tests {
         let mut config = LoongConfig::default();
         config.provider.tool_schema_mode = crate::config::ProviderToolSchemaModeConfig::Disabled;
 
-        let system_message =
-            build_system_message(&config, true).expect("system message when enabled");
+        let system_message = build_system_message(&config, true)
+            .expect("build system message")
+            .expect("system message when enabled");
         let system_content = system_message["content"].as_str().expect("system content");
 
         assert!(system_content.contains("## Tool Access"));
@@ -1711,8 +1715,9 @@ mod tests {
             let mut config = LoongConfig::default();
             config.provider.tool_schema_mode = tool_schema_mode;
 
-            let system_message =
-                build_system_message(&config, true).expect("system message when enabled");
+            let system_message = build_system_message(&config, true)
+                .expect("build system message")
+                .expect("system message when enabled");
             let system_content = system_message["content"].as_str().expect("system content");
 
             assert!(!system_content.contains("## Tool Access"));
@@ -1738,7 +1743,9 @@ mod tests {
         config.tools.runtime_self.max_total_chars = total_budget;
 
         let binding = ProviderRuntimeBinding::Context(&harness.app_ctx);
-        let messages = build_base_messages_with_binding(&config, true, binding).await;
+        let messages = build_base_messages_with_binding(&config, true, binding)
+            .await
+            .expect("build base messages");
         let system_content = system_prompt_content(&messages);
 
         assert!(system_content.contains(&agents_text));
@@ -1773,7 +1780,9 @@ mod tests {
         config.tools.runtime_self.max_total_chars = total_budget;
 
         let binding = ProviderRuntimeBinding::Context(&harness.app_ctx);
-        let messages = build_base_messages_with_binding(&config, true, binding).await;
+        let messages = build_base_messages_with_binding(&config, true, binding)
+            .await
+            .expect("build base messages");
         let system_content = system_prompt_content(&messages);
 
         assert!(system_content.contains(&agents_text));
@@ -1806,8 +1815,9 @@ mod tests {
         config.tools.runtime_self.max_source_chars = 10_000;
         config.tools.runtime_self.max_total_chars = agents_text.chars().count();
 
-        let system_message =
-            build_system_message(&config, true).expect("system message when enabled");
+        let system_message = build_system_message(&config, true)
+            .expect("build system message")
+            .expect("system message when enabled");
         let system_content = system_message["content"].as_str().expect("system content");
 
         assert!(!system_content.contains(&agents_text));
@@ -1830,8 +1840,9 @@ mod tests {
 
         config.tools.file_root = Some(workspace_root.display().to_string());
 
-        let system_message =
-            build_system_message(&config, true).expect("system message when enabled");
+        let system_message = build_system_message(&config, true)
+            .expect("build system message")
+            .expect("system message when enabled");
         let system_content = system_message["content"].as_str().expect("system content");
 
         assert!(!system_content.contains(agents_text));
@@ -1858,7 +1869,9 @@ mod tests {
         config.tools.runtime_self.max_total_chars = agents_text.chars().count();
 
         let binding = ProviderRuntimeBinding::Context(&harness.app_ctx);
-        let messages = build_base_messages_with_binding(&config, true, binding).await;
+        let messages = build_base_messages_with_binding(&config, true, binding)
+            .await
+            .expect("build base messages");
         let system_content = system_prompt_content(&messages);
 
         assert!(system_content.contains(&agents_text));
@@ -1887,7 +1900,8 @@ mod tests {
 
         let advisory_messages =
             build_base_messages_with_binding(&config, true, ProviderRuntimeBinding::AdvisoryOnly)
-                .await;
+                .await
+                .expect("build advisory base messages");
         let advisory_content = system_prompt_content(&advisory_messages);
         assert!(advisory_content.contains("## Governed Runtime Binding"));
         assert!(advisory_content.contains("session_mode: advisory_only"));
@@ -1898,7 +1912,8 @@ mod tests {
             true,
             ProviderRuntimeBinding::Context(&harness.app_ctx),
         )
-        .await;
+        .await
+        .expect("build context-bound base messages");
         let mutating_content = system_prompt_content(&mutating_messages);
         assert!(mutating_content.contains("## Governed Runtime Binding"));
         assert!(mutating_content.contains("session_mode: mutating_capable"));
@@ -1912,7 +1927,9 @@ mod tests {
         config.cli.personality = None;
         config.cli.system_prompt = "Stay concise and technical.".to_owned();
 
-        let system = build_system_message(&config, true).expect("system message");
+        let system = build_system_message(&config, true)
+            .expect("build system message")
+            .expect("system message");
         let content = system["content"].as_str().expect("system content");
         assert!(content.starts_with("Stay concise and technical."));
         assert!(content.contains("[tool_discovery_runtime]"));
@@ -1922,7 +1939,9 @@ mod tests {
     fn build_system_message_includes_execution_discipline_section() {
         let config = LoongConfig::default();
 
-        let system = build_system_message(&config, true).expect("system message");
+        let system = build_system_message(&config, true)
+            .expect("build system message")
+            .expect("system message");
         let content = system["content"].as_str().expect("system content");
 
         assert!(content.contains("## Execution Discipline"));
@@ -1949,7 +1968,9 @@ mod tests {
         let mut config = LoongConfig::default();
         config.tools.file_root = Some("/tmp/loong-runtime-root".to_owned());
 
-        let system = build_system_message(&config, true).expect("system message");
+        let system = build_system_message(&config, true)
+            .expect("build system message")
+            .expect("system message");
         let content = system["content"].as_str().expect("system content");
 
         assert!(content.contains("## Runtime Scope"));
@@ -1961,7 +1982,9 @@ mod tests {
     fn build_system_message_emphasizes_yolo_by_default_with_runtime_boundaries() {
         let config = LoongConfig::default();
 
-        let system = build_system_message(&config, true).expect("system message");
+        let system = build_system_message(&config, true)
+            .expect("build system message")
+            .expect("system message");
         let content = system["content"].as_str().expect("system content");
 
         assert!(content.contains("<yolo_by_default>"));
@@ -1983,7 +2006,9 @@ mod tests {
         config.provider.wire_api = crate::config::ProviderWireApi::Responses;
         config.tools.web_search.enabled = true;
 
-        let system = build_system_message(&config, true).expect("system message");
+        let system = build_system_message(&config, true)
+            .expect("build system message")
+            .expect("system message");
         let content = system["content"].as_str().expect("system content");
 
         assert!(content.contains("## Native Query Search"));
@@ -2000,7 +2025,9 @@ mod tests {
         config.provider.wire_api = crate::config::ProviderWireApi::Responses;
         config.tools.web_search.enabled = false;
 
-        let system = build_system_message(&config, true).expect("system message");
+        let system = build_system_message(&config, true)
+            .expect("build system message")
+            .expect("system message");
         let content = system["content"].as_str().expect("system content");
 
         assert!(!content.contains("## Native Query Search"));
@@ -2015,7 +2042,9 @@ mod tests {
         config.tools.file_root = Some(harness.temp_dir.display().to_string());
 
         let binding = ProviderRuntimeBinding::Context(&harness.app_ctx);
-        let messages = build_base_messages_with_binding(&config, true, binding).await;
+        let messages = build_base_messages_with_binding(&config, true, binding)
+            .await
+            .expect("build base messages");
         let content = system_prompt_content(&messages);
 
         let runtime_contract_index = content
@@ -2110,7 +2139,9 @@ mod tests {
         config.cli.personality = None;
         config.cli.system_prompt = "You are a legacy inline prompt.".to_owned();
 
-        let system = build_system_message(&config, true).expect("system message");
+        let system = build_system_message(&config, true)
+            .expect("build system message")
+            .expect("system message");
         let system_content = system["content"].as_str().expect("system content");
 
         assert!(system_content.contains("You are a legacy inline prompt."));
@@ -2143,7 +2174,9 @@ mod tests {
         config.tools.file_root = Some(harness.temp_dir.display().to_string());
 
         let binding = ProviderRuntimeBinding::Context(&harness.app_ctx);
-        let messages = build_base_messages_with_binding(&config, true, binding).await;
+        let messages = build_base_messages_with_binding(&config, true, binding)
+            .await
+            .expect("build base messages");
         let system_content = system_prompt_content(&messages);
 
         assert!(system_content.contains("## Workspace Guidance"));
@@ -2178,6 +2211,7 @@ mod tests {
             &tool_view,
             &tool_runtime_config,
         )
+        .expect("build system message")
         .expect("system message");
         let system_content = system_message["content"].as_str().expect("system content");
 
@@ -2201,7 +2235,9 @@ mod tests {
         config.tools.file_root = Some(harness.temp_dir.display().to_string());
 
         let binding = ProviderRuntimeBinding::Context(&harness.app_ctx);
-        let messages = build_base_messages_with_binding(&config, true, binding).await;
+        let messages = build_base_messages_with_binding(&config, true, binding)
+            .await
+            .expect("build base messages");
         let system_content = system_prompt_content(&messages);
 
         assert!(system_content.contains("## Resolved Runtime Identity"));
@@ -2223,7 +2259,9 @@ mod tests {
         config.tools.file_root = Some(harness.temp_dir.display().to_string());
 
         let binding = ProviderRuntimeBinding::Context(&harness.app_ctx);
-        let messages = build_base_messages_with_binding(&config, true, binding).await;
+        let messages = build_base_messages_with_binding(&config, true, binding)
+            .await
+            .expect("build base messages");
         let system_content = system_prompt_content(&messages);
 
         assert!(system_content.contains("## Runtime Self Context"));

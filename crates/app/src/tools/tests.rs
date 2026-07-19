@@ -5,7 +5,7 @@ use crate::context::bootstrap_test_app_context;
 use crate::test_utils::unique_temp_dir;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use loong_contracts::Capability;
+use loong_contracts::{Capability, ToolPath};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[test]
@@ -67,7 +67,7 @@ fn expected_tool_request_error_leaves_runtime_failures_as_warnable() {
 
 #[test]
 fn capability_snapshot_is_deterministic() {
-    let snapshot = capability_snapshot(None);
+    let snapshot = capability_snapshot(None).expect("build capability snapshot");
     assert!(snapshot.starts_with("[tool_discovery_runtime]"));
     assert!(snapshot.contains("Available tools:"));
     assert!(snapshot.contains("- read:"));
@@ -84,7 +84,7 @@ fn capability_snapshot_is_deterministic() {
     assert!(!snapshot.contains("shell.exec"));
     assert!(!snapshot.contains("file.read"));
 
-    let snapshot2 = capability_snapshot(None);
+    let snapshot2 = capability_snapshot(None).expect("build capability snapshot");
     assert!(snapshot2.starts_with("[tool_discovery_runtime]"));
     assert!(snapshot2.contains("- read:"));
 }
@@ -133,7 +133,8 @@ fn capability_snapshot_stays_compact_when_skills_are_installed() {
     )
     .expect("install should succeed");
 
-    let snapshot = capability_snapshot_with_config(None, &config);
+    let snapshot =
+        capability_snapshot_with_config(None, &config).expect("build capability snapshot");
     assert!(snapshot.starts_with("[tool_discovery_runtime]"));
     assert!(snapshot.contains("[available_skills]"));
     assert!(snapshot.contains("demo-skill"));
@@ -161,7 +162,7 @@ fn capability_snapshot_stays_compact_when_skills_are_installed() {
 ))]
 #[test]
 fn capability_snapshot_only_lists_visible_direct_and_gateway_tools() {
-    let snapshot = capability_snapshot(None);
+    let snapshot = capability_snapshot(None).expect("build capability snapshot");
     assert!(snapshot.contains("Available tools:"));
     assert!(snapshot.contains("- read:"));
     assert!(snapshot.contains("- write:"));
@@ -190,7 +191,7 @@ fn capability_snapshot_only_lists_visible_direct_and_gateway_tools() {
 #[test]
 fn tool_registry_returns_runtime_discoverable_tools_for_default_config() {
     let config = runtime_config::ToolRuntimeConfig::default();
-    let entries = tool_registry_with_config(None, Some(&config));
+    let entries = tool_registry_with_config(None, Some(&config)).expect("build tool registry");
     let names = entries
         .iter()
         .map(|entry| entry.name.clone())
@@ -212,7 +213,7 @@ fn tool_registry_returns_runtime_discoverable_tools_for_default_config() {
 #[test]
 fn tool_registry_returns_runtime_discoverable_tools_for_default_config_no_websearch() {
     let config = runtime_config::ToolRuntimeConfig::default();
-    let entries = tool_registry_with_config(None, Some(&config));
+    let entries = tool_registry_with_config(None, Some(&config)).expect("build tool registry");
     let names = entries
         .iter()
         .map(|entry| entry.name.clone())
@@ -234,7 +235,7 @@ fn tool_registry_re_exposes_session_mutation_tools_when_runtime_policy_allows_th
         ..runtime_config::ToolRuntimeConfig::default()
     };
 
-    let entries = tool_registry_with_config(None, Some(&config));
+    let entries = tool_registry_with_config(None, Some(&config)).expect("build tool registry");
     let names = entries
         .iter()
         .map(|entry| entry.name.clone())
@@ -254,7 +255,7 @@ fn tool_registry_and_snapshot_use_typed_read_summary() {
     let config = runtime_config::ToolRuntimeConfig::default();
     let app_ctx = bootstrap_test_app_context("typed-read-metadata", 60).expect("bootstrap context");
     let runtime = Some(app_ctx.runtime());
-    let registry = tool_registry_with_config(runtime, Some(&config));
+    let registry = tool_registry_with_config(runtime, Some(&config)).expect("build tool registry");
     let read = registry
         .iter()
         .find(|entry| entry.name == "read")
@@ -266,7 +267,8 @@ fn tool_registry_and_snapshot_use_typed_read_summary() {
     );
     assert!(!read.description.contains("inspect file contents"));
 
-    let snapshot = capability_snapshot_with_config(runtime, &config);
+    let snapshot =
+        capability_snapshot_with_config(runtime, &config).expect("build capability snapshot");
     assert!(
         snapshot
             .contains("- read: Read files, list paths, or search file contents in allowed roots.")
@@ -277,7 +279,7 @@ fn tool_registry_and_snapshot_use_typed_read_summary() {
 #[test]
 fn capability_snapshot_for_view_keeps_hidden_tools_out_of_direct_surface_copy() {
     let view = ToolView::from_tool_names(["config.import", "shell.exec"]);
-    let snapshot = capability_snapshot_for_view(None, &view);
+    let snapshot = capability_snapshot_for_view(None, &view).expect("build capability snapshot");
 
     assert!(snapshot.contains("Available tools:"));
     assert!(!snapshot.contains("- config.import:"));
@@ -486,7 +488,8 @@ fn capability_snapshot_with_config_uses_runtime_enabled_tool_view() {
         ..runtime_config::ToolRuntimeConfig::default()
     };
 
-    let snapshot = capability_snapshot_with_config(None, &config);
+    let snapshot =
+        capability_snapshot_with_config(None, &config).expect("build capability snapshot");
     assert!(!snapshot.contains("- browser.open:"));
     assert!(!snapshot.contains("- web.fetch:"));
     assert!(!snapshot.contains("- delegate:"));
@@ -558,7 +561,8 @@ fn provider_tool_definitions_are_stable_and_cover_direct_surface() {
     let config = runtime_config::ToolRuntimeConfig::default();
     let app_ctx =
         bootstrap_test_app_context("provider-tool-metadata", 60).expect("bootstrap context");
-    let defs = provider_tool_definitions_with_config(Some(app_ctx.runtime()), Some(&config));
+    let defs = provider_tool_definitions_with_config(Some(app_ctx.runtime()), Some(&config))
+        .expect("provider definitions");
     let expected_names = vec!["bash", "browse", "edit", "read", "web", "write"];
     assert_eq!(defs.len(), expected_names.len());
 
@@ -625,7 +629,8 @@ fn provider_tool_definitions_are_stable_and_cover_direct_surface() {
 #[test]
 fn provider_tool_definitions_hide_typed_file_tools_when_file_feature_disabled() {
     let config = runtime_config::ToolRuntimeConfig::default();
-    let defs = provider_tool_definitions_with_config(None, Some(&config));
+    let defs =
+        provider_tool_definitions_with_config(None, Some(&config)).expect("provider definitions");
     let names = defs
         .iter()
         .filter_map(|item| item.get("function"))
@@ -648,14 +653,17 @@ fn runtime_surfaces_hide_file_tools_when_file_feature_disabled() {
     }
 
     let registry_names = tool_registry_with_config(None, Some(&config))
+        .expect("build tool registry")
         .into_iter()
         .map(|entry| entry.name)
         .collect::<BTreeSet<_>>();
     let search_entry_names = runtime_tool_search_entries(None, &config, None, false)
+        .expect("runtime tool search entries")
         .into_iter()
         .map(|entry| entry.canonical_name)
         .collect::<BTreeSet<_>>();
-    let snapshot = capability_snapshot_with_config(None, &config);
+    let snapshot =
+        capability_snapshot_with_config(None, &config).expect("build capability snapshot");
 
     for tool_name in ["read", "write", "edit"] {
         assert!(!registry_names.contains(tool_name));
@@ -848,7 +856,7 @@ fn tool_registry_hides_web_search_when_runtime_disabled() {
         ..runtime_config::ToolRuntimeConfig::default()
     };
 
-    let entries = tool_registry_with_config(None, Some(&config));
+    let entries = tool_registry_with_config(None, Some(&config)).expect("build tool registry");
 
     assert!(
         !entries.iter().any(|entry| entry.name == "web.search"),
@@ -881,7 +889,8 @@ fn provider_tool_definitions_trim_web_query_mode_when_search_is_runtime_disabled
         ..runtime_config::ToolRuntimeConfig::default()
     };
 
-    let defs = provider_tool_definitions_with_config(None, Some(&config));
+    let defs =
+        provider_tool_definitions_with_config(None, Some(&config)).expect("provider definitions");
     let web = defs
         .iter()
         .find(|item| {
@@ -906,7 +915,8 @@ fn provider_tool_definitions_include_browse_surface_when_browser_is_enabled() {
     let defs = provider_tool_definitions_with_config(
         None,
         Some(&runtime_config::ToolRuntimeConfig::default()),
-    );
+    )
+    .expect("provider definitions");
     assert!(defs.iter().any(|item| {
         item.get("function")
             .and_then(|function| function.get("name"))
@@ -920,7 +930,8 @@ fn provider_tool_definitions_expose_browse_page_actions() {
     let defs = provider_tool_definitions_with_config(
         None,
         Some(&runtime_config::ToolRuntimeConfig::default()),
-    );
+    )
+    .expect("provider definitions");
     let browse = defs
         .iter()
         .find(|item| {
@@ -962,7 +973,8 @@ fn runtime_tool_search_entries_trim_web_search_mode_when_query_mode_is_disabled(
         ..runtime_config::ToolRuntimeConfig::default()
     };
 
-    let entries = runtime_tool_search_entries(None, &config, None, false);
+    let entries = runtime_tool_search_entries(None, &config, None, false)
+        .expect("runtime tool search entries");
     let web = entries
         .iter()
         .find(|entry| entry.tool_id == "web")
@@ -986,7 +998,8 @@ fn runtime_tool_search_entries_hide_browse_surface_when_browser_is_disabled() {
         },
         ..runtime_config::ToolRuntimeConfig::default()
     };
-    let entries = runtime_tool_search_entries(None, &config, None, false);
+    let entries = runtime_tool_search_entries(None, &config, None, false)
+        .expect("runtime tool search entries");
     assert!(!entries.iter().any(|entry| entry.tool_id == "browse"));
 }
 
@@ -997,7 +1010,8 @@ fn runtime_tool_search_entries_expose_browse_surface_when_browser_is_enabled() {
         &runtime_config::ToolRuntimeConfig::default(),
         None,
         false,
-    );
+    )
+    .expect("runtime tool search entries");
     let browse = entries
         .iter()
         .find(|entry| entry.tool_id == "browse")
@@ -1923,7 +1937,7 @@ fn tool_search_accepts_keywords_array_queries() {
 
 #[test]
 fn capability_snapshot_summarizes_hidden_tags_without_tool_names() {
-    let snapshot = capability_snapshot(None);
+    let snapshot = capability_snapshot(None).expect("build capability snapshot");
     assert!(!snapshot.contains("Hidden specialized tool tags currently discoverable:"));
 }
 
@@ -1952,9 +1966,11 @@ fn runtime_discoverable_tool_surface_summary_uses_provider_invokable_hidden_entr
     let config = runtime_config::ToolRuntimeConfig::default();
     let view = runtime_tool_view_for_runtime_config(&config);
     let all_discoverable_entries =
-        runtime_discoverable_tool_entries(None, &config, Some(&view), false);
+        runtime_discoverable_tool_entries(None, &config, Some(&view), false)
+            .expect("all discoverable entries");
     let provider_discoverable_entries =
-        runtime_discoverable_tool_entries(None, &config, Some(&view), true);
+        runtime_discoverable_tool_entries(None, &config, Some(&view), true)
+            .expect("provider discoverable entries");
     let all_discoverable_names = all_discoverable_entries
         .iter()
         .map(|entry| entry.canonical_name.as_str())
@@ -2393,6 +2409,7 @@ fn runtime_discoverable_tool_entries_intersect_injected_view_with_runtime_surfac
 
     let injected = ToolView::from_tool_names(["sessions_list", "config.import"]);
     let names = runtime_discoverable_tool_entries(None, &config, Some(&injected), false)
+        .expect("runtime discoverable entries")
         .into_iter()
         .map(|entry| entry.canonical_name)
         .collect::<Vec<_>>();
@@ -3252,7 +3269,7 @@ fn tool_registry_with_config_includes_feishu_tools_when_runtime_configured() {
         integration: crate::config::FeishuIntegrationConfig::default(),
     });
 
-    let entries = tool_registry_with_config(None, Some(&config));
+    let entries = tool_registry_with_config(None, Some(&config)).expect("build tool registry");
     let names = entries
         .iter()
         .map(|entry| entry.name.clone())
@@ -3282,7 +3299,8 @@ fn provider_tool_definitions_with_config_keeps_direct_surface_when_feishu_runtim
 
     let app_ctx =
         bootstrap_test_app_context("feishu-provider-tool-metadata", 60).expect("bootstrap context");
-    let defs = provider_tool_definitions_with_config(Some(app_ctx.runtime()), Some(&config));
+    let defs = provider_tool_definitions_with_config(Some(app_ctx.runtime()), Some(&config))
+        .expect("provider definitions");
     let names = defs
         .iter()
         .filter_map(|item| item.get("function"))
@@ -13239,7 +13257,7 @@ async fn registered_tool_execution_never_falls_back_when_registration_is_missing
     assert!(matches!(
         error,
         ToolRequestError::RegistryMissing { path }
-            if path == loong_runtime::tool_plane::ToolPath::from("config.import")
+            if path == ToolPath::new(["config.import"]).expect("test tool path must be valid")
     ));
     assert!(invocations.lock().expect("invocations lock").is_empty());
 }

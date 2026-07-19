@@ -12,9 +12,9 @@ mod registered;
 pub use invocation::{ToolInvocation, ToolInvocationContext};
 pub use registered::RegisteredToolError;
 
-use std::{borrow::Cow, collections::BTreeMap, fmt};
+use std::{borrow::Cow, collections::BTreeMap};
 
-use loong_contracts::{Capabilities, Capability};
+use loong_contracts::{Capabilities, Capability, ToolPath};
 use loong_core::{
     policy::{
         action::{ActionMeta, ActionMetadata},
@@ -27,62 +27,6 @@ use slotmap::{SlotMap, new_key_type};
 
 use self::error::{LookupError, RegistrationError};
 use self::registered::RegisteredTool;
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-/// Path type chosen by the default runtime registry.
-///
-/// Paths stay out of core/contracts because another `ToolPlane` implementation
-/// may choose a different lookup key.
-pub struct ToolPath {
-    segments: Vec<String>,
-}
-
-impl ToolPath {
-    #[must_use]
-    pub fn from_segments(segments: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        Self {
-            segments: segments.into_iter().map(Into::into).collect(),
-        }
-    }
-
-    #[must_use]
-    pub fn segments(&self) -> &[String] {
-        self.segments.as_slice()
-    }
-
-    // Provider/catalog names still arrive as dotted strings. This conversion
-    // belongs to the concrete plane path, not the core tool abstraction.
-    fn from_dotted(path: &str) -> Self {
-        Self::from_segments(path.split('.'))
-    }
-}
-
-impl fmt::Display for ToolPath {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut segments = self.segments.iter();
-        let Some(first) = segments.next() else {
-            return Ok(());
-        };
-        formatter.write_str(first)?;
-        for segment in segments {
-            formatter.write_str(".")?;
-            formatter.write_str(segment)?;
-        }
-        Ok(())
-    }
-}
-
-impl From<&str> for ToolPath {
-    fn from(path: &str) -> Self {
-        Self::from_dotted(path)
-    }
-}
-
-impl From<String> for ToolPath {
-    fn from(path: String) -> Self {
-        Self::from_dotted(path.as_str())
-    }
-}
 
 /// Authorizes dispatch into one registered tool.
 ///
@@ -146,11 +90,9 @@ impl ActionMeta for ToolInvocationAction {
 /// point intentionally permits a future trie or another path index without
 /// exposing registered dispatch outside Runtime.
 pub(crate) trait ToolPlane<C: ContextFactory>: Send + Sync {
-    type Path;
+    fn registered_paths(&self) -> Vec<ToolPath>;
 
-    fn registered_paths(&self) -> Vec<Self::Path>;
-
-    fn resolve(&self, path: &Self::Path) -> Result<&RegisteredTool<C>, LookupError<Self::Path>>;
+    fn resolve(&self, path: &ToolPath) -> Result<&RegisteredTool<C>, LookupError>;
 }
 
 new_key_type! {
@@ -221,10 +163,7 @@ where
         self.paths.keys().cloned().collect()
     }
 
-    pub(crate) fn resolve(
-        &self,
-        path: &ToolPath,
-    ) -> Result<&RegisteredTool<C>, LookupError<ToolPath>> {
+    pub(crate) fn resolve(&self, path: &ToolPath) -> Result<&RegisteredTool<C>, LookupError> {
         let slot = self
             .paths
             .get(path)
@@ -260,13 +199,11 @@ impl<C> ToolPlane<C> for ToolPlaneRegistry<C>
 where
     C: ContextFactory,
 {
-    type Path = ToolPath;
-
     fn registered_paths(&self) -> Vec<ToolPath> {
         ToolPlaneRegistry::registered_paths(self)
     }
 
-    fn resolve(&self, path: &ToolPath) -> Result<&RegisteredTool<C>, LookupError<ToolPath>> {
+    fn resolve(&self, path: &ToolPath) -> Result<&RegisteredTool<C>, LookupError> {
         ToolPlaneRegistry::resolve(self, path)
     }
 }

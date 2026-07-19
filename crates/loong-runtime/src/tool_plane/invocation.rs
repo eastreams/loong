@@ -1,7 +1,7 @@
 //! Governed typed tool invocation owned by the runtime boundary.
 
 use async_trait::async_trait;
-use loong_contracts::{ActionExecutionEvent, AuditEventKind, Capabilities, Capability};
+use loong_contracts::{ActionExecutionEvent, AuditEventKind, Capabilities, Capability, ToolPath};
 use loong_core::{
     kernel::Kernel as CoreKernel,
     policy::{
@@ -15,7 +15,7 @@ use loong_kernel::Kernel;
 use serde_json::Value;
 
 use super::{
-    RegisteredToolError, ToolInvocationAction, ToolPath,
+    RegisteredToolError, ToolInvocationAction,
     error::{CapabilityOverrideError, ToolInvocationError},
     registered::RegisteredTool,
 };

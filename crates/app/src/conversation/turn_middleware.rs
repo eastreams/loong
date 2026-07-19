@@ -242,7 +242,7 @@ impl ConversationTurnMiddleware for SystemPromptToolViewTurnMiddleware {
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<AssembledConversationContext> {
         if include_system_prompt && requested_tool_view != runtime_tool_view {
-            apply_tool_view_to_system_prompt(&mut assembled, requested_tool_view, binding);
+            apply_tool_view_to_system_prompt(&mut assembled, requested_tool_view, binding)?;
         }
         Ok(assembled)
     }
@@ -317,11 +317,12 @@ fn apply_tool_view_to_system_prompt(
     assembled: &mut AssembledConversationContext,
     tool_view: &ToolView,
     binding: ConversationRuntimeBinding<'_>,
-) {
+) -> CliResult<()> {
     seed_prompt_fragments_from_context(assembled);
 
     let runtime = binding.context().map(AppContext::runtime);
-    let capability_snapshot = crate::tools::capability_snapshot_for_view(runtime, tool_view);
+    let capability_snapshot = crate::tools::capability_snapshot_for_view(runtime, tool_view)
+        .map_err(|error| error.to_string())?;
     let capability_fragment_index = assembled
         .prompt_fragments
         .iter()
@@ -350,7 +351,7 @@ fn apply_tool_view_to_system_prompt(
 
     if updated_prompt_fragments {
         sync_prompt_fragments_into_context(assembled);
-        return;
+        return Ok(());
     }
 
     for message in &mut assembled.messages {
@@ -369,7 +370,8 @@ fn apply_tool_view_to_system_prompt(
         let Some(snapshot_start) = content.find("[available_tools]") else {
             continue;
         };
-        let snapshot = crate::tools::capability_snapshot_for_view(runtime, tool_view);
+        let snapshot = crate::tools::capability_snapshot_for_view(runtime, tool_view)
+            .map_err(|error| error.to_string())?;
 
         let prefix = content[..snapshot_start].trim_end();
         let rewritten = if prefix.is_empty() {
@@ -381,8 +383,10 @@ fn apply_tool_view_to_system_prompt(
         if let Some(object) = message.as_object_mut() {
             object.insert("content".to_owned(), Value::String(rewritten));
         }
-        return;
+        return Ok(());
     }
+
+    Ok(())
 }
 
 fn ensure_runtime_contract_artifact(

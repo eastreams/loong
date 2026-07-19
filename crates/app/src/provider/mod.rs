@@ -175,7 +175,10 @@ const MODEL_CATALOG_CACHE_MAX_ENTRIES: usize = 32;
 #[cfg(test)]
 const MODEL_CANDIDATE_COOLDOWN_CACHE_MAX_ENTRIES: usize = 64;
 
-pub fn build_system_message(config: &LoongConfig, include_system_prompt: bool) -> Option<Value> {
+pub fn build_system_message(
+    config: &LoongConfig,
+    include_system_prompt: bool,
+) -> CliResult<Option<Value>> {
     request_message_runtime::build_system_message(config, include_system_prompt)
 }
 

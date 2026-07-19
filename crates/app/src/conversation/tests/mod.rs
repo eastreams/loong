@@ -1820,6 +1820,7 @@ async fn provider_messages_with_kernel_binding(
         &envelope,
     )
     .await
+    .expect("project stage envelope")
     .messages
 }
 

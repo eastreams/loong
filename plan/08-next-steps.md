@@ -31,9 +31,9 @@ Runtime
 - 物理副作用只发生在 Access。nested typed tool 只能编排，最终仍必须进入
   `Granted<ConcreteAction>` 的 Access operation。
 - typed tool primitive 已有 `RegisteredToolError` 与 runtime
-  `error::{RegistrationError, LookupError<P>, DispatchError<P>}`。composite `ToolInvocationError` 只在
-  步骤 5 的 runtime wrapper 真正接线时定义并使用；`PolicyGrantError` 不降级成 `KernelError` 或
-  字符串。
+  `error::{RegistrationError, LookupError, ToolInvocationError}`。`ToolPath` 由 contracts 固定为
+  canonical segmented identity，runtime plane 只决定索引结构。composite `ToolInvocationError` 由
+  runtime wrapper 使用并保留 concrete source；`PolicyGrantError` 不降级成 `KernelError` 或字符串。
 - `ctx.tool(...).invoke(...)` 是普通 caller 唯一入口；raw granted ToolPlane dispatch 只在
   `loong-runtime` 内可达。
 - legacy fallback 只在 typed path 未注册时发生；override/narrowing/grant/parse/dispatch error

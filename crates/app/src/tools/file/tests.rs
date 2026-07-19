@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use loong_contracts::{
     ActionExecutionEvent, AuditEvent, AuditEventKind, AuthorizationAttempt,
     AuthorizationAttemptEvent, AuthorizationPolicyEvent, AuthorizationTerminalOutcome, Capability,
-    ExecutionRoute, HarnessKind, ToolCoreOutcome, ToolCoreRequest,
+    ExecutionRoute, HarnessKind, ToolCoreOutcome, ToolCoreRequest, ToolPath,
 };
 use loong_kernel::{
     InMemoryAuditSink, Kernel, SystemClock, VerticalPackManifest,
@@ -17,7 +17,6 @@ use loong_kernel::{
     },
     policy::{FsContentSearchAllowPolicy, FsGlobAllowPolicy, PolicyPipelineBuilder},
 };
-use loong_runtime::tool_plane::ToolPath;
 use serde_json::json;
 
 use super::*;
@@ -27,6 +26,13 @@ use crate::tools::runtime_config::ToolRuntimeConfig;
 use crate::tools::runtime_events::{
     ToolFileChangeKind, ToolRuntimeEvent, ToolRuntimeEventSink, with_tool_runtime_event_sink,
 };
+
+// Path validation is covered by contracts; file-tool tests use valid catalog
+// identities so they can focus on access, grant, and fallback behavior.
+#[allow(clippy::expect_used)]
+fn tool_path(segment: &str) -> ToolPath {
+    ToolPath::new([segment]).expect("test tool path must be valid")
+}
 
 #[derive(Default)]
 struct RecordingRuntimeSink {
@@ -170,7 +176,7 @@ async fn execute_file_read_with_test_context(
     let execution_context = app_ctx.for_invocation(config)?;
     let _ = config;
     let outcome = execution_context
-        .tool(loong_runtime::tool_plane::ToolPath::from("read"))
+        .tool(tool_path("read"))
         .map_err(|error| error.to_string())?
         .invoke(request.payload)
         .await
@@ -394,7 +400,7 @@ async fn kernel_routed_file_read_uses_typed_tool_registry() {
     assert_eq!(outcome.payload["line_end"], json!(2));
     let events = audit.snapshot();
     assert!(matches!(
-        terminal_action_execution(&events, "read"),
+        terminal_action_execution(&events, "/read"),
         Some(ActionExecutionEvent::Completed)
     ));
     assert!(!events.iter().any(|event| {
@@ -438,7 +444,7 @@ async fn kernel_routed_tool_invoke_file_read_uses_typed_tool_registry() {
     assert_eq!(outcome.payload["content"], json!("beta"));
     let events = audit.snapshot();
     assert!(matches!(
-        terminal_action_execution(&events, "read"),
+        terminal_action_execution(&events, "/read"),
         Some(ActionExecutionEvent::Completed)
     ));
     assert!(!events.iter().any(|event| {
@@ -529,7 +535,7 @@ async fn kernel_routed_tool_invoke_capability_override_rejects_added_capabilitie
                     declared,
                 }
             )
-        ) if path == ToolPath::from("read")
+        ) if path == tool_path("read")
             && requested == loong_contracts::Capabilities::from([Capability::FilesystemWrite])
             && declared == loong_contracts::Capabilities::from([Capability::FilesystemRead])
     ));
@@ -570,7 +576,7 @@ async fn kernel_routed_direct_read_glob_uses_typed_tool_registry() {
     assert_eq!(matches[1]["path"], "src/nested/mod.rs");
     let events = audit.snapshot();
     assert!(matches!(
-        terminal_action_execution(&events, "read"),
+        terminal_action_execution(&events, "/read"),
         Some(ActionExecutionEvent::Completed)
     ));
     assert!(!events.iter().any(|event| {
@@ -626,7 +632,7 @@ async fn kernel_routed_direct_read_query_uses_typed_tool_registry() {
     assert_eq!(first["snippet"], "println!(\"hello world\");");
     let events = audit.snapshot();
     assert!(matches!(
-        terminal_action_execution(&events, "read"),
+        terminal_action_execution(&events, "/read"),
         Some(ActionExecutionEvent::Completed)
     ));
     assert!(!events.iter().any(|event| {
@@ -734,7 +740,7 @@ async fn kernel_routed_file_read_reports_typed_input_error() {
     );
     let events = audit.snapshot();
     assert!(matches!(
-        terminal_action_execution(&events, "read"),
+        terminal_action_execution(&events, "/read"),
         Some(ActionExecutionEvent::InputRejected { error })
             if error.to_string().contains("read payload.offset must be a positive integer")
     ));
@@ -768,7 +774,7 @@ async fn conversation_read_input_error_is_owned_and_audited_by_typed_tool() {
     assert!(failure.reason.contains("direct_read_requires_one_of"));
     let events = harness.audit.snapshot();
     assert!(matches!(
-        terminal_action_execution(&events, "read"),
+        terminal_action_execution(&events, "/read"),
         Some(ActionExecutionEvent::InputRejected { error })
             if error.to_string().contains("direct_read_requires_one_of")
     ));
@@ -810,7 +816,7 @@ async fn conversation_tool_invoke_preserves_empty_capability_override() {
     // to a hidden catalog path so this fixture exercises the envelope boundary.
     tools
         .register(
-            ToolPath::from("config.import"),
+            tool_path("config.import"),
             loong_tools::file::ReadTool::new("config.import"),
         )
         .expect("register hidden typed test tool");
@@ -860,7 +866,7 @@ async fn conversation_tool_invoke_preserves_empty_capability_override() {
     assert!(output.contains("missing capability: FilesystemRead"));
     let events = audit.snapshot();
     assert!(matches!(
-        terminal_action_execution(&events, "config.import"),
+        terminal_action_execution(&events, "/config.import"),
         Some(ActionExecutionEvent::Failed { reason })
             if reason.contains("missing capability: FilesystemRead")
     ));
@@ -900,7 +906,7 @@ async fn kernel_routed_glob_search_uses_typed_tool_registry() {
     );
     let events = audit.snapshot();
     assert!(matches!(
-        terminal_action_execution(&events, "glob.search"),
+        terminal_action_execution(&events, "/glob.search"),
         Some(ActionExecutionEvent::Completed)
     ));
     assert!(!events.iter().any(|event| {
@@ -949,7 +955,7 @@ async fn kernel_routed_content_search_uses_typed_tool_registry() {
     assert_eq!(outcome.payload["matches"][0]["path"], json!("src/main.rs"));
     let events = audit.snapshot();
     assert!(matches!(
-        terminal_action_execution(&events, "content.search"),
+        terminal_action_execution(&events, "/content.search"),
         Some(ActionExecutionEvent::Completed)
     ));
     assert!(!events.iter().any(|event| {
@@ -1002,7 +1008,7 @@ async fn kernel_routed_file_write_uses_typed_tool_registry() {
     );
     let events = audit.snapshot();
     assert!(matches!(
-        terminal_action_execution(&events, "write"),
+        terminal_action_execution(&events, "/write"),
         Some(ActionExecutionEvent::Completed)
     ));
     assert!(!events.iter().any(|event| {
@@ -1059,7 +1065,7 @@ async fn context_direct_write_uses_typed_tool_registry() {
         .for_invocation(&config)
         .expect("build execution context");
     let outcome = execution_context
-        .tool(loong_runtime::tool_plane::ToolPath::from("write"))
+        .tool(tool_path("write"))
         .expect("lookup typed write")
         .invoke(json!({
             "path": "typed.txt",
@@ -1076,7 +1082,7 @@ async fn context_direct_write_uses_typed_tool_registry() {
     );
     let events = audit.snapshot();
     assert!(matches!(
-        terminal_action_execution(&events, "write"),
+        terminal_action_execution(&events, "/write"),
         Some(ActionExecutionEvent::Completed)
     ));
     let _ = fs::remove_dir_all(base);
@@ -1113,7 +1119,7 @@ async fn kernel_routed_tool_invoke_file_write_uses_typed_tool_registry() {
     );
     let events = audit.snapshot();
     assert!(matches!(
-        terminal_action_execution(&events, "write"),
+        terminal_action_execution(&events, "/write"),
         Some(ActionExecutionEvent::Completed)
     ));
     assert!(!events.iter().any(|event| {
@@ -1178,7 +1184,7 @@ async fn kernel_routed_file_edit_uses_typed_tool_registry_and_preview_observer()
 
     let events = audit.snapshot();
     assert!(matches!(
-        terminal_action_execution(&events, "edit"),
+        terminal_action_execution(&events, "/edit"),
         Some(ActionExecutionEvent::Completed)
     ));
     assert!(!events.iter().any(|event| {

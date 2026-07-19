@@ -1,8 +1,10 @@
 use std::collections::BTreeSet;
 
-use loong_runtime::{runtime::Runtime, tool_plane::ToolPath};
+use loong_contracts::ToolPath;
+use loong_runtime::{runtime::Runtime, tool_plane::error::LookupError};
 use serde::{Deserialize, Serialize};
 
+use super::error::ToolMetadataError;
 use super::runtime_config;
 use super::skills;
 use super::tool_surface;
@@ -27,14 +29,14 @@ pub struct DiscoverableToolSurfaceSummary {
 
 pub fn tool_registry(
     runtime: Option<&Runtime<crate::context::AppContextFactory>>,
-) -> Vec<ToolRegistryEntry> {
+) -> Result<Vec<ToolRegistryEntry>, ToolMetadataError> {
     tool_registry_with_config(runtime, Some(runtime_config::get_tool_runtime_config()))
 }
 
 pub fn tool_registry_with_config(
     runtime: Option<&Runtime<crate::context::AppContextFactory>>,
     config: Option<&runtime_config::ToolRuntimeConfig>,
-) -> Vec<ToolRegistryEntry> {
+) -> Result<Vec<ToolRegistryEntry>, ToolMetadataError> {
     let default_runtime_config;
     let config = match config {
         Some(config) => config,
@@ -49,7 +51,7 @@ pub fn tool_registry_with_config(
     let mut entries = Vec::new();
 
     for state in visible_direct_states {
-        let summary = agent_visible_summary_for_direct_state(runtime, &state);
+        let summary = agent_visible_summary_for_direct_state(runtime, &state)?;
         let registry_entry = ToolRegistryEntry {
             name: state.surface_id,
             description: format!("{} {}", summary, state.usage_guidance),
@@ -58,17 +60,19 @@ pub fn tool_registry_with_config(
     }
 
     entries.sort_by(|left, right| left.name.cmp(&right.name));
-    entries
+    Ok(entries)
 }
 
-pub fn capability_snapshot(runtime: Option<&Runtime<crate::context::AppContextFactory>>) -> String {
+pub fn capability_snapshot(
+    runtime: Option<&Runtime<crate::context::AppContextFactory>>,
+) -> Result<String, ToolMetadataError> {
     capability_snapshot_with_config(runtime, runtime_config::get_tool_runtime_config())
 }
 
 pub fn capability_snapshot_with_config(
     runtime: Option<&Runtime<crate::context::AppContextFactory>>,
     config: &runtime_config::ToolRuntimeConfig,
-) -> String {
+) -> Result<String, ToolMetadataError> {
     capability_snapshot_for_view_with_config(
         runtime,
         &runtime_tool_view_for_runtime_config(config),
@@ -79,7 +83,7 @@ pub fn capability_snapshot_with_config(
 pub fn capability_snapshot_for_view(
     runtime: Option<&Runtime<crate::context::AppContextFactory>>,
     view: &ToolView,
-) -> String {
+) -> Result<String, ToolMetadataError> {
     capability_snapshot_for_view_with_config(
         runtime,
         view,
@@ -91,7 +95,7 @@ pub(crate) fn capability_snapshot_for_view_with_config(
     runtime: Option<&Runtime<crate::context::AppContextFactory>>,
     view: &ToolView,
     config: &runtime_config::ToolRuntimeConfig,
-) -> String {
+) -> Result<String, ToolMetadataError> {
     let visible_direct_states = tool_surface::visible_direct_tool_states_for_view(view);
     capability_snapshot_for_direct_states_with_config(runtime, view, config, visible_direct_states)
 }
@@ -101,14 +105,14 @@ pub(crate) fn capability_snapshot_for_direct_states_with_config(
     _view: &ToolView,
     config: &runtime_config::ToolRuntimeConfig,
     visible_direct_states: Vec<super::ToolSurfaceState>,
-) -> String {
+) -> Result<String, ToolMetadataError> {
     let mut lines = vec![
         "[tool_discovery_runtime]".to_owned(),
         "Available tools:".to_owned(),
     ];
 
     let visible_direct_lines =
-        render_visible_direct_tool_lines(runtime, visible_direct_states.as_slice());
+        render_visible_direct_tool_lines(runtime, visible_direct_states.as_slice())?;
     lines.extend(visible_direct_lines);
 
     lines.push("Guidelines:".to_owned());
@@ -121,17 +125,17 @@ pub(crate) fn capability_snapshot_for_direct_states_with_config(
     if let Some(skill_catalog_section) = skills::model_skill_catalog_section_with_config(config) {
         lines.push(skill_catalog_section);
     }
-    lines.join("\n")
+    Ok(lines.join("\n"))
 }
 
 fn render_visible_direct_tool_lines(
     runtime: Option<&Runtime<crate::context::AppContextFactory>>,
     states: &[super::ToolSurfaceState],
-) -> Vec<String> {
+) -> Result<Vec<String>, ToolMetadataError> {
     let mut lines = Vec::new();
 
     for state in states {
-        let summary = agent_visible_summary_for_direct_state(runtime, state);
+        let summary = agent_visible_summary_for_direct_state(runtime, state)?;
         let line = format!(
             "- {}: {} {}",
             state.surface_id, summary, state.usage_guidance
@@ -139,21 +143,30 @@ fn render_visible_direct_tool_lines(
         lines.push(line);
     }
 
-    lines
+    Ok(lines)
 }
 
 fn agent_visible_summary_for_direct_state(
     runtime: Option<&Runtime<crate::context::AppContextFactory>>,
     state: &super::ToolSurfaceState,
-) -> String {
+) -> Result<String, ToolMetadataError> {
     // Concrete typed tools own their action-level summary. The app surface keeps
     // usage guidance because it describes prompt/orchestration behavior, not the
     // tool's payload or side effect boundary.
-    let typed_path = ToolPath::from(state.surface_id.as_str());
-    runtime
-        .and_then(|runtime| runtime.tool_spec(&typed_path).ok())
-        .map(|spec| spec.description.clone())
-        .unwrap_or_else(|| state.prompt_snippet.clone())
+    let path = ToolPath::new([state.surface_id.as_str()]).map_err(|source| {
+        ToolMetadataError::InvalidPath {
+            tool_name: state.surface_id.clone(),
+            source,
+        }
+    })?;
+    let Some(runtime) = runtime else {
+        return Ok(state.prompt_snippet.clone());
+    };
+    match runtime.tool_spec(&path) {
+        Ok(spec) => Ok(spec.description.clone()),
+        Err(LookupError::NotRegistered { .. }) => Ok(state.prompt_snippet.clone()),
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn render_active_tool_guideline_lines(
@@ -195,3 +208,6 @@ pub fn runtime_discoverable_tool_surface_summary_with_config(
         hidden_surfaces: Vec::new(),
     }
 }
+
+#[cfg(test)]
+mod tests;

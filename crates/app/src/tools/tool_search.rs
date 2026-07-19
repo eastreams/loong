@@ -94,6 +94,7 @@ pub(super) fn execute_tool_search_tool_with_config(
     let visible_tool_view = search_tool_view_from_payload(payload, config);
     let searchable_entries =
         runtime_tool_search_entries(runtime, config, Some(&visible_tool_view), false)
+            .map_err(|error| error.to_string())?
             .into_iter()
             .filter(|entry| {
                 tool_search_entry_is_capability_usable(

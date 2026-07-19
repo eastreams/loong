@@ -19,6 +19,7 @@ mod secret_ref;
 mod secret_resolver;
 mod secret_value;
 mod task_state;
+mod tool_path;
 mod tool_types;
 mod work_types;
 mod workflow_types;
@@ -66,6 +67,7 @@ pub use secret_ref::SecretRef;
 pub use secret_resolver::{SecretResolutionError, SecretResolver};
 pub use secret_value::SecretValue;
 pub use task_state::TaskState;
+pub use tool_path::{ToolPath, ToolPathError};
 pub use tool_types::{
     ToolCoreOutcome, ToolCoreRequest, ToolExtensionOutcome, ToolExtensionRequest, ToolInputError,
     ToolSchedulingClass, ToolSpec, ToolTier,

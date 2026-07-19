@@ -12,7 +12,7 @@
    metadata。
 4. [跨模块变更约束](04-change-hygiene.md)：dependency、feature、helper、comment 和 test
    hygiene。
-5. [ToolPlane 与 Tool Invocation](05-tool-plane.md)：plane-local path、sealed dispatch 和
+5. [ToolPlane 与 Tool Invocation](05-tool-plane.md)：contracts-owned path、sealed dispatch 和
    legacy ingress 删除目标。
 6. [Filesystem Path Grants](06-filesystem-and-read.md)：fs typestate、安全边界、operation
    ownership 和剩余 TOCTOU 工作。

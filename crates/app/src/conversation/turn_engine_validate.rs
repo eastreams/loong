@@ -6,7 +6,8 @@ use super::{
     provider_tool_denial_should_conceal_name, tool_intent_is_visible,
     tool_intent_skips_provider_exposed_gate,
 };
-use loong_runtime::tool_plane::{ToolPath, error::LookupError};
+use loong_contracts::ToolPath;
+use loong_runtime::tool_plane::error::LookupError;
 
 impl TurnEngine {
     #[cfg(test)]
@@ -60,7 +61,9 @@ impl TurnEngine {
         let catalog = crate::tools::tool_catalog();
         for intent in &turn.tool_intents {
             let canonical_tool_name = crate::tools::canonical_tool_name(intent.tool_name.as_str());
-            let typed_path = ToolPath::from(canonical_tool_name);
+            let typed_path = ToolPath::new([canonical_tool_name]).map_err(|error| {
+                TurnFailure::non_retryable("tool_path_invalid", error.to_string())
+            })?;
             let typed_registered = match session_context.runtime().tool_spec(&typed_path) {
                 Ok(_) => true,
                 Err(LookupError::NotRegistered { .. }) => false,

@@ -1,11 +1,11 @@
 use std::borrow::Cow;
 
-use loong_contracts::{AuthorizationScope, AuthorizationSubject, Capabilities};
+use loong_contracts::{AuthorizationScope, AuthorizationSubject, Capabilities, ToolPath};
 use loong_core::policy::context::{ContextFactory, PolicyContext};
 use loong_kernel::Kernel;
 
 use super::Runtime;
-use crate::tool_plane::{ToolPath, ToolPlaneRegistry};
+use crate::tool_plane::ToolPlaneRegistry;
 
 struct TestContextFactory;
 

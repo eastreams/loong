@@ -56,6 +56,9 @@ impl From<crate::tools::ToolRequestError> for TurnFailure {
             crate::tools::ToolRequestError::Context(reason) => {
                 TurnFailure::non_retryable("tool_context_failed", reason)
             }
+            crate::tools::ToolRequestError::InvalidPath(error) => {
+                TurnFailure::non_retryable("tool_path_invalid", error.to_string())
+            }
             crate::tools::ToolRequestError::Lookup(error) => {
                 TurnFailure::non_retryable("tool_registry_failed", error.to_string())
             }
