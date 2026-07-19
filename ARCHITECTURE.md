@@ -1,6 +1,6 @@
 # Loong Architecture
 
-Loong is structured as a 13-crate Rust workspace with a strict acyclic
+Loong is structured as a 15-crate Rust workspace with a strict acyclic
 dependency graph. The current tree contains two connected families: the
 governed runtime rail that ships today, and an already-landed additive SDK
 spine that is still transitional. The kernel continues to enforce layered
@@ -49,8 +49,8 @@ maintainers who need the codebase-level structure behind the Mintlify docs.
 
 The workspace DAG matters, but so does the ownership model behind it. Today the
 codebase has two manifest-level leaves (`contracts`, `protocol`), one core
-foundation crate above contracts (`loong-core`), five additive spine crates, four governed runtime support crates,
-one benchmark rail, and one shipped binary crate.
+foundation crate above contracts (`loong-core`), an additive spine, a
+governed runtime rail, one benchmark rail, and one shipped binary crate.
 
 ```text
 direct workspace dependency DAG
@@ -69,9 +69,11 @@ additive spine
 - loong-cli -> loong-app-protocol
 
 governed runtime rail
-- kernel -> contracts, loong-core, loong-plugin-sdk
+- loong-access -> contracts, loong-core
+- kernel -> contracts, loong-access, loong-core, loong-plugin-sdk
+- loong-tools -> contracts, loong-core, kernel
 - bridge-runtime -> contracts, kernel, protocol
-- app -> contracts, loong-core, kernel
+- app -> contracts, loong-core, kernel, loong-runtime, loong-tools
 - spec -> contracts, loong-core, kernel, protocol, bridge-runtime
 - bench -> kernel, spec
 - daemon (`loong`) -> app, loong-app-protocol, bench, bridge-runtime, contracts, loong-core, kernel, protocol, spec
@@ -81,11 +83,11 @@ No dependency cycles. This is non-negotiable.
 
 ## Practical Ownership Map
 
-The 13 packages fall into two ownership families:
+The 15 packages fall into two ownership families:
 
-- Governed runtime rail: `contracts`, `kernel`, `protocol`, `bridge-runtime`,
-  `app`, `spec`, `bench`, and `daemon` own the shipping product path and the
-  policy-governed runtime.
+- Governed runtime rail: `contracts`, `loong-access`, `kernel`, `loong-tools`,
+  `protocol`, `bridge-runtime`, `app`, `spec`, `bench`, and `daemon` own the
+  shipping product path and the policy-governed runtime.
 - Additive SDK spine: `loong-core`, `loong-plugin-sdk`, `loong-runtime`,
   `loong-app-protocol`, and `loong-cli` define the newer task/session/runtime
   contract spine. They already participate in the live graph through `kernel`
@@ -95,7 +97,9 @@ The 13 packages fall into two ownership families:
 |-------|------|
 | `loong-core` | Core action/policy/grant foundation plus sessions, tasks, turns, artifacts, workspace context, and execution lifecycle facts used by the additive spine. |
 | `loong-plugin-sdk` | Plugin contract spine above `loong-core`. Owns the additive plugin-facing contract that `kernel` already consumes. |
+| `loong-access` | Typed physical side-effect boundary. Owns Access facades, concrete Actions, and operation-local execution errors above core grant contracts. |
 | `loong-runtime` | Runtime ownership spine above `loong-core` and `kernel`. Defines the shared kernel/tool-plane owner plus oneshot, interactive, and task-status runtime contracts while the shipped bootstrap path migrates onto that owner. |
+| `loong-tools` | Concrete builtin typed tool implementations. It composes governed Access and kernel-facing tool contracts without owning orchestration. |
 | `loong-app-protocol` | App-facing task/session/turn protocol built on `loong-runtime`. This is the transitional boundary that `daemon` already consumes directly. |
 | `loong-cli` | First-party CLI shell spine library. Exists as Phase 2 scaffolding; it is not the shipping `loong` binary entrypoint today. |
 | `contracts` | Shared governed-runtime vocabulary: capability tokens, policy/audit types, runtime/tool/memory request-outcome shapes, task state, namespaces, and pack manifests. Zero internal dependencies. |
@@ -188,7 +192,7 @@ the documented contract deliberately.
 2. **No breaking changes** -- new features are additive only. Existing public API signatures stay unchanged.
 3. **Capability-gated by default** -- every tool call, memory operation, and connector invocation requires a valid `CapabilityToken`.
 4. **Audit everything security-critical** -- policy denials, token lifecycle events, and module invocations all emit structured audit events.
-5. **13-crate DAG, no cycles** -- dependency direction is non-negotiable.
+5. **15-crate DAG, no cycles** -- dependency direction is non-negotiable.
 6. **Tests first** -- if a behavior isn't tested, it doesn't exist. All tests pass at every commit.
 7. **Proven technology preferred** -- choose well-understood, composable dependencies over opaque packages.
 8. **Repository is the system of record** -- design decisions and architectural context live in `docs/`, not in chat threads.

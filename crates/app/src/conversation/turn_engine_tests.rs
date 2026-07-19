@@ -49,6 +49,7 @@ where
             description: "Typed-only preparation test tool.".to_owned(),
             input_schema: json!({ "type": "object" }),
             required_capabilities: std::collections::BTreeSet::new(),
+            scheduling: loong_contracts::ToolSchedulingClass::ParallelSafe,
             argument_hint: None,
             search_hint: None,
             tags: Vec::new(),

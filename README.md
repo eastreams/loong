@@ -237,22 +237,24 @@ For the full provider and channel matrices, multi-account setups, and the long-r
 <a id="architecture"></a>
 ## Architecture
 
-Loong is a 13-crate Rust workspace with a strict acyclic dependency graph,
+Loong is a 15-crate Rust workspace with a strict acyclic dependency graph,
 organized around a governed kernel that separates stable contracts, runtime
 substrate, product/runtime assembly, validation rails, and daemon-owned
 delivery surfaces.
 
 ```text
-loong-core          (minimal shared base types)
-├── loong-runtime      -> loong-core
+loong-core          -> contracts
+├── loong-access       -> contracts, loong-core
+├── loong-runtime      -> contracts, loong-core, kernel
+├── loong-tools        -> contracts, loong-core, kernel
 ├── loong-plugin-sdk   -> loong-core
 ├── contracts          (stable contract vocabulary)
-├── kernel             -> contracts, loong-core, plugin-sdk
+├── kernel             -> access, contracts, loong-core, plugin-sdk
 ├── protocol           (independent transport foundation)
 ├── bridge-runtime     -> contracts, kernel, protocol
 ├── loong-app-protocol -> loong-runtime
 ├── loong-cli          -> loong-app-protocol
-├── app                -> contracts, loong-core, kernel
+├── app                -> contracts, loong-core, kernel, loong-runtime, loong-tools
 ├── spec               -> contracts, loong-core, kernel, protocol, bridge-runtime
 ├── bench              -> kernel, spec
 └── daemon             -> app, app-protocol, bench, bridge-runtime, contracts, loong-core, kernel, protocol, spec

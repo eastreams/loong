@@ -8,7 +8,7 @@ description: The public architecture contract for contributors and integrators.
 Use this page when you want the public system map before opening the deeper
 repository-native design docs.
 
-Loong is organized as a 13-crate Rust workspace with a strict dependency DAG.
+Loong is organized as a 15-crate Rust workspace with a strict dependency DAG.
 This page stays intentionally short: it explains the boundaries builders should
 preserve, not the full internal authoring trail.
 
@@ -41,16 +41,18 @@ into runnable operator entrypoints.
 ```text
 direct dependency DAG
 
-loong-core          (minimal shared base types)
-├── loong-runtime      -> loong-core
+loong-core          -> contracts
+├── loong-access       -> contracts, loong-core
+├── loong-runtime      -> contracts, loong-core, kernel
+├── loong-tools        -> contracts, loong-core, kernel
 ├── loong-plugin-sdk   -> loong-core
 ├── contracts          (stable contract vocabulary)
-├── kernel             -> contracts, loong-core, plugin-sdk
+├── kernel             -> access, contracts, loong-core, plugin-sdk
 ├── protocol           (independent transport foundation)
 ├── bridge-runtime     -> contracts, kernel, protocol
 ├── loong-app-protocol -> loong-runtime
 ├── loong-cli          -> loong-app-protocol
-├── app                -> contracts, loong-core, kernel
+├── app                -> contracts, loong-core, kernel, loong-runtime, loong-tools
 ├── spec               -> contracts, loong-core, kernel, protocol, bridge-runtime
 ├── bench              -> kernel, spec
 └── daemon             -> app, app-protocol, bench, bridge-runtime, contracts, loong-core, kernel, protocol, spec
@@ -62,11 +64,13 @@ loong-core          (minimal shared base types)
 | --- | --- |
 | `loong-core` / `loong-runtime` / `loong-app-protocol` / `loong-cli` | thin substrate crates for stable base types, lightweight runtime reuse, and compact protocol/CLI-facing surfaces |
 | `loong-plugin-sdk` | public plugin-sdk contract substrate for authoring and translation-facing compatibility |
+| `loong-access` | typed physical side-effect boundary above core action and grant contracts |
+| `loong-tools` | concrete builtin typed tool implementations |
 | `contracts` | shared contract vocabulary for capability, policy, audit, and execution request-outcome types |
 | `kernel` | governed execution core for policy, audit, planes, harness, plugin, and integration control |
 | `protocol` | transport and route foundation used by the spec rail |
 | `bridge-runtime` | shared managed bridge transport substrate reused by spec and production bridge execution |
-| `app` | product/runtime layer for providers, channels, tools, memory, conversation, config, and presentation |
+| `app` | product/runtime assembly for providers, channels, memory, conversation, config, and presentation |
 | `spec` | deterministic execution rail and bootstrap/test runtime |
 | `bench` | performance and pressure rail on top of spec/kernel |
 | `daemon` | operator CLI and service delivery layer over the lower crates |

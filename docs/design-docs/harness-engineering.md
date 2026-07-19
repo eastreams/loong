@@ -86,7 +86,7 @@ The workspace clippy configuration mechanically prevents agent-generated anti-pa
 
 ### Dependency DAG as Constraint
 
-The 13-crate DAG prevents circular dependencies and implementation leakage.
+The 15-crate DAG prevents circular dependencies and implementation leakage.
 Enforced by `scripts/check_dep_graph.sh` and, when the optional `task` CLI is
 installed, `task check:architecture`.
 
