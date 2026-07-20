@@ -12,7 +12,10 @@ mod registered;
 pub use invocation::{ToolInvocation, ToolInvocationContext};
 pub use registered::RegisteredToolError;
 
-use std::{borrow::Cow, collections::BTreeMap};
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, btree_map::Entry},
+};
 
 use loong_contracts::{Capabilities, Capability, ToolPath};
 use loong_core::{
@@ -23,7 +26,6 @@ use loong_core::{
     tool::ToolImpl,
 };
 use serde_json::{Value, json};
-use slotmap::{SlotMap, new_key_type};
 
 use self::error::{LookupError, RegistrationError};
 use self::registered::RegisteredTool;
@@ -95,19 +97,12 @@ pub(crate) trait ToolPlane<C: ContextFactory>: Send + Sync {
     fn resolve(&self, path: &ToolPath) -> Result<&RegisteredTool<C>, LookupError>;
 }
 
-new_key_type! {
-    // Storage identity is intentionally private. ToolPath remains the stable
-    // lookup and audit identity if the registry representation changes.
-    struct ToolSlot;
-}
-
-/// Slot-backed default registry for the runtime tool plane.
+/// Ordered default registry for the runtime tool plane.
 ///
-/// The ordered path index provides stable lookup/enumeration while slots keep
-/// tool storage independent from externally visible identity.
+/// The contracts-owned path remains both lookup identity and storage key. A
+/// second storage identity is deferred until removal or replacement requires it.
 pub struct ToolPlaneRegistry<C: ContextFactory> {
-    entries: SlotMap<ToolSlot, RegisteredTool<C>>,
-    paths: BTreeMap<ToolPath, ToolSlot>,
+    entries: BTreeMap<ToolPath, RegisteredTool<C>>,
 }
 
 impl<C> ToolPlaneRegistry<C>
@@ -117,8 +112,7 @@ where
     #[must_use]
     pub fn new() -> Self {
         Self {
-            entries: SlotMap::with_key(),
-            paths: BTreeMap::new(),
+            entries: BTreeMap::new(),
         }
     }
 
@@ -126,13 +120,7 @@ where
     where
         T: ToolImpl<C>,
     {
-        if self.paths.contains_key(&path) {
-            return Err(RegistrationError::AlreadyRegistered { path });
-        }
-
-        let slot = self.entries.insert(RegisteredTool::from_tool(tool));
-        self.paths.insert(path, slot);
-        Ok(())
+        self.insert_registered(path, || RegisteredTool::from_tool(tool))
     }
 
     pub fn register_with_success_observer<T, F>(
@@ -145,44 +133,36 @@ where
         T: ToolImpl<C>,
         F: for<'a> Fn(&C::Cx<'a>, &T::Output) + Send + Sync + 'static,
     {
-        if self.paths.contains_key(&path) {
-            return Err(RegistrationError::AlreadyRegistered { path });
-        }
+        self.insert_registered(path, || {
+            RegisteredTool::from_tool_with_success_observer(tool, observer)
+        })
+    }
 
-        let slot = self
-            .entries
-            .insert(RegisteredTool::from_tool_with_success_observer(
-                tool, observer,
-            ));
-        self.paths.insert(path, slot);
-        Ok(())
+    /// Share duplicate handling without observing a rejected tool's descriptor.
+    fn insert_registered<F>(&mut self, path: ToolPath, build: F) -> Result<(), RegistrationError>
+    where
+        F: FnOnce() -> RegisteredTool<C>,
+    {
+        match self.entries.entry(path) {
+            Entry::Vacant(entry) => {
+                entry.insert(build());
+                Ok(())
+            }
+            Entry::Occupied(entry) => Err(RegistrationError::AlreadyRegistered {
+                path: entry.key().clone(),
+            }),
+        }
     }
 
     #[must_use]
     pub fn registered_paths(&self) -> Vec<ToolPath> {
-        self.paths.keys().cloned().collect()
+        self.entries.keys().cloned().collect()
     }
 
     pub(crate) fn resolve(&self, path: &ToolPath) -> Result<&RegisteredTool<C>, LookupError> {
-        let slot = self
-            .paths
-            .get(path)
-            .ok_or_else(|| LookupError::NotRegistered { path: path.clone() })?;
         self.entries
-            .get(*slot)
-            .ok_or_else(|| LookupError::RegistryInvariant { path: path.clone() })
-    }
-
-    #[cfg(test)]
-    #[must_use]
-    fn entry_count(&self) -> usize {
-        self.entries.len()
-    }
-
-    #[cfg(test)]
-    #[must_use]
-    fn path_count(&self) -> usize {
-        self.paths.len()
+            .get(path)
+            .ok_or_else(|| LookupError::NotRegistered { path: path.clone() })
     }
 }
 

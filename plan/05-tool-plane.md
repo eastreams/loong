@@ -10,7 +10,7 @@
 - runtime `ToolInvocation` wrapper 与 `ToolInvocationContext` 也必须归属 `loong-runtime`；当前
   app-owned wrapper 是步骤 5 要删除的实现偏差，不能再增加第二个 bridge。
 - `ToolPlane` 不是外部扩展点。它只允许 runtime crate 内部替换 registry/storage strategy；path
-  identity、比较和序列化不随 BTreeMap/slot map/Trie 实现变化。`Runtime` 不接受 caller-provided
+  identity、比较和序列化不随 BTreeMap/Trie 实现变化。`Runtime` 不接受 caller-provided
   plane，也不向 crate 外暴露能消费 invocation grant 的 trait object。
 - app bootstrap 注册 concrete builtin tools 和 app-owned policy/success observer；kernel 不持有
   typed registry，concrete tool crate 不持有 registry。
@@ -23,15 +23,16 @@ segment，没有 filesystem navigation 语义。当前 dotted catalog id 是一�
 `glob.search -> /glob.search`，不能隐式拆成 `/glob/search`；真正的层级 namespace 必须在注册时显式
 传入多个 segments。contracts 不提供 `From<&str>` 或其它隐式 dotted conversion。
 
-## Registry Invariant
+## Registry Storage
 
-default registry 已采用 private slot storage + ordered path index：
+default registry 直接使用 ordered path map：
 
 ```text
-ToolPath -> private ToolSlot -> RegisteredTool<C>
+ToolPath -> RegisteredTool<C>
 ```
 
-- `ToolSlot` 不跨 module boundary，不进入 Action、audit、contracts/core 或 concrete tool API。
+- 当前没有 unregister、replacement 或 stable slot caller，因此第二套 storage identity 没有语义价值。
+  真正出现该需求前不引入 slot arena、generation 或 path-to-slot index。
 - entry 不重复保存 path，避免 index 与 entry drift。
 - `RegisteredTool` 保存 descriptor、registration time 和 provenance；private `ErasedTool` 只由
   `RegisteredTool` 构造。
@@ -49,7 +50,7 @@ ToolPath -> private ToolSlot -> RegisteredTool<C>
 - runtime plane 分开拥有 concrete `RegistrationError`、`LookupError`、`RegisteredToolError` 与
   composite `ToolInvocationError`，lookup 和 granted dispatch failure 不再混成同一个 fallback signal；
 - 只有 `LookupError::NotRegistered` 可以由 legacy ingress 选择 fallback；
-  `LookupError::RegistryInvariant`、`RegisteredToolError` 和 `ToolInvocationError` 都不得 fallback。
+  `RegisteredToolError` 和 `ToolInvocationError` 都不得 fallback。
 
 composite `ToolInvocationError` 已由 runtime invocation wrapper 使用，保留 caps override、child
 narrowing、grant、dispatch 与 execution audit 的 concrete source；它不是 registry lookup error，

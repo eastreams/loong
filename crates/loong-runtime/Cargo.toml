@@ -15,7 +15,6 @@ name = "loong_runtime"
 loong-contracts.workspace = true
 loong-core.workspace = true
 loong-kernel.workspace = true
-slotmap.workspace = true
 async-trait.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

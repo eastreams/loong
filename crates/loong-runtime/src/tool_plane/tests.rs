@@ -52,6 +52,8 @@ impl PolicyContext for TestContext {
 
 struct EchoTool {
     executions: Arc<AtomicUsize>,
+    spec_calls: Arc<AtomicUsize>,
+    description: &'static str,
 }
 
 #[async_trait]
@@ -61,8 +63,9 @@ impl ToolImpl<TestContextFactory> for EchoTool {
     type Error = std::convert::Infallible;
 
     fn spec(&self) -> ToolSpec {
+        self.spec_calls.fetch_add(1, Ordering::Relaxed);
         ToolSpec {
-            description: "Echo the provided message.".to_owned(),
+            description: self.description.to_owned(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -98,7 +101,7 @@ impl ToolImpl<TestContextFactory> for EchoTool {
 }
 
 // Path validation belongs to contracts tests; registry tests use valid literal
-// identities so they can stay focused on lookup and slot invariants.
+// identities so they can stay focused on lookup and registration behavior.
 #[allow(clippy::expect_used)]
 fn tool_path(segment: &str) -> ToolPath {
     ToolPath::new([segment]).expect("test tool path must be valid")
@@ -152,6 +155,8 @@ fn registry_resolves_registered_tool_metadata() {
             path.clone(),
             EchoTool {
                 executions: Arc::clone(&executions),
+                spec_calls: Arc::new(AtomicUsize::new(0)),
+                description: "Echo the provided message.",
             },
         )
         .expect("test tool registration should succeed");
@@ -164,23 +169,30 @@ fn registry_resolves_registered_tool_metadata() {
 }
 
 #[test]
-fn registry_rejects_duplicate_paths_without_leaking_slots() {
+fn registry_rejects_duplicate_paths_without_replacing_the_entry() {
     let mut plane = ToolPlaneRegistry::<TestContextFactory>::new();
     let path = tool_path("test.echo");
+    let first_spec_calls = Arc::new(AtomicUsize::new(0));
+    let duplicate_spec_calls = Arc::new(AtomicUsize::new(0));
     plane
         .register(
             path.clone(),
             EchoTool {
                 executions: Arc::new(AtomicUsize::new(0)),
+                spec_calls: Arc::clone(&first_spec_calls),
+                description: "first registration",
             },
         )
         .expect("first registration should succeed");
+    assert_eq!(first_spec_calls.load(Ordering::Relaxed), 1);
 
     let error = plane
         .register(
-            path,
+            path.clone(),
             EchoTool {
                 executions: Arc::new(AtomicUsize::new(0)),
+                spec_calls: Arc::clone(&duplicate_spec_calls),
+                description: "duplicate registration",
             },
         )
         .expect_err("duplicate path should fail");
@@ -190,8 +202,15 @@ fn registry_rejects_duplicate_paths_without_leaking_slots() {
         RegistrationError::AlreadyRegistered { path }
             if path == tool_path("test.echo")
     ));
-    assert_eq!(plane.entry_count(), 1);
-    assert_eq!(plane.path_count(), 1);
+    assert_eq!(duplicate_spec_calls.load(Ordering::Relaxed), 0);
+    assert_eq!(
+        plane
+            .resolve(&path)
+            .expect("first registration should remain")
+            .spec()
+            .description,
+        "first registration"
+    );
 }
 
 #[test]
@@ -203,6 +222,8 @@ fn registry_enumerates_paths_in_path_order() {
                 tool_path(path),
                 EchoTool {
                     executions: Arc::new(AtomicUsize::new(0)),
+                    spec_calls: Arc::new(AtomicUsize::new(0)),
+                    description: "Echo the provided message.",
                 },
             )
             .expect("test tool registration should succeed");
@@ -222,6 +243,8 @@ fn registry_reports_unregistered_path_before_invocation() {
             tool_path("test.echo"),
             EchoTool {
                 executions: Arc::new(AtomicUsize::new(0)),
+                spec_calls: Arc::new(AtomicUsize::new(0)),
+                description: "Echo the provided message.",
             },
         )
         .expect("test tool registration should succeed");

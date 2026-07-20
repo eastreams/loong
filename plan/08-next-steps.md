@@ -110,7 +110,8 @@ finalization behavior 留在步骤 14。
   production 和 tests 都没有 caller；
 - runtime 没有 sink/clock/event-id state access；跨 crate audit 只经过返回 typed `AuditError` 的
   `Kernel::record_audit_event`；
-- ToolSlot、registry key、legacy route 和 pack/token 不进入 typed execution audit payload；
+- typed execution audit 只引用 contracts-owned ToolPath/GrantId，不记录 registry representation、
+  legacy route 或 pack/token；
 - concrete tool 无法跳过 wrapper，也不手写 audit；本步骤不声称 generic Access execution evidence
   已经存在。
 - 删除本步骤时同步删除/改写 `plan/07-kernel-audit-and-deviations.md` 中对应“当前偏差”，并更新

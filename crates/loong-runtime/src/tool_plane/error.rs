@@ -25,8 +25,6 @@ pub enum RegistrationError {
 pub enum LookupError {
     #[error("tool is not registered: {path}")]
     NotRegistered { path: ToolPath },
-    #[error("tool registry invariant failed for {path}")]
-    RegistryInvariant { path: ToolPath },
 }
 
 /// A requested tool override exceeded the tool's declared default authority.
