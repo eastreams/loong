@@ -632,38 +632,48 @@ cargo fmt --all -- --check
 git diff --check
 ```
 
-## 20. 在 benchmark/profile 证明后迁移 Capabilities bitset
-
-**进入条件**
-
-- 先为当前集合表示建立 membership、subset、intersection、child narrowing 与 clone/owned-Cow
-  baseline；workspace benchmark 和真实 profile 必须共同证明这些操作是值得优化的 hot path。
-- 若 profile 不支持迁移，关闭该任务并保留当前表示，不为“看起来更快”增加复杂度。
+## 20. 将 Capabilities 收敛为值语义 bitset
 
 **范围**
 
-- 评估已有 bitset crate；除非现有库无法表达固定 capability universe，否则不手写 bitset。
-- `Capabilities` 封装 capability 到 bit index 的 exhaustive mapping；不能把未承诺稳定的 enum
-  discriminant 当成持久化/wire bit position。
+- 删除 `Capabilities(Option<Arc<BTreeSet<Capability>>>)`；空集就是零值，clone/copy、membership、subset
+  和 intersection 都是无分配的值操作，不再用 `Option` 或共享所有权编码集合状态。
+- 目标 concrete shape 是 opaque `Capabilities(u64)`，并实现 `Copy`。`contains`、`is_subset`、
+  `intersection` 和 `difference` 直接做值运算，其中后两者返回 `Capabilities`，需要枚举时再显式
+  `iter()`，不保留只为旧 `BTreeSet` 形状存在的 iterator API。
+- capability variant、canonical name、bit mapping 和 `ALL_CAPABILITIES` 必须由 contracts-private 的
+  单一 declaration 生成，不能维护会彼此漂移的 mapping 与遍历表。生成顺序保持当前 `Capability` 声明
+  顺序；compile-time capacity assertion 拒绝超过 64 bit，测试同时锁定 one-hot、bit 唯一、全集无遗漏和
+  full-mask iteration 可逆。declaration 旁用简短注释说明它是 authorization universe 的唯一 source；
+  不把未承诺稳定的 bit position 当成持久化/wire identity。
 - 保持 capability 名称/list 的序列化 contract；Policy、Action、Context 和 Access 不暴露 mask、
-  index、word size 或具体 bitset crate。
+  index 或 word size，raw mask 不进入 serde、audit 或其它 wire format。未来内部存储超过单个 word 时
+  可以在保持 opaque API 和 `Copy` contract 的前提下替换；放弃 `Copy` 必须作为新的 breaking decision。
+- 删除 `Cow<Capabilities>` 以及仅为 set-backed clone 成本存在的借用分支；recursive Context 直接保存
+  `Capabilities` 值，`PolicyContext::allowed_capabilities()` 按值返回，child 通过位与得到严格不扩权的新值。
+- benchmark/profile 可以记录迁移收益，但不再作为修复当前表示的进入条件；本目标首先消除错误的
+  ownership/集合建模。
+- 这是一次 workspace-wide atomic breaking migration：contracts 表示、set-operation 返回类型、所有
+  `PolicyContext` 实现和 caller 在同一提交切换，不保留 Cow/iterator compatibility API。
 
 **完成线**
 
 - capability gate、subset 和 intersection 语义与迁移前一致；
-- `Cow::Borrowed` base path 不分配，child narrowing 只构造一个 owned bitset；
-- benchmark/profile 记录迁移前后结果，并证明收益覆盖新增复杂度。
+- base/child Context 都不因 capability clone 或 narrowing 分配；
+- `rg -n "Option<Arc<BTreeSet<Capability>>>|Cow<'[^']*, Capabilities>" crates` 无 production 命中；
+- serde 继续输出迁移前相同的 PascalCase 名称数组和 `Capability` 声明顺序；乱序及重复输入被
+  canonicalize，未知名称、非数组与整数 mask 被拒绝；
+- tests 覆盖空集、全集、重复输入、subset、intersection、difference、one-hot、bit uniqueness、mapping
+  completeness、full-mask iteration、golden wire order 与 64-bit capacity assertion。
 
 **验证**
 
 ```bash
-cargo test -p loong-contracts
-cargo test -p loong-core policy
-cargo test -p loong-kernel policy
-cargo test -p loong-app context
-cargo bench -p loong-bench -- capabilities
-cargo clippy -p loong-contracts -p loong-core -p loong-kernel --all-targets --all-features -- -D warnings
-cargo fmt --all -- --check
+RUSTC_WRAPPER= cargo fmt --all -- --check
+RUSTC_WRAPPER= cargo clippy --workspace --all-targets --all-features -- -D warnings
+RUSTC_WRAPPER= cargo test --workspace
+RUSTC_WRAPPER= cargo test --workspace --all-features
+./scripts/check_architecture_boundaries.sh
 git diff --check
 ```
 

@@ -14,14 +14,16 @@
   `child_caps = parent_caps ∩ override`。无 override 时使用 tool default caps。
 - `ToolInvocationAction` 只授权进入一个 tool；tool 内部 filesystem/network/memory/process
   side effect 仍需各自的 domain action grant。
-- `PolicyContext::allowed_capabilities()` 目标签名是
+- 在 bitset 迁移前，`PolicyContext::allowed_capabilities()` 的过渡签名是
   `Cow<'_, Capabilities>`。base Context 的字段是 `Cow::Borrowed`，child 中被收窄的字段是
   `Cow::Owned`；accessor 对两者都返回
   `Cow::Borrowed(self.effective_capabilities.as_ref())`，绝不为读取再次 clone。
   `Cow` 只优化 recursive Context 的存储借用/收窄，不改变 `child_caps ⊆ parent_caps`。
-- `Capabilities` 先使用当前集合表示，避免在本轮同时引入表示层重构。bitset 迁移必须由
-  benchmark/profile 证明 capability membership、集合求交或 child narrowing 是 hot path 后再
-  单独进行；不得把 bitset 细节泄露进 Policy/Action/Context trait。
+- 当前 `Capabilities(Option<Arc<BTreeSet<Capability>>>)` 只是过渡实现：它用 `Option` 表达空集、用
+  `Arc` 补偿集合 clone 成本，把集合语义和存储策略混在了一起。active runtime cutover 完成后必须由
+  独立目标将其替换为 contracts-owned `Capabilities(u64)` 值语义 bitset。mask 与 capability 的映射只在
+  contracts 内可见；Policy/Action/Context trait 不得暴露 mask 或 bit index。bitset 落地后同时删除仅为
+  集合共享存在的 `Cow<Capabilities>`，Context 直接保存并按值传递 effective capabilities。
 
 ## PolicyPipeline
 
