@@ -445,7 +445,7 @@ jobs:
       issues: write
     steps:
       - name: Checkout base repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Apply path labels
         uses: actions/labeler@634933edcd8ababfe52f92936142cc22ac488b1b
