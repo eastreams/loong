@@ -438,34 +438,49 @@ cargo fmt --all -- --check
 git diff --check
 ```
 
-## 14. 让 streaming Turn 协作取消并保证 finalization
+## 14. 让 streaming Invocation 协作取消并保证 finalization
+
+取消属于一次 Invocation 的递归执行作用域，而不是 Policy 或 Action payload。concrete
+`Context<'a>` 私有持有 `tokio_util::sync::CancellationToken`：同一 scope 的 `Context::clone()` 共享
+token，递归 tool invocation 与每个 batch sibling 分别通过 `child_token()` 得到独立 child。
+parent cancel 向下传播；取消一个 child 不得取消 parent 或 sibling。
+
+runtime `ToolInvocation` 按值持有 child Context，从而拥有该执行作用域；`ToolImpl`、Policy 与 Access
+只借用 `&Context<'_>`。它们通过窄的只读 observation contract 检查或等待取消，不能取得 raw token
+或 cancellation authority。按值持有 Context 不使它成为 `'static`；detached execution 仍由长期 owner
+在自己的 future 内构造 Context。
 
 该目标固定按 owner 拆成五个最小提交，不能合成一个大 cancellation commit：
 
-1. **signal + tool scheduling observation**：Turn execution owner 引入 live cancellation signal 并
-   放入 Context；tool scheduling 和下一次 action grant 在启动前观察它。定向测试触发 signal 后
-   断言不再调度 nested tool，也不再请求下一 action grant；本提交必须有可观察行为，不能只传播
-   signal。
+1. **signal + tool scheduling observation**：Invocation execution owner 引入 live cancellation
+   signal 并放入 Context；runtime wrapper 在调度 tool 前观察它，sealed grant 入口通过窄 context
+   requirement 在 mint 前观察它。cancellation 是 lifecycle gate，不成为 `PolicyDecision`。定向测试
+   触发 signal 后断言不再调度 nested tool，也不再请求下一 action grant；本提交必须有可观察行为，
+   不能只传播 signal。增加 `ToolFailureKind::Cancelled` 与 `ToolInvocationError::Cancelled`，不能把取消
+   降级成 deny 或普通 execution failure。
 2. **provider observation**：provider stream read/retry/backoff 在安全点观察同一 signal，drop
    upstream response stream 并协作退出。
 3. **Access observation**：long-running search/glob/read-dir 等 Access operation 在各自安全点观察
    同一 signal；不把 cancellation 变成 policy input。
-4. **gateway trigger**：SSE receiver close 触发当前 Turn signal；gateway 保存自己创建的 task/join
-   owner，不再 detached 地放任完整 Turn 继续执行。本提交不先引入无 evidence 的 force abort。
-5. **finalization/evidence**：把 cancellable execution 与不可跳过的 finalization 分开，记录
-   cancelled/timeout、partial-output policy 和 Session lifecycle transition；等待 grace period 后
-   才允许 force abort，并记录 timeout。partial text 不写成 completed reply。
+4. **gateway trigger**：SSE receiver close 触发当前 Invocation signal；gateway 保存自己创建的
+   task/join owner，不再 detached 地放任完整 Invocation 继续执行。本提交不先引入无 evidence 的
+   force abort。
+5. **finalization/evidence**：把 cancellable execution 与不可跳过的 finalization 分开；Started 后
+   协作退出记录 `ActionExecutionEvent::Cancelled`，Started 前取消不伪造 execution evidence。同时
+   记录 timeout、partial-output policy 和 Session lifecycle transition；等待 grace period 后才允许
+   force abort，并记录 timeout。partial text 不写成 completed reply。
 
-已经进入 backend 的 side effect 不承诺回滚。步骤 14 只记录其已有 owner 能证明的 tool/Turn
+已经进入 backend 的 side effect 不承诺回滚。步骤 14 只记录其已有 owner 能证明的 tool/Invocation
 outcome；generic Access action execution evidence 在步骤 21 完成前不能假定存在。不为取消引入
 永久 Session actor、全局 registry 或 Context-owned task supervisor。
 
 **完成线**
 
 - downstream disconnect 停止 provider stream，并且不启动后续 tool/action；
-- 当前 Turn cancelled 后 Session 可以继续下一 Turn；
+- 当前 Invocation cancelled 后 Session 可以继续下一次 Invocation；
 - forced abort 只发生在 grace timeout 后，并与正常 cooperative cancellation 区分；
 - 首个提交的测试证明 signal 会阻止后续 tool scheduling 与下一 action grant；
+- batch parent cancellation 会取消全部 child，但单个 child deny/cancel 不影响 sibling；
 - provider、Access、gateway 和 finalization 各自在 owning boundary 有定向取消测试；五个提交都可
   独立验证。
 
