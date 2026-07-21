@@ -1,375 +1,259 @@
 # plan: 最小提交顺序
 
-本文件只列尚未完成的有序迁移目标。提交拓扑由唯一 owner 和可验证边界决定：步骤 5 是
-runtime-owned execution boundary，步骤 7 是 workspace-wide 原子替换；其它目标不把一个编号机械
-塞进单个 commit。目标完成后删除该项，长期不变量只保留在 `01` 到 `07`。
+本文件只列尚未完成的有序迁移目标。编号已被其它文档和 Code TODO 引用，因此删除已完成目标后不
+机械重编号。长期不变量只保留在 `01` 到 `07`。
 
-## 当前 active goal
+## 当前 active goal：闭合 loong-runtime-owned typed execution domain
 
-剩余步骤 5 到 8 共同完成这条破坏性 typed execution spine：
+### 目标
+
+破坏性完成 concrete `Runtime -> Session -> Context<'a>` ownership，并把已经成立但尚未完整接入 owner
+主干的 typed grant spine 一起验收。goal 结束时，新架构不能再由 app Context、split
+Runtime/Session ownership、legacy dispatcher 或旧 `loong-runtime` transitional code 塑形。
 
 ```text
-Runtime
-  -> owned Session
-  -> borrowed Context<'a>
-  -> PolicyEngine::grant + mandatory authorization audit
-  -> ActionGrant<A>
-  -> Granted<A>
-  -> runtime ToolInvocation / Access
+loong_runtime::Runtime
+  owns Kernel<RuntimeContextFactory> + ToolPlane + all live Sessions
+  -> runtime::Handle
+  -> session::Handle
+  -> invoke(ConversationInvocation)
+  -> Invocation<ConversationInvocation>
+  -> private Session runner
+       -> private ErasedInvocation adapter
+       -> private Context<'a>
+            -> InvocationImpl::execute
+            -> recursive child Context<'a>
+            -> ctx.tool(path)?.invoke(payload)
+            -> ctx.access()...
+            -> PolicyEngine::grant
+            -> ActionGrant<A>
+            -> Granted<A>
+            -> ToolPlane / Access side effect
+
+legacy ingress
+  -> typed NotRegistered / explicitly unmigrated non-tool ingress only
+  -> isolated legacy owner
 ```
 
-这四步的共同边界：
+`loong-runtime` 直接定义 Runtime、Session、Context、RuntimeContextFactory、handles、Invocation、
+`InvocationImpl`/private erasure 和最小 live authority domain；app 只负责 config/persistence
+materialization、Policy/Tool registration、concrete `ConversationInvocation`、product orchestration 与
+legacy ingress selection。`02-runtime-and-crates.md` 是完整 owner contract。
 
-- `PolicyEngine::grant` 是唯一 typed authorization API；core grant algorithm 对外不可覆写，且在
-  terminal authorization write 成功前不能 mint。runtime typed tool 必须直接复用这条已闭合路径。
-- 禁止新增 `Kernel::grant`、`SessionAuthority`、permit token、`AuditHandle`、route/receipt、
-  `ctx.audit` 或 compatibility alias/wrapper。
-- typed Session 只保存 identity、lineage、baseline capabilities、稳定 config 和 lifecycle state；
-  `CapabilityToken`、pack 与 token evidence 只留在旧 ingress/fallback。
-- `ContextFactory` 只有 GAT；effective capabilities API 保持
-  `Cow<'_, Capabilities>`，child Context 只能收窄 authority。
-- 物理副作用只发生在 Access。nested typed tool 只能编排，最终仍必须进入
-  `Granted<ConcreteAction>` 的 Access operation。
-- typed tool primitive 已有 `RegisteredToolError` 与 runtime
-  `error::{RegistrationError, LookupError, ToolInvocationError}`。`ToolPath` 由 contracts 固定为
-  canonical segmented identity，runtime plane 只决定索引结构。composite `ToolInvocationError` 由
-  runtime wrapper 使用并保留 concrete source；`PolicyGrantError` 不降级成 `KernelError` 或字符串。
-- `ctx.tool(...).invoke(...)` 是普通 caller 唯一入口；raw granted ToolPlane dispatch 只在
-  `loong-runtime` 内可达。
-- legacy fallback 只在 typed path 未注册时发生；override/narrowing/grant/parse/dispatch error
-  都不 fallback。
+本 goal 明确取代旧的“app-defined Context + generic Runtime shell”约束。继续有效的是 Context 由统一
+runtime domain 定义、Policy 只依赖 requirement traits、`ContextFactory` 只有 GAT；不再为了维持旧 crate
+位置保留 app Context 或增加 factory method。
 
-filesystem 模块收敛、streaming cancellation、全部 legacy tool 迁移、fs TOCTOU、crate 收敛、
-bitset 与 generic Access execution evidence 不属于当前 active goal，分别列在步骤 9、14、15、
-18、19、20、21。步骤 7 只建立
-Context 的 cancellation field 与 inheritance；provider/Access observation、gateway wiring 和
-finalization behavior 留在步骤 14。
+### 已有基础与必须修复的偏差
 
-## 5. 让 runtime ToolInvocation 成为强制 execution audit 边界
+- 保留当前 `PolicyEngine::grant -> ActionGrant<A> -> Granted<A>`、runtime-bound ToolInvocation、typed
+  error、private registered dispatch、operation-local Access 和仅 `NotRegistered` fallback 的实现。
+- 删除 app `Context`/Clone `Session`、公开 `Context::new`/`rebind_session`、`RuntimeId` 和长期 owner 现场
+  拼 Context 的路径；这些是过渡实现，不形成兼容 API。
+- narrowed Context 当前可重新构造 root authority，且 `Context::runtime()` 可达 audit/legacy Kernel；
+  cutover 必须从类型和 visibility 上同时关闭两条路径。
+- detached typed execution 当前从 legacy dispatcher 取得 Runtime；必须改由 Runtime supervisor 拥有
+  child Session lifecycle。
+- 当前没有一条可编译的 dependency-inversion boundary 让 runtime-owned Session runner 执行 app-owned
+  conversation/provider algorithm。不能用整个 `ConversationRuntime` forwarding trait、global program
+  factory、裸 closure 或 `Runtime<P>` 填洞；必须建立 concrete `InvocationImpl` + runtime-private
+  erasure，并让 app 的一次调用状态由 concrete `ConversationInvocation` owned value 携带。
+- crate-root spine 与 projection relocation 不属于剩余工作；后续迁移不得恢复对应 alias、adapter 或
+  forwarding dependency。
 
-**范围**
+### 原有原则中继续生效的硬约束
 
-- 将 typed `ToolInvocation` wrapper 从 app 迁入 `loong-runtime`。`ctx.tool(path)?.invoke(payload)` 是
-  普通 caller 唯一入口，同一个 runtime owner 绑定 lookup、caps override、child narrowing、direct
-  grant、granted dispatch 和 execution audit；删除 app-owned `ToolInvocation`，不保留 forwarding
-  wrapper。
-- 在 runtime wrapper 接线的同一提交中定义并实际使用 composite `ToolInvocationError`。它分别
-  保留 `LookupError`、invalid caps override、`CapabilityNarrowingError`、`PolicyGrantError`、
-  `DispatchError` 和 typed `AuditError` source；不先提交未接线的 public error scaffold。
-- 在 `loong-runtime` 定义唯一直接 requirement trait `ToolInvocationContext`。它只按给定
-  `Capabilities` 从 parent 派生同类型 child，`derive_tool_child` 返回
-  `Result<Self, CapabilityNarrowingError>`；trait 没有 Factory 参数或 associated error，不暴露
-  kernel、audit 或 Runtime，不放进 `ContextFactory`，也不构造 base Context。app concrete Context
-  直接实现它。
-- `Context::tool(path)` 保持薄入口，只调用 Runtime 创建 handle；runtime `ToolInvocation` 通过
-  `ToolInvocationContext` narrowing 后直接调用具备 mandatory audit 的 `PolicyEngine::grant`，再完成
-  internal plane dispatch 和 execution audit。trait 附近注释说明它是
-  跨 crate child authority narrowing contract，不是搬运 helper。
-- 删除 typed caller 的 pack/token 参数和 `Kernel::grant_action`；该方法没有 legacy production
-  caller，不能留到步骤 17。authorization deny/audit failure 原样保留 `PolicyGrantError` source。
-- raw ToolPlane granted dispatch 收为 runtime-internal；public/普通 caller、app helper 和
-  concrete `ToolImpl` 都不能直接消费 `Granted<ToolInvocationAction>` 绕过 wrapper。破坏性删除 public
-  `ToolPlane::invoke`、caller-provided plane 的 `Runtime::new<P>` 以及返回 `dyn ToolPlane` 的
-  `Runtime::tools()`；runtime-internal trait 只保留 crate 内 storage strategy 替换能力。catalog/spec
-  查询通过不暴露 dispatch capability 的 Runtime API 提供。
-- wrapper 在消费 `ActionGrant.granted` 前保留 outer `ActionGrant.id/info`，直到关联 execution audit
-  结束，并用 outer id 关联 outcome；dispatch 前先完成必要的 execution-start write，该 write 失败时
-  返回 typed error，且不得 dispatch。authorization deny 没有 execution event。
-- dispatch 后 wrapper 必须写 terminal completed/failed/input-error/cancelled outcome。terminal audit
-  failure 返回 typed `ToolInvocationError`，但 execution 可能已经 completed 或产生 side effect，
-  因此不得自动重试。
-- dispatch success + terminal audit failure 的 error variant 同时保留“execution completed”事实和
-  typed audit source；dispatch failure + terminal audit failure 的复合 error variant 同时保留
-  dispatch 与 audit 两个 typed source，不能互相覆盖。
-- runtime 不得访问 kernel-private audit state。wrapper 通过 Kernel 现有 generic
-  `record_audit_event` governance recorder 提交 execution evidence；保留该 recorder，并将其 error
-  boundary 收敛为 typed `AuditError`。recorder 负责 clock、event id 与 sink write。
-- `record_audit_event` 附近用短注释说明其真实 ownership 职责，因此它不是 forwarding helper；不新增
-  `AuditHandle`、route/receipt、`ctx.audit` 或同义 capability。`ToolImpl` 不获得 audit API。
-- 删除 tool-specific `Kernel::record_tool_invocation`、tool-specific route/registry schema 和
-  `TODO(tool-audit-owner)`；保留并收敛 generic `record_audit_event`。legacy `PlaneInvoked` 只随对应
-  legacy plane 保留。
-- 只有 `LookupError::NotRegistered` 可以交给 legacy ingress fallback；override、narrowing、grant、
-  audit、parse/input、dispatch 和 concrete execution error 都不 fallback。
+- 唯一 production typed grant API 是现有 `PolicyEngine::grant`。禁止新增 `Kernel::grant`、grant
+  forwarding trait/helper 或第二套 policy engine。
+- `ActionGrant<A>` 保留完整 report/info；`Granted<A>` 保持 private mint 并作为 execution proof。禁止
+  `SessionAuthority`、permit token、authorization wrapper 或“防伪造”同义类型。
+- `ContextFactory` 只有 GAT，没有 factory method。concrete `Context<'a>` 是 recursive execution scope，
+  不是 Turn、Session、Invocation result 或 host handle。
+- Context 不保存 request parameters、tool/action payload、`ExecutionPlane` 或 `PlaneTier`；
+  `PolicyAny` 直接读取 `ActionMeta::payload()`，不从 ambient Context 重建 legacy request。
+- `ToolPath` 由 contracts 固定为 non-empty opaque segments，canonical text/serde 使用 leading slash；
+  runtime ToolPlane 只决定索引结构。provider/discovery 名称是 registration presentation，不能参与
+  authority lookup 或被重新解析成 path。
+- Context 必须 cheap Clone；effective capabilities 使用 `Cow<'a, Capabilities>`，child authority 只能取
+  parent 交集。任何 caller 都不能通过 Session id/Handle/root constructor 恢复 baseline。
+- parent/user permission 缺少真实 interaction 时默认返回结构化
+  `PermissionRequestError::Unavailable`，不能 panic；grant error 保留原始 report/source。
+- typed Tool/Access 不接收 pack/token，不要求 `KernelInvocationContext`，也不把
+  `PolicyGrantError`/typed invocation error 映射回 legacy `KernelError` 或字符串。
+- Kernel 的 typed policy/access impl 不带 legacy bearer context bound；仅 isolated legacy owner 的具体
+  method 可以约束旧 token/pack context，不能把 HRTB 或同义全局 bound 传播回 ordinary Kernel API。
+- Context 不暴露 Runtime/Session owner、Kernel、audit sink 或 `ctx.audit()`。ToolImpl 不参与 audit；
+  runtime ToolInvocation wrapper 自动、强制记录 grant-bound execution outcome。
+- app execution 通过 owned `I: InvocationImpl` 扩展；`session::Handle::invoke(I)` 只在调用点 generic，
+  Runtime/Session/Handle 不传播 `I`。private erasure 必须保留 associated event/output/error，禁止
+  `Any`/JSON envelope、String error、`InvocationFactory`、global callback bag 或裸 future injection。
+- Session runner 在 `I::execute` 外强制 lifecycle、serialization、cancellation、audit 与 terminal
+  delivery；concrete `ConversationInvocation` 不获得 audit/Kernel/Runtime/root constructor。现有
+  `ConversationRuntime` 只能是 app implementation 内部 contract，不能注册进 runtime。
+- migrated side effect only Access can do。Tool、Policy、Kernel adapter 和 orchestration 不直接执行
+  filesystem/network/process 等物理副作用。
+- typed hit 后任何 input/grant/dispatch/audit error 都不 fallback。legacy bearer/envelope 只能存在于
+  明确 allowlist 的最终 ingress owner，且不能反向拥有 typed Runtime/Session。
+- 敢于 breaking change：不留 alias、proxy、双 Context、双 Runtime、deprecated wrapper、同构转换或
+  compatibility workaround。替代 API 落地的同一 commit 删除旧入口和 caller。
+- helper 默认不成立。保留 helper 必须统一多个真实调用面、无法由类型/owner 表达，并有简短 why/owner
+  注释。错误优先使用 `thiserror` 保留 source，`anyhow`/String 只在最终聚合边界使用。
+- 每个 ownership、安全边界和非显然约束都写少量 intent comment；不写注释墙，也不能依赖本次讨论
+  记忆维持正确性。
 
-**完成线**
+### 实施步骤
 
-- 只有 sink 成功接受 terminal write，才存在一条带 grant id 的 terminal execution evidence；
-  audit write failure 必须显式传播，不能伪造 terminal evidence；
-- dispatch 前必要 audit write 失败时 dispatch count 为零；dispatch 后 terminal audit 失败不触发
-  自动重试；
-- tests 覆盖 pre-dispatch audit failure、success + audit failure、dispatch + audit failure；断言第一种
-  不 dispatch，第二种保留 completed 事实，第三种同时保留两个 typed source；
-- raw granted dispatch 在 `loong-runtime` 外不可调用；
-- `Runtime` 不接受外部 `ToolPlane` implementation，也不返回带 granted dispatch capability 的 trait
-  object；内部 trait 不能成为绕过 wrapper 的扩展面；
-- runtime `ToolInvocation` 与 app Context 之间除 `ToolInvocationContext` 外没有第二个 direct
-  bridge；`ContextFactory` 仍只有 GAT；
-- composite `ToolInvocationError` 的每个 variant 都有真实 runtime caller，没有 public scaffold；
-- app-owned `ToolInvocation`、`Kernel::grant_action` 与 `Kernel::record_tool_invocation` 均已删除，
-  production 和 tests 都没有 caller；
-- runtime 没有 sink/clock/event-id state access；跨 crate audit 只经过返回 typed `AuditError` 的
-  `Kernel::record_audit_event`；
-- typed execution audit 只引用 contracts-owned ToolPath/GrantId，不记录 registry representation、
-  legacy route 或 pack/token；
-- concrete tool 无法跳过 wrapper，也不手写 audit；本步骤不声称 generic Access execution evidence
-  已经存在。
-- 删除本步骤时同步删除/改写 `plan/07-kernel-audit-and-deviations.md` 中对应“当前偏差”，并更新
-  Code TODO 对照。
+1. **先收拢已成立的 typed foundation**：按 contracts/core/kernel/access/tool-plane/tool owner 审计现有
+   改动；删除无用 helper/TODO 后形成可独立编译的最小提交。app Context 的 authority 重建漏洞
+   修复前不得把它作为完成形态提交。
+2. **迁移最小 runtime domain**：把 concrete `RuntimeContextFactory`、Context、Session identity/lineage、
+   ToolView、caps/fs authority、mailbox/lifecycle 和 Context 所需 typed service contracts 移入
+   `loong-runtime`。runtime 不依赖 app；不能把 `LoongConfig`、repository、prompt/provider state 或整份
+   `ToolRuntimeConfig` 一起搬入。
+3. **建立 SessionSpec materialization boundary**：app 从 config/repository/delegate evidence 验证并构造
+   runtime-owned `SessionSpec`。Runtime 接收后复查 parent generation/narrowing 并取得 live ownership；
+   删除 app executable Session 和同构 mutation/rematerialization API。
+4. **实现 Runtime supervisor/Handle**：concrete Runtime 不可 Clone，中央拥有 Kernel、ToolPlane 和全部
+   Session join owner；lifetime-free `runtime::Handle` 只含 command endpoint。shutdown 关闭新命令并
+   drain Session；不增加 `RuntimeInner`/`*Shared` 大容器。
+5. **建立 invocation extension**：在 runtime 定义非 object-safe `InvocationImpl` 与 typed
+   `Invocation<I>`，用 private sealed `ErasedInvocation` adapter 把不同 concrete invocation 放入 Session
+   mailbox。adapter 保存 typed channels 并在 app code 外执行 lifecycle/cancel/audit/finalization；不增加
+   business envelope、factory 或 generic Runtime。
+6. **实现 Session owner/Handle/Invocation**：Session value 只由 runner 持有；Runtime supervisor 保存
+   id/generation、parent、join、command/status endpoints。ordinary inbox bounded，interrupt/shutdown 使用
+   独立 control channel，receiver 保持 runner-private；删除 kernel `AgentMailbox`/外部 `drain`。Handle
+   提供 `invoke(I: InvocationImpl)`；Invocation 不可 Clone并拥有本次 typed event/result/cancel endpoint。
+   attached/detached 关系只在 Runtime supervisor graph 中改变。
+7. **原子切换 Context**：root Context 只在 Session runner 内 private 构造，child 只取 authority 交集；
+   删除 app Context/Factory、`Context::new`、`rebind_session`、`RuntimeId` 和 runtime mismatch。
+   concrete Context 实现窄 `ToolInvocationContext` requirement；`ctx.tool()`/`ctx.access()` 使用 private
+   narrow services，不暴露 owner。
+8. **实现 app concrete invocation 并迁移 host**：`ConversationInvocation` owned capture normalized input、
+   provider/conversation services 和 product options，只调用一个明确 coordinator entry。借用型
+   `TurnExecutionOptions<'_>`/event sink 改为 owned field 或 `Invocation<I>` event stream；daemon/chat/
+   channel 长期只保存 runtime/session Handle，不传播 raw `Arc<Runtime>`/Clone Session。subagent 是 child
+   Session，detached work 向 Runtime reparent；删除 `legacy_tools.execution_runtime()` 等反向依赖。
+9. **收敛 audit 与 legacy ingress**：operational audit 由 Runtime/Session orchestration 的真实 owner
+   调用，不再从 Context 获取 Runtime。因为 Runtime 拥有 Kernel，kernel/core target fallback 放入
+   `loong-runtime` 内明确的 legacy ingress module；app-only legacy tool 仍由 app ingress dispatch。
+   app 只在 typed miss 后做一次 target routing，runtime 不反向依赖 app，也不增加 forwarding callback
+   或同构 wrapper。
+10. **清理 runtime API/Cargo/tests**：删除浅层 generic `Runtime<C>`、`id()`、`legacy_kernel()`、generic
+    `record_audit_event()`、外部 Context 参数式 `Runtime::access/tool`，以及迁移后无 caller 的 errors、
+    fixtures、features/dependencies。测试按 runtime/session/context/invocation/tool_plane owner 拆分。
+11. **同步 plan/docs/guards**：architecture check 必须检测 root Context 重建、Context -> Runtime/audit、
+    typed -> legacy lifecycle 反向依赖和 legacy import allowlist，而不只是检查旧类型名。
 
-**最小提交**
+### 最小提交顺序
 
-`refactor(runtime): own audited typed tool invocation`
+1. typed contracts/policy foundation；
+2. Access 与 concrete tool operation ownership；
+3. runtime-owned authority types 与 SessionSpec；
+4. `InvocationImpl`、typed Invocation handle 与 private erasure；
+5. Runtime supervisor 与 Session owner/Handle；
+6. concrete Context 原子 cutover；
+7. app `ConversationInvocation` 与 host/subagent caller migration；
+8. audit/legacy containment 与 helper 清理；
+9. docs、architecture guards 和完整验收。
 
-这是一个 owner-driven 原子接线提交：error、wrapper、direct grant、dispatch、audit 与旧入口删除必须
-同时可用，不能拆出未接线 public error commit。
+“最小”指 smallest coherent owner change，不以文件数为目标。每个提交必须独立编译、首行后有详细
+body；不能把 filesystem、纯文档、机械 caller migration 和无关行为变化揉成一个提交。不得 reset、
+stash 或丢弃当前用户改动；使用精确 staging 组装提交。
 
-**验证**
+### 完成线
+
+以下必须无输出：
 
 ```bash
-cargo test -p loong-runtime tool_plane
-cargo test -p loong-app tool_invocation
-cargo test -p loong -- audit
-cargo fmt --all -- --check
+rg -n "AppContext|AppContextInner|AppContextFactory|KernelInvocationContext" crates
+rg -n "Context::new|rebind_session|RuntimeId|runtime_id" crates
+rg -n "Arc<Runtime|Arc<Session" crates/app crates/daemon crates/loong-runtime
+rg -n "ctx\.runtime\(\)|context\.runtime\(\)|session_context\.runtime\(\)" crates
+rg -n "legacy_tools\.execution_runtime" crates
+rg -n "Kernel::grant|ActionAuthorizationContext|SessionAuthority" crates
+rg -n "RuntimeSpine|RuntimeSurface|RuntimeOneshot|RuntimeInteractive" crates/loong-runtime
+rg -n "ConversationRuntime|LoongConfig|AgentTurnRequest|TurnExecutionOptions" crates/loong-runtime
+rg -n "InvocationFactory|SessionProgram|dyn .*InvocationImpl|Runtime<RuntimeContextFactory>" crates
+rg -n "loong_kernel::mailbox|AgentMailbox|InterAgentMessage|trigger_turn" crates/app crates/loong-runtime
+```
+
+以下必须满足精确 owner allowlist：
+
+```bash
+rg -n "grant_action|CapabilityToken|authorize_operation" crates/app crates/loong-runtime crates/access
+rg -n "ToolCoreRequest|ToolCoreOutcome|CoreToolAdapter" crates/loong-runtime crates/access crates/tools
+```
+
+- app 不再定义/re-export concrete Runtime/Session/Context/RuntimeContextFactory；`loong-runtime` 不依赖
+  `loong-app`；
+- narrowed Context 无法重新 mint root authority；root constructor 对 Session runner 外不可见；
+- 至少两个不同 concrete `InvocationImpl` 能经同一 Session mailbox 返回各自 typed event/output/error；
+  runtime/private erasure 不使用 `Any`、JSON business envelope 或 String error；
+- app 的 production turn 由一个 concrete `ConversationInvocation` 进入 Session runner；不存在把
+  `ConversationRuntime` 方法逐个 forwarding 到 runtime 的第二套 behavior surface；
+- Runtime shutdown 关闭 spawn/reparent、取消并等待全部 live Session；stale generation fail closed；
+- detach 不改变 Session identity、history coordinate 或 authority；
+- typed Tool/Access 继续经过现有 grant chain，typed tool execution audit 强制发生；
+- typed deny/error 不 fallback，NotRegistered fallback 不读取或构造 typed owner；
+- `loong-runtime` 没有旧 transitional public API、无 caller helper 或仅为已删代码存在的 dependency；
+- 至少一轮 security/ownership subagent review 和一轮 helper/comment/taste review 均无 blocker。
+
+### 验证
+
+```bash
+RUSTC_WRAPPER= cargo fmt --all -- --check
+RUSTC_WRAPPER= cargo clippy --workspace --all-targets --all-features -- -D warnings
+RUSTC_WRAPPER= cargo test --workspace
+RUSTC_WRAPPER= cargo test --workspace --all-features
+./scripts/check_architecture_boundaries.sh
 git diff --check
 ```
 
-## 6. 消除 outer/root 与 session-specific 双 Context
+### 本 goal 明确不做
 
-**范围**
+- Capabilities bitset；
+- 全部 legacy tool/plane 迁移和 bearer surface 最终删除；
+- provider/gateway/Access 的完整 streaming cancellation 接线；
+- descriptor-relative fs TOCTOU closure；
+- provider/model/history ownership 重写；
+- generic Access action execution evidence；
+- production permission UI 接线；
+- Monty/code-mode programmable agent API。
 
-- channel/gateway/turn service 长期只持有共享 Runtime，不在具体 session identity 未知时构造
-  host/root `AppContext`。
-- session address 确定后再物化当前 session typed authority；同一 Turn 的 provider、core tool、
-  app tool 和 policy 全部使用这一份 session-specific execution context。
-- 修复 core tool 从 `ConversationRuntimeBinding` 取 outer context、而 preflight/app tool 使用
-  session-specific context 的分流；删除对应 downstream binding 传播。
-- OpenAI gateway 共享 Runtime，停止每个 request 重新 bootstrap kernel/tool plane。
-- Session 可以先按 Turn 从 repository snapshot 物化；不为本步引入永久 actor、registry 或
-  Context adapter。
-
-**完成线**
-
-- 一个 Turn 不同时持有 outer/root context 与 session-specific context；
-- channel session 的 identity、workspace、narrowing 和 baseline capabilities 进入同一 typed path；
-- entry surface 不重复签发同一 session authority；
-- 没有为保留双路径新增 alias、optional wrapper 或 forwarding helper。
-- 删除本步骤时同步删除/改写 `plan/07-kernel-audit-and-deviations.md` 中对应“当前偏差”，并更新
-  Code TODO 对照。
-
-**最小提交顺序**
-
-1. 按 channel/app owner 清除 outer context 传播。
-2. 按 daemon gateway owner 共享 Runtime 并延后 Session 物化。
-
-**验证**
-
-```bash
-cargo test -p loong-app inbound_turn
-cargo test -p loong-app conversation
-cargo test -p loong-app file_read
-cargo test -p loong -- openai_compat
-cargo check -p loong-app -p loong
-cargo fmt --all -- --check
-git diff --check
-```
-
-## 7. 原子替换为 owned Session + borrowed Context
-
-**范围**
-
-- 在 app runtime boundary 定义 owned `Session`、borrowed `Context<'a>` 与
-  `RuntimeContextFactory`。`ContextFactory` implementation 只有
-  `type Cx<'a> = Context<'a>`，不提供 value factory method。
-- Session 只保存 typed identity、lineage、baseline capabilities、稳定 config 和并发安全的
-  lifecycle state；不保存 `CapabilityToken`、pack、token evidence 或 invocation Context。
-- Context 从 Runtime/Session borrow、本次 Turn typed options 和 cancellation signal 构造；归一化
-  mode/goal、effective caps、tool config、roots 和其它本次执行 view。
-- effective capabilities 字段保持 `Cow<'a, Capabilities>`：base 字段是 `Cow::Borrowed`，child 中
-  被收窄的字段是 `Cow::Owned`；`PolicyContext::allowed_capabilities()` 对两者都返回
-  `Cow::Borrowed(self.effective_capabilities.as_ref())`，绝不因 accessor 再次 clone。nested
-  invocation 派生同类型 child Context，只能收窄 caps/tool/root view 并继承
-  mode/goal/cancellation。
-- 将 `AppContextInner` 的剩余字段归属到 Runtime、Session、Turn options、Context
-  derived view 或 Action payload，不保留第二份 source of truth。
-- batch tool invocation 为每个分支派生 sibling Context；subagent 创建新 Session。detached task
-  只 move Runtime、owned Session 和 Turn options，并在 future 内重建 Context；`&Context` 不逃逸
-  到 `'static` task。
-- advisory Session 也构造同一种 Context，只通过 baseline capabilities 表达限制；删除
-  `ConversationRuntimeBinding` / `ProviderRuntimeBinding` 的 no-context 分支。
-- 新 app `Context<'a>` 直接实现既有 runtime-owned `ToolInvocationContext`；
-  `Context::tool(path)` 仍是薄入口。不得为原子替换增加 Context adapter、第二个 bridge 或
-  `RuntimeContextFactory` 方法。
-- 一次性迁移 production、tests、fixtures、generic instantiation、注释和文档，删除
-  `AppContext`、`AppContextInner`、`AppContextFactory`、旧 COW mutation API 和 compatibility
-  re-export。同一提交同步 `plan/02-runtime-and-crates.md` 的当前事实、
-  `plan/07-kernel-audit-and-deviations.md` 的对应“当前偏差”和 Code TODO 对照。
-
-**完成线**
-
-- `ContextFactory::Cx<'a> = Context<'a>` 真正使用 lifetime；
-- Runtime 是长期 owner，Session 是 Context 之外的 owned materialization；Context 不含
-  `Arc<AppContextInner>`、pack/token evidence 或独立 policy/audit owner；
-- base Context clone 只复制 Runtime/Session 引用、borrowed Cow field 和 cancellation handle；child
-  effective capabilities accessor 也只 reborrow owned field，不 clone；
-- `ctx.access()` 与 runtime-owned `ctx.tool(path)?.invoke(payload)` 是普通执行入口；
-- `RuntimeContextFactory` 命名不变且仍只有 GAT；app Context 直接实现
-  `ToolInvocationContext`，没有 adapter；
-- 删除本步骤时已经同步改写 `plan/02-runtime-and-crates.md` 当前事实、删除/改写
-  `plan/07-kernel-audit-and-deviations.md` 对应“当前偏差”，并更新 Code TODO 对照；
-- 以下搜索无输出：
-
-```bash
-rg -n "AppContext|AppContextInner|AppContextFactory" crates docs AGENTS.md CLAUDE.md ARCHITECTURE.md
-rg -n "ConversationRuntimeBinding|ProviderRuntimeBinding" crates/app/src crates/daemon/src
-```
-
-**验证**
-
-```bash
-cargo test -p loong-app context
-cargo test -p loong-app conversation
-cargo test -p loong-app file_read
-cargo test -p loong-kernel access
-cargo check -p loong-core -p loong-runtime -p loong-kernel -p loong-app -p loong
-cargo fmt --all -- --check
-git diff --check
-```
-
-这是唯一允许的大原子提交。不能用 `Cx<'a> = &'a AppContext`、`Arc<Session>` 包旧 Context、双
-Context adapter、alias 或 blanket forwarding trait 拆小。
-
-建议提交：`refactor(app): replace app context with recursive execution context`
-
-## 8. 完成 typed/legacy quarantine
-
-**范围**
-
-- 持有 Context 的 caller 直接使用 `ctx.tool(path)?.invoke(payload).await`；删除
-  `execute_kernel_tool_request` 中只搬运 typed payload/outcome 的 bridge。
-- typed-first ingress 只在 `ToolInvocationError` 明确表示 path 未注册时进入 legacy fallback；
-  override、narrowing、authorization deny、audit failure、parse/input 和 execution error 原样返回。
-- typed Session/Context/Runtime ToolInvocation 不再暴露 pack/token。legacy bearer evidence、
-  `KernelInvocationContext` 和 token validation 只留在旧 ingress/fallback module 的 bounded impl。
-- typed registration 的 descriptor/path/output metadata 只来自 concrete tool + runtime plane；legacy
-  static catalog 只描述尚未迁移的 legacy tools，不能覆盖 typed registration。
-- 尚未迁移的 concrete tools 继续明确留在 legacy plane，不注册进 typed plane冒充完成；全部逐
-  tool 迁移与最终 envelope 删除留到步骤 15。
-
-**完成线**
-
-- typed caller 不构造 `ToolCoreRequest` / `ToolCoreOutcome`，不调用 legacy adapter；
-- raw ToolPlane dispatch、pack/token 和 legacy error conversion 不出现在 typed Session/Context path；
-- typed path 命中后任何失败都不 fallback；
-- `rg -n "ToolCoreRequest|ToolCoreOutcome|KernelInvocationContext" crates/app/src/context.rs \
-  crates/loong-runtime/src` 无输出；剩余命中只允许位于明确的 app/kernel legacy ingress module。
-- 删除本步骤时同步删除/改写 `plan/07-kernel-audit-and-deviations.md` 中对应“当前偏差”，并更新
-  Code TODO 对照。
-
-**验证**
-
-```bash
-cargo test -p loong-runtime tool_plane
-cargo test -p loong-app tools
-cargo test -p loong-app conversation
-cargo check -p loong-runtime -p loong-kernel -p loong-app -p loong
-cargo fmt --all -- --check
-git diff --check
-```
+这些非目标已有后续 owner goal；本轮不得借它们保留双 Context、split Session ownership、typed-to-legacy
+反向依赖或旧 runtime API。
 
 ## 后续独立目标
 
-以下步骤不属于当前 active goal。每项在开始前重新核对 owner 和 caller，不得借后续目标扩大
-剩余步骤 5 到 8 的提交。
-
-## 9. 按 filesystem operation 共置 Access 实现
+## 11. 完整迁移 config.import 到 typed Tool + Access
 
 **范围**
 
-- 将 filesystem concrete action、options、`FsAccess` method、granted execution 和 output 按
-  operation 共置到 `read.rs`、`write.rs`、`glob.rs` 等文件；不再让修改一个 operation 横跨
-  `action.rs`、`access.rs` 和 output/execution 文件。
-- `access.rs` 只保留 `FsAccess` identity、构造和强制 resolve -> path grant 顺序的共享 chain；
-  `action.rs` 只保留 `FsAction` family；`path.rs` 只拥有共享 path facts、resolve/path actions 与
-  execution；`error.rs` 只拥有跨 operation 共用的 fs domain error。
-- operation modules 保持 private，由 `fs` facade 显式 re-export public members。破坏性删除
-  `fs::action::*` 和其它内部 module path，不保留 alias、forwarder 或 compatibility re-export。
-- 保持现有 authorization、path typestate、副作用顺序和 error source 不变。不要把本次文件 ownership
-  调整与 authorization-audit、新 Access primitive 或 TOCTOU backend 混进同一提交。
-- operation 边界只加说明授权/副作用 ownership 的简短注释；tests 继续按 operation 放在
-  `fs/tests/<operation>.rs`，不重新聚合成大测试文件。
-
-**完成线**
-
-- concrete action definitions 不再集中在 `action.rs`；一个 operation 的主要实现可以在单个文件内
-  阅读和修改；
-- `access.rs` 不保存 concrete operation method 或 final side effect；
-- `rg -n '^pub mod ' crates/access/src/fs.rs` 无输出，workspace caller 不再使用旧 module paths；
-- 没有仅为搬运相同参数或维持旧路径新增的 helper/alias；行为测试保持不变。
-
-**最小提交**
-
-`refactor(access): co-locate filesystem operations`
-
-**验证**
-
-```bash
-cargo test -p loong-access
-cargo test -p loong-kernel access --all-features
-cargo clippy -p loong-access -p loong-kernel --all-targets --all-features -- -D warnings
-cargo fmt --all -- --check
-git diff --check
-```
-
-## 10. 将 provider/runtime-self live source 完全迁入 Access
-
-**范围**
-
-- provider source loader 只接收 `&Context<'_>`，通过 `ctx.access().fs()` 读取
-  `AGENTS.md` / `TOOLS.md` / `IDENTITY.md` 等 live source。
-- candidate discovery 保持 lexical；存在性、canonical containment、symlink escape 和内容读取
-  由 fs actions 决定。
-- context engine 同时产出 assembled prompt 和结构化 `RuntimeSelfContinuity`；compaction 只消费
-  结构化结果，不从 prompt/config 现场回读文件。
-- 删除 no-context/advisory live-source fallback 和
-  `TODO(deprecate-no-kernel-live-source)`。
-
-**完成线**
-
-- live source 内容只在 granted fs action 中读取；
-- 没有 entry-level root Context 或 config fallback 现场读文件；
-- prompt assembly 不伪造 tool invocation audit。
-
-**验证**
-
-```bash
-cargo test -p loong-app workspace_guidance
-cargo test -p loong-app runtime_self
-cargo test -p loong-app context_engine
-cargo check -p loong-access -p loong-app -p loong
-cargo fmt --all -- --check
-git diff --check
-```
-
-建议提交：`refactor(app): govern runtime source reads through access`
-
-## 11. 迁移 config.import skills lifecycle 副作用
-
-**范围**
-
-- 范围严格限于 `apply_selected + apply_skills_plan=true` 依赖的 `skills.install` /
-  `skills.remove`、external manifest、staging/copy/archive/extract/index/remove 和 failure rollback。
-- concrete config import tool 只 parse/compose；它可以通过 `ctx.tool(...).invoke(...)` 编排 nested
-  typed skills tool，但每个文件、网络或进程 side effect 最终都必须进入对应
-  `Granted<ConcreteAction>` 的 Access operation。
-- 迁移完成后删除 `FilePolicyExtension`、direct file preflight 对应分支和
+- 当前 `config.import` 整体留在 legacy path；direct preflight 与 `FilePolicyExtension` 保护
+  `input_path` / `output_path`。不得引入 `*_with_access` 半迁移函数，也不能按 mode 注册一个“部分
+  typed”的同名 tool。
+- 先补齐 discovery/read、backup/rollback、manifest、staging/copy/archive/extract/index/remove、skills
+  install/remove，以及需要的 network/process Access primitives。每个物理副作用最终都消费
+  `Granted<ConcreteAction>`；migration orchestration 只组合 typed facts/results。
+- concrete `ConfigImportTool` 只 parse 全部 mode、通过 `ctx.access()` 或
+  `ctx.tool(...).invoke(...)` 编排，并构造 typed output。nested tool 不是副作用边界，tool-to-tool child
+  capabilities 继续取交集。
+- Access primitives 可以按 domain owner 分成前置最小提交；但 typed registration、所有 mode 切换、
+  legacy route 删除和 policy/preflight 删除必须作为一个 coherent cutover，不能留下双轨。
+- cutover 后删除 `FilePolicyExtension`、direct file preflight 对应分支和
   `TODO(config-import-access)` / `TODO(access-migration)`。
 
 **完成线**
 
-- kernel-routed skills apply 不再 fail closed，也不调用 direct filesystem helper；
-- legacy direct API 不再需要 `FilePolicyExtension`；
-- nested tool 不成为物理副作用边界，所有 side effect 都由 Granted Access action 执行。
+- 所有 `config.import` mode 都命中同一个 typed tool；不存在 mode-based fallback 或
+  `*_with_access` 平行实现；
+- concrete tool、migration orchestration 和 legacy adapter 不直接执行 filesystem/network/process
+  副作用；所有 side effect 都由 Granted Access action 执行；
+- `config.import` 不再进入 `Kernel::execute_tool_core`，不再需要 `FilePolicyExtension` 或 direct file
+  preflight；
+- policy deny 走 typed authorization report/audit，tool execution failure 保留 concrete source，均不
+  fallback。
 
 **验证**
 
@@ -382,7 +266,7 @@ cargo fmt --all -- --check
 git diff --check
 ```
 
-按 Access primitive 与 concrete tool owner 分拆提交，不把完整 skills lifecycle 塞进一个 commit。
+按 Access primitive owner 分拆前置提交；最终 tool registration 与 legacy 删除保持一个原子 cutover。
 
 ## 12. 编码 hard constraint 与 terminal consent 阶段
 
@@ -394,12 +278,16 @@ git diff --check
   `Advance` 产生结构化 misconfiguration denial。
 - terminal consent stage 只在全部 hard constraints 通过后运行；不另造 policy engine，也不在
   pipeline 外重跑 policy。
+- 把当前 config-driven `ToolMutationConsentPolicy` 迁入 terminal consent stage；同一 tool invocation
+  pipeline 的 visibility 等 hard policy 全部迁入 constraint stage，不能靠 bootstrap 注册顺序维持
+  安全性。
 
 **完成线**
 
 - permission 只满足 consent，不增加 capabilities、不覆盖 hard deny/root/runtime limit；
 - typed 与 any policy 都能显式注册到正确阶段；错误阶段的 decision fail closed；
-- production 尚未接线前不注册 permission policy。
+- production 不存在 constraint stage 之外的 hard policy，也不存在 terminal consent stage 之外的
+  permission policy。
 
 **验证**
 
@@ -425,8 +313,8 @@ git diff --check
 
 - unavailable 保留原始 report 并返回 `PermissionRequestError::Unavailable`；
 - parent/user 路由与 Session lineage 一致，user escalation 被结构化拒绝；
-- production 只在 fail-closed permission foundation 以及步骤 7、12 完成后注册 permission
-  policy。
+- 真实 parent/user interaction backend 只在当前 Runtime/Session owner goal 与步骤 12 完成后启用；此前
+  已注册 consent policy 继续通过 `PermissionRequestError::Unavailable` fail closed。
 
 **验证**
 
@@ -471,8 +359,8 @@ runtime `ToolInvocation` 按值持有 child Context，从而拥有该执行作�
    force abort，并记录 timeout。partial text 不写成 completed reply。
 
 已经进入 backend 的 side effect 不承诺回滚。步骤 14 只记录其已有 owner 能证明的 tool/Invocation
-outcome；generic Access action execution evidence 在步骤 21 完成前不能假定存在。不为取消引入
-永久 Session actor、全局 registry 或 Context-owned task supervisor。
+outcome；generic Access action execution evidence 在步骤 21 完成前不能假定存在。步骤 14 复用 active
+goal 已建立的 Session runner/supervisor，不能另造平行 actor registry 或 Context-owned task supervisor。
 
 **完成线**
 
@@ -565,13 +453,12 @@ git diff --check
 
 **范围**
 
-- `Kernel::grant_action` 必须已经随步骤 5 删除；它没有 legacy production caller，不能等待步骤
-  15、16。这里不再迁移或保留它。
-- 在步骤 15、16 的 caller 全部清空后，删除 `authorize_operation`、`policy_engine_error` 和 legacy
+- 步骤 17 只清理仍有 caller 的 legacy authorization；不得引入 `Kernel::grant_action` 或同义 wrapper。
+- 在步骤 15、16 的 caller 全部清空后，删除 `authorize_operation` 和 legacy
   `PolicyError` conversion。
-- 删除不再有 ingress owner 的 `KernelInvocationContext`、token/pack authorization methods 与 bearer
-  evidence type；若某个 wire contract 仍有真实 caller，先把该 caller 纳入步骤 15 或 16，不能
-  留 fallback/workaround。
+- 删除不再有 ingress owner 的 token/pack authorization methods 与 bearer evidence type；源码已无
+  `KernelInvocationContext`，不得用另一名称恢复同类全局 bound。若某个 wire contract 仍有真实 caller，
+  先把该 caller 纳入步骤 15 或 16，不能留 fallback/workaround。
 - 保留现有最小 `loong_core::kernel::Kernel<C>` Access contract；没有真实外部需求时删除
   `TODO(kernel-contract)`，不新增宽 forwarding trait。
 
@@ -620,18 +507,17 @@ git diff --check
 
 **范围**
 
-- `loong-runtime` 的旧 one-shot/interactive/task-status projection 已删除；后续不得恢复 phase spine、
-  executor adapter 或 core type re-export。
-- 逐个审计 `loong-cli`、`loong-app-protocol`、`loong-plugin-sdk`、`protocol`、
-  `bridge-runtime`。每个提交只处理一个 owner 明确的 forwarding shell；有真实 command、wire 或 bridge
-  contract 的 crate 保留并收窄。
-- 修正 kernel -> author-facing SDK 的反向依赖；kernel 所需 contract 下沉，SDK 只保留 author API。
-- 每次 manifest 变化都从 `cargo metadata --no-deps` 重建真实 DAG，并同步 `AGENTS.md`、
-  `CLAUDE.md`、`ARCHITECTURE.md`、reader-facing docs 与 fail-closed architecture checks。
+- 本步骤只在 active Runtime owner goal 完成后开始；届时检查后续 crate 变更没有恢复
+  one-shot/interactive dependency、compat alias、app Runtime facade 或 forwarding adapter，不重复进行
+  Runtime cutover。
+- 继续逐个审计 `loong-cli`、`loong-app-protocol`、`loong-plugin-sdk`、`protocol`、
+  `bridge-runtime`；每次只处理一个 owner 明确的 forwarding shell。
+- 从 `Cargo.toml` / `cargo metadata --no-deps` 重建真实 crate DAG，同步 `AGENTS.md`、
+  `CLAUDE.md`、`ARCHITECTURE.md`、reader-facing docs 和 architecture checks。
 
 **完成线**
 
-- 没有无 owner forwarding shell、compatibility facade 或 kernel -> author-facing SDK 反向依赖；
+- 没有剩余 forwarding shell、compatibility facade 或 kernel -> author-facing SDK 反向依赖；
 - workspace DAG、文档和 architecture checks 一致；
 - `AGENTS.md` 与 `CLAUDE.md` 保持镜像。
 
@@ -656,59 +542,55 @@ git diff --check
 - 目标 concrete shape 是 opaque `Capabilities(u64)`，并实现 `Copy`。`contains`、`is_subset`、
   `intersection` 和 `difference` 直接做值运算，其中后两者返回 `Capabilities`，需要枚举时再显式
   `iter()`，不保留只为旧 `BTreeSet` 形状存在的 iterator API。
-- capability variant、canonical name、bit mapping 和 `ALL_CAPABILITIES` 必须由 contracts-private 的
-  单一 declaration 生成，不能维护会彼此漂移的 mapping 与遍历表。生成顺序保持当前 `Capability` 声明
-  顺序；compile-time capacity assertion 拒绝超过 64 bit，测试同时锁定 one-hot、bit 唯一、全集无遗漏和
-  full-mask iteration 可逆。declaration 旁用简短注释说明它是 authorization universe 的唯一 source；
-  不把未承诺稳定的 bit position 当成持久化/wire identity。
+- `Capabilities` 在 contracts 内封装 capability 到 bit index 的 exhaustive mapping 和唯一的
+  `ALL_CAPABILITIES` 遍历顺序；不能把未承诺稳定的 enum discriminant 当成持久化/wire bit position。
+  新增 capability 必须同时更新 mapping 与遍历表，并由 compile-time capacity assertion 防止超过 64 bit。
 - 保持 capability 名称/list 的序列化 contract；Policy、Action、Context 和 Access 不暴露 mask、
-  index 或 word size，raw mask 不进入 serde、audit 或其它 wire format。未来内部存储超过单个 word 时
-  可以在保持 opaque API 和 `Copy` contract 的前提下替换；放弃 `Copy` 必须作为新的 breaking decision。
+  index 或 word size，raw mask 不进入 serde、audit 或其它 wire format。未来内部存储超过单个 word 时可以
+  在不修改这些 contract 的前提下替换。
 - 删除 `Cow<Capabilities>` 以及仅为 set-backed clone 成本存在的借用分支；recursive Context 直接保存
   `Capabilities` 值，`PolicyContext::allowed_capabilities()` 按值返回，child 通过位与得到严格不扩权的新值。
 - benchmark/profile 可以记录迁移收益，但不再作为修复当前表示的进入条件；本目标首先消除错误的
   ownership/集合建模。
-- 这是一次 workspace-wide atomic breaking migration：contracts 表示、set-operation 返回类型、所有
-  `PolicyContext` 实现和 caller 在同一提交切换，不保留 Cow/iterator compatibility API。
 
 **完成线**
 
 - capability gate、subset 和 intersection 语义与迁移前一致；
 - base/child Context 都不因 capability clone 或 narrowing 分配；
 - `rg -n "Option<Arc<BTreeSet<Capability>>>|Cow<'[^']*, Capabilities>" crates` 无 production 命中；
-- serde 继续输出迁移前相同的 PascalCase 名称数组和 `Capability` 声明顺序；乱序及重复输入被
-  canonicalize，未知名称、非数组与整数 mask 被拒绝；
-- tests 覆盖空集、全集、重复输入、subset、intersection、difference、one-hot、bit uniqueness、mapping
-  completeness、full-mask iteration、golden wire order 与 64-bit capacity assertion。
+- serde roundtrip 继续输出有序 capability 名称数组，且不存在 raw integer mask 的 wire 表示；
+- tests 覆盖空集、全集、重复输入、subset、intersection、difference、iteration order 与 64-bit capacity
+  assertion。
 
 **验证**
 
 ```bash
-RUSTC_WRAPPER= cargo fmt --all -- --check
-RUSTC_WRAPPER= cargo clippy --workspace --all-targets --all-features -- -D warnings
-RUSTC_WRAPPER= cargo test --workspace
-RUSTC_WRAPPER= cargo test --workspace --all-features
-./scripts/check_architecture_boundaries.sh
+cargo test -p loong-contracts
+cargo test -p loong-core policy
+cargo test -p loong-kernel policy
+cargo test -p loong-app context
+cargo clippy -p loong-contracts -p loong-core -p loong-kernel --all-targets --all-features -- -D warnings
+cargo fmt --all -- --check
 git diff --check
 ```
 
 ## 21. 设计并闭合 generic Granted Action execution evidence
 
 该目标独立于当前 active goal。sealed grant algorithm 已保证所有 typed Action 的 authorization
-evidence；步骤 5 只保证 ToolInvocation execution evidence。不能借二者声称 Access execution audit
-已完成。
+evidence，runtime ToolInvocation 已保证自身 execution evidence；不能借二者声称 Access execution
+audit 已完成。
 
 **范围**
 
 - 先确定 generic `Granted<Action>` execution evidence 的唯一 owner 与调用签名，使 filesystem 与
-  其它 Access action 在真正执行时记录 started/completed/failed/cancelled；在 owner 确定前不修改
-  `Granted` 字段形状，也不预设 correlation carrier。
-- 比较两种候选：A) 单一 execution wrapper 同时拥有 outer `ActionGrant` 并负责 audit 时，由它保留
-  id/info；B) 只有当 `Granted` 必须独立跨越 execution boundary、owner 无法可靠保留 outer metadata，
-  且保留 outer 会迫使多个 consumer 重复传 id 或增加 wrapper 时，才考虑将 `GrantId` 下沉并提供只读
-  accessor。不得因调用方便提前选择 B，也不能用当前 ToolInvocation 的 outer-retention 方案替
-  generic Access 预先定案。
-- 无论选择哪种 carrier，都不把 sink、clock、report 或 authority 挂到 Context/`Granted`，不增加
+  其它 Access action 在真正执行时记录 started/completed/failed/cancelled。correlation carrier 已固定：
+  `Granted<A>` 携带同一次 private mint 的 id/info/action，execution owner 不再保留 outer
+  `ActionGrant` 或复制 id。
+- 需要决定的是 domain-neutral execution event/state machine 的 owner：由 `Granted::run` 的 owning port、
+  每个 Access operation wrapper，或另一个真正拥有 action outcome 的单一边界强制 Started/terminal
+  顺序。不能让每个 caller 自愿记 audit，也不能让 Kernel 代替 domain owner 执行 action。
+- `Granted` 携带 immutable authorization info 只是 correlation proof；仍不把 sink、clock 或 authority
+  handle 挂到 Context/`Granted`，不增加
   `Kernel::grant`，也不让 ToolInvocation wrapper 代替 generic Action owner。
 - execution-start write 必须先成功才进入 `Action::run`；失败时 action dispatch count 为零。
   terminal write 发生在 action outcome 已知后，必须保留 concrete action error 与 audit source。
@@ -723,9 +605,9 @@ evidence；步骤 5 只保证 ToolInvocation execution evidence。不能借二�
 
 **完成线**
 
-- generic execution evidence 的唯一 owner/调用签名已经确定，并据此在候选 A/B 中完成明确决策；
-- 每个 migrated Access action 的 authorization 与 execution event 使用选定 carrier 关联同一
-  grant id，且没有同时保留两套 metadata path；
+- generic execution evidence 的唯一 owner/调用签名和 domain-neutral state machine 已经确定；
+- 每个 migrated Access action 的 authorization 与 execution event 使用 `Granted.id()` 关联同一 grant，
+  且没有 outer-id copy 或第二套 metadata path；
 - 当前只委托 `Action::run` 的 `Granted<Action>::run(ctx)` 不再被误认为已有 audit；完成后其 owning
   consumption path 才能保证 generic execution evidence；
 - tests 覆盖 pre-execution audit failure、action success + terminal audit failure、action failure +
@@ -745,15 +627,85 @@ cargo fmt --all -- --check
 git diff --check
 ```
 
+## 22. Monty 接入后暴露 governed programmable agent control
+
+这是 deferred goal，不属于当前 Runtime owner cutover。当前 goal 只建立 Session runner、supervisor、
+mailbox ownership 与 typed Invocation 基础；在 Monty 真正接入前，不预先冻结 `busy`、`send_msg`、
+`redirect` 等 author-facing API。
+
+**前置条件**
+
+- 当前 Runtime/Session/Context active goal 已完成，agent lifecycle、generation、parent relation、history、
+  cancellation 与 mailbox 都已有唯一 owner；
+- Monty 已作为 agent-side programmable tool 接入 typed ToolPlane，并能把 host dataclass method call 转成
+  external future；不能直接照搬当前 MVP 中拒绝 method call、未接通 `ResolveFutures` 的 bridge；
+- agent control 使用现有 Context authority、typed policy/grant 和 runtime audit，不建立另一套 sender/token
+  授权面。
+
+**已经确定的边界**
+
+- Monty 是 agent 使用的可编程工具，不是 Spec、global metadata 或 Session store 的替代品。
+- host 暴露的 `Subagent` 是 frozen、serializable reference，只保存 `agent_id + generation`。它不是
+  `Session`、`Arc`、mailbox sender、authorization proof 或 lifecycle owner。
+- 每次 method call 都经当前 recursive Context 进入 Runtime supervisor，由 supervisor 校验 reference、
+  lineage、effective capabilities 和 operation policy；Monty object 不能直接访问 mailbox 或 registry。
+- Runtime supervisor 持有 agent lifecycle record、join、parent relation 与 command/status endpoints；唯一
+  Session runner 持有 Session value、mailbox receiver、history 和当前 Invocation。普通 command 使用
+  bounded channel，interrupt/shutdown 使用独立 control channel，状态与完成通过 observation subscription
+  暴露。
+- live status query 返回 immutable snapshot。观察结果不能作为随后 mutation 的正确性前提；需要
+  “检查后执行”的语义时，由 Runtime 提供单个 atomic operation。`interrupt` 必须幂等。
+- parent 与 child 可以并行；parent 通过 status subscription 观察，通过 Runtime wait operation 等待。
+  child authority 只能继承或收窄，任何 Monty 调用都不能借 agent reference 扩权。
+- concrete Monty 实现优先使用其已有 host dataclass methods、external futures 与 `asyncio.gather`；没有
+  证据时不另造 IR、手写协程状态机或把 live Rust handle 序列化进解释器状态。
+
+**接入前必须决策的问题**
+
+- `send_msg` 是同步 tell，还是等待 Runtime 接受/持久化后完成的 async operation；
+- idle agent 收到 message 后是排队、自动启动新 Invocation，还是要求显式 follow-up；
+- `redirect` 是否作为独立 atomic operation，以及它与 `interrupt + send_msg/followup` primitives 的关系；
+- `status` / `busy` 的最终 async surface 与 snapshot freshness contract；
+- Monty REPL state 是否跨 Runtime restart 持久化，以及 stale `generation` reference 的恢复方式；
+- `spawn_agent`、`send_message`、`followup_task`、`wait_agent`、`interrupt_agent`、`list_agents` 的最终
+  author-facing 命名和 payload/result schema。
+
+这些问题必须在 Monty bridge 与真实 caller 同时可验证时决定，不能先用 helper、alias 或兼容 wrapper
+填满 API。无论最终命名如何，状态 mutation 都必须由 Runtime supervisor 串行化；`busy/status` 只用于
+观察，不允许形成 check-then-act correctness contract。
+
+**完成线**
+
+- Monty code 可以创建/引用 child agent、并行工作、观察、等待、发送消息和幂等中断，且所有调用都经过
+  current Context 的 authority narrowing、typed grant 与强制 audit；
+- stale generation、越权 child caps、已关闭 Runtime/Session 和 full mailbox 都返回 typed error；不
+  panic，不暴露 sender/receiver，不把 transport 字符串当 policy decision；
+- parent completion/cancellation、detach/reparent 和 Runtime shutdown 与 active goal 的 supervisor graph
+  保持同一套 lifecycle 语义；
+- tests 覆盖 parent/child 并行、wait/status observation、stale reference、capability non-escalation、
+  interrupt idempotence、mailbox backpressure，以及最终选定的 idle/send/redirect 语义；
+- plan、Monty host-object docs 与 intent comments 明确区分 reference、handle、Session owner、Invocation 和
+  immutable status snapshot。
+
+**验证方向**
+
+```bash
+cargo test -p loong-runtime agent
+cargo test -p loong-tools monty
+cargo test -p loong-app subagent
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo fmt --all -- --check
+git diff --check
+```
+
 ## Code TODO 对照
 
-- `TODO(session-owned-context)` -> 步骤 7；
-- `TODO(typed-tool-authorization-audit)` / `TODO(tool-audit-owner)` -> 步骤 5；
-- `TODO(deprecate-no-kernel-live-source)` -> 步骤 10；
+这些 tag 只是当前代码位置索引，不继承注释中“先加 `#[deprecated]`”的旧指令。步骤 15/17 在 caller
+清零后直接删除 legacy API 与 TODO，不建立 deprecation 兼容期。
+
 - `TODO(config-import-access)` / `TODO(access-migration)` -> 步骤 11；
-- `TODO(deprecate-tool-core-envelope)` / `TODO(tool-plane)` /
-  `TODO(tool-plane-display)` / `TODO(tool-catalog-owner)` /
-  `TODO(typed-tool-legacy-ingress)` -> 步骤 15；
+- `TODO(deprecate-tool-core-envelope)` / `TODO(legacy-tool-core)` /
+  `TODO(legacy-tool-view)` / `TODO(tool-plane-display)` / `TODO(tool-catalog-owner)` -> 步骤 15；
 - `TODO(control-plane-action)` -> 步骤 16；
-- `TODO(deprecate-legacy-kernel-auth)` / `TODO(deprecate-legacy-policy-error)` -> 步骤 17；
+- `TODO(deprecate-legacy-kernel-auth)` / `TODO(deprecate-legacy-kernel-envelopes)` -> 步骤 17；
 - `TODO(kernel-contract)` -> 步骤 17。

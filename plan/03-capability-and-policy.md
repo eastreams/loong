@@ -8,10 +8,17 @@
 - 每个 concrete action 通过 `ActionMeta::metadata()` 声明 required capabilities。
 - `PolicyEngine::grant` 在 policy chain 前执行 capability gate。缺 cap 时不执行 policy，不产生
   `Granted<A>`。
-- Context 暴露本次执行的 effective capabilities。base Context 来自 Session baseline 与 Turn
+- Context 暴露本次执行的 effective capabilities。base Context 来自 Session baseline 与 Invocation
   options 的交集；tool->tool child Context 只能继续缩窄。
-- tool caps override 必须先证明 `override ⊆ tool_default_caps`，再计算
-  `child_caps = parent_caps ∩ override`。无 override 时使用 tool default caps。
+- tool caps override 必须先证明 `override ⊆ tool_default_caps`。该证明发生在 runtime-owned
+  `invoke().await` 内，并自动记录 structured rejection；builder 只保存 requested value，不能在 audit
+  前同步失败。证明通过后令
+  `selected_tool_caps = override.unwrap_or(tool_default_caps)`，计算
+  `required_caps = { InvokeTool } ∪ selected_tool_caps`，并用
+  `child_caps = parent_caps ∩ required_caps` 派生 child Context。
+- `ToolInvocationAction` 必须继续声明完整 `required_caps`，不能改成 child 已有的交集。这样 parent
+  缺 capability 时会由 `PolicyEngine::grant` 的正式 capability gate 拒绝并写 authorization
+  evidence，而不是在 child 构造阶段提前返回一个没有审计的 narrowing error。
 - `ToolInvocationAction` 只授权进入一个 tool；tool 内部 filesystem/network/memory/process
   side effect 仍需各自的 domain action grant。
 - 在 bitset 迁移前，`PolicyContext::allowed_capabilities()` 的过渡签名是
@@ -39,7 +46,7 @@ pre PolicyAny -> typed Policy<C, A> -> fallback PolicyAny
 - 没有 terminal decision 时 default deny。
 - pipeline registry 保留每个 policy 的 id、注册顺序、注册时间和 source location；
   `PolicyReport` 保留完整 evaluation order、stage、grant 和 outcome。
-- `Policy` 与 `PolicyAny` 都通过 `&C::Cx<'_>` 读取 Context，不持有 Factory，不依赖 app concrete
+- `Policy` 与 `PolicyAny` 都通过 `&C::Cx<'_>` 读取 Context，不持有 Factory，不依赖 runtime concrete
   Context。
 - public `loong_kernel::policy::PolicyPipelineBuilder<C>` 只负责 policy registration；kernel crate
   root 不 re-export 它。`new()` 是 default deny，legacy allow fallback 必须显式选择，且不能授权新
@@ -81,19 +88,27 @@ pre PolicyAny -> typed Policy<C, A> -> fallback PolicyAny
 
 `ActionGrantInfo` 保存发放 grant 所依据的完整 `PolicyReport`。当前 grant boundary 要求：
 
-- 当前字段形状由 outer `ActionGrant<A>` 提供 `GrantId`、grant metadata 和不可伪造的
-  `Granted<A>`；当前 goal 保持 `Granted<A>` 只保存 action，不新增 `grant_id()`，也不复制 outer
-  metadata；
+- core 在同一次 private mint 中把 `GrantId`、`ActionGrantInfo { report, subject, action }` 与 action
+  写入 `Granted<A>`；`ActionGrant<A>` 只包装这一个 proof，不再公开可重组的平行字段；
+- `ActionGrant::into_granted()` 是唯一 execution transition。`Granted::id()` / `info()` 只读暴露与
+  当前 action 同时 mint 的 correlation 与 authorization snapshot，不能替换、clone grant 或重新 mint；
 - deny 继续通过 typed authorization error 保存 report；
 - kernel generic authorization audit 直接使用 allow/deny report，不重新运行 policy，也不生成
   替代 reason；
 - `Granted<A>::as_ref()` 只允许 execution boundary 在消费前读取 action metadata，不能提供
-  clone/mint/bypass API；`Granted<A>` 不持有 sink、report 或 authority。
+  clone/mint/bypass API；`Granted<A>` 可以携带 immutable grant info，但不持有 sink、clock 或
+  authority handle。
 
 `ActionGrant<A>` / `Granted<A>` 的 mint 是 core-private，因此成功 grant 是不可伪造的证明。这个
 边界不自动保证 grant algorithm 正确；仍必须让 capability deny、policy deny、permission failure
 和 authorization audit failure 都无法到达 mint。不要为同一目的引入 `SessionAuthority`、
 authorize token、permit wrapper 或另一层 `Granted`。
+
+`GrantId` 是跨 Kernel 实例与进程重启稳定关联的 UUID，不是每个 Kernel 从 1 重启的 sequence。
+新 evidence 只写 UUID。历史整数 ID 不只是“可以 decode”：decode 后必须继续以原 JSON number
+representation 序列化，不能被改写成 UUID string。protected journal 的 integrity hash 基于事件的
+canonical serialization；改变旧 ID representation 会把合法历史记录误判为篡改。因此迁移测试必须
+覆盖 decode -> verify -> repair -> reverify -> reopen/append，并证明历史数字在整条链中保持数字。
 
 `PolicyEngine::grant` 也是 typed authorization evidence 的唯一自动触发点。terminal allow write 成功
 后才能 mint；evidence/identity 错误按上一节保留 source，而 core 不反向依赖 kernel `AuditError`。
@@ -105,9 +120,10 @@ grant wrapper 代替该 contract。
 - 新 typed path 是
   `Context -> PolicyEngine::grant -> ActionGrant<A> -> Granted<A> -> execution`。Access 和 typed
   tool invocation 不接收 pack/token；不为这条链新增 `Kernel::grant` forwarding method。
-- `CapabilityToken`、`KernelInvocationContext`、`authorize_token`、`authorize_operation` 和旧 plane
-  execution 可以继续服务仍在运行的 legacy fallback，但只能位于明确的 legacy owner/bounded
-  impl；不得成为 typed grant、Access 或 typed ToolPlane authorization 的 trait bound。
+- `CapabilityToken`、`authorize_token`、`authorize_operation` 和旧 plane execution 可以继续服务仍在
+  运行的 legacy fallback，但只能位于明确的 legacy owner/bounded impl；源码已不存在
+  `KernelInvocationContext`，不得重新用同类全局 context bound 塑造 typed grant、Access 或 typed
+  ToolPlane authorization。
 - 不把 legacy API 包装成新的 authority abstraction。legacy caller 留在旧路径，新 caller 直接
   使用 typed grant；迁移一个 caller 时删除该 caller 的 token/pack 参数。
 - capability collection 是 policy input，`Granted<A>` 是 policy 通过后才能获得的 execution
@@ -126,8 +142,9 @@ grant wrapper 代替该 contract。
   token/pack 字段进入普通 typed Context scope。
 - fs resolution root、fs allowed roots、provider-specific view 等不放进这个基础 trait；它们由
   对应 domain requirement trait 表达。
-- 整个 `KernelInvocationContext` 属于 legacy fallback；它不能作为 `Kernel<C>` 普通 API 的全局
-  HRTB。type-erased policy 读取 `ActionMeta::payload()`；typed policy 直接读取 concrete action。
+- legacy bearer 所需的局部 context requirement 只能写在对应 fallback method/owner 上，不能成为
+  `Kernel<C>` 普通 API 的全局 HRTB。type-erased policy 读取 `ActionMeta::payload()`；typed policy
+  直接读取 concrete action。
 
 ## Config -> Policy
 
@@ -141,5 +158,6 @@ config -> concrete policy value -> PolicyPipeline registration -> PolicyReport
 - config 不能通过修改 action required caps 表达 path/filename 等业务授权。
 - fs resolution allow、allowed-roots containment、filename deny 和各 concrete operation allow 都是
   typed policy。`deny_read_filenames` 已是普通 config input，不是写死的临时 deny。
-- `FilePolicyExtension` 只允许覆盖尚未迁移的 legacy `config.import` skills bridge；不能扩回
-  read/write/edit/search 或其它已迁移 action。
+- `config.import` 当前整体留在 legacy path；`FilePolicyExtension` 只为它的 `input_path` / `output_path`
+  保留 legacy root authorization。不存在 access-backed 的半迁移 bridge；完成整条 typed Tool +
+  Access 迁移后直接删除该 extension，不能扩回 read/write/edit/search 或其它已迁移 action。

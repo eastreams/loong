@@ -38,7 +38,9 @@ raw path
 
 - `FsResolutionContext::fs_resolution_root()` 是 Access 构造 resolve action 的 execution input。
 - `FsPathPolicyContext::fs_allowed_roots()` 只被 typed path policy 读取。
-- `AccessCx::fs()` 只要求 resolution view；`FsPathAllowedRootsPolicy` 单独约束 path policy view。
+- `FsResolutionContext` 与 `FsPathPolicyContext` 是两个独立职责；`AccessCx::fs()` 同时约束二者，
+  因为每个可执行 fs operation 都必须先完成 resolution，再把 path facts 交给 containment policy。
+  同时约束不等于把两类数据重新塞回一个 aggregate context trait。
 - capability 由通用 `PolicyContext` 提供；不再存在把 resolution、allowed roots 和 capabilities
   混在一起的 `FsAccessPolicyContext`。
 
@@ -55,8 +57,10 @@ ctx.access().fs().read_file(path).await
 ctx.access().fs().write_file(path, bytes, options).await
 ```
 
-每个 fs domain error 使用 `thiserror` 保留 source。legacy string reason 只在旧 tool envelope 的
-最后边界转换，不能反向污染 Access error。
+每个 fs operation 拥有自己的 `thiserror` error，并保留 path、policy 与 backend source。
+`FsPathError` 只表达所有 path grant chain 真实共享的 prerequisite failure；不存在重新汇总所有
+operation variant 的 `FsAccessError`。legacy string reason 只在旧 tool envelope 的最后边界转换，
+不能反向污染 Access error。
 
 ## Operation Module Ownership
 
@@ -66,10 +70,8 @@ filesystem 模块按 operation 纵向切片，而不是按 action、facade metho
 
 ```text
 fs/
-  access.rs          # FsAccess + shared grant_path chain
-  action.rs          # only the FsAction family enum
-  error.rs           # shared fs domain errors
-  path.rs            # path facts + resolve/path actions and execution
+  access.rs          # FsAccess facade identity + constructor
+  path.rs            # path facts + resolve/path actions + shared FsPathError
   read.rs
   write.rs
   copy.rs
@@ -83,18 +85,24 @@ fs/
   rename.rs
 ```
 
-- operation modules、`action` 和 error implementation modules 都保持 private；`fs` facade 显式
+- operation modules 都保持 private；`fs` facade 显式
   re-export 每个 operation 的 public members。调用者只依赖
   `loong_access::fs::{FsAccess, FsReadAction, ...}`，不能依赖 `fs::action::*` 或 operation module
   path。
-- `access.rs` 只保留 facade identity、构造和强制 resolve -> path grant 顺序的共享实现。
-  `error.rs` 保留跨 operation 共用的 domain error；不能为了文件共置复制错误类型或添加转发 helper。
-- `FsAction` family 可以继续存在，但只负责 concrete action 的和类型与 delegation，不重新拥有各
-  action 的构造事实或 execution logic。
+- 不建立 `fs/action/` 再按 action type 拆文件；那仍然是横向 action bucket。每个 concrete action
+  移入其 operation file，并由 `loong_access::fs` 这个 owning Access facade re-export；crate root
+  不再额外 flatten 这些名字。
+- `access.rs` 只保留 facade identity 和构造；强制 resolve -> path grant 顺序的共享实现由
+  `path.rs` 拥有，因为它只服务 path prerequisite。
+- 每个 operation error 与 operation 共置，只包含该 operation 真正产生的 variant，并通过
+  `FsPathError` 复用 path prerequisite failure。不得恢复 shared mega enum、泛型 error wrapper、
+  分类 helper 或只转发 `From` 的兼容层。
 - 每个 operation module 顶部用简短注释说明其授权与副作用边界；不写复述代码的注释。
-
-当前实现仍把 concrete actions 集中在 `action.rs`，并公开内部 module path。破坏性收敛步骤和
-完成线见 `08-next-steps.md` 步骤 9；该结构调整不改变 authorization 或 filesystem 行为。
+- 当前 concrete action、Access method、`Action::run` 与 output 已按 operation 共置；内部 module
+  path 保持 private，`loong_access::fs` 是唯一公共 facade。
+- 纯 lexical path normalization 由 `fs::normalize_path_lexically` 统一拥有。它不访问文件系统、
+  不 canonicalize symlink、也不授权路径；Session root materialization 与 action resolution 共享它，
+  防止 policy 前出现两套 `.`/`..` 语义。
 
 ## Read Family
 
@@ -109,12 +117,13 @@ concrete tool 只 parse payload、调用上述 Access operation、格式化 type
 
 ## Cancellation Boundary
 
-- Turn cancellation 后不再开始新的 resolve/path/operation grant。
+- Invocation cancellation 后不再开始新的 resolve/path/operation grant。
 - long-running search/glob/read-dir 应在可安全停止的迭代边界观察 cancellation。
 - 已经进入不可中断 syscall 或 atomic commit 的操作不承诺回滚。generic Access execution evidence
-  尚未建立；它必须等步骤 21 确定唯一 consumption owner 与 correlation carrier 后再实现，不能从
-  authorization evidence 推断 operation 已完成或失败。
-- cancellation signal 来自当前 Turn Context，不成为 fs policy input，也不改变 Action required
+  尚未建立；`Granted` 已固定携带同一次 mint 的 correlation metadata，但步骤 21 仍需确定 generic
+  Access execution lifecycle 的唯一 owner 与 started/terminal/cancelled 状态机。不能从 authorization
+  evidence 推断 operation 已完成或失败。
+- cancellation signal 来自当前 Invocation Context，不成为 fs policy input，也不改变 Action required
   capabilities。
 
 ## 剩余安全缺口：TOCTOU

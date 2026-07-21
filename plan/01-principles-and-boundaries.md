@@ -18,48 +18,85 @@
 
 ## Runtime、Session 与 Context
 
-- `Runtime<C>` 是长期 runtime owner，持有 `Kernel<C>` 和 typed `ToolPlane<C>`。kernel 是
-  Runtime 内的 governance authority，不是第二套 app runtime，也不持有 typed tool registry。
-- `Session` 是跨 Turn 存活的主体，只拥有 typed identity、lineage、baseline capabilities、稳定
-  config 和 lifecycle state。它不保存 `CapabilityToken`、pack 或其它 token evidence；Session 的
-  业务生命周期不由 Rust lifetime 表达，Session 也不是 Future。
-- `Context<'a>` 是递归执行作用域的不可变视图，不等同于整个 Turn，也不固定代表单次
-  invocation。Turn boundary 根据 Session typed baseline、typed options 和 cancellation signal 构造
-  base Context；nested invocation 从 parent 派生同类型 child Context。
+- concrete `Runtime`、`Session`、`Context<'a>` 和 `RuntimeContextFactory` 都属于 `loong-runtime`。
+  这是一个完整 execution domain，不是由 app concrete type 填空的 generic shell。Runtime 不可 Clone，
+  持有 `Kernel<RuntimeContextFactory>`、tool plane、shutdown owner 和私有 Session supervisor；kernel
+  仍只是 Runtime 内的 governance authority，不持有 typed tool registry 或 Session。
+- `runtime::Handle` 是不带 lifetime 的可 Clone 命令能力。它保存 supervisor 的 typed command sender，
+  不保存 `&Runtime`；`Runtime::handle() -> &runtime::Handle` 只借出 Runtime 已拥有的 handle，跨
+  `'static` task 时 caller 显式 clone。Runtime shutdown 后旧 handle 可以继续存在，但命令必须返回
+  closed，不能延长 Runtime 的运行生命周期。
+- `Session` 是不可 Clone 的 live agent state，只存在于唯一的 Session runner。Runtime supervisor 保存
+  lifecycle record：session id/generation、typed command sender、status/completion receiver、runner
+  `JoinHandle` 和 parent relation；它不复制或共享 Session value。`session::Handle` 不带 lifetime、可 Clone，
+  只引用这些 command/observation endpoints；不保存 `Arc<Runtime>`、`Arc<Session>`，也不能构造 Context。
+- Runtime 始终是 Session actor 的 lifecycle owner。把 Session value 移入 runner future 不转移 spawn、join、
+  reparent 或 shutdown ownership。attached child 只是在同一 supervisor graph 中记录 parent；detach 原子
+  清除 relation，不移动 Session 或 `JoinHandle`。parent completion/cancellation 由 Runtime 向 attached
+  descendants 传播。
+- Session runner 独占普通 command receiver、优先级 control receiver、当前 Invocation 和 mutable history。
+  sender/observer 可以 Clone，receiver 不能放进 `Arc<Mutex<_>>`、公开 `drain` 或交给 Tool；mailbox 是传输
+  边界，不是 history store、status truth 或 authorization proof。
+- `loong-runtime` 定义 `InvocationImpl`，app 为一次具体调用实现
+  `ConversationInvocation`。`session::Handle::invoke(I)` 只接受这个 owned、`'static` 的 concrete
+  invocation value；runtime 在 private `ErasedInvocation` adapter 中擦除它，不能改成 `Any`、JSON
+  envelope、全局 callback bag 或 `Runtime<P>` 泛型传播。
+- `Invocation<I>` 是 `session::Handle::invoke(I)` 返回的不可 Clone 调用对象，负责本次 typed event、
+  cancellation request 与 terminal result。它不保存 Session authority、history owner 或 Context；
+  Drop 只能发送 cancellation，真正 finalize 始终由 Session runner 完成。
+- private erasure 只解决 Session mailbox 需要存放不同 concrete invocation 类型的问题。本次 input/state
+  由 concrete `I` 的字段持有，event/output/error 由 associated types 表达；runtime 不为跨队列而发明
+  `Value`/String 中间格式。Session runner 构造 root Context，并在调用 `I::execute` 外强制包住 lifecycle、
+  cancellation 与 audit；concrete implementation 不获得 audit 或 root construction。
+- `Context<'a>` 是一个 Invocation 内递归执行作用域的不可变视图。Session runner 私有构造 root
+  Context；tool、action、nested model 与 batch sibling 从 parent 派生同类型 child Context。Context
+  不是 `Invocation` 的返回对象，也不能取消整个 Session。
 - 一个 Context 生命周期内，影响 authority 或 policy 输入的字段不可原地修改。child Context
-  只能继承或收窄 authority：`child_caps ⊆ parent_caps`，并继承同一 Turn 的 identity、
+  只能继承或收窄 authority：`child_caps ⊆ parent_caps`，并继承同一 Invocation 的 identity、
   mode/goal 和 cancellation signal。
 - Context 的 `Cow` 字段表达存储 ownership：base 字段是 `Cow::Borrowed`，child 中被收窄的字段
   是 `Cow::Owned`。`PolicyContext::allowed_capabilities()` 对两者都返回
   `Cow::Borrowed(self.effective_capabilities.as_ref())`；accessor 只 reborrow，绝不再次 clone。
-- Context 不保存 tool payload、action payload、`CapabilityToken`、pack/token evidence、
-  `ExecutionPlane` 或 `PlaneTier`。payload 属于 concrete Action；tool invocation、`AccessCx` 和
-  concrete Action 类型已经表达执行域。
-- Session、Runtime registry 和持久化 store 都不保存 invocation Context。需要 `'static` 的任务
-  持有真正的长期 owner，并在 future 内构造借用型 Context；不能把整个 Context 重新 Arc 化。
-- concrete 名称固定为 `Context<'a>`，GAT marker 固定为 `RuntimeContextFactory`。旧
-  `AppContext`、`AppContextInner`、`AppContextFactory` 必须彻底删除，不留 alias、deprecated
-  wrapper 或 re-export。
+- Context 不保存 tool/action payload、`CapabilityToken`、pack/token evidence、Runtime/Session
+  Handle、session registry、join owner、`ExecutionPlane` 或 `PlaneTier`。payload 属于 concrete
+  Action；Invocation、tool invocation、`AccessCx` 和 concrete Action 类型已经表达执行域。
+- Context 只保存本次执行所需的窄 services、session id/generation、固定 history branch/head、
+  cancellation observation 与 effective authority。canonical history 内容不是 ambient Context
+  权限；Provider 使用 Invocation 已读取的固定投影，需要历史的 Tool 必须通过受治理 Access 按同一
+  revision 读取，不能默认读取 latest。
+- Session、Runtime supervisor 和持久化 store 都不保存 Context。需要 `'static` 的 Session runner
+  拥有真实长期资源，并在自己的 future 内构造借用型 Context；不能把整个 Context 重新 Arc 化。
+- concrete 名称固定为 `Context<'a>`，GAT marker 固定为 `RuntimeContextFactory`，两者都由
+  `loong-runtime` 直接定义。替换掉的 app Context、factory 和 Session owner 不留 alias、deprecated
+  wrapper 或 app-root re-export。
 - `ContextFactory` 只是 lifetime 到 concrete context 的 GAT 映射，不构造值，也不持有 policy
   engine 或 runtime。
-- `loong-runtime` 拥有窄 requirement trait `ToolInvocationContext`，这是 runtime-owned
-  `ToolInvocation` 与 app-defined Context 的唯一直接 contract。它只按给定 `Capabilities` 从
-  parent 派生同类型 child，`derive_tool_child` 返回 `Result<Self, CapabilityNarrowingError>`；不暴露
-  kernel、audit 或 Runtime，不放进 `ContextFactory`，也不构造 base Context。app concrete Context
-  直接实现它。该 trait 用于跨 crate 表达 child authority narrowing，不是搬运同构数据的 helper。
+- app 的 config/repository materializer 只能产出 runtime-owned `SessionSpec`。该类型是经过验证后移交
+  live identity、authority 和 service ports 的 ownership boundary，不是旧 Session 的同构 wrapper。
+  `LoongConfig`、SQLite repository、prompt/provider state 和整份 legacy `ToolRuntimeConfig` 不进入
+  Runtime/Session/Context；typed policy 需要的 session authority 必须拆成有 owner 的具体字段。
+- `ToolInvocationContext` 是 generic `ToolInvocation<C>` 对 `C::Cx<'a>` 的窄 requirement trait，只表达
+  “从 parent 按给定 capabilities 派生同类型、authority 不扩大的 child”。它不构造 root Context，
+  不暴露 Kernel/audit/Runtime，也不进入 `ContextFactory`。即使 canonical Context 与 ToolInvocation
+  同属 `loong-runtime`，该 trait 仍用于保持 generic ToolPlane primitive 与 concrete Context 解耦；
+  不能把它扩成大 deps trait 或同义 service locator。
 
 ## Cancellation
 
-- streaming client disconnect 取消当前 Turn execution，不取消整个 Session。Session shutdown
-  可以向下取消其活跃 Turn；Runtime shutdown 可以向下取消活跃 Session/Turn。
+- streaming client disconnect 取消当前 `Invocation`，不取消整个 Session。Session cancel 向下取消
+  其活跃 Invocation 与 attached descendants；Runtime shutdown 向下取消全部 Session/Invocation。
+- Session runner 在执行 Invocation 时必须继续处理 cancellation、permission reply、user input 与
+  shutdown control；不能在同一个 command loop 中直接 `.await` Invocation 而阻塞其依赖的控制消息。
+  同一 conversation branch 的 mutating Invocation 默认串行，batch tool 并发不受影响；真正需要并发
+  Invocation 时必须显式 fork branch，不能完成后自动 rebase。
 - cancellation 是协作式执行边界。Provider、tool orchestration 和长时 access operation 在安全
-  点观察同一个 Turn cancellation signal；强制 task abort 只能是超过 grace period 后的最后手段。
+  点观察同一个 Invocation cancellation signal；强制 task abort 只能是超过 grace period 后的最后手段。
 - cancellation 不承诺回滚已经提交的 side effect。取消后不得再 grant/启动新的 action；已经进入
   backend 的操作按其原子性契约完成或失败，已经产生的 authorization evidence 必须保留。
   execution evidence 由对应 grant consumption owner 的 contract 保证；cancellation 不能虚构、抹去
   或跨 domain 推断 execution outcome。
-- partial assistant output 不能伪装成 completed reply。Turn finalization 必须区分 completed、failed
-  和 cancelled，并恢复 Session 的可继续状态或记录明确的 terminal lifecycle。
+- partial assistant output 不能伪装成 completed reply。Invocation finalization 必须区分
+  completed、failed 和 cancelled，并恢复 Session 的可继续状态或记录明确的 terminal lifecycle。
 
 ## Access、Action 与 Policy
 
@@ -90,36 +127,53 @@
 - `PolicyGrantError::{Audit, IdentityAllocation, IdentityAllocationAndAudit}` 分别保留 evidence write、
   identity allocation，以及 allocation + failure-evidence write 的双重失败。错误必须携带 core 当时准备
   写入的 evidence 和原始 typed source，并在 grant 逃逸前传播；evidence 字段不声称 sink 已经接受它。
-- terminal authorization write 成功后，core 才能私有 mint `ActionGrant<A>` 与 `Granted<A>`。
-  `ActionGrant<A>` 承载 grant metadata，`Granted<A>` 是不可伪造的 action execution proof；不把
-  sink、report 或 authority 塞进 execution proof。私有 mint 仍必须保证 deny 与 audit failure
-  路径无法绕过。Context、caller、policy 和 Access backend 都不手写 authorization evidence。
+- terminal authorization write 成功后，core 才能私有 mint `ActionGrant<A>`。`ActionGrant<A>` 只包装
+  一个已经绑定 `GrantId + ActionGrantInfo + action` 的 `Granted<A>`，`into_granted()` 是进入 execution
+  proof 的唯一过渡。三个事实不能由 caller 拆开后与另一份真实 grant 重组；`Granted<A>` 也不持有
+  sink、clock 或 authority handle。私有 mint 仍必须保证 deny 与 audit failure 路径无法绕过。
+  Context、caller、policy 和 Access backend 都不手写 authorization evidence。
 - 执行入口消费 `Granted<ConcreteAction>`；不能再为“防伪造 grant”增加 `SessionAuthority`、
   token wrapper 或同义证明类型。backend 可以存在，但不要求统一 backend trait。
-- policy 不依赖 app concrete Context。它通过小 requirement trait 读取所需字段；config ->
+- policy 不依赖 runtime concrete Context。它通过小 requirement trait 读取所需字段；config ->
   concrete typed policy registration 属于 app bootstrap。
 - `AccessCx`、fs facade 等 concrete view 可以存在，但只能借用 Context/Runtime 中的 source of
   truth，不能拥有独立 capability、policy、audit 或 runtime state。
+- 每个 Access domain 自己拥有并 re-export 其 public action、options、output 和 facade API。
+  concrete operation 按纵向能力共置；不能把所有 domain action 继续堆进一个大 `action.rs`，也不能
+  只是把它机械改成按类型分类的 `action/` 子目录。内部 operation module 保持 private，调用方依赖
+  `loong_access::<domain>::{...}`，不依赖内部文件路径或 crate-root flattening。
 
 ## Tool
 
-- 普通调用入口必须是 `ctx.tool(path)?.invoke(payload).await`。`Context::tool(path)` 是薄入口，只调用
-  Runtime 创建 handle；runtime `ToolInvocation` 通过 `ToolInvocationContext` 派生 child，再用
+- 普通调用入口必须是 `ctx.tool(path)?.invoke(payload).await`。`Context::tool(path)` 只使用 Session
+  runner 在 root Context 中安装的窄 tool execution service；它不能取得或构造 `runtime::Handle`。
+  runtime `ToolInvocation` 通过 `ToolInvocationContext` 派生 capability 不扩大的 child，再用
   `PolicyEngine::grant` 完成 grant、internal dispatch 和强制 execution audit。
-- raw ToolPlane granted dispatch 是 `loong-runtime` 内部 primitive，只消费
-  `Granted<InvocationAction>` 并 dispatch；它不能被普通 caller 直接调用，也不知道 kernel
-  token、pack、audit sink 或 event id。`ErasedTool` 保持 private/sealed，concrete `ToolImpl` 不得
-  绕过 runtime invocation wrapper。
-- runtime `ToolInvocation` wrapper 必须保留 outer `ActionGrant` metadata，直到关联的 execution
-  audit 完成；`ToolImpl` 不获得 audit API。lookup、caps override、child narrowing、grant、dispatch
-  和 audit failure 都必须通过 `ToolInvocationError` 保留 typed source，不能降级成字符串。
-- runtime 不得访问 kernel-private audit state。跨 crate 写入只通过 Kernel 的 generic
-  `record_audit_event` governance recorder；该边界拥有 clock、event id 与 sink write，并向 runtime
-  返回 typed `AuditError` source。它不是 forwarding helper；不得增加 `AuditHandle`、route/receipt、
-  `ctx.audit` 或同义 capability。
-- `path` 属于具体 ToolPlane，不属于 contracts/core。tool descriptor 不带 path；注册点把
-  plane path 与 `RegisteredTool` 组合。新增 builtin tool 的目标改动面只有 concrete
-  `ToolImpl` 和一条 registration。
+- runtime tool service 在 grant 前完成唯一一次 registry lookup，并把 concrete `RegisteredTool` entry
+  绑定进借用型 handle。registry 只负责 storage、resolve 和 enumeration；runtime
+  `ToolInvocation` 消费 `Granted<ToolInvocationAction>` 后直接调用已绑定 entry，不能在 authorization
+  之后按 path 再 lookup。`RegisteredTool`、registered descriptor owner 和 `ErasedTool` 全部属于
+  `loong-runtime` 并保持 raw invoke crate-private；`loong-core` 只保留 concrete implementer 使用的
+  `ToolImpl` 抽象。普通 caller 只能获得受治理的 invocation handle，不能构造或调用 raw registered
+  entry。
+- `Context::tool` 的 lookup failure 保持为 `LookupError`。`with_capabilities_override` 只在 handle 上
+  保存 requested narrowing，不同步校验或返回 error；subset validation 属于随后
+  `invoke(...).await` 的 governed attempt，失败由 `ToolInvocationError::CapabilityOverride` 保留 typed
+  source 并自动记录 rejection evidence。这样扩权尝试不会在 audit 前消失。
+- runtime 将 `ActionGrant<ToolInvocationAction>` 转成 `Granted<ToolInvocationAction>` 后立即进入
+  `Granted::run`；runtime-private `Action::run` 在同一个 proof 的生命周期内读取 id/info、写 Started、
+  dispatch bound entry，再写 terminal evidence。不存在 outer id copy path 或第二套 execution
+  metadata。`ToolImpl` 不获得 audit API。`ToolInvocationError` 覆盖 override rejection、child
+  narrowing、grant、dispatch 和 execution audit，并保留 typed source，不能降级成字符串。
+- runtime 不得访问 kernel-private sink/clock/id state。Kernel generic operational recorder 拒绝
+  engine-owned `Authorization`、grant-bound `ActionExecution` 和只读历史 `ToolInvocation`；runtime
+  通过绑定真实 `Granted<ToolInvocationAction>` 的窄 execution recorder 写 Started/terminal
+  `ActionExecution` evidence。两条边界都由 Kernel 拥有 clock、event id 与 sink write，并返回 typed
+  `AuditError`。不得增加
+  `AuthorizedToolInvocation`、`AuditHandle`、route/receipt、`ctx.audit` 或同义 authorization proof。
+- `ToolPath` 的 identity、segments 与 wire contract 属于 contracts；某个 concrete tool 使用哪个 path
+  属于 ToolPlane registration，不属于 tool descriptor。注册点把 path 与 runtime-private registered
+  entry 组合。新增 builtin tool 的目标改动面只有 concrete `ToolImpl` 和一条 registration。
 - 一个 path 命中后由 concrete tool parse payload。不存在 `ToolPayloadMatch`、payload claim 或
   “解析失败就 fallback”。aggregate `read` 可以内部选择 file/query/glob，但这些分支必须进入
   不同 concrete fs actions。
@@ -146,9 +200,13 @@
   manual authorization 只属于仍在运行的 legacy fallback，不能进入新的 Kernel/Access/Tool
   contract。
 - `loong-access`：domain side-effect boundary。
-- `loong-runtime`：`Runtime<C>`、ToolPlane primitive 和 default registry；不得保留与
-  `Runtime<C>` 并行的第二套 runtime spine。
-- `loong-app`：concrete `Context<'a>`、`RuntimeContextFactory`、Session/Turn option 装配、builtin
-  registration、provider/channel/conversation integration 和 legacy ingress migration。
+- `loong-runtime`：concrete `Runtime`、`Session`、`Context<'a>`、`RuntimeContextFactory`、lifetime-free
+  command handles、Session supervisor、`InvocationImpl`/private invocation erasure、tool-plane registry，
+  以及执行 Context 所需的最小 typed authority domain。它不依赖 `loong-app`，不解析产品配置或持久化
+  记录，也不保留旧 transitional runtime spine。
+- `loong-app`：config/persistence materialization、builtin Policy/Tool registration、provider/channel/
+  conversation integration、concrete `ConversationInvocation` 和 legacy ingress migration。app 把外部
+  状态验证为 runtime-owned `SessionSpec` 后移交 ownership；不定义第二套 Runtime/Session/Context，
+  也不 re-export 旧名字。
 - `loong-tools`：concrete builtin tool implementations only；不拥有 registry、policy、access
   facade 或 legacy envelope。
