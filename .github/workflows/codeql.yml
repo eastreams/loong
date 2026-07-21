@@ -104,7 +104,7 @@ jobs:
 
       - name: Analyze
         if: steps.ghas.outputs.enabled == 'true'
-        uses: github/codeql-action/analyze@e46ed2cbd01164d986452f91f178727624ae40d7
+        uses: github/codeql-action/analyze@7188fc363630916deb702c7fdcf4e481b751f97a
         timeout-minutes: 10
 
       - name: Skip CodeQL when GHAS is unavailable
