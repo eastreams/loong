@@ -18,7 +18,6 @@ pub use artifact::{
     ExecutionArtifactKind, ExecutionArtifacts,
 };
 pub use budget::{ChildBudgetPolicy, RetentionBudget, SessionBudgetOverlay, TaskBudget};
-pub use error::AuthorizationError;
 pub use error::CoreModelError;
 pub use error::PermissionRequestError;
 pub use error::PolicyGrantError;

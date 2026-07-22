@@ -1,10 +1,212 @@
-use std::{collections::VecDeque, path::PathBuf};
+use std::{
+    borrow::Cow,
+    collections::VecDeque,
+    path::{Path, PathBuf},
+};
 
 use async_trait::async_trait;
-use loong_core::policy::{action::Action, grant::Granted};
+use loong_contracts::{Capability, PolicyDecision, PolicyGrant};
+use loong_core::{
+    error::PolicyGrantError,
+    policy::{
+        action::{Action, ActionMeta, ActionMetadata},
+        context::ContextFactory,
+        engine::PolicyEngine,
+        grant::Granted,
+        policy::Policy,
+    },
+};
 use regex::RegexBuilder;
+use serde_json::{Value, json};
+use thiserror::Error;
 
-use super::{access::FsAccessError, action::FsContentSearchAction, glob::GlobMatcher};
+use super::{
+    access::FsAccess,
+    glob::GlobMatcher,
+    path::{FsPathPolicyContext, FsResolutionContext, GrantedPath},
+};
+
+#[cfg(test)]
+mod tests;
+
+const FS_CONTENT_SEARCH_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
+
+#[derive(Debug, Error)]
+pub enum FsContentSearchError {
+    #[error(transparent)]
+    Path(#[from] super::path::FsPathError),
+    #[error(transparent)]
+    Authorization(#[from] PolicyGrantError),
+    #[error("invalid glob pattern {pattern}: {source}")]
+    InvalidGlobPattern {
+        pattern: String,
+        #[source]
+        source: regex::Error,
+    },
+    #[error("failed to build content search matcher for {query}: {source}")]
+    BuildContentSearchRegex {
+        query: String,
+        #[source]
+        source: regex::Error,
+    },
+    #[error("failed to read directory {path}: {source}", path = .path.display())]
+    ReadDirectory {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to inspect path {path}: {source}", path = .path.display())]
+    InspectPath {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(
+        "failed to render relative path for {path} from {root}: {source}",
+        path = .path.display(),
+        root = .root.display()
+    )]
+    RenderRelativePath {
+        root: PathBuf,
+        path: PathBuf,
+        #[source]
+        source: std::path::StripPrefixError,
+    },
+    #[error("failed to read file {path}: {source}", path = .path.display())]
+    ReadFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("content search produced an invalid match range in {path}", path = .path.display())]
+    InvalidContentMatchRange { path: PathBuf },
+}
+
+/// Policy-visible options for one governed content search.
+///
+/// Defaults and bounds belong to the caller/tool parser; access receives the
+/// already-selected values and records them in the action payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsContentSearchOptions {
+    pub glob: Option<String>,
+    pub max_results: usize,
+    pub max_bytes_per_file: usize,
+    pub case_sensitive: bool,
+}
+
+/// Typed action for searching text inside files under one governed root.
+///
+/// Content search reads many candidate files, so the query and optional glob
+/// filter belong to the action payload. Keeping matching inside access avoids
+/// returning broad file contents to a tool just so it can filter them itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsContentSearchAction {
+    root: GrantedPath,
+    query: String,
+    options: FsContentSearchOptions,
+}
+
+impl FsContentSearchAction {
+    #[must_use]
+    pub fn new(
+        root: GrantedPath,
+        query: impl Into<String>,
+        options: FsContentSearchOptions,
+    ) -> Self {
+        Self {
+            root,
+            query: query.into(),
+            options,
+        }
+    }
+
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        self.root.as_path()
+    }
+
+    #[must_use]
+    pub fn query(&self) -> &str {
+        self.query.as_str()
+    }
+
+    #[must_use]
+    pub fn options(&self) -> &FsContentSearchOptions {
+        &self.options
+    }
+}
+
+impl ActionMeta for FsContentSearchAction {
+    fn metadata(&self) -> ActionMetadata<'_> {
+        ActionMetadata {
+            kind: "fs.content_search",
+            operation: Cow::Borrowed("search_content"),
+            required_capabilities: Cow::Borrowed(&FS_CONTENT_SEARCH_REQUIRED_CAPABILITIES),
+        }
+    }
+
+    fn audit_resource(&self) -> Option<Cow<'_, str>> {
+        Some(self.root.as_path().display().to_string().into())
+    }
+
+    fn payload(&self) -> Cow<'_, Value> {
+        Cow::Owned(json!({
+            "root": self.root.as_path().display().to_string(),
+            "query": self.query,
+            "glob": self.options.glob.as_deref(),
+            "max_results": self.options.max_results,
+            "max_bytes_per_file": self.options.max_bytes_per_file,
+            "case_sensitive": self.options.case_sensitive,
+        }))
+    }
+}
+
+/// Terminal content-search policy installed after configured deny policies.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct FsContentSearchAllowPolicy;
+
+#[async_trait]
+impl<C> Policy<C, FsContentSearchAction> for FsContentSearchAllowPolicy
+where
+    C: ContextFactory + Send + Sync,
+{
+    fn name(&self) -> Cow<'static, str> {
+        Cow::Borrowed("fs-content-search-allow")
+    }
+
+    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &FsContentSearchAction) -> PolicyGrant {
+        PolicyGrant {
+            decision: PolicyDecision::Allow,
+            predicate: Some("fs.content_search reached terminal allow policy".into()),
+            reason: "filesystem content search allowed after configured deny policies".into(),
+        }
+    }
+}
+
+impl<'a, 'ctx, C, P> FsAccess<'a, 'ctx, C, P>
+where
+    C: ContextFactory + 'ctx,
+    P: PolicyEngine<C>,
+    C::Cx<'ctx>: FsResolutionContext + FsPathPolicyContext,
+{
+    /// Search file contents under a governed root.
+    ///
+    /// Access performs the candidate traversal and file reads. The caller only
+    /// receives match metadata, so content search cannot bypass fs read policy
+    /// by moving bulk file reads into a concrete tool implementation.
+    pub async fn search_content(
+        self,
+        root: impl AsRef<Path>,
+        query: impl Into<String>,
+        options: FsContentSearchOptions,
+    ) -> Result<FsContentSearchOutput, FsContentSearchError> {
+        let root = self.grant_target_path(root).await?;
+
+        let action = FsContentSearchAction::new(root, query, options);
+        let grant = self.policy_engine.grant(self.ctx, action).await?;
+        grant.into_granted().run(self.ctx).await
+    }
+}
 
 /// Execute an already-authorized content search.
 ///
@@ -17,7 +219,7 @@ where
     Cx: Sync,
 {
     type Output = FsContentSearchOutput;
-    type Error = FsAccessError;
+    type Error = FsContentSearchError;
 
     async fn run(granted: Granted<Self>, _ctx: &Cx) -> Result<Self::Output, Self::Error> {
         let action = granted.into_action();
@@ -34,7 +236,12 @@ where
         }
 
         let glob_matcher = match options.glob.as_deref() {
-            Some(pattern) => Some(GlobMatcher::new(pattern)?),
+            Some(pattern) => Some(GlobMatcher::new(pattern).map_err(|source| {
+                FsContentSearchError::InvalidGlobPattern {
+                    pattern: pattern.to_owned(),
+                    source,
+                }
+            })?),
             None => None,
         };
         let mut matches = Vec::new();
@@ -42,12 +249,12 @@ where
 
         while let Some(directory) = queue.pop_front() {
             let mut children = std::fs::read_dir(&directory)
-                .map_err(|source| FsAccessError::ReadDirectory {
+                .map_err(|source| FsContentSearchError::ReadDirectory {
                     path: directory.clone(),
                     source,
                 })?
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(|source| FsAccessError::ReadDirectory {
+                .map_err(|source| FsContentSearchError::ReadDirectory {
                     path: directory.clone(),
                     source,
                 })?;
@@ -55,12 +262,13 @@ where
 
             for child in children {
                 let child_path = child.path();
-                let file_type = child
-                    .file_type()
-                    .map_err(|source| FsAccessError::InspectPath {
-                        path: child_path.clone(),
-                        source,
-                    })?;
+                let file_type =
+                    child
+                        .file_type()
+                        .map_err(|source| FsContentSearchError::InspectPath {
+                            path: child_path.clone(),
+                            source,
+                        })?;
 
                 if file_type.is_dir() {
                     queue.push_back(child_path);
@@ -71,7 +279,7 @@ where
                 }
 
                 let relative_path = child_path.strip_prefix(&root).map_err(|source| {
-                    FsAccessError::RenderRelativePath {
+                    FsContentSearchError::RenderRelativePath {
                         root: root.clone(),
                         path: child_path.clone(),
                         source,
@@ -84,11 +292,12 @@ where
                     continue;
                 }
 
-                let file_bytes =
-                    std::fs::read(&child_path).map_err(|source| FsAccessError::ReadFile {
+                let file_bytes = std::fs::read(&child_path).map_err(|source| {
+                    FsContentSearchError::ReadFile {
                         path: child_path.clone(),
                         source,
-                    })?;
+                    }
+                })?;
                 let truncated_file = file_bytes.len() > options.max_bytes_per_file;
                 let limited_bytes = file_bytes
                     .get(..options.max_bytes_per_file)
@@ -102,7 +311,7 @@ where
 
                 let match_text = file_text
                     .get(byte_start..byte_end)
-                    .ok_or_else(|| FsAccessError::InvalidContentMatchRange {
+                    .ok_or_else(|| FsContentSearchError::InvalidContentMatchRange {
                         path: child_path.clone(),
                     })?
                     .to_owned();
@@ -163,7 +372,7 @@ fn find_content_match(
     content: &str,
     query: &str,
     case_sensitive: bool,
-) -> Result<Option<(usize, usize)>, FsAccessError> {
+) -> Result<Option<(usize, usize)>, FsContentSearchError> {
     if query.is_empty() {
         return Ok(None);
     }
@@ -178,12 +387,13 @@ fn find_content_match(
     let escaped_query = regex::escape(query);
     let mut regex_builder = RegexBuilder::new(escaped_query.as_str());
     regex_builder.case_insensitive(true);
-    let regex = regex_builder
-        .build()
-        .map_err(|source| FsAccessError::BuildContentSearchRegex {
-            query: query.to_owned(),
-            source,
-        })?;
+    let regex =
+        regex_builder
+            .build()
+            .map_err(|source| FsContentSearchError::BuildContentSearchRegex {
+                query: query.to_owned(),
+                source,
+            })?;
     Ok(regex
         .find(content)
         .map(|matched| (matched.start(), matched.end())))
@@ -194,17 +404,16 @@ fn build_snippet(
     byte_start: usize,
     byte_end: usize,
     path: &std::path::Path,
-) -> Result<String, FsAccessError> {
-    let prefix =
-        content
-            .get(..byte_start)
-            .ok_or_else(|| FsAccessError::InvalidContentMatchRange {
-                path: path.to_path_buf(),
-            })?;
+) -> Result<String, FsContentSearchError> {
+    let prefix = content.get(..byte_start).ok_or_else(|| {
+        FsContentSearchError::InvalidContentMatchRange {
+            path: path.to_path_buf(),
+        }
+    })?;
     let suffix =
         content
             .get(byte_end..)
-            .ok_or_else(|| FsAccessError::InvalidContentMatchRange {
+            .ok_or_else(|| FsContentSearchError::InvalidContentMatchRange {
                 path: path.to_path_buf(),
             })?;
     let snippet_start = prefix.rfind('\n').map_or(0, |index| index + 1);
@@ -212,7 +421,7 @@ fn build_snippet(
         .find('\n')
         .map_or(content.len(), |index| byte_end + index);
     let snippet = content.get(snippet_start..snippet_end).ok_or_else(|| {
-        FsAccessError::InvalidContentMatchRange {
+        FsContentSearchError::InvalidContentMatchRange {
             path: path.to_path_buf(),
         }
     })?;
@@ -223,13 +432,12 @@ fn compute_line_info(
     content: &str,
     byte_start: usize,
     path: &std::path::Path,
-) -> Result<LineInfo, FsAccessError> {
-    let prefix =
-        content
-            .get(..byte_start)
-            .ok_or_else(|| FsAccessError::InvalidContentMatchRange {
-                path: path.to_path_buf(),
-            })?;
+) -> Result<LineInfo, FsContentSearchError> {
+    let prefix = content.get(..byte_start).ok_or_else(|| {
+        FsContentSearchError::InvalidContentMatchRange {
+            path: path.to_path_buf(),
+        }
+    })?;
     let line = prefix.bytes().filter(|byte| *byte == b'\n').count() + 1;
     let column = prefix
         .rsplit('\n')

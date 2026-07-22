@@ -2823,6 +2823,29 @@ fn session_tool_policy_repository_round_trips_and_deletes_policy() {
 }
 
 #[test]
+fn session_tool_policy_repository_rejects_legacy_only_identity() {
+    let config = isolated_memory_config("session-tool-policy-legacy-only");
+    let repo = SessionRepository::new(&config).expect("repository");
+    append_session_turn_direct("legacy-only", "user", "old turn", &config)
+        .expect("persist legacy read-model identity");
+
+    let error = repo
+        .upsert_session_tool_policy(NewSessionToolPolicyRecord {
+            session_id: "legacy-only".to_owned(),
+            requested_tool_ids: vec!["read".to_owned()],
+            runtime_narrowing: ToolRuntimeNarrowing::default(),
+        })
+        .expect_err("typed policy writes require a canonical Session");
+
+    assert!(error.contains("session `legacy-only` not found"));
+    assert!(
+        repo.load_session_tool_policy("legacy-only")
+            .expect("load absent policy")
+            .is_none()
+    );
+}
+
+#[test]
 fn approval_request_repository_lists_requests_for_session_and_status() {
     let config = isolated_memory_config("approval-request-list");
     let repo = SessionRepository::new(&config).expect("repository");

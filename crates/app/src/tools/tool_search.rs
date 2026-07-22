@@ -38,9 +38,6 @@ use result::{tool_search_diagnostics_json, tool_search_result_entry_json};
 #[cfg(test)]
 pub(crate) use view::runtime_discoverable_tool_entries;
 pub(crate) use view::runtime_tool_search_entries;
-#[cfg(test)]
-pub(crate) use view::tool_id_visible_in_view;
-
 #[derive(Debug, Clone)]
 pub(super) struct RankedSearchableToolEntry {
     pub(super) entry: SearchableToolEntry,
@@ -54,7 +51,7 @@ pub(super) struct ToolSearchRanking {
 }
 
 pub(super) fn execute_tool_search_tool_with_config(
-    runtime: Option<&Runtime<crate::context::AppContextFactory>>,
+    runtime: Option<&Runtime<crate::context::RuntimeContextFactory>>,
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
@@ -91,7 +88,7 @@ pub(super) fn execute_tool_search_tool_with_config(
         .get(TOOL_SEARCH_GRANTED_CAPABILITIES_FIELD)
         .cloned()
         .and_then(|value| serde_json::from_value::<BTreeSet<Capability>>(value).ok());
-    let visible_tool_view = search_tool_view_from_payload(payload, config);
+    let visible_tool_view = search_tool_view_from_payload(runtime, payload, config);
     let searchable_entries =
         runtime_tool_search_entries(runtime, config, Some(&visible_tool_view), false)
             .map_err(|error| error.to_string())?
@@ -263,13 +260,15 @@ pub(super) fn tool_search_entry_is_capability_usable(
     let Some(granted_capabilities) = granted_capabilities else {
         return true;
     };
-    let required = super::required_capabilities_for_tool_name_and_payload(tool_name, &json!({}));
+    let required =
+        super::legacy_required_capabilities_for_tool_name_and_payload(tool_name, &json!({}));
     required
         .iter()
         .all(|capability| granted_capabilities.contains(capability))
 }
 
 pub(super) fn search_tool_view_from_payload(
+    runtime: Option<&Runtime<crate::context::RuntimeContextFactory>>,
     payload: &serde_json::Map<String, Value>,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> ToolView {
@@ -300,10 +299,19 @@ pub(super) fn search_tool_view_from_payload(
         None
     };
 
-    match visible_tool_names {
-        Some(visible_tool_names) => ToolView::from_tool_names(visible_tool_names),
-        None => super::full_runtime_tool_view_for_runtime_config(config),
-    }
+    let runtime_view = runtime.map_or_else(
+        || super::runtime_tool_view_for_runtime_config(config),
+        |runtime| super::runtime_visible_tool_view(runtime, config, None),
+    );
+    let Some(visible_tool_names) = visible_tool_names else {
+        return runtime_view;
+    };
+    runtime_view.filter(|path, provider_name| {
+        let path = path.to_string();
+        visible_tool_names
+            .iter()
+            .any(|visible| visible == provider_name || visible == &path)
+    })
 }
 
 #[cfg(test)]

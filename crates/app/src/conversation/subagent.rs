@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use loong_contracts::TaskScopeDescriptor;
+use loong_contracts::{Capabilities, TaskScopeDescriptor};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
@@ -106,13 +106,6 @@ pub enum ConstrainedSubagentRole {
 pub enum ConstrainedSubagentControlScope {
     Children,
     None,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ConstrainedSubagentRuntimeBinding {
-    Direct,
-    ContextBound,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -381,8 +374,6 @@ pub struct ConstrainedSubagentContractView {
     pub child_tool_allowlist: Vec<String>,
     #[serde(default, skip_serializing_if = "ToolRuntimeNarrowing::is_empty")]
     pub runtime_narrowing: ToolRuntimeNarrowing,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub runtime_binding: Option<ConstrainedSubagentRuntimeBinding>,
 }
 
 impl ConstrainedSubagentContractView {
@@ -403,11 +394,6 @@ impl ConstrainedSubagentContractView {
             allow_shell_in_child: Some(execution.allow_shell_in_child),
             child_tool_allowlist: execution.child_tool_allowlist.clone(),
             runtime_narrowing: execution.runtime_narrowing.clone(),
-            runtime_binding: Some(if execution.kernel_bound {
-                ConstrainedSubagentRuntimeBinding::ContextBound
-            } else {
-                ConstrainedSubagentRuntimeBinding::Direct
-            }),
         }
     }
 
@@ -475,7 +461,6 @@ impl ConstrainedSubagentContractView {
             && self.allow_shell_in_child.is_none()
             && self.child_tool_allowlist.is_empty()
             && self.runtime_narrowing.is_empty()
-            && self.runtime_binding.is_none()
     }
 }
 
@@ -493,11 +478,16 @@ pub struct ConstrainedSubagentExecution {
     pub timeout_seconds: u64,
     pub allow_shell_in_child: bool,
     pub child_tool_allowlist: Vec<String>,
+    /// Capability ceiling captured from the parent recursive Context.
+    ///
+    /// Persisting it with lifecycle evidence prevents detached workers from
+    /// reconstructing the child from the broader configured baseline.
+    #[serde(default)]
+    pub capability_ceiling: Capabilities,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_root: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "ToolRuntimeNarrowing::is_empty")]
     pub runtime_narrowing: ToolRuntimeNarrowing,
-    pub kernel_bound: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<ConstrainedSubagentIdentity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -641,9 +631,9 @@ mod tests {
             timeout_seconds: 60,
             allow_shell_in_child: false,
             child_tool_allowlist: vec!["read".to_owned(), "write".to_owned(), "edit".to_owned()],
+            capability_ceiling: loong_contracts::Capabilities::new(),
             workspace_root: Some(PathBuf::from("/tmp/child-workspace")),
             runtime_narrowing: ToolRuntimeNarrowing::default(),
-            kernel_bound: true,
             identity: None,
             profile: Some(ConstrainedSubagentProfile::for_child_depth(1, 2)),
         };
@@ -653,6 +643,7 @@ mod tests {
             Some("child"),
             Some(DelegateBuiltinProfile::Research),
         );
+        assert!(payload["execution"].get("kernel_bound").is_none());
         assert_eq!(
             ConstrainedSubagentExecution::from_event_payload(&payload),
             Some(execution)
@@ -682,9 +673,9 @@ mod tests {
             timeout_seconds: 30,
             allow_shell_in_child: false,
             child_tool_allowlist: vec!["web.fetch".to_owned()],
+            capability_ceiling: loong_contracts::Capabilities::new(),
             workspace_root: None,
             runtime_narrowing: ToolRuntimeNarrowing::default(),
-            kernel_bound: false,
             identity: None,
             profile: Some(ConstrainedSubagentProfile::for_child_depth(1, 2)),
         };
@@ -746,9 +737,9 @@ mod tests {
             timeout_seconds: 60,
             allow_shell_in_child: false,
             child_tool_allowlist: vec!["read".to_owned()],
+            capability_ceiling: loong_contracts::Capabilities::new(),
             workspace_root: None,
             runtime_narrowing: ToolRuntimeNarrowing::default(),
-            kernel_bound: false,
             identity: None,
             profile: None,
         };
@@ -783,9 +774,9 @@ mod tests {
             timeout_seconds: 45,
             allow_shell_in_child: true,
             child_tool_allowlist: vec!["read".to_owned(), "shell.exec".to_owned()],
+            capability_ceiling: loong_contracts::Capabilities::new(),
             workspace_root: None,
             runtime_narrowing: runtime_narrowing.clone(),
-            kernel_bound: true,
             identity: Some(ConstrainedSubagentIdentity {
                 nickname: Some("child-researcher".to_owned()),
                 specialization: Some("reviewer".to_owned()),
@@ -808,8 +799,13 @@ mod tests {
                 allow_shell_in_child: Some(true),
                 child_tool_allowlist: vec!["read".to_owned(), "shell.exec".to_owned()],
                 runtime_narrowing,
-                runtime_binding: Some(ConstrainedSubagentRuntimeBinding::ContextBound),
             }
+        );
+        assert!(
+            serde_json::to_value(execution.contract_view())
+                .expect("serialize constrained subagent contract")
+                .get("runtime_binding")
+                .is_none()
         );
     }
 

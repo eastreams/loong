@@ -27,6 +27,7 @@ use crate::task_progress::{
     TASK_PROGRESS_EVENT_KIND, TaskProgressRecord, task_progress_from_event_payload,
 };
 
+mod actions;
 mod bootstrap;
 mod schema;
 mod search;
@@ -37,6 +38,10 @@ mod test_utils;
 #[cfg(test)]
 #[path = "sqlite/sqlite_core_tests.rs"]
 mod tests;
+
+pub(super) use actions::{
+    append_turn_granted, replace_turns_granted, transcript_granted, window_granted,
+};
 
 use self::bootstrap::{
     acquire_memory_runtime, default_window_size, default_window_size_u64,

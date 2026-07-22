@@ -98,10 +98,8 @@ impl ConversationRuntime for ApprovalControlRuntime {
     async fn build_messages(
         &self,
         _config: &LoongConfig,
-        _app_ctx: &crate::AppContext,
+        _ctx: &crate::Context<'_>,
         _include_system_prompt: bool,
-        _tool_view: &crate::tools::ToolView,
-        _binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Vec<Value>> {
         Ok(vec![json!({
             "role": "system",
@@ -113,7 +111,7 @@ impl ConversationRuntime for ApprovalControlRuntime {
         &self,
         _config: &LoongConfig,
         _messages: &[Value],
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
     ) -> CliResult<String> {
         Ok("approval handled".to_owned())
     }
@@ -121,11 +119,9 @@ impl ConversationRuntime for ApprovalControlRuntime {
     async fn request_turn(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
         _turn_id: &str,
         _messages: &[Value],
-        _tool_view: &crate::tools::ToolView,
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
     ) -> CliResult<ProviderTurn> {
         panic!("request_turn should not run during approval control replay")
     }
@@ -133,11 +129,9 @@ impl ConversationRuntime for ApprovalControlRuntime {
     async fn request_turn_streaming(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
         _turn_id: &str,
         _messages: &[Value],
-        _tool_view: &crate::tools::ToolView,
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
         _on_token: crate::provider::StreamingTokenCallback,
     ) -> CliResult<ProviderTurn> {
         panic!("request_turn_streaming should not run during approval control replay")
@@ -145,10 +139,9 @@ impl ConversationRuntime for ApprovalControlRuntime {
 
     async fn persist_turn(
         &self,
-        _session_id: &str,
         _role: &str,
         _content: &str,
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
     ) -> CliResult<()> {
         Ok(())
     }
@@ -156,8 +149,7 @@ impl ConversationRuntime for ApprovalControlRuntime {
     async fn bootstrap(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
-        _app_ctx: &AppContext,
+        _ctx: &Context<'_>,
     ) -> CliResult<crate::conversation::context_engine::ContextEngineBootstrapResult> {
         let mut bootstrap_calls = self
             .bootstrap_calls
@@ -174,23 +166,11 @@ pub(super) struct CoreReplayRuntime;
 #[cfg(feature = "memory-sqlite")]
 #[async_trait]
 impl ConversationRuntime for CoreReplayRuntime {
-    fn session_context(
-        &self,
-        _config: &LoongConfig,
-        _app_ctx: &crate::AppContext,
-        _session_id: &str,
-        _binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<AppContext> {
-        Err("session_context should not be called for core approval replay".to_owned())
-    }
-
     async fn build_messages(
         &self,
         _config: &LoongConfig,
-        _app_ctx: &crate::AppContext,
+        _ctx: &crate::Context<'_>,
         _include_system_prompt: bool,
-        _tool_view: &crate::tools::ToolView,
-        _binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Vec<Value>> {
         Err("build_messages should not run during core approval replay".to_owned())
     }
@@ -199,7 +179,7 @@ impl ConversationRuntime for CoreReplayRuntime {
         &self,
         _config: &LoongConfig,
         _messages: &[Value],
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
     ) -> CliResult<String> {
         Err("request_completion should not run during core approval replay".to_owned())
     }
@@ -207,11 +187,9 @@ impl ConversationRuntime for CoreReplayRuntime {
     async fn request_turn(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
         _turn_id: &str,
         _messages: &[Value],
-        _tool_view: &crate::tools::ToolView,
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
     ) -> CliResult<ProviderTurn> {
         Err("request_turn should not run during core approval replay".to_owned())
     }
@@ -219,11 +197,9 @@ impl ConversationRuntime for CoreReplayRuntime {
     async fn request_turn_streaming(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
         _turn_id: &str,
         _messages: &[Value],
-        _tool_view: &crate::tools::ToolView,
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
         _on_token: crate::provider::StreamingTokenCallback,
     ) -> CliResult<ProviderTurn> {
         Err("request_turn_streaming should not run during core approval replay".to_owned())
@@ -231,10 +207,9 @@ impl ConversationRuntime for CoreReplayRuntime {
 
     async fn persist_turn(
         &self,
-        _session_id: &str,
         _role: &str,
         _content: &str,
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
     ) -> CliResult<()> {
         Err("persist_turn should not run during core approval replay".to_owned())
     }
@@ -257,6 +232,10 @@ pub(super) fn seed_pending_approval_request(
     tool_name: &str,
     dispatch_kind: &str,
 ) {
+    let args_json = match tool_name {
+        "delegate" | "delegate_async" => json!({ "task": "run the approved test task" }),
+        _ => json!({}),
+    };
     repo.ensure_approval_request(crate::session::repository::NewApprovalRequestRecord {
         approval_request_id: approval_request_id.to_owned(),
         session_id: session_id.to_owned(),
@@ -269,9 +248,8 @@ pub(super) fn seed_pending_approval_request(
             "turn_id": "turn-pending-approval",
             "tool_call_id": "call-pending-approval",
             "tool_name": tool_name,
-            "args_json": {},
+            "args_json": args_json,
             "source": "test",
-            "capabilities_override": null,
             "dispatch_kind": dispatch_kind,
             "trusted_internal_context": false,
         }),
@@ -313,10 +291,8 @@ impl ConversationRuntime for ExplicitSkillActivationRuntime {
     async fn build_messages(
         &self,
         _config: &LoongConfig,
-        _app_ctx: &crate::AppContext,
+        _ctx: &crate::Context<'_>,
         _include_system_prompt: bool,
-        _tool_view: &crate::tools::ToolView,
-        _binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Vec<Value>> {
         Ok(vec![json!({
             "role": "system",
@@ -328,7 +304,7 @@ impl ConversationRuntime for ExplicitSkillActivationRuntime {
         &self,
         _config: &LoongConfig,
         messages: &[Value],
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
     ) -> CliResult<String> {
         let mut stored = self
             .completion_messages
@@ -341,11 +317,9 @@ impl ConversationRuntime for ExplicitSkillActivationRuntime {
     async fn request_turn(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
         _turn_id: &str,
         _messages: &[Value],
-        _tool_view: &crate::tools::ToolView,
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
     ) -> CliResult<ProviderTurn> {
         panic!("request_turn should not run for explicit skill activation control turns")
     }
@@ -353,11 +327,9 @@ impl ConversationRuntime for ExplicitSkillActivationRuntime {
     async fn request_turn_streaming(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
         _turn_id: &str,
         messages: &[Value],
-        _tool_view: &crate::tools::ToolView,
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
         on_token: crate::provider::StreamingTokenCallback,
     ) -> CliResult<ProviderTurn> {
         let mut streaming_calls = self
@@ -387,10 +359,9 @@ impl ConversationRuntime for ExplicitSkillActivationRuntime {
 
     async fn persist_turn(
         &self,
-        _session_id: &str,
         role: &str,
         content: &str,
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
     ) -> CliResult<()> {
         let mut stored = self.persisted_turns.lock().expect("persisted turns lock");
         stored.push((role.to_owned(), content.to_owned()));
@@ -400,8 +371,7 @@ impl ConversationRuntime for ExplicitSkillActivationRuntime {
     async fn bootstrap(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
-        _app_ctx: &AppContext,
+        _ctx: &Context<'_>,
     ) -> CliResult<crate::conversation::context_engine::ContextEngineBootstrapResult> {
         let mut calls = self.bootstrap_calls.lock().expect("bootstrap lock");
         *calls += 1;
@@ -426,22 +396,23 @@ async fn handle_turn_with_runtime_explicit_skill_activation_prefix_injects_skill
     let mut config = LoongConfig::default();
     config.skills.enabled = true;
     config.tools.file_root = Some(workspace_root.display().to_string());
-    let app_ctx = crate::context::bootstrap_app_context_with_config(
-        "session-explicit-skill-activation",
-        60,
+    let owner = crate::test_support::TestRuntimeSession::from_config(
         &config,
+        "session-explicit-skill-activation",
+        "test-agent",
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
-    .expect("test app context");
+    .expect("materialize explicit skill session");
+    let ctx = owner.context();
 
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
-            &app_ctx,
-            "session-explicit-skill-activation",
+            &ctx,
             "$demo-skill summarize the changelog",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::AdvisoryOnly,
+            &owner.legacy_tools,
         )
         .await
         .expect("explicit activation turn should succeed");
@@ -524,12 +495,14 @@ async fn handle_turn_with_runtime_explicit_skill_activation_preserves_observer_s
     config.skills.enabled = true;
     config.tools.file_root = Some(workspace_root.display().to_string());
     config.provider.kind = crate::config::ProviderKind::Anthropic;
-    let app_ctx = crate::context::bootstrap_app_context_with_config(
-        "session-explicit-skill-activation-observer",
-        60,
+    let owner = crate::test_support::TestRuntimeSession::from_config(
         &config,
+        "session-explicit-skill-activation-observer",
+        "test-agent",
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )
-    .expect("test app context");
+    .expect("materialize explicit skill session");
+    let ctx = owner.context();
 
     let observer = Arc::new(RecordingTurnObserver::default());
     let observer_handle: ConversationTurnObserverHandle = observer.clone();
@@ -540,13 +513,13 @@ async fn handle_turn_with_runtime_explicit_skill_activation_preserves_observer_s
     let reply = coordinator
         .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             &config,
-            &app_ctx,
+            &ctx,
             &address,
             "$demo-skill summarize the changelog",
             ProviderErrorMode::Propagate,
             &runtime,
             &acp_options,
-            ConversationRuntimeBinding::AdvisoryOnly,
+            &owner.legacy_tools,
             None,
             Some(observer_handle),
             None,
@@ -616,10 +589,8 @@ impl ConversationRuntime for RecordingCompactRuntime {
     async fn build_messages(
         &self,
         _config: &LoongConfig,
-        _app_ctx: &crate::AppContext,
+        _ctx: &crate::Context<'_>,
         _include_system_prompt: bool,
-        _tool_view: &crate::tools::ToolView,
-        _binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Vec<Value>> {
         Ok(Vec::new())
     }
@@ -628,7 +599,7 @@ impl ConversationRuntime for RecordingCompactRuntime {
         &self,
         _config: &LoongConfig,
         _messages: &[Value],
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
     ) -> CliResult<String> {
         Ok(String::new())
     }
@@ -636,11 +607,9 @@ impl ConversationRuntime for RecordingCompactRuntime {
     async fn request_turn(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
         _turn_id: &str,
         _messages: &[Value],
-        _tool_view: &crate::tools::ToolView,
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
     ) -> CliResult<ProviderTurn> {
         panic!("request_turn should not be called in compaction tests")
     }
@@ -648,11 +617,9 @@ impl ConversationRuntime for RecordingCompactRuntime {
     async fn request_turn_streaming(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
         _turn_id: &str,
         _messages: &[Value],
-        _tool_view: &crate::tools::ToolView,
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
         _on_token: crate::provider::StreamingTokenCallback,
     ) -> CliResult<ProviderTurn> {
         panic!("request_turn_streaming should not be called in compaction tests")
@@ -660,10 +627,9 @@ impl ConversationRuntime for RecordingCompactRuntime {
 
     async fn persist_turn(
         &self,
-        _session_id: &str,
         _role: &str,
         _content: &str,
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
     ) -> CliResult<()> {
         Ok(())
     }
@@ -671,9 +637,8 @@ impl ConversationRuntime for RecordingCompactRuntime {
     async fn compact_context(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
         _messages: &[Value],
-        _app_ctx: &AppContext,
+        _ctx: &Context<'_>,
     ) -> CliResult<()> {
         let mut compact_calls = self.compact_calls.lock().expect("compact lock");
         *compact_calls += 1;
@@ -683,19 +648,14 @@ impl ConversationRuntime for RecordingCompactRuntime {
 
 #[cfg(feature = "memory-sqlite")]
 pub(super) struct CompactSessionBuildMessagesRuntime {
-    pub(super) session_tool_view: crate::tools::ToolView,
     pub(super) build_messages_calls: StdMutex<Vec<(bool, crate::tools::ToolView)>>,
     pub(super) fail_after_first_readback: bool,
 }
 
 #[cfg(feature = "memory-sqlite")]
 impl CompactSessionBuildMessagesRuntime {
-    pub(super) fn new(
-        session_tool_view: crate::tools::ToolView,
-        fail_after_first_readback: bool,
-    ) -> Self {
+    pub(super) fn new(fail_after_first_readback: bool) -> Self {
         Self {
-            session_tool_view,
             build_messages_calls: StdMutex::new(Vec::new()),
             fail_after_first_readback,
         }
@@ -705,27 +665,13 @@ impl CompactSessionBuildMessagesRuntime {
 #[cfg(feature = "memory-sqlite")]
 #[async_trait]
 impl ConversationRuntime for CompactSessionBuildMessagesRuntime {
-    fn session_context(
-        &self,
-        _config: &LoongConfig,
-        _app_ctx: &crate::AppContext,
-        session_id: &str,
-        _binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<AppContext> {
-        Ok(crate::test_support::app_context_for_session(
-            session_id,
-            self.session_tool_view.clone(),
-        ))
-    }
-
     async fn build_messages(
         &self,
         _config: &LoongConfig,
-        _app_ctx: &crate::AppContext,
+        ctx: &crate::Context<'_>,
         include_system_prompt: bool,
-        tool_view: &crate::tools::ToolView,
-        _binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Vec<Value>> {
+        let tool_view = &ctx.session().tool_view;
         let mut build_messages_calls = self
             .build_messages_calls
             .lock()
@@ -752,7 +698,7 @@ impl ConversationRuntime for CompactSessionBuildMessagesRuntime {
         &self,
         _config: &LoongConfig,
         _messages: &[Value],
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
     ) -> CliResult<String> {
         Ok(String::new())
     }
@@ -760,11 +706,9 @@ impl ConversationRuntime for CompactSessionBuildMessagesRuntime {
     async fn request_turn(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
         _turn_id: &str,
         _messages: &[Value],
-        _tool_view: &crate::tools::ToolView,
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
     ) -> CliResult<ProviderTurn> {
         panic!("request_turn should not be called in compact_session tests")
     }
@@ -772,11 +716,9 @@ impl ConversationRuntime for CompactSessionBuildMessagesRuntime {
     async fn request_turn_streaming(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
         _turn_id: &str,
         _messages: &[Value],
-        _tool_view: &crate::tools::ToolView,
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
         _on_token: crate::provider::StreamingTokenCallback,
     ) -> CliResult<ProviderTurn> {
         panic!("request_turn_streaming should not be called in compact_session tests")
@@ -784,10 +726,9 @@ impl ConversationRuntime for CompactSessionBuildMessagesRuntime {
 
     async fn persist_turn(
         &self,
-        _session_id: &str,
         _role: &str,
         _content: &str,
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
     ) -> CliResult<()> {
         Ok(())
     }
@@ -795,9 +736,8 @@ impl ConversationRuntime for CompactSessionBuildMessagesRuntime {
     async fn compact_context(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
         _messages: &[Value],
-        _app_ctx: &AppContext,
+        _ctx: &Context<'_>,
     ) -> CliResult<()> {
         Ok(())
     }
@@ -813,10 +753,8 @@ impl ConversationRuntime for ObserverStreamingRuntime {
     async fn build_messages(
         &self,
         _config: &LoongConfig,
-        _app_ctx: &crate::AppContext,
+        _ctx: &crate::Context<'_>,
         _include_system_prompt: bool,
-        _tool_view: &crate::tools::ToolView,
-        _binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Vec<Value>> {
         Ok(vec![json!({
             "role": "system",
@@ -828,7 +766,7 @@ impl ConversationRuntime for ObserverStreamingRuntime {
         &self,
         _config: &LoongConfig,
         _messages: &[Value],
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
     ) -> CliResult<String> {
         Ok("completion".to_owned())
     }
@@ -836,11 +774,9 @@ impl ConversationRuntime for ObserverStreamingRuntime {
     async fn request_turn(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
         _turn_id: &str,
         _messages: &[Value],
-        _tool_view: &crate::tools::ToolView,
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
     ) -> CliResult<ProviderTurn> {
         panic!("request_turn should not be called when observer streaming is enabled")
     }
@@ -848,11 +784,9 @@ impl ConversationRuntime for ObserverStreamingRuntime {
     async fn request_turn_streaming(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
         _turn_id: &str,
         _messages: &[Value],
-        _tool_view: &crate::tools::ToolView,
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
         on_token: crate::provider::StreamingTokenCallback,
     ) -> CliResult<ProviderTurn> {
         let mut streaming_calls = self
@@ -876,10 +810,9 @@ impl ConversationRuntime for ObserverStreamingRuntime {
 
     async fn persist_turn(
         &self,
-        _session_id: &str,
         _role: &str,
         _content: &str,
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
     ) -> CliResult<()> {
         Ok(())
     }
@@ -896,10 +829,8 @@ impl ConversationRuntime for ObserverFallbackRuntime {
     async fn build_messages(
         &self,
         _config: &LoongConfig,
-        _app_ctx: &crate::AppContext,
+        _ctx: &crate::Context<'_>,
         _include_system_prompt: bool,
-        _tool_view: &crate::tools::ToolView,
-        _binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Vec<Value>> {
         Ok(vec![json!({
             "role": "system",
@@ -911,7 +842,7 @@ impl ConversationRuntime for ObserverFallbackRuntime {
         &self,
         _config: &LoongConfig,
         _messages: &[Value],
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
     ) -> CliResult<String> {
         Ok("completion".to_owned())
     }
@@ -919,11 +850,9 @@ impl ConversationRuntime for ObserverFallbackRuntime {
     async fn request_turn(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
         _turn_id: &str,
         _messages: &[Value],
-        _tool_view: &crate::tools::ToolView,
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
     ) -> CliResult<ProviderTurn> {
         let mut request_turn_calls = self
             .request_turn_calls
@@ -941,11 +870,9 @@ impl ConversationRuntime for ObserverFallbackRuntime {
     async fn request_turn_streaming(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
         _turn_id: &str,
         _messages: &[Value],
-        _tool_view: &crate::tools::ToolView,
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
         _on_token: crate::provider::StreamingTokenCallback,
     ) -> CliResult<ProviderTurn> {
         let mut request_turn_streaming_calls = self
@@ -958,10 +885,9 @@ impl ConversationRuntime for ObserverFallbackRuntime {
 
     async fn persist_turn(
         &self,
-        _session_id: &str,
         _role: &str,
         _content: &str,
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
     ) -> CliResult<()> {
         Ok(())
     }

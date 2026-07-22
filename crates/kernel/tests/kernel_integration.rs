@@ -800,7 +800,6 @@ fn record_audit_event_supports_provider_failover_summary() {
         .record_audit_event(
             Some("agent-provider"),
             AuditEventKind::ProviderFailover {
-                pack_id: "pack-provider".to_owned(),
                 provider_id: "openai".to_owned(),
                 reason: "rate_limited".to_owned(),
                 stage: "status_failure".to_owned(),
@@ -828,7 +827,6 @@ fn record_audit_event_supports_provider_failover_summary() {
     assert!(matches!(
         &events[0].kind,
         AuditEventKind::ProviderFailover {
-            pack_id,
             provider_id,
             reason,
             stage,
@@ -844,8 +842,7 @@ fn record_audit_event_supports_provider_failover_summary() {
             auto_model_mode,
             candidate_index,
             candidate_count,
-        } if pack_id == "pack-provider"
-            && provider_id == "openai"
+        } if provider_id == "openai"
             && reason == "rate_limited"
             && stage == "status_failure"
             && model == "gpt-5"

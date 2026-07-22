@@ -1,4 +1,4 @@
-use crate::AppContext;
+use crate::Context;
 #[cfg(feature = "memory-sqlite")]
 use crate::conversation::{load_fast_lane_tool_batch_event_summary, load_safe_lane_event_summary};
 
@@ -18,20 +18,23 @@ pub(super) async fn print_turn_checkpoint_startup_health(runtime: &CliTurnRuntim
     let limit = runtime.config.memory.sliding_window;
 
     #[cfg(feature = "memory-sqlite")]
+    let context = match runtime.context() {
+        Ok(context) => context,
+        Err(error) => {
+            tracing::error!(%error, "cannot build checkpoint health Context");
+            return;
+        }
+    };
+
+    #[cfg(feature = "memory-sqlite")]
     match runtime
         .turn_coordinator
-        .load_production_turn_checkpoint_diagnostics_with_limit(
-            &runtime.config,
-            &runtime.app_context,
-            &runtime.session_id,
-            limit,
-            runtime.conversation_binding(),
-        )
+        .load_production_turn_checkpoint_diagnostics_with_limit(&runtime.config, &context, limit)
         .await
     {
         Ok(diagnostics) => {
             if let Some(rendered_lines) = render_turn_checkpoint_startup_health_lines_with_width(
-                &runtime.session_id,
+                context.session().session_id(),
                 &diagnostics,
                 render_width,
             ) {
@@ -40,7 +43,7 @@ pub(super) async fn print_turn_checkpoint_startup_health(runtime: &CliTurnRuntim
         }
         Err(error) => {
             let rendered_lines = render_turn_checkpoint_health_error_lines_with_width(
-                &runtime.session_id,
+                context.session().session_id(),
                 &error,
                 render_width,
             );
@@ -63,20 +66,23 @@ pub(super) async fn print_cli_chat_status(
 }
 
 #[allow(clippy::print_stdout)] // CLI output
-pub(super) async fn print_fast_lane_summary(
-    session_id: &str,
+pub(super) async fn print_fast_lane_summary<
+    R: crate::conversation::ConversationRuntime + ?Sized,
+>(
     limit: usize,
-    binding: ConversationRuntimeBinding<'_>,
-    #[cfg(feature = "memory-sqlite")] memory_config: &SessionStoreConfig,
+    context: &Context<'_>,
+    runtime: &R,
 ) -> CliResult<()> {
     #[cfg(feature = "memory-sqlite")]
     {
-        let summary =
-            load_fast_lane_tool_batch_event_summary(session_id, limit, binding, memory_config)
-                .await?;
+        let summary = load_fast_lane_tool_batch_event_summary(limit, context, runtime).await?;
         let render_width = detect_cli_chat_render_width();
-        let rendered_lines =
-            render_fast_lane_summary_lines_with_width(session_id, limit, &summary, render_width);
+        let rendered_lines = render_fast_lane_summary_lines_with_width(
+            context.session().session_id(),
+            limit,
+            &summary,
+            render_width,
+        );
 
         print_rendered_cli_chat_lines(&rendered_lines);
         Ok(())
@@ -84,7 +90,7 @@ pub(super) async fn print_fast_lane_summary(
 
     #[cfg(not(feature = "memory-sqlite"))]
     {
-        let _ = (session_id, limit, binding);
+        let _ = (limit, context, runtime);
         let render_width = detect_cli_chat_render_width();
         let rendered_lines = render_cli_chat_feature_unavailable_lines_with_width(
             "fast-lane",
@@ -98,20 +104,20 @@ pub(super) async fn print_fast_lane_summary(
 }
 
 #[allow(clippy::print_stdout)] // CLI output
-pub(super) async fn print_safe_lane_summary(
-    session_id: &str,
+pub(super) async fn print_safe_lane_summary<
+    R: crate::conversation::ConversationRuntime + ?Sized,
+>(
     limit: usize,
     conversation_config: &ConversationConfig,
-    binding: ConversationRuntimeBinding<'_>,
-    #[cfg(feature = "memory-sqlite")] memory_config: &SessionStoreConfig,
+    context: &Context<'_>,
+    runtime: &R,
 ) -> CliResult<()> {
     #[cfg(feature = "memory-sqlite")]
     {
-        let summary =
-            load_safe_lane_event_summary(session_id, limit, binding, memory_config).await?;
+        let summary = load_safe_lane_event_summary(limit, context, runtime).await?;
         let render_width = detect_cli_chat_render_width();
         let rendered_lines = render_safe_lane_summary_lines_with_width(
-            session_id,
+            context.session().session_id(),
             limit,
             conversation_config,
             &summary,
@@ -124,7 +130,7 @@ pub(super) async fn print_safe_lane_summary(
 
     #[cfg(not(feature = "memory-sqlite"))]
     {
-        let _ = (session_id, limit, conversation_config, binding);
+        let _ = (limit, conversation_config, context, runtime);
         let render_width = detect_cli_chat_render_width();
         let rendered_lines = render_cli_chat_feature_unavailable_lines_with_width(
             "safe-lane",
@@ -141,22 +147,17 @@ pub(super) async fn print_safe_lane_summary(
 pub(super) async fn print_turn_checkpoint_summary(
     turn_coordinator: &ConversationTurnCoordinator,
     config: &LoongConfig,
-    app_ctx: &AppContext,
-    session_id: &str,
+    context: &Context<'_>,
     limit: usize,
-    binding: ConversationRuntimeBinding<'_>,
-    #[cfg(feature = "memory-sqlite")] _memory_config: &SessionStoreConfig,
 ) -> CliResult<()> {
     #[cfg(feature = "memory-sqlite")]
     {
         let diagnostics = turn_coordinator
-            .load_production_turn_checkpoint_diagnostics_with_limit(
-                config, app_ctx, session_id, limit, binding,
-            )
+            .load_production_turn_checkpoint_diagnostics_with_limit(config, context, limit)
             .await?;
         let render_width = detect_cli_chat_render_width();
         let rendered_lines = render_turn_checkpoint_summary_lines_with_width(
-            session_id,
+            context.session().session_id(),
             limit,
             &diagnostics,
             render_width,
@@ -168,14 +169,7 @@ pub(super) async fn print_turn_checkpoint_summary(
 
     #[cfg(not(feature = "memory-sqlite"))]
     {
-        let _ = (
-            turn_coordinator,
-            config,
-            app_ctx,
-            session_id,
-            limit,
-            binding,
-        );
+        let _ = (turn_coordinator, config, context, limit);
         let render_width = detect_cli_chat_render_width();
         let rendered_lines = render_cli_chat_feature_unavailable_lines_with_width(
             "checkpoint",
@@ -192,18 +186,19 @@ pub(super) async fn print_turn_checkpoint_summary(
 pub(super) async fn print_turn_checkpoint_repair(
     turn_coordinator: &ConversationTurnCoordinator,
     config: &LoongConfig,
-    app_ctx: &AppContext,
-    session_id: &str,
-    binding: ConversationRuntimeBinding<'_>,
+    context: &Context<'_>,
 ) -> CliResult<()> {
     #[cfg(feature = "memory-sqlite")]
     {
         let outcome = turn_coordinator
-            .repair_production_turn_checkpoint_tail(config, app_ctx, session_id, binding)
+            .repair_production_turn_checkpoint_tail(config, context)
             .await?;
         let render_width = detect_cli_chat_render_width();
-        let rendered_lines =
-            render_turn_checkpoint_repair_lines_with_width(session_id, &outcome, render_width);
+        let rendered_lines = render_turn_checkpoint_repair_lines_with_width(
+            context.session().session_id(),
+            &outcome,
+            render_width,
+        );
 
         print_rendered_cli_chat_lines(&rendered_lines);
         Ok(())
@@ -211,7 +206,7 @@ pub(super) async fn print_turn_checkpoint_repair(
 
     #[cfg(not(feature = "memory-sqlite"))]
     {
-        let _ = (turn_coordinator, config, app_ctx, session_id, binding);
+        let _ = (turn_coordinator, config, context);
         let render_width = detect_cli_chat_render_width();
         let rendered_lines = render_cli_chat_feature_unavailable_lines_with_width(
             "repair",
@@ -235,20 +230,23 @@ async fn print_turn_checkpoint_status_health(runtime: &CliTurnRuntime) {
     let limit = runtime.config.memory.sliding_window;
 
     #[cfg(feature = "memory-sqlite")]
+    let context = match runtime.context() {
+        Ok(context) => context,
+        Err(error) => {
+            tracing::error!(%error, "cannot build checkpoint status Context");
+            return;
+        }
+    };
+
+    #[cfg(feature = "memory-sqlite")]
     match runtime
         .turn_coordinator
-        .load_production_turn_checkpoint_diagnostics_with_limit(
-            &runtime.config,
-            &runtime.app_context,
-            &runtime.session_id,
-            limit,
-            runtime.conversation_binding(),
-        )
+        .load_production_turn_checkpoint_diagnostics_with_limit(&runtime.config, &context, limit)
         .await
     {
         Ok(diagnostics) => {
             let rendered_lines = render_turn_checkpoint_status_health_lines_with_width(
-                &runtime.session_id,
+                context.session().session_id(),
                 &diagnostics,
                 render_width,
             );
@@ -257,7 +255,7 @@ async fn print_turn_checkpoint_status_health(runtime: &CliTurnRuntime) {
         }
         Err(error) => {
             let rendered_lines = render_turn_checkpoint_health_error_lines_with_width(
-                &runtime.session_id,
+                context.session().session_id(),
                 &error,
                 render_width,
             );

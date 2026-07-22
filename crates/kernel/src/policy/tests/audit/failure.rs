@@ -133,10 +133,8 @@ async fn sink_failure_returns_concrete_source_without_releasing_a_grant() {
         .await
         .expect_err("failed terminal evidence must prevent grant release");
 
-    let FsAccessError::Authorization(AuthorizationError::PolicyGrant(PolicyGrantError::Audit {
-        source,
-        ..
-    })) = error
+    let FsReadError::Path(FsPathError::Authorization(PolicyGrantError::Audit { source, .. })) =
+        error
     else {
         panic!("expected typed audit failure");
     };

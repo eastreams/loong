@@ -40,12 +40,10 @@ impl ContextCompactionReport {
 pub(super) async fn maybe_compact_context<R: ConversationRuntime + ?Sized>(
     config: &LoongConfig,
     runtime: &R,
-    app_ctx: &AppContext,
-    session_id: &str,
+    ctx: &Context<'_>,
     messages: &[Value],
     estimated_tokens: Option<usize>,
     live_runtime_self_continuity: Option<&runtime_self_continuity::RuntimeSelfContinuity>,
-    binding: ConversationRuntimeBinding<'_>,
     force: bool,
 ) -> CliResult<ContextCompactionOutcome> {
     let estimated_tokens = estimated_tokens.or_else(|| estimate_tokens(messages));
@@ -59,7 +57,11 @@ pub(super) async fn maybe_compact_context<R: ConversationRuntime + ?Sized>(
     if !should_attempt_compaction {
         return Ok(ContextCompactionOutcome::Skipped);
     }
-    if !binding.allows_mutation() {
+    if !matches!(
+        ctx.session().session_mode,
+        GovernedSessionMode::MutatingCapable
+    ) || !ctx.allowed_capabilities().contains(Capability::MemoryWrite)
+    {
         return Ok(ContextCompactionOutcome::Skipped);
     }
 
@@ -67,7 +69,7 @@ pub(super) async fn maybe_compact_context<R: ConversationRuntime + ?Sized>(
     {
         if let Err(error) = persist_runtime_self_continuity_for_compaction(
             config,
-            session_id,
+            ctx,
             live_runtime_self_continuity,
         ) {
             if config.conversation.compaction_fail_open() {
@@ -79,18 +81,7 @@ pub(super) async fn maybe_compact_context<R: ConversationRuntime + ?Sized>(
             ));
         }
 
-        let workspace_root = config
-            .tools
-            .file_root
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|_| config.tools.resolved_file_root());
-
-        let memory_config = store::session_store_config_from_memory_config(&config.memory);
-        let compact_stage_result =
-            store::run_session_compact_stage(session_id, workspace_root.as_deref(), &memory_config)
-                .await;
+        let compact_stage_result = ctx.access().memory().compact().await;
         match compact_stage_result {
             Ok(diagnostics)
                 if matches!(diagnostics.outcome, crate::memory::StageOutcome::Fallback) =>
@@ -119,10 +110,7 @@ pub(super) async fn maybe_compact_context<R: ConversationRuntime + ?Sized>(
         }
     }
 
-    match runtime
-        .compact_context(config, session_id, messages, app_ctx)
-        .await
-    {
+    match runtime.compact_context(config, messages, ctx).await {
         Ok(()) => Ok(ContextCompactionOutcome::Completed),
         Err(_error) if config.conversation.compaction_fail_open() => {
             Ok(ContextCompactionOutcome::FailedOpen)
@@ -134,9 +122,10 @@ pub(super) async fn maybe_compact_context<R: ConversationRuntime + ?Sized>(
 #[cfg(feature = "memory-sqlite")]
 pub(super) fn persist_runtime_self_continuity_for_compaction(
     config: &LoongConfig,
-    session_id: &str,
+    ctx: &Context<'_>,
     live_continuity: Option<&runtime_self_continuity::RuntimeSelfContinuity>,
 ) -> Result<(), String> {
+    let session_id = ctx.session().session_id();
     let memory_config = store::session_store_config_from_memory_config(&config.memory);
     let repo = SessionRepository::new(&memory_config)?;
 
@@ -227,11 +216,11 @@ pub(super) fn ensure_session_exists_for_runtime_self_continuity(
 #[cfg(feature = "memory-sqlite")]
 pub(super) fn effective_runtime_self_continuity_for_session(
     config: &LoongConfig,
-    session_context: &AppContext,
+    session_context: &Context<'_>,
 ) -> Option<runtime_self_continuity::RuntimeSelfContinuity> {
     let live_continuity =
         runtime_self_continuity::resolve_runtime_self_continuity_for_config(config);
-    let stored_continuity = session_context.runtime_self_continuity.as_ref();
+    let stored_continuity = session_context.session().runtime_self_continuity.as_ref();
     runtime_self_continuity::merge_runtime_self_continuity(live_continuity, stored_continuity)
 }
 

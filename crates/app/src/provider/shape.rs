@@ -1,7 +1,9 @@
 use serde_json::{Value, json};
 
-use crate::conversation::turn_engine::{ProviderTurn, ToolIntent};
+use crate::conversation::turn_engine::{ProviderTurn, ToolIntent, ToolIntentTarget};
 use crate::tools;
+
+use super::native_tool_surface::ProviderToolRequestSurface;
 
 mod inline_function;
 mod invoke_block;
@@ -17,27 +19,34 @@ use invoke_block::{
 };
 
 pub fn extract_provider_turn(body: &Value) -> Option<ProviderTurn> {
-    extract_provider_turn_with_scope(body, None, None)
+    extract_provider_turn_with_scope(body, None)
 }
 
 pub fn extract_provider_turn_with_scope(
     body: &Value,
-    session_id: Option<&str>,
     turn_id: Option<&str>,
 ) -> Option<ProviderTurn> {
-    extract_provider_turn_with_scope_and_messages(body, session_id, turn_id, &[])
+    extract_provider_turn_with_schema(body, turn_id, None)
 }
 
-pub fn extract_provider_turn_with_scope_and_messages(
+pub(super) fn extract_provider_turn_for_request(
     body: &Value,
-    session_id: Option<&str>,
     turn_id: Option<&str>,
-    messages: &[Value],
+    tool_surface: &ProviderToolRequestSurface,
 ) -> Option<ProviderTurn> {
-    let bridge_context = provider_tool_bridge_context_from_messages(messages);
+    extract_provider_turn_with_schema(body, turn_id, Some(tool_surface))
+}
 
-    if let Some(turn) = extract_responses_provider_turn(body, session_id, turn_id, &bridge_context)
-    {
+fn extract_provider_turn_with_schema(
+    body: &Value,
+    turn_id: Option<&str>,
+    tool_surface: Option<&ProviderToolRequestSurface>,
+) -> Option<ProviderTurn> {
+    // Response coercion must use the exact tool surface sent with this request;
+    // consulting the catalog here could parse a disabled or stale tool schema.
+    let schema = ProviderToolSchemaView { tool_surface };
+
+    if let Some(turn) = extract_responses_provider_turn(body, turn_id, &schema) {
         return Some(turn);
     }
 
@@ -49,16 +58,14 @@ pub fn extract_provider_turn_with_scope_and_messages(
         {
             raw_meta_object.insert("usage".to_owned(), usage.clone());
         }
-        let mut tool_intents =
-            extract_openai_tool_intents(message, session_id, turn_id, &bridge_context);
+        let mut tool_intents = extract_openai_tool_intents(message, turn_id, &schema);
 
         if tool_intents.is_empty() {
             let extraction = extract_openai_text_tool_turn(
                 assistant_text.as_str(),
                 &mut raw_meta,
-                session_id,
                 turn_id,
-                &bridge_context,
+                &schema,
             );
             assistant_text = extraction.assistant_text;
             tool_intents = extraction.tool_intents;
@@ -74,20 +81,14 @@ pub fn extract_provider_turn_with_scope_and_messages(
     if let Some(message) = bedrock_message(body) {
         return Some(ProviderTurn {
             assistant_text: message_content(message).unwrap_or_default(),
-            tool_intents: extract_bedrock_tool_intents(
-                message,
-                session_id,
-                turn_id,
-                &bridge_context,
-            ),
+            tool_intents: extract_bedrock_tool_intents(message, turn_id, &schema),
             raw_meta: normalize_bedrock_message(message),
         });
     }
 
     if let Some(message) = google_message(body) {
         let assistant_text = google_message_content(message).unwrap_or_default();
-        let tool_intents =
-            extract_google_tool_intents(message, session_id, turn_id, &bridge_context);
+        let tool_intents = extract_google_tool_intents(message, turn_id, &schema);
         if assistant_text.is_empty() && tool_intents.is_empty() {
             return None;
         }
@@ -100,7 +101,7 @@ pub fn extract_provider_turn_with_scope_and_messages(
     }
 
     let assistant_text = extract_body_content_text(body).unwrap_or_default();
-    let tool_intents = extract_anthropic_tool_intents(body, session_id, turn_id, &bridge_context);
+    let tool_intents = extract_anthropic_tool_intents(body, turn_id, &schema);
     if assistant_text.is_empty() && tool_intents.is_empty() {
         return None;
     }
@@ -112,25 +113,64 @@ pub fn extract_provider_turn_with_scope_and_messages(
     })
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct ProviderToolBridgeContext;
+#[derive(Debug, Clone, Copy)]
+struct ProviderToolSchemaView<'a> {
+    tool_surface: Option<&'a ProviderToolRequestSurface>,
+}
+
+impl ProviderToolSchemaView<'_> {
+    fn contains(&self, provider_name: &str) -> bool {
+        let Some(tool_surface) = self.tool_surface else {
+            // Public parsing APIs recover syntax only. Request execution uses
+            // `Some(exact_definitions)` and applies the strict surface gate.
+            return true;
+        };
+        tool_surface.definitions().iter().any(|definition| {
+            definition
+                .get("function")
+                .and_then(|function| function.get("name"))
+                .and_then(Value::as_str)
+                == Some(provider_name)
+        })
+    }
+
+    fn resolve_target(&self, provider_name: &str) -> Option<ToolIntentTarget> {
+        match self.tool_surface {
+            Some(surface) => surface.resolve(provider_name),
+            None => Some(ToolIntentTarget::from(provider_name)),
+        }
+    }
+
+    fn parameter_schema_type(&self, tool_name: &str, parameter_name: &str) -> Option<&str> {
+        self.tool_surface?
+            .definitions()
+            .iter()
+            .find_map(|definition| {
+                let function = definition.get("function")?;
+                let definition_name = function.get("name")?.as_str()?;
+                if tools::canonical_tool_name(definition_name) != tool_name {
+                    return None;
+                }
+                function
+                    .get("parameters")?
+                    .get("properties")?
+                    .get(parameter_name)?
+                    .get("type")?
+                    .as_str()
+            })
+    }
+}
 
 struct OpenAiTextToolTurnExtraction {
     assistant_text: String,
     tool_intents: Vec<ToolIntent>,
 }
 
-fn provider_tool_bridge_context_from_messages(messages: &[Value]) -> ProviderToolBridgeContext {
-    let _ = messages;
-    ProviderToolBridgeContext
-}
-
 fn extract_openai_text_tool_turn(
     assistant_text: &str,
     raw_meta: &mut Value,
-    session_id: Option<&str>,
     turn_id: Option<&str>,
-    bridge_context: &ProviderToolBridgeContext,
+    schema: &ProviderToolSchemaView,
 ) -> OpenAiTextToolTurnExtraction {
     let mut cleaned_text = assistant_text.to_owned();
     let mut tool_intents = Vec::new();
@@ -138,17 +178,15 @@ fn extract_openai_text_tool_turn(
     if let Some((parsed_text, parsed_tool_intents)) = json_tool_call::extract_json_tool_call_turn(
         cleaned_text.as_str(),
         raw_meta,
-        session_id,
         turn_id,
-        bridge_context,
+        schema,
     ) {
         cleaned_text = parsed_text;
         tool_intents = parsed_tool_intents;
     }
 
     if tool_intents.is_empty() {
-        match extract_invoke_block_turn(cleaned_text.as_str(), session_id, turn_id, bridge_context)
-        {
+        match extract_invoke_block_turn(cleaned_text.as_str(), turn_id, schema) {
             InvokeBlockParseResult::Parsed {
                 cleaned_text: parsed_text,
                 tool_intents: parsed_tool_intents,
@@ -166,12 +204,7 @@ fn extract_openai_text_tool_turn(
     }
 
     if tool_intents.is_empty() {
-        match extract_inline_function_call_turn(
-            cleaned_text.as_str(),
-            session_id,
-            turn_id,
-            bridge_context,
-        ) {
+        match extract_inline_function_call_turn(cleaned_text.as_str(), turn_id, schema) {
             InlineFunctionParseResult::Parsed {
                 cleaned_text: parsed_text,
                 tool_intents: parsed_tool_intents,
@@ -265,24 +298,30 @@ fn build_provider_tool_intent(
     raw_tool_name: &str,
     args_json: Value,
     source: &str,
-    session_id: Option<&str>,
     turn_id: Option<&str>,
     tool_call_id: String,
-    _bridge_context: &ProviderToolBridgeContext,
+    schema: &ProviderToolSchemaView,
 ) -> Option<ToolIntent> {
-    let canonical_tool_name = tools::canonical_tool_name(raw_tool_name).to_owned();
-    let direct_tool_name =
-        tools::direct_tool_name_for_hidden_tool(canonical_tool_name.as_str()).map(str::to_owned);
-    let tool_name = direct_tool_name.unwrap_or(canonical_tool_name);
-    let provider_visible = tools::is_provider_exposed_tool_name(tool_name.as_str());
-    if !provider_visible {
+    // The exact schema sent with this request is the provider ingress
+    // authority. Migrated registrations need no duplicate legacy catalog row,
+    // and stale or disabled names cannot be revived during response parsing.
+    if !schema.contains(raw_tool_name) {
         return None;
     }
+    let tool_name = match schema.resolve_target(raw_tool_name)? {
+        registered @ ToolIntentTarget::Registered { .. } => registered,
+        ToolIntentTarget::Unresolved { name } => {
+            let canonical_tool_name = tools::canonical_tool_name(name.as_str()).to_owned();
+            tools::direct_tool_name_for_hidden_tool(canonical_tool_name.as_str())
+                .map(str::to_owned)
+                .unwrap_or(canonical_tool_name)
+                .into()
+        }
+    };
     Some(ToolIntent {
         tool_name,
         args_json,
         source: source.to_owned(),
-        session_id: session_id.unwrap_or_default().to_owned(),
         turn_id: turn_id.unwrap_or_default().to_owned(),
         tool_call_id,
     })
@@ -290,9 +329,8 @@ fn build_provider_tool_intent(
 
 fn extract_openai_tool_intents(
     message: &Value,
-    session_id: Option<&str>,
     turn_id: Option<&str>,
-    bridge_context: &ProviderToolBridgeContext,
+    schema: &ProviderToolSchemaView,
 ) -> Vec<ToolIntent> {
     message
         .get("tool_calls")
@@ -323,10 +361,9 @@ fn extract_openai_tool_intents(
                         raw_tool_name,
                         args_json,
                         "provider_tool_call",
-                        session_id,
                         turn_id,
                         tool_call_id,
-                        bridge_context,
+                        schema,
                     )
                 })
                 .collect()
@@ -336,9 +373,8 @@ fn extract_openai_tool_intents(
 
 fn extract_anthropic_tool_intents(
     body: &Value,
-    session_id: Option<&str>,
     turn_id: Option<&str>,
-    bridge_context: &ProviderToolBridgeContext,
+    schema: &ProviderToolSchemaView,
 ) -> Vec<ToolIntent> {
     body.get("content")
         .and_then(Value::as_array)
@@ -354,14 +390,13 @@ fn extract_anthropic_tool_intents(
                         raw_tool_name,
                         block.get("input").cloned().unwrap_or_else(|| json!({})),
                         "provider_tool_call",
-                        session_id,
                         turn_id,
                         block
                             .get("id")
                             .and_then(Value::as_str)
                             .unwrap_or("")
                             .to_owned(),
-                        bridge_context,
+                        schema,
                     )
                 })
                 .collect()
@@ -371,9 +406,8 @@ fn extract_anthropic_tool_intents(
 
 fn extract_bedrock_tool_intents(
     message: &Value,
-    session_id: Option<&str>,
     turn_id: Option<&str>,
-    bridge_context: &ProviderToolBridgeContext,
+    schema: &ProviderToolSchemaView,
 ) -> Vec<ToolIntent> {
     message
         .get("content")
@@ -388,14 +422,13 @@ fn extract_bedrock_tool_intents(
                         raw_tool_name,
                         tool_use.get("input").cloned().unwrap_or_else(|| json!({})),
                         "provider_tool_call",
-                        session_id,
                         turn_id,
                         tool_use
                             .get("toolUseId")
                             .and_then(Value::as_str)
                             .unwrap_or("")
                             .to_owned(),
-                        bridge_context,
+                        schema,
                     )
                 })
                 .collect()
@@ -405,9 +438,8 @@ fn extract_bedrock_tool_intents(
 
 fn extract_google_tool_intents(
     message: &Value,
-    session_id: Option<&str>,
     turn_id: Option<&str>,
-    bridge_context: &ProviderToolBridgeContext,
+    schema: &ProviderToolSchemaView,
 ) -> Vec<ToolIntent> {
     message
         .get("parts")
@@ -428,10 +460,9 @@ fn extract_google_tool_intents(
                         raw_tool_name,
                         args_json,
                         "provider_tool_call",
-                        session_id,
                         turn_id,
                         tool_call_id,
-                        bridge_context,
+                        schema,
                     )
                 })
                 .collect()
@@ -485,28 +516,20 @@ fn normalize_bedrock_content_block(block: &Value) -> Option<Value> {
 
 fn extract_responses_provider_turn(
     body: &Value,
-    session_id: Option<&str>,
     turn_id: Option<&str>,
-    bridge_context: &ProviderToolBridgeContext,
+    schema: &ProviderToolSchemaView,
 ) -> Option<ProviderTurn> {
     let output = response_output_items(body)?;
     let mut assistant_text = extract_responses_message_content(body).unwrap_or_default();
     let mut raw_meta = body.clone();
     let mut tool_intents = output
         .iter()
-        .filter_map(|item| {
-            response_tool_intent_from_item(item, session_id, turn_id, bridge_context)
-        })
+        .filter_map(|item| response_tool_intent_from_item(item, turn_id, schema))
         .collect::<Vec<_>>();
 
     if tool_intents.is_empty() && !assistant_text.is_empty() {
-        let extraction = extract_openai_text_tool_turn(
-            assistant_text.as_str(),
-            &mut raw_meta,
-            session_id,
-            turn_id,
-            bridge_context,
-        );
+        let extraction =
+            extract_openai_text_tool_turn(assistant_text.as_str(), &mut raw_meta, turn_id, schema);
         assistant_text = extraction.assistant_text;
         tool_intents = extraction.tool_intents;
     }
@@ -555,9 +578,8 @@ fn response_output_items(body: &Value) -> Option<&[Value]> {
 
 fn response_tool_intent_from_item(
     item: &Value,
-    session_id: Option<&str>,
     turn_id: Option<&str>,
-    bridge_context: &ProviderToolBridgeContext,
+    schema: &ProviderToolSchemaView,
 ) -> Option<ToolIntent> {
     let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
     if item_type != "function_call" && item_type != "tool_call" {
@@ -596,10 +618,9 @@ fn response_tool_intent_from_item(
         raw_tool_name,
         args_json,
         "provider_tool_call",
-        session_id,
         turn_id,
         tool_call_id,
-        bridge_context,
+        schema,
     )
 }
 

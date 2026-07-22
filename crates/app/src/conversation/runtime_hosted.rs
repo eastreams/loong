@@ -3,22 +3,17 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::{AppContext, CliResult};
+use crate::{CliResult, Context};
 
-use super::super::runtime_binding::ConversationRuntimeBinding;
 use super::{
     AssembledConversationContext, AsyncDelegateSpawner, BoxedDefaultConversationRuntime,
     ContextEngineBootstrapResult, ContextEngineIngestResult, ConversationRuntime, LoongConfig,
-    ProviderTurn, ToolView, load_default_conversation_runtime,
+    ProviderTurn, load_default_conversation_runtime,
 };
-#[cfg(feature = "memory-sqlite")]
-use crate::session::store;
-
 #[cfg(feature = "memory-sqlite")]
 #[derive(Clone)]
 pub struct HostedConversationRuntime<R> {
     inner: R,
-    memory_config: store::SessionStoreConfig,
     async_delegate_spawner_override: Option<Arc<dyn AsyncDelegateSpawner>>,
     background_task_spawner_override: Option<Arc<dyn AsyncDelegateSpawner>>,
 }
@@ -26,14 +21,8 @@ pub struct HostedConversationRuntime<R> {
 #[cfg(feature = "memory-sqlite")]
 impl<R> HostedConversationRuntime<R> {
     pub fn new(inner: R) -> Self {
-        let memory_config = store::current_session_store_config().clone();
-        Self::new_with_memory_config(inner, memory_config)
-    }
-
-    pub fn new_with_memory_config(inner: R, memory_config: store::SessionStoreConfig) -> Self {
         Self {
             inner,
-            memory_config,
             async_delegate_spawner_override: None,
             background_task_spawner_override: None,
         }
@@ -63,10 +52,7 @@ pub fn load_hosted_default_conversation_runtime(
     config: &LoongConfig,
 ) -> CliResult<HostedConversationRuntime<BoxedDefaultConversationRuntime>> {
     let inner_runtime = load_default_conversation_runtime(config)?;
-    let memory_config =
-        store::session_store_config_from_memory_config_without_env_overrides(&config.memory);
-    let runtime = HostedConversationRuntime::new_with_memory_config(inner_runtime, memory_config);
-    Ok(runtime)
+    Ok(HostedConversationRuntime::new(inner_runtime))
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -75,26 +61,6 @@ impl<R> ConversationRuntime for HostedConversationRuntime<R>
 where
     R: ConversationRuntime,
 {
-    fn session_context(
-        &self,
-        config: &LoongConfig,
-        app_ctx: &AppContext,
-        session_id: &str,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<AppContext> {
-        self.inner
-            .session_context(config, app_ctx, session_id, binding)
-    }
-
-    fn tool_view(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<ToolView> {
-        self.inner.tool_view(config, session_id, binding)
-    }
-
     fn async_delegate_spawner(
         &self,
         config: &LoongConfig,
@@ -120,152 +86,124 @@ where
     async fn bootstrap(
         &self,
         config: &LoongConfig,
-        session_id: &str,
-        app_ctx: &AppContext,
+        ctx: &Context<'_>,
     ) -> CliResult<ContextEngineBootstrapResult> {
-        self.inner.bootstrap(config, session_id, app_ctx).await
+        self.inner.bootstrap(config, ctx).await
     }
 
     async fn ingest(
         &self,
-        session_id: &str,
         message: &Value,
-        app_ctx: &AppContext,
+        ctx: &Context<'_>,
     ) -> CliResult<ContextEngineIngestResult> {
-        self.inner.ingest(session_id, message, app_ctx).await
+        self.inner.ingest(message, ctx).await
     }
 
     async fn build_context(
         &self,
         config: &LoongConfig,
-        ctx: &AppContext,
+        ctx: &Context<'_>,
         include_system_prompt: bool,
-        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<AssembledConversationContext> {
         self.inner
-            .build_context(config, ctx, include_system_prompt, binding)
+            .build_context(config, ctx, include_system_prompt)
             .await
     }
 
     async fn build_messages(
         &self,
         config: &LoongConfig,
-        ctx: &AppContext,
+        ctx: &Context<'_>,
         include_system_prompt: bool,
-        tool_view: &ToolView,
-        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Vec<Value>> {
         self.inner
-            .build_messages(config, ctx, include_system_prompt, tool_view, binding)
+            .build_messages(config, ctx, include_system_prompt)
             .await
+    }
+
+    async fn read_session_window(
+        &self,
+        limit: usize,
+        ctx: &Context<'_>,
+    ) -> Result<Vec<crate::memory::WindowTurn>, crate::conversation::AssistantHistoryLoadError>
+    {
+        self.inner.read_session_window(limit, ctx).await
     }
 
     async fn request_completion(
         &self,
         config: &LoongConfig,
         messages: &[Value],
-        binding: ConversationRuntimeBinding<'_>,
+        ctx: &Context<'_>,
     ) -> CliResult<String> {
-        self.inner
-            .request_completion(config, messages, binding)
-            .await
+        self.inner.request_completion(config, messages, ctx).await
     }
 
     async fn request_turn(
         &self,
         config: &LoongConfig,
-        session_id: &str,
         turn_id: &str,
         messages: &[Value],
-        tool_view: &ToolView,
-        binding: ConversationRuntimeBinding<'_>,
+        ctx: &Context<'_>,
     ) -> CliResult<ProviderTurn> {
         self.inner
-            .request_turn(config, session_id, turn_id, messages, tool_view, binding)
+            .request_turn(config, turn_id, messages, ctx)
             .await
     }
 
     async fn request_turn_streaming(
         &self,
         config: &LoongConfig,
-        session_id: &str,
         turn_id: &str,
         messages: &[Value],
-        tool_view: &ToolView,
-        binding: ConversationRuntimeBinding<'_>,
+        ctx: &Context<'_>,
         on_token: crate::provider::StreamingTokenCallback,
     ) -> CliResult<ProviderTurn> {
         self.inner
-            .request_turn_streaming(
-                config, session_id, turn_id, messages, tool_view, binding, on_token,
-            )
+            .request_turn_streaming(config, turn_id, messages, ctx, on_token)
             .await
     }
 
-    async fn persist_turn(
-        &self,
-        session_id: &str,
-        role: &str,
-        content: &str,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<()> {
-        if binding.context().is_some() {
-            return self
-                .inner
-                .persist_turn(session_id, role, content, binding)
-                .await;
-        }
-
-        store::append_session_turn_direct(session_id, role, content, &self.memory_config)
-            .map_err(|error| format!("persist {role} turn failed: {error}"))?;
-
-        Ok(())
+    async fn persist_turn(&self, role: &str, content: &str, ctx: &Context<'_>) -> CliResult<()> {
+        self.inner.persist_turn(role, content, ctx).await
     }
 
     async fn after_turn(
         &self,
-        session_id: &str,
         user_input: &str,
         assistant_reply: &str,
         messages: &[Value],
-        app_ctx: &AppContext,
+        ctx: &Context<'_>,
     ) -> CliResult<()> {
         self.inner
-            .after_turn(session_id, user_input, assistant_reply, messages, app_ctx)
+            .after_turn(user_input, assistant_reply, messages, ctx)
             .await
     }
 
     async fn compact_context(
         &self,
         config: &LoongConfig,
-        session_id: &str,
         messages: &[Value],
-        app_ctx: &AppContext,
+        ctx: &Context<'_>,
     ) -> CliResult<()> {
-        self.inner
-            .compact_context(config, session_id, messages, app_ctx)
-            .await
+        self.inner.compact_context(config, messages, ctx).await
     }
 
     async fn prepare_subagent_spawn(
         &self,
-        parent_session_id: &str,
         subagent_session_id: &str,
-        app_ctx: &AppContext,
+        ctx: &Context<'_>,
     ) -> CliResult<()> {
         self.inner
-            .prepare_subagent_spawn(parent_session_id, subagent_session_id, app_ctx)
+            .prepare_subagent_spawn(subagent_session_id, ctx)
             .await
     }
 
     async fn on_subagent_ended(
         &self,
-        parent_session_id: &str,
         subagent_session_id: &str,
-        app_ctx: &AppContext,
+        ctx: &Context<'_>,
     ) -> CliResult<()> {
-        self.inner
-            .on_subagent_ended(parent_session_id, subagent_session_id, app_ctx)
-            .await
+        self.inner.on_subagent_ended(subagent_session_id, ctx).await
     }
 }

@@ -1,3 +1,4 @@
+use loong_contracts::ToolPath;
 use loong_contracts::{Capabilities, Capability};
 
 use super::*;
@@ -6,31 +7,56 @@ const TOOL_INVOKE_CAPABILITIES_OVERRIDE_FIELD: &str = "capabilities_override";
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PeekedToolInvokeRequest<'a> {
-    /// Canonical tool name suitable for constructing the runtime plane path.
+    /// Legacy canonical name used only by context-free display/preflight code.
     pub(crate) tool_name: &'a str,
     pub(crate) arguments: &'a Value,
 }
 
+/// Parsed legacy ingress envelope before its target owner is known.
+///
+/// The raw path must reach Runtime lookup unchanged. The typed plane has no
+/// alias layer; only a typed miss may enter legacy catalog canonicalization.
+/// Lease validation waits for the selected owner to supply the canonical
+/// identity and therefore cannot authorize a different tool by reinterpretation.
+#[derive(Debug)]
+pub(crate) struct ParsedToolInvoke<'a> {
+    pub(crate) path: ToolPath,
+    pub(crate) requested_name: &'a str,
+    payload: Value,
+    capabilities_override: Option<Capabilities>,
+    lease: &'a str,
+    envelope: &'a serde_json::Map<String, Value>,
+}
+
 /// Validated contents of the legacy `tool.invoke` ingress envelope.
 ///
-/// Keeping the capability override beside the resolved request prevents
+/// Keeping the capability override beside the resolved invocation prevents
 /// normalization from silently restoring the selected tool's default authority.
-/// `request.tool_name` is canonicalized for runtime lookup, but this resolver
-/// deliberately does not consult legacy execution ownership.
+/// The result is typed-plane data; legacy envelopes are constructed only after
+/// a later owner selection proves the target has not migrated.
 #[derive(Debug, Clone)]
-pub(crate) struct ResolvedToolInvokeRequest {
-    pub(crate) request: ToolCoreRequest,
+pub(crate) struct ResolvedLeasedInvocation {
+    pub(crate) path: ToolPath,
+    pub(crate) payload: Value,
     pub(crate) capabilities_override: Option<Capabilities>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ToolInvokeProviderExposure {
-    /// Legacy public `tool.invoke` is only for leased hidden/discoverable tools;
-    /// provider-exposed surfaces should still be called directly there.
-    RejectProviderExposed,
-    /// Kernel-routed typed tool-to-tool calls may target provider-exposed
-    /// surfaces because `ctx.tool(...).invoke(...)` still performs grant/audit.
-    AllowProviderExposed,
+impl ParsedToolInvoke<'_> {
+    pub(crate) fn resolve(
+        self,
+        canonical_path: ToolPath,
+    ) -> Result<ResolvedLeasedInvocation, String> {
+        tool_lease_authority::validate_tool_lease(
+            canonical_path.to_string().as_str(),
+            self.lease,
+            self.envelope,
+        )?;
+        Ok(ResolvedLeasedInvocation {
+            path: canonical_path,
+            payload: self.payload,
+            capabilities_override: self.capabilities_override,
+        })
+    }
 }
 
 pub(crate) fn merge_trusted_internal_tool_context_into_arguments(
@@ -50,14 +76,15 @@ pub(crate) fn merge_trusted_internal_tool_context_into_arguments(
     Ok(())
 }
 
-pub(crate) fn peek_tool_invoke_request(
-    request: &ToolCoreRequest,
-) -> Option<PeekedToolInvokeRequest<'_>> {
-    if canonical_tool_name(request.tool_name.as_str()) != "tool.invoke" {
+pub(crate) fn peek_tool_invoke_request<'a>(
+    tool_name: &'a str,
+    payload: &'a Value,
+) -> Option<PeekedToolInvokeRequest<'a>> {
+    if canonical_tool_name(tool_name) != "tool.invoke" {
         return None;
     }
 
-    let payload = request.payload.as_object()?;
+    let payload = payload.as_object()?;
     let raw_tool_name = payload
         .get("tool_id")
         .and_then(Value::as_str)
@@ -77,22 +104,30 @@ pub(crate) fn peek_tool_invoke_request(
     })
 }
 
-pub(crate) fn resolve_tool_invoke_request(
-    request: &ToolCoreRequest,
-    provider_exposure: ToolInvokeProviderExposure,
-) -> Result<ResolvedToolInvokeRequest, String> {
-    let Some(peeked_request) = peek_tool_invoke_request(request) else {
+pub(crate) fn parse_tool_invoke_request<'a>(
+    tool_name: &str,
+    payload: &'a Value,
+) -> Result<ParsedToolInvoke<'a>, String> {
+    if canonical_tool_name(tool_name) != "tool.invoke" {
         return Err(format!(
             "tool_invoke_required: expected `tool.invoke`, got `{}`",
-            request.tool_name
+            tool_name
         ));
-    };
+    }
 
-    let payload = request
-        .payload
+    let payload = payload
         .as_object()
         .ok_or_else(|| "tool.invoke payload must be an object".to_owned())?;
-    let canonical_tool_name = peeked_request.tool_name;
+    let raw_tool_name = payload
+        .get("tool_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "tool.invoke requires payload.tool_id".to_owned())?;
+    let raw_tool_name = if raw_tool_name == "agent" {
+        let arguments = payload.get("arguments").unwrap_or(&Value::Null);
+        super::routing::route_hidden_agent_tool_name(arguments).unwrap_or(raw_tool_name)
+    } else {
+        raw_tool_name
+    };
     let lease = payload
         .get("lease")
         .and_then(Value::as_str)
@@ -110,7 +145,6 @@ pub(crate) fn resolve_tool_invoke_request(
         }
     }
 
-    tool_lease_authority::validate_tool_lease(canonical_tool_name, lease, payload)?;
     let capabilities_override = match payload.get(TOOL_INVOKE_CAPABILITIES_OVERRIDE_FIELD) {
         None | Some(Value::Null) => None,
         Some(raw_override) => {
@@ -136,21 +170,25 @@ pub(crate) fn resolve_tool_invoke_request(
         }
     };
 
-    if provider_exposure == ToolInvokeProviderExposure::RejectProviderExposed
-        && is_provider_exposed_tool_name(canonical_tool_name)
-    {
-        return Err(format!(
-            "tool_not_provider_exposed: {} must be called directly as a core tool",
-            canonical_tool_name
-        ));
+    // Leading slash is the unambiguous canonical contracts form. Legacy
+    // provider/catalog names contain no slash and remain one opaque segment
+    // until an explicit typed miss selects legacy canonicalization.
+    let path = if raw_tool_name.starts_with('/') {
+        raw_tool_name.parse::<ToolPath>()
+    } else {
+        ToolPath::new([raw_tool_name])
     }
+    .map_err(|error| {
+        format!("tool.invoke payload.tool_id is not a valid tool identity: {error}")
+    })?;
 
-    Ok(ResolvedToolInvokeRequest {
-        request: ToolCoreRequest {
-            tool_name: canonical_tool_name.to_owned(),
-            payload: arguments,
-        },
+    Ok(ParsedToolInvoke {
+        path,
+        requested_name: raw_tool_name,
+        payload: arguments,
         capabilities_override,
+        lease,
+        envelope: payload,
     })
 }
 
@@ -164,37 +202,38 @@ pub(crate) fn execute_tool_invoke_tool_with_config(
         inner_arguments,
         "payload.arguments",
     )?;
-    let resolved =
-        resolve_tool_invoke_request(&request, ToolInvokeProviderExposure::RejectProviderExposed)?;
+    let parsed = parse_tool_invoke_request(request.tool_name.as_str(), &request.payload)?;
+    let canonical_name = canonical_tool_name(parsed.requested_name).to_owned();
+    let canonical_path = ToolPath::new([canonical_name.as_str()])
+        .map_err(|error| format!("legacy tool identity is invalid: {error}"))?;
+    let resolved = parsed.resolve(canonical_path)?;
     if resolved.capabilities_override.is_some() {
         return Err(format!(
             "tool.invoke capabilities_override requires a registered typed tool; `{}` is legacy-only",
-            resolved.request.tool_name
+            resolved.path
         ));
     }
-    let execution =
-        resolve_legacy_tool_execution(resolved.request.tool_name.as_str()).ok_or_else(|| {
-            format!(
-                "tool_not_found: unknown tool `{}`",
-                resolved.request.tool_name
-            )
-        })?;
-    match execution.execution_kind {
-        ToolExecutionKind::Core => {
-            execute_discoverable_tool_core_with_config(resolved.request, config)
+    let execution = resolve_legacy_tool_execution(canonical_name.as_str())
+        .ok_or_else(|| format!("tool_not_found: unknown tool `{canonical_name}`"))?;
+    match execution {
+        ResolvedLegacyToolExecution::Core { .. } => execute_discoverable_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: canonical_name,
+                payload: resolved.payload,
+            },
+            config,
+        ),
+        ResolvedLegacyToolExecution::App { canonical_name } => {
+            Err(format!("tool_requires_app_dispatcher: {}", canonical_name))
         }
-        ToolExecutionKind::App => Err(format!(
-            "tool_requires_app_dispatcher: {}",
-            execution.canonical_name
-        )),
     }
 }
 
 pub(crate) fn issue_tool_lease(
-    tool_id: &str,
+    path: &ToolPath,
     payload: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
-    tool_lease_authority::issue_tool_lease(tool_id, payload)
+    tool_lease_authority::issue_tool_lease(path.to_string().as_str(), payload)
 }
 
 pub(crate) fn bridge_provider_tool_call_with_scope(
@@ -220,7 +259,10 @@ pub(crate) fn bridge_provider_tool_call_with_scope(
     let mut lease_payload = serde_json::Map::new();
     inject_tool_lease_binding(&mut lease_payload, None, session_id, turn_id);
     let tool_id = entry.canonical_name;
-    let lease = match tool_lease_authority::issue_tool_lease(tool_id, &lease_payload) {
+    let lease = match ToolPath::new([tool_id])
+        .map_err(|error| error.to_string())
+        .and_then(|path| issue_tool_lease(&path, &lease_payload))
+    {
         Ok(lease) => lease,
         Err(error) => format!("tool-lease-error:{error}"),
     };

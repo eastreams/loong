@@ -1,7 +1,6 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
-use loong_core::policy::context::ContextFactory;
 use serde::Serialize;
 
 // Re-export data types from contracts
@@ -34,7 +33,7 @@ impl ToolConcurrencyClass {
 }
 
 #[async_trait]
-pub trait CoreToolAdapter<C: ContextFactory>: Send + Sync {
+pub trait CoreToolAdapter: Send + Sync {
     fn name(&self) -> &str;
 
     async fn execute_core_tool(
@@ -44,32 +43,29 @@ pub trait CoreToolAdapter<C: ContextFactory>: Send + Sync {
 }
 
 #[async_trait]
-pub trait ToolExtensionAdapter<C: ContextFactory>: Send + Sync {
+pub trait ToolExtensionAdapter: Send + Sync {
     fn name(&self) -> &str;
 
     async fn execute_tool_extension(
         &self,
         request: ToolExtensionRequest,
-        core: &(dyn CoreToolAdapter<C> + Sync),
+        core: &(dyn CoreToolAdapter + Sync),
     ) -> Result<ToolExtensionOutcome, ToolPlaneError>;
 }
 
 /// Legacy adapter-backed tool plane.
 ///
 /// This temporarily owns the old core/extension adapter path while tools move
-/// to the app-owned typed tool plane. Do not register newly migrated tools here;
+/// to the runtime-owned typed tool plane. Do not register newly migrated tools here;
 /// this type is a deletion target once legacy adapters are gone.
 #[derive(Default)]
-pub struct LegacyToolPlane<C: ContextFactory> {
-    core_adapters: BTreeMap<String, Arc<dyn CoreToolAdapter<C>>>,
-    extension_adapters: BTreeMap<String, Arc<dyn ToolExtensionAdapter<C>>>,
+pub struct LegacyToolPlane {
+    core_adapters: BTreeMap<String, Arc<dyn CoreToolAdapter>>,
+    extension_adapters: BTreeMap<String, Arc<dyn ToolExtensionAdapter>>,
     default_core_adapter: Option<String>,
 }
 
-impl<C> LegacyToolPlane<C>
-where
-    C: ContextFactory,
-{
+impl LegacyToolPlane {
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -79,7 +75,7 @@ where
         }
     }
 
-    pub fn register_core_adapter<A: CoreToolAdapter<C> + 'static>(&mut self, adapter: A) {
+    pub fn register_core_adapter<A: CoreToolAdapter + 'static>(&mut self, adapter: A) {
         let name = adapter.name().to_owned();
         if self.default_core_adapter.is_none() {
             self.default_core_adapter = Some(name.clone());
@@ -87,7 +83,7 @@ where
         self.core_adapters.insert(name, Arc::new(adapter));
     }
 
-    pub fn register_extension_adapter<A: ToolExtensionAdapter<C> + 'static>(&mut self, adapter: A) {
+    pub fn register_extension_adapter<A: ToolExtensionAdapter + 'static>(&mut self, adapter: A) {
         let name = adapter.name().to_owned();
         self.extension_adapters.insert(name, Arc::new(adapter));
     }

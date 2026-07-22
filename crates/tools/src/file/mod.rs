@@ -1,3 +1,4 @@
+use loong_contracts::ToolInputError;
 use serde_json::Value;
 
 // Concrete file tools live here, but filesystem effects do not. Each tool only
@@ -5,27 +6,38 @@ use serde_json::Value;
 // directory traversal, and content search side effects are owned by
 // loong_access::fs through granted fs actions.
 mod edit;
-mod error;
 mod read;
 mod search;
 mod write;
 
-pub use edit::{EditOutput, EditRequest, EditTool, ExactTextEditBlock};
-pub use error::FileToolError;
-pub use read::{FileReadRequest, ReadFileOutput, ReadOutput, ReadRequest, ReadTool};
+pub use edit::{EditOutput, EditRequest, EditTool, EditToolError, ExactTextEditBlock};
+pub use read::{FileReadRequest, ReadFileOutput, ReadOutput, ReadRequest, ReadTool, ReadToolError};
 pub use search::{
     ContentSearchReadOutput, ContentSearchReadRequest, ContentSearchTool, GlobReadOutput,
     GlobReadRequest, GlobSearchTool,
 };
 pub use write::{WriteOutput, WriteRequest, WriteTool};
 
+// Required non-empty strings share one contract across file tools so missing
+// and malformed fields retain the same typed evidence at every entry point.
 fn required_trimmed_string_field<'a>(
     payload: &'a serde_json::Map<String, Value>,
     field_name: &str,
-    tool_name: &str,
-) -> Result<&'a str, String> {
-    optional_trimmed_string_field(payload.get(field_name))
-        .ok_or_else(|| format!("{tool_name} requires payload.{field_name}"))
+) -> Result<&'a str, ToolInputError> {
+    let value = payload
+        .get(field_name)
+        .ok_or_else(|| ToolInputError::missing_field(field_name))?;
+    let value = value
+        .as_str()
+        .ok_or_else(|| ToolInputError::invalid_field(field_name, "must be a string"))?
+        .trim();
+    if value.is_empty() {
+        return Err(ToolInputError::invalid_field(
+            field_name,
+            "must not be empty",
+        ));
+    }
+    Ok(value)
 }
 
 // `offset` and `limit` intentionally share one parser: both fields use the same
@@ -33,28 +45,30 @@ fn required_trimmed_string_field<'a>(
 fn optional_positive_usize_field(
     payload: &serde_json::Map<String, Value>,
     field_name: &str,
-    tool_name: &str,
-) -> Result<Option<usize>, String> {
+) -> Result<Option<usize>, ToolInputError> {
     let Some(value) = payload.get(field_name) else {
         return Ok(None);
     };
 
     let raw_value = value
         .as_u64()
-        .ok_or_else(|| format!("{tool_name} payload.{field_name} must be a positive integer"))?;
+        .ok_or_else(|| ToolInputError::invalid_field(field_name, "must be a positive integer"))?;
     if raw_value == 0 {
-        return Err(format!(
-            "{tool_name} payload.{field_name} must be a positive integer"
+        return Err(ToolInputError::invalid_field(
+            field_name,
+            "must be a positive integer",
         ));
     }
 
     usize::try_from(raw_value)
         .map(Some)
         .map_err(|conversion_error| {
-            format!("{tool_name} payload.{field_name} is too large: {conversion_error}")
+            ToolInputError::invalid_field(field_name, format!("is too large: {conversion_error}"))
         })
 }
 
+// Mode selection and optional search fields intentionally share trimming and
+// blank-as-absent behavior; callers decide which field, if any, is required.
 fn optional_trimmed_string_field(value: Option<&Value>) -> Option<&str> {
     value
         .and_then(Value::as_str)
@@ -62,26 +76,28 @@ fn optional_trimmed_string_field(value: Option<&Value>) -> Option<&str> {
         .filter(|value| !value.is_empty())
 }
 
+// Search limit fields use the same default-and-inclusive-range contract, while
+// each caller supplies its schema-specific bounds.
 fn optional_bounded_usize_field(
     payload: &serde_json::Map<String, Value>,
     field_name: &str,
     default_value: usize,
     minimum: usize,
     maximum: usize,
-    tool_name: &str,
-) -> Result<usize, String> {
+) -> Result<usize, ToolInputError> {
     let Some(value) = payload.get(field_name) else {
         return Ok(default_value);
     };
     let parsed_value_u64 = value
         .as_u64()
-        .ok_or_else(|| format!("{tool_name} payload.{field_name} must be an integer"))?;
+        .ok_or_else(|| ToolInputError::invalid_field(field_name, "must be an integer"))?;
     let parsed_value = usize::try_from(parsed_value_u64).map_err(|conversion_error| {
-        format!("{tool_name} payload.{field_name} is out of range: {conversion_error}")
+        ToolInputError::invalid_field(field_name, format!("is out of range: {conversion_error}"))
     })?;
     if parsed_value < minimum || parsed_value > maximum {
-        return Err(format!(
-            "{tool_name} payload.{field_name} must be between {minimum} and {maximum}"
+        return Err(ToolInputError::invalid_field(
+            field_name,
+            format!("must be between {minimum} and {maximum}"),
         ));
     }
     Ok(parsed_value)

@@ -1,46 +1,53 @@
-pub mod access;
-pub mod action;
-pub mod content_search;
-pub mod copy;
-pub mod directory;
-pub mod error;
-pub mod glob;
-pub mod inspect;
-pub mod path;
-pub mod read;
-pub mod read_dir;
-pub mod remove;
-pub mod remove_dir;
-pub mod rename;
-pub mod write;
+mod access;
+mod content_search;
+mod copy;
+mod directory;
+mod glob;
+mod inspect;
+mod path;
+mod read;
+mod read_dir;
+mod remove;
+mod remove_dir;
+mod rename;
+mod write;
 
-pub use access::{FsAccess, FsAccessError};
-pub use action::{
-    FsContentSearchAction, FsContentSearchOptions, FsGlobAction, FsInspectPathAction,
-    FsReadDirAction, FsRemoveDirAllAction, FsRenameAction,
+pub use access::FsAccess;
+pub use content_search::{
+    FsContentSearchAction, FsContentSearchAllowPolicy, FsContentSearchError, FsContentSearchMatch,
+    FsContentSearchOptions, FsContentSearchOutput,
 };
-pub use content_search::{FsContentSearchMatch, FsContentSearchOutput};
-pub use copy::{FsCopyFileAction, FsCopyFileAllowPolicy, FsCopyFileOutput};
-pub use directory::{FsCreateDirAllAction, FsCreateDirAllAllowPolicy, FsCreateDirAllOutput};
-pub use error::FsActionError;
-pub use glob::{FsGlobOutput, FsPathKind, FsPathMatch};
-pub use inspect::FsInspectPathOutput;
+pub use copy::{FsCopyFileAction, FsCopyFileAllowPolicy, FsCopyFileError, FsCopyFileOutput};
+pub use directory::{
+    FsCreateDirAllAction, FsCreateDirAllAllowPolicy, FsCreateDirAllError, FsCreateDirAllOutput,
+};
+pub use glob::{FsGlobAction, FsGlobAllowPolicy, FsGlobError, FsGlobOutput, FsPathMatch};
+pub use inspect::{
+    FsInspectPathAction, FsInspectPathAllowPolicy, FsInspectPathError, FsInspectPathOutput,
+};
 pub use path::{
-    FsPathAction, FsPathAllowedRootsPolicy, FsPathPolicyContext, FsResolutionContext,
-    FsResolvePathAction, FsResolvePathAllowPolicy, GrantedEntryPath, GrantedPath,
-    ResolvedEntryPath, ResolvedPath,
+    FsPathAction, FsPathAllowedRootsPolicy, FsPathError, FsPathKind, FsPathPolicyContext,
+    FsResolutionContext, FsResolvePathAction, FsResolvePathAllowPolicy, GrantedEntryPath,
+    GrantedPath, ResolvedEntryPath, ResolvedPath, normalize_path_lexically,
 };
-pub use read::{FsReadAction, FsReadAllowPolicy, FsReadFilenameDenyPolicy, FsReadOutput};
-pub use read_dir::{FsReadDirEntry, FsReadDirOutput};
+pub use read::{
+    FsReadAction, FsReadAllowPolicy, FsReadError, FsReadFilenameDenyPolicy, FsReadOutput,
+};
+pub use read_dir::{
+    FsReadDirAction, FsReadDirAllowPolicy, FsReadDirEntry, FsReadDirError, FsReadDirOutput,
+};
 pub use remove::{
-    FsRemoveFileAction, FsRemoveFileAllowPolicy, FsRemoveFileKind, FsRemoveFileOutput,
+    FsRemoveFileAction, FsRemoveFileAllowPolicy, FsRemoveFileError, FsRemoveFileKind,
+    FsRemoveFileOutput,
 };
-pub use remove_dir::FsRemoveDirAllOutput;
-pub use rename::FsRenameOutput;
+pub use remove_dir::{
+    FsRemoveDirAllAction, FsRemoveDirAllAllowPolicy, FsRemoveDirAllError, FsRemoveDirAllOutput,
+};
+pub use rename::{FsRenameAction, FsRenameAllowPolicy, FsRenameError, FsRenameOutput};
 pub use write::{
-    FsAtomicWriteAction, FsAtomicWriteAllowPolicy, FsWriteAction, FsWriteAllowPolicy,
+    FsAtomicWriteAction, FsAtomicWriteAllowPolicy, FsWriteAction, FsWriteAllowPolicy, FsWriteError,
     FsWriteOptions, FsWriteOutput,
 };
 
 #[cfg(test)]
-mod tests;
+mod test_support;

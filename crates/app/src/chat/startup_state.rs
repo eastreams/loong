@@ -41,7 +41,7 @@ pub(super) fn build_cli_chat_startup_summary(
     Ok(CliChatStartupSummary {
         config_path: runtime.resolved_path.display().to_string(),
         memory_label: runtime.memory_label.clone(),
-        session_id: runtime.session_id.clone(),
+        session_id: runtime.session.session_id().to_owned(),
         context_engine_id: context_engine_selection.id.to_owned(),
         context_engine_source: context_engine_selection.source.as_str().to_owned(),
         compaction_enabled: compaction.enabled,

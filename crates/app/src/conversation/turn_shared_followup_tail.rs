@@ -4,6 +4,7 @@ use super::super::tool_input_contract::{
     render_tool_input_repair_guidance, render_tool_input_repair_guidance_from_reason,
     repair_guidance_visible_tool_name,
 };
+use super::super::turn_engine::ToolInputFailure;
 use super::tool_result::followup_prompt_needs_truncation_hint;
 use super::{
     EXTERNAL_SKILL_FOLLOWUP_PROMPT, TOOL_LOOP_GUARD_PROMPT, TOOL_TRUNCATION_HINT_PROMPT,
@@ -157,6 +158,7 @@ where
         loop_warning_reason,
         tool_request_summary,
         None,
+        None,
         payload_mapper,
     )
 }
@@ -167,6 +169,7 @@ pub(crate) fn build_tool_failure_followup_tail_with_request_summary_and_contract
     user_input: &str,
     loop_warning_reason: Option<&str>,
     tool_request_summary: Option<&str>,
+    typed_input: Option<&ToolInputFailure>,
     continuation_contract: Option<&str>,
     mut payload_mapper: F,
 ) -> Vec<Value>
@@ -182,8 +185,9 @@ where
             "content": format!("[tool_request]\n{bounded_request}"),
         }));
     }
-    let repair_guidance =
-        render_tool_failure_repair_guidance(tool_failure_reason, tool_request_summary);
+    let repair_guidance = typed_input
+        .map(ToolInputFailure::repair_guidance)
+        .or_else(|| render_tool_failure_repair_guidance(tool_failure_reason, tool_request_summary));
     let label = ToolDrivenFollowupLabel::ToolFailure;
     let bounded_failure = payload_mapper(label.as_str(), tool_failure_reason);
     let bounded_failure = if repair_guidance.is_some() {
@@ -301,6 +305,19 @@ where
                 user_input,
                 loop_warning_reason,
                 tool_request_summary,
+                None,
+                continuation_contract,
+                payload_mapper,
+            )
+        }
+        ToolDrivenFollowupPayload::ToolInputFailure { reason, input } => {
+            build_tool_failure_followup_tail_with_request_summary_and_contract(
+                assistant_preface,
+                reason.as_str(),
+                user_input,
+                loop_warning_reason,
+                tool_request_summary,
+                Some(input),
                 continuation_contract,
                 payload_mapper,
             )
@@ -459,18 +476,6 @@ fn render_direct_routing_failure_repair_guidance(
         "Add search, inspect, install, run, or list fields for the legacy skills-management request, or provide `operation` to make the request explicit.".to_owned()
     } else if normalized_reason.starts_with("hidden_channel_requires_operation:") {
         "Add `operation` for the channel request, for example `messages.send`, `messages.reply`, `card.update`, or `feishu.whoami`.".to_owned()
-    } else if normalized_reason.starts_with("direct_read_requires_one_of:") {
-        "Provide exactly one read mode: `path` for a file, `query` for content search, or `pattern` for glob-style path matching.".to_owned()
-    } else if normalized_reason.starts_with("direct_read_ambiguous:") {
-        "Use only one read mode at a time. Do not mix `path`, `query`, and `pattern` in the same direct read request.".to_owned()
-    } else if normalized_reason.starts_with("direct_write_requires_path:") {
-        "Add `path` to tell the direct write surface which file to replace.".to_owned()
-    } else if normalized_reason.starts_with("direct_write_requires_content:") {
-        "Add `content` with the full replacement text for the direct write request.".to_owned()
-    } else if normalized_reason.starts_with("direct_edit_requires_edits:") {
-        "Add `edits` with one or more exact edit blocks, and include `path`.".to_owned()
-    } else if normalized_reason.starts_with("direct_edit_requires_path:") {
-        "Add `path` so the direct edit surface knows which file to patch.".to_owned()
     } else if normalized_reason.starts_with("direct_bash_requires_command:") {
         "Add `command` with the bash command string to execute.".to_owned()
     } else if normalized_reason.starts_with("direct_web_requires_query_or_url:") {

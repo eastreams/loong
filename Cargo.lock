@@ -3050,6 +3050,7 @@ dependencies = [
  "loong-core",
  "loong-kernel",
  "loong-protocol",
+ "loong-runtime",
  "loong-spec",
  "opentelemetry",
  "opentelemetry-otlp",
@@ -3284,6 +3285,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

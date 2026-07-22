@@ -6,7 +6,7 @@ use std::{
 use async_trait::async_trait;
 use loong_contracts::{Capability, PolicyDecision, PolicyGrant};
 use loong_core::{
-    error::AuthorizationError,
+    error::PolicyGrantError,
     policy::{
         action::{Action, ActionMeta, ActionMetadata},
         context::ContextFactory,
@@ -16,13 +16,39 @@ use loong_core::{
     },
 };
 use serde_json::{Value, json};
+use thiserror::Error;
 
 use super::{
-    access::{FsAccess, FsAccessError},
-    path::{FsResolutionContext, GrantedEntryPath},
+    access::FsAccess,
+    path::{FsPathPolicyContext, FsResolutionContext, GrantedEntryPath},
 };
 
+#[cfg(test)]
+mod tests;
+
 const FS_REMOVE_FILE_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
+
+#[derive(Debug, Error)]
+pub enum FsRemoveFileError {
+    #[error(transparent)]
+    Path(#[from] super::path::FsPathError),
+    #[error(transparent)]
+    Authorization(#[from] PolicyGrantError),
+    #[error("failed to inspect path {path}: {source}", path = .path.display())]
+    InspectPath {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("path {path} is a directory, not a file", path = .path.display())]
+    PathIsDirectory { path: PathBuf },
+    #[error("failed to remove file {path}: {source}", path = .path.display())]
+    RemoveFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+}
 
 /// Typed action for removing one governed file or symlink.
 ///
@@ -93,7 +119,7 @@ impl<'a, 'ctx, C, P> FsAccess<'a, 'ctx, C, P>
 where
     C: ContextFactory + 'ctx,
     P: PolicyEngine<C>,
-    C::Cx<'ctx>: FsResolutionContext,
+    C::Cx<'ctx>: FsResolutionContext + FsPathPolicyContext,
 {
     /// Remove one file or symlink through entry-path and write policy.
     ///
@@ -102,16 +128,11 @@ where
     pub async fn remove_file(
         self,
         path: impl AsRef<Path>,
-    ) -> Result<FsRemoveFileOutput, FsAccessError> {
+    ) -> Result<FsRemoveFileOutput, FsRemoveFileError> {
         let path = self.grant_entry_path(path).await?;
 
         let action = FsRemoveFileAction::new(path);
-        let grant = self
-            .policy_engine
-            .grant(self.ctx, action)
-            .await
-            .map_err(AuthorizationError::from)
-            .map_err(FsAccessError::Authorization)?;
+        let grant = self.policy_engine.grant(self.ctx, action).await?;
         grant.into_granted().run(self.ctx).await
     }
 }
@@ -127,7 +148,7 @@ where
     Cx: Sync,
 {
     type Output = FsRemoveFileOutput;
-    type Error = FsAccessError;
+    type Error = FsRemoveFileError;
 
     async fn run(granted: Granted<Self>, _ctx: &Cx) -> Result<Self::Output, Self::Error> {
         let action = granted.into_action();
@@ -142,13 +163,13 @@ where
                 });
             }
             Err(source) => {
-                return Err(FsAccessError::InspectPath { path, source });
+                return Err(FsRemoveFileError::InspectPath { path, source });
             }
         };
 
         let file_type = metadata.file_type();
         if file_type.is_dir() {
-            return Err(FsAccessError::PathIsDirectory { path });
+            return Err(FsRemoveFileError::PathIsDirectory { path });
         }
         let kind = if file_type.is_symlink() {
             FsRemoveFileKind::Symlink
@@ -167,7 +188,7 @@ where
                 removed: false,
                 kind: None,
             }),
-            Err(source) => Err(FsAccessError::RemoveFile { path, source }),
+            Err(source) => Err(FsRemoveFileError::RemoveFile { path, source }),
         }
     }
 }

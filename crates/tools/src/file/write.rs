@@ -3,17 +3,22 @@ use std::{collections::BTreeSet, path::PathBuf};
 use async_trait::async_trait;
 use loong_contracts::{Capability, ToolInputError, ToolSchedulingClass, ToolSpec};
 use loong_core::{
+    PolicyGrantError,
     policy::context::ContextFactory,
     tool::{ToolFailureKind, ToolImpl},
 };
-use loong_kernel::{KernelAccess, access::fs::FsWriteOptions};
+use loong_kernel::{
+    KernelAccess,
+    access::fs::{
+        FsPathError, FsPathPolicyContext, FsResolutionContext, FsWriteError, FsWriteOptions,
+    },
+};
 use serde_json::{Value, json};
 
-use super::{FileToolError, required_trimmed_string_field};
+use super::required_trimmed_string_field;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WriteRequest {
-    pub(super) tool_name: String,
     pub(super) path: String,
     pub(super) content: String,
     pub(super) create_dirs: bool,
@@ -22,7 +27,6 @@ pub struct WriteRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WriteOutput {
-    pub(super) tool_name: String,
     pub(super) path: PathBuf,
     pub(super) bytes_written: usize,
 }
@@ -30,29 +34,15 @@ pub struct WriteOutput {
 impl From<WriteOutput> for Value {
     fn from(output: WriteOutput) -> Self {
         json!({
-            "adapter": "core-tools",
-            "tool_name": output.tool_name,
             "path": output.path.display().to_string(),
             "bytes_written": output.bytes_written,
         })
     }
 }
 
-pub struct WriteTool {
-    tool_name: &'static str,
-}
+pub struct WriteTool;
 
 impl WriteTool {
-    /// Creates the write implementation for an app-facing tool name.
-    ///
-    /// Like `ReadTool`, this name is response metadata only. The app plane owns
-    /// the registry path and will decide when this typed tool replaces legacy
-    /// `write` / `file.write` dispatch.
-    #[must_use]
-    pub const fn new(tool_name: &'static str) -> Self {
-        Self { tool_name }
-    }
-
     fn input_schema() -> Value {
         json!({
             "type": "object",
@@ -82,18 +72,18 @@ impl WriteTool {
 
 /// Concrete builtin implementation for writing file contents.
 ///
-/// This is only the typed tool foundation: registration and legacy dispatch
-/// migration stay in the app plane. The tool performs no filesystem I/O itself;
-/// the write side effect is delegated to `ctx.access().fs().write_file(...)`.
+/// Registration and tool identity stay in the app plane. The tool performs no
+/// filesystem I/O itself; the write side effect is delegated to
+/// `ctx.access().fs().write_file(...)`.
 #[async_trait]
 impl<C> ToolImpl<C> for WriteTool
 where
     C: ContextFactory + Send + Sync,
-    for<'a> C::Cx<'a>: KernelAccess<C> + Sync,
+    for<'a> C::Cx<'a>: KernelAccess<C> + FsResolutionContext + FsPathPolicyContext + Sync,
 {
     type Input = WriteRequest;
     type Output = WriteOutput;
-    type Error = FileToolError;
+    type Error = FsWriteError;
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -116,12 +106,32 @@ where
     }
 
     fn parse_input(&self, payload: Value) -> Result<Self::Input, ToolInputError> {
-        WriteRequest::parse_payload(self.tool_name.to_owned(), &payload)
-            .map_err(ToolInputError::invalid_payload)
+        WriteRequest::parse_payload(&payload)
     }
 
     fn failure_kind(&self, error: &Self::Error) -> ToolFailureKind {
-        error.failure_kind()
+        match error {
+            FsWriteError::Authorization(source)
+            | FsWriteError::Path(FsPathError::Authorization(source))
+                if matches!(
+                    source,
+                    PolicyGrantError::MissingCapability { .. }
+                        | PolicyGrantError::Denied { .. }
+                        | PolicyGrantError::PermissionDenied { .. }
+                ) =>
+            {
+                ToolFailureKind::Denied
+            }
+            FsWriteError::Path(_)
+            | FsWriteError::Authorization(_)
+            | FsWriteError::InspectPath { .. }
+            | FsWriteError::CreateParentDirectory { .. }
+            | FsWriteError::PathIsDirectory { .. }
+            | FsWriteError::RefuseSymlink { .. }
+            | FsWriteError::FileExistsRequiresOverwrite { .. }
+            | FsWriteError::OpenWriteFile { .. }
+            | FsWriteError::WriteFile { .. } => ToolFailureKind::Execution,
+        }
     }
 
     async fn execute(
@@ -140,7 +150,6 @@ where
             .await?;
 
         Ok(WriteOutput {
-            tool_name: input.tool_name,
             path: output.path,
             bytes_written: output.bytes_written,
         })
@@ -148,31 +157,31 @@ where
 }
 
 impl WriteRequest {
-    pub(super) fn parse_payload(tool_name: String, payload: &Value) -> Result<Self, String> {
+    pub(super) fn parse_payload(payload: &Value) -> Result<Self, ToolInputError> {
         let payload = payload
             .as_object()
-            .ok_or_else(|| format!("{tool_name} payload must be an object"))?;
-        let path = required_trimmed_string_field(payload, "path", tool_name.as_str())?.to_owned();
+            .ok_or(ToolInputError::PayloadMustBeObject)?;
+        let path = required_trimmed_string_field(payload, "path")?.to_owned();
         let content = payload
             .get("content")
-            .and_then(Value::as_str)
-            .ok_or_else(|| format!("{tool_name} requires payload.content"))?
+            .ok_or_else(|| ToolInputError::missing_field("content"))?
+            .as_str()
+            .ok_or_else(|| ToolInputError::invalid_field("content", "must be a string"))?
             .to_owned();
         let create_dirs = match payload.get("create_dirs") {
             Some(value) => value
                 .as_bool()
-                .ok_or_else(|| format!("{tool_name} payload.create_dirs must be a boolean"))?,
+                .ok_or_else(|| ToolInputError::invalid_field("create_dirs", "must be a boolean"))?,
             None => true,
         };
         let overwrite = match payload.get("overwrite") {
             Some(value) => value
                 .as_bool()
-                .ok_or_else(|| format!("{tool_name} payload.overwrite must be a boolean"))?,
+                .ok_or_else(|| ToolInputError::invalid_field("overwrite", "must be a boolean"))?,
             None => false,
         };
 
         Ok(Self {
-            tool_name,
             path,
             content,
             create_dirs,

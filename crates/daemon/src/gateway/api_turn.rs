@@ -101,6 +101,7 @@ pub(crate) async fn handle_turn(
 
     let event_sink = app_state.event_bus.as_ref().map(|bus| bus.sink());
     let result = match execute_explicit_acp_turn_request(
+        Arc::clone(&app_state.runtime),
         PathBuf::from(app_state.config_path.clone()),
         config.clone(),
         _acp_manager.clone(),

@@ -134,32 +134,3 @@ pub(super) fn format_turn_checkpoint_runtime_probe(
         render_labels.action, render_labels.source, render_labels.reason,
     )
 }
-
-#[cfg(test)]
-pub(super) async fn load_turn_checkpoint_summary_output(
-    turn_coordinator: &ConversationTurnCoordinator,
-    config: &LoongConfig,
-    app_ctx: &crate::AppContext,
-    session_id: &str,
-    limit: usize,
-    binding: ConversationRuntimeBinding<'_>,
-) -> CliResult<String> {
-    let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
-    let runtime_ref = &runtime;
-    let diagnostics_future = turn_coordinator
-        .load_turn_checkpoint_diagnostics_with_runtime_and_limit(
-            config,
-            app_ctx,
-            session_id,
-            limit,
-            runtime_ref,
-            binding,
-        );
-    let diagnostics = diagnostics_future.await?;
-
-    Ok(format_turn_checkpoint_summary_output(
-        session_id,
-        limit,
-        &diagnostics,
-    ))
-}

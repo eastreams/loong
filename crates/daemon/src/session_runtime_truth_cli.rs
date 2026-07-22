@@ -1,20 +1,16 @@
 use loong_app as mvp;
 use serde_json::{Value, json};
 
-pub(crate) async fn load_session_safe_lane_payload(
+pub(crate) async fn load_session_safe_lane_payload<
+    R: mvp::conversation::ConversationRuntime + ?Sized,
+>(
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
-    session_id: &str,
+    context: &mvp::Context<'_>,
+    runtime: &R,
 ) -> Value {
     let summary_limit = runtime_truth_summary_limit(memory_config);
-    let binding = mvp::conversation::ConversationRuntimeBinding::AdvisoryOnly;
-    let session_store_config = mvp::session::store::SessionStoreConfig::from(memory_config);
-    let summary_result = mvp::conversation::load_safe_lane_event_summary(
-        session_id,
-        summary_limit,
-        binding,
-        &session_store_config,
-    )
-    .await;
+    let summary_result =
+        mvp::conversation::load_safe_lane_event_summary(summary_limit, context, runtime).await;
 
     match summary_result {
         Ok(summary) => {
@@ -33,20 +29,17 @@ pub(crate) async fn load_session_safe_lane_payload(
     }
 }
 
-pub(crate) async fn load_session_turn_checkpoint_payload(
+pub(crate) async fn load_session_turn_checkpoint_payload<
+    R: mvp::conversation::ConversationRuntime + ?Sized,
+>(
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
-    session_id: &str,
+    context: &mvp::Context<'_>,
+    runtime: &R,
 ) -> Value {
     let summary_limit = runtime_truth_summary_limit(memory_config);
-    let binding = mvp::conversation::ConversationRuntimeBinding::AdvisoryOnly;
-    let session_store_config = mvp::session::store::SessionStoreConfig::from(memory_config);
-    let summary_result = mvp::conversation::load_turn_checkpoint_event_summary(
-        session_id,
-        summary_limit,
-        binding,
-        &session_store_config,
-    )
-    .await;
+    let summary_result =
+        mvp::conversation::load_turn_checkpoint_event_summary(summary_limit, context, runtime)
+            .await;
 
     match summary_result {
         Ok(summary) => {

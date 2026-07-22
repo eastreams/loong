@@ -137,7 +137,7 @@ fn next_openai_compat_test_sqlite_path(label: &str) -> std::path::PathBuf {
 }
 
 fn openai_compat_unsupported_stream_config() -> LoongConfig {
-    LoongConfig {
+    let mut config = LoongConfig {
         providers: BTreeMap::from([(
             "bedrock-main".to_owned(),
             ProviderProfileConfig {
@@ -151,7 +151,11 @@ fn openai_compat_unsupported_stream_config() -> LoongConfig {
         )]),
         active_provider: Some("bedrock-main".to_owned()),
         ..LoongConfig::default()
-    }
+    };
+    config.memory.sqlite_path = next_openai_compat_test_sqlite_path("unsupported-stream")
+        .display()
+        .to_string();
+    config
 }
 
 fn openai_compat_duplicate_model_config(base_url: String) -> LoongConfig {
@@ -1163,7 +1167,16 @@ async fn gateway_openai_chat_completion_streaming_rejects_truly_unsupported_mode
         .await
         .expect("response");
 
-    assert_eq!(response.status(), axum::http::StatusCode::NOT_IMPLEMENTED);
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body");
+    assert_eq!(
+        status,
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        "response body: {}",
+        String::from_utf8_lossy(&body)
+    );
 }
 
 #[test]

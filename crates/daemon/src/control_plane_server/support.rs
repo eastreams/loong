@@ -74,6 +74,7 @@ pub(super) struct ControlPlaneTurnStreamState {
 /// keeps just enough config, ACP ownership, and per-turn event registry state
 /// to materialize `AgentRuntime` turns on demand.
 pub(super) struct ControlPlaneTurnRuntime {
+    pub(super) runtime: Arc<loong_runtime::runtime::Runtime<mvp::RuntimeContextFactory>>,
     pub(super) resolved_path: std::path::PathBuf,
     pub(super) config: mvp::config::LoongConfig,
     pub(super) acp_manager: Arc<mvp::acp::AcpSessionManager>,
@@ -137,7 +138,7 @@ impl ControlPlaneKernelAuthority {
                 .cloned()
                 .ok_or_else(|| "missing control-plane kernel token binding".to_owned())?
         };
-        let policy_context = SpecExecutionContext::new(&token);
+        let policy_context = SpecExecutionContext::from_legacy_token(&token);
         self.kernel
             .authorize_operation(
                 CONTROL_PLANE_PACK_ID,
@@ -279,7 +280,7 @@ impl ControlPlaneTurnRuntime {
         config: mvp::config::LoongConfig,
     ) -> Result<Self, String> {
         let acp_manager = mvp::acp::acquire_shared_acp_session_manager(&config)?;
-        Ok(Self::with_manager(resolved_path, config, acp_manager))
+        Self::with_manager(resolved_path, config, acp_manager)
     }
 
     /// Test/advanced constructor that reuses an already prepared ACP manager
@@ -288,13 +289,15 @@ impl ControlPlaneTurnRuntime {
         resolved_path: std::path::PathBuf,
         config: mvp::config::LoongConfig,
         acp_manager: Arc<mvp::acp::AcpSessionManager>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, String> {
+        let runtime = mvp::runtime::bootstrap_runtime_with_config(&config)?;
+        Ok(Self {
+            runtime,
             resolved_path,
             config,
             acp_manager,
             registry: Arc::new(mvp::control_plane::ControlPlaneTurnRegistry::new()),
-        }
+        })
     }
 }
 

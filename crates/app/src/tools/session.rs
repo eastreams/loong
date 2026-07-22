@@ -6,6 +6,8 @@ use std::{
 #[cfg(feature = "memory-sqlite")]
 use tokio::time::{Duration, Instant, timeout};
 
+#[cfg(feature = "memory-sqlite")]
+use loong_contracts::ToolPath;
 use loong_contracts::{
     GovernedSessionMode, GovernedWorkflowPhase, ToolCoreOutcome, ToolCoreRequest,
     WorkflowOperationKind, WorkflowOperationScope, WorktreeBindingDescriptor,
@@ -17,13 +19,14 @@ use super::payload::{
     required_payload_string,
 };
 
+#[cfg(feature = "memory-sqlite")]
+use crate::Context;
 use crate::config::{SessionVisibility, ToolConfig};
 #[cfg(feature = "memory-sqlite")]
 use crate::conversation::{
     ConstrainedSubagentContractView, ConstrainedSubagentExecution, ConstrainedSubagentHandle,
     ConstrainedSubagentIdentity, ConstrainedSubagentProfile, DelegateBuiltinProfile,
-    InterAgentMessage, coordination_actions_for_subagent_handle, mailbox_for_session,
-    subagent_surface_fields,
+    InterAgentMessage, coordination_actions_for_subagent_handle, subagent_surface_fields,
 };
 #[cfg(feature = "memory-sqlite")]
 use crate::runtime_self_continuity;
@@ -57,16 +60,12 @@ use crate::session::repository::{
     NewSessionArtifactRecord, NewSessionRecord, NewSessionToolPolicyRecord, SessionArtifactKind,
     SessionArtifactRecord, SessionEventRecord, SessionHeadMode, SessionHeadRecord, SessionKind,
     SessionNodeRecord, SessionObservationRecord, SessionRepository, SessionState,
-    SessionSummaryRecord, SessionTerminalOutcomeRecord, SessionToolPolicyRecord,
+    SessionSummaryRecord, SessionTerminalOutcomeRecord,
 };
 #[cfg(feature = "memory-sqlite")]
 use crate::{
     config::LoongConfig,
-    conversation::{
-        ConversationRuntime, ConversationRuntimeBinding,
-        run_started_delegate_child_turn_with_runtime,
-        with_prepared_subagent_spawn_cleanup_if_kernel_bound,
-    },
+    conversation::{ConversationRuntime, run_started_delegate_child_turn_with_runtime},
 };
 
 #[cfg(feature = "memory-sqlite")]
@@ -405,7 +404,8 @@ pub fn execute_session_tool_with_config(
     current_session_id: &str,
     config: &SessionStoreConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    execute_session_tool_with_policies(request, current_session_id, config, &ToolConfig::default())
+    let tool_config = ToolConfig::default();
+    execute_session_tool_with_policies(request, current_session_id, config, &tool_config)
 }
 
 pub fn execute_session_tool_with_policies(
@@ -464,15 +464,11 @@ pub fn execute_session_tool_with_policies(
             "task_recover" => {
                 execute_task_recover(payload, current_session_id, config, tool_config)
             }
-            "session_tool_policy_status" => {
-                execute_session_tool_policy_status(payload, current_session_id, config, tool_config)
-            }
-            "session_tool_policy_set" => {
-                execute_session_tool_policy_set(payload, current_session_id, config, tool_config)
-            }
-            "session_tool_policy_clear" => {
-                execute_session_tool_policy_clear(payload, current_session_id, config, tool_config)
-            }
+            "session_tool_policy_status"
+            | "session_tool_policy_set"
+            | "session_tool_policy_clear" => Err(format!(
+                "app_tool_not_found: `{tool_name}` requires a live Context"
+            )),
             "session_search" => super::session_search::execute_session_search_with_policies(
                 payload,
                 current_session_id,
@@ -533,6 +529,31 @@ pub fn execute_session_tool_with_policies(
                 "app_tool_not_found: unknown session tool `{other}`"
             )),
         }
+    }
+}
+
+/// Execute Session policy management at the only legacy app boundary that has
+/// a live recursive Context and the Runtime used by canonical materialization.
+#[cfg(feature = "memory-sqlite")]
+pub(crate) fn execute_session_policy_tool(
+    request: ToolCoreRequest,
+    context: &Context<'_>,
+    app_config: &LoongConfig,
+) -> Result<ToolCoreOutcome, String> {
+    match request.tool_name.as_str() {
+        "session_tool_policy_status" => {
+            execute_session_tool_policy_status(request.payload, context, app_config)
+        }
+        "session_tool_policy_set" => {
+            execute_session_tool_policy_set(request.payload, context, app_config)
+        }
+        "session_tool_policy_clear" => {
+            execute_session_tool_policy_clear(request.payload, context, app_config)
+        }
+        _ => Err(format!(
+            "app_tool_not_found: unknown session policy tool `{}`",
+            request.tool_name
+        )),
     }
 }
 
@@ -839,13 +860,11 @@ struct SessionContinueRequest {
 #[cfg(feature = "memory-sqlite")]
 pub(crate) async fn continue_session_with_runtime<R: ConversationRuntime + ?Sized>(
     payload: Value,
-    app_ctx: &crate::AppContext,
-    current_session_id: &str,
-    memory_config: &SessionStoreConfig,
+    ctx: &crate::Context<'_>,
     tool_config: &ToolConfig,
     app_config: &LoongConfig,
     runtime: &R,
-    binding: ConversationRuntimeBinding<'_>,
+    legacy_tools: &crate::conversation::DefaultLegacyToolDispatcher,
 ) -> Result<ToolCoreOutcome, String> {
     if !tool_config.sessions.enabled {
         return Err("app_tool_disabled: session tools are disabled by config".to_owned());
@@ -857,11 +876,14 @@ pub(crate) async fn continue_session_with_runtime<R: ConversationRuntime + ?Size
         );
     }
 
-    let repo = SessionRepository::new(memory_config)?;
+    let current_session_id = ctx.session().session_id();
+    let memory_config =
+        SessionStoreConfig::from_memory_config_without_env_overrides(&app_config.memory);
+    let repo = SessionRepository::new(&memory_config)?;
     let request = parse_session_continue_request(
         &payload,
         current_session_id,
-        memory_config,
+        &memory_config,
         app_config.tools.delegate.timeout_seconds,
     )?;
     ensure_visible(
@@ -900,12 +922,12 @@ pub(crate) async fn continue_session_with_runtime<R: ConversationRuntime + ?Size
         ));
     }
 
-    let parent_session_id = target_session.parent_session_id.clone().ok_or_else(|| {
-        format!(
+    if target_session.parent_session_id.is_none() {
+        return Err(format!(
             "session_continue_lineage_missing: session `{}` has no parent session",
             request.session_id
-        )
-    })?;
+        ));
+    }
     let execution =
         load_delegate_execution_contract(&repo, &request.session_id)?.ok_or_else(|| {
             format!(
@@ -924,11 +946,18 @@ pub(crate) async fn continue_session_with_runtime<R: ConversationRuntime + ?Size
         .min(app_config.tools.delegate.timeout_seconds);
     let mut continued_execution = execution.execution.clone();
     continued_execution.timeout_seconds = effective_timeout_seconds;
-    with_prepared_subagent_spawn_cleanup_if_kernel_bound(
+    let child_session =
+        ctx.session()
+            .materialize_child(ctx.runtime(), app_config, &child_session_id)?;
+    let child_ctx = ctx
+        .rebind_session(&child_session)
+        .map_err(|error| error.to_string())?;
+    let child_legacy_tools = legacy_tools.for_session(&child_session)?;
+    let parent_mailbox = ctx.session().mailbox().sender();
+    crate::conversation::with_subagent_lifecycle(
         runtime,
-        &parent_session_id,
         &child_session_id,
-        binding,
+        ctx,
         || async {
             let transitioned = repo
                 .transition_session_with_event_if_current(
@@ -957,15 +986,14 @@ pub(crate) async fn continue_session_with_runtime<R: ConversationRuntime + ?Size
             let mut outcome = run_started_delegate_child_turn_with_runtime(
                 app_config,
                 runtime,
-                app_ctx,
-                &child_session_id,
-                &parent_session_id,
+                &child_ctx,
+                &parent_mailbox,
+                &child_legacy_tools,
                 child_label.clone(),
                 &request.input,
                 execution.profile,
                 continued_execution,
                 effective_timeout_seconds,
-                binding,
             )
             .await?;
             if outcome.status != "ok"
@@ -1103,7 +1131,7 @@ fn load_delegate_execution_contract(
 #[allow(dead_code)]
 pub(super) async fn wait_for_session_tool_with_policies(
     payload: Value,
-    current_session_id: &str,
+    context: &Context<'_>,
     config: &SessionStoreConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
@@ -1120,7 +1148,7 @@ pub(super) async fn wait_for_session_tool_with_policies(
         let target_session_id = legacy_single_session_id(&request.session_ids)?;
         return wait_for_single_session_with_policies(
             target_session_id,
-            current_session_id,
+            context,
             config,
             tool_config,
             after_id,
@@ -1132,7 +1160,7 @@ pub(super) async fn wait_for_session_tool_with_policies(
 
     wait_for_session_batch_with_policies(
         request.session_ids,
-        current_session_id,
+        context,
         config,
         tool_config,
         after_id,
@@ -1145,7 +1173,7 @@ pub(super) async fn wait_for_session_tool_with_policies(
 #[cfg(feature = "memory-sqlite")]
 pub(super) async fn wait_for_task_tool_with_policies(
     payload: Value,
-    current_session_id: &str,
+    context: &Context<'_>,
     config: &SessionStoreConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
@@ -1161,7 +1189,7 @@ pub(super) async fn wait_for_task_tool_with_policies(
 
     wait_for_single_task_with_policies(
         target_task_id.as_str(),
-        current_session_id,
+        context,
         config,
         tool_config,
         after_id,
@@ -1174,18 +1202,19 @@ pub(super) async fn wait_for_task_tool_with_policies(
 #[cfg(feature = "memory-sqlite")]
 async fn wait_for_single_task_with_policies(
     target_task_id: &str,
-    current_session_id: &str,
+    context: &Context<'_>,
     config: &SessionStoreConfig,
     tool_config: &ToolConfig,
     after_id: Option<i64>,
     timeout_ms: u64,
     event_limit: usize,
 ) -> Result<ToolCoreOutcome, String> {
+    let current_session_id = context.session().session_id();
     let started_at = Instant::now();
     let poll_interval_ms = 100_u64;
     let mut next_after_id = after_id.unwrap_or(0).max(0);
     let mut observed_events = Vec::new();
-    let mailbox = mailbox_for_session(current_session_id);
+    let mailbox = context.session().mailbox();
     let mut mailbox_subscription = mailbox.subscribe();
 
     loop {
@@ -1550,183 +1579,93 @@ fn ensure_policy_target_session_exists(
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn session_tool_policy_root_tool_view(
-    tool_config: &ToolConfig,
-    runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
-) -> ToolView {
-    crate::tools::runtime_tool_view_with_runtime_config(tool_config, runtime_config)
+/// Typed policy status shared by legacy tool output and control-plane views.
+///
+/// Keep this projection typed until the actual wire/envelope boundary. Parsing
+/// the legacy JSON payload back into Rust would lose path/provider identity and
+/// duplicate its fallback semantics in every consumer.
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct SessionToolPolicyStatus {
+    pub(crate) has_policy: bool,
+    pub(crate) updated_at: Option<i64>,
+    pub(crate) requested_tool_ids: Vec<String>,
+    pub(crate) visible_requested_tool_ids: Vec<String>,
+    pub(crate) base_tool_ids: Vec<String>,
+    pub(crate) visible_base_tool_ids: Vec<String>,
+    pub(crate) effective_tool_ids: Vec<String>,
+    pub(crate) visible_effective_tool_ids: Vec<String>,
+    pub(crate) requested_runtime_narrowing: Option<ToolRuntimeNarrowing>,
+    pub(crate) delegate_runtime_narrowing: Option<ToolRuntimeNarrowing>,
+    pub(crate) effective_runtime_narrowing: Option<ToolRuntimeNarrowing>,
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn session_tool_policy_base_tool_view(
-    repo: &SessionRepository,
-    session_id: &str,
-    tool_config: &ToolConfig,
-) -> Result<ToolView, String> {
-    if let Some(session) = repo.load_session(session_id)? {
-        if session.parent_session_id.is_some() {
-            let depth = match repo.session_lineage_depth(session_id) {
-                Ok(depth) => depth,
-                Err(error)
-                    if error.starts_with("session_lineage_broken:")
-                        || error.starts_with("session_lineage_cycle_detected:") =>
-                {
-                    return Ok(super::delegate_child_tool_view_for_config_with_delegate(
-                        tool_config,
-                        false,
-                    ));
-                }
-                Err(error) => {
-                    return Err(format!(
-                        "compute session lineage depth for session tool policy failed: {error}"
-                    ));
-                }
-            };
-            let allow_nested_delegate = depth < tool_config.delegate.max_depth;
-            return Ok(super::delegate_child_tool_view_for_config_with_delegate(
-                tool_config,
-                allow_nested_delegate,
-            ));
-        }
-    } else if repo
-        .load_session_summary_with_legacy_fallback(session_id)?
-        .is_some_and(|session| session.kind == SessionKind::DelegateChild)
-    {
-        return Ok(super::delegate_child_tool_view_for_config(tool_config));
-    }
-
-    let runtime_config = crate::tools::runtime_config::get_tool_runtime_config();
-    let root_tool_view = session_tool_policy_root_tool_view(tool_config, runtime_config);
-    Ok(root_tool_view)
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn apply_session_tool_policy_to_tool_view(
-    base_tool_view: &ToolView,
-    session_tool_policy: Option<&SessionToolPolicyRecord>,
-) -> ToolView {
-    let Some(session_tool_policy) = session_tool_policy else {
-        return base_tool_view.clone();
-    };
-    if session_tool_policy.requested_tool_ids.is_empty() {
-        return base_tool_view.clone();
-    }
-
-    let requested_tool_view =
-        ToolView::from_tool_names(session_tool_policy.requested_tool_ids.iter());
-    base_tool_view.intersect(&requested_tool_view)
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn load_session_delegate_runtime_narrowing(
-    repo: &SessionRepository,
-    session_id: &str,
-) -> Result<Option<ToolRuntimeNarrowing>, String> {
-    let events = repo.list_delegate_lifecycle_events(session_id)?;
-    let execution = events.into_iter().rev().find_map(|event| {
-        matches!(
-            event.event_kind.as_str(),
-            "delegate_queued" | "delegate_started"
-        )
-        .then(|| ConstrainedSubagentExecution::from_event_payload(&event.payload_json))
-        .flatten()
-    });
-    Ok(execution.and_then(|execution| {
-        (!execution.runtime_narrowing.is_empty()).then_some(execution.runtime_narrowing)
-    }))
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn merge_session_tool_policy_runtime_narrowing(
-    delegate_runtime_narrowing: Option<ToolRuntimeNarrowing>,
-    session_tool_policy: Option<&SessionToolPolicyRecord>,
-) -> Option<ToolRuntimeNarrowing> {
-    let policy_runtime_narrowing = session_tool_policy.and_then(|policy| {
-        (!policy.runtime_narrowing.is_empty()).then_some(policy.runtime_narrowing.clone())
-    });
-    super::runtime_config::merge_runtime_narrowing_sources(
-        delegate_runtime_narrowing,
-        policy_runtime_narrowing,
-    )
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn tool_view_names(tool_view: &ToolView) -> Vec<String> {
-    tool_view.tool_names().map(str::to_owned).collect()
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn visible_tool_id_names(tool_ids: &[String]) -> Vec<String> {
-    let mut visible_tool_ids = Vec::new();
-
-    for tool_id in tool_ids {
-        let visible_tool_id = crate::tools::model_visible_tool_name(tool_id.as_str());
-        if !visible_tool_ids.contains(&visible_tool_id) {
-            visible_tool_ids.push(visible_tool_id);
-        }
-    }
-
-    visible_tool_ids
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn runtime_narrowing_json(runtime_narrowing: Option<ToolRuntimeNarrowing>) -> Value {
-    match runtime_narrowing {
-        Some(runtime_narrowing) => serde_json::to_value(runtime_narrowing).unwrap_or(Value::Null),
-        None => Value::Null,
-    }
-}
-
-#[cfg(feature = "memory-sqlite")]
-pub(crate) fn build_session_tool_policy_status_payload(
-    repo: &SessionRepository,
-    target_session_id: &str,
-    tool_config: &ToolConfig,
-) -> Result<Value, String> {
-    let session_tool_policy = repo.load_session_tool_policy(target_session_id)?;
-    let base_tool_view = session_tool_policy_base_tool_view(repo, target_session_id, tool_config)?;
-    let effective_tool_view =
-        apply_session_tool_policy_to_tool_view(&base_tool_view, session_tool_policy.as_ref());
-    let delegate_runtime_narrowing =
-        load_session_delegate_runtime_narrowing(repo, target_session_id)?;
-    let effective_runtime_narrowing = merge_session_tool_policy_runtime_narrowing(
-        delegate_runtime_narrowing.clone(),
-        session_tool_policy.as_ref(),
-    );
+/// Combine canonical Session materialization with the caller's authority view.
+///
+/// Durable policy may only narrow both inputs. The returned structure is the
+/// single app-level presentation of that result; callers choose when to encode
+/// it for their own protocol.
+pub(crate) fn build_session_tool_policy_status(
+    projection: &crate::context::SessionToolPolicyProjection,
+    authority_tool_view: &ToolView,
+) -> Result<SessionToolPolicyStatus, String> {
+    let session_tool_policy = projection.session_tool_policy.as_ref();
+    let base_tool_view = projection.base_tool_view.intersect(authority_tool_view);
+    let effective_tool_view = projection
+        .effective_tool_view
+        .intersect(authority_tool_view);
+    let delegate_runtime_narrowing = projection.delegate_runtime_narrowing.clone();
+    let effective_runtime_narrowing = projection.effective_runtime_narrowing.clone();
     let requested_tool_ids = session_tool_policy
-        .as_ref()
         .map(|policy| policy.requested_tool_ids.clone())
         .unwrap_or_default();
-    let requested_runtime_narrowing = session_tool_policy.as_ref().and_then(|policy| {
+    let requested_runtime_narrowing = session_tool_policy.and_then(|policy| {
         (!policy.runtime_narrowing.is_empty()).then_some(policy.runtime_narrowing.clone())
     });
-    let updated_at = session_tool_policy.as_ref().map(|policy| policy.updated_at);
-    let base_tool_ids = tool_view_names(&base_tool_view);
-    let effective_tool_ids = tool_view_names(&effective_tool_view);
+    let updated_at = session_tool_policy.map(|policy| policy.updated_at);
+    let base_tool_ids = base_tool_view.paths().map(ToString::to_string).collect();
+    let visible_base_tool_ids = base_tool_view.tool_names().map(str::to_owned).collect();
+    let effective_tool_ids = effective_tool_view
+        .paths()
+        .map(ToString::to_string)
+        .collect();
+    let visible_effective_tool_ids = effective_tool_view
+        .tool_names()
+        .map(str::to_owned)
+        .collect();
+    let mut visible_requested_tool_ids = Vec::new();
+    for tool_id in &requested_tool_ids {
+        let visible_tool_id = tool_id
+            .parse::<ToolPath>()
+            .ok()
+            .and_then(|path| base_tool_view.provider_name(&path).map(str::to_owned))
+            .unwrap_or_else(|| crate::tools::model_visible_tool_name(tool_id.as_str()));
+        if !visible_requested_tool_ids.contains(&visible_tool_id) {
+            visible_requested_tool_ids.push(visible_tool_id);
+        }
+    }
 
-    Ok(json!({
-        "has_policy": session_tool_policy.is_some(),
-        "updated_at": updated_at,
-        "requested_tool_ids": requested_tool_ids,
-        "visible_requested_tool_ids": visible_tool_id_names(&requested_tool_ids),
-        "base_tool_ids": base_tool_ids,
-        "visible_base_tool_ids": visible_tool_id_names(&base_tool_ids),
-        "effective_tool_ids": effective_tool_ids,
-        "visible_effective_tool_ids": visible_tool_id_names(&effective_tool_ids),
-        "requested_runtime_narrowing": runtime_narrowing_json(requested_runtime_narrowing),
-        "delegate_runtime_narrowing": runtime_narrowing_json(delegate_runtime_narrowing),
-        "effective_runtime_narrowing": runtime_narrowing_json(effective_runtime_narrowing),
-    }))
+    Ok(SessionToolPolicyStatus {
+        has_policy: session_tool_policy.is_some(),
+        updated_at,
+        visible_requested_tool_ids,
+        requested_tool_ids,
+        visible_base_tool_ids,
+        base_tool_ids,
+        visible_effective_tool_ids,
+        effective_tool_ids,
+        requested_runtime_narrowing,
+        delegate_runtime_narrowing,
+        effective_runtime_narrowing,
+    })
 }
 
 #[cfg(feature = "memory-sqlite")]
 fn resolve_session_tool_policy_tool_ids(
-    repo: &SessionRepository,
     session_id: &str,
-    tool_config: &ToolConfig,
+    base_tool_view: &ToolView,
     raw_tool_ids: Vec<String>,
 ) -> Result<Vec<String>, String> {
-    let base_tool_view = session_tool_policy_base_tool_view(repo, session_id, tool_config)?;
     let mut normalized_tool_ids = BTreeMap::new();
 
     for raw_tool_id in raw_tool_ids {
@@ -1737,12 +1676,17 @@ fn resolve_session_tool_policy_tool_ids(
             ));
         }
         let visible_tool_id = crate::tools::model_visible_tool_name(canonical_tool_id.as_str());
-        if !base_tool_view.contains(&visible_tool_id) {
-            return Err(format!(
-                "session_tool_policy_set_invalid_tool_id: `{raw_tool_id}` is not available in session `{session_id}`"
-            ));
-        }
-        normalized_tool_ids.insert(visible_tool_id.clone(), visible_tool_id);
+        let path = base_tool_view
+            .resolve_path(raw_tool_id.as_str())
+            .or_else(|| base_tool_view.resolve_path(canonical_tool_id.as_str()))
+            .or_else(|| base_tool_view.resolve_path(visible_tool_id.as_str()))
+            .ok_or_else(|| {
+                format!(
+                    "session_tool_policy_set_invalid_tool_id: `{raw_tool_id}` is not available in session `{session_id}`"
+                )
+            })?;
+        let canonical_path = path.to_string();
+        normalized_tool_ids.insert(canonical_path.clone(), canonical_path);
     }
 
     Ok(normalized_tool_ids.into_values().collect())

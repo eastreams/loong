@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 use crate::config::LoongConfig;
 use crate::tools::ToolView;
-use crate::{AppContext, CliResult};
+use crate::{CliResult, Context};
 
 use super::context_engine::{
     AssembledConversationContext, ContextArtifactDescriptor, ContextArtifactKind,
@@ -13,7 +13,6 @@ use super::context_engine::{
 };
 use super::prompt_orchestrator::seed_prompt_fragments_from_context;
 use super::prompt_orchestrator::sync_prompt_fragments_into_context;
-use super::runtime_binding::ConversationRuntimeBinding;
 use super::{PromptFragment, PromptLane};
 
 pub const TURN_MIDDLEWARE_API_VERSION: u16 = 1;
@@ -111,6 +110,11 @@ pub(crate) fn builtin_turn_middlewares() -> Vec<Box<dyn ConversationTurnMiddlewa
         .collect()
 }
 
+/// Observes one conversation execution without carrying parallel Session authority.
+///
+/// Identity and tool visibility always come from the Session bound into
+/// `Context`; subagent lifecycle hooks retain only the explicitly targeted
+/// child id.
 #[async_trait]
 pub trait ConversationTurnMiddleware: Send + Sync {
     fn id(&self) -> &'static str;
@@ -119,44 +123,31 @@ pub trait ConversationTurnMiddleware: Send + Sync {
         TurnMiddlewareMetadata::new(self.id(), [])
     }
 
-    async fn bootstrap(
-        &self,
-        _config: &LoongConfig,
-        _session_id: &str,
-        _app_ctx: &AppContext,
-    ) -> CliResult<()> {
+    async fn bootstrap(&self, _config: &LoongConfig, _ctx: &Context<'_>) -> CliResult<()> {
         Ok(())
     }
 
-    async fn ingest(
-        &self,
-        _session_id: &str,
-        _message: &Value,
-        _app_ctx: &AppContext,
-    ) -> CliResult<()> {
+    async fn ingest(&self, _message: &Value, _ctx: &Context<'_>) -> CliResult<()> {
         Ok(())
     }
 
     async fn transform_context(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
         _include_system_prompt: bool,
         assembled: AssembledConversationContext,
         _runtime_tool_view: &ToolView,
-        _requested_tool_view: &ToolView,
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &Context<'_>,
     ) -> CliResult<AssembledConversationContext> {
         Ok(assembled)
     }
 
     async fn after_turn(
         &self,
-        _session_id: &str,
         _user_input: &str,
         _assistant_reply: &str,
         _messages: &[Value],
-        _app_ctx: &AppContext,
+        _ctx: &Context<'_>,
     ) -> CliResult<()> {
         Ok(())
     }
@@ -164,27 +155,24 @@ pub trait ConversationTurnMiddleware: Send + Sync {
     async fn compact_context(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
         _messages: &[Value],
-        _app_ctx: &AppContext,
+        _ctx: &Context<'_>,
     ) -> CliResult<()> {
         Ok(())
     }
 
     async fn prepare_subagent_spawn(
         &self,
-        _parent_session_id: &str,
         _subagent_session_id: &str,
-        _app_ctx: &AppContext,
+        _ctx: &Context<'_>,
     ) -> CliResult<()> {
         Ok(())
     }
 
     async fn on_subagent_ended(
         &self,
-        _parent_session_id: &str,
         _subagent_session_id: &str,
-        _app_ctx: &AppContext,
+        _ctx: &Context<'_>,
     ) -> CliResult<()> {
         Ok(())
     }
@@ -203,12 +191,10 @@ impl ConversationTurnMiddleware for SystemPromptAdditionTurnMiddleware {
     async fn transform_context(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
         include_system_prompt: bool,
         mut assembled: AssembledConversationContext,
         _runtime_tool_view: &ToolView,
-        _requested_tool_view: &ToolView,
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &Context<'_>,
     ) -> CliResult<AssembledConversationContext> {
         if !include_system_prompt {
             return Ok(assembled);
@@ -234,15 +220,14 @@ impl ConversationTurnMiddleware for SystemPromptToolViewTurnMiddleware {
     async fn transform_context(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
         include_system_prompt: bool,
         mut assembled: AssembledConversationContext,
         runtime_tool_view: &ToolView,
-        requested_tool_view: &ToolView,
-        binding: ConversationRuntimeBinding<'_>,
+        ctx: &Context<'_>,
     ) -> CliResult<AssembledConversationContext> {
-        if include_system_prompt && requested_tool_view != runtime_tool_view {
-            apply_tool_view_to_system_prompt(&mut assembled, requested_tool_view, binding)?;
+        let session_tool_view = &ctx.session().tool_view;
+        if include_system_prompt && session_tool_view != runtime_tool_view {
+            apply_tool_view_to_system_prompt(&mut assembled, ctx)?;
         }
         Ok(assembled)
     }
@@ -315,12 +300,12 @@ pub(crate) fn apply_system_prompt_addition(
 
 fn apply_tool_view_to_system_prompt(
     assembled: &mut AssembledConversationContext,
-    tool_view: &ToolView,
-    binding: ConversationRuntimeBinding<'_>,
+    ctx: &Context<'_>,
 ) -> CliResult<()> {
     seed_prompt_fragments_from_context(assembled);
 
-    let runtime = binding.context().map(AppContext::runtime);
+    let runtime = Some(ctx.runtime());
+    let tool_view = &ctx.session().tool_view;
     let capability_snapshot = crate::tools::capability_snapshot_for_view(runtime, tool_view)
         .map_err(|error| error.to_string())?;
     let capability_fragment_index = assembled
@@ -421,91 +406,71 @@ where
         self.as_ref().metadata()
     }
 
-    async fn bootstrap(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        app_ctx: &AppContext,
-    ) -> CliResult<()> {
-        self.as_ref().bootstrap(config, session_id, app_ctx).await
+    async fn bootstrap(&self, config: &LoongConfig, ctx: &Context<'_>) -> CliResult<()> {
+        self.as_ref().bootstrap(config, ctx).await
     }
 
-    async fn ingest(
-        &self,
-        session_id: &str,
-        message: &Value,
-        app_ctx: &AppContext,
-    ) -> CliResult<()> {
-        self.as_ref().ingest(session_id, message, app_ctx).await
+    async fn ingest(&self, message: &Value, ctx: &Context<'_>) -> CliResult<()> {
+        self.as_ref().ingest(message, ctx).await
     }
 
     async fn transform_context(
         &self,
         config: &LoongConfig,
-        session_id: &str,
         include_system_prompt: bool,
         assembled: AssembledConversationContext,
         runtime_tool_view: &ToolView,
-        requested_tool_view: &ToolView,
-        binding: ConversationRuntimeBinding<'_>,
+        ctx: &Context<'_>,
     ) -> CliResult<AssembledConversationContext> {
         self.as_ref()
             .transform_context(
                 config,
-                session_id,
                 include_system_prompt,
                 assembled,
                 runtime_tool_view,
-                requested_tool_view,
-                binding,
+                ctx,
             )
             .await
     }
 
     async fn after_turn(
         &self,
-        session_id: &str,
         user_input: &str,
         assistant_reply: &str,
         messages: &[Value],
-        app_ctx: &AppContext,
+        ctx: &Context<'_>,
     ) -> CliResult<()> {
         self.as_ref()
-            .after_turn(session_id, user_input, assistant_reply, messages, app_ctx)
+            .after_turn(user_input, assistant_reply, messages, ctx)
             .await
     }
 
     async fn compact_context(
         &self,
         config: &LoongConfig,
-        session_id: &str,
         messages: &[Value],
-        app_ctx: &AppContext,
+        ctx: &Context<'_>,
     ) -> CliResult<()> {
-        self.as_ref()
-            .compact_context(config, session_id, messages, app_ctx)
-            .await
+        self.as_ref().compact_context(config, messages, ctx).await
     }
 
     async fn prepare_subagent_spawn(
         &self,
-        parent_session_id: &str,
         subagent_session_id: &str,
-        app_ctx: &AppContext,
+        ctx: &Context<'_>,
     ) -> CliResult<()> {
         self.as_ref()
-            .prepare_subagent_spawn(parent_session_id, subagent_session_id, app_ctx)
+            .prepare_subagent_spawn(subagent_session_id, ctx)
             .await
     }
 
     async fn on_subagent_ended(
         &self,
-        parent_session_id: &str,
         subagent_session_id: &str,
-        app_ctx: &AppContext,
+        ctx: &Context<'_>,
     ) -> CliResult<()> {
         self.as_ref()
-            .on_subagent_ended(parent_session_id, subagent_session_id, app_ctx)
+            .on_subagent_ended(subagent_session_id, ctx)
             .await
     }
 }
@@ -516,6 +481,16 @@ mod tests {
 
     #[tokio::test]
     async fn builtin_turn_middlewares_preserve_context_artifact_descriptors() {
+        let config = crate::config::LoongConfig::default();
+        let mut owner = crate::test_support::TestRuntimeSession::from_config(
+            &config,
+            "session-artifact-preservation",
+            "turn-middleware-test",
+            loong_contracts::GovernedSessionMode::AdvisoryOnly,
+        )
+        .expect("advisory test runtime session");
+        owner.session.tool_view = crate::tools::ToolView::from_legacy_paths(["read"]);
+        let ctx = owner.context();
         let assembled = AssembledConversationContext {
             messages: vec![
                 json!({
@@ -578,30 +553,13 @@ mod tests {
             runtime_self_continuity: None,
         };
         let runtime_tool_view = crate::tools::runtime_tool_view();
-        let requested_tool_view = crate::tools::ToolView::from_tool_names(["file.read"]);
 
         let assembled = SystemPromptAdditionTurnMiddleware
-            .transform_context(
-                &crate::config::LoongConfig::default(),
-                "session-artifact-preservation",
-                true,
-                assembled,
-                &runtime_tool_view,
-                &requested_tool_view,
-                ConversationRuntimeBinding::AdvisoryOnly,
-            )
+            .transform_context(&config, true, assembled, &runtime_tool_view, &ctx)
             .await
             .expect("system prompt addition middleware should succeed");
         let transformed = SystemPromptToolViewTurnMiddleware
-            .transform_context(
-                &crate::config::LoongConfig::default(),
-                "session-artifact-preservation",
-                true,
-                assembled,
-                &runtime_tool_view,
-                &requested_tool_view,
-                ConversationRuntimeBinding::AdvisoryOnly,
-            )
+            .transform_context(&config, true, assembled, &runtime_tool_view, &ctx)
             .await
             .expect("tool view middleware should succeed");
 
@@ -665,6 +623,15 @@ mod tests {
 
     #[tokio::test]
     async fn system_prompt_addition_middleware_skips_addition_when_system_prompt_is_disabled() {
+        let config = crate::config::LoongConfig::default();
+        let owner = crate::test_support::TestRuntimeSession::from_config(
+            &config,
+            "session-no-system-prompt",
+            "turn-middleware-test",
+            loong_contracts::GovernedSessionMode::AdvisoryOnly,
+        )
+        .expect("advisory test runtime session");
+        let ctx = owner.context();
         let assembled = AssembledConversationContext {
             messages: Vec::new(),
             artifacts: Vec::new(),
@@ -676,15 +643,7 @@ mod tests {
         let runtime_tool_view = crate::tools::runtime_tool_view();
 
         let transformed = SystemPromptAdditionTurnMiddleware
-            .transform_context(
-                &crate::config::LoongConfig::default(),
-                "session-no-system-prompt",
-                false,
-                assembled,
-                &runtime_tool_view,
-                &runtime_tool_view,
-                ConversationRuntimeBinding::AdvisoryOnly,
-            )
+            .transform_context(&config, false, assembled, &runtime_tool_view, &ctx)
             .await
             .expect("system prompt addition middleware should succeed");
 

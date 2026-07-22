@@ -202,8 +202,9 @@ architecture_boundary_check_keys() {
   cat <<'BOUNDARIES'
 memory_literals
 provider_mod_helper_definitions
-conversation_provider_optional_binding_roundtrip
-conversation_app_dispatcher_optional_kernel_context
+typed_execution_legacy_types
+typed_action_execution_audit_owner
+runtime_root_transitional_contracts
 spec_app_dependency
 BOUNDARIES
 }
@@ -234,36 +235,70 @@ architecture_spec_app_dependency_hits() {
   fi
 }
 
-architecture_conversation_provider_optional_binding_roundtrip_hits() {
-  local file="crates/app/src/conversation/runtime.rs"
+architecture_typed_execution_legacy_type_hits() {
+  local required="crates/app/src/context.rs"
+  local paths=("$required")
+  local candidates=(
+    "crates/app/src/context"
+    "crates/loong-runtime/src"
+    "crates/access/src"
+    "crates/tools/src"
+  )
+  local candidate
+
+  if [[ ! -f "$required" ]]; then
+    echo "missing boundary file: $required" >&2
+    return 1
+  fi
+  for candidate in "${candidates[@]}"; do
+    [[ -e "$candidate" ]] && paths+=("$candidate")
+  done
+
   if have_rg; then
-    rg -n 'ProviderRuntimeBinding::from_optional_kernel_context' "$file" || true
+    rg -n '\b(AppContext|AppContextInner|AppContextFactory|KernelInvocationContext|KernelContext|CapabilityToken|VerticalPackManifest|ToolCoreRequest|ToolCoreOutcome|grant_action|ActionAuthorizationContext|SessionAuthority)\b' \
+      "${paths[@]}" || true
   else
-    grep -En 'ProviderRuntimeBinding::from_optional_kernel_context' "$file" || true
+    grep -REn '\b(AppContext|AppContextInner|AppContextFactory|KernelInvocationContext|KernelContext|CapabilityToken|VerticalPackManifest|ToolCoreRequest|ToolCoreOutcome|grant_action|ActionAuthorizationContext|SessionAuthority)\b' \
+      "${paths[@]}" || true
   fi
 }
 
-architecture_conversation_app_dispatcher_optional_kernel_context_hits() {
-  local files=(
-    "crates/app/src/conversation/turn_engine.rs"
-    "crates/app/src/conversation/turn_coordinator.rs"
-  )
-  local file
-  local pattern
+architecture_typed_action_execution_audit_owner_hits() {
+  local required="crates/loong-runtime/src/tool_plane/invocation.rs"
+  if [[ ! -f "$required" ]]; then
+    echo "missing boundary file: $required" >&2
+    return 1
+  fi
 
-  for file in "${files[@]}"; do
-    if [[ ! -f "$file" ]]; then
-      echo "missing boundary file: $file" >&2
-      return 1
-    fi
-  done
-
-  pattern='kernel_ctx:[[:space:]]*Option<[[:space:]]*&[^>]*KernelContext[^>]*>'
-
+  # Only the runtime's private granted ToolInvocation runner owns typed action
+  # execution evidence. Tests may exercise the writer directly; production
+  # callers elsewhere would let orchestration fabricate an execution lifecycle.
   if have_rg; then
-    rg -n "$pattern" "${files[@]}" || true
+    rg -n '\.record_granted_action_execution\(' crates --glob '*.rs' \
+      --glob '!crates/loong-runtime/src/tool_plane/invocation.rs' \
+      --glob '!**/tests.rs' \
+      --glob '!**/tests/**' || true
   else
-    grep -En "$pattern" "${files[@]}" || true
+    grep -REn '\.record_granted_action_execution\(' crates \
+      --include='*.rs' \
+      --exclude='tests.rs' \
+      --exclude-dir='tests' \
+      --exclude='invocation.rs' || true
+  fi
+}
+
+architecture_runtime_root_transitional_contract_hits() {
+  local file="crates/loong-runtime/src/lib.rs"
+  if [[ ! -f "$file" ]]; then
+    echo "missing boundary file: $file" >&2
+    return 1
+  fi
+  if have_rg; then
+    rg --with-filename -n 'Runtime(Oneshot|Interactive|Executor|TaskStatus)|pub use loong_core|use loong_core::Session' \
+      "$file" || true
+  else
+    grep -HEn 'Runtime(Oneshot|Interactive|Executor|TaskStatus)|pub use loong_core|use loong_core::Session' \
+      "$file" || true
   fi
 }
 
@@ -275,11 +310,14 @@ architecture_boundary_pass_summary() {
     provider_mod_helper_definitions)
       echo "provider/mod.rs keeps payload, parse, and recovery helper implementations outside the top-level module"
       ;;
-    conversation_provider_optional_binding_roundtrip)
-      echo "conversation/runtime.rs translates explicit conversation bindings into provider bindings without optional-kernel roundtrips"
+    typed_execution_legacy_types)
+      echo "typed execution uses app-owned Context<'a>, typed grants, and narrow requirement traits"
       ;;
-    conversation_app_dispatcher_optional_kernel_context)
-      echo "conversation app-tool dispatcher approval hooks stay binding-based without optional kernel fallbacks"
+    typed_action_execution_audit_owner)
+      echo "typed action execution evidence is written only by the runtime grant owner"
+      ;;
+    runtime_root_transitional_contracts)
+      echo "loong-runtime crate root contains only runtime ownership modules"
       ;;
     spec_app_dependency)
       echo "spec crate remains detached from app crate at the Cargo dependency boundary"
@@ -298,11 +336,14 @@ architecture_boundary_fail_summary() {
     provider_mod_helper_definitions)
       echo "provider/mod.rs still defines payload, parse, or recovery helpers directly"
       ;;
-    conversation_provider_optional_binding_roundtrip)
-      echo "conversation/runtime.rs still rebuilds provider bindings from optional kernel context"
+    typed_execution_legacy_types)
+      echo "legacy execution types found in the typed execution spine"
       ;;
-    conversation_app_dispatcher_optional_kernel_context)
-      echo "conversation app-tool dispatcher approval hooks still expose raw optional kernel context"
+    typed_action_execution_audit_owner)
+      echo "typed action execution evidence has a caller outside the runtime grant owner"
+      ;;
+    runtime_root_transitional_contracts)
+      echo "loong-runtime crate root still owns transitional protocol contracts"
       ;;
     spec_app_dependency)
       echo "spec crate depends on app crate directly"
@@ -321,11 +362,14 @@ architecture_boundary_hits() {
     provider_mod_helper_definitions)
       architecture_provider_mod_helper_definition_hits
       ;;
-    conversation_provider_optional_binding_roundtrip)
-      architecture_conversation_provider_optional_binding_roundtrip_hits
+    typed_execution_legacy_types)
+      architecture_typed_execution_legacy_type_hits
       ;;
-    conversation_app_dispatcher_optional_kernel_context)
-      architecture_conversation_app_dispatcher_optional_kernel_context_hits
+    typed_action_execution_audit_owner)
+      architecture_typed_action_execution_audit_owner_hits
+      ;;
+    runtime_root_transitional_contracts)
+      architecture_runtime_root_transitional_contract_hits
       ;;
     spec_app_dependency)
       architecture_spec_app_dependency_hits

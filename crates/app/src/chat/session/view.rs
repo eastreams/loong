@@ -74,7 +74,7 @@ impl ChatSessionSurface {
         let startup_summary = state
             .startup_summary
             .clone()
-            .unwrap_or_else(|| fallback_startup_summary(self.runtime.session_id.as_str()));
+            .unwrap_or_else(|| fallback_startup_summary(self.runtime.session.session_id()));
         let mut lines = vec![
             format!("control deck · {}", state.sidebar_tab.title()),
             format!("session {}", startup_summary.session_id),
@@ -365,7 +365,7 @@ impl ChatSessionSurface {
             .startup_summary
             .as_ref()
             .map(|summary| summary.session_id.as_str())
-            .unwrap_or(self.runtime.session_id.as_str());
+            .unwrap_or(self.runtime.session.session_id());
         let acp = if self.runtime.config.acp.enabled {
             "acp:on"
         } else {

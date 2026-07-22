@@ -2,15 +2,15 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-use futures_util::stream::{self, StreamExt};
+use futures_util::stream::{FuturesUnordered, StreamExt};
 use loong_contracts::ToolSchedulingClass;
 
 use super::prepare::PreparedToolIntent;
 use super::{
-    AppContext, AppToolDispatcher, ConversationRuntimeBinding, ConversationTurnObserverHandle,
-    PreparedToolExecutionOutcome, ToolBatchExecutionIntentTrace, ToolBatchExecutionMode,
-    ToolBatchExecutionSegmentTrace, ToolBatchExecutionTrace, ToolOutcomeTraceRecord, TurnEngine,
-    TurnResult, build_denied_tool_outcome_trace_record, build_failure_tool_outcome_trace_record,
+    Context, ConversationTurnObserverHandle, LegacyToolDispatcher, PreparedToolExecutionOutcome,
+    ToolBatchExecutionIntentTrace, ToolBatchExecutionMode, ToolBatchExecutionSegmentTrace,
+    ToolBatchExecutionTrace, ToolIntent, ToolOutcomeTraceRecord, TurnEngine, TurnResult,
+    build_denied_tool_outcome_trace_record, build_failure_tool_outcome_trace_record,
     build_success_tool_outcome_trace_record, build_tool_intent_completed_trace,
     build_tool_intent_denied_trace, build_tool_intent_failure_trace, elapsed_ms_u64,
     format_tool_denied_result_line_with_limit, format_tool_result_line_with_limit,
@@ -70,7 +70,7 @@ impl<'a> ToolBatchHarness<'a> {
 
     pub(super) fn prepared_batch_segments(
         self,
-        prepared: &[PreparedToolIntent],
+        prepared: &[PreparedToolIntent<'_>],
     ) -> Vec<PreparedBatchSegment> {
         let mut segments = Vec::new();
         let mut remaining = prepared;
@@ -113,20 +113,42 @@ impl<'a> ToolBatchHarness<'a> {
         ToolBatchExecutionMode::Sequential
     }
 
-    pub(super) async fn execute_prepared_batch<D: AppToolDispatcher + ?Sized>(
+    /// One observed unit of bounded parallel execution.
+    ///
+    /// This is the sole owner of in-flight accounting. Tool dispatch remains
+    /// on the prepared invocation, and tracing remains at the batch boundary.
+    async fn execute_parallel_intent<'context, D: LegacyToolDispatcher + ?Sized>(
         self,
-        prepared: &[PreparedToolIntent],
+        index: usize,
+        prepared_intent: PreparedToolIntent<'context>,
+        session_context: &Context<'_>,
+        legacy_dispatcher: &D,
+        observer: Option<&ConversationTurnObserverHandle>,
+        in_flight: Arc<AtomicUsize>,
+        observed_peak: Arc<AtomicUsize>,
+    ) -> (usize, ToolIntent, PreparedToolExecutionOutcome) {
+        let current_in_flight = in_flight.fetch_add(1, Ordering::Relaxed) + 1;
+        observe_peak_in_flight(observed_peak.as_ref(), current_in_flight);
+        let (intent, outcome) = prepared_intent
+            .execute(self.engine, session_context, legacy_dispatcher, observer)
+            .await;
+        in_flight.fetch_sub(1, Ordering::Relaxed);
+        (index, intent, outcome)
+    }
+
+    pub(super) async fn execute_prepared_batch<'context, D: LegacyToolDispatcher + ?Sized>(
+        self,
+        prepared: Vec<PreparedToolIntent<'context>>,
         batch_segments: &[PreparedBatchSegment],
-        session_context: &AppContext,
-        app_dispatcher: &D,
-        binding: ConversationRuntimeBinding<'_>,
+        session_context: &Context<'_>,
+        legacy_dispatcher: &D,
         trace: &mut ToolBatchExecutionTrace,
         observer: Option<&ConversationTurnObserverHandle>,
     ) -> Result<Vec<String>, TurnResult> {
         let started_at = Instant::now();
         let result = async {
             let mut outputs = Vec::with_capacity(prepared.len());
-            let mut remaining = prepared;
+            let mut remaining = prepared.into_iter();
 
             debug_assert_eq!(trace.segments.len(), batch_segments.len());
 
@@ -135,14 +157,13 @@ impl<'a> ToolBatchHarness<'a> {
                 .copied()
                 .zip(trace.segments.iter_mut())
             {
-                let (prepared_segment, rest) = remaining.split_at(segment.len);
+                let prepared_segment = remaining.by_ref().take(segment.len).collect();
                 let mut segment_outputs = match segment.execution_mode {
                     ToolBatchExecutionMode::Parallel => {
                         self.execute_prepared_batch_in_parallel(
                             prepared_segment,
                             session_context,
-                            app_dispatcher,
-                            binding,
+                            legacy_dispatcher,
                             &mut trace.intent_outcomes,
                             &mut trace.outcome_records,
                             trace_segment,
@@ -154,8 +175,7 @@ impl<'a> ToolBatchHarness<'a> {
                         self.execute_prepared_batch_sequential(
                             prepared_segment,
                             session_context,
-                            app_dispatcher,
-                            binding,
+                            legacy_dispatcher,
                             &mut trace.intent_outcomes,
                             &mut trace.outcome_records,
                             trace_segment,
@@ -166,8 +186,9 @@ impl<'a> ToolBatchHarness<'a> {
                 };
 
                 outputs.append(&mut segment_outputs);
-                remaining = rest;
             }
+
+            debug_assert!(remaining.next().is_none());
 
             Ok(outputs)
         }
@@ -178,49 +199,41 @@ impl<'a> ToolBatchHarness<'a> {
         result
     }
 
-    async fn execute_prepared_batch_sequential<D: AppToolDispatcher + ?Sized>(
+    async fn execute_prepared_batch_sequential<'context, D: LegacyToolDispatcher + ?Sized>(
         self,
-        prepared: &[PreparedToolIntent],
-        session_context: &AppContext,
-        app_dispatcher: &D,
-        binding: ConversationRuntimeBinding<'_>,
+        prepared: Vec<PreparedToolIntent<'context>>,
+        session_context: &Context<'_>,
+        legacy_dispatcher: &D,
         intent_outcomes: &mut Vec<ToolBatchExecutionIntentTrace>,
         outcome_records: &mut Vec<ToolOutcomeTraceRecord>,
         trace_segment: &mut ToolBatchExecutionSegmentTrace,
         observer: Option<&ConversationTurnObserverHandle>,
     ) -> Result<Vec<String>, TurnResult> {
         let started_at = Instant::now();
+        let has_prepared = !prepared.is_empty();
         let result = async {
             let mut outputs = Vec::with_capacity(prepared.len());
 
             for prepared_intent in prepared {
-                let outcome = match self
-                    .engine
-                    .execute_prepared_tool_intent(
-                        prepared_intent,
-                        session_context,
-                        app_dispatcher,
-                        binding,
-                        observer,
-                    )
-                    .await
-                {
-                    PreparedToolExecutionOutcome::Completed(outcome) => outcome,
+                let (intent, execution_outcome) = prepared_intent
+                    .execute(self.engine, session_context, legacy_dispatcher, observer)
+                    .await;
+                let (status, payload) = match execution_outcome {
+                    PreparedToolExecutionOutcome::Completed { status, payload } => {
+                        (status, payload)
+                    }
                     PreparedToolExecutionOutcome::Denied(failure) => {
-                        let outcome_record = build_denied_tool_outcome_trace_record(
-                            &prepared_intent.intent,
-                            &failure,
-                        );
+                        let outcome_record =
+                            build_denied_tool_outcome_trace_record(&intent, &failure);
                         outcome_records.push(outcome_record);
 
-                        let intent_outcome =
-                            build_tool_intent_denied_trace(&prepared_intent.intent, &failure);
+                        let intent_outcome = build_tool_intent_denied_trace(&intent, &failure);
                         intent_outcomes.push(intent_outcome);
 
                         let payload_summary_limit_chars =
                             self.engine.tool_result_payload_summary_limit_chars;
                         let output = format_tool_denied_result_line_with_limit(
-                            &prepared_intent.intent,
+                            &intent,
                             &failure,
                             payload_summary_limit_chars,
                         );
@@ -228,17 +241,14 @@ impl<'a> ToolBatchHarness<'a> {
                         continue;
                     }
                     PreparedToolExecutionOutcome::Interrupted(turn_result) => {
-                        let outcome_record = build_failure_tool_outcome_trace_record(
-                            &prepared_intent.intent,
-                            &turn_result,
-                        );
+                        let outcome_record =
+                            build_failure_tool_outcome_trace_record(&intent, &turn_result);
 
                         if let Some(outcome_record) = outcome_record {
                             outcome_records.push(outcome_record);
                         }
 
-                        let intent_outcome =
-                            build_tool_intent_failure_trace(&prepared_intent.intent, &turn_result);
+                        let intent_outcome = build_tool_intent_failure_trace(&intent, &turn_result);
 
                         if let Some(intent_outcome) = intent_outcome {
                             intent_outcomes.push(intent_outcome);
@@ -248,30 +258,20 @@ impl<'a> ToolBatchHarness<'a> {
                     }
                 };
 
-                app_dispatcher
-                    .after_tool_execution(
-                        session_context,
-                        &prepared_intent.intent,
-                        prepared_intent.intent_sequence,
-                        &prepared_intent.request,
-                        &outcome,
-                        binding,
-                    )
-                    .await;
-
                 let outcome_record =
-                    build_success_tool_outcome_trace_record(&prepared_intent.intent, &outcome);
+                    build_success_tool_outcome_trace_record(&intent, status.as_str(), &payload);
                 outcome_records.push(outcome_record);
 
                 let intent_outcome =
-                    build_tool_intent_completed_trace(&prepared_intent.intent, &outcome);
+                    build_tool_intent_completed_trace(&intent, status.as_str(), &payload);
                 intent_outcomes.push(intent_outcome);
 
                 let payload_summary_limit_chars =
                     self.engine.tool_result_payload_summary_limit_chars;
                 let output = format_tool_result_line_with_limit(
-                    &prepared_intent.intent,
-                    &outcome,
+                    &intent,
+                    status.as_str(),
+                    &payload,
                     payload_summary_limit_chars,
                 );
                 outputs.push(output);
@@ -281,19 +281,18 @@ impl<'a> ToolBatchHarness<'a> {
         }
         .await;
 
-        let observed_peak_in_flight = if prepared.is_empty() { 0 } else { 1 };
+        let observed_peak_in_flight = usize::from(has_prepared);
         let observed_wall_time_ms = elapsed_ms_u64(started_at);
         trace_segment.record_observation(observed_peak_in_flight, observed_wall_time_ms);
 
         result
     }
 
-    async fn execute_prepared_batch_in_parallel<D: AppToolDispatcher + ?Sized>(
+    async fn execute_prepared_batch_in_parallel<'context, D: LegacyToolDispatcher + ?Sized>(
         self,
-        prepared: &[PreparedToolIntent],
-        session_context: &AppContext,
-        app_dispatcher: &D,
-        binding: ConversationRuntimeBinding<'_>,
+        prepared: Vec<PreparedToolIntent<'context>>,
+        session_context: &Context<'_>,
+        legacy_dispatcher: &D,
         intent_outcomes: &mut Vec<ToolBatchExecutionIntentTrace>,
         outcome_records: &mut Vec<ToolOutcomeTraceRecord>,
         trace_segment: &mut ToolBatchExecutionSegmentTrace,
@@ -307,93 +306,59 @@ impl<'a> ToolBatchHarness<'a> {
         let mut indexed_outcome_records = Vec::with_capacity(prepared.len());
         let mut results = Vec::with_capacity(prepared.len());
         let max_in_flight = self.engine.parallel_tool_execution_max_in_flight;
-        let mut executions = stream::iter(prepared.iter().cloned().enumerate().map(
-            |(index, prepared_intent)| {
-                let in_flight = Arc::clone(&in_flight);
-                let observed_peak = Arc::clone(&observed_peak);
-
-                async move {
-                    let current_in_flight = in_flight.fetch_add(1, Ordering::Relaxed) + 1;
-                    observe_peak_in_flight(observed_peak.as_ref(), current_in_flight);
-
-                    let result = match self
-                        .engine
-                        .execute_prepared_tool_intent(
-                            &prepared_intent,
-                            session_context,
-                            app_dispatcher,
-                            binding,
-                            observer,
-                        )
-                        .await
-                    {
-                        PreparedToolExecutionOutcome::Completed(outcome) => {
-                            app_dispatcher
-                                .after_tool_execution(
-                                    session_context,
-                                    &prepared_intent.intent,
-                                    prepared_intent.intent_sequence,
-                                    &prepared_intent.request,
-                                    &outcome,
-                                    binding,
-                                )
-                                .await;
-
-                            let output = format_tool_result_line_with_limit(
-                                &prepared_intent.intent,
-                                &outcome,
-                                payload_summary_limit_chars,
-                            );
-                            let outcome_record = build_success_tool_outcome_trace_record(
-                                &prepared_intent.intent,
-                                &outcome,
-                            );
-                            let intent_outcome = build_tool_intent_completed_trace(
-                                &prepared_intent.intent,
-                                &outcome,
-                            );
-
-                            Ok((output, intent_outcome, outcome_record))
-                        }
-                        PreparedToolExecutionOutcome::Denied(failure) => {
-                            let output = format_tool_denied_result_line_with_limit(
-                                &prepared_intent.intent,
-                                &failure,
-                                payload_summary_limit_chars,
-                            );
-                            let intent_outcome =
-                                build_tool_intent_denied_trace(&prepared_intent.intent, &failure);
-                            let outcome_record = build_denied_tool_outcome_trace_record(
-                                &prepared_intent.intent,
-                                &failure,
-                            );
-
-                            Ok((output, intent_outcome, outcome_record))
-                        }
-                        PreparedToolExecutionOutcome::Interrupted(turn_result) => {
-                            let intent_outcome = build_tool_intent_failure_trace(
-                                &prepared_intent.intent,
-                                &turn_result,
-                            );
-                            let outcome_record = build_failure_tool_outcome_trace_record(
-                                &prepared_intent.intent,
-                                &turn_result,
-                            );
-
-                            Err((turn_result, intent_outcome, outcome_record))
-                        }
-                    };
-
-                    in_flight.fetch_sub(1, Ordering::Relaxed);
-
-                    (index, result)
-                }
-            },
-        ))
-        .buffer_unordered(max_in_flight);
+        let mut remaining = prepared.into_iter().enumerate();
+        let mut executions = FuturesUnordered::new();
+        for _ in 0..max_in_flight {
+            let Some((index, prepared_intent)) = remaining.next() else {
+                break;
+            };
+            executions.push(self.execute_parallel_intent(
+                index,
+                prepared_intent,
+                session_context,
+                legacy_dispatcher,
+                observer,
+                Arc::clone(&in_flight),
+                Arc::clone(&observed_peak),
+            ));
+        }
 
         let mut batch_failure = None;
-        while let Some((index, result)) = executions.next().await {
+        while let Some((index, intent, execution_outcome)) = executions.next().await {
+            let result = match execution_outcome {
+                PreparedToolExecutionOutcome::Completed { status, payload } => {
+                    let output = format_tool_result_line_with_limit(
+                        &intent,
+                        status.as_str(),
+                        &payload,
+                        payload_summary_limit_chars,
+                    );
+                    let outcome_record =
+                        build_success_tool_outcome_trace_record(&intent, status.as_str(), &payload);
+                    let intent_outcome =
+                        build_tool_intent_completed_trace(&intent, status.as_str(), &payload);
+
+                    Ok((output, intent_outcome, outcome_record))
+                }
+                PreparedToolExecutionOutcome::Denied(failure) => {
+                    let output = format_tool_denied_result_line_with_limit(
+                        &intent,
+                        &failure,
+                        payload_summary_limit_chars,
+                    );
+                    let intent_outcome = build_tool_intent_denied_trace(&intent, &failure);
+                    let outcome_record = build_denied_tool_outcome_trace_record(&intent, &failure);
+
+                    Ok((output, intent_outcome, outcome_record))
+                }
+                PreparedToolExecutionOutcome::Interrupted(turn_result) => {
+                    let intent_outcome = build_tool_intent_failure_trace(&intent, &turn_result);
+                    let outcome_record =
+                        build_failure_tool_outcome_trace_record(&intent, &turn_result);
+
+                    Err((turn_result, intent_outcome, outcome_record))
+                }
+            };
             match result {
                 Ok((output, intent_outcome, outcome_record)) => {
                     indexed_intent_outcomes.push((index, intent_outcome));
@@ -412,6 +377,18 @@ impl<'a> ToolBatchHarness<'a> {
                     batch_failure = Some(turn_result);
                     break;
                 }
+            }
+
+            if let Some((next_index, next_prepared_intent)) = remaining.next() {
+                executions.push(self.execute_parallel_intent(
+                    next_index,
+                    next_prepared_intent,
+                    session_context,
+                    legacy_dispatcher,
+                    observer,
+                    Arc::clone(&in_flight),
+                    Arc::clone(&observed_peak),
+                ));
             }
         }
 

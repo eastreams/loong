@@ -808,7 +808,7 @@ fn find_memory_location_for_path<'a>(
 }
 
 fn normalized_requested_path_key(path: &Path) -> String {
-    let normalized_path = super::normalize_without_fs(path);
+    let normalized_path = loong_kernel::access::fs::normalize_path_lexically(path);
     normalized_path.display().to_string()
 }
 

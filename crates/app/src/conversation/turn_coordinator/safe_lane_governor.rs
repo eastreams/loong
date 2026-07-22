@@ -373,21 +373,17 @@ pub(super) fn decide_safe_lane_session_governor(
     }
 }
 
-pub(super) async fn load_safe_lane_history_signals_for_governor(
-    config: &LoongConfig,
-    session_id: &str,
-    binding: ConversationRuntimeBinding<'_>,
+pub(super) async fn load_safe_lane_history_signals_for_governor<R: ConversationRuntime + ?Sized>(
+    ctx: &Context<'_>,
+    runtime: &R,
 ) -> SafeLaneGovernorHistorySignals {
     let window_turns = SAFE_LANE_SESSION_GOVERNOR_WINDOW_TURNS;
     #[cfg(feature = "memory-sqlite")]
     {
-        let memory_config =
-            crate::session::store::session_store_config_from_memory_config(&config.memory);
         return match load_assistant_contents_from_session_window_detailed(
-            session_id,
             window_turns,
-            binding,
-            &memory_config,
+            ctx,
+            runtime,
         )
         .await
         {
@@ -404,6 +400,7 @@ pub(super) async fn load_safe_lane_history_signals_for_governor(
 
     #[cfg(not(feature = "memory-sqlite"))]
     {
+        let _ = (ctx, runtime);
         SafeLaneGovernorHistorySignals::default()
     }
 }

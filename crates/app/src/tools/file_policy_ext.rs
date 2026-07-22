@@ -159,7 +159,7 @@ impl FilePolicyExtension {
         }
 
         // 3. Neither path nor parent exists — fall back to pure normalization.
-        let normalized = super::normalize_without_fs(&combined);
+        let normalized = loong_kernel::access::fs::normalize_path_lexically(&combined);
         !self.path_is_within_allowed_roots(normalized.as_path())
     }
 
@@ -244,7 +244,7 @@ fn normalize_path_for_policy(path: &Path) -> PathBuf {
         return canonicalized_path;
     }
 
-    super::normalize_without_fs(path)
+    loong_kernel::access::fs::normalize_path_lexically(path)
 }
 
 fn reconstruct_from_existing_ancestor(path: &Path) -> Option<PathBuf> {

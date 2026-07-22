@@ -329,7 +329,6 @@ mod tests {
     #[derive(Default)]
     struct ChannelTraceRuntime {
         request_turn_calls: Arc<Mutex<usize>>,
-        request_turn_kernel_bindings: Arc<Mutex<Vec<bool>>>,
     }
 
     #[cfg(any(
@@ -342,10 +341,8 @@ mod tests {
         async fn build_messages(
             &self,
             _config: &LoongConfig,
-            _app_ctx: &crate::AppContext,
+            _ctx: &crate::Context<'_>,
             include_system_prompt: bool,
-            _tool_view: &crate::tools::ToolView,
-            _binding: crate::conversation::ConversationRuntimeBinding<'_>,
         ) -> CliResult<Vec<Value>> {
             let mut messages = Vec::new();
 
@@ -370,7 +367,7 @@ mod tests {
             &self,
             _config: &LoongConfig,
             _messages: &[Value],
-            _binding: crate::conversation::ConversationRuntimeBinding<'_>,
+            _ctx: &crate::Context<'_>,
         ) -> CliResult<String> {
             Err("request_completion should not be used in channel trace runtime tests".to_owned())
         }
@@ -378,17 +375,10 @@ mod tests {
         async fn request_turn(
             &self,
             _config: &LoongConfig,
-            _session_id: &str,
             _turn_id: &str,
             _messages: &[Value],
-            _tool_view: &crate::tools::ToolView,
-            binding: crate::conversation::ConversationRuntimeBinding<'_>,
+            _ctx: &crate::Context<'_>,
         ) -> CliResult<crate::conversation::ProviderTurn> {
-            self.request_turn_kernel_bindings
-                .lock()
-                .expect("request turn context binding log")
-                .push(binding.is_context_bound());
-
             let mut request_turn_calls = self
                 .request_turn_calls
                 .lock()
@@ -399,12 +389,11 @@ mod tests {
 
             if current_call == 1 {
                 let tool_intent = crate::conversation::ToolIntent {
-                    tool_name: "tool.search".to_owned(),
+                    tool_name: "tool.search".into(),
                     args_json: serde_json::json!({
                         "query": "qzxwvvvjjjjkkk",
                     }),
                     source: "channel_trace_test".to_owned(),
-                    session_id: String::new(),
                     turn_id: String::new(),
                     tool_call_id: "call-1".to_owned(),
                 };
@@ -425,23 +414,19 @@ mod tests {
         async fn request_turn_streaming(
             &self,
             config: &LoongConfig,
-            session_id: &str,
             turn_id: &str,
             messages: &[Value],
-            tool_view: &crate::tools::ToolView,
-            binding: crate::conversation::ConversationRuntimeBinding<'_>,
+            ctx: &crate::Context<'_>,
             _on_token: crate::provider::StreamingTokenCallback,
         ) -> CliResult<crate::conversation::ProviderTurn> {
-            self.request_turn(config, session_id, turn_id, messages, tool_view, binding)
-                .await
+            self.request_turn(config, turn_id, messages, ctx).await
         }
 
         async fn persist_turn(
             &self,
-            _session_id: &str,
             _role: &str,
             _content: &str,
-            _binding: crate::conversation::ConversationRuntimeBinding<'_>,
+            _ctx: &crate::Context<'_>,
         ) -> CliResult<()> {
             Ok(())
         }
@@ -648,15 +633,18 @@ mod tests {
             },
         };
         let runtime = ChannelTraceRuntime::default();
-        let app_ctx = crate::context::bootstrap_test_app_context("channel-test", 60)
-            .expect("bootstrap test app context");
+        let owner = crate::test_support::runtime_session_for_test(
+            message.session.session_key(),
+            crate::tools::runtime_tool_view_from_loong_config(&config),
+        );
+        let ctx = owner.context();
 
         let reply = process_inbound_with_runtime_and_feedback(
             &config,
-            &app_ctx,
+            &ctx,
             &runtime,
             &message,
-            crate::conversation::ConversationRuntimeBinding::Context(&app_ctx),
+            &owner.legacy_tools,
             ChannelTurnFeedbackPolicy::final_trace_significant(),
         )
         .await
@@ -673,12 +661,6 @@ mod tests {
             .lock()
             .expect("request turn call count");
         assert_eq!(*request_turn_calls, 1);
-
-        let request_turn_kernel_bindings = runtime
-            .request_turn_kernel_bindings
-            .lock()
-            .expect("request turn context binding log");
-        assert_eq!(request_turn_kernel_bindings.as_slice(), &[true]);
     }
 
     #[cfg(any(
@@ -718,15 +700,18 @@ mod tests {
             },
         };
         let runtime = ChannelTraceRuntime::default();
-        let app_ctx = crate::context::bootstrap_test_app_context("channel-test", 60)
-            .expect("bootstrap test app context");
+        let owner = crate::test_support::runtime_session_for_test(
+            message.session.session_key(),
+            crate::tools::runtime_tool_view_from_loong_config(&config),
+        );
+        let ctx = owner.context();
 
         let reply = process_inbound_with_runtime_and_feedback(
             &config,
-            &app_ctx,
+            &ctx,
             &runtime,
             &message,
-            crate::conversation::ConversationRuntimeBinding::Context(&app_ctx),
+            &owner.legacy_tools,
             ChannelTurnFeedbackPolicy::disabled(),
         )
         .await

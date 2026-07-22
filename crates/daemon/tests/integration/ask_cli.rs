@@ -1078,7 +1078,7 @@ fn ask_cli_browser_open_extract_click_runs_full_e2e() {
                 MockProviderResponse::ok_json(openai_chat_tool_call_body(
                     "I will open the fixture page first.",
                     "call-browser-open",
-                    "browser",
+                    "browse",
                     json!({
                         "url": browser_base_url,
                     }),
@@ -1099,7 +1099,7 @@ fn ask_cli_browser_open_extract_click_runs_full_e2e() {
                 MockProviderResponse::ok_json(openai_chat_tool_call_body(
                     "I will extract the headline next.",
                     "call-browser-extract",
-                    "browser",
+                    "browse",
                     json!({
                         "session_id": session_id,
                         "mode": "selector_text",
@@ -1117,7 +1117,7 @@ fn ask_cli_browser_open_extract_click_runs_full_e2e() {
                 MockProviderResponse::ok_json(openai_chat_tool_call_body(
                     "I will follow the discovered link.",
                     "call-browser-click",
-                    "browser",
+                    "browse",
                     json!({
                         "session_id": session_id,
                         "link_id": 1,
@@ -1259,7 +1259,7 @@ fn ask_cli_browser_continues_after_shell_heavy_page_without_confirmation() {
                 MockProviderResponse::ok_json(openai_chat_tool_call_body(
                     "I will open the fixture page first.",
                     "call-browser-open-shell",
-                    "browser",
+                    "browse",
                     json!({
                         "url": browser_base_url,
                     }),
@@ -1517,7 +1517,7 @@ fn ask_cli_repairs_pseudo_done_browser_reply_before_finishing() {
                 MockProviderResponse::ok_json(openai_chat_tool_call_body(
                     "I will open the fixture page first.",
                     "call-browser-open-pseudo-done",
-                    "browser",
+                    "browse",
                     json!({
                         "url": browser_base_url,
                     }),

@@ -3,11 +3,6 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::sync::Mutex as StdMutex;
 
-// Preparation tests need authority-bearing context, but do not exercise context bootstrap itself.
-fn provider_turn_test_context() -> AppContext {
-    bootstrap_test_app_context("provider-turn-preparation", 60).expect("test app context")
-}
-
 #[test]
 fn provider_turn_session_state_appends_user_input_and_keeps_estimate() {
     let session = ProviderTurnSessionState::from_assembled_context(
@@ -161,7 +156,6 @@ fn provider_turn_followup_preparation_preserves_stable_prefix_hash_and_updates_t
     };
     let preparation = ProviderTurnPreparation::from_assembled_context(
         &LoongConfig::default(),
-        &provider_turn_test_context(),
         assembled,
         "use the recent result",
         None,
@@ -241,7 +235,6 @@ fn provider_turn_followup_preparation_retains_original_tail_across_multiple_foll
     };
     let preparation = ProviderTurnPreparation::from_assembled_context(
         &LoongConfig::default(),
-        &provider_turn_test_context(),
         assembled,
         "use the recent result",
         None,
@@ -303,7 +296,6 @@ fn provider_turn_preparation_derives_lane_plan_and_raw_mode() {
 
     let preparation = ProviderTurnPreparation::from_assembled_context(
         &config,
-        &provider_turn_test_context(),
         AssembledConversationContext::from_messages(vec![serde_json::json!({
             "role": "system",
             "content": "sys"
@@ -331,10 +323,9 @@ fn provider_turn_lane_plan_safe_plan_path_requires_safe_lane_and_tool_intents() 
     let tool_turn = ProviderTurn {
         assistant_text: "preface".to_owned(),
         tool_intents: vec![ToolIntent {
-            tool_name: "shell.exec".to_owned(),
+            tool_name: "shell.exec".into(),
             args_json: json!({"command": "echo hi"}),
             source: "provider_tool_call".to_owned(),
-            session_id: "session-safe".to_owned(),
             turn_id: "turn-safe".to_owned(),
             tool_call_id: "call-safe".to_owned(),
         }],
@@ -367,10 +358,8 @@ impl ConversationRuntime for MissingToolContinuationRuntime {
     async fn build_messages(
         &self,
         _config: &LoongConfig,
-        _app_ctx: &crate::AppContext,
+        _ctx: &crate::Context<'_>,
         _include_system_prompt: bool,
-        _tool_view: &crate::tools::ToolView,
-        _binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Vec<Value>> {
         Ok(vec![json!({
             "role": "system",
@@ -382,7 +371,7 @@ impl ConversationRuntime for MissingToolContinuationRuntime {
         &self,
         _config: &LoongConfig,
         _messages: &[Value],
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
     ) -> CliResult<String> {
         panic!("request_completion should not run in missing-tool continuation tests")
     }
@@ -390,11 +379,9 @@ impl ConversationRuntime for MissingToolContinuationRuntime {
     async fn request_turn(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
         _turn_id: &str,
         messages: &[Value],
-        _tool_view: &crate::tools::ToolView,
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
     ) -> CliResult<ProviderTurn> {
         self.request_turn_messages
             .lock()
@@ -413,11 +400,9 @@ impl ConversationRuntime for MissingToolContinuationRuntime {
     async fn request_turn_streaming(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
         _turn_id: &str,
         _messages: &[Value],
-        _tool_view: &crate::tools::ToolView,
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
         _on_token: crate::provider::StreamingTokenCallback,
     ) -> CliResult<ProviderTurn> {
         panic!("request_turn_streaming should not run in missing-tool continuation tests")
@@ -425,10 +410,9 @@ impl ConversationRuntime for MissingToolContinuationRuntime {
 
     async fn persist_turn(
         &self,
-        _session_id: &str,
         _role: &str,
         _content: &str,
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
     ) -> CliResult<()> {
         Ok(())
     }
@@ -440,7 +424,6 @@ fn provider_continuation_test_preparation(
 ) -> ProviderTurnPreparation {
     ProviderTurnPreparation::from_assembled_context(
         config,
-        &provider_turn_test_context(),
         AssembledConversationContext::from_messages(vec![json!({
             "role": "system",
             "content": "sys"
@@ -485,17 +468,15 @@ fn provider_continuation_test_continue_phase_with_lane(
 }
 
 fn provider_continuation_test_intent(
-    session_id: &str,
     turn_id: &str,
     tool_call_id: &str,
     tool_id: &str,
     arguments: Value,
 ) -> ToolIntent {
     ToolIntent {
-        tool_name: tool_id.to_owned(),
+        tool_name: tool_id.into(),
         args_json: arguments,
         source: "provider_tool_call".to_owned(),
-        session_id: session_id.to_owned(),
         turn_id: turn_id.to_owned(),
         tool_call_id: tool_call_id.to_owned(),
     }
@@ -509,6 +490,11 @@ async fn provider_continuation_recovers_malformed_parse_followup_without_real_to
     config.tools.file_root = Some(temp_dir.path().display().to_string());
 
     let user_input = "Write the repaired response to recovered.txt";
+    let owner = crate::test_support::runtime_session_for_test(
+        "session-malformed",
+        crate::tools::runtime_tool_view_from_loong_config(&config),
+    );
+    let ctx = owner.context();
     let preparation = provider_continuation_test_preparation(&config, user_input);
     let continue_phase = provider_continuation_test_continue_phase_with_lane(
         &config,
@@ -523,7 +509,6 @@ async fn provider_continuation_recovers_malformed_parse_followup_without_real_to
             ProviderTurn {
                 assistant_text: String::new(),
                 tool_intents: vec![provider_continuation_test_intent(
-                    "session-malformed",
                     "turn-write",
                     "call-write",
                     "write",
@@ -547,15 +532,15 @@ async fn provider_continuation_recovers_malformed_parse_followup_without_real_to
 
     let resolved = resolve_provider_turn_reply(
         &runtime,
+        &ctx,
         &config,
-        "session-malformed",
         &preparation,
         &continue_phase,
         user_input,
         &turn_loop_policy,
         &mut turn_loop_state,
         3,
-        ConversationRuntimeBinding::AdvisoryOnly,
+        &owner.legacy_tools,
         None,
         None,
         None,
@@ -577,6 +562,11 @@ async fn provider_continuation_recovers_malformed_parse_followup_without_real_to
 async fn provider_continuation_uses_provider_turn_followup_for_nonterminal_tool_results() {
     let config = LoongConfig::default();
     let user_input = "Replace beta with gamma, then reply with the final file contents only.";
+    let owner = crate::test_support::runtime_session_for_test(
+        "session-edit",
+        crate::tools::runtime_tool_view_from_loong_config(&config),
+    );
+    let ctx = owner.context();
     let preparation = provider_continuation_test_preparation(&config, user_input);
     let tool_result_text = format!(
         "[ok] {}",
@@ -614,7 +604,6 @@ async fn provider_continuation_uses_provider_turn_followup_for_nonterminal_tool_
             ProviderTurn {
                 assistant_text: "Verifying the updated contents.".to_owned(),
                 tool_intents: vec![provider_continuation_test_intent(
-                    "session-edit",
                     "turn-read",
                     "call-read",
                     "read",
@@ -637,15 +626,15 @@ async fn provider_continuation_uses_provider_turn_followup_for_nonterminal_tool_
 
     let resolved = resolve_provider_turn_reply(
         &runtime,
+        &ctx,
         &config,
-        "session-edit",
         &preparation,
         &continue_phase,
         user_input,
         &turn_loop_policy,
         &mut turn_loop_state,
         4,
-        ConversationRuntimeBinding::AdvisoryOnly,
+        &owner.legacy_tools,
         None,
         None,
         None,
@@ -665,6 +654,11 @@ async fn provider_continuation_reprompts_when_nonterminal_tool_result_is_followe
  {
     let config = LoongConfig::default();
     let user_input = "Open the page and keep going until you can summarize the main content.";
+    let owner = crate::test_support::runtime_session_for_test(
+        "session-browser",
+        crate::tools::runtime_tool_view_from_loong_config(&config),
+    );
+    let ctx = owner.context();
     let preparation = provider_continuation_test_preparation(&config, user_input);
     let tool_result_text = format!(
         "[ok] {}",
@@ -709,7 +703,6 @@ async fn provider_continuation_reprompts_when_nonterminal_tool_result_is_followe
             ProviderTurn {
                 assistant_text: "Extracting the page text.".to_owned(),
                 tool_intents: vec![provider_continuation_test_intent(
-                    "session-browser",
                     "turn-browse-extract",
                     "call-browse-extract",
                     "browse",
@@ -734,15 +727,15 @@ async fn provider_continuation_reprompts_when_nonterminal_tool_result_is_followe
 
     let resolved = resolve_provider_turn_reply(
         &runtime,
+        &ctx,
         &config,
-        "session-browser",
         &preparation,
         &continue_phase,
         user_input,
         &turn_loop_policy,
         &mut turn_loop_state,
         4,
-        ConversationRuntimeBinding::AdvisoryOnly,
+        &owner.legacy_tools,
         None,
         None,
         None,
@@ -769,7 +762,6 @@ fn provider_turn_continue_phase_checkpoint_captures_continue_branch_kernel_shape
     let config = LoongConfig::default();
     let preparation = ProviderTurnPreparation::from_assembled_context(
         &config,
-        &provider_turn_test_context(),
         AssembledConversationContext::from_messages(vec![serde_json::json!({
             "role": "system",
             "content": "sys"
@@ -866,23 +858,21 @@ fn provider_turn_continue_phase_checkpoint_captures_continue_branch_kernel_shape
 }
 
 #[test]
-fn scope_provider_turn_tool_intents_overrides_existing_provider_ids_with_runtime_scope() {
+fn scope_provider_turn_tool_intents_overrides_existing_provider_turn_ids() {
     let turn = ProviderTurn {
         assistant_text: String::new(),
         tool_intents: vec![
             ToolIntent {
-                tool_name: "tool.search".to_owned(),
+                tool_name: "tool.search".into(),
                 args_json: json!({"query": "read file"}),
                 source: "provider_tool_call".to_owned(),
-                session_id: String::new(),
                 turn_id: String::new(),
                 tool_call_id: "call-1".to_owned(),
             },
             ToolIntent {
-                tool_name: "tool.invoke".to_owned(),
+                tool_name: "tool.invoke".into(),
                 args_json: json!({"tool_id": "file.read", "lease": "stub", "arguments": {"path": "README.md"}}),
                 source: "provider_tool_call".to_owned(),
-                session_id: "already-session".to_owned(),
                 turn_id: "already-turn".to_owned(),
                 tool_call_id: "call-2".to_owned(),
             },
@@ -890,33 +880,29 @@ fn scope_provider_turn_tool_intents_overrides_existing_provider_ids_with_runtime
         raw_meta: Value::Null,
     };
 
-    let scoped = scope_provider_turn_tool_intents(turn, "session-a", "turn-a");
+    let scoped = scope_provider_turn_tool_intents(turn, "turn-a");
 
-    // Provider-originated intents always get runtime scope overridden.
-    assert_eq!(scoped.tool_intents[0].session_id, "session-a");
+    // Provider-originated intents always get runtime turn scope overridden.
     assert_eq!(scoped.tool_intents[0].turn_id, "turn-a");
-    assert_eq!(scoped.tool_intents[1].session_id, "session-a");
     assert_eq!(scoped.tool_intents[1].turn_id, "turn-a");
 }
 
 #[test]
-fn scope_non_provider_turn_tool_intents_preserve_existing_ids() {
+fn scope_non_provider_turn_tool_intents_preserve_or_fill_turn_ids() {
     let turn = ProviderTurn {
         assistant_text: String::new(),
         tool_intents: vec![
             ToolIntent {
-                tool_name: "tool.search".to_owned(),
+                tool_name: "tool.search".into(),
                 args_json: json!({"query": "read file"}),
                 source: "local_followup".to_owned(),
-                session_id: "existing-session".to_owned(),
                 turn_id: "existing-turn".to_owned(),
                 tool_call_id: "call-1".to_owned(),
             },
             ToolIntent {
-                tool_name: "tool.invoke".to_owned(),
+                tool_name: "tool.invoke".into(),
                 args_json: json!({"tool_id": "file.read", "lease": "stub", "arguments": {"path": "README.md"}}),
                 source: "local_followup".to_owned(),
-                session_id: String::new(),
                 turn_id: String::new(),
                 tool_call_id: "call-2".to_owned(),
             },
@@ -924,11 +910,9 @@ fn scope_non_provider_turn_tool_intents_preserve_existing_ids() {
         raw_meta: Value::Null,
     };
 
-    let scoped = scope_provider_turn_tool_intents(turn, "session-a", "turn-a");
+    let scoped = scope_provider_turn_tool_intents(turn, "turn-a");
 
-    assert_eq!(scoped.tool_intents[0].session_id, "existing-session");
     assert_eq!(scoped.tool_intents[0].turn_id, "existing-turn");
-    assert_eq!(scoped.tool_intents[1].session_id, "session-a");
     assert_eq!(scoped.tool_intents[1].turn_id, "turn-a");
 }
 
@@ -965,7 +949,7 @@ fn reload_followup_provider_config_reads_provider_switch_wrapped_by_tool_invoke(
     let turn = ProviderTurn {
         assistant_text: String::new(),
         tool_intents: vec![ToolIntent {
-            tool_name: "tool.invoke".to_owned(),
+            tool_name: "tool.invoke".into(),
             args_json: json!({
                 "tool_id": "provider.switch",
                 "lease": "ignored",
@@ -975,7 +959,6 @@ fn reload_followup_provider_config_reads_provider_switch_wrapped_by_tool_invoke(
                 }
             }),
             source: "provider_tool_call".to_owned(),
-            session_id: "session-a".to_owned(),
             turn_id: "turn-a".to_owned(),
             tool_call_id: "call-1".to_owned(),
         }],
@@ -996,7 +979,6 @@ fn reload_followup_provider_config_reads_provider_switch_wrapped_by_tool_invoke(
 fn provider_turn_continue_phase_checkpoint_keeps_direct_reply_without_followup() {
     let preparation = ProviderTurnPreparation::from_assembled_context(
         &LoongConfig::default(),
-        &provider_turn_test_context(),
         AssembledConversationContext::from_messages(vec![serde_json::json!({
             "role": "system",
             "content": "sys"
@@ -1082,7 +1064,6 @@ fn resolved_provider_turn_checkpoint_preserves_safe_lane_route_provenance() {
             )),
             preparation: ProviderTurnPreparation::from_assembled_context(
                 &config,
-                &provider_turn_test_context(),
                 AssembledConversationContext::from_messages(vec![serde_json::json!({
                     "role": "system",
                     "content": "sys"
@@ -1192,7 +1173,6 @@ fn resolved_provider_turn_checkpoint_keeps_inline_provider_error_terminal_shape(
             )),
             preparation: ProviderTurnPreparation::from_assembled_context(
                 &LoongConfig::default(),
-                &provider_turn_test_context(),
                 AssembledConversationContext::from_messages(vec![serde_json::json!({
                     "role": "system",
                     "content": "sys"
@@ -1239,7 +1219,6 @@ fn resolved_provider_turn_checkpoint_marks_return_error_finalization() {
             identity: None,
             preparation: ProviderTurnPreparation::from_assembled_context(
                 &LoongConfig::default(),
-                &provider_turn_test_context(),
                 AssembledConversationContext::from_messages(vec![serde_json::json!({
                     "role": "system",
                     "content": "sys"
@@ -1291,7 +1270,6 @@ fn resolved_provider_turn_terminal_phase_builds_reply_tail_and_checkpoint() {
             identity: Some(TurnCheckpointIdentity::from_turn("say hello", "done")),
             preparation: ProviderTurnPreparation::from_assembled_context(
                 &LoongConfig::default(),
-                &provider_turn_test_context(),
                 AssembledConversationContext::from_messages(vec![serde_json::json!({
                     "role": "system",
                     "content": "sys"
@@ -1353,7 +1331,6 @@ fn resolved_provider_turn_terminal_phase_preserves_return_error_checkpoint() {
             identity: None,
             preparation: ProviderTurnPreparation::from_assembled_context(
                 &LoongConfig::default(),
-                &provider_turn_test_context(),
                 AssembledConversationContext::from_messages(vec![serde_json::json!({
                     "role": "system",
                     "content": "sys"
@@ -1386,7 +1363,6 @@ fn resolved_provider_turn_terminal_phase_preserves_return_error_checkpoint() {
 fn provider_turn_request_terminal_phase_builds_inline_provider_error_reply() {
     let preparation = ProviderTurnPreparation::from_assembled_context(
         &LoongConfig::default(),
-        &provider_turn_test_context(),
         AssembledConversationContext::from_messages(vec![serde_json::json!({
             "role": "system",
             "content": "sys"
@@ -1427,7 +1403,6 @@ fn provider_turn_request_terminal_phase_builds_inline_provider_error_reply() {
 fn provider_turn_request_terminal_phase_builds_return_error_without_reply_identity() {
     let preparation = ProviderTurnPreparation::from_assembled_context(
         &LoongConfig::default(),
-        &provider_turn_test_context(),
         AssembledConversationContext::from_messages(vec![serde_json::json!({
             "role": "system",
             "content": "sys"

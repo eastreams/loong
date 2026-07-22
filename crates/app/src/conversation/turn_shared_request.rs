@@ -85,13 +85,9 @@ fn sanitize_followup_request_summary(tool_name: &str, request: Value) -> Value {
 }
 
 pub(crate) fn effective_followup_tool_name(intent: &ToolIntent) -> String {
-    let request = loong_contracts::ToolCoreRequest {
-        tool_name: intent.tool_name.clone(),
-        payload: intent.args_json.clone(),
-    };
-    crate::tools::peek_tool_invoke_request(&request)
+    crate::tools::peek_tool_invoke_request(intent.tool_name(), &intent.args_json)
         .map(|peeked| peeked.tool_name.to_owned())
-        .unwrap_or_else(|| crate::tools::canonical_tool_name(intent.tool_name.as_str()).to_owned())
+        .unwrap_or_else(|| crate::tools::canonical_tool_name(intent.tool_name()).to_owned())
 }
 
 pub(crate) fn effective_followup_visible_tool_name(intent: &ToolIntent) -> String {
@@ -100,28 +96,25 @@ pub(crate) fn effective_followup_visible_tool_name(intent: &ToolIntent) -> Strin
 }
 
 pub(crate) fn effective_followup_request(intent: &ToolIntent) -> Value {
-    let request = loong_contracts::ToolCoreRequest {
-        tool_name: intent.tool_name.clone(),
-        payload: intent.args_json.clone(),
-    };
-    let (canonical_tool_name, payload) = crate::tools::peek_tool_invoke_request(&request)
-        .map(|peeked| {
-            let mut payload = peeked.arguments.clone();
-            let grouped_agent_wrapper = request
-                .payload
-                .get("tool_id")
-                .and_then(Value::as_str)
-                .is_some_and(|tool_id| tool_id == "agent");
-            if grouped_agent_wrapper && let Some(payload_object) = payload.as_object_mut() {
-                payload_object.remove("operation");
-            }
-            (peeked.tool_name, payload)
-        })
-        .unwrap_or_else(|| {
-            (
-                crate::tools::canonical_tool_name(intent.tool_name.as_str()),
-                intent.args_json.clone(),
-            )
-        });
+    let (canonical_tool_name, payload) =
+        crate::tools::peek_tool_invoke_request(intent.tool_name(), &intent.args_json)
+            .map(|peeked| {
+                let mut payload = peeked.arguments.clone();
+                let grouped_agent_wrapper = intent
+                    .args_json
+                    .get("tool_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|tool_id| tool_id == "agent");
+                if grouped_agent_wrapper && let Some(payload_object) = payload.as_object_mut() {
+                    payload_object.remove("operation");
+                }
+                (peeked.tool_name, payload)
+            })
+            .unwrap_or_else(|| {
+                (
+                    crate::tools::canonical_tool_name(intent.tool_name()),
+                    intent.args_json.clone(),
+                )
+            });
     crate::tools::normalize_shell_payload_for_request(canonical_tool_name, payload)
 }

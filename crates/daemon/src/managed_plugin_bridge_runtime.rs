@@ -150,11 +150,7 @@ pub async fn run_managed_plugin_bridge_channel(
     mvp::runtime_env::initialize_runtime_environment(&config, Some(resolved_path.as_path()));
 
     let kernel_scope = format!("channel-plugin-bridge-{channel_id}");
-    let app_ctx = mvp::context::bootstrap_app_context_with_config(
-        kernel_scope.as_str(),
-        mvp::context::DEFAULT_TOKEN_TTL_S,
-        &config,
-    )?;
+    let execution_runtime = mvp::runtime::bootstrap_runtime_with_config(&config)?;
     let bridge_policy = bridge_execution_policy_from_config(&config)?;
     let stop = mvp::channel::ChannelServeStopHandle::new();
     let runtime_account_id = binding.account_id.clone();
@@ -179,7 +175,6 @@ pub async fn run_managed_plugin_bridge_channel(
     }
     let config = Arc::new(config);
     let resolved_path = Some(resolved_path);
-    let app_ctx = Arc::new(app_ctx);
     let runtime_spec = mvp::channel::ChannelServeRuntimeSpec {
         platform: binding.platform,
         operation_id: mvp::channel::CHANNEL_OPERATION_SERVE_ID,
@@ -206,14 +201,16 @@ pub async fn run_managed_plugin_bridge_channel(
                 |message, feedback_policy| {
                     let config = config.clone();
                     let resolved_path = resolved_path.clone();
-                    let app_ctx = app_ctx.clone();
+                    let execution_runtime = execution_runtime.clone();
+                    let agent_id = kernel_scope.clone();
                     Box::pin(async move {
                         let resolved_path = resolved_path.as_deref();
                         mvp::channel::process_inbound_with_provider(
                             config.as_ref(),
                             resolved_path,
                             &message,
-                            app_ctx.as_ref(),
+                            &execution_runtime,
+                            &agent_id,
                             feedback_policy,
                         )
                         .await

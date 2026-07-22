@@ -38,6 +38,15 @@ pub struct SessionRepository {
 }
 
 impl SessionRepository {
+    /// Open the durable Session store from host configuration without process env overrides.
+    pub(crate) fn from_memory_config_without_env_overrides(
+        config: &crate::config::MemoryConfig,
+    ) -> Result<Self, String> {
+        let store_config =
+            store::session_store_config_from_memory_config_without_env_overrides(config);
+        Self::new(&store_config).map_err(|error| format!("open session repository failed: {error}"))
+    }
+
     pub fn new(config: &SessionStoreConfig) -> Result<Self, String> {
         let db_path = store::ensure_session_store_ready(config.sqlite_path.clone(), config)?;
         Ok(Self {

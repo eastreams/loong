@@ -44,12 +44,12 @@ const COMPACTION_SUMMARY_SCOPE_NOTE: &str = concat!(
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeSelfContinuity {
     #[serde(default)]
-    pub workspace_guidance: WorkspaceGuidanceModel,
-    pub runtime_self: RuntimeSelfModel,
+    pub(crate) workspace_guidance: WorkspaceGuidanceModel,
+    pub(crate) runtime_self: RuntimeSelfModel,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resolved_identity: Option<ResolvedRuntimeIdentity>,
+    pub(crate) resolved_identity: Option<ResolvedRuntimeIdentity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_profile_projection: Option<String>,
+    pub(crate) session_profile_projection: Option<String>,
 }
 
 pub(crate) fn compaction_summary_scope_note() -> &'static str {

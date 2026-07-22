@@ -1,15 +1,10 @@
 #[cfg(feature = "memory-sqlite")]
-use std::collections::BTreeSet;
-
-#[cfg(feature = "memory-sqlite")]
-use loong_contracts::Capability;
-#[cfg(feature = "memory-sqlite")]
-use serde_json::json;
-
-#[cfg(feature = "memory-sqlite")]
 use crate::memory;
 #[cfg(feature = "memory-sqlite")]
-use crate::{AppContext, CliResult};
+use crate::{CliResult, Context};
+
+#[cfg(feature = "memory-sqlite")]
+use super::context_engine::DefaultContextEngine;
 
 #[cfg(feature = "memory-sqlite")]
 const MAX_COMPACTION_WINDOW_TURNS: usize = 512;
@@ -25,9 +20,17 @@ pub(crate) struct CompactionSessionSnapshot {
 
 #[cfg(feature = "memory-sqlite")]
 impl CompactionSessionSnapshot {
-    fn from_memory_core_payload(payload: &serde_json::Value) -> Self {
-        let turns = memory::decode_window_turns(payload);
-        let turn_count = memory::decode_window_turn_count(payload).unwrap_or(turns.len());
+    fn from_memory_snapshot(snapshot: loong_kernel::access::memory::MemorySnapshot) -> Self {
+        let turns = snapshot
+            .turns
+            .into_iter()
+            .map(|turn| memory::WindowTurn {
+                role: turn.role,
+                content: turn.content,
+                ts: turn.ts,
+            })
+            .collect();
+        let turn_count = snapshot.turn_count;
         Self { turns, turn_count }
     }
 
@@ -37,97 +40,54 @@ impl CompactionSessionSnapshot {
 }
 
 #[cfg(feature = "memory-sqlite")]
-pub(crate) async fn load_compaction_session_snapshot(
-    session_id: &str,
-    app_ctx: &AppContext,
-) -> CliResult<CompactionSessionSnapshot> {
-    let window_snapshot = load_compaction_window_snapshot(session_id, app_ctx).await?;
-    if window_snapshot.is_complete() {
-        return Ok(window_snapshot);
+impl DefaultContextEngine {
+    pub(super) async fn load_compaction_session_snapshot(
+        &self,
+        context: &Context<'_>,
+    ) -> CliResult<CompactionSessionSnapshot> {
+        let window_snapshot = self.load_compaction_window_snapshot(context).await?;
+        if window_snapshot.is_complete() {
+            return Ok(window_snapshot);
+        }
+
+        let transcript_snapshot = match self.load_compaction_transcript_snapshot(context).await {
+            Ok(snapshot) => snapshot,
+            Err(_error) => return Ok(window_snapshot),
+        };
+        if !transcript_snapshot.is_complete()
+            || transcript_snapshot.turn_count < window_snapshot.turn_count
+        {
+            return Ok(window_snapshot);
+        }
+
+        Ok(transcript_snapshot)
     }
 
-    let transcript_snapshot = match load_compaction_transcript_snapshot(session_id, app_ctx).await {
-        Ok(snapshot) => snapshot,
-        Err(_error) => return Ok(window_snapshot),
-    };
-    if !transcript_snapshot.is_complete()
-        || transcript_snapshot.turn_count < window_snapshot.turn_count
-    {
-        return Ok(window_snapshot);
+    async fn load_compaction_window_snapshot(
+        &self,
+        context: &Context<'_>,
+    ) -> CliResult<CompactionSessionSnapshot> {
+        let snapshot = context
+            .access()
+            .memory()
+            .window(MAX_COMPACTION_WINDOW_TURNS, true)
+            .await
+            .map_err(|error| format!("load compaction window failed: {error}"))?;
+
+        Ok(CompactionSessionSnapshot::from_memory_snapshot(snapshot))
     }
 
-    Ok(transcript_snapshot)
-}
+    async fn load_compaction_transcript_snapshot(
+        &self,
+        context: &Context<'_>,
+    ) -> CliResult<CompactionSessionSnapshot> {
+        let snapshot = context
+            .access()
+            .memory()
+            .transcript(DEFAULT_COMPACTION_TRANSCRIPT_PAGE_SIZE)
+            .await
+            .map_err(|error| format!("load compaction transcript failed: {error}"))?;
 
-#[cfg(feature = "memory-sqlite")]
-async fn load_compaction_window_snapshot(
-    session_id: &str,
-    app_ctx: &AppContext,
-) -> CliResult<CompactionSessionSnapshot> {
-    let mut request = memory::build_window_request(session_id, MAX_COMPACTION_WINDOW_TURNS);
-    let Some(payload) = request.payload.as_object_mut() else {
-        return Err("load compaction window via kernel built a non-object payload".to_owned());
-    };
-    payload.insert("allow_extended_limit".to_owned(), json!(true));
-    let caps = BTreeSet::from([Capability::MemoryRead]);
-    let execution_context = app_ctx.for_invocation(app_ctx.tool_runtime_config())?;
-    let outcome = app_ctx
-        .runtime()
-        .kernel()
-        .execute_memory_core(
-            app_ctx.pack_id(),
-            app_ctx.token(),
-            &caps,
-            None,
-            request,
-            &execution_context,
-        )
-        .await
-        .map_err(|error| format!("load compaction window via kernel failed: {error}"))?;
-
-    if outcome.status != "ok" {
-        return Err(format!(
-            "load compaction window via kernel returned non-ok status: {}",
-            outcome.status
-        ));
+        Ok(CompactionSessionSnapshot::from_memory_snapshot(snapshot))
     }
-
-    Ok(CompactionSessionSnapshot::from_memory_core_payload(
-        &outcome.payload,
-    ))
-}
-
-#[cfg(feature = "memory-sqlite")]
-async fn load_compaction_transcript_snapshot(
-    session_id: &str,
-    app_ctx: &AppContext,
-) -> CliResult<CompactionSessionSnapshot> {
-    let request =
-        memory::build_transcript_request(session_id, DEFAULT_COMPACTION_TRANSCRIPT_PAGE_SIZE);
-    let caps = BTreeSet::from([Capability::MemoryRead]);
-    let execution_context = app_ctx.for_invocation(app_ctx.tool_runtime_config())?;
-    let outcome = app_ctx
-        .runtime()
-        .kernel()
-        .execute_memory_core(
-            app_ctx.pack_id(),
-            app_ctx.token(),
-            &caps,
-            None,
-            request,
-            &execution_context,
-        )
-        .await
-        .map_err(|error| format!("load compaction transcript via kernel failed: {error}"))?;
-
-    if outcome.status != "ok" {
-        return Err(format!(
-            "load compaction transcript via kernel returned non-ok status: {}",
-            outcome.status
-        ));
-    }
-
-    Ok(CompactionSessionSnapshot::from_memory_core_payload(
-        &outcome.payload,
-    ))
 }

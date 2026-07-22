@@ -104,8 +104,6 @@ impl ProviderTurnReplyTailPhase {
 
 #[derive(Debug, Clone)]
 pub(super) struct ProviderTurnPreparation {
-    /// Session-owned authority and immutable views shared by every round of this turn.
-    pub(super) ctx: AppContext,
     pub(super) session: ProviderTurnSessionState,
     pub(super) lane_plan: ProviderTurnLanePlan,
     pub(super) raw_tool_output_requested: bool,
@@ -116,7 +114,6 @@ impl ProviderTurnPreparation {
     #[cfg(test)]
     pub(super) fn from_assembled_context(
         config: &LoongConfig,
-        ctx: &AppContext,
         assembled_context: AssembledConversationContext,
         user_input: &str,
         ingress: Option<&ConversationIngressContext>,
@@ -124,7 +121,6 @@ impl ProviderTurnPreparation {
         let turn_id = next_conversation_turn_id();
         Self::from_assembled_context_with_turn_id(
             config,
-            ctx,
             assembled_context,
             user_input,
             turn_id.as_str(),
@@ -134,14 +130,12 @@ impl ProviderTurnPreparation {
 
     pub(super) fn from_assembled_context_with_turn_id(
         config: &LoongConfig,
-        ctx: &AppContext,
         assembled_context: AssembledConversationContext,
         user_input: &str,
         turn_id: &str,
         ingress: Option<&ConversationIngressContext>,
     ) -> Self {
         Self {
-            ctx: ctx.clone(),
             session: ProviderTurnSessionState::from_assembled_context(
                 assembled_context,
                 user_input,
@@ -167,7 +161,6 @@ impl ProviderTurnPreparation {
             .prompt_frame
             .with_turn_ephemeral_messages(followup_tail_messages.as_slice(), None);
         Self {
-            ctx: self.ctx.clone(),
             session: ProviderTurnSessionState {
                 messages,
                 estimated_tokens: None,
@@ -214,12 +207,9 @@ pub(super) fn summarize_followup_turn(turn: &ProviderTurn) -> FollowupTurnSummar
     let intent = turn
         .tool_intents
         .iter()
-        .find(|intent| {
-            crate::tools::canonical_tool_name(intent.tool_name.as_str()) == "tool.invoke"
-        })
+        .find(|intent| crate::tools::canonical_tool_name(intent.tool_name()) == "tool.invoke")
         .unwrap_or(first);
-    let canonical_tool_name =
-        crate::tools::canonical_tool_name(intent.tool_name.as_str()).to_owned();
+    let canonical_tool_name = crate::tools::canonical_tool_name(intent.tool_name()).to_owned();
     let visible_tool_name = crate::tools::legacy_display_tool_name(canonical_tool_name.as_str());
     let used_legacy_hidden_tool_wrapper = canonical_tool_name == "tool.invoke";
     let followup_target_tool_id = used_legacy_hidden_tool_wrapper
@@ -493,66 +483,52 @@ const DELEGATE_CHILD_OUTPUT_PREVIEW_CHARS: usize = 200;
 
 pub(super) async fn emit_discovery_first_event<R: ConversationRuntime + ?Sized>(
     runtime: &R,
-    session_id: &str,
     event_name: &str,
     payload: Value,
-    binding: ConversationRuntimeBinding<'_>,
+    ctx: &Context<'_>,
 ) {
-    let _ = persist_conversation_event(runtime, session_id, event_name, payload, binding).await;
-    if let Some(ctx) = binding.context() {
-        let _ = ctx.runtime().kernel().record_audit_event(
-            Some(ctx.agent_id()),
-            AuditEventKind::PlaneInvoked {
-                pack_id: ctx.pack_id().to_owned(),
-                plane: ExecutionPlane::Runtime,
-                tier: PlaneTier::Core,
-                primary_adapter: "conversation.discovery_first".to_owned(),
-                delegated_core_adapter: None,
-                operation: format!("conversation.discovery_first.{event_name}"),
-                required_capabilities: Vec::new(),
-            },
-        );
-    }
+    let outcome = match persist_conversation_event(runtime, event_name, payload, ctx).await {
+        Ok(()) => RuntimeOperationOutcome::Completed,
+        Err(reason) => RuntimeOperationOutcome::Failed { reason },
+    };
+    let _ = ctx.runtime().record_audit_event(
+        Some(ctx.agent_id()),
+        AuditEventKind::RuntimeOperation {
+            operation: format!("conversation.discovery_first.{event_name}"),
+            outcome,
+        },
+    );
 }
 
 pub(super) async fn emit_prompt_frame_event<R: ConversationRuntime + ?Sized>(
     runtime: &R,
-    session_id: &str,
     provider_round: usize,
     phase: &str,
     summary: &PromptFrameSummary,
-    binding: ConversationRuntimeBinding<'_>,
+    ctx: &Context<'_>,
 ) {
     let payload = json!({
         "provider_round": provider_round,
         "phase": phase,
         "prompt_frame": summary.to_event_payload(),
     });
-    let _ = persist_conversation_event(
-        runtime,
-        session_id,
-        "provider_prompt_frame_snapshot",
-        payload,
-        binding,
-    )
-    .await;
+    let _ =
+        persist_conversation_event(runtime, "provider_prompt_frame_snapshot", payload, ctx).await;
 }
 
 #[cfg(feature = "memory-sqlite")]
 pub(super) async fn emit_async_delegate_child_queued_event<R: ConversationRuntime + ?Sized>(
     runtime: &R,
-    parent_session_id: &str,
     child_session_id: &str,
     child_label: Option<&str>,
     profile: Option<crate::conversation::DelegateBuiltinProfile>,
     isolation: crate::conversation::ConstrainedSubagentIsolation,
     timeout_seconds: u64,
     workspace_root: Option<&std::path::Path>,
-    binding: ConversationRuntimeBinding<'_>,
+    ctx: &Context<'_>,
 ) {
     emit_delegate_child_projection_event(
         runtime,
-        parent_session_id,
         "delegate_child_queued",
         json!({
             "child_session_id": child_session_id,
@@ -564,7 +540,7 @@ pub(super) async fn emit_async_delegate_child_queued_event<R: ConversationRuntim
             "timeout_seconds": timeout_seconds,
             "workspace_root": workspace_root.map(|workspace_root| workspace_root.display().to_string()),
         }),
-        binding,
+        ctx,
     )
     .await;
 }
@@ -572,7 +548,6 @@ pub(super) async fn emit_async_delegate_child_queued_event<R: ConversationRuntim
 #[cfg(feature = "memory-sqlite")]
 pub(crate) async fn emit_async_delegate_child_terminal_event<R: ConversationRuntime + ?Sized>(
     runtime: &R,
-    parent_session_id: &str,
     child_session_id: &str,
     child_label: Option<&str>,
     profile: Option<crate::conversation::DelegateBuiltinProfile>,
@@ -584,11 +559,10 @@ pub(crate) async fn emit_async_delegate_child_terminal_event<R: ConversationRunt
     final_output: Option<&str>,
     workspace_root: Option<&std::path::Path>,
     workspace_retained: Option<bool>,
-    binding: ConversationRuntimeBinding<'_>,
+    ctx: &Context<'_>,
 ) {
     emit_delegate_child_projection_event(
         runtime,
-        parent_session_id,
         "delegate_child_terminal",
         json!({
             "child_session_id": child_session_id,
@@ -604,7 +578,7 @@ pub(crate) async fn emit_async_delegate_child_terminal_event<R: ConversationRunt
             "workspace_root": workspace_root.map(|workspace_root| workspace_root.display().to_string()),
             "workspace_retained": workspace_retained,
         }),
-        binding,
+        ctx,
     )
     .await;
 }
@@ -647,27 +621,21 @@ pub(super) fn split_delegate_workspace_cleanup(
 #[cfg(feature = "memory-sqlite")]
 async fn emit_delegate_child_projection_event<R: ConversationRuntime + ?Sized>(
     runtime: &R,
-    parent_session_id: &str,
     event_name: &str,
     payload: Value,
-    binding: ConversationRuntimeBinding<'_>,
+    ctx: &Context<'_>,
 ) {
-    let _ =
-        persist_conversation_event(runtime, parent_session_id, event_name, payload, binding).await;
-    if let Some(ctx) = binding.context() {
-        let _ = ctx.runtime().kernel().record_audit_event(
-            Some(ctx.agent_id()),
-            AuditEventKind::PlaneInvoked {
-                pack_id: ctx.pack_id().to_owned(),
-                plane: ExecutionPlane::Runtime,
-                tier: PlaneTier::Core,
-                primary_adapter: "conversation.delegate_child".to_owned(),
-                delegated_core_adapter: None,
-                operation: format!("conversation.delegate_child.{event_name}"),
-                required_capabilities: Vec::new(),
-            },
-        );
-    }
+    let outcome = match persist_conversation_event(runtime, event_name, payload, ctx).await {
+        Ok(()) => RuntimeOperationOutcome::Completed,
+        Err(reason) => RuntimeOperationOutcome::Failed { reason },
+    };
+    let _ = ctx.runtime().record_audit_event(
+        Some(ctx.agent_id()),
+        AuditEventKind::RuntimeOperation {
+            operation: format!("conversation.delegate_child.{event_name}"),
+            outcome,
+        },
+    );
 }
 
 #[cfg(feature = "memory-sqlite")]

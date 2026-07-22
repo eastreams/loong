@@ -13,13 +13,14 @@ use loong_contracts::{
     ToolSchedulingClass, ToolSpec,
 };
 use loong_core::{
-    error::{AuthorizationError, PolicyGrantError},
+    error::PolicyGrantError,
     policy::context::{ContextFactory, PolicyContext},
     tool::{ToolFailureKind, ToolImpl},
 };
 use serde_json::{Value, json};
 
 use super::{RegisteredTool, RegisteredToolError};
+use crate::tool_plane::ToolRegistration;
 
 struct TestContextFactory;
 
@@ -55,8 +56,8 @@ struct EchoTool {
 struct EchoExecutionError;
 
 #[derive(Debug, thiserror::Error)]
-#[error("nested authorization failure: {0}")]
-struct NestedAuthorizationError(#[source] AuthorizationError);
+#[error("nested policy failure: {0}")]
+struct NestedPolicyError(#[source] PolicyGrantError);
 
 struct DeniedTool;
 
@@ -64,7 +65,7 @@ struct DeniedTool;
 impl ToolImpl<TestContextFactory> for DeniedTool {
     type Input = ();
     type Output = Value;
-    type Error = NestedAuthorizationError;
+    type Error = NestedPolicyError;
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -91,11 +92,9 @@ impl ToolImpl<TestContextFactory> for DeniedTool {
         _ctx: &<TestContextFactory as ContextFactory>::Cx<'_>,
         (): Self::Input,
     ) -> Result<Self::Output, Self::Error> {
-        Err(NestedAuthorizationError(AuthorizationError::PolicyGrant(
-            PolicyGrantError::MissingCapability {
-                capability: Capability::FilesystemRead,
-            },
-        )))
+        Err(NestedPolicyError(PolicyGrantError::MissingCapability {
+            capability: Capability::FilesystemRead,
+        }))
     }
 }
 
@@ -148,10 +147,13 @@ impl ToolImpl<TestContextFactory> for EchoTool {
 #[tokio::test]
 async fn registered_tool_invokes_erased_tool_impl() {
     let executions = Arc::new(AtomicUsize::new(0));
-    let tool = RegisteredTool::<TestContextFactory>::from_tool(EchoTool {
-        executions: Arc::clone(&executions),
-        fail_execution: false,
-    });
+    let tool = RegisteredTool::<TestContextFactory>::from_tool(
+        ToolRegistration::direct("test_echo"),
+        EchoTool {
+            executions: Arc::clone(&executions),
+            fail_execution: false,
+        },
+    );
 
     let outcome = tool
         .invoke(&TestContext, json!({ "message": "hello" }))
@@ -166,10 +168,13 @@ async fn registered_tool_invokes_erased_tool_impl() {
 #[tokio::test]
 async fn registered_tool_parse_failure_does_not_execute_tool() {
     let executions = Arc::new(AtomicUsize::new(0));
-    let tool = RegisteredTool::<TestContextFactory>::from_tool(EchoTool {
-        executions: Arc::clone(&executions),
-        fail_execution: false,
-    });
+    let tool = RegisteredTool::<TestContextFactory>::from_tool(
+        ToolRegistration::direct("test_echo"),
+        EchoTool {
+            executions: Arc::clone(&executions),
+            fail_execution: false,
+        },
+    );
 
     let error = tool
         .invoke(&TestContext, json!({}))
@@ -185,10 +190,13 @@ async fn registered_tool_parse_failure_does_not_execute_tool() {
 
 #[tokio::test]
 async fn registered_tool_preserves_concrete_execution_error_as_source() {
-    let tool = RegisteredTool::<TestContextFactory>::from_tool(EchoTool {
-        executions: Arc::new(AtomicUsize::new(0)),
-        fail_execution: true,
-    });
+    let tool = RegisteredTool::<TestContextFactory>::from_tool(
+        ToolRegistration::direct("test_echo"),
+        EchoTool {
+            executions: Arc::new(AtomicUsize::new(0)),
+            fail_execution: true,
+        },
+    );
 
     let error = tool
         .invoke(&TestContext, json!({ "message": "hello" }))
@@ -203,30 +211,26 @@ async fn registered_tool_preserves_concrete_execution_error_as_source() {
 
 #[tokio::test]
 async fn registered_tool_respects_explicit_denial_class_at_erasure() {
-    let nested = NestedAuthorizationError(AuthorizationError::PolicyGrant(
-        PolicyGrantError::MissingCapability {
-            capability: Capability::FilesystemRead,
-        },
-    ));
-    let authorization = std::error::Error::source(&nested)
-        .expect("nested tool error should expose authorization source");
-    assert!(authorization.is::<AuthorizationError>());
+    let nested = NestedPolicyError(PolicyGrantError::MissingCapability {
+        capability: Capability::FilesystemRead,
+    });
     assert!(
-        authorization
-            .source()
-            .is_some_and(|source| source.is::<PolicyGrantError>()),
-        "authorization error should expose typed policy grant source"
+        std::error::Error::source(&nested).is_some_and(|source| source.is::<PolicyGrantError>()),
+        "tool error should expose its typed policy grant source"
     );
 
-    let error = RegisteredTool::<TestContextFactory>::from_tool(DeniedTool)
-        .invoke(&TestContext, json!({}))
-        .await
-        .expect_err("nested policy denial should remain typed after erasure");
+    let error = RegisteredTool::<TestContextFactory>::from_tool(
+        ToolRegistration::direct("denied"),
+        DeniedTool,
+    )
+    .invoke(&TestContext, json!({}))
+    .await
+    .expect_err("nested policy denial should remain typed after erasure");
 
     assert!(matches!(error, RegisteredToolError::Denied { .. }));
     assert!(
         std::error::Error::source(&error)
-            .and_then(|source| source.downcast_ref::<NestedAuthorizationError>())
+            .and_then(|source| source.downcast_ref::<NestedPolicyError>())
             .is_some(),
         "denied erasure must retain the concrete tool error"
     );
@@ -237,6 +241,7 @@ async fn registered_tool_success_observer_sees_typed_output_before_erasure() {
     let executions = Arc::new(AtomicUsize::new(0));
     let observed = Arc::new(Mutex::new(Vec::new()));
     let tool = RegisteredTool::<TestContextFactory>::from_tool_with_success_observer(
+        ToolRegistration::direct("test_echo"),
         EchoTool {
             executions: Arc::clone(&executions),
             fail_execution: false,

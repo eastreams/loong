@@ -1,13 +1,12 @@
 use super::*;
 
-// Runtime-entry tests vary binding semantics independently from the explicit authority context.
-fn runtime_test_context() -> AppContext {
-    bootstrap_test_app_context("turn-coordinator-runtime", 60).expect("test app context")
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handle_turn_with_observer_uses_streaming_request_and_emits_live_events() {
-    let app_ctx = runtime_test_context();
+    let owner = crate::test_support::runtime_session_for_test(
+        "observer-session",
+        crate::tools::runtime_tool_view(),
+    );
+    let ctx = owner.context();
     let mut config = LoongConfig::default();
     config.provider.kind = crate::config::ProviderKind::Anthropic;
 
@@ -19,13 +18,13 @@ async fn handle_turn_with_observer_uses_streaming_request_and_emits_live_events(
     let reply = ConversationTurnCoordinator::new()
         .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             &config,
-            &app_ctx,
+            &ctx,
             &address,
             "say hello",
             ProviderErrorMode::Propagate,
             &runtime,
             &acp_options,
-            ConversationRuntimeBinding::AdvisoryOnly,
+            &owner.legacy_tools,
             None,
             Some(observer_handle),
             None,
@@ -72,7 +71,11 @@ async fn handle_turn_with_observer_uses_streaming_request_and_emits_live_events(
 
 #[tokio::test]
 async fn handle_turn_with_observer_falls_back_when_streaming_events_are_unsupported() {
-    let app_ctx = runtime_test_context();
+    let owner = crate::test_support::runtime_session_for_test(
+        "observer-session",
+        crate::tools::runtime_tool_view(),
+    );
+    let ctx = owner.context();
     let mut config = LoongConfig::default();
     config.provider.kind = crate::config::ProviderKind::Openai;
     config.provider.wire_api = crate::config::ProviderWireApi::Responses;
@@ -85,13 +88,13 @@ async fn handle_turn_with_observer_falls_back_when_streaming_events_are_unsuppor
     let reply = ConversationTurnCoordinator::new()
         .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             &config,
-            &app_ctx,
+            &ctx,
             &address,
             "say hello",
             ProviderErrorMode::Propagate,
             &runtime,
             &acp_options,
-            ConversationRuntimeBinding::AdvisoryOnly,
+            &owner.legacy_tools,
             None,
             Some(observer_handle),
             None,
@@ -145,7 +148,11 @@ async fn handle_turn_with_observer_falls_back_when_streaming_events_are_unsuppor
 
 #[tokio::test]
 async fn handle_turn_with_observer_emits_lifecycle_for_explicit_acp_inline_message() {
-    let app_ctx = runtime_test_context();
+    let owner = crate::test_support::runtime_session_for_test(
+        "observer-session",
+        crate::tools::runtime_tool_view(),
+    );
+    let ctx = owner.context();
     let config = LoongConfig::default();
     let runtime = ObserverStreamingRuntime::default();
     let observer = Arc::new(RecordingTurnObserver::default());
@@ -155,13 +162,13 @@ async fn handle_turn_with_observer_emits_lifecycle_for_explicit_acp_inline_messa
     let reply = ConversationTurnCoordinator::new()
         .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             &config,
-            &app_ctx,
+            &ctx,
             &address,
             "say hello",
             ProviderErrorMode::InlineMessage,
             &runtime,
             &acp_options,
-            ConversationRuntimeBinding::AdvisoryOnly,
+            &owner.legacy_tools,
             None,
             Some(observer_handle),
             None,
@@ -212,7 +219,11 @@ async fn handle_turn_with_observer_emits_lifecycle_for_explicit_acp_inline_messa
 
 #[tokio::test]
 async fn handle_turn_with_ingress_and_observer_marks_failed_when_runtime_bootstrap_fails() {
-    let app_ctx = runtime_test_context();
+    let owner = crate::test_support::runtime_session_for_test(
+        "observer-session",
+        crate::tools::runtime_tool_view(),
+    );
+    let ctx = owner.context();
     let mut config = LoongConfig::default();
     config.conversation.context_engine = Some("missing-observer-runtime-ingress".to_owned());
 
@@ -225,12 +236,12 @@ async fn handle_turn_with_ingress_and_observer_marks_failed_when_runtime_bootstr
     let result = coordinator
         .handle_turn_with_address_and_acp_options_and_ingress_and_observer_with_manager(
             &config,
-            &app_ctx,
+            &ctx,
             &address,
             "say hello",
             ProviderErrorMode::Propagate,
             &acp_options,
-            ConversationRuntimeBinding::AdvisoryOnly,
+            &owner.legacy_tools,
             None,
             Some(observer_handle),
             None,
@@ -252,7 +263,11 @@ async fn handle_turn_with_ingress_and_observer_marks_failed_when_runtime_bootstr
 
 #[tokio::test]
 async fn handle_turn_with_observer_marks_failed_when_runtime_bootstrap_fails() {
-    let app_ctx = runtime_test_context();
+    let owner = crate::test_support::runtime_session_for_test(
+        "observer-session",
+        crate::tools::runtime_tool_view(),
+    );
+    let ctx = owner.context();
     let mut config = LoongConfig::default();
     config.conversation.context_engine = Some("missing-observer-runtime".to_owned());
 
@@ -265,12 +280,12 @@ async fn handle_turn_with_observer_marks_failed_when_runtime_bootstrap_fails() {
     let result = coordinator
         .handle_turn_with_address_and_acp_options_and_ingress_and_observer_with_manager(
             &config,
-            &app_ctx,
+            &ctx,
             &address,
             "say hello",
             ProviderErrorMode::Propagate,
             &acp_options,
-            ConversationRuntimeBinding::AdvisoryOnly,
+            &owner.legacy_tools,
             None,
             Some(observer_handle),
             None,
@@ -288,179 +303,6 @@ async fn handle_turn_with_observer_marks_failed_when_runtime_bootstrap_fails() {
         .map(|event| event.phase)
         .collect::<Vec<_>>();
     assert_eq!(phase_names, vec![ConversationTurnPhase::Failed]);
-}
-
-#[tokio::test]
-async fn handle_production_turn_with_observer_rejects_advisory_only_binding_before_runtime_bootstrap()
- {
-    let app_ctx = runtime_test_context();
-    let mut config = LoongConfig::default();
-    config.conversation.context_engine = Some("missing-observer-runtime".to_owned());
-
-    let coordinator = ConversationTurnCoordinator::new();
-    let observer = Arc::new(RecordingTurnObserver::default());
-    let observer_handle: ConversationTurnObserverHandle = observer.clone();
-    let acp_options = AcpConversationTurnOptions::automatic();
-    let address = ConversationSessionAddress::from_session_id("observer-session");
-
-    let result = coordinator
-        .handle_production_turn_with_address_and_acp_options_and_observer_with_manager(
-            &config,
-            &app_ctx,
-            &address,
-            "say hello",
-            ProviderErrorMode::Propagate,
-            &acp_options,
-            ConversationRuntimeBinding::AdvisoryOnly,
-            Some(observer_handle),
-            None,
-            None,
-        )
-        .await;
-    let error = result.expect_err("advisory-only production binding should fail");
-
-    assert_eq!(
-        error,
-        PRODUCTION_CONVERSATION_RUNTIME_REQUIRES_KERNEL_BINDING
-    );
-
-    let phase_events = observer
-        .phase_events
-        .lock()
-        .expect("phase event lock should not be poisoned");
-    let phase_names = phase_events
-        .iter()
-        .map(|event| event.phase)
-        .collect::<Vec<_>>();
-
-    assert_eq!(phase_names, vec![ConversationTurnPhase::Failed]);
-}
-
-#[tokio::test]
-async fn handle_production_turn_with_runtime_rejects_advisory_only_binding_before_provider_request()
-{
-    let app_ctx = runtime_test_context();
-    let mut config = LoongConfig::default();
-    config.provider.kind = crate::config::ProviderKind::Anthropic;
-
-    let runtime = ObserverStreamingRuntime::default();
-    let coordinator = ConversationTurnCoordinator::new();
-    let observer = Arc::new(RecordingTurnObserver::default());
-    let observer_handle: ConversationTurnObserverHandle = observer.clone();
-    let acp_options = AcpConversationTurnOptions::automatic();
-    let address = ConversationSessionAddress::from_session_id("observer-session");
-
-    let result = coordinator
-        .handle_production_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
-            &config,
-            &app_ctx,
-            &address,
-            "say hello",
-            ProviderErrorMode::Propagate,
-            &runtime,
-            &acp_options,
-            ConversationRuntimeBinding::AdvisoryOnly,
-            None,
-            Some(observer_handle),
-        )
-        .await;
-    let error = result.expect_err("advisory-only production binding should fail");
-
-    assert_eq!(
-        error,
-        PRODUCTION_CONVERSATION_RUNTIME_REQUIRES_KERNEL_BINDING
-    );
-
-    let streaming_calls = runtime
-        .streaming_calls
-        .lock()
-        .expect("streaming call lock should not be poisoned");
-
-    assert_eq!(*streaming_calls, 0);
-
-    let phase_events = observer
-        .phase_events
-        .lock()
-        .expect("phase event lock should not be poisoned");
-    let phase_names = phase_events
-        .iter()
-        .map(|event| event.phase)
-        .collect::<Vec<_>>();
-
-    assert_eq!(phase_names, vec![ConversationTurnPhase::Failed]);
-}
-
-#[tokio::test]
-async fn compact_production_session_rejects_advisory_only_binding_before_runtime_bootstrap() {
-    let app_ctx = runtime_test_context();
-    let mut config = LoongConfig::default();
-    config.conversation.context_engine = Some("missing-maintenance-runtime".to_owned());
-
-    let coordinator = ConversationTurnCoordinator::new();
-    let result = coordinator
-        .compact_production_session(
-            &config,
-            &app_ctx,
-            "maintenance-session",
-            ConversationRuntimeBinding::AdvisoryOnly,
-        )
-        .await;
-    let error = result.expect_err("advisory-only production maintenance binding should fail");
-
-    assert_eq!(
-        error,
-        PRODUCTION_CONVERSATION_RUNTIME_REQUIRES_KERNEL_BINDING
-    );
-}
-
-#[tokio::test]
-async fn repair_production_turn_checkpoint_tail_rejects_advisory_only_binding_before_runtime_bootstrap()
- {
-    let app_ctx = runtime_test_context();
-    let mut config = LoongConfig::default();
-    config.conversation.context_engine = Some("missing-maintenance-runtime".to_owned());
-
-    let coordinator = ConversationTurnCoordinator::new();
-    let result = coordinator
-        .repair_production_turn_checkpoint_tail(
-            &config,
-            &app_ctx,
-            "maintenance-session",
-            ConversationRuntimeBinding::AdvisoryOnly,
-        )
-        .await;
-    let error = result.expect_err("advisory-only production maintenance binding should fail");
-
-    assert_eq!(
-        error,
-        PRODUCTION_CONVERSATION_RUNTIME_REQUIRES_KERNEL_BINDING
-    );
-}
-
-#[tokio::test]
-async fn load_production_turn_checkpoint_diagnostics_rejects_advisory_only_binding_before_runtime_bootstrap()
- {
-    let app_ctx = runtime_test_context();
-    let mut config = LoongConfig::default();
-    config.conversation.context_engine = Some("missing-maintenance-runtime".to_owned());
-
-    let coordinator = ConversationTurnCoordinator::new();
-    let limit = config.memory.sliding_window;
-    let result = coordinator
-        .load_production_turn_checkpoint_diagnostics_with_limit(
-            &config,
-            &app_ctx,
-            "maintenance-session",
-            limit,
-            ConversationRuntimeBinding::AdvisoryOnly,
-        )
-        .await;
-    let error = result.expect_err("advisory-only production maintenance binding should fail");
-
-    assert_eq!(
-        error,
-        PRODUCTION_CONVERSATION_RUNTIME_REQUIRES_KERNEL_BINDING
-    );
 }
 
 #[test]

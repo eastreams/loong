@@ -11,6 +11,7 @@ use loong_app::tools::runtime_config::BashExecRuntimePolicy;
 #[cfg(feature = "tool-shell")]
 use loong_app::tools::runtime_config::ToolRuntimeConfig;
 use loong_contracts::Capability;
+use loong_core::policy::context::PolicyContext;
 use serde_json::json;
 
 #[test]
@@ -24,11 +25,11 @@ fn fake_provider_builder_text_only() {
 fn fake_provider_builder_with_tool_call() {
     let turn = FakeProviderBuilder::new()
         .with_text("checking file")
-        .with_tool_call("file.read", json!({"path": "test.txt"}))
+        .with_tool_call("read", json!({"path": "test.txt"}))
         .build();
     assert_eq!(turn.assistant_text, "checking file");
     assert_eq!(turn.tool_intents.len(), 1);
-    assert_eq!(turn.tool_intents[0].tool_name, "read");
+    assert_eq!(turn.tool_intents[0].tool_name.name(), "read");
     assert_eq!(turn.tool_intents[0].args_json, json!({"path": "test.txt"}));
     assert!(!turn.tool_intents[0].tool_call_id.is_empty());
 }
@@ -36,8 +37,8 @@ fn fake_provider_builder_with_tool_call() {
 #[test]
 fn fake_provider_builder_unique_tool_call_ids() {
     let turn = FakeProviderBuilder::new()
-        .with_tool_call("file.read", json!({"path": "a.txt"}))
-        .with_tool_call("file.read", json!({"path": "b.txt"}))
+        .with_tool_call("read", json!({"path": "a.txt"}))
+        .with_tool_call("read", json!({"path": "b.txt"}))
         .build();
     assert_eq!(turn.tool_intents.len(), 2);
     assert_ne!(
@@ -49,12 +50,14 @@ fn fake_provider_builder_unique_tool_call_ids() {
 #[test]
 fn harness_builds_with_invoke_tool_capability() {
     let harness = TurnTestHarness::new();
+    assert!(harness.runtime.registered_tool_paths().contains(
+        &loong_contracts::ToolPath::new(["read"]).expect("test tool path must be valid")
+    ));
     assert!(
         harness
-            .app_ctx
-            .token()
-            .allowed_capabilities
-            .contains(&Capability::InvokeTool)
+            .context()
+            .allowed_capabilities()
+            .contains(Capability::InvokeTool)
     );
     assert!(harness.temp_dir.exists());
 }
@@ -93,7 +96,7 @@ async fn integ_file_read_returns_real_content() {
     .expect("seed file");
 
     let turn = FakeProviderBuilder::new()
-        .with_tool_call("file.read", json!({"path": "greeting.txt"}))
+        .with_tool_call("read", json!({"path": "greeting.txt"}))
         .build();
     let result = harness.execute(&turn).await;
 
@@ -116,7 +119,7 @@ async fn integ_file_write_then_read_round_trip() {
     // Write
     let write_turn = FakeProviderBuilder::new()
         .with_tool_call(
-            "file.write",
+            "write",
             json!({"path": "round-trip.txt", "content": "written by tool"}),
         )
         .build();
@@ -134,7 +137,7 @@ async fn integ_file_write_then_read_round_trip() {
 
     // Read back
     let read_turn = FakeProviderBuilder::new()
-        .with_tool_call("file.read", json!({"path": "round-trip.txt"}))
+        .with_tool_call("read", json!({"path": "round-trip.txt"}))
         .build();
     let read_result = harness.execute(&read_turn).await;
     #[allow(clippy::wildcard_enum_match_arm)]
@@ -220,7 +223,7 @@ async fn integ_file_read_sandbox_rejects_path_escape() {
     let harness = TurnTestHarness::new();
 
     let turn = FakeProviderBuilder::new()
-        .with_tool_call("file.read", json!({"path": "../../../etc/passwd"}))
+        .with_tool_call("read", json!({"path": "../../../etc/passwd"}))
         .build();
     let result = harness.execute(&turn).await;
 
@@ -235,7 +238,7 @@ async fn integ_missing_capability_denies_tool() {
     let harness = TurnTestHarness::with_capabilities(BTreeSet::from([Capability::MemoryRead]));
 
     let turn = FakeProviderBuilder::new()
-        .with_tool_call("file.read", json!({"path": "anything.txt"}))
+        .with_tool_call("read", json!({"path": "anything.txt"}))
         .build();
     let result = harness.execute(&turn).await;
 
@@ -302,7 +305,7 @@ async fn integ_malformed_tool_args_returns_error() {
     let harness = TurnTestHarness::new();
 
     let turn = FakeProviderBuilder::new()
-        .with_tool_call("file.read", json!("not an object"))
+        .with_tool_call("read", json!("not an object"))
         .build();
     let result = harness.execute(&turn).await;
 
@@ -310,8 +313,8 @@ async fn integ_malformed_tool_args_returns_error() {
     match result {
         TurnResult::ToolError(err) => {
             assert!(
-                err.contains("invalid tool input")
-                    && err.contains("read payload must be an object"),
+                err.contains("tool dispatch failed")
+                    && err.contains("tool input payload must be an object"),
                 "expected typed read input error, got: {err}"
             );
         }
@@ -327,10 +330,7 @@ async fn integ_file_write_denied_without_capability() {
     let harness = TurnTestHarness::with_capabilities(BTreeSet::from([Capability::InvokeTool]));
 
     let turn = FakeProviderBuilder::new()
-        .with_tool_call(
-            "file.write",
-            json!({"path": "test.txt", "content": "hello"}),
-        )
+        .with_tool_call("write", json!({"path": "test.txt", "content": "hello"}))
         .build();
     let result = harness.execute(&turn).await;
 

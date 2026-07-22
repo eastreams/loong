@@ -1,26 +1,26 @@
 use super::*;
 use crate::conversation::autonomy_policy::AutonomyTurnBudgetState;
-use crate::conversation::turn_engine::{ApprovalRequirement, ToolPreflightOutcome};
+use crate::conversation::turn_engine::{ApprovalRequirement, LegacyToolPreflightOutcome};
 
 fn effective_tool_config_for_session(
     tool_config: &crate::config::ToolConfig,
-    session_context: &AppContext,
+    session_context: &Context<'_>,
 ) -> crate::config::ToolConfig {
     let mut tool_config = tool_config.clone();
-    if session_context.parent_session_id.is_some() {
+    if session_context.session().parent_session_id.is_some() {
         tool_config.sessions.visibility = crate::config::SessionVisibility::SelfOnly;
     }
     tool_config
 }
 
-pub(super) struct CoordinatorAppToolDispatcher<'a, R: ?Sized> {
+pub(super) struct CoordinatorLegacyToolDispatcher<'a, R: ?Sized> {
     pub(super) config: &'a LoongConfig,
     pub(super) runtime: &'a R,
-    pub(super) fallback: &'a DefaultAppToolDispatcher,
+    pub(super) fallback: &'a DefaultLegacyToolDispatcher,
 }
 
 #[async_trait::async_trait]
-impl<R> AppToolDispatcher for CoordinatorAppToolDispatcher<'_, R>
+impl<R> LegacyToolDispatcher for CoordinatorLegacyToolDispatcher<'_, R>
 where
     R: ConversationRuntime + ?Sized,
 {
@@ -28,88 +28,83 @@ where
         self.fallback.memory_config()
     }
 
-    async fn preflight_tool_intent_with_binding(
+    async fn preflight_tool_intent(
         &self,
-        session_context: &AppContext,
+        session_context: &Context<'_>,
         intent: &ToolIntent,
         execution_request: &loong_contracts::ToolCoreRequest,
         trusted_internal_context: bool,
         descriptor: &crate::tools::ToolDescriptor,
-        dispatch_kind: crate::conversation::turn_engine::ToolDispatchKind,
-        capabilities_override: Option<&loong_contracts::Capabilities>,
-        binding: ConversationRuntimeBinding<'_>,
+        dispatch_kind: crate::conversation::turn_engine::LegacyToolDispatchKind,
         budget_state: &AutonomyTurnBudgetState,
-    ) -> Result<ToolPreflightOutcome, String> {
+    ) -> Result<LegacyToolPreflightOutcome, String> {
         self.fallback
-            .preflight_tool_intent_with_binding(
+            .preflight_tool_intent(
                 session_context,
                 intent,
                 execution_request,
                 trusted_internal_context,
                 descriptor,
                 dispatch_kind,
-                capabilities_override,
-                binding,
                 budget_state,
             )
             .await
     }
 
-    async fn maybe_require_approval_with_binding(
+    async fn maybe_require_approval(
         &self,
-        session_context: &AppContext,
+        session_context: &Context<'_>,
         intent: &ToolIntent,
         execution_request: &loong_contracts::ToolCoreRequest,
         trusted_internal_context: bool,
         descriptor: &crate::tools::ToolDescriptor,
-        dispatch_kind: crate::conversation::turn_engine::ToolDispatchKind,
-        capabilities_override: Option<&loong_contracts::Capabilities>,
-        binding: ConversationRuntimeBinding<'_>,
+        dispatch_kind: crate::conversation::turn_engine::LegacyToolDispatchKind,
     ) -> Result<Option<ApprovalRequirement>, String> {
         self.fallback
-            .maybe_require_approval_with_binding(
+            .maybe_require_approval(
                 session_context,
                 intent,
                 execution_request,
                 trusted_internal_context,
                 descriptor,
                 dispatch_kind,
-                capabilities_override,
-                binding,
             )
             .await
     }
 
-    async fn preflight_tool_execution_with_binding(
+    async fn preflight_tool_execution(
         &self,
-        session_context: &AppContext,
+        session_context: &Context<'_>,
         intent: &ToolIntent,
         request: loong_contracts::ToolCoreRequest,
         descriptor: &crate::tools::ToolDescriptor,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> Result<ToolExecutionPreflight, String> {
+    ) -> Result<LegacyToolExecutionPreflight, String> {
         self.fallback
-            .preflight_tool_execution_with_binding(
-                session_context,
-                intent,
-                request,
-                descriptor,
-                binding,
-            )
+            .preflight_tool_execution(session_context, intent, request, descriptor)
+            .await
+    }
+
+    async fn execute_core_tool(
+        &self,
+        session_context: &Context<'_>,
+        request: loong_contracts::ToolCoreRequest,
+        trusted_internal_context: bool,
+    ) -> Result<loong_contracts::ToolCoreOutcome, crate::tools::LegacyToolRequestError> {
+        self.fallback
+            .execute_core_tool(session_context, request, trusted_internal_context)
             .await
     }
 
     async fn execute_app_tool(
         &self,
-        session_context: &AppContext,
+        session_context: &Context<'_>,
         request: loong_contracts::ToolCoreRequest,
-        binding: ConversationRuntimeBinding<'_>,
     ) -> Result<loong_contracts::ToolCoreOutcome, String> {
         match crate::tools::canonical_tool_name(request.tool_name.as_str()) {
             "approval_request_resolve" => {
                 #[cfg(not(feature = "memory-sqlite"))]
                 {
-                    let _ = (session_context, binding);
+                    let _ = session_context;
                     Err("approval tools require sqlite memory support (enable feature `memory-sqlite`)"
                         .to_owned())
                 }
@@ -124,11 +119,10 @@ where
                         session_context,
                         self.runtime,
                         self.fallback,
-                        binding,
                     );
                     crate::tools::approval::execute_approval_tool_with_runtime_support(
                         request,
-                        &session_context.session_id,
+                        &session_context.session().session_id,
                         &memory_config,
                         &effective_tool_config,
                         Some(&approval_runtime),
@@ -142,7 +136,7 @@ where
                     self.runtime,
                     session_context,
                     request.payload,
-                    binding,
+                    self.fallback,
                 )
                 .await
             }
@@ -152,13 +146,27 @@ where
                     self.runtime,
                     session_context,
                     request.payload,
-                    binding,
+                    self.fallback,
+                )
+                .await
+            }
+            #[cfg(feature = "memory-sqlite")]
+            "session_continue" => {
+                let tool_config =
+                    effective_tool_config_for_session(&self.config.tools, session_context);
+                crate::tools::session::continue_session_with_runtime(
+                    request.payload,
+                    session_context,
+                    &tool_config,
+                    self.config,
+                    self.runtime,
+                    self.fallback,
                 )
                 .await
             }
             _ => {
                 self.fallback
-                    .execute_app_tool(session_context, request, binding)
+                    .execute_app_tool(session_context, request)
                     .await
             }
         }
@@ -166,23 +174,21 @@ where
 
     async fn after_tool_execution(
         &self,
-        session_context: &AppContext,
+        session_context: &Context<'_>,
         intent: &ToolIntent,
         intent_sequence: usize,
         request: &loong_contracts::ToolCoreRequest,
         outcome: &loong_contracts::ToolCoreOutcome,
-        binding: ConversationRuntimeBinding<'_>,
     ) {
         let tool_name = crate::tools::canonical_tool_name(request.tool_name.as_str());
 
         persist_tool_discovery_refresh_event_if_needed(
             self.runtime,
-            &session_context.session_id,
+            &session_context.session().session_id,
             intent,
             intent_sequence,
             tool_name,
             outcome,
-            binding,
         )
         .await;
     }

@@ -12,8 +12,7 @@ use loong_contracts::{
     PolicyReport,
 };
 use loong_core::{
-    AuthorizationError, PermissionRequestError, PolicyGrantError, kernel::Kernel as _,
-    policy::context::PolicyContext,
+    PermissionRequestError, PolicyGrantError, kernel::Kernel as _, policy::context::PolicyContext,
 };
 use serde_json::json;
 
@@ -21,7 +20,7 @@ use super::*;
 use crate::{
     AccessCx, AuditError, AuditEvent, AuditEventKind, AuditSink, FixedClock, InMemoryAuditSink,
     Kernel,
-    access::fs::{FsAccessError, FsPathPolicyContext, FsResolutionContext},
+    access::fs::{FsPathError, FsPathPolicyContext, FsReadError, FsResolutionContext},
 };
 
 struct AuditContext {

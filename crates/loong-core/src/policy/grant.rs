@@ -79,7 +79,7 @@ impl<A: ActionMeta> Granted<A> {
         self.action
     }
 
-    /// Consume this authorization token through the action's execution hook.
+    /// Consume this authorization proof through the action's execution hook.
     ///
     /// This is the preferred port from authorization into side-effect
     /// execution. Callers should not invoke `Action::run` directly unless they
@@ -90,7 +90,7 @@ impl<A: ActionMeta> Granted<A> {
     ) -> Result<<A as Action<Cx>>::Output, <A as Action<Cx>>::Error>
     where
         A: Action<Cx>,
-        Cx: Sync,
+        Cx: ?Sized + Sync,
     {
         A::run(self, ctx).await
     }

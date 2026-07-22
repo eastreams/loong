@@ -13,6 +13,7 @@ use loong_protocol::{
     ControlPlaneConnectErrorCode, ControlPlaneConnectErrorResponse, ControlPlaneConnectRequest,
     ControlPlanePrincipal, ControlPlaneScope,
 };
+use loong_runtime::runtime::Runtime;
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::{
@@ -195,6 +196,8 @@ impl GatewayPairingSessionRequest {
 
 #[derive(Clone)]
 pub(crate) struct GatewayControlAppState {
+    /// One governance/runtime registry shared by every gateway-owned session.
+    pub(crate) runtime: Arc<Runtime<mvp::RuntimeContextFactory>>,
     pub(crate) runtime_dir: PathBuf,
     pub(crate) config_path: String,
     pub(crate) bearer_token: String,
@@ -210,10 +213,31 @@ pub(crate) struct GatewayControlAppState {
 impl GatewayControlAppState {
     /// Minimal state for tests that don't need ACP.
     pub fn test_minimal(bearer_token: String) -> Self {
+        let mut config = LoongConfig::default();
+        config.audit.mode = mvp::config::AuditMode::InMemory;
+        Self::test_state(bearer_token, config, None)
+    }
+
+    /// Test state whose Runtime and exposed config are one atomic snapshot.
+    pub fn test_with_config(bearer_token: String, mut config: LoongConfig) -> Self {
+        config.audit.mode = mvp::config::AuditMode::InMemory;
+        Self::test_state(bearer_token, config.clone(), Some(config))
+    }
+
+    // Centralizing fixture assembly prevents tests from replacing config after
+    // Runtime bootstrap, a state production construction cannot represent.
+    fn test_state(
+        bearer_token: String,
+        runtime_config: LoongConfig,
+        config: Option<LoongConfig>,
+    ) -> Self {
+        let runtime = mvp::runtime::bootstrap_runtime_with_config(&runtime_config)
+            .expect("minimal gateway test runtime should bootstrap");
         let channel_inventory = minimal_gateway_channel_inventory_read_model();
         let runtime_snapshot =
             minimal_gateway_runtime_snapshot_read_model(channel_inventory.clone());
         Self {
+            runtime,
             runtime_dir: PathBuf::from("/tmp/test"),
             config_path: String::new(),
             bearer_token,
@@ -223,7 +247,7 @@ impl GatewayControlAppState {
             acp_manager: None,
             challenge_registry: Arc::new(mvp::control_plane::ControlPlaneChallengeRegistry::new()),
             connection_registry: Arc::new(mvp::control_plane::ControlPlaneConnectionRegistry::new()),
-            config: None,
+            config,
         }
     }
 }
@@ -414,6 +438,9 @@ pub async fn start_gateway_control_surface(
     acp_manager: Option<Arc<AcpSessionManager>>,
     port_override: Option<u16>,
 ) -> CliResult<GatewayControlSurface> {
+    // Runtime is a gateway-lifetime owner. Sessions borrow it through Context;
+    // individual HTTP turns and channel accounts must never bootstrap another.
+    let runtime = mvp::runtime::bootstrap_runtime_with_config(&loaded_config.config)?;
     let channel_inventory = build_gateway_channel_inventory_read_model(loaded_config)?;
     let runtime_snapshot = build_gateway_runtime_snapshot_read_model(loaded_config)?;
     let bearer_token = new_gateway_control_bearer_token();
@@ -424,7 +451,8 @@ pub async fn start_gateway_control_surface(
     let (listener, binding) =
         bind_gateway_control_listener(loaded_config, port_override, token_path.as_path()).await?;
     let (gateway_ingress_router, gateway_ingress_runtimes) =
-        build_gateway_control_ingress(loaded_config, token_path.as_path()).await?;
+        build_gateway_control_ingress(loaded_config, Arc::clone(&runtime), token_path.as_path())
+            .await?;
 
     let connection_registry =
         build_gateway_pairing_connection_registry(persisted_pairing_runtime.as_ref())?;
@@ -432,6 +460,7 @@ pub async fn start_gateway_control_surface(
         build_gateway_pairing_event_bus(persisted_pairing_runtime.as_ref(), acp_manager.is_some());
 
     let app_state = GatewayControlAppState {
+        runtime,
         runtime_dir: runtime_dir.to_path_buf(),
         config_path: loaded_config.resolved_path.display().to_string(),
         bearer_token,
@@ -513,6 +542,7 @@ async fn bind_gateway_control_listener(
 
 async fn build_gateway_control_ingress(
     loaded_config: &LoadedSupervisorConfig,
+    runtime: Arc<Runtime<mvp::RuntimeContextFactory>>,
     token_path: &Path,
 ) -> CliResult<(
     axum::Router,
@@ -521,6 +551,7 @@ async fn build_gateway_control_ingress(
     mvp::channel::build_gateway_ingress(
         loaded_config.resolved_path.as_path(),
         &loaded_config.config,
+        runtime,
     )
     .await
     .map(|gateway_ingress| gateway_ingress.into_parts())
@@ -927,9 +958,8 @@ pub fn build_gateway_acp_test_router(
     config: LoongConfig,
     acp_manager: Arc<AcpSessionManager>,
 ) -> Router {
-    let mut state = GatewayControlAppState::test_minimal(bearer_token);
+    let mut state = GatewayControlAppState::test_with_config(bearer_token, config);
     state.acp_manager = Some(acp_manager);
-    state.config = Some(config);
     let app_state = Arc::new(state);
     Router::new()
         .route("/v1/acp/status", get(handle_acp_status))
@@ -944,8 +974,7 @@ pub fn build_gateway_pairing_test_router_without_event_bus(
     bearer_token: String,
     config: LoongConfig,
 ) -> Router {
-    let mut state = GatewayControlAppState::test_minimal(bearer_token);
-    state.config = Some(config);
+    let state = GatewayControlAppState::test_with_config(bearer_token, config);
     let app_state = Arc::new(state);
     Router::new()
         .route("/v1/pairing/start", post(handle_gateway_pairing_start))
@@ -973,9 +1002,8 @@ pub fn build_gateway_pairing_test_router_with_event_bus(
     config: LoongConfig,
     event_bus: GatewayEventBus,
 ) -> Router {
-    let mut state = GatewayControlAppState::test_minimal(bearer_token);
+    let mut state = GatewayControlAppState::test_with_config(bearer_token, config);
     state.event_bus = Some(event_bus);
-    state.config = Some(config);
     let app_state = Arc::new(state);
     Router::new()
         .route("/v1/pairing/start", post(handle_gateway_pairing_start))
@@ -998,8 +1026,7 @@ pub fn build_gateway_nodes_test_router(
     config: LoongConfig,
     channel_inventory: GatewayChannelInventoryReadModel,
 ) -> Router {
-    let mut state = GatewayControlAppState::test_minimal(bearer_token);
-    state.config = Some(config);
+    let mut state = GatewayControlAppState::test_with_config(bearer_token, config);
     state.channel_inventory = Arc::new(channel_inventory);
     let app_state = Arc::new(state);
     Router::new()

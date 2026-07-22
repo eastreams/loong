@@ -7,7 +7,7 @@ use std::{
 use async_trait::async_trait;
 use loong_contracts::{Capability, PolicyDecision, PolicyGrant};
 use loong_core::{
-    error::AuthorizationError,
+    error::PolicyGrantError,
     policy::{
         action::{Action, ActionMeta, ActionMetadata},
         context::ContextFactory,
@@ -17,13 +17,55 @@ use loong_core::{
     },
 };
 use serde_json::{Value, json};
+use thiserror::Error;
 
 use super::{
-    access::{FsAccess, FsAccessError},
-    path::{FsResolutionContext, GrantedPath},
+    access::FsAccess,
+    path::{FsPathPolicyContext, FsResolutionContext, GrantedPath},
 };
 
+#[cfg(test)]
+mod tests;
+
 const FS_WRITE_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
+
+#[derive(Debug, Error)]
+pub enum FsWriteError {
+    #[error(transparent)]
+    Path(#[from] super::path::FsPathError),
+    #[error(transparent)]
+    Authorization(#[from] PolicyGrantError),
+    #[error("failed to inspect path {path}: {source}", path = .path.display())]
+    InspectPath {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to create parent directory {path}: {source}", path = .path.display())]
+    CreateParentDirectory {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("path {path} is a directory, not a file", path = .path.display())]
+    PathIsDirectory { path: PathBuf },
+    #[error("refusing to write through symlink {path}", path = .path.display())]
+    RefuseSymlink { path: PathBuf },
+    #[error("file {path} already exists; overwrite is required", path = .path.display())]
+    FileExistsRequiresOverwrite { path: PathBuf },
+    #[error("failed to open file {path} for writing: {source}", path = .path.display())]
+    OpenWriteFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to write file {path}: {source}", path = .path.display())]
+    WriteFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+}
 
 /// Policy-visible options shared by governed write operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -202,7 +244,7 @@ impl<'a, 'ctx, C, P> FsAccess<'a, 'ctx, C, P>
 where
     C: ContextFactory + 'ctx,
     P: PolicyEngine<C>,
-    C::Cx<'ctx>: FsResolutionContext,
+    C::Cx<'ctx>: FsResolutionContext + FsPathPolicyContext,
 {
     /// Write bytes through resolution, path authorization, and write policy.
     ///
@@ -213,16 +255,11 @@ where
         path: impl AsRef<Path>,
         bytes: impl Into<Vec<u8>>,
         options: FsWriteOptions,
-    ) -> Result<FsWriteOutput, FsAccessError> {
+    ) -> Result<FsWriteOutput, FsWriteError> {
         let path = self.grant_target_path(path).await?;
 
         let action = FsWriteAction::new(path, bytes.into(), options);
-        let grant = self
-            .policy_engine
-            .grant(self.ctx, action)
-            .await
-            .map_err(AuthorizationError::from)
-            .map_err(FsAccessError::Authorization)?;
+        let grant = self.policy_engine.grant(self.ctx, action).await?;
         grant.into_granted().run(self.ctx).await
     }
 
@@ -236,16 +273,11 @@ where
         path: impl AsRef<Path>,
         bytes: impl Into<Vec<u8>>,
         options: FsWriteOptions,
-    ) -> Result<FsWriteOutput, FsAccessError> {
+    ) -> Result<FsWriteOutput, FsWriteError> {
         let path = self.grant_target_path(path).await?;
 
         let action = FsAtomicWriteAction::new(path, bytes.into(), options);
-        let grant = self
-            .policy_engine
-            .grant(self.ctx, action)
-            .await
-            .map_err(AuthorizationError::from)
-            .map_err(FsAccessError::Authorization)?;
+        let grant = self.policy_engine.grant(self.ctx, action).await?;
         grant.into_granted().run(self.ctx).await
     }
 }
@@ -260,7 +292,7 @@ where
     Cx: Sync,
 {
     type Output = FsWriteOutput;
-    type Error = FsAccessError;
+    type Error = FsWriteError;
 
     async fn run(granted: Granted<Self>, _ctx: &Cx) -> Result<Self::Output, Self::Error> {
         let action = granted.into_action();
@@ -268,16 +300,16 @@ where
         let options = action.options();
 
         if symlink_metadata_is_symlink(&path)? {
-            return Err(FsAccessError::RefuseSymlink { path });
+            return Err(FsWriteError::RefuseSymlink { path });
         }
         if path.is_dir() {
-            return Err(FsAccessError::PathIsDirectory { path });
+            return Err(FsWriteError::PathIsDirectory { path });
         }
         if options.create_dirs
             && let Some(parent) = path.parent()
         {
             std::fs::create_dir_all(parent).map_err(|source| {
-                FsAccessError::CreateParentDirectory {
+                FsWriteError::CreateParentDirectory {
                     path: parent.to_path_buf(),
                     source,
                 }
@@ -286,12 +318,12 @@ where
 
         let overwritten = path
             .try_exists()
-            .map_err(|source| FsAccessError::InspectPath {
+            .map_err(|source| FsWriteError::InspectPath {
                 path: path.clone(),
                 source,
             })?;
         if overwritten && !options.overwrite {
-            return Err(FsAccessError::FileExistsRequiresOverwrite { path });
+            return Err(FsWriteError::FileExistsRequiresOverwrite { path });
         }
 
         let mut file_options = std::fs::OpenOptions::new();
@@ -303,16 +335,16 @@ where
         }
         let mut file = file_options.open(&path).map_err(|source| {
             if source.kind() == std::io::ErrorKind::AlreadyExists && !options.overwrite {
-                return FsAccessError::FileExistsRequiresOverwrite { path: path.clone() };
+                return FsWriteError::FileExistsRequiresOverwrite { path: path.clone() };
             }
 
-            FsAccessError::OpenWriteFile {
+            FsWriteError::OpenWriteFile {
                 path: path.clone(),
                 source,
             }
         })?;
         file.write_all(action.bytes())
-            .map_err(|source| FsAccessError::WriteFile {
+            .map_err(|source| FsWriteError::WriteFile {
                 path: path.clone(),
                 source,
             })?;
@@ -335,7 +367,7 @@ where
     Cx: Sync,
 {
     type Output = FsWriteOutput;
-    type Error = FsAccessError;
+    type Error = FsWriteError;
 
     async fn run(granted: Granted<Self>, _ctx: &Cx) -> Result<Self::Output, Self::Error> {
         let action = granted.into_action();
@@ -343,16 +375,16 @@ where
         let options = action.options();
 
         if symlink_metadata_is_symlink(&path)? {
-            return Err(FsAccessError::RefuseSymlink { path });
+            return Err(FsWriteError::RefuseSymlink { path });
         }
         if path.is_dir() {
-            return Err(FsAccessError::PathIsDirectory { path });
+            return Err(FsWriteError::PathIsDirectory { path });
         }
         if options.create_dirs
             && let Some(parent) = path.parent()
         {
             std::fs::create_dir_all(parent).map_err(|source| {
-                FsAccessError::CreateParentDirectory {
+                FsWriteError::CreateParentDirectory {
                     path: parent.to_path_buf(),
                     source,
                 }
@@ -361,17 +393,17 @@ where
 
         let overwritten = path
             .try_exists()
-            .map_err(|source| FsAccessError::InspectPath {
+            .map_err(|source| FsWriteError::InspectPath {
                 path: path.clone(),
                 source,
             })?;
         if overwritten && !options.overwrite {
-            return Err(FsAccessError::FileExistsRequiresOverwrite { path });
+            return Err(FsWriteError::FileExistsRequiresOverwrite { path });
         }
 
         let parent = path.parent().unwrap_or(Path::new("."));
         let mut staged = tempfile::NamedTempFile::new_in(parent).map_err(|source| {
-            FsAccessError::OpenWriteFile {
+            FsWriteError::OpenWriteFile {
                 path: path.clone(),
                 source,
             }
@@ -379,20 +411,20 @@ where
         staged
             .as_file_mut()
             .write_all(action.bytes())
-            .map_err(|source| FsAccessError::WriteFile {
+            .map_err(|source| FsWriteError::WriteFile {
                 path: path.clone(),
                 source,
             })?;
         staged
             .as_file_mut()
             .sync_all()
-            .map_err(|source| FsAccessError::WriteFile {
+            .map_err(|source| FsWriteError::WriteFile {
                 path: path.clone(),
                 source,
             })?;
         staged
             .persist(&path)
-            .map_err(|error| FsAccessError::WriteFile {
+            .map_err(|error| FsWriteError::WriteFile {
                 path: path.clone(),
                 source: error.error,
             })?;
@@ -407,11 +439,11 @@ where
 
 // Both write modes must classify missing targets and symlinks identically
 // before they choose different persistence strategies.
-fn symlink_metadata_is_symlink(path: &Path) -> Result<bool, FsAccessError> {
+fn symlink_metadata_is_symlink(path: &Path) -> Result<bool, FsWriteError> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata) => Ok(metadata.file_type().is_symlink()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(source) => Err(FsAccessError::InspectPath {
+        Err(source) => Err(FsWriteError::InspectPath {
             path: path.to_path_buf(),
             source,
         }),

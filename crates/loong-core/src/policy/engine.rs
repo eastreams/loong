@@ -5,7 +5,7 @@ use loong_contracts::{
     AuthorizationActionSnapshot, AuthorizationAttempt, AuthorizationAttemptEvent,
     AuthorizationAttemptId, AuthorizationDenial, AuthorizationEvidence, AuthorizationFailure,
     AuthorizationPermissionAuthority, AuthorizationPermissionInteraction, AuthorizationPolicyEvent,
-    AuthorizationSubject, AuthorizationTerminalOutcome, Capability, GrantId, PermissionResolution,
+    AuthorizationSubject, AuthorizationTerminalOutcome, GrantId, PermissionResolution,
     PolicyOutcome, PolicyReport,
 };
 
@@ -192,7 +192,15 @@ where
         ctx: &(impl PolicyContext + ?Sized),
         report: Option<&PolicyReport>,
     ) -> Result<(), PolicyGrantError> {
-        let Some(capability) = missing_required_capability(ctx, &self.action.required_capabilities)
+        // Read the context once so this gate cannot combine observations from
+        // different authority snapshots.
+        let granted_capabilities = ctx.allowed_capabilities();
+        let Some(capability) = self
+            .action
+            .required_capabilities
+            .iter()
+            .copied()
+            .find(|capability| !granted_capabilities.contains(*capability))
         else {
             return Ok(());
         };
@@ -477,17 +485,4 @@ where
             action,
         ))
     }
-}
-
-/// Read the context once so one capability gate cannot combine observations
-/// from different authority snapshots.
-fn missing_required_capability(
-    ctx: &(impl PolicyContext + ?Sized),
-    required_capabilities: &[Capability],
-) -> Option<Capability> {
-    let granted_capabilities = ctx.allowed_capabilities();
-    required_capabilities
-        .iter()
-        .copied()
-        .find(|capability| !granted_capabilities.contains(*capability))
 }

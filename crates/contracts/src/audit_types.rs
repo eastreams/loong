@@ -69,6 +69,17 @@ pub enum HistoricalToolInvocationOutcome {
     Failed { error_kind: String, reason: String },
 }
 
+/// Result of an app-runtime operation that is observable but carries no grant.
+///
+/// This evidence must not be interpreted as authorization or action execution;
+/// those stronger claims are represented by `Authorization` and
+/// `ActionExecution`, whose writers require the corresponding typed proof.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RuntimeOperationOutcome {
+    Completed,
+    Failed { reason: String },
+}
+
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AuditEventKind {
@@ -114,6 +125,11 @@ pub enum AuditEventKind {
         path_display: String,
         requested: Capabilities,
         declared: Capabilities,
+    },
+    /// Pack-free operational evidence emitted by the app runtime owner.
+    RuntimeOperation {
+        operation: String,
+        outcome: RuntimeOperationOutcome,
     },
     /// Historical pre-grant-linked tool invocation journal record.
     ///
@@ -162,8 +178,8 @@ pub enum AuditEventKind {
         filtered_out_tier_counts: BTreeMap<String, usize>,
         top_provider_ids: Vec<String>,
     },
+    /// Provider retry evidence belongs to the runtime request, not a legacy pack.
     ProviderFailover {
-        pack_id: String,
         provider_id: String,
         reason: String,
         stage: String,

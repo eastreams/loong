@@ -1,8 +1,12 @@
-use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use loong_contracts::{MemoryCoreOutcome, MemoryCoreRequest};
+use loong_core::policy::grant::Granted;
+use loong_kernel::access::memory::{
+    MemoryAppendTurnAction, MemoryBackend, MemoryBackendError, MemoryCompactAction,
+    MemoryReadStageEnvelopeAction, MemoryReplaceTurnsAction, MemoryReplaceTurnsOutcome,
+    MemorySnapshot, MemoryTranscriptAction, MemoryWindowAction,
+};
 
 use super::orchestrator::{
     BuiltinMemoryOrchestrator, hydrate_stage_envelope_without_execution_adapter,
@@ -10,29 +14,131 @@ use super::orchestrator::{
 };
 use super::runtime_config::MemoryRuntimeConfig;
 use super::{
-    MemoryCoreOperation, MemoryStageFamily, MemorySystem, MemorySystemMetadata, StageDiagnostics,
-    StageEnvelope,
+    MemoryStageFamily, MemorySystem, MemorySystemMetadata, StageDiagnostics, StageEnvelope,
 };
 
 #[async_trait]
 pub trait MemorySystemRuntime: Send + Sync {
     fn metadata(&self) -> &MemorySystemMetadata;
 
-    fn supported_core_operations(&self) -> Vec<MemoryCoreOperation>;
+    fn config(&self) -> &MemoryRuntimeConfig;
 
-    fn execute_core(&self, request: MemoryCoreRequest) -> Result<MemoryCoreOutcome, String>;
-
-    fn hydrate_stage_envelope(
+    async fn read_stage_envelope(
         &self,
-        session_id: &str,
-        workspace_root: Option<&Path>,
-    ) -> Result<StageEnvelope, String>;
+        granted: Granted<MemoryReadStageEnvelopeAction>,
+    ) -> Result<StageEnvelope, MemoryBackendError>;
 
-    async fn run_compact_stage(
+    async fn compact(
         &self,
-        session_id: &str,
-        workspace_root: Option<&Path>,
-    ) -> Result<StageDiagnostics, String>;
+        granted: Granted<MemoryCompactAction>,
+    ) -> Result<StageDiagnostics, MemoryBackendError>;
+}
+
+/// Session-selected backend for all governed memory side effects.
+///
+/// Durable storage is shared across memory systems, while stage hydration and
+/// compaction remain system-defined. This type owns that composition so Context
+/// exposes one `MemoryBackend` instead of forwarding every operation itself.
+pub struct MemorySystemBackend {
+    runtime: Box<dyn MemorySystemRuntime>,
+}
+
+impl MemorySystemBackend {
+    pub fn new(runtime: Box<dyn MemorySystemRuntime>) -> Self {
+        Self { runtime }
+    }
+}
+
+#[async_trait]
+impl MemoryBackend for MemorySystemBackend {
+    type StageEnvelope = StageEnvelope;
+    type CompactOutput = StageDiagnostics;
+
+    async fn append_turn(
+        &self,
+        granted: Granted<MemoryAppendTurnAction>,
+    ) -> Result<(), MemoryBackendError> {
+        #[cfg(feature = "memory-sqlite")]
+        {
+            super::sqlite::append_turn_granted(granted, self.runtime.config())
+        }
+        #[cfg(not(feature = "memory-sqlite"))]
+        {
+            let _ = granted;
+            Err(MemoryBackendError::Execution {
+                operation: "append_turn",
+                source: "sqlite memory is disabled in this build".into(),
+            })
+        }
+    }
+
+    async fn window(
+        &self,
+        granted: Granted<MemoryWindowAction>,
+    ) -> Result<MemorySnapshot, MemoryBackendError> {
+        #[cfg(feature = "memory-sqlite")]
+        {
+            super::sqlite::window_granted(granted, self.runtime.config())
+        }
+        #[cfg(not(feature = "memory-sqlite"))]
+        {
+            let _ = granted;
+            Err(MemoryBackendError::Execution {
+                operation: "window",
+                source: "sqlite memory is disabled in this build".into(),
+            })
+        }
+    }
+
+    async fn transcript(
+        &self,
+        granted: Granted<MemoryTranscriptAction>,
+    ) -> Result<MemorySnapshot, MemoryBackendError> {
+        #[cfg(feature = "memory-sqlite")]
+        {
+            super::sqlite::transcript_granted(granted, self.runtime.config())
+        }
+        #[cfg(not(feature = "memory-sqlite"))]
+        {
+            let _ = granted;
+            Err(MemoryBackendError::Execution {
+                operation: "transcript",
+                source: "sqlite memory is disabled in this build".into(),
+            })
+        }
+    }
+
+    async fn replace_turns(
+        &self,
+        granted: Granted<MemoryReplaceTurnsAction>,
+    ) -> Result<MemoryReplaceTurnsOutcome, MemoryBackendError> {
+        #[cfg(feature = "memory-sqlite")]
+        {
+            super::sqlite::replace_turns_granted(granted, self.runtime.config())
+        }
+        #[cfg(not(feature = "memory-sqlite"))]
+        {
+            let _ = granted;
+            Err(MemoryBackendError::Execution {
+                operation: "replace_turns",
+                source: "sqlite memory is disabled in this build".into(),
+            })
+        }
+    }
+
+    async fn read_stage_envelope(
+        &self,
+        granted: Granted<MemoryReadStageEnvelopeAction>,
+    ) -> Result<Self::StageEnvelope, MemoryBackendError> {
+        self.runtime.read_stage_envelope(granted).await
+    }
+
+    async fn compact(
+        &self,
+        granted: Granted<MemoryCompactAction>,
+    ) -> Result<Self::CompactOutput, MemoryBackendError> {
+        self.runtime.compact(granted).await
+    }
 }
 
 pub struct SystemBackedMemorySystemRuntime {
@@ -61,39 +167,38 @@ impl MemorySystemRuntime for SystemBackedMemorySystemRuntime {
         &self.metadata
     }
 
-    fn supported_core_operations(&self) -> Vec<MemoryCoreOperation> {
-        super::supported_memory_core_operations(self.config.backend)
+    fn config(&self) -> &MemoryRuntimeConfig {
+        &self.config
     }
 
-    fn execute_core(&self, request: MemoryCoreRequest) -> Result<MemoryCoreOutcome, String> {
-        super::execute_builtin_backend_memory_core(request, &self.config)
-    }
-
-    fn hydrate_stage_envelope(
+    async fn read_stage_envelope(
         &self,
-        session_id: &str,
-        workspace_root: Option<&Path>,
-    ) -> Result<StageEnvelope, String> {
+        granted: Granted<MemoryReadStageEnvelopeAction>,
+    ) -> Result<StageEnvelope, MemoryBackendError> {
+        let action = granted.as_ref();
+        let session_id = action.session_id();
+        let workspace_root = action.workspace_root();
         let orchestrator = BuiltinMemoryOrchestrator;
         let system = self.system.as_ref();
         let metadata = &self.metadata;
         let config = &self.config;
-        let envelope = orchestrator.hydrate_stage_envelope(
-            session_id,
-            workspace_root,
-            config,
-            system,
-            metadata,
-        )?;
+        let envelope = orchestrator
+            .hydrate_stage_envelope(session_id, workspace_root, config, system, metadata)
+            .map_err(|source| MemoryBackendError::Execution {
+                operation: "read_stage_envelope",
+                source: source.into(),
+            })?;
 
         Ok(envelope)
     }
 
-    async fn run_compact_stage(
+    async fn compact(
         &self,
-        session_id: &str,
-        workspace_root: Option<&Path>,
-    ) -> Result<StageDiagnostics, String> {
+        granted: Granted<MemoryCompactAction>,
+    ) -> Result<StageDiagnostics, MemoryBackendError> {
+        let action = granted.as_ref();
+        let session_id = action.session_id();
+        let workspace_root = action.workspace_root();
         let family = MemoryStageFamily::Compact;
         let supports_compact_stage = self.metadata.supports_stage_family(family);
         if !supports_compact_stage {
@@ -122,7 +227,10 @@ impl MemorySystemRuntime for SystemBackedMemorySystemRuntime {
                 };
                 Ok(diagnostics)
             }
-            Err(error) => Err(format!("memory compact stage failed: {error}")),
+            Err(source) => Err(MemoryBackendError::Execution {
+                operation: "compact",
+                source: source.into(),
+            }),
         }
     }
 }
@@ -153,45 +261,48 @@ impl MemorySystemRuntime for BuiltinMemorySystemRuntime {
         &self.metadata
     }
 
-    fn supported_core_operations(&self) -> Vec<MemoryCoreOperation> {
-        super::supported_memory_core_operations(self.config.backend)
+    fn config(&self) -> &MemoryRuntimeConfig {
+        &self.config
     }
 
-    fn execute_core(&self, request: MemoryCoreRequest) -> Result<MemoryCoreOutcome, String> {
-        super::execute_builtin_backend_memory_core(request, &self.config)
-    }
-
-    fn hydrate_stage_envelope(
+    async fn read_stage_envelope(
         &self,
-        session_id: &str,
-        workspace_root: Option<&Path>,
-    ) -> Result<StageEnvelope, String> {
+        granted: Granted<MemoryReadStageEnvelopeAction>,
+    ) -> Result<StageEnvelope, MemoryBackendError> {
+        let action = granted.as_ref();
+        let session_id = action.session_id();
+        let workspace_root = action.workspace_root();
         let orchestrator = BuiltinMemoryOrchestrator;
         let system = self.system.as_ref();
         let metadata = &self.metadata;
         let config = &self.config;
-        let envelope = orchestrator.hydrate_stage_envelope(
-            session_id,
-            workspace_root,
-            config,
-            system,
-            metadata,
-        )?;
+        let envelope = orchestrator
+            .hydrate_stage_envelope(session_id, workspace_root, config, system, metadata)
+            .map_err(|source| MemoryBackendError::Execution {
+                operation: "read_stage_envelope",
+                source: source.into(),
+            })?;
 
         Ok(envelope)
     }
 
-    async fn run_compact_stage(
+    async fn compact(
         &self,
-        session_id: &str,
-        workspace_root: Option<&Path>,
-    ) -> Result<StageDiagnostics, String> {
+        granted: Granted<MemoryCompactAction>,
+    ) -> Result<StageDiagnostics, MemoryBackendError> {
+        let action = granted.as_ref();
+        let session_id = action.session_id();
+        let workspace_root = action.workspace_root();
         let diagnostics = super::orchestrator::run_builtin_compact_stage(
             session_id,
             workspace_root,
             &self.config,
         )
-        .await?;
+        .await
+        .map_err(|source| MemoryBackendError::Execution {
+            operation: "compact",
+            source: source.into(),
+        })?;
 
         Ok(diagnostics)
     }
@@ -214,33 +325,32 @@ impl MemorySystemRuntime for MetadataOnlyMemorySystemRuntime {
         &self.metadata
     }
 
-    fn supported_core_operations(&self) -> Vec<MemoryCoreOperation> {
-        super::supported_memory_core_operations(self.config.backend)
+    fn config(&self) -> &MemoryRuntimeConfig {
+        &self.config
     }
 
-    fn execute_core(&self, request: MemoryCoreRequest) -> Result<MemoryCoreOutcome, String> {
-        super::execute_builtin_backend_memory_core(request, &self.config)
-    }
-
-    fn hydrate_stage_envelope(
+    async fn read_stage_envelope(
         &self,
-        session_id: &str,
-        _workspace_root: Option<&Path>,
-    ) -> Result<StageEnvelope, String> {
+        granted: Granted<MemoryReadStageEnvelopeAction>,
+    ) -> Result<StageEnvelope, MemoryBackendError> {
+        let session_id = granted.as_ref().session_id();
         let envelope = hydrate_stage_envelope_without_execution_adapter(
             session_id,
             &self.config,
             &self.metadata,
-        )?;
+        )
+        .map_err(|source| MemoryBackendError::Execution {
+            operation: "read_stage_envelope",
+            source: source.into(),
+        })?;
 
         Ok(envelope)
     }
 
-    async fn run_compact_stage(
+    async fn compact(
         &self,
-        _session_id: &str,
-        _workspace_root: Option<&Path>,
-    ) -> Result<StageDiagnostics, String> {
+        _granted: Granted<MemoryCompactAction>,
+    ) -> Result<StageDiagnostics, MemoryBackendError> {
         let family = MemoryStageFamily::Compact;
         let supports_compact_stage = self.metadata.supports_stage_family(family);
         if !supports_compact_stage {

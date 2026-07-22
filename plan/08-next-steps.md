@@ -5,7 +5,28 @@
 
 ## 当前 active goal：闭合 loong-runtime-owned typed execution domain
 
-### 目标
+### 设计门禁：Runtime / Session / Context 形状未完成
+
+本 active goal 当前停在 owner/control 设计，而不是等待机械实现。`02-runtime-and-crates.md` 中的
+`Runtime -> session::Handle -> Invocation<I> -> private Session runner` 仍是先前候选，不是已经接受的
+目标 API。实现步骤 2 到 10 只有在以下问题明确后才能重写并开始：
+
+- Session 是 runner 独占 value，还是受控共享 state 加唯一 lifecycle loop；
+- 调用面是 typed one-shot `invoke(I)`，还是可持续 feed input/control 并读取 event/status 的 stream；
+- Turn、model step 和 recursive Tool/Access Context 是否需要三个不同层级；
+- subagent lifecycle、等待、完成通知与 Runtime shutdown 分别由 registry、channel 和 task owner 中的谁
+  负责。
+
+OpenAI Codex 当前实现可作为讨论基线：`ThreadManager` 管理 `Arc<CodexThread>`，`CodexThread` 组合
+`Arc<Session>` 与 `SessionIo`，Session loop 创建单一 active task；`TurnContext`、`StepContext` 和
+`ToolInvocation` 分层，subagent 是共享 tree-scoped `AgentControl` 的独立 Thread/Session。Loong 只借鉴其
+lifecycle/context 分层与 channel 交互，不照搬 broad Session authority、Arc/Mutex 传播或 tool 直接访问
+Session。
+
+设计闭合前，只能继续提交不预设上述答案的 typed grant/Access/Tool foundation；不得宣称 Runtime /
+Session / Context owner cutover 已经可以实施或完成。
+
+### 先前候选目标
 
 破坏性完成 concrete `Runtime -> Session -> Context<'a>` ownership，并把已经成立但尚未完整接入 owner
 主干的 typed grant spine 一起验收。goal 结束时，新架构不能再由 app Context、split
@@ -101,7 +122,7 @@ runtime domain 定义、Policy 只依赖 requirement traits、`ContextFactory` �
 - 每个 ownership、安全边界和非显然约束都写少量 intent comment；不写注释墙，也不能依赖本次讨论
   记忆维持正确性。
 
-### 实施步骤
+### 先前候选步骤（设计闭合后重写）
 
 1. **先收拢已成立的 typed foundation**：按 contracts/core/kernel/access/tool-plane/tool owner 审计现有
    改动；删除无用 helper/TODO 后形成可独立编译的最小提交。app Context 的 authority 重建漏洞
@@ -145,7 +166,7 @@ runtime domain 定义、Policy 只依赖 requirement traits、`ContextFactory` �
 11. **同步 plan/docs/guards**：architecture check 必须检测 root Context 重建、Context -> Runtime/audit、
     typed -> legacy lifecycle 反向依赖和 legacy import allowlist，而不只是检查旧类型名。
 
-### 最小提交顺序
+### 先前候选提交顺序（设计闭合后重写）
 
 1. typed contracts/policy foundation；
 2. Access 与 concrete tool operation ownership；
@@ -161,7 +182,7 @@ runtime domain 定义、Policy 只依赖 requirement traits、`ContextFactory` �
 body；不能把 filesystem、纯文档、机械 caller migration 和无关行为变化揉成一个提交。不得 reset、
 stash 或丢弃当前用户改动；使用精确 staging 组装提交。
 
-### 完成线
+### 候选方案完成线
 
 以下必须无输出：
 

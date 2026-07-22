@@ -236,22 +236,11 @@ async fn request_completion_with_raw_fallback_detailed_preserves_state_and_uses_
 
     #[async_trait]
     impl ConversationRuntime for StateOnlyRuntime {
-        fn tool_view(
-            &self,
-            _config: &LoongConfig,
-            _session_id: &str,
-            _binding: ConversationRuntimeBinding<'_>,
-        ) -> CliResult<ToolView> {
-            Ok(crate::tools::runtime_tool_view())
-        }
-
         async fn build_messages(
             &self,
             _config: &LoongConfig,
-            _app_ctx: &crate::AppContext,
+            _ctx: &crate::Context<'_>,
             _include_system_prompt: bool,
-            _tool_view: &ToolView,
-            _binding: ConversationRuntimeBinding<'_>,
         ) -> CliResult<Vec<Value>> {
             Ok(Vec::new())
         }
@@ -260,7 +249,7 @@ async fn request_completion_with_raw_fallback_detailed_preserves_state_and_uses_
             &self,
             _config: &LoongConfig,
             _messages: &[Value],
-            _binding: ConversationRuntimeBinding<'_>,
+            _ctx: &crate::Context<'_>,
         ) -> CliResult<String> {
             Ok("[followup_state:continue]".to_owned())
         }
@@ -268,11 +257,9 @@ async fn request_completion_with_raw_fallback_detailed_preserves_state_and_uses_
         async fn request_turn(
             &self,
             _config: &LoongConfig,
-            _session_id: &str,
             _turn_id: &str,
             _messages: &[Value],
-            _tool_view: &ToolView,
-            _binding: ConversationRuntimeBinding<'_>,
+            _ctx: &crate::Context<'_>,
         ) -> CliResult<ProviderTurn> {
             Ok(ProviderTurn::default())
         }
@@ -280,11 +267,9 @@ async fn request_completion_with_raw_fallback_detailed_preserves_state_and_uses_
         async fn request_turn_streaming(
             &self,
             _config: &LoongConfig,
-            _session_id: &str,
             _turn_id: &str,
             _messages: &[Value],
-            _tool_view: &ToolView,
-            _binding: ConversationRuntimeBinding<'_>,
+            _ctx: &crate::Context<'_>,
             _on_token: crate::provider::StreamingTokenCallback,
         ) -> CliResult<ProviderTurn> {
             Ok(ProviderTurn::default())
@@ -292,20 +277,28 @@ async fn request_completion_with_raw_fallback_detailed_preserves_state_and_uses_
 
         async fn persist_turn(
             &self,
-            _session_id: &str,
             _role: &str,
             _content: &str,
-            _binding: ConversationRuntimeBinding<'_>,
+            _ctx: &crate::Context<'_>,
         ) -> CliResult<()> {
             Ok(())
         }
     }
 
+    let config = LoongConfig::default();
+    let owner = crate::test_support::TestRuntimeSession::from_config(
+        &config,
+        "raw-fallback-state",
+        "test-agent",
+        loong_contracts::GovernedSessionMode::AdvisoryOnly,
+    )
+    .expect("advisory runtime session");
+    let ctx = owner.context();
     let reply = request_completion_with_raw_fallback_detailed(
         &StateOnlyRuntime,
-        &LoongConfig::default(),
+        &config,
         &[],
-        ConversationRuntimeBinding::AdvisoryOnly,
+        &ctx,
         "<think>hidden</think>fallback body",
         None,
     )
@@ -322,22 +315,11 @@ async fn request_completion_with_raw_fallback_detailed_uses_raw_reply_when_compl
 
     #[async_trait]
     impl ConversationRuntime for EmptyReplyRuntime {
-        fn tool_view(
-            &self,
-            _config: &LoongConfig,
-            _session_id: &str,
-            _binding: ConversationRuntimeBinding<'_>,
-        ) -> CliResult<ToolView> {
-            Ok(crate::tools::runtime_tool_view())
-        }
-
         async fn build_messages(
             &self,
             _config: &LoongConfig,
-            _app_ctx: &crate::AppContext,
+            _ctx: &crate::Context<'_>,
             _include_system_prompt: bool,
-            _tool_view: &ToolView,
-            _binding: ConversationRuntimeBinding<'_>,
         ) -> CliResult<Vec<Value>> {
             Ok(Vec::new())
         }
@@ -346,7 +328,7 @@ async fn request_completion_with_raw_fallback_detailed_uses_raw_reply_when_compl
             &self,
             _config: &LoongConfig,
             _messages: &[Value],
-            _binding: ConversationRuntimeBinding<'_>,
+            _ctx: &crate::Context<'_>,
         ) -> CliResult<String> {
             Ok(String::new())
         }
@@ -354,11 +336,9 @@ async fn request_completion_with_raw_fallback_detailed_uses_raw_reply_when_compl
         async fn request_turn(
             &self,
             _config: &LoongConfig,
-            _session_id: &str,
             _turn_id: &str,
             _messages: &[Value],
-            _tool_view: &ToolView,
-            _binding: ConversationRuntimeBinding<'_>,
+            _ctx: &crate::Context<'_>,
         ) -> CliResult<ProviderTurn> {
             Ok(ProviderTurn::default())
         }
@@ -366,11 +346,9 @@ async fn request_completion_with_raw_fallback_detailed_uses_raw_reply_when_compl
         async fn request_turn_streaming(
             &self,
             _config: &LoongConfig,
-            _session_id: &str,
             _turn_id: &str,
             _messages: &[Value],
-            _tool_view: &ToolView,
-            _binding: ConversationRuntimeBinding<'_>,
+            _ctx: &crate::Context<'_>,
             _on_token: crate::provider::StreamingTokenCallback,
         ) -> CliResult<ProviderTurn> {
             Ok(ProviderTurn::default())
@@ -378,20 +356,28 @@ async fn request_completion_with_raw_fallback_detailed_uses_raw_reply_when_compl
 
         async fn persist_turn(
             &self,
-            _session_id: &str,
             _role: &str,
             _content: &str,
-            _binding: ConversationRuntimeBinding<'_>,
+            _ctx: &crate::Context<'_>,
         ) -> CliResult<()> {
             Ok(())
         }
     }
 
+    let config = LoongConfig::default();
+    let owner = crate::test_support::TestRuntimeSession::from_config(
+        &config,
+        "raw-fallback-empty",
+        "test-agent",
+        loong_contracts::GovernedSessionMode::AdvisoryOnly,
+    )
+    .expect("advisory runtime session");
+    let ctx = owner.context();
     let reply = request_completion_with_raw_fallback_detailed(
         &EmptyReplyRuntime,
-        &LoongConfig::default(),
+        &config,
         &[],
-        ConversationRuntimeBinding::AdvisoryOnly,
+        &ctx,
         "<think>hidden</think>fallback body",
         None,
     )
@@ -408,22 +394,11 @@ async fn request_completion_with_raw_fallback_detailed_salvages_glued_tool_reque
 
     #[async_trait]
     impl ConversationRuntime for ToolMarkupRuntime {
-        fn tool_view(
-            &self,
-            _config: &LoongConfig,
-            _session_id: &str,
-            _binding: ConversationRuntimeBinding<'_>,
-        ) -> CliResult<ToolView> {
-            Ok(crate::tools::runtime_tool_view())
-        }
-
         async fn build_messages(
             &self,
             _config: &LoongConfig,
-            _app_ctx: &crate::AppContext,
+            _ctx: &crate::Context<'_>,
             _include_system_prompt: bool,
-            _tool_view: &ToolView,
-            _binding: ConversationRuntimeBinding<'_>,
         ) -> CliResult<Vec<Value>> {
             Ok(Vec::new())
         }
@@ -432,7 +407,7 @@ async fn request_completion_with_raw_fallback_detailed_salvages_glued_tool_reque
             &self,
             _config: &LoongConfig,
             _messages: &[Value],
-            _binding: ConversationRuntimeBinding<'_>,
+            _ctx: &crate::Context<'_>,
         ) -> CliResult<String> {
             Ok("[tool_request]\n{\"url\":\"https://example.com\"}Example Domain is a reserved placeholder page.".to_owned())
         }
@@ -440,11 +415,9 @@ async fn request_completion_with_raw_fallback_detailed_salvages_glued_tool_reque
         async fn request_turn(
             &self,
             _config: &LoongConfig,
-            _session_id: &str,
             _turn_id: &str,
             _messages: &[Value],
-            _tool_view: &ToolView,
-            _binding: ConversationRuntimeBinding<'_>,
+            _ctx: &crate::Context<'_>,
         ) -> CliResult<ProviderTurn> {
             Ok(ProviderTurn::default())
         }
@@ -452,11 +425,9 @@ async fn request_completion_with_raw_fallback_detailed_salvages_glued_tool_reque
         async fn request_turn_streaming(
             &self,
             _config: &LoongConfig,
-            _session_id: &str,
             _turn_id: &str,
             _messages: &[Value],
-            _tool_view: &ToolView,
-            _binding: ConversationRuntimeBinding<'_>,
+            _ctx: &crate::Context<'_>,
             _on_token: crate::provider::StreamingTokenCallback,
         ) -> CliResult<ProviderTurn> {
             Ok(ProviderTurn::default())
@@ -464,20 +435,28 @@ async fn request_completion_with_raw_fallback_detailed_salvages_glued_tool_reque
 
         async fn persist_turn(
             &self,
-            _session_id: &str,
             _role: &str,
             _content: &str,
-            _binding: ConversationRuntimeBinding<'_>,
+            _ctx: &crate::Context<'_>,
         ) -> CliResult<()> {
             Ok(())
         }
     }
 
+    let config = LoongConfig::default();
+    let owner = crate::test_support::TestRuntimeSession::from_config(
+        &config,
+        "raw-fallback-tool-markup",
+        "test-agent",
+        loong_contracts::GovernedSessionMode::AdvisoryOnly,
+    )
+    .expect("advisory runtime session");
+    let ctx = owner.context();
     let reply = request_completion_with_raw_fallback_detailed(
         &ToolMarkupRuntime,
-        &LoongConfig::default(),
+        &config,
         &[],
-        ConversationRuntimeBinding::AdvisoryOnly,
+        &ctx,
         "fallback body",
         None,
     )
@@ -1338,13 +1317,16 @@ fn tool_failure_followup_tail_strips_quoted_shell_arguments_from_repair_guidance
 }
 
 #[test]
-fn tool_failure_followup_tail_renders_required_field_guidance_for_file_read() {
-    let payload = ToolDrivenFollowupPayload::ToolFailure {
-            reason:
-                "tool_preflight_denied: tool input needs repair: file.read payload.path is required (string)"
-                    .to_owned(),
-            retryable: false,
-        };
+fn tool_failure_followup_tail_renders_typed_read_mode_guidance() {
+    let payload = ToolDrivenFollowupPayload::ToolInputFailure {
+        reason: "tool dispatch failed: read input requires a mode".to_owned(),
+        input: crate::conversation::turn_engine::ToolInputFailure {
+            path: loong_contracts::ToolPath::new(["read"]).expect("test tool path must be valid"),
+            provider_name: "read".to_owned(),
+            argument_hint: Some("path?:string,query?:string,pattern?:string".to_owned()),
+            error: loong_contracts::ToolInputError::missing_one_of(["path", "query", "pattern"]),
+        },
+    };
     let tool_request_summary = r#"{"tool":"read","request":{}}"#;
     let tail = build_tool_driven_followup_tail(
         "preface",
@@ -1362,10 +1344,10 @@ fn tool_failure_followup_tail_renders_required_field_guidance_for_file_read() {
         .expect("user followup prompt should exist");
 
     assert!(user_prompt.contains("Repair guidance for read"));
-    assert!(user_prompt.contains("Add required field `payload.path` as a string."));
-    assert!(user_prompt.contains(
-        "Expected payload shape: path:string,offset?:integer,limit?:integer,max_bytes?:integer."
-    ));
+    assert!(user_prompt.contains("Add at least one of these fields: `path`, `query`, `pattern`."));
+    assert!(
+        user_prompt.contains("Expected payload shape: path?:string,query?:string,pattern?:string.")
+    );
 }
 
 #[test]
@@ -2182,15 +2164,15 @@ fn reduce_followup_payload_for_model_compacts_tool_search_summary() {
             "adapter": "core-tools",
             "tool_name": "tool.search",
             "query": "read repo file",
-            "exact_tool_id": "file.read",
+            "exact_tool_id": "read",
             "returned": 1,
             "diagnostics": {
                 "reason": "exact_tool_id_not_visible",
-                "requested_tool_id": "file.read"
+                "requested_tool_id": "read"
             },
             "results": [
                 {
-                    "tool_id": "file.read",
+                    "tool_id": "read",
                     "summary": "Read a UTF-8 text file from the configured workspace root and return contents.",
                     "argument_hint": "path:string",
                     "required_fields": ["path"],
@@ -2314,18 +2296,19 @@ fn summarize_failed_provider_lane_tool_request_preserves_multi_intent_context_wi
         assistant_text: String::new(),
         tool_intents: vec![
             ToolIntent {
-                tool_name: "file.read".to_owned(),
+                tool_name: crate::conversation::turn_engine::ToolIntentTarget::registered(
+                    loong_contracts::ToolPath::new(["read"]).expect("test tool path must be valid"),
+                    "read",
+                ),
                 args_json: json!({"path": "Cargo.toml"}),
                 source: "provider_tool_call".to_owned(),
-                session_id: "session-a".to_owned(),
                 turn_id: "turn-a".to_owned(),
                 tool_call_id: "call-1".to_owned(),
             },
             ToolIntent {
-                tool_name: "shell.exec".to_owned(),
+                tool_name: "shell.exec".into(),
                 args_json: json!({"command": "ls /root"}),
                 source: "provider_tool_call".to_owned(),
-                session_id: "session-a".to_owned(),
                 turn_id: "turn-a".to_owned(),
                 tool_call_id: "call-2".to_owned(),
             },
@@ -2351,7 +2334,7 @@ fn summarize_failed_provider_lane_tool_request_preserves_multi_intent_context_wi
 #[test]
 fn summarize_single_tool_followup_request_resolves_grouped_hidden_invoke_to_precise_operation() {
     let intent = ToolIntent {
-        tool_name: "tool.invoke".to_owned(),
+        tool_name: "tool.invoke".into(),
         args_json: json!({
             "tool_id": "agent",
             "lease": "lease-agent",
@@ -2361,7 +2344,6 @@ fn summarize_single_tool_followup_request_resolves_grouped_hidden_invoke_to_prec
             }
         }),
         source: "provider_tool_call".to_owned(),
-        session_id: "session-a".to_owned(),
         turn_id: "turn-a".to_owned(),
         tool_call_id: "call-agent".to_owned(),
     };

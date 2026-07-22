@@ -30,7 +30,7 @@ pub(super) fn resolve_safe_file_path_with_config(
     } else {
         resolution_root.join(candidate)
     };
-    let normalized = super::normalize_without_fs(&combined);
+    let normalized = loong_kernel::access::fs::normalize_path_lexically(&combined);
     resolve_path_within_allowed_roots(&allowed_roots, &fallback_root, &normalized)
 }
 
@@ -65,7 +65,7 @@ pub(super) fn canonicalize_or_fallback(path: PathBuf) -> Result<PathBuf, String>
         let canonical = canonical.map(|resolved| dunce::simplified(&resolved).to_path_buf())?;
         return Ok(canonical);
     }
-    Ok(super::normalize_without_fs(&path))
+    Ok(loong_kernel::access::fs::normalize_path_lexically(&path))
 }
 
 fn collect_allowed_roots(

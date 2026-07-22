@@ -52,23 +52,25 @@ Current direct tool vocabulary:
 
 - `read`
 - `write`
+- `edit`
 - `exec`
 - `web`
 - `browser`
 - `memory`
 
-A direct tool is a facade. It does not replace the canonical internal tools.
-Instead, it dispatches to the canonical tool that matches the payload shape.
+A direct registration may itself be the canonical typed tool. Aggregate tools
+such as `read` choose a concrete Access operation from the payload without
+changing tool identity; older direct facades still route only unmigrated
+legacy domains.
 
 Examples:
 
-- `read { path }` -> `file.read`
-- `read { path, offset, limit }` -> `file.read`
-- `read { query }` -> `content.search`
-- `read { pattern }` -> `glob.search`
-- `write { path, content }` -> `file.write`
-- `write { path, edits }` -> `file.edit`
-- `write { path, old_string, new_string }` -> `file.edit` (legacy exact-edit mode)
+- `read { path }` -> `FsReadAction`
+- `read { path, offset, limit }` -> `FsReadAction`
+- `read { query }` -> `FsContentSearchAction`
+- `read { pattern/glob }` -> `FsGlobAction`
+- `write { path, content }` -> `FsWriteAction`
+- `edit { path, edits }` -> `FsReadAction` followed by `FsWriteAction`
 - `exec { command }` -> `shell.exec`
 - `exec { script }` -> `bash.exec`
 
@@ -109,9 +111,8 @@ Canonical tools remain the governed execution substrate.
 They keep their precise names, schemas, approval behavior, and telemetry.
 Examples include:
 
-- `file.read`
-- `file.write`
-- `file.edit`
+- `glob.search`
+- `content.search`
 - `shell.exec`
 - `bash.exec`
 - `web.fetch`

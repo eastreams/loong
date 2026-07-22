@@ -17,17 +17,16 @@ fn snapshot_rejects_an_invalid_typed_identity() {
 
 #[test]
 fn snapshot_uses_legacy_summary_only_for_an_unregistered_path() {
-    let app_ctx = crate::context::bootstrap_test_app_context("snapshot-unregistered", 60)
-        .expect("bootstrap context");
+    let harness = crate::test_support::TurnTestHarness::new();
     let state = crate::tools::ToolSurfaceState {
-        surface_id: "legacy-only".to_owned(),
+        surface_id: "web".to_owned(),
         prompt_snippet: "legacy summary".to_owned(),
         usage_guidance: String::new(),
         tool_ids: Vec::new(),
     };
 
-    let summary = agent_visible_summary_for_direct_state(Some(app_ctx.runtime()), &state)
+    let summary = agent_visible_summary_for_direct_state(Some(harness.runtime.as_ref()), &state)
         .expect("ordinary absence may use legacy metadata");
 
-    assert_eq!(summary, "legacy summary");
+    assert_eq!(summary, Some("legacy summary".to_owned()));
 }

@@ -15,7 +15,7 @@ use serde_json::Value;
 use tokio::runtime::Handle;
 
 #[cfg(feature = "memory-sqlite")]
-use crate::AppContext;
+use crate::Context;
 use crate::config::LoongConfig;
 #[cfg(feature = "memory-sqlite")]
 use crate::operator::delegate_runtime::next_delegate_child_depth;
@@ -28,12 +28,8 @@ use crate::session::store::SessionStoreConfig;
 #[cfg(feature = "memory-sqlite")]
 use super::announce::{DelegateAnnounceSettings, enqueue_delegate_result_announce};
 #[cfg(feature = "memory-sqlite")]
-use super::runtime::{
-    AsyncDelegateSpawnRequest, AsyncDelegateSpawner, ConversationRuntime,
-    load_default_conversation_runtime,
-};
+use super::runtime::{AsyncDelegateSpawnRequest, AsyncDelegateSpawner, ConversationRuntime};
 #[cfg(feature = "memory-sqlite")]
-use super::runtime_binding::ConversationRuntimeBinding;
 #[cfg(feature = "memory-sqlite")]
 use super::subagent::ConstrainedSubagentExecution;
 #[cfg(feature = "memory-sqlite")]
@@ -108,13 +104,13 @@ pub(crate) fn spawn_async_delegate_detached(
     max_frozen_bytes: usize,
     announce_settings: DelegateAnnounceSettings,
 ) {
-    let child_session_id = request.child_session_id.clone();
-    let parent_session_id = request.parent_session_id.clone();
-    let label = request.label.clone();
-    let profile = request.profile;
-    let execution = request.execution.clone();
-    let binding = request.binding.clone();
-
+    let child_session_id = request.child_session_id().to_owned();
+    let parent_session_id = request.parent_session_id().to_owned();
+    let label = request.label().map(str::to_owned);
+    let profile = request.profile();
+    let execution = request.execution().clone();
+    let execution_runtime = Arc::clone(request.legacy_tools().execution_runtime());
+    let session = request.parent_session().clone();
     runtime_handle.spawn(async move {
         let spawn_failure = match AssertUnwindSafe(spawner.spawn(request))
             .catch_unwind()
@@ -157,12 +153,25 @@ pub(crate) fn spawn_async_delegate_detached(
             announce_settings.clone(),
         );
 
-        let runtime = load_default_conversation_runtime(config.as_ref());
+        let runtime =
+            crate::conversation::runtime::BoxedDefaultConversationRuntime::from_config_or_env(
+                config.as_ref(),
+            );
         match runtime {
             Ok(runtime) => {
+                let context = match Context::new(&execution_runtime, &session) {
+                    Ok(context) => context,
+                    Err(error) => {
+                        tracing::error!(
+                            child_session_id = %child_session_id,
+                            %error,
+                            "cannot emit delegate terminal event through mismatched Runtime"
+                        );
+                        return;
+                    }
+                };
                 emit_async_delegate_child_terminal_event(
                     &runtime,
-                    &parent_session_id,
                     &child_session_id,
                     label.as_deref(),
                     profile,
@@ -174,7 +183,7 @@ pub(crate) fn spawn_async_delegate_detached(
                     None,
                     execution.workspace_root.as_deref(),
                     None,
-                    binding.as_borrowed(),
+                    &context,
                 )
                 .await;
             }
@@ -226,43 +235,36 @@ pub(crate) fn enqueue_delegate_result_announce_with_memory_config(
 pub(crate) fn next_delegate_child_depth_for_delegate(
     config: &LoongConfig,
     repo: &SessionRepository,
-    session_context: &AppContext,
+    session_context: &Context<'_>,
 ) -> Result<usize, String> {
     next_delegate_child_depth(
         repo,
-        &session_context.session_id,
+        &session_context.session().session_id,
         config.tools.delegate.max_depth,
     )
 }
 
 #[cfg(feature = "memory-sqlite")]
-pub(crate) async fn with_prepared_subagent_spawn_cleanup_if_kernel_bound<
-    R: ConversationRuntime + ?Sized,
-    F,
-    Fut,
-    T,
->(
+/// Run one child lifecycle with hooks paired even when child work fails.
+///
+/// This helper exists because combining work and terminal-hook failures is a
+/// single orchestration boundary; it does not adapt or hide Context authority.
+pub(crate) async fn with_subagent_lifecycle<R: ConversationRuntime + ?Sized, F, Fut, T>(
     runtime: &R,
-    parent_session_id: &str,
     child_session_id: &str,
-    binding: ConversationRuntimeBinding<'_>,
+    ctx: &Context<'_>,
     work: F,
 ) -> Result<T, String>
 where
     F: FnOnce() -> Fut,
     Fut: Future<Output = Result<T, String>>,
 {
-    prepare_subagent_spawn_if_kernel_bound(runtime, parent_session_id, child_session_id, binding)
+    runtime
+        .prepare_subagent_spawn(child_session_id, ctx)
         .await?;
 
     let work_result = work().await;
-    let notify_result = notify_subagent_ended_if_kernel_bound(
-        runtime,
-        parent_session_id,
-        child_session_id,
-        binding,
-    )
-    .await;
+    let notify_result = runtime.on_subagent_ended(child_session_id, ctx).await;
 
     match (work_result, notify_result) {
         (Ok(value), Ok(())) => Ok(value),
@@ -274,38 +276,6 @@ where
             "{work_error}; delegate_subagent_end_hook_failed: {notify_error}"
         )),
     }
-}
-
-#[cfg(feature = "memory-sqlite")]
-async fn prepare_subagent_spawn_if_kernel_bound<R: ConversationRuntime + ?Sized>(
-    runtime: &R,
-    parent_session_id: &str,
-    child_session_id: &str,
-    binding: ConversationRuntimeBinding<'_>,
-) -> Result<(), String> {
-    let Some(app_ctx) = binding.context() else {
-        return Ok(());
-    };
-
-    runtime
-        .prepare_subagent_spawn(parent_session_id, child_session_id, app_ctx)
-        .await
-}
-
-#[cfg(feature = "memory-sqlite")]
-async fn notify_subagent_ended_if_kernel_bound<R: ConversationRuntime + ?Sized>(
-    runtime: &R,
-    parent_session_id: &str,
-    child_session_id: &str,
-    binding: ConversationRuntimeBinding<'_>,
-) -> Result<(), String> {
-    let Some(app_ctx) = binding.context() else {
-        return Ok(());
-    };
-
-    runtime
-        .on_subagent_ended(parent_session_id, child_session_id, app_ctx)
-        .await
 }
 
 #[cfg(feature = "memory-sqlite")]

@@ -8,7 +8,7 @@ use std::{
 use async_trait::async_trait;
 use loong_contracts::{Capability, PolicyDecision, PolicyGrant};
 use loong_core::{
-    error::AuthorizationError,
+    error::PolicyGrantError,
     policy::{
         action::{Action, ActionMeta, ActionMetadata},
         context::ContextFactory,
@@ -18,11 +18,12 @@ use loong_core::{
     },
 };
 use serde_json::{Value, json};
+use thiserror::Error;
 
-use super::{
-    access::{FsAccess, FsAccessError},
-    error::FsActionError,
-};
+use super::access::FsAccess;
+
+#[cfg(test)]
+mod tests;
 
 const FS_PATH_REQUIRED_CAPABILITIES: [Capability; 0] = [];
 
@@ -84,10 +85,62 @@ pub trait FsResolutionContext {
 
 /// Filesystem root view required by path containment policy.
 ///
-/// Implementors must provide canonical or simplified roots in the same path
-/// space as the facts produced by `FsResolvePathAction`.
+/// Implementors provide absolute, lexically normalized configuration roots.
+/// `FsResolvePathAction` observes and resolves them only after grant so Session
+/// construction and policy evaluation never touch the filesystem directly.
 pub trait FsPathPolicyContext {
     fn fs_allowed_roots(&self) -> &[PathBuf];
+
+    /// Parent/root authority that the effective roots must remain beneath.
+    ///
+    /// Root contexts use their own allowed roots. Derived Session contexts
+    /// override this with the parent's effective roots so a lexical child path
+    /// cannot gain authority by traversing a symlink outside its parent.
+    fn fs_authority_ceiling_roots(&self) -> &[PathBuf] {
+        self.fs_allowed_roots()
+    }
+}
+
+/// Failure while preparing or authorizing a filesystem path.
+///
+/// Concrete operation errors wrap this type as their path prerequisite. Keeping
+/// it in the path module avoids either duplicating resolution failures or
+/// rebuilding a domain-wide filesystem error enum.
+#[derive(Debug, Error)]
+pub enum FsPathError {
+    #[error(transparent)]
+    Authorization(#[from] PolicyGrantError),
+    #[error("filesystem path must not be empty")]
+    EmptyPath,
+    #[error("filesystem path {path} must include a file name", path = .path.display())]
+    MissingFileName { path: PathBuf },
+    #[error("failed to canonicalize filesystem path {path}: {source}", path = .path.display())]
+    CanonicalizePath {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("cannot resolve existing ancestor for filesystem path {path}", path = .path.display())]
+    MissingExistingAncestor { path: PathBuf },
+}
+
+/// Filesystem object kind shared by governed path-inspection operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FsPathKind {
+    File,
+    Directory,
+}
+
+impl FsPathKind {
+    pub(in crate::fs) fn from_file_type(file_type: std::fs::FileType) -> Option<Self> {
+        if file_type.is_dir() {
+            return Some(Self::Directory);
+        }
+        if file_type.is_file() || file_type.is_symlink() {
+            return Some(Self::File);
+        }
+        None
+    }
 }
 
 /// Typed action for resolving one requested path into filesystem facts.
@@ -99,20 +152,28 @@ pub trait FsPathPolicyContext {
 pub struct FsResolvePathAction<M = TargetPath> {
     raw_path: PathBuf,
     resolution_root: PathBuf,
+    allowed_roots: Vec<PathBuf>,
+    authority_ceiling_roots: Vec<PathBuf>,
     _mode: PhantomData<fn() -> M>,
 }
 
 impl FsResolvePathAction<TargetPath> {
     #[must_use]
-    pub(in crate::fs) fn target(path: impl AsRef<Path>, resolution_root: impl AsRef<Path>) -> Self {
-        Self::new(path, resolution_root)
+    pub(in crate::fs) fn target<Cx>(path: impl AsRef<Path>, ctx: &Cx) -> Self
+    where
+        Cx: FsResolutionContext + FsPathPolicyContext,
+    {
+        Self::new(path, ctx)
     }
 }
 
 impl FsResolvePathAction<EntryPath> {
     #[must_use]
-    pub(in crate::fs) fn entry(path: impl AsRef<Path>, resolution_root: impl AsRef<Path>) -> Self {
-        Self::new(path, resolution_root)
+    pub(in crate::fs) fn entry<Cx>(path: impl AsRef<Path>, ctx: &Cx) -> Self
+    where
+        Cx: FsResolutionContext + FsPathPolicyContext,
+    {
+        Self::new(path, ctx)
     }
 }
 
@@ -120,10 +181,15 @@ impl<M> FsResolvePathAction<M>
 where
     M: FsPathMode,
 {
-    fn new(path: impl AsRef<Path>, resolution_root: impl AsRef<Path>) -> Self {
+    fn new<Cx>(path: impl AsRef<Path>, ctx: &Cx) -> Self
+    where
+        Cx: FsResolutionContext + FsPathPolicyContext,
+    {
         Self {
             raw_path: path.as_ref().to_path_buf(),
-            resolution_root: resolution_root.as_ref().to_path_buf(),
+            resolution_root: ctx.fs_resolution_root().to_path_buf(),
+            allowed_roots: ctx.fs_allowed_roots().to_vec(),
+            authority_ceiling_roots: ctx.fs_authority_ceiling_roots().to_vec(),
             _mode: PhantomData,
         }
     }
@@ -138,13 +204,28 @@ where
         &self.resolution_root
     }
 
-    fn resolve(self) -> Result<ResolvedFsPath<M>, FsActionError> {
+    fn resolve(self) -> Result<ResolvedFsPath<M>, FsPathError> {
         let resolved = if M::FOLLOWS_FINAL_COMPONENT {
             resolve_target_path(&self.raw_path, &self.resolution_root)?
         } else {
             resolve_entry_path(&self.raw_path, &self.resolution_root)?
         };
-        Ok(ResolvedFsPath::new(self.raw_path, resolved))
+        let allowed_roots = self
+            .allowed_roots
+            .iter()
+            .map(|root| resolve_target_path(root, &self.resolution_root))
+            .collect::<Result<Vec<_>, _>>()?;
+        let authority_ceiling_roots = self
+            .authority_ceiling_roots
+            .iter()
+            .map(|root| resolve_target_path(root, &self.resolution_root))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ResolvedFsPath::new(
+            self.raw_path,
+            resolved,
+            allowed_roots,
+            authority_ceiling_roots,
+        ))
     }
 }
 
@@ -168,6 +249,12 @@ where
         Cow::Owned(json!({
             "path": self.raw_path.display().to_string(),
             "resolution_root": self.resolution_root.display().to_string(),
+            "allowed_roots": self.allowed_roots.iter()
+                .map(|root| root.display().to_string())
+                .collect::<Vec<_>>(),
+            "authority_ceiling_roots": self.authority_ceiling_roots.iter()
+                .map(|root| root.display().to_string())
+                .collect::<Vec<_>>(),
             "semantics": M::NAME,
         }))
     }
@@ -242,6 +329,16 @@ where
         self.resolved.path()
     }
 
+    #[must_use]
+    pub fn resolved_allowed_roots(&self) -> &[PathBuf] {
+        self.resolved.allowed_roots()
+    }
+
+    #[must_use]
+    pub fn resolved_authority_ceiling_roots(&self) -> &[PathBuf] {
+        self.resolved.authority_ceiling_roots()
+    }
+
     fn into_granted_path(self) -> GrantedFsPath<M> {
         GrantedFsPath::new(self.resolved.into_path_buf())
     }
@@ -267,6 +364,12 @@ where
         Cow::Owned(json!({
             "path": self.requested_path().display().to_string(),
             "resolved_path": self.resolved_path().display().to_string(),
+            "resolved_allowed_roots": self.resolved_allowed_roots().iter()
+                .map(|root| root.display().to_string())
+                .collect::<Vec<_>>(),
+            "resolved_authority_ceiling_roots": self.resolved_authority_ceiling_roots().iter()
+                .map(|root| root.display().to_string())
+                .collect::<Vec<_>>(),
             "semantics": M::NAME,
         }))
     }
@@ -300,14 +403,28 @@ impl<C, M> Policy<C, FsPathAction<M>> for FsPathAllowedRootsPolicy<M>
 where
     C: ContextFactory + Send + Sync,
     M: FsPathMode,
-    for<'a> C::Cx<'a>: FsPathPolicyContext,
 {
     fn name(&self) -> Cow<'static, str> {
         Cow::Borrowed("fs-path-allowed-roots")
     }
 
-    async fn grant(&self, ctx: &C::Cx<'_>, action: &FsPathAction<M>) -> PolicyGrant {
-        let allowed_roots = ctx.fs_allowed_roots();
+    async fn grant(&self, _ctx: &C::Cx<'_>, action: &FsPathAction<M>) -> PolicyGrant {
+        let allowed_roots = action.resolved_allowed_roots();
+        let authority_ceiling_roots = action.resolved_authority_ceiling_roots();
+        if allowed_roots.iter().any(|allowed_root| {
+            !authority_ceiling_roots
+                .iter()
+                .any(|ceiling_root| allowed_root.starts_with(ceiling_root))
+        }) {
+            return PolicyGrant {
+                decision: PolicyDecision::Deny,
+                predicate: Some(
+                    "resolved allowed roots must remain beneath authority ceiling roots".into(),
+                ),
+                reason: "filesystem root narrowing escapes its parent authority after resolution"
+                    .into(),
+            };
+        }
         if allowed_roots
             .iter()
             .any(|allowed_root| action.resolved_path().starts_with(allowed_root))
@@ -344,14 +461,23 @@ where
 pub struct ResolvedFsPath<M> {
     requested: PathBuf,
     path: PathBuf,
+    allowed_roots: Vec<PathBuf>,
+    authority_ceiling_roots: Vec<PathBuf>,
     _mode: std::marker::PhantomData<fn() -> M>,
 }
 
 impl<M> ResolvedFsPath<M> {
-    pub(in crate::fs) fn new(requested: PathBuf, path: PathBuf) -> Self {
+    pub(in crate::fs) fn new(
+        requested: PathBuf,
+        path: PathBuf,
+        allowed_roots: Vec<PathBuf>,
+        authority_ceiling_roots: Vec<PathBuf>,
+    ) -> Self {
         Self {
             requested,
             path,
+            allowed_roots,
+            authority_ceiling_roots,
             _mode: std::marker::PhantomData,
         }
     }
@@ -364,6 +490,16 @@ impl<M> ResolvedFsPath<M> {
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    #[must_use]
+    pub fn allowed_roots(&self) -> &[PathBuf] {
+        &self.allowed_roots
+    }
+
+    #[must_use]
+    pub fn authority_ceiling_roots(&self) -> &[PathBuf] {
+        &self.authority_ceiling_roots
     }
 
     pub(in crate::fs) fn into_path_buf(self) -> PathBuf {
@@ -431,7 +567,7 @@ where
     M: FsPathMode,
 {
     type Output = ResolvedFsPath<M>;
-    type Error = FsActionError;
+    type Error = FsPathError;
 
     async fn run(granted: Granted<Self>, _ctx: &Cx) -> Result<Self::Output, Self::Error> {
         granted.into_action().resolve()
@@ -450,7 +586,7 @@ where
     M: FsPathMode,
 {
     type Output = GrantedFsPath<M>;
-    type Error = FsActionError;
+    type Error = FsPathError;
 
     async fn run(granted: Granted<Self>, _ctx: &Cx) -> Result<Self::Output, Self::Error> {
         Ok(granted.into_action().into_granted_path())
@@ -461,7 +597,7 @@ impl<'a, 'ctx, C, P> FsAccess<'a, 'ctx, C, P>
 where
     C: ContextFactory + 'ctx,
     P: PolicyEngine<C>,
-    C::Cx<'ctx>: FsResolutionContext,
+    C::Cx<'ctx>: FsResolutionContext + FsPathPolicyContext,
 {
     /// Run the mandatory resolve and path-policy stages for a target path.
     ///
@@ -471,24 +607,18 @@ where
     pub(in crate::fs) async fn grant_target_path(
         &self,
         path: impl AsRef<Path>,
-    ) -> Result<GrantedPath, FsAccessError> {
-        self.grant_path(FsResolvePathAction::target(
-            path,
-            self.ctx.fs_resolution_root(),
-        ))
-        .await
+    ) -> Result<GrantedPath, FsPathError> {
+        self.grant_path(FsResolvePathAction::target(path, self.ctx))
+            .await
     }
 
     /// Resolve and authorize a final-component no-follow entry path.
     pub(in crate::fs) async fn grant_entry_path(
         &self,
         path: impl AsRef<Path>,
-    ) -> Result<GrantedEntryPath, FsAccessError> {
-        self.grant_path(FsResolvePathAction::entry(
-            path,
-            self.ctx.fs_resolution_root(),
-        ))
-        .await
+    ) -> Result<GrantedEntryPath, FsPathError> {
+        self.grant_path(FsResolvePathAction::entry(path, self.ctx))
+            .await
     }
 
     // Both public-to-fs entry points use this exact two-stage order. Keeping the
@@ -497,16 +627,14 @@ where
     async fn grant_path<M>(
         &self,
         resolve: FsResolvePathAction<M>,
-    ) -> Result<GrantedFsPath<M>, FsAccessError>
+    ) -> Result<GrantedFsPath<M>, FsPathError>
     where
         M: FsPathMode,
     {
         let resolved = self
             .policy_engine
             .grant(self.ctx, resolve)
-            .await
-            .map_err(AuthorizationError::from)
-            .map_err(FsAccessError::Authorization)?
+            .await?
             .into_granted()
             .run(self.ctx)
             .await?;
@@ -514,9 +642,7 @@ where
         let path = self
             .policy_engine
             .grant(self.ctx, path_action)
-            .await
-            .map_err(AuthorizationError::from)
-            .map_err(FsAccessError::Authorization)?
+            .await?
             .into_granted()
             .run(self.ctx)
             .await?;
@@ -527,9 +653,9 @@ where
 pub(in crate::fs) fn resolve_target_path(
     path: &Path,
     resolution_root: &Path,
-) -> Result<PathBuf, FsActionError> {
+) -> Result<PathBuf, FsPathError> {
     if path.as_os_str().is_empty() {
-        return Err(FsActionError::EmptyPath);
+        return Err(FsPathError::EmptyPath);
     }
 
     let resolution_root = resolve_existing_or_missing_path(resolution_root)?;
@@ -544,9 +670,9 @@ pub(in crate::fs) fn resolve_target_path(
 pub(in crate::fs) fn resolve_entry_path(
     path: &Path,
     resolution_root: &Path,
-) -> Result<PathBuf, FsActionError> {
+) -> Result<PathBuf, FsPathError> {
     if path.as_os_str().is_empty() {
-        return Err(FsActionError::EmptyPath);
+        return Err(FsPathError::EmptyPath);
     }
 
     let resolution_root = resolve_existing_or_missing_path(resolution_root)?;
@@ -555,16 +681,16 @@ pub(in crate::fs) fn resolve_entry_path(
     } else {
         resolution_root.join(path)
     };
-    let normalized = normalize_without_fs(&combined);
+    let normalized = normalize_path_lexically(&combined);
     let file_name = normalized
         .file_name()
         .map(std::ffi::OsStr::to_owned)
-        .ok_or_else(|| FsActionError::MissingFileName {
+        .ok_or_else(|| FsPathError::MissingFileName {
             path: normalized.clone(),
         })?;
     let parent = normalized
         .parent()
-        .ok_or_else(|| FsActionError::MissingExistingAncestor {
+        .ok_or_else(|| FsPathError::MissingExistingAncestor {
             path: normalized.clone(),
         })?;
     let mut resolved = resolve_existing_or_missing_path(parent)?;
@@ -573,8 +699,8 @@ pub(in crate::fs) fn resolve_entry_path(
     Ok(dunce::simplified(&resolved).to_path_buf())
 }
 
-fn resolve_existing_or_missing_path(path: &Path) -> Result<PathBuf, FsActionError> {
-    let normalized = normalize_without_fs(path);
+fn resolve_existing_or_missing_path(path: &Path) -> Result<PathBuf, FsPathError> {
+    let normalized = normalize_path_lexically(path);
     if !normalized.exists() {
         // Missing suffixes still inherit symlinks from existing ancestors.
         // Resolve that ancestor now so the returned path is the policy-visible
@@ -585,7 +711,7 @@ fn resolve_existing_or_missing_path(path: &Path) -> Result<PathBuf, FsActionErro
     canonicalize_existing_path(&normalized)
 }
 
-fn resolve_from_existing_ancestor(path: &Path) -> Result<PathBuf, FsActionError> {
+fn resolve_from_existing_ancestor(path: &Path) -> Result<PathBuf, FsPathError> {
     let (ancestor, suffix) = split_existing_ancestor(path)?;
     let mut resolved = canonicalize_existing_path(&ancestor)?;
     for component in suffix {
@@ -594,16 +720,15 @@ fn resolve_from_existing_ancestor(path: &Path) -> Result<PathBuf, FsActionError>
     Ok(dunce::simplified(&resolved).to_path_buf())
 }
 
-fn canonicalize_existing_path(path: &Path) -> Result<PathBuf, FsActionError> {
-    let canonical =
-        dunce::canonicalize(path).map_err(|source| FsActionError::CanonicalizePath {
-            path: path.to_path_buf(),
-            source,
-        })?;
+fn canonicalize_existing_path(path: &Path) -> Result<PathBuf, FsPathError> {
+    let canonical = dunce::canonicalize(path).map_err(|source| FsPathError::CanonicalizePath {
+        path: path.to_path_buf(),
+        source,
+    })?;
     Ok(dunce::simplified(&canonical).to_path_buf())
 }
 
-fn split_existing_ancestor(path: &Path) -> Result<(PathBuf, Vec<OsString>), FsActionError> {
+fn split_existing_ancestor(path: &Path) -> Result<(PathBuf, Vec<OsString>), FsPathError> {
     let mut cursor = path.to_path_buf();
     let mut suffix = Vec::new();
 
@@ -614,14 +739,14 @@ fn split_existing_ancestor(path: &Path) -> Result<(PathBuf, Vec<OsString>), FsAc
         }
 
         let Some(name) = cursor.file_name().map(std::ffi::OsStr::to_owned) else {
-            return Err(FsActionError::MissingExistingAncestor {
+            return Err(FsPathError::MissingExistingAncestor {
                 path: path.to_path_buf(),
             });
         };
         suffix.push(name);
 
         let Some(parent) = cursor.parent() else {
-            return Err(FsActionError::MissingExistingAncestor {
+            return Err(FsPathError::MissingExistingAncestor {
                 path: path.to_path_buf(),
             });
         };
@@ -629,9 +754,13 @@ fn split_existing_ancestor(path: &Path) -> Result<(PathBuf, Vec<OsString>), FsAc
     }
 }
 
-// Keep local normalization here until path normalization moves into a lower
-// shared crate than `loong-access`.
-fn normalize_without_fs(path: &Path) -> PathBuf {
+/// Normalize `.` and `..` components without touching the filesystem.
+///
+/// This operation is deliberately pure: it neither canonicalizes symlinks nor
+/// authorizes the resulting path. Keeping the one implementation in fs Access
+/// prevents configured roots and action resolution from applying different
+/// lexical rules before policy evaluates canonical filesystem facts.
+pub fn normalize_path_lexically(path: &Path) -> PathBuf {
     use std::path::Component;
 
     let mut parts: Vec<OsString> = Vec::new();

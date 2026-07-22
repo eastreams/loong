@@ -24,7 +24,7 @@ use crate::config::{LoongConfig, ProviderConfig, ProviderKind, ReasoningEffort};
 use crate::test_utils::{ScopedEnv, unique_temp_dir};
 #[cfg(feature = "memory-sqlite")]
 use crate::{
-    chat::{CliRuntimeSessionOrigin, RouteOrigin, rebuild_active_session_route},
+    chat::{CliRuntimeSessionOrigin, rebuild_active_session_route},
     config::AuditMode,
     session::{
         repository::{NewSessionRecord, SessionKind, SessionRepository, SessionState},
@@ -464,14 +464,14 @@ fn session_router_marks_created_routes_for_cleanup_but_not_existing_routes() {
         "loong-session-router-existing",
         "existing-session",
     ));
-    let existing_session_id = existing_route.runtime.session_id.clone();
+    let existing_session_id = existing_route.runtime.session.session_id().to_owned();
     let mut router = SessionRouter::new(existing_route);
 
     let created_route = ActiveSessionRoute::from_runtime(created_router_runtime_with_path(
         PathBuf::from("/tmp/loong-created.toml"),
         "loong-session-router-created",
     ));
-    let created_session_id = created_route.runtime.session_id.clone();
+    let created_session_id = created_route.runtime.session.session_id().to_owned();
     router.install_created_route(created_route);
 
     let cleanup_ids = router.created_this_run_session_ids();
@@ -492,7 +492,7 @@ fn session_router_marks_startup_created_initial_route_for_cleanup() {
         PathBuf::from("/tmp/loong-startup-created.toml"),
         "loong-session-router-startup-created",
     ));
-    let created_session_id = created_route.runtime.session_id.clone();
+    let created_session_id = created_route.runtime.session.session_id().to_owned();
 
     let router = SessionRouter::new(created_route);
 
@@ -510,18 +510,14 @@ fn session_router_marks_startup_created_initial_route_for_cleanup() {
 #[cfg(feature = "memory-sqlite")]
 #[test]
 fn session_router_dedupes_created_session_cleanup_ids() {
-    let created_route = ActiveSessionRoute::from_runtime(created_router_runtime_with_path(
+    let created_runtime = created_router_runtime_with_path(
         PathBuf::from("/tmp/loong-created-dedupe.toml"),
         "loong-session-router-created-dedupe",
-    ));
-    let created_session_id = created_route.runtime.session_id.clone();
+    );
+    let created_session_id = created_runtime.session.session_id().to_owned();
+    let created_route = ActiveSessionRoute::from_runtime(created_runtime.clone());
     let mut router = SessionRouter::new(created_route);
-    let mut duplicate_created_route =
-        ActiveSessionRoute::from_runtime(created_router_runtime_with_path(
-            PathBuf::from("/tmp/loong-created-dedupe-duplicate.toml"),
-            "loong-session-router-created-dedupe-duplicate",
-        ));
-    duplicate_created_route.runtime.session_id = created_session_id.clone();
+    let duplicate_created_route = ActiveSessionRoute::from_runtime(created_runtime);
 
     router.install_created_route(duplicate_created_route);
 
@@ -538,20 +534,20 @@ async fn rebuilt_new_route_preserves_created_this_run_origin() {
         PathBuf::from("/tmp/loong-rebuilt-created.toml"),
         "loong-session-router-rebuilt-created",
     );
-    let session_id = created_runtime.session_id.clone();
+    let session_id = created_runtime.session.session_id().to_owned();
     let rebuilt_route = rebuild_active_session_route(
         created_runtime.resolved_path.clone(),
         created_runtime.config.clone(),
         session_id.as_str(),
         &CliChatOptions::default(),
-        RouteOrigin::CreatedThisRun,
+        CliRuntimeSessionOrigin::CreatedThisRun,
     )
     .await
     .expect("rebuild created route");
 
     let active_route = ActiveSessionRoute::from_rebuilt_route(rebuilt_route);
 
-    assert_eq!(active_route.runtime.session_id, session_id);
+    assert_eq!(active_route.runtime.session.session_id(), session_id);
     assert_eq!(
         active_route.route_origin(),
         CliRuntimeSessionOrigin::CreatedThisRun
@@ -713,11 +709,11 @@ impl CleanupTestHarness {
     }
 
     fn create_created_this_run_empty_session(&self) -> String {
-        self.router.active_runtime().session_id.clone()
+        self.router.active_runtime().session.session_id().to_owned()
     }
 
     fn create_created_this_run_session_with_user_turn(&self) -> String {
-        let session_id = self.router.active_runtime().session_id.clone();
+        let session_id = self.router.active_runtime().session.session_id().to_owned();
         store::append_session_turn_direct(
             session_id.as_str(),
             "user",
@@ -789,13 +785,18 @@ impl CleanupTestHarness {
 #[test]
 fn run_surface_command_new_creates_and_switches_to_real_session() {
     let mut harness = resume_test_harness("surface-new-switch");
-    let original_session_id = harness.router.active_runtime().session_id.clone();
+    let original_session_id = harness
+        .router
+        .active_runtime()
+        .session
+        .session_id()
+        .to_owned();
 
     let result = harness.run_command("/new");
 
     assert!(result.is_ok(), "command should succeed");
     assert_ne!(
-        harness.router.active_runtime().session_id,
+        harness.router.active_runtime().session.session_id(),
         original_session_id
     );
 }
@@ -807,7 +808,10 @@ fn run_surface_command_resume_latest_switches_to_first_candidate() {
     let result = harness.run_command("/resume latest");
 
     assert!(result.is_ok(), "command should succeed");
-    assert_eq!(harness.router.active_runtime().session_id, "root-new");
+    assert_eq!(
+        harness.router.active_runtime().session.session_id(),
+        "root-new"
+    );
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -819,7 +823,10 @@ fn run_surface_command_resume_rebuilds_route_through_history_bootstrap_path() {
     let transcript = harness.latest_transcript();
 
     assert!(result.is_ok(), "command should succeed");
-    assert_eq!(harness.router.active_runtime().session_id, "root-new");
+    assert_eq!(
+        harness.router.active_runtime().session.session_id(),
+        "root-new"
+    );
     assert!(transcript.contains("newer resume candidate"));
 }
 
@@ -831,7 +838,10 @@ fn run_surface_command_resume_restores_history_as_chat_messages() {
     let result = harness.run_command("/resume root-new");
 
     assert!(result.is_ok(), "command should succeed");
-    assert_eq!(harness.router.active_runtime().session_id, "root-new");
+    assert_eq!(
+        harness.router.active_runtime().session.session_id(),
+        "root-new"
+    );
     assert_eq!(harness.app.message_list.messages.len(), 3);
     assert_eq!(harness.app.message_list.messages[0].role, "You");
     match &harness.app.message_list.messages[0].contents[0] {
@@ -910,7 +920,10 @@ fn session_router_rebuild_preserves_runtime_acp_state_across_resume() {
     let result = harness.run_command("/resume root-new");
 
     assert!(result.is_ok(), "command should succeed");
-    assert_eq!(harness.router.active_runtime().session_id, "root-new");
+    assert_eq!(
+        harness.router.active_runtime().session.session_id(),
+        "root-new"
+    );
     assert_eq!(
         harness
             .router
@@ -932,7 +945,12 @@ fn session_router_rebuild_preserves_runtime_acp_state_across_resume() {
 #[test]
 fn dispatch_palette_resume_selection_returns_shared_resume_command() {
     let mut harness = resume_test_harness("resume-picker-dispatch");
-    let original_session_id = harness.router.active_runtime().session_id.clone();
+    let original_session_id = harness
+        .router
+        .active_runtime()
+        .session
+        .session_id()
+        .to_owned();
     let transcript_before = harness.latest_transcript();
 
     let command = super::dispatch_palette_action(
@@ -952,7 +970,7 @@ fn dispatch_palette_resume_selection_returns_shared_resume_command() {
         })
     );
     assert_eq!(
-        harness.router.active_runtime().session_id,
+        harness.router.active_runtime().session.session_id(),
         original_session_id
     );
     assert_eq!(harness.latest_transcript(), transcript_before);
@@ -995,7 +1013,10 @@ fn mouse_resume_picker_selection_routes_through_shared_resume_command() {
         result.is_ok(),
         "mouse-selected resume command should succeed"
     );
-    assert_eq!(harness.router.active_runtime().session_id, "root-new");
+    assert_eq!(
+        harness.router.active_runtime().session.session_id(),
+        "root-new"
+    );
 }
 
 #[cfg(feature = "memory-sqlite")]

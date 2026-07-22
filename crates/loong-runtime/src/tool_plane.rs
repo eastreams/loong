@@ -1,7 +1,7 @@
 //! Runtime-owned typed tool lookup and granted dispatch.
 //!
 //! Concrete tools and policies remain outside this module. The registry only
-//! binds a plane-local path to an erased `RegisteredTool`. Runtime-owned
+//! binds a contracts-owned path to an erased `RegisteredTool`. Runtime-owned
 //! `ToolInvocation` consumes the grant before calling the resolved entry, so
 //! storage choices cannot become tool identity.
 
@@ -17,6 +17,8 @@ use std::{
     collections::{BTreeMap, btree_map::Entry},
 };
 
+use self::error::{LookupError, RegistrationError};
+use self::registered::RegisteredTool;
 use loong_contracts::{Capabilities, Capability, ToolPath};
 use loong_core::{
     policy::{
@@ -25,10 +27,35 @@ use loong_core::{
     },
     tool::ToolImpl,
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 
-use self::error::{LookupError, RegistrationError};
-use self::registered::RegisteredTool;
+/// Plane-owned presentation metadata for one registered tool.
+///
+/// Path is deliberately absent. The registry index owns identity; this value
+/// only describes how that identity is presented outside the plane. A provider
+/// wire name exists only for direct tools; discoverable tools are invoked through
+/// the leased discovery envelope and retain their exact plane path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolRegistration {
+    Direct { provider_name: String },
+    Discoverable { discovery_name: String },
+}
+
+impl ToolRegistration {
+    #[must_use]
+    pub fn direct(provider_name: impl Into<String>) -> Self {
+        Self::Direct {
+            provider_name: provider_name.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn discoverable(discovery_name: impl Into<String>) -> Self {
+        Self::Discoverable {
+            discovery_name: discovery_name.into(),
+        }
+    }
+}
 
 /// Authorizes dispatch into one registered tool.
 ///
@@ -77,29 +104,17 @@ impl ActionMeta for ToolInvocationAction {
     }
 
     fn payload(&self) -> Cow<'_, Value> {
-        Cow::Owned(json!({
-            "tool_path": self.path.to_string(),
-            "payload": self.payload,
-        }))
+        // The action type and metadata already identify tool invocation and its
+        // contracts-owned path. Broad policy should inspect the original agent
+        // payload rather than an allocation-heavy runtime envelope.
+        Cow::Borrowed(&self.payload)
     }
 }
 
-/// Runtime-internal storage capability independent of registry representation.
+/// Runtime-owned registry for the tool plane.
 ///
-/// Resolution returns the concrete registered entry so one successful lookup
-/// remains valid through authorization and execution. Grant consumption belongs
-/// to `ToolInvocation`, not to the storage abstraction. This private substitution
-/// point intentionally permits a future trie or another path index without
-/// exposing registered dispatch outside Runtime.
-pub(crate) trait ToolPlane<C: ContextFactory>: Send + Sync {
-    fn registered_paths(&self) -> Vec<ToolPath>;
-
-    fn resolve(&self, path: &ToolPath) -> Result<&RegisteredTool<C>, LookupError>;
-}
-
-/// Ordered default registry for the runtime tool plane.
-///
-/// The contracts-owned path remains both lookup identity and storage key. A
+/// Runtime owns this concrete type directly. A single ordered map keeps the
+/// contracts-owned path as both lookup identity and storage key; introducing a
 /// second storage identity is deferred until removal or replacement requires it.
 pub struct ToolPlaneRegistry<C: ContextFactory> {
     entries: BTreeMap<ToolPath, RegisteredTool<C>>,
@@ -116,16 +131,22 @@ where
         }
     }
 
-    pub fn register<T>(&mut self, path: ToolPath, tool: T) -> Result<(), RegistrationError>
+    pub fn register<T>(
+        &mut self,
+        path: ToolPath,
+        registration: ToolRegistration,
+        tool: T,
+    ) -> Result<(), RegistrationError>
     where
         T: ToolImpl<C>,
     {
-        self.insert_registered(path, || RegisteredTool::from_tool(tool))
+        self.insert_registered(path, || RegisteredTool::from_tool(registration, tool))
     }
 
     pub fn register_with_success_observer<T, F>(
         &mut self,
         path: ToolPath,
+        registration: ToolRegistration,
         tool: T,
         observer: F,
     ) -> Result<(), RegistrationError>
@@ -134,7 +155,7 @@ where
         F: for<'a> Fn(&C::Cx<'a>, &T::Output) + Send + Sync + 'static,
     {
         self.insert_registered(path, || {
-            RegisteredTool::from_tool_with_success_observer(tool, observer)
+            RegisteredTool::from_tool_with_success_observer(registration, tool, observer)
         })
     }
 
@@ -159,9 +180,12 @@ where
         self.entries.keys().cloned().collect()
     }
 
-    pub(crate) fn resolve(&self, path: &ToolPath) -> Result<&RegisteredTool<C>, LookupError> {
+    pub(crate) fn resolve(
+        &self,
+        path: &ToolPath,
+    ) -> Result<(&ToolPath, &RegisteredTool<C>), LookupError> {
         self.entries
-            .get(path)
+            .get_key_value(path)
             .ok_or_else(|| LookupError::NotRegistered { path: path.clone() })
     }
 }
@@ -172,19 +196,6 @@ where
 {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl<C> ToolPlane<C> for ToolPlaneRegistry<C>
-where
-    C: ContextFactory,
-{
-    fn registered_paths(&self) -> Vec<ToolPath> {
-        ToolPlaneRegistry::registered_paths(self)
-    }
-
-    fn resolve(&self, path: &ToolPath) -> Result<&RegisteredTool<C>, LookupError> {
-        ToolPlaneRegistry::resolve(self, path)
     }
 }
 

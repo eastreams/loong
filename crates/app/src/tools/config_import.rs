@@ -551,7 +551,7 @@ fn resolve_safe_path_with_config(
     } else {
         root.join(candidate)
     };
-    let normalized = super::normalize_without_fs(&combined);
+    let normalized = loong_kernel::access::fs::normalize_path_lexically(&combined);
     resolve_path_within_root(&root, &normalized)
 }
 
@@ -562,7 +562,7 @@ fn canonicalize_or_fallback(path: PathBuf) -> Result<PathBuf, String> {
         let canonical = canonical.map(|resolved| dunce::simplified(&resolved).to_path_buf())?;
         return Ok(canonical);
     }
-    Ok(super::normalize_without_fs(&path))
+    Ok(loong_kernel::access::fs::normalize_path_lexically(&path))
 }
 
 fn resolve_path_within_root(root: &Path, normalized: &Path) -> Result<PathBuf, String> {

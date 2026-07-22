@@ -1,36 +1,51 @@
 use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 use serde_json::Value;
 
+use crate::Context;
 use crate::config::ToolConfig;
 use crate::session::store::SessionStoreConfig;
 
 use super::{approval, canonical_tool_name, session};
 
-pub fn execute_app_tool_with_config(
+/// Execute a legacy app-owned tool for context-free CLI/spec callers.
+///
+/// This path has no live Session authority, so its visibility ceiling is the
+/// static legacy catalog projected from config. Runtime execution must call
+/// [`execute_legacy_app_tool_in_view`] with the current Session's ToolView.
+pub fn execute_legacy_app_tool_with_config(
     request: ToolCoreRequest,
     current_session_id: &str,
     memory_config: &SessionStoreConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    execute_app_tool_dispatch(request, current_session_id, memory_config, tool_config)
+    let authority_tool_view = super::runtime_tool_view_for_config(tool_config);
+    execute_legacy_app_tool_in_view(
+        request,
+        current_session_id,
+        memory_config,
+        tool_config,
+        &authority_tool_view,
+    )
 }
 
-pub(crate) fn execute_app_tool_with_visibility_checked_config(
+/// Dispatch after the runtime owner has projected the current Session ToolView.
+///
+/// Keeping the view explicit prevents this legacy leaf from reconstructing
+/// authority from static catalog metadata.
+pub(crate) fn execute_legacy_app_tool_in_view(
     request: ToolCoreRequest,
     current_session_id: &str,
     memory_config: &SessionStoreConfig,
     tool_config: &ToolConfig,
-) -> Result<ToolCoreOutcome, String> {
-    execute_app_tool_dispatch(request, current_session_id, memory_config, tool_config)
-}
-
-fn execute_app_tool_dispatch(
-    request: ToolCoreRequest,
-    current_session_id: &str,
-    memory_config: &SessionStoreConfig,
-    tool_config: &ToolConfig,
+    authority_tool_view: &super::ToolView,
 ) -> Result<ToolCoreOutcome, String> {
     let canonical_name = canonical_tool_name(request.tool_name.as_str());
+    if let Some(descriptor) = super::tool_catalog().descriptor(canonical_name)
+        && descriptor.owner == super::ToolOwner::LegacyApp
+        && !authority_tool_view.contains(descriptor.name)
+    {
+        return Err(format!("tool_not_visible: {}", descriptor.name));
+    }
     let request = ToolCoreRequest {
         tool_name: canonical_name.to_owned(),
         payload: request.payload,
@@ -87,13 +102,13 @@ fn execute_app_tool_dispatch(
 
 pub async fn wait_for_session_with_config(
     payload: Value,
-    current_session_id: &str,
+    context: &Context<'_>,
     memory_config: &SessionStoreConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
     #[cfg(not(feature = "memory-sqlite"))]
     {
-        let _ = (payload, current_session_id, memory_config, tool_config);
+        let _ = (payload, context, memory_config, tool_config);
         return Err(
             "session tools require sqlite memory support (enable feature `memory-sqlite`)"
                 .to_owned(),
@@ -105,25 +120,20 @@ pub async fn wait_for_session_with_config(
         if !tool_config.sessions.enabled {
             return Err("app_tool_disabled: session tools are disabled by config".to_owned());
         }
-        session::wait_for_session_tool_with_policies(
-            payload,
-            current_session_id,
-            memory_config,
-            tool_config,
-        )
-        .await
+        session::wait_for_session_tool_with_policies(payload, context, memory_config, tool_config)
+            .await
     }
 }
 
 pub async fn wait_for_task_with_config(
     payload: Value,
-    current_session_id: &str,
+    context: &Context<'_>,
     memory_config: &SessionStoreConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
     #[cfg(not(feature = "memory-sqlite"))]
     {
-        let _ = (payload, current_session_id, memory_config, tool_config);
+        let _ = (payload, context, memory_config, tool_config);
         return Err(
             "session tools require sqlite memory support (enable feature `memory-sqlite`)"
                 .to_owned(),
@@ -135,38 +145,7 @@ pub async fn wait_for_task_with_config(
         if !tool_config.sessions.enabled {
             return Err("app_tool_disabled: task tools are disabled by config".to_owned());
         }
-        session::wait_for_task_tool_with_policies(
-            payload,
-            current_session_id,
-            memory_config,
-            tool_config,
-        )
-        .await
+        session::wait_for_task_tool_with_policies(payload, context, memory_config, tool_config)
+            .await
     }
-}
-
-#[cfg(feature = "memory-sqlite")]
-pub(crate) async fn continue_session_with_runtime<
-    R: crate::conversation::ConversationRuntime + ?Sized,
->(
-    payload: Value,
-    app_ctx: &crate::AppContext,
-    current_session_id: &str,
-    memory_config: &SessionStoreConfig,
-    tool_config: &ToolConfig,
-    app_config: &crate::config::LoongConfig,
-    runtime: &R,
-    binding: crate::conversation::ConversationRuntimeBinding<'_>,
-) -> Result<ToolCoreOutcome, String> {
-    session::continue_session_with_runtime(
-        payload,
-        app_ctx,
-        current_session_id,
-        memory_config,
-        tool_config,
-        app_config,
-        runtime,
-        binding,
-    )
-    .await
 }

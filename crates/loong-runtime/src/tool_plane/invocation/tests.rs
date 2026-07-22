@@ -29,19 +29,19 @@ use super::ToolInvocationContext;
 use crate::{
     runtime::Runtime,
     tool_plane::{
-        RegisteredToolError, ToolPlaneRegistry,
+        RegisteredToolError, ToolPlaneRegistry, ToolRegistration,
         error::{CapabilityNarrowingError, ToolInvocationError},
     },
 };
 
-// Path validation belongs to contracts tests; invocation tests use valid
-// literal identities so they can focus on grant, dispatch, and audit order.
+struct TestContextFactory;
+
+// Contracts owns path validation; invocation tests use valid identities so
+// they can focus on grant, audit, and cancellation behavior.
 #[allow(clippy::expect_used)]
 fn tool_path(segment: &str) -> ToolPath {
     ToolPath::new([segment]).expect("test tool path must be valid")
 }
-
-struct TestContextFactory;
 
 impl ContextFactory for TestContextFactory {
     type Cx<'a> = TestContext;
@@ -231,6 +231,7 @@ fn test_runtime(
     tools
         .register(
             tool_path("test.echo"),
+            ToolRegistration::direct("test_echo"),
             TestTool {
                 executions: executions.clone(),
                 fail: tool_fails,
@@ -344,6 +345,7 @@ async fn missing_tool_capability_is_denied_and_audited_by_policy_engine() {
     tools
         .register(
             tool_path("test.read"),
+            ToolRegistration::direct("test_read"),
             TestTool {
                 executions: executions.clone(),
                 fail: false,
@@ -487,6 +489,7 @@ async fn bound_registered_tool_runs_its_success_observer() {
     tools
         .register_with_success_observer(
             tool_path("test.echo"),
+            ToolRegistration::direct("test_echo"),
             TestTool {
                 executions: executions.clone(),
                 fail: false,
@@ -536,6 +539,7 @@ async fn dropping_started_invocation_records_unknown_outcome() {
     tools
         .register(
             tool_path("test.pending"),
+            ToolRegistration::direct("test_pending"),
             PendingTool {
                 entered: entered.clone(),
                 executions: executions.clone(),
@@ -594,6 +598,7 @@ async fn dropping_started_invocation_cannot_propagate_terminal_audit_failure() {
     tools
         .register(
             tool_path("test.pending"),
+            ToolRegistration::direct("test_pending"),
             PendingTool {
                 entered: entered.clone(),
                 executions: executions.clone(),
@@ -665,6 +670,7 @@ async fn policy_denial_stays_typed_and_emits_no_execution_event() {
     tools
         .register(
             tool_path("test.echo"),
+            ToolRegistration::direct("test_echo"),
             TestTool {
                 executions: executions.clone(),
                 fail: false,

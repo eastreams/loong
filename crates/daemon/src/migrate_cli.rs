@@ -5,7 +5,7 @@ use std::{
 };
 
 use clap::ValueEnum;
-use kernel::{ToolCoreOutcome, ToolCoreRequest};
+use kernel::ToolCoreOutcome;
 use loong_app as mvp;
 use loong_spec::CliResult;
 use serde_json::{Value, json};
@@ -67,17 +67,26 @@ pub fn run_migrate_cli(options: MigrateCommandOptions) -> CliResult<()> {
 async fn run_migrate_cli_async(options: MigrateCommandOptions) -> CliResult<()> {
     validate_migrate_cli_options(&options)?;
     let config = load_migrate_cli_runtime_config(&options)?;
-    let app_ctx = mvp::context::bootstrap_app_context_with_config(
-        "daemon-migrate-cli",
-        mvp::context::DEFAULT_TOKEN_TTL_S,
+    let execution_runtime = mvp::runtime::bootstrap_runtime_with_config(&config)?;
+    let session = mvp::Session::from_config(
+        execution_runtime.as_ref(),
         &config,
+        "daemon-migrate-cli",
+        "daemon-migrate-cli",
+        loong_contracts::GovernedSessionMode::MutatingCapable,
     )?;
-    let outcome = mvp::tools::execute_legacy_tool_envelope(
-        ToolCoreRequest {
-            tool_name: "config.import".to_owned(),
-            payload: build_migrate_tool_payload(&options),
-        },
-        &app_ctx,
+    let legacy_tools = mvp::conversation::DefaultLegacyToolDispatcher::with_config(
+        execution_runtime.clone(),
+        &session,
+        mvp::session::store::SessionStoreConfig::from_memory_config(&config.memory),
+        config.clone(),
+    )?;
+    let context =
+        mvp::Context::new(&execution_runtime, &session).map_err(|error| error.to_string())?;
+    let outcome = mvp::tools::execute_legacy_config_import(
+        build_migrate_tool_payload(&options),
+        &context,
+        &legacy_tools,
     )
     .await
     .map_err(|error| translate_migrate_cli_error(&options, error))?;

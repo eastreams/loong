@@ -1,63 +1,40 @@
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use loong_contracts::Capability;
 use serde_json::Value;
 
 use crate::memory;
 use crate::provider;
-#[cfg(feature = "memory-sqlite")]
-use crate::session::store;
-use crate::{AppContext, CliResult};
+use crate::{CliResult, Context};
 
 use super::super::context_engine::{
     AssembledConversationContext, ContextEngineBootstrapResult, ContextEngineIngestResult,
     ConversationContextEngine,
 };
-use super::super::runtime_binding::ConversationRuntimeBinding;
+use super::super::prompt_orchestrator::{
+    seed_prompt_fragments_from_context, sync_prompt_fragments_into_context,
+};
+#[cfg(feature = "memory-sqlite")]
+use super::super::session_history::AssistantHistoryLoadError;
+#[cfg(feature = "memory-sqlite")]
+use super::runtime_prompt::active_skills_prompt_summary;
+use super::runtime_prompt::{
+    append_runtime_prompt_fragment, delegate_child_profile_prompt_summary,
+    delegate_child_runtime_contract_prompt_summary, runtime_self_continuity_prompt_summary,
+};
 use super::{
     AsyncDelegateSpawner, DefaultAsyncDelegateSpawner, DefaultConversationRuntime, LoongConfig,
-    ProviderTurn, ToolView, apply_active_skill_blocked_tools_to_tool_view,
-    apply_session_tool_policy_to_tool_view, build_base_tool_view_from_snapshot,
-    build_session_context_from_snapshot, load_persisted_session_context,
-    load_persisted_session_snapshot, open_session_repository, provider_runtime_binding,
-    root_session_context_from_config,
+    PromptFrameAuthority, ProviderTurn,
 };
 
+/// Conversation services bound to the authority of an execution Context.
+///
+/// Every context-bearing operation takes session identity and tool visibility
+/// from `ctx.session()`. Callers targeting another session authority must first
+/// bind a Context to that Session; parallel identity or visibility arguments
+/// are intentionally not accepted because they could disagree with ctx.
 #[async_trait]
 pub trait ConversationRuntime: Send + Sync {
-    fn session_context(
-        &self,
-        config: &LoongConfig,
-        app_ctx: &AppContext,
-        session_id: &str,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<AppContext> {
-        let tool_view = self.tool_view(config, session_id, binding)?;
-
-        #[cfg(feature = "memory-sqlite")]
-        if let Some(session_context) =
-            load_persisted_session_context(app_ctx, config, session_id, &tool_view)?
-        {
-            return Ok(session_context);
-        }
-
-        Ok(root_session_context_from_config(
-            app_ctx, config, session_id, tool_view,
-        ))
-    }
-
-    fn tool_view(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<ToolView> {
-        let _ = (session_id, binding);
-        Ok(crate::tools::runtime_tool_view_from_loong_config(config))
-    }
-
     #[cfg(feature = "memory-sqlite")]
     fn async_delegate_spawner(
         &self,
@@ -77,17 +54,15 @@ pub trait ConversationRuntime: Send + Sync {
     async fn bootstrap(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
-        _app_ctx: &AppContext,
+        _ctx: &Context<'_>,
     ) -> CliResult<ContextEngineBootstrapResult> {
         Ok(ContextEngineBootstrapResult::default())
     }
 
     async fn ingest(
         &self,
-        _session_id: &str,
         _message: &Value,
-        _app_ctx: &AppContext,
+        _ctx: &Context<'_>,
     ) -> CliResult<ContextEngineIngestResult> {
         Ok(ContextEngineIngestResult::default())
     }
@@ -95,11 +70,10 @@ pub trait ConversationRuntime: Send + Sync {
     async fn build_context(
         &self,
         config: &LoongConfig,
-        ctx: &AppContext,
+        ctx: &Context<'_>,
         include_system_prompt: bool,
-        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<AssembledConversationContext> {
-        self.build_messages(config, ctx, include_system_prompt, &ctx.tool_view, binding)
+        self.build_messages(config, ctx, include_system_prompt)
             .await
             .map(AssembledConversationContext::from_messages)
     }
@@ -107,96 +81,92 @@ pub trait ConversationRuntime: Send + Sync {
     async fn build_messages(
         &self,
         config: &LoongConfig,
-        ctx: &AppContext,
+        ctx: &Context<'_>,
         include_system_prompt: bool,
-        tool_view: &ToolView,
-        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Vec<Value>>;
+
+    /// Reads the durable turn window through the current Context's MemoryAccess.
+    ///
+    /// Custom runtimes may provide another backing store. The default runtime
+    /// uses the typed memory runtime owned by the Context's Session.
+    #[cfg(feature = "memory-sqlite")]
+    async fn read_session_window(
+        &self,
+        limit: usize,
+        ctx: &Context<'_>,
+    ) -> Result<Vec<memory::WindowTurn>, AssistantHistoryLoadError> {
+        let _ = (limit, ctx);
+        Err(AssistantHistoryLoadError::unavailable(
+            "session-window reads are unavailable for this conversation runtime",
+        ))
+    }
 
     async fn request_completion(
         &self,
         config: &LoongConfig,
         messages: &[Value],
-        binding: ConversationRuntimeBinding<'_>,
+        ctx: &Context<'_>,
     ) -> CliResult<String>;
 
     async fn request_completion_with_retry_progress(
         &self,
         config: &LoongConfig,
         messages: &[Value],
-        binding: ConversationRuntimeBinding<'_>,
+        ctx: &Context<'_>,
         _retry_progress: crate::provider::ProviderRetryProgressCallback,
     ) -> CliResult<String> {
-        self.request_completion(config, messages, binding).await
+        self.request_completion(config, messages, ctx).await
     }
 
     async fn request_turn(
         &self,
         config: &LoongConfig,
-        session_id: &str,
         turn_id: &str,
         messages: &[Value],
-        tool_view: &ToolView,
-        binding: ConversationRuntimeBinding<'_>,
+        ctx: &Context<'_>,
     ) -> CliResult<ProviderTurn>;
 
     async fn request_turn_with_retry_progress(
         &self,
         config: &LoongConfig,
-        session_id: &str,
         turn_id: &str,
         messages: &[Value],
-        tool_view: &ToolView,
-        binding: ConversationRuntimeBinding<'_>,
+        ctx: &Context<'_>,
         _retry_progress: crate::provider::ProviderRetryProgressCallback,
     ) -> CliResult<ProviderTurn> {
-        self.request_turn(config, session_id, turn_id, messages, tool_view, binding)
-            .await
+        self.request_turn(config, turn_id, messages, ctx).await
     }
 
     async fn request_turn_streaming(
         &self,
         config: &LoongConfig,
-        session_id: &str,
         turn_id: &str,
         messages: &[Value],
-        tool_view: &ToolView,
-        binding: ConversationRuntimeBinding<'_>,
+        ctx: &Context<'_>,
         on_token: crate::provider::StreamingTokenCallback,
     ) -> CliResult<ProviderTurn>;
 
     async fn request_turn_streaming_with_retry_progress(
         &self,
         config: &LoongConfig,
-        session_id: &str,
         turn_id: &str,
         messages: &[Value],
-        tool_view: &ToolView,
-        binding: ConversationRuntimeBinding<'_>,
+        ctx: &Context<'_>,
         on_token: crate::provider::StreamingTokenCallback,
         _retry_progress: crate::provider::ProviderRetryProgressCallback,
     ) -> CliResult<ProviderTurn> {
-        self.request_turn_streaming(
-            config, session_id, turn_id, messages, tool_view, binding, on_token,
-        )
-        .await
+        self.request_turn_streaming(config, turn_id, messages, ctx, on_token)
+            .await
     }
 
-    async fn persist_turn(
-        &self,
-        session_id: &str,
-        role: &str,
-        content: &str,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<()>;
+    async fn persist_turn(&self, role: &str, content: &str, ctx: &Context<'_>) -> CliResult<()>;
 
     async fn after_turn(
         &self,
-        _session_id: &str,
         _user_input: &str,
         _assistant_reply: &str,
         _messages: &[Value],
-        _app_ctx: &AppContext,
+        _ctx: &Context<'_>,
     ) -> CliResult<()> {
         Ok(())
     }
@@ -204,27 +174,24 @@ pub trait ConversationRuntime: Send + Sync {
     async fn compact_context(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
         _messages: &[Value],
-        _app_ctx: &AppContext,
+        _ctx: &Context<'_>,
     ) -> CliResult<()> {
         Ok(())
     }
 
     async fn prepare_subagent_spawn(
         &self,
-        _parent_session_id: &str,
         _subagent_session_id: &str,
-        _app_ctx: &AppContext,
+        _ctx: &Context<'_>,
     ) -> CliResult<()> {
         Ok(())
     }
 
     async fn on_subagent_ended(
         &self,
-        _parent_session_id: &str,
         _subagent_session_id: &str,
-        _app_ctx: &AppContext,
+        _ctx: &Context<'_>,
     ) -> CliResult<()> {
         Ok(())
     }
@@ -235,121 +202,108 @@ impl<E> ConversationRuntime for DefaultConversationRuntime<E>
 where
     E: ConversationContextEngine,
 {
-    fn session_context(
-        &self,
-        config: &LoongConfig,
-        app_ctx: &AppContext,
-        session_id: &str,
-        _binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<AppContext> {
-        #[cfg(feature = "memory-sqlite")]
-        {
-            let repo = open_session_repository(config)?;
-            let snapshot = load_persisted_session_snapshot(&repo, session_id)?;
-            let base_tool_view =
-                build_base_tool_view_from_snapshot(config, &repo, session_id, snapshot.as_ref())?;
-
-            if let Some(snapshot) = snapshot {
-                return build_session_context_from_snapshot(
-                    app_ctx,
-                    config,
-                    &repo,
-                    session_id,
-                    base_tool_view,
-                    snapshot,
-                );
-            }
-
-            Ok(root_session_context_from_config(
-                app_ctx,
-                config,
-                session_id,
-                base_tool_view,
-            ))
-        }
-
-        #[cfg(not(feature = "memory-sqlite"))]
-        {
-            let tool_view = self.tool_view(config, session_id, _binding)?;
-            Ok(root_session_context_from_config(
-                app_ctx, config, session_id, tool_view,
-            ))
-        }
-    }
-
-    fn tool_view(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        _binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<ToolView> {
-        #[cfg(feature = "memory-sqlite")]
-        {
-            let repo = open_session_repository(config)?;
-            let snapshot = load_persisted_session_snapshot(&repo, session_id)?;
-            let base_tool_view =
-                build_base_tool_view_from_snapshot(config, &repo, session_id, snapshot.as_ref())?;
-            let tool_view = apply_session_tool_policy_to_tool_view(
-                base_tool_view,
-                snapshot
-                    .as_ref()
-                    .and_then(|snapshot| snapshot.session_tool_policy.as_ref()),
-            );
-            Ok(apply_active_skill_blocked_tools_to_tool_view(
-                tool_view,
-                snapshot
-                    .as_ref()
-                    .and_then(|snapshot| snapshot.active_skills.as_ref()),
-            ))
-        }
-
-        #[cfg(not(feature = "memory-sqlite"))]
-        Ok(crate::tools::runtime_tool_view_from_loong_config(config))
-    }
-
     async fn bootstrap(
         &self,
         config: &LoongConfig,
-        session_id: &str,
-        app_ctx: &AppContext,
+        ctx: &Context<'_>,
     ) -> CliResult<ContextEngineBootstrapResult> {
-        let result = self
-            .context_engine
-            .bootstrap(config, session_id, app_ctx)
-            .await?;
-        self.run_turn_middlewares_bootstrap(config, session_id, app_ctx)
-            .await?;
+        let result = self.context_engine.bootstrap(config, ctx).await?;
+        self.run_turn_middlewares_bootstrap(config, ctx).await?;
         Ok(result)
     }
 
     async fn ingest(
         &self,
-        session_id: &str,
         message: &Value,
-        app_ctx: &AppContext,
+        ctx: &Context<'_>,
     ) -> CliResult<ContextEngineIngestResult> {
-        let result = self
-            .context_engine
-            .ingest(session_id, message, app_ctx)
-            .await?;
-        self.run_turn_middlewares_ingest(session_id, message, app_ctx)
-            .await?;
+        let result = self.context_engine.ingest(message, ctx).await?;
+        self.run_turn_middlewares_ingest(message, ctx).await?;
         Ok(result)
     }
 
     async fn build_context(
         &self,
         config: &LoongConfig,
-        ctx: &AppContext,
+        session_context: &Context<'_>,
         include_system_prompt: bool,
-        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<AssembledConversationContext> {
-        self.build_context_for_tool_view(
-            config,
-            ctx,
+        let effective_config_storage;
+        let effective_config = match session_context.session().workspace_root.as_ref() {
+            Some(workspace_root) => {
+                let mut overridden_config = config.clone();
+                overridden_config.tools.file_root = Some(workspace_root.display().to_string());
+                effective_config_storage = overridden_config;
+                &effective_config_storage
+            }
+            None => config,
+        };
+        let runtime_tool_view = crate::tools::runtime_tool_view_from_loong_config(effective_config);
+        let mut assembled = self
+            .context_engine
+            .assemble_context(effective_config, include_system_prompt, session_context)
+            .await?;
+        let runtime_self_continuity = include_system_prompt
+            .then(|| {
+                runtime_self_continuity_prompt_summary(
+                    session_context,
+                    assembled.runtime_self_continuity.as_ref(),
+                )
+            })
+            .flatten();
+        #[cfg(feature = "memory-sqlite")]
+        let active_skills = include_system_prompt
+            .then(|| {
+                active_skills_prompt_summary(
+                    effective_config,
+                    session_context.session().session_id(),
+                )
+            })
+            .flatten();
+        #[cfg(not(feature = "memory-sqlite"))]
+        let active_skills: Option<String> = None;
+        let delegate_runtime_contract = include_system_prompt
+            .then(|| {
+                delegate_child_runtime_contract_prompt_summary(effective_config, session_context)
+            })
+            .flatten();
+        let delegate_profile_contract = include_system_prompt
+            .then(|| delegate_child_profile_prompt_summary(session_context))
+            .flatten();
+
+        seed_prompt_fragments_from_context(&mut assembled);
+        append_runtime_prompt_fragment(
+            &mut assembled,
+            "runtime-self-continuity",
+            runtime_self_continuity,
+            PromptFrameAuthority::RuntimeSelf,
+        );
+        append_runtime_prompt_fragment(
+            &mut assembled,
+            "active-skills",
+            active_skills,
+            PromptFrameAuthority::SessionLocalRecall,
+        );
+        append_runtime_prompt_fragment(
+            &mut assembled,
+            "delegate-child-profile",
+            delegate_profile_contract,
+            PromptFrameAuthority::AdvisoryProfile,
+        );
+        append_runtime_prompt_fragment(
+            &mut assembled,
+            "delegate-child-runtime-contract",
+            delegate_runtime_contract,
+            PromptFrameAuthority::CapabilityContract,
+        );
+        sync_prompt_fragments_into_context(&mut assembled);
+
+        self.apply_turn_middlewares_to_context(
+            effective_config,
             include_system_prompt,
-            &ctx.tool_view,
-            binding,
+            assembled,
+            &runtime_tool_view,
+            session_context,
         )
         .await
     }
@@ -357,236 +311,162 @@ where
     async fn build_messages(
         &self,
         config: &LoongConfig,
-        ctx: &AppContext,
+        ctx: &Context<'_>,
         include_system_prompt: bool,
-        tool_view: &ToolView,
-        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Vec<Value>> {
-        self.build_context_for_tool_view(config, ctx, include_system_prompt, tool_view, binding)
+        self.build_context(config, ctx, include_system_prompt)
             .await
             .map(|assembled| assembled.messages)
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    async fn read_session_window(
+        &self,
+        limit: usize,
+        ctx: &Context<'_>,
+    ) -> Result<Vec<memory::WindowTurn>, AssistantHistoryLoadError> {
+        let snapshot = ctx.access().memory().window(limit, true).await?;
+        Ok(snapshot
+            .turns
+            .into_iter()
+            .map(|turn| memory::WindowTurn {
+                role: turn.role,
+                content: turn.content,
+                ts: turn.ts,
+            })
+            .collect())
     }
 
     async fn request_completion(
         &self,
         config: &LoongConfig,
         messages: &[Value],
-        binding: ConversationRuntimeBinding<'_>,
+        ctx: &Context<'_>,
     ) -> CliResult<String> {
-        provider::request_completion(config, messages, provider_runtime_binding(binding)).await
+        provider::request_completion(config, messages, ctx).await
     }
 
     async fn request_completion_with_retry_progress(
         &self,
         config: &LoongConfig,
         messages: &[Value],
-        binding: ConversationRuntimeBinding<'_>,
+        ctx: &Context<'_>,
         retry_progress: crate::provider::ProviderRetryProgressCallback,
     ) -> CliResult<String> {
-        provider::request_completion_with_retry_progress(
-            config,
-            messages,
-            provider_runtime_binding(binding),
-            retry_progress,
-        )
-        .await
+        provider::request_completion_with_retry_progress(config, messages, ctx, retry_progress)
+            .await
     }
 
     async fn request_turn(
         &self,
         config: &LoongConfig,
-        session_id: &str,
         turn_id: &str,
         messages: &[Value],
-        tool_view: &ToolView,
-        binding: ConversationRuntimeBinding<'_>,
+        ctx: &Context<'_>,
     ) -> CliResult<ProviderTurn> {
-        provider::request_turn_in_view(
-            config,
-            session_id,
-            turn_id,
-            messages,
-            tool_view,
-            provider_runtime_binding(binding),
-        )
-        .await
+        provider::request_turn(config, turn_id, messages, ctx).await
     }
 
     async fn request_turn_with_retry_progress(
         &self,
         config: &LoongConfig,
-        session_id: &str,
         turn_id: &str,
         messages: &[Value],
-        tool_view: &ToolView,
-        binding: ConversationRuntimeBinding<'_>,
+        ctx: &Context<'_>,
         retry_progress: crate::provider::ProviderRetryProgressCallback,
     ) -> CliResult<ProviderTurn> {
-        provider::request_turn_in_view_with_retry_progress(
-            config,
-            session_id,
-            turn_id,
-            messages,
-            tool_view,
-            provider_runtime_binding(binding),
-            retry_progress,
-        )
-        .await
+        provider::request_turn_with_retry_progress(config, turn_id, messages, ctx, retry_progress)
+            .await
     }
 
     async fn request_turn_streaming(
         &self,
         config: &LoongConfig,
-        session_id: &str,
         turn_id: &str,
         messages: &[Value],
-        tool_view: &ToolView,
-        binding: ConversationRuntimeBinding<'_>,
+        ctx: &Context<'_>,
         on_token: crate::provider::StreamingTokenCallback,
     ) -> CliResult<ProviderTurn> {
-        provider::request_turn_streaming_in_view(
-            config,
-            session_id,
-            turn_id,
-            messages,
-            tool_view,
-            provider_runtime_binding(binding),
-            on_token,
-        )
-        .await
+        provider::request_turn_streaming(config, turn_id, messages, ctx, on_token).await
     }
 
     async fn request_turn_streaming_with_retry_progress(
         &self,
         config: &LoongConfig,
-        session_id: &str,
         turn_id: &str,
         messages: &[Value],
-        tool_view: &ToolView,
-        binding: ConversationRuntimeBinding<'_>,
+        ctx: &Context<'_>,
         on_token: crate::provider::StreamingTokenCallback,
         retry_progress: crate::provider::ProviderRetryProgressCallback,
     ) -> CliResult<ProviderTurn> {
-        provider::request_turn_streaming_in_view_with_retry_progress(
+        provider::request_turn_streaming_with_retry_progress(
             config,
-            session_id,
             turn_id,
             messages,
-            tool_view,
-            provider_runtime_binding(binding),
+            ctx,
             on_token,
             retry_progress,
         )
         .await
     }
 
-    async fn persist_turn(
-        &self,
-        session_id: &str,
-        role: &str,
-        content: &str,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<()> {
-        if let Some(ctx) = binding.context() {
-            let request = memory::build_append_turn_request(session_id, role, content);
-            let caps = BTreeSet::from([Capability::MemoryWrite]);
-            let execution_context = ctx.for_invocation(ctx.tool_runtime_config())?;
-            ctx.runtime()
-                .kernel()
-                .execute_memory_core(
-                    ctx.pack_id(),
-                    ctx.token(),
-                    &caps,
-                    None,
-                    request,
-                    &execution_context,
-                )
-                .await
-                .map_err(|error| format!("persist {role} turn via kernel failed: {error}"))?;
-            return Ok(());
-        }
-
-        #[cfg(feature = "memory-sqlite")]
-        {
-            store::append_session_turn_direct(
-                session_id,
-                role,
-                content,
-                store::current_session_store_config(),
-            )
-            .map_err(|error| format!("persist {role} turn failed: {error}"))?;
-        }
-
-        #[cfg(not(feature = "memory-sqlite"))]
-        {
-            let _ = (session_id, role, content);
-        }
-
+    async fn persist_turn(&self, role: &str, content: &str, ctx: &Context<'_>) -> CliResult<()> {
+        ctx.access()
+            .memory()
+            .append_turn(role, content)
+            .await
+            .map_err(|error| format!("persist {role} turn via memory access failed: {error}"))?;
         Ok(())
     }
 
     async fn after_turn(
         &self,
-        session_id: &str,
         user_input: &str,
         assistant_reply: &str,
         messages: &[Value],
-        app_ctx: &AppContext,
+        ctx: &Context<'_>,
     ) -> CliResult<()> {
         self.context_engine
-            .after_turn(session_id, user_input, assistant_reply, messages, app_ctx)
+            .after_turn(user_input, assistant_reply, messages, ctx)
             .await?;
-        self.run_turn_middlewares_after_turn(
-            session_id,
-            user_input,
-            assistant_reply,
-            messages,
-            app_ctx,
-        )
-        .await
+        self.run_turn_middlewares_after_turn(user_input, assistant_reply, messages, ctx)
+            .await
     }
 
     async fn compact_context(
         &self,
         config: &LoongConfig,
-        session_id: &str,
         messages: &[Value],
-        app_ctx: &AppContext,
+        ctx: &Context<'_>,
     ) -> CliResult<()> {
         self.context_engine
-            .compact_context(config, session_id, messages, app_ctx)
+            .compact_context(config, messages, ctx)
             .await?;
-        self.run_turn_middlewares_compact_context(config, session_id, messages, app_ctx)
+        self.run_turn_middlewares_compact_context(config, messages, ctx)
             .await
     }
 
     async fn prepare_subagent_spawn(
         &self,
-        parent_session_id: &str,
         subagent_session_id: &str,
-        app_ctx: &AppContext,
+        ctx: &Context<'_>,
     ) -> CliResult<()> {
         self.context_engine
-            .prepare_subagent_spawn(parent_session_id, subagent_session_id, app_ctx)
+            .prepare_subagent_spawn(subagent_session_id, ctx)
             .await?;
-        self.run_turn_middlewares_prepare_subagent_spawn(
-            parent_session_id,
-            subagent_session_id,
-            app_ctx,
-        )
-        .await
+        self.run_turn_middlewares_prepare_subagent_spawn(subagent_session_id, ctx)
+            .await
     }
 
     async fn on_subagent_ended(
         &self,
-        parent_session_id: &str,
         subagent_session_id: &str,
-        app_ctx: &AppContext,
+        ctx: &Context<'_>,
     ) -> CliResult<()> {
         self.context_engine
-            .on_subagent_ended(parent_session_id, subagent_session_id, app_ctx)
+            .on_subagent_ended(subagent_session_id, ctx)
             .await?;
-        self.run_turn_middlewares_on_subagent_ended(parent_session_id, subagent_session_id, app_ctx)
+        self.run_turn_middlewares_on_subagent_ended(subagent_session_id, ctx)
             .await
     }
 }

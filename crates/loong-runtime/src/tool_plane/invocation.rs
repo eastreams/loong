@@ -1,7 +1,11 @@
 //! Governed typed tool invocation owned by the runtime boundary.
 
+use std::fmt;
+
 use async_trait::async_trait;
-use loong_contracts::{ActionExecutionEvent, AuditEventKind, Capabilities, Capability, ToolPath};
+use loong_contracts::{
+    ActionExecutionEvent, AuditEventKind, Capabilities, Capability, ToolPath, ToolSpec,
+};
 use loong_core::{
     kernel::Kernel as CoreKernel,
     policy::{
@@ -15,7 +19,7 @@ use loong_kernel::Kernel;
 use serde_json::Value;
 
 use super::{
-    RegisteredToolError, ToolInvocationAction,
+    RegisteredToolError, ToolInvocationAction, ToolRegistration,
     error::{CapabilityOverrideError, ToolInvocationError},
     registered::RegisteredTool,
 };
@@ -23,9 +27,10 @@ use super::{
 /// Context capability required by runtime-owned tool invocation.
 ///
 /// This is the only direct contract between the runtime wrapper and an
-/// app-defined context. It exists to derive a same-type child with narrower
-/// authority; it does not expose Runtime, Kernel, audit, or a context factory.
-pub trait ToolInvocationContext: PolicyContext + Sized {
+/// app-defined context. It exposes the Session's contracts-owned tool authority
+/// and derives a same-type child with narrower capabilities; it does not expose
+/// Runtime, Kernel, audit, or a context factory.
+pub trait ToolInvocationContext: PolicyContext + Clone + Sized {
     fn derive_tool_child(
         &self,
         capabilities: Capabilities,
@@ -35,7 +40,7 @@ pub trait ToolInvocationContext: PolicyContext + Sized {
 /// One looked-up typed tool invocation bound to its recursive execution context.
 ///
 /// Construction is runtime-owned so ordinary callers cannot obtain registered
-/// entry execution capability. Use the app context's `tool(path)` entrypoint.
+/// entry execution capability. Use the concrete context's `tool(path)` entrypoint.
 pub struct ToolInvocation<'runtime, 'context, C>
 where
     C: ContextFactory,
@@ -43,10 +48,26 @@ where
 {
     kernel: &'runtime Kernel<C>,
     tool: &'runtime RegisteredTool<C>,
-    context: &'runtime C::Cx<'context>,
+    context: C::Cx<'context>,
     path: ToolPath,
-    declared_capabilities: Capabilities,
     capability_override: Option<Capabilities>,
+}
+
+impl<C> fmt::Debug for ToolInvocation<'_, '_, C>
+where
+    C: ContextFactory,
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ToolInvocation")
+            .field("path", &self.path)
+            .field(
+                "declared_capabilities",
+                &self.tool.spec().required_capabilities,
+            )
+            .field("capability_override", &self.capability_override)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'runtime, 'context, C> ToolInvocation<'runtime, 'context, C>
@@ -58,18 +79,34 @@ where
     pub(crate) fn new(
         kernel: &'runtime Kernel<C>,
         tool: &'runtime RegisteredTool<C>,
-        context: &'runtime C::Cx<'context>,
+        context: C::Cx<'context>,
         path: ToolPath,
-        declared_capabilities: Capabilities,
     ) -> Self {
         Self {
             kernel,
             tool,
             context,
             path,
-            declared_capabilities,
             capability_override: None,
         }
+    }
+
+    /// Registry identity fixed by the successful lookup that created this invocation.
+    #[must_use]
+    pub fn path(&self) -> &ToolPath {
+        &self.path
+    }
+
+    /// Metadata from the same registered entry that will receive dispatch.
+    #[must_use]
+    pub fn spec(&self) -> &ToolSpec {
+        self.tool.spec()
+    }
+
+    /// Presentation policy from the same entry that receives dispatch.
+    #[must_use]
+    pub fn registration(&self) -> &ToolRegistration {
+        self.tool.registration()
     }
 
     /// Request a replacement for the tool's declared domain capabilities.
@@ -89,9 +126,10 @@ where
             tool,
             context,
             path,
-            declared_capabilities,
             capability_override,
         } = self;
+        let declared_capabilities: Capabilities =
+            tool.spec().required_capabilities.iter().copied().collect();
         let tool_capabilities = match capability_override {
             Some(requested) if !requested.is_subset(&declared_capabilities) => {
                 let rejection = CapabilityOverrideError {

@@ -1,13 +1,13 @@
 use super::*;
-use crate::AppContext;
 use crate::config::{LoongConfig, ProviderConfig, ReasoningEffort};
 use crate::provider::rate_limit::RateLimitObservation;
+use crate::test_support::{TurnTestHarness, runtime_session_for_test};
 use crate::test_utils::ScopedEnv;
-use loong_contracts::{Capability, ExecutionRoute, HarnessKind, SecretRef};
-use loong_kernel::{AuditEventKind, FixedClock, InMemoryAuditSink, Kernel, VerticalPackManifest};
+use loong_contracts::SecretRef;
+use loong_kernel::AuditEventKind;
 use reqwest::header::{HeaderMap, HeaderValue, RETRY_AFTER};
 use serde_json::json;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -24,52 +24,12 @@ const OPENAI_AUTH_ENV_KEYS: &[&str] = &[
 ];
 const VOLCENGINE_AUTH_ENV_KEYS: &[&str] = &["ARK_API_KEY"];
 
-// Request-shape tests are not metadata-error tests; keep their repeated setup
-// focused on the provider payload after successful schema materialization.
-fn test_provider_tool_definitions(
-    runtime: Option<&loong_runtime::runtime::Runtime<crate::context::AppContextFactory>>,
-) -> Vec<Value> {
-    crate::tools::provider_tool_definitions(runtime)
-        .expect("provider tool definitions should materialize")
-}
-
-fn build_provider_failover_test_app_context(
-    agent_id: &str,
-) -> (AppContext, Arc<InMemoryAuditSink>) {
-    let audit = Arc::new(InMemoryAuditSink::default());
-    let clock = Arc::new(FixedClock::new(1_700_000_321));
-    let mut kernel = Kernel::with_legacy_allow_runtime(clock, audit.clone());
-    let pack = VerticalPackManifest {
-        pack_id: "provider-test-pack".to_owned(),
-        domain: "provider-test".to_owned(),
-        version: "0.1.0".to_owned(),
-        default_route: ExecutionRoute {
-            harness_kind: HarnessKind::EmbeddedPi,
-            adapter: None,
-        },
-        allowed_connectors: BTreeSet::new(),
-        granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
-        metadata: BTreeMap::new(),
-    };
-    kernel.register_pack(pack).expect("register test pack");
-    let token = kernel
-        .issue_token("provider-test-pack", agent_id, 3_600)
-        .expect("issue test token");
-    (
-        AppContext::new(
-            Arc::new(loong_runtime::runtime::Runtime::new(
-                kernel,
-                crate::tools::plane::test_builtin_tool_plane(),
-            )),
-            token,
-            crate::tools::runtime_config::ToolRuntimeConfig::default(),
-            "test-session",
-            crate::tools::runtime_tool_view(),
-            loong_contracts::GovernedSessionMode::MutatingCapable,
-        )
-        .expect("build provider test app context"),
-        audit,
-    )
+/// Provider payload tests share the production registry invariant instead of
+/// manufacturing schemas from the static legacy catalog.
+fn provider_tool_definitions_for_test() -> Vec<serde_json::Value> {
+    let owner = runtime_session_for_test("provider-schema-test", crate::tools::runtime_tool_view());
+    crate::tools::provider_tool_definitions(owner.runtime.as_ref())
+        .expect("builtin typed tool metadata")
 }
 
 fn build_profile_state_policy_for_test(namespace: String) -> ProviderProfileStatePolicy {
@@ -492,16 +452,18 @@ async fn request_turn_auto_model_rejects_missing_volcengine_credentials_before_t
     let mut env = ScopedEnv::new();
     clear_provider_auth_envs(&mut env, VOLCENGINE_AUTH_ENV_KEYS);
     let config = test_config(provider);
+    let owner =
+        runtime_session_for_test("provider-request-agent", crate::tools::runtime_tool_view());
+    let ctx = owner.context();
 
     let error = request_turn(
         &config,
-        "session-provider-test",
         "turn-provider-test",
         &[json!({
             "role": "user",
             "content": "ping"
         })],
-        ProviderRuntimeBinding::AdvisoryOnly,
+        &ctx,
     )
     .await
     .expect_err("auto-model requests should fail on missing managed credentials before transport");
@@ -631,6 +593,9 @@ async fn request_completion_auto_model_falls_forward_to_next_auth_profile_after_
         oauth_access_token_env: None,
         ..ProviderConfig::default()
     });
+    let owner =
+        runtime_session_for_test("provider-request-agent", crate::tools::runtime_tool_view());
+    let ctx = owner.context();
 
     let completion = request_completion(
         &config,
@@ -638,7 +603,7 @@ async fn request_completion_auto_model_falls_forward_to_next_auth_profile_after_
             "role": "user",
             "content": "ping"
         })],
-        ProviderRuntimeBinding::AdvisoryOnly,
+        &ctx,
     )
     .await
     .expect("request should succeed with the next auth profile after catalog auth failure");
@@ -1297,22 +1262,40 @@ fn provider_profile_state_snapshot_skips_unknown_reason_entries() {
     assert!(restored.order.is_empty());
 }
 
-#[test]
-fn message_builder_includes_system_prompt() {
+#[tokio::test(flavor = "current_thread")]
+async fn message_builder_includes_system_prompt() {
     let config = test_config(ProviderConfig::default());
+    let owner = crate::test_support::TestRuntimeSession::from_config(
+        &config,
+        "provider-message-agent",
+        "provider-message-agent",
+        loong_contracts::GovernedSessionMode::MutatingCapable,
+    )
+    .expect("provider message test runtime session");
+    let ctx = owner.context();
 
-    let messages =
-        build_messages_for_session(&config, "noop-session", true).expect("build messages");
+    let messages = build_messages_for_session(&config, true, &ctx)
+        .await
+        .expect("build messages");
     assert!(!messages.is_empty());
     assert_eq!(messages[0]["role"], "system");
 }
 
-#[test]
-fn build_messages_includes_capability_snapshot_block() {
+#[tokio::test(flavor = "current_thread")]
+async fn build_messages_includes_capability_snapshot_block() {
     let config = test_config(ProviderConfig::default());
+    let owner = crate::test_support::TestRuntimeSession::from_config(
+        &config,
+        "provider-message-agent",
+        "provider-message-agent",
+        loong_contracts::GovernedSessionMode::MutatingCapable,
+    )
+    .expect("provider message test runtime session");
+    let ctx = owner.context();
 
-    let messages =
-        build_messages_for_session(&config, "noop-session", true).expect("build messages");
+    let messages = build_messages_for_session(&config, true, &ctx)
+        .await
+        .expect("build messages");
     assert!(!messages.is_empty());
     let system_content = messages[0]["content"].as_str().expect("system content");
     assert!(
@@ -1688,6 +1671,9 @@ async fn opencode_zen_claude_route_skips_oauth_only_profiles_before_request_disp
         oauth_access_token: Some(SecretRef::Inline("oauth-token".to_owned())),
         ..ProviderConfig::default()
     });
+    let owner =
+        runtime_session_for_test("provider-request-agent", crate::tools::runtime_tool_view());
+    let ctx = owner.context();
 
     let completion = request_completion(
         &config,
@@ -1695,7 +1681,7 @@ async fn opencode_zen_claude_route_skips_oauth_only_profiles_before_request_disp
             "role": "user",
             "content": "ping"
         })],
-        ProviderRuntimeBinding::AdvisoryOnly,
+        &ctx,
     )
     .await
     .expect("opencode claude route should succeed with api key profile");
@@ -1782,15 +1768,13 @@ fn http_request_contains_header(request: &str, expected_name: &str, expected_val
 #[test]
 fn turn_body_includes_tool_schema_and_auto_choice() {
     let config = test_config(ProviderConfig::default());
-    let (app_ctx, _audit) = build_provider_failover_test_app_context("tool-schema-agent");
-
     let body = build_turn_request_body(
         &config,
         &[],
         "model-latest",
         CompletionPayloadMode::default_for(&config.provider),
         true,
-        &test_provider_tool_definitions(Some(app_ctx.runtime())),
+        &provider_tool_definitions_for_test(),
     );
     let tools = body
         .get("tools")
@@ -1854,7 +1838,7 @@ fn anthropic_turn_body_uses_native_messages_shape_and_tool_schema() {
         "claude-3-7-sonnet-latest",
         CompletionPayloadMode::default_for(&config.provider),
         true,
-        &test_provider_tool_definitions(None),
+        &provider_tool_definitions_for_test(),
     );
 
     assert_eq!(body["system"], "system rules");
@@ -1892,7 +1876,7 @@ fn anthropic_turn_body_converts_tool_schema_to_native_format() {
         "claude-test",
         CompletionPayloadMode::default_for(&config.provider),
         true,
-        &test_provider_tool_definitions(None),
+        &provider_tool_definitions_for_test(),
     );
     let tools = body
         .get("tools")
@@ -1953,7 +1937,7 @@ fn anthropic_turn_body_preserves_native_tool_use_and_tool_result_blocks() {
         "claude-test",
         CompletionPayloadMode::default_for(&config.provider),
         true,
-        &test_provider_tool_definitions(None),
+        &provider_tool_definitions_for_test(),
     );
 
     let adapted_messages = body["messages"].as_array().expect("anthropic messages");
@@ -2013,7 +1997,7 @@ fn opencode_zen_gemini_turn_body_uses_google_generate_content_shape() {
         runtime_contract,
         capability,
         true,
-        &test_provider_tool_definitions(None),
+        &provider_tool_definitions_for_test(),
         false,
     );
 
@@ -2097,7 +2081,7 @@ fn opencode_zen_gemini_turn_body_preserves_native_tool_result_blocks() {
         runtime_contract,
         capability,
         true,
-        &test_provider_tool_definitions(None),
+        &provider_tool_definitions_for_test(),
         false,
     );
 
@@ -2264,7 +2248,7 @@ fn bedrock_turn_body_uses_native_tool_blocks_and_tool_config() {
         "anthropic.claude-3-7-sonnet-20250219-v1:0",
         CompletionPayloadMode::default_for(&config.provider),
         true,
-        &test_provider_tool_definitions(None),
+        &provider_tool_definitions_for_test(),
     );
 
     let adapted_messages = body["messages"].as_array().expect("bedrock messages");
@@ -2333,12 +2317,11 @@ fn extract_provider_turn_supports_google_generate_content_tool_calls() {
         ]
     });
 
-    let turn = extract_provider_turn_with_scope_and_messages(&body, None, None, &[])
-        .expect("provider turn");
+    let turn = extract_provider_turn_with_scope(&body, None).expect("provider turn");
 
     assert_eq!(turn.assistant_text, "checking");
     assert_eq!(turn.tool_intents.len(), 1);
-    assert_eq!(turn.tool_intents[0].tool_name, "read");
+    assert_eq!(turn.tool_intents[0].tool_name.name(), "read");
     assert_eq!(turn.tool_intents[0].args_json["path"], "README.md");
 }
 
@@ -2359,7 +2342,7 @@ fn responses_turn_body_keeps_tool_schema_with_responses_input_shape() {
         "gpt-5.1-mini",
         CompletionPayloadMode::default_for(&config.provider),
         true,
-        &test_provider_tool_definitions(None),
+        &provider_tool_definitions_for_test(),
     );
 
     assert_eq!(body["input"][0]["role"], "user");
@@ -2385,11 +2368,12 @@ fn responses_openai_turn_body_includes_native_web_search_tool_when_enabled() {
     });
     let runtime_config =
         crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(&config, None);
+    let owner =
+        runtime_session_for_test("native-search-enabled", crate::tools::runtime_tool_view());
     let provider_tool_surface = super::native_tool_surface::provider_tool_surface(&config);
     let surface_plan = provider_tool_surface
         .materialize(
-            None,
-            &config,
+            owner.runtime.as_ref(),
             &crate::tools::runtime_tool_view(),
             &runtime_config,
         )
@@ -2405,7 +2389,7 @@ fn responses_openai_turn_body_includes_native_web_search_tool_when_enabled() {
         "gpt-5.1-mini",
         CompletionPayloadMode::default_for(&config.provider),
         true,
-        &request_surface.tool_definitions,
+        request_surface.definitions(),
     );
 
     let tools = body["tools"].as_array().expect("responses tools array");
@@ -2449,11 +2433,12 @@ fn responses_openai_turn_body_omits_native_web_search_tool_when_disabled() {
     config.tools.web_search.enabled = false;
     let runtime_config =
         crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(&config, None);
+    let owner =
+        runtime_session_for_test("native-search-disabled", crate::tools::runtime_tool_view());
     let provider_tool_surface = super::native_tool_surface::provider_tool_surface(&config);
     let surface_plan = provider_tool_surface
         .materialize(
-            None,
-            &config,
+            owner.runtime.as_ref(),
             &crate::tools::runtime_tool_view(),
             &runtime_config,
         )
@@ -2469,7 +2454,7 @@ fn responses_openai_turn_body_omits_native_web_search_tool_when_disabled() {
         "gpt-5.1-mini",
         CompletionPayloadMode::default_for(&config.provider),
         true,
-        &request_surface.tool_definitions,
+        request_surface.definitions(),
     );
 
     let tools = body["tools"].as_array().expect("responses tools array");
@@ -2491,11 +2476,11 @@ fn responses_non_openai_turn_body_keeps_function_web_query_mode() {
     });
     let runtime_config =
         crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(&config, None);
+    let owner = runtime_session_for_test("non-openai-search", crate::tools::runtime_tool_view());
     let provider_tool_surface = super::native_tool_surface::provider_tool_surface(&config);
     let surface_plan = provider_tool_surface
         .materialize(
-            None,
-            &config,
+            owner.runtime.as_ref(),
             &crate::tools::runtime_tool_view(),
             &runtime_config,
         )
@@ -2511,7 +2496,7 @@ fn responses_non_openai_turn_body_keeps_function_web_query_mode() {
         "deepseek-chat",
         CompletionPayloadMode::default_for(&config.provider),
         true,
-        &request_surface.tool_definitions,
+        request_surface.definitions(),
     );
 
     let tools = body["tools"].as_array().expect("responses tools array");
@@ -2548,11 +2533,12 @@ fn provider_request_tool_definitions_include_native_web_search_for_openai_respon
     });
     let runtime_config =
         crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(&config, None);
+    let owner =
+        runtime_session_for_test("provider-native-search", crate::tools::runtime_tool_view());
     let provider_tool_surface = super::native_tool_surface::provider_tool_surface(&config);
     let surface_plan = provider_tool_surface
         .materialize(
-            None,
-            &config,
+            owner.runtime.as_ref(),
             &crate::tools::runtime_tool_view(),
             &runtime_config,
         )
@@ -2560,7 +2546,7 @@ fn provider_request_tool_definitions_include_native_web_search_for_openai_respon
     let request_surface = surface_plan.request;
     let prompt_surface = surface_plan.prompt;
 
-    let tools = request_surface.tool_definitions;
+    let tools = request_surface.definitions().to_vec();
 
     assert!(
         tools
@@ -2611,7 +2597,7 @@ fn responses_turn_body_preserves_native_function_call_roundtrip_items() {
         "gpt-5.1-mini",
         CompletionPayloadMode::default_for(&config.provider),
         true,
-        &test_provider_tool_definitions(None),
+        &provider_tool_definitions_for_test(),
     );
 
     let input = body["input"].as_array().expect("responses input array");
@@ -2982,16 +2968,18 @@ async fn request_turn_streaming_rejects_unsupported_transport_modes() {
     });
 
     assert!(!supports_turn_streaming_events(&config));
+    let owner =
+        runtime_session_for_test("provider-request-agent", crate::tools::runtime_tool_view());
+    let ctx = owner.context();
 
     let error = request_turn_streaming(
         &config,
-        "session-provider-test",
         "turn-provider-test",
         &[json!({
             "role": "user",
             "content": "turn ping"
         })],
-        ProviderRuntimeBinding::AdvisoryOnly,
+        &ctx,
         None,
     )
     .await
@@ -3364,6 +3352,9 @@ async fn responses_completion_falls_back_to_chat_completions_for_compatible_endp
         api_key: Some(SecretRef::Inline("deepseek-test-key".to_owned())),
         ..ProviderConfig::default()
     });
+    let owner =
+        runtime_session_for_test("provider-request-agent", crate::tools::runtime_tool_view());
+    let ctx = owner.context();
 
     let completion = request_completion(
         &config,
@@ -3371,7 +3362,7 @@ async fn responses_completion_falls_back_to_chat_completions_for_compatible_endp
             "role": "user",
             "content": "ping"
         })],
-        ProviderRuntimeBinding::AdvisoryOnly,
+        &ctx,
     )
     .await
     .expect("compatible responses transport should retry chat-completions automatically");
@@ -3446,16 +3437,18 @@ async fn responses_turn_falls_back_to_chat_completions_for_compatible_endpoints(
         api_key: Some(SecretRef::Inline("deepseek-test-key".to_owned())),
         ..ProviderConfig::default()
     });
+    let owner =
+        runtime_session_for_test("provider-request-agent", crate::tools::runtime_tool_view());
+    let ctx = owner.context();
 
     let turn = request_turn(
         &config,
-        "session-provider-test",
         "turn-provider-test",
         &[json!({
             "role": "user",
             "content": "turn ping"
         })],
-        ProviderRuntimeBinding::AdvisoryOnly,
+        &ctx,
     )
     .await
     .expect("turn requests should retry chat-completions when Responses is rejected");
@@ -3515,16 +3508,18 @@ async fn responses_turn_does_not_fallback_for_generic_gateway_failures() {
         api_key: Some(SecretRef::Inline("deepseek-test-key".to_owned())),
         ..ProviderConfig::default()
     });
+    let owner =
+        runtime_session_for_test("provider-request-agent", crate::tools::runtime_tool_view());
+    let ctx = owner.context();
 
     let error = request_turn(
         &config,
-        "session-provider-test",
         "turn-provider-test",
         &[json!({
             "role": "user",
             "content": "turn ping"
         })],
-        ProviderRuntimeBinding::AdvisoryOnly,
+        &ctx,
     )
     .await
     .expect_err("generic gateway failures should stay on the same transport and eventually fail");
@@ -3579,6 +3574,9 @@ async fn routed_google_requests_do_not_retry_responses_fallback_logic() {
         api_key: Some(SecretRef::Inline("opencode-test-key".to_owned())),
         ..ProviderConfig::default()
     });
+    let owner =
+        runtime_session_for_test("provider-request-agent", crate::tools::runtime_tool_view());
+    let ctx = owner.context();
 
     let error = request_completion(
         &config,
@@ -3586,7 +3584,7 @@ async fn routed_google_requests_do_not_retry_responses_fallback_logic() {
             "role": "user",
             "content": "ping"
         })],
-        ProviderRuntimeBinding::AdvisoryOnly,
+        &ctx,
     )
     .await
     .expect_err("google routed request should fail without a duplicate fallback retry");
@@ -3654,7 +3652,8 @@ fn model_request_error_omits_status_code_for_transport_failures() {
 
 #[test]
 fn provider_failover_audit_event_records_structured_payload() {
-    let (app_ctx, audit) = build_provider_failover_test_app_context("provider-agent");
+    let harness = TurnTestHarness::new();
+    let ctx = harness.context();
     let snapshot = ProviderFailoverSnapshot {
         reason: ProviderFailoverReason::RateLimited,
         stage: ProviderFailoverStage::StatusFailure,
@@ -3674,114 +3673,55 @@ fn provider_failover_audit_event_records_structured_payload() {
         ..ProviderConfig::default()
     };
 
-    record_provider_failover_audit_event(
-        ProviderRuntimeBinding::Context(&app_ctx),
-        &provider,
-        &snapshot,
-        true,
-        true,
-        1,
-        4,
-        false,
-    );
+    record_provider_failover_audit_event(&ctx, &provider, &snapshot, true, true, 1, 4, false);
 
-    let failover_event = audit
+    let failover_event = harness
+        .audit
         .snapshot()
         .into_iter()
-        .find_map(|event| {
-            if let AuditEventKind::ProviderFailover {
-                pack_id,
-                provider_id,
-                reason,
-                stage,
-                model,
-                attempt,
-                max_attempts,
-                status_code,
-                request_id,
-                cf_ray,
-                auth_error,
-                auth_error_code,
-                try_next_model,
-                auto_model_mode,
-                candidate_index,
-                candidate_count,
-            } = event.kind
-            {
-                Some((
-                    pack_id,
-                    provider_id,
-                    reason,
-                    stage,
-                    model,
-                    attempt,
-                    max_attempts,
-                    status_code,
-                    request_id,
-                    cf_ray,
-                    auth_error,
-                    auth_error_code,
-                    try_next_model,
-                    auto_model_mode,
-                    candidate_index,
-                    candidate_count,
-                ))
-            } else {
-                None
-            }
-        })
+        .find(|event| matches!(event.kind, AuditEventKind::ProviderFailover { .. }))
         .expect("provider failover event should be recorded");
-
-    assert_eq!(failover_event.0, "provider-test-pack");
-    assert_eq!(failover_event.1, "kimi_coding");
-    assert_eq!(failover_event.2, "rate_limited");
-    assert_eq!(failover_event.3, "status_failure");
-    assert_eq!(failover_event.4, "model-z");
-    assert_eq!(failover_event.5, 2);
-    assert_eq!(failover_event.6, 3);
-    assert_eq!(failover_event.7, Some(429));
-    assert_eq!(failover_event.8.as_deref(), Some("req-provider-1"));
-    assert_eq!(failover_event.9.as_deref(), Some("ray-provider-1"));
-    assert!(failover_event.10.is_none());
-    assert_eq!(failover_event.11.as_deref(), Some("token_expired"));
-    assert!(failover_event.12);
-    assert!(failover_event.13);
-    assert_eq!(failover_event.14, 1);
-    assert_eq!(failover_event.15, 4);
-}
-
-#[test]
-fn provider_failover_audit_event_is_noop_without_app_context() {
-    let (_app_ctx, audit) = build_provider_failover_test_app_context("provider-agent");
-    let snapshot = ProviderFailoverSnapshot {
-        reason: ProviderFailoverReason::TransportFailure,
-        stage: ProviderFailoverStage::TransportFailure,
-        model: "model-a".to_owned(),
-        attempt: 1,
-        max_attempts: 3,
-        status_code: None,
-        response_debug_context: None,
+    let AuditEventKind::ProviderFailover {
+        provider_id,
+        reason,
+        stage,
+        model,
+        attempt,
+        max_attempts,
+        status_code,
+        request_id,
+        cf_ray,
+        auth_error,
+        auth_error_code,
+        try_next_model,
+        auto_model_mode,
+        candidate_index,
+        candidate_count,
+    } = failover_event.kind
+    else {
+        panic!("event was filtered by variant")
     };
-    let provider = ProviderConfig::default();
-    let before = audit.snapshot().len();
-
-    record_provider_failover_audit_event(
-        ProviderRuntimeBinding::AdvisoryOnly,
-        &provider,
-        &snapshot,
-        false,
-        false,
-        0,
-        1,
-        true,
-    );
-
-    let after = audit.snapshot().len();
-    assert_eq!(after, before);
+    assert_eq!(provider_id, "kimi_coding");
+    assert_eq!(reason, "rate_limited");
+    assert_eq!(stage, "status_failure");
+    assert_eq!(model, "model-z");
+    assert_eq!(attempt, 2);
+    assert_eq!(max_attempts, 3);
+    assert_eq!(status_code, Some(429));
+    assert_eq!(request_id.as_deref(), Some("req-provider-1"));
+    assert_eq!(cf_ray.as_deref(), Some("ray-provider-1"));
+    assert!(auth_error.is_none());
+    assert_eq!(auth_error_code.as_deref(), Some("token_expired"));
+    assert!(try_next_model);
+    assert!(auto_model_mode);
+    assert_eq!(candidate_index, 1);
+    assert_eq!(candidate_count, 4);
 }
 
 #[test]
-fn provider_failover_metrics_record_even_without_app_context() {
+fn provider_failover_metrics_record_with_context() {
+    let owner = runtime_session_for_test("provider-agent", crate::tools::runtime_tool_view());
+    let ctx = owner.context();
     let before = provider_failover_metrics_snapshot();
     let snapshot = ProviderFailoverSnapshot {
         reason: ProviderFailoverReason::TransportFailure,
@@ -3794,16 +3734,7 @@ fn provider_failover_metrics_record_even_without_app_context() {
     };
     let provider = ProviderConfig::default();
 
-    record_provider_failover_audit_event(
-        ProviderRuntimeBinding::AdvisoryOnly,
-        &provider,
-        &snapshot,
-        false,
-        false,
-        0,
-        1,
-        true,
-    );
+    record_provider_failover_audit_event(&ctx, &provider, &snapshot, false, false, 0, 1, true);
 
     let after = provider_failover_metrics_snapshot();
     let reason_before = before
@@ -3838,6 +3769,8 @@ fn provider_failover_metrics_record_even_without_app_context() {
 
 #[test]
 fn provider_failover_metrics_track_continue_path() {
+    let owner = runtime_session_for_test("provider-agent", crate::tools::runtime_tool_view());
+    let ctx = owner.context();
     let before = provider_failover_metrics_snapshot();
     let snapshot = ProviderFailoverSnapshot {
         reason: ProviderFailoverReason::RateLimited,
@@ -3853,16 +3786,7 @@ fn provider_failover_metrics_track_continue_path() {
         ..ProviderConfig::default()
     };
 
-    record_provider_failover_audit_event(
-        ProviderRuntimeBinding::AdvisoryOnly,
-        &provider,
-        &snapshot,
-        true,
-        true,
-        1,
-        4,
-        false,
-    );
+    record_provider_failover_audit_event(&ctx, &provider, &snapshot, true, true, 1, 4, false);
 
     let after = provider_failover_metrics_snapshot();
     let reason_before = before.by_reason.get("rate_limited").copied().unwrap_or(0);
@@ -4385,6 +4309,9 @@ fn request_across_model_candidates_preserves_first_cooldown_trigger_across_auth_
         retry_after: Some(Duration::from_secs(30)),
         provider_family: crate::provider::rate_limit::ProviderHeaderFamily::OpenAi,
     };
+    let owner =
+        runtime_session_for_test("provider-failover-agent", crate::tools::runtime_tool_view());
+    let ctx = owner.context();
 
     let result: Result<String, String> = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -4393,7 +4320,7 @@ fn request_across_model_candidates_preserves_first_cooldown_trigger_across_auth_
         .block_on(async {
             request_failover_runtime::request_across_model_candidates(
                 &provider,
-                ProviderRuntimeBinding::AdvisoryOnly,
+                &ctx,
                 &auth_profiles,
                 None,
                 &["model-a".to_owned(), "model-b".to_owned()],
@@ -4502,6 +4429,9 @@ fn request_across_model_candidates_upgrades_to_later_rate_limit_hint() {
         retry_after: Some(Duration::from_secs(30)),
         provider_family: crate::provider::rate_limit::ProviderHeaderFamily::OpenAi,
     };
+    let owner =
+        runtime_session_for_test("provider-failover-agent", crate::tools::runtime_tool_view());
+    let ctx = owner.context();
 
     let result: Result<String, String> = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -4510,7 +4440,7 @@ fn request_across_model_candidates_upgrades_to_later_rate_limit_hint() {
         .block_on(async {
             request_failover_runtime::request_across_model_candidates(
                 &provider,
-                ProviderRuntimeBinding::AdvisoryOnly,
+                &ctx,
                 &auth_profiles,
                 None,
                 &["model-a".to_owned(), "model-b".to_owned()],

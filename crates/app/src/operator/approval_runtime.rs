@@ -249,7 +249,6 @@ mod tests {
                 "parent_session_id": parent_session_id,
                 "dispatch_kind": "legacy_app",
                 "trusted_internal_context": false,
-                "capabilities_override": null,
             }),
             governance_snapshot_json: json!({}),
         })

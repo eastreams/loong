@@ -3,6 +3,7 @@ use loong_core::policy::engine::PolicyEngine;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
+    future::Future,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -18,14 +19,14 @@ use crate::{
     contracts::{
         Capability, CapabilityToken, ConnectorCommand, ConnectorOutcome, HarnessRequest, TaskIntent,
     },
-    errors::{AuditError, KernelError},
+    errors::{AuditError, KernelError, PolicyError},
     harness::{HarnessAdapter, HarnessBroker},
     memory::{
         CoreMemoryAdapter, MemoryCoreOutcome, MemoryCoreRequest, MemoryExtensionAdapter,
         MemoryExtensionOutcome, MemoryExtensionRequest, MemoryPlane,
     },
     pack::VerticalPackManifest,
-    policy::{LegacyKernelAction, PolicyPipeline, PolicyPipelineBuilder, policy_engine_error},
+    policy::{LegacyKernelAction, PolicyPipeline, PolicyPipelineBuilder},
     runtime::{
         CoreRuntimeAdapter, RuntimeCoreOutcome, RuntimeCoreRequest, RuntimeExtensionAdapter,
         RuntimeExtensionOutcome, RuntimeExtensionRequest, RuntimePlane,
@@ -72,7 +73,7 @@ pub struct Kernel<C: ContextFactory> {
 
     audit_state: Arc<SharedAuditState>,
 
-    legacy_tool_plane: LegacyToolPlane<C>,
+    legacy_tool_plane: LegacyToolPlane,
     memory_plane: MemoryPlane,
     connector_plane: ConnectorPlane,
     runtime_plane: RuntimePlane,
@@ -223,17 +224,17 @@ where
     /// Register an old core tool adapter.
     ///
     /// This is the compatibility path for tools that have not moved to the
-    /// app-owned typed tool plane. New governed tools should not add another
+    /// runtime-owned typed tool plane. New governed tools should not add another
     /// adapter here; they should be registered by app orchestration and call
     /// kernel only for authorization and audit.
-    pub fn register_core_tool_adapter<A: CoreToolAdapter<C> + 'static>(&mut self, adapter: A) {
+    pub fn register_core_tool_adapter<A: CoreToolAdapter + 'static>(&mut self, adapter: A) {
         self.legacy_tool_plane.register_core_adapter(adapter);
     }
 
     /// Register an old extension tool adapter.
     ///
     /// This remains only while unmigrated core/extension tools exist.
-    pub fn register_tool_extension_adapter<A: ToolExtensionAdapter<C> + 'static>(
+    pub fn register_tool_extension_adapter<A: ToolExtensionAdapter + 'static>(
         &mut self,
         adapter: A,
     ) {
@@ -243,6 +244,16 @@ where
     pub fn set_default_core_tool_adapter(&mut self, name: &str) -> Result<(), KernelError> {
         self.legacy_tool_plane.set_default_core_adapter(name)?;
         Ok(())
+    }
+
+    /// Return the explicitly configured owner of legacy core-tool execution.
+    ///
+    /// Typed tools never consult this adapter plane. App ingress uses this only
+    /// after typed lookup has missed, so an injected legacy adapter remains the
+    /// execution owner instead of being silently bypassed by the app fallback.
+    #[must_use]
+    pub fn default_legacy_core_tool_adapter_name(&self) -> Option<&str> {
+        self.legacy_tool_plane.default_core_adapter_name()
     }
 
     pub fn register_core_memory_adapter<A: CoreMemoryAdapter + 'static>(&mut self, adapter: A) {
@@ -364,10 +375,10 @@ where
         Ok(())
     }
 
-    /// Resolve the registered manifest that defines a token's pack boundary.
+    /// Resolve the registered manifest that defines a legacy token's pack boundary.
     ///
-    /// Context constructors use this lookup instead of accepting a second,
-    /// caller-supplied manifest that could disagree with kernel authority.
+    /// Typed Context construction does not inspect packs. This remains for old
+    /// bearer issuance and adapter planes until their explicit migration.
     pub fn pack_manifest(&self, pack_id: &str) -> Result<&VerticalPackManifest, KernelError> {
         self.packs
             .get(pack_id)
@@ -517,6 +528,11 @@ where
     }
 }
 
+// Legacy pack/token ingress for planes that have not migrated to concrete
+// actions. New typed Tool/Access code must enter through PolicyEngine::grant
+// and consume Granted<ConcreteAction>, never call methods in this block.
+// TODO(deprecate-legacy-kernel-envelopes): mark these public methods deprecated
+// once all remaining callers are isolated behind the app legacy dispatcher.
 impl<C> Kernel<C>
 where
     C: ContextFactory,
@@ -858,9 +874,8 @@ where
     /// Execute one core tool call through the legacy adapter plane.
     ///
     /// This is the temporary compatibility entry point for unmigrated tools.
-    /// The context exists only for legacy pack/token authorization. Once this
-    /// ingress selects fallback, the adapter cannot re-enter typed dispatch;
-    /// migrated tools must have been handled before this method is called.
+    /// The context is consumed by legacy authorization and is never exposed to
+    /// the registered adapter.
     pub async fn execute_tool_core(
         &self,
         pack_id: &str,
@@ -870,6 +885,46 @@ where
         request: ToolCoreRequest,
         policy_context: &C::Cx<'_>,
     ) -> Result<ToolCoreOutcome, KernelError> {
+        let resolved_core_adapter = core_name
+            .map(std::string::ToString::to_string)
+            .or_else(|| {
+                self.legacy_tool_plane
+                    .default_core_adapter_name()
+                    .map(std::string::ToString::to_string)
+            })
+            .unwrap_or_else(|| "default".to_owned());
+        self.execute_legacy_tool_core_with(
+            pack_id,
+            token,
+            required_capabilities,
+            resolved_core_adapter.as_str(),
+            request,
+            policy_context,
+            |request| self.legacy_tool_plane.execute_core(core_name, request),
+        )
+        .await
+    }
+
+    /// Govern one app-owned legacy fallback without exposing typed Context to it.
+    ///
+    /// The callback receives only the authorized legacy request. App runtime
+    /// owners may capture session-specific executor inputs, but the kernel's
+    /// registered adapter contract remains context-free and cannot re-enter the
+    /// typed tool plane. Delete this boundary with the last legacy tool caller.
+    pub async fn execute_legacy_tool_core_with<F, Fut>(
+        &self,
+        pack_id: &str,
+        token: &CapabilityToken,
+        required_capabilities: &BTreeSet<Capability>,
+        adapter_name: &str,
+        request: ToolCoreRequest,
+        policy_context: &C::Cx<'_>,
+        execute: F,
+    ) -> Result<ToolCoreOutcome, KernelError>
+    where
+        F: FnOnce(ToolCoreRequest) -> Fut,
+        Fut: Future<Output = Result<ToolCoreOutcome, crate::errors::ToolPlaneError>>,
+    {
         let pack = self.pack_manifest(pack_id)?;
         let ToolCoreRequest { tool_name, payload } = request;
         let (now, payload) = self
@@ -882,22 +937,11 @@ where
                 payload,
             )
             .await?;
-        let resolved_core_adapter = core_name
-            .map(std::string::ToString::to_string)
-            .or_else(|| {
-                self.legacy_tool_plane
-                    .default_core_adapter_name()
-                    .map(std::string::ToString::to_string)
-            })
-            .unwrap_or_else(|| "default".to_owned());
-        let request = ToolCoreRequest {
+        let outcome = execute(ToolCoreRequest {
             tool_name: tool_name.clone(),
             payload,
-        };
-        let outcome = self
-            .legacy_tool_plane
-            .execute_core(core_name, request)
-            .await?;
+        })
+        .await?;
 
         self.record_plane_invocation(PlaneInvocationRecord {
             timestamp_epoch_s: now,
@@ -905,7 +949,7 @@ where
             pack_id: &pack.pack_id,
             plane: ExecutionPlane::Tool,
             tier: PlaneTier::Core,
-            primary_adapter: resolved_core_adapter,
+            primary_adapter: adapter_name.to_owned(),
             delegated_core_adapter: None,
             operation: tool_name,
             required_capabilities,
@@ -1113,7 +1157,12 @@ where
         let action = LegacyKernelAction::new(operation, required_capabilities.clone(), payload);
         let granted = match self.policy.grant(ctx, action).await {
             Ok(grant) => grant.into_granted(),
-            Err(error) => return Err(KernelError::Policy(policy_engine_error(error))),
+            Err(error) => {
+                return Err(KernelError::Policy(PolicyError::ExtensionDenied {
+                    extension: "policy-engine".to_owned(),
+                    reason: error.to_string(),
+                }));
+            }
         };
 
         // Permission-capable policy may have awaited an external authority.

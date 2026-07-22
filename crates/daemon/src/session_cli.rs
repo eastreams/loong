@@ -133,7 +133,7 @@ pub fn collect_session_search_artifact(
     };
 
     let session_store_config = mvp::session::store::SessionStoreConfig::from(&memory_config);
-    let payload = mvp::tools::execute_app_tool_with_config(
+    let payload = mvp::tools::execute_legacy_app_tool_with_config(
         request,
         &scope_session_id,
         &session_store_config,

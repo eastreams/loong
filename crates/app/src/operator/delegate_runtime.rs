@@ -1,13 +1,13 @@
 use std::path::PathBuf;
 
+use loong_contracts::Capabilities;
 use serde_json::{Value, json};
 
 use crate::config::LoongConfig;
 use crate::conversation::{
-    ConstrainedSubagentContractView, ConstrainedSubagentExecution, ConstrainedSubagentIdentity,
-    ConstrainedSubagentIsolation, ConstrainedSubagentMode, ConstrainedSubagentOwnerKind,
-    ConstrainedSubagentProfile, ConstrainedSubagentTerminalReason, ConversationRuntimeBinding,
-    DelegateBuiltinProfile,
+    ConstrainedSubagentExecution, ConstrainedSubagentIdentity, ConstrainedSubagentIsolation,
+    ConstrainedSubagentMode, ConstrainedSubagentOwnerKind, ConstrainedSubagentProfile,
+    ConstrainedSubagentTerminalReason, DelegateBuiltinProfile,
 };
 use crate::runtime_self_continuity::RuntimeSelfContinuity;
 use crate::session::frozen_result::capture_frozen_result;
@@ -41,69 +41,9 @@ pub(crate) struct DelegateChildExecutionPolicy {
     pub timeout_seconds: u64,
     pub allow_shell_in_child: bool,
     pub child_tool_allowlist: Vec<String>,
+    pub capability_ceiling: Capabilities,
     pub runtime_narrowing: ToolRuntimeNarrowing,
     pub workspace_root: Option<PathBuf>,
-}
-
-pub(crate) fn load_delegate_execution(
-    repo: &SessionRepository,
-    session_id: &str,
-) -> Result<Option<ConstrainedSubagentExecution>, String> {
-    let events = repo.list_delegate_lifecycle_events(session_id)?;
-    let execution = events.into_iter().rev().find_map(|event| {
-        let event_kind = event.event_kind.as_str();
-        let is_delegate_lifecycle_event =
-            matches!(event_kind, "delegate_queued" | "delegate_started");
-        if !is_delegate_lifecycle_event {
-            return None;
-        }
-
-        ConstrainedSubagentExecution::from_event_payload(&event.payload_json)
-    });
-    Ok(execution)
-}
-
-pub(crate) fn derive_subagent_profile_from_lineage(
-    repo: &SessionRepository,
-    session_id: &str,
-    max_depth: usize,
-) -> Result<Option<ConstrainedSubagentProfile>, String> {
-    let session_graph = OperatorSessionGraph::new(repo);
-    let depth_result = session_graph.lineage_depth(session_id);
-    let depth = match depth_result {
-        Ok(depth) => depth,
-        Err(error)
-            if error.starts_with("session_lineage_broken:")
-                || error.starts_with("session_lineage_cycle_detected:") =>
-        {
-            return Ok(None);
-        }
-        Err(error) => {
-            let message = format!(
-                "compute session lineage depth for delegate runtime contract failed: {error}"
-            );
-            return Err(message);
-        }
-    };
-
-    let profile = ConstrainedSubagentProfile::for_child_depth(depth, max_depth);
-    Ok(Some(profile))
-}
-
-pub(crate) fn resolve_delegate_child_contract(
-    repo: &SessionRepository,
-    session_id: &str,
-    max_depth: usize,
-) -> Result<Option<ConstrainedSubagentContractView>, String> {
-    let execution = load_delegate_execution(repo, session_id)?;
-    if let Some(execution) = execution {
-        let contract = execution.contract_view();
-        return Ok(Some(contract));
-    }
-
-    let profile = derive_subagent_profile_from_lineage(repo, session_id, max_depth)?;
-    let contract = profile.map(ConstrainedSubagentContractView::from_profile);
-    Ok(contract)
 }
 
 pub(crate) fn next_delegate_child_depth(
@@ -117,7 +57,6 @@ pub(crate) fn next_delegate_child_depth(
 
 pub(crate) fn build_delegate_child_lifecycle_seed(
     config: &LoongConfig,
-    binding: ConversationRuntimeBinding<'_>,
     mode: ConstrainedSubagentMode,
     next_child_depth: usize,
     active_children: usize,
@@ -132,7 +71,6 @@ pub(crate) fn build_delegate_child_lifecycle_seed(
 ) -> DelegateChildLifecycleSeed {
     let execution = build_delegate_child_execution(
         config,
-        binding,
         mode,
         next_child_depth,
         active_children,
@@ -156,14 +94,12 @@ pub(crate) fn build_delegate_child_lifecycle_seed(
 
 fn build_delegate_child_execution(
     config: &LoongConfig,
-    binding: ConversationRuntimeBinding<'_>,
     mode: ConstrainedSubagentMode,
     next_child_depth: usize,
     active_children: usize,
     identity: Option<ConstrainedSubagentIdentity>,
     execution_policy: &DelegateChildExecutionPolicy,
 ) -> ConstrainedSubagentExecution {
-    let kernel_bound = binding.is_context_bound();
     let profile = ConstrainedSubagentProfile::for_child_depth(
         next_child_depth,
         config.tools.delegate.max_depth,
@@ -180,9 +116,9 @@ fn build_delegate_child_execution(
         timeout_seconds: execution_policy.timeout_seconds,
         allow_shell_in_child: execution_policy.allow_shell_in_child,
         child_tool_allowlist: execution_policy.child_tool_allowlist.clone(),
+        capability_ceiling: execution_policy.capability_ceiling.clone(),
         workspace_root: execution_policy.workspace_root.clone(),
         runtime_narrowing: execution_policy.runtime_narrowing.clone(),
-        kernel_bound,
         identity,
         profile: Some(profile),
     }
@@ -604,14 +540,9 @@ mod tests {
 
     use super::*;
     use crate::config::LoongConfig;
-    use crate::session::repository::{NewSessionEvent, NewSessionRecord};
+    use crate::session::repository::NewSessionRecord;
     use crate::session::store::SessionStoreConfig;
     use crate::trust::extract_trust_event_payload;
-
-    fn isolated_repo(test_name: &str) -> SessionRepository {
-        let (repo, _sqlite_path) = isolated_repo_with_path(test_name);
-        repo
-    }
 
     fn isolated_repo_with_path(test_name: &str) -> (SessionRepository, std::path::PathBuf) {
         let sqlite_path = std::env::temp_dir().join(format!(
@@ -630,93 +561,6 @@ mod tests {
     }
 
     #[test]
-    fn resolve_delegate_child_contract_falls_back_to_lineage_profile() {
-        let repo = isolated_repo("lineage-fallback");
-        repo.create_session(NewSessionRecord {
-            session_id: "root-session".to_owned(),
-            kind: SessionKind::Root,
-            parent_session_id: None,
-            label: None,
-            state: SessionState::Ready,
-        })
-        .expect("create root session");
-        repo.create_session(NewSessionRecord {
-            session_id: "child-session".to_owned(),
-            kind: SessionKind::DelegateChild,
-            parent_session_id: Some("root-session".to_owned()),
-            label: None,
-            state: SessionState::Ready,
-        })
-        .expect("create child session");
-
-        let contract =
-            resolve_delegate_child_contract(&repo, "child-session", 2).expect("resolve contract");
-        let profile = contract.and_then(|contract| contract.profile);
-
-        assert_eq!(
-            profile,
-            Some(ConstrainedSubagentProfile::for_child_depth(1, 2))
-        );
-    }
-
-    #[test]
-    fn resolve_delegate_child_contract_prefers_persisted_execution() {
-        let repo = isolated_repo("persisted-execution");
-        repo.create_session(NewSessionRecord {
-            session_id: "root-session".to_owned(),
-            kind: SessionKind::Root,
-            parent_session_id: None,
-            label: None,
-            state: SessionState::Ready,
-        })
-        .expect("create root session");
-        repo.create_session(NewSessionRecord {
-            session_id: "child-session".to_owned(),
-            kind: SessionKind::DelegateChild,
-            parent_session_id: Some("root-session".to_owned()),
-            label: None,
-            state: SessionState::Ready,
-        })
-        .expect("create child session");
-        repo.append_event(NewSessionEvent {
-            session_id: "child-session".to_owned(),
-            event_kind: "delegate_started".to_owned(),
-            actor_session_id: Some("root-session".to_owned()),
-            payload_json: json!({
-                "task": "research",
-                "execution": {
-                    "mode": "inline",
-                    "depth": 1,
-                    "max_depth": 3,
-                    "active_children": 0,
-                    "max_active_children": 2,
-                    "timeout_seconds": 60,
-                    "allow_shell_in_child": false,
-                    "child_tool_allowlist": ["read"],
-                    "kernel_bound": false,
-                    "runtime_narrowing": {
-                        "browser": {
-                            "max_sessions": 1
-                        }
-                    }
-                }
-            }),
-        })
-        .expect("append event");
-
-        let contract =
-            resolve_delegate_child_contract(&repo, "child-session", 3).expect("resolve contract");
-        let contract = contract.expect("resolved contract");
-        let profile = contract.profile;
-
-        assert_eq!(
-            profile,
-            Some(ConstrainedSubagentProfile::for_child_depth(1, 3))
-        );
-        assert_eq!(contract.runtime_narrowing.browser.max_sessions, Some(1));
-    }
-
-    #[test]
     fn build_delegate_child_lifecycle_seed_uses_mode_specific_state_and_event_kind() {
         let config = LoongConfig::default();
         let execution_policy = DelegateChildExecutionPolicy {
@@ -726,12 +570,12 @@ mod tests {
             timeout_seconds: 42,
             allow_shell_in_child: false,
             child_tool_allowlist: config.tools.delegate.child_tool_allowlist.clone(),
+            capability_ceiling: Capabilities::new(),
             runtime_narrowing: config.tools.delegate.child_runtime.runtime_narrowing(),
             workspace_root: None,
         };
         let seed = build_delegate_child_lifecycle_seed(
             &config,
-            ConversationRuntimeBinding::AdvisoryOnly,
             ConstrainedSubagentMode::Async,
             1,
             0,
@@ -762,12 +606,12 @@ mod tests {
             timeout_seconds: 60,
             allow_shell_in_child: false,
             child_tool_allowlist: config.tools.delegate.child_tool_allowlist.clone(),
+            capability_ceiling: Capabilities::new(),
             runtime_narrowing: config.tools.delegate.child_runtime.runtime_narrowing(),
             workspace_root: None,
         };
         let seed = build_delegate_child_lifecycle_seed(
             &config,
-            ConversationRuntimeBinding::AdvisoryOnly,
             ConstrainedSubagentMode::Inline,
             1,
             0,
@@ -911,9 +755,9 @@ mod tests {
             timeout_seconds: 60,
             allow_shell_in_child: false,
             child_tool_allowlist: vec!["read".to_owned(), "write".to_owned(), "edit".to_owned()],
+            capability_ceiling: loong_contracts::Capabilities::new(),
             workspace_root: None,
             runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
-            kernel_bound: false,
             identity: None,
             profile: Some(crate::conversation::ConstrainedSubagentProfile::for_child_depth(1, 1)),
         };

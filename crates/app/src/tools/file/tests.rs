@@ -7,28 +7,32 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use loong_contracts::{
     ActionExecutionEvent, AuditEvent, AuditEventKind, AuthorizationAttempt,
     AuthorizationAttemptEvent, AuthorizationPolicyEvent, AuthorizationTerminalOutcome, Capability,
-    ExecutionRoute, HarnessKind, ToolCoreOutcome, ToolCoreRequest, ToolPath,
+    ExecutionRoute, HarnessKind, ToolPath,
 };
 use loong_kernel::{
     InMemoryAuditSink, Kernel, SystemClock, VerticalPackManifest,
     access::fs::{
-        FsPathAllowedRootsPolicy, FsReadAllowPolicy, FsReadFilenameDenyPolicy,
-        FsResolvePathAllowPolicy, FsWriteAllowPolicy,
+        FsAtomicWriteAllowPolicy, FsContentSearchAllowPolicy, FsCopyFileAllowPolicy,
+        FsCreateDirAllAllowPolicy, FsGlobAllowPolicy, FsInspectPathAllowPolicy,
+        FsPathAllowedRootsPolicy, FsReadAllowPolicy, FsReadDirAllowPolicy,
+        FsReadFilenameDenyPolicy, FsRemoveDirAllAllowPolicy, FsRemoveFileAllowPolicy,
+        FsRenameAllowPolicy, FsResolvePathAllowPolicy, FsWriteAllowPolicy,
     },
-    policy::{FsContentSearchAllowPolicy, FsGlobAllowPolicy, PolicyPipelineBuilder},
+    policy::PolicyPipelineBuilder,
 };
+use loong_runtime::tool_plane::ToolRegistration;
 use serde_json::json;
 
 use super::*;
-use crate::context::AppContextFactory;
+use crate::context::RuntimeContextFactory;
 use crate::tools::file_path::resolve_safe_file_path_with_config;
 use crate::tools::runtime_config::ToolRuntimeConfig;
 use crate::tools::runtime_events::{
     ToolFileChangeKind, ToolRuntimeEvent, ToolRuntimeEventSink, with_tool_runtime_event_sink,
 };
 
-// Path validation is covered by contracts; file-tool tests use valid catalog
-// identities so they can focus on access, grant, and fallback behavior.
+// Contracts tests path validation; file fixtures use valid one-segment tool
+// identities and focus on access, grant, and fallback behavior.
 #[allow(clippy::expect_used)]
 fn tool_path(segment: &str) -> ToolPath {
     ToolPath::new([segment]).expect("test tool path must be valid")
@@ -58,8 +62,9 @@ impl ToolRuntimeEventSink for RecordingRuntimeSink {
 /// Join execution evidence to the authorization action that owns tool identity.
 fn terminal_action_execution<'a>(
     events: &'a [AuditEvent],
-    operation: &str,
+    path: &ToolPath,
 ) -> Option<&'a ActionExecutionEvent> {
+    let operation = path.to_string();
     let grant_id = events.iter().find_map(|event| {
         let AuditEventKind::Authorization { evidence } = &event.kind else {
             return None;
@@ -133,182 +138,91 @@ fn test_pack() -> VerticalPackManifest {
     ]))
 }
 
-async fn execute_file_read_with_test_context(
-    request: ToolCoreRequest,
-    config: &ToolRuntimeConfig,
-) -> Result<ToolCoreOutcome, String> {
-    let mut policy = PolicyPipelineBuilder::<AppContextFactory>::new_legacy_allow_fallback()
-        .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
-        .with_policy(FsResolvePathAllowPolicy::target())
-        .with_policy(FsPathAllowedRootsPolicy::target());
-    if !config.fs.deny_read_filenames.is_empty() {
-        policy.push_policy(FsReadFilenameDenyPolicy::new(
-            config.fs.deny_read_filenames.clone(),
-        ));
+/// Owned test boundary for direct typed Tool invocation.
+///
+/// It centralizes policy/bootstrap setup only; tests still spell out
+/// `context().tool(path).invoke(payload)` so legacy envelopes cannot creep back
+/// into the asserted execution path.
+struct TypedFileTestRuntime {
+    runtime: Arc<loong_runtime::runtime::Runtime<RuntimeContextFactory>>,
+    session: crate::context::Session,
+    audit: Arc<InMemoryAuditSink>,
+}
+
+impl TypedFileTestRuntime {
+    fn new(config: &ToolRuntimeConfig) -> Result<Self, String> {
+        Self::with_capabilities(
+            config,
+            loong_contracts::Capabilities::from([
+                Capability::InvokeTool,
+                Capability::FilesystemRead,
+                Capability::FilesystemWrite,
+            ]),
+        )
     }
-    policy.push_policy(FsReadAllowPolicy);
-    policy.push_policy(FsWriteAllowPolicy);
-    policy.push_policy(FsGlobAllowPolicy);
-    policy.push_policy(FsContentSearchAllowPolicy);
-    let mut kernel = Kernel::<AppContextFactory>::with_policy_runtime(
-        policy,
-        Arc::new(SystemClock),
-        Arc::new(InMemoryAuditSink::default()),
-    );
-    let pack = test_pack();
-    kernel
-        .register_pack(pack)
-        .map_err(|error| format!("register pack failed: {error}"))?;
-    let token = kernel
-        .issue_token("test-pack", "test-agent", 60)
-        .map_err(|error| format!("issue token failed: {error}"))?;
-    let app_ctx = crate::AppContext::new(
-        Arc::new(loong_runtime::runtime::Runtime::new(
+
+    fn with_capabilities(
+        config: &ToolRuntimeConfig,
+        capabilities: loong_contracts::Capabilities,
+    ) -> Result<Self, String> {
+        let audit = Arc::new(InMemoryAuditSink::default());
+        let mut policy = PolicyPipelineBuilder::<RuntimeContextFactory>::new()
+            .with_pre_policy(crate::tools::plane::ToolVisibilityPolicy)
+            .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
+            .with_policy(FsResolvePathAllowPolicy::target())
+            .with_policy(FsResolvePathAllowPolicy::entry())
+            .with_policy(FsPathAllowedRootsPolicy::target())
+            .with_policy(FsPathAllowedRootsPolicy::entry());
+        if !config.fs.deny_read_filenames.is_empty() {
+            policy.push_policy(FsReadFilenameDenyPolicy::new(
+                config.fs.deny_read_filenames.clone(),
+            ));
+        }
+        policy.push_policy(FsReadAllowPolicy);
+        policy.push_policy(FsWriteAllowPolicy);
+        policy.push_policy(FsAtomicWriteAllowPolicy);
+        policy.push_policy(FsCopyFileAllowPolicy);
+        policy.push_policy(FsCreateDirAllAllowPolicy);
+        policy.push_policy(FsRemoveFileAllowPolicy);
+        policy.push_policy(FsRemoveDirAllAllowPolicy);
+        policy.push_policy(FsRenameAllowPolicy);
+        policy.push_policy(FsInspectPathAllowPolicy);
+        policy.push_policy(FsGlobAllowPolicy);
+        policy.push_policy(FsReadDirAllowPolicy);
+        policy.push_policy(FsContentSearchAllowPolicy);
+        let kernel = Kernel::<RuntimeContextFactory>::with_policy_runtime(
+            policy,
+            Arc::new(SystemClock),
+            audit.clone(),
+        );
+        let runtime = Arc::new(loong_runtime::runtime::Runtime::new(
             kernel,
             crate::tools::plane::test_builtin_tool_plane(),
-        )),
-        token,
-        config.clone(),
-        "test-session",
-        crate::tools::runtime_tool_view(),
-        loong_contracts::GovernedSessionMode::MutatingCapable,
-    )?;
-    let execution_context = app_ctx.for_invocation(config)?;
-    let _ = config;
-    let outcome = execution_context
-        .tool(tool_path("read"))
-        .map_err(|error| error.to_string())?
-        .invoke(request.payload)
-        .await
-        .map_err(|error| error.to_string())?;
-    Ok(ToolCoreOutcome {
-        status: "ok".to_owned(),
-        payload: outcome,
-    })
-}
-
-async fn execute_request_via_kernel_tool_registry(
-    request: ToolCoreRequest,
-    config: &ToolRuntimeConfig,
-) -> Result<(ToolCoreOutcome, Arc<InMemoryAuditSink>), crate::tools::ToolRequestError> {
-    execute_request_via_kernel_tool_registry_with_capabilities(
-        request,
-        config,
-        BTreeSet::from([
-            Capability::InvokeTool,
-            Capability::FilesystemRead,
-            Capability::FilesystemWrite,
-        ]),
-    )
-    .await
-}
-
-async fn execute_request_via_kernel_tool_registry_result(
-    request: ToolCoreRequest,
-    config: &ToolRuntimeConfig,
-) -> (
-    Result<ToolCoreOutcome, crate::tools::ToolRequestError>,
-    Arc<InMemoryAuditSink>,
-) {
-    execute_request_via_kernel_tool_registry_with_capabilities_result(
-        request,
-        config,
-        BTreeSet::from([
-            Capability::InvokeTool,
-            Capability::FilesystemRead,
-            Capability::FilesystemWrite,
-        ]),
-    )
-    .await
-}
-
-async fn execute_request_via_kernel_tool_registry_with_capabilities(
-    request: ToolCoreRequest,
-    config: &ToolRuntimeConfig,
-    capabilities: BTreeSet<Capability>,
-) -> Result<(ToolCoreOutcome, Arc<InMemoryAuditSink>), crate::tools::ToolRequestError> {
-    let (outcome, audit) = execute_request_via_kernel_tool_registry_with_capabilities_result(
-        request,
-        config,
-        capabilities,
-    )
-    .await;
-    outcome.map(|outcome| (outcome, audit))
-}
-
-// Invalid fixture setup may panic; production bootstrap propagates every
-// registration and token error instead.
-#[allow(clippy::expect_used)]
-async fn execute_request_via_kernel_tool_registry_with_capabilities_result(
-    request: ToolCoreRequest,
-    config: &ToolRuntimeConfig,
-    capabilities: BTreeSet<Capability>,
-) -> (
-    Result<ToolCoreOutcome, crate::tools::ToolRequestError>,
-    Arc<InMemoryAuditSink>,
-) {
-    let audit = Arc::new(InMemoryAuditSink::default());
-    let mut policy = PolicyPipelineBuilder::<AppContextFactory>::new_legacy_allow_fallback()
-        .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
-        .with_policy(FsResolvePathAllowPolicy::target())
-        .with_policy(FsPathAllowedRootsPolicy::target());
-    if !config.fs.deny_read_filenames.is_empty() {
-        policy.push_policy(FsReadFilenameDenyPolicy::new(
-            config.fs.deny_read_filenames.clone(),
         ));
+        let tool_view = crate::tools::runtime_visible_tool_view(runtime.as_ref(), config, None);
+        let session = crate::context::Session::root(
+            runtime.as_ref(),
+            "test-agent",
+            "test-session",
+            loong_contracts::GovernedSessionMode::MutatingCapable,
+            capabilities,
+            config.clone(),
+            crate::memory::runtime_config::MemoryRuntimeConfig::default(),
+            tool_view,
+            None,
+            None,
+        )?;
+
+        Ok(Self {
+            runtime,
+            session,
+            audit,
+        })
     }
-    policy.push_policy(FsReadAllowPolicy);
-    policy.push_policy(FsWriteAllowPolicy);
-    policy.push_policy(FsGlobAllowPolicy);
-    policy.push_policy(FsContentSearchAllowPolicy);
-    let mut kernel = Kernel::<AppContextFactory>::with_policy_runtime(
-        policy,
-        Arc::new(SystemClock),
-        audit.clone(),
-    );
-    let pack = test_pack_with_capabilities(capabilities);
-    kernel.register_pack(pack).expect("register test pack");
-    crate::tools::register_kernel_tools(
-        &mut kernel,
-        config.clone(),
-        crate::config::ObservabilityConfig::runtime_default(),
-    )
-    .expect("register test kernel tools");
-    let token = kernel
-        .issue_token("test-pack", "test-agent", 60)
-        .expect("issue test token");
-    let app_ctx = crate::AppContext::new(
-        Arc::new(loong_runtime::runtime::Runtime::new(
-            kernel,
-            crate::tools::plane::test_builtin_tool_plane(),
-        )),
-        token,
-        config.clone(),
-        "test-session",
-        crate::tools::runtime_tool_view(),
-        loong_contracts::GovernedSessionMode::MutatingCapable,
-    )
-    .expect("test app context");
-    let outcome = crate::tools::execute_kernel_tool_request(&app_ctx, request, None, false).await;
-    (outcome, audit)
-}
 
-fn tool_invoke_request(
-    tool_id: &str,
-    arguments: serde_json::Value,
-) -> Result<ToolCoreRequest, String> {
-    let lease_payload = serde_json::Map::new();
-    let lease =
-        crate::tools::issue_tool_lease(crate::tools::canonical_tool_name(tool_id), &lease_payload)?;
-
-    Ok(ToolCoreRequest {
-        tool_name: "tool.invoke".to_owned(),
-        payload: json!({
-            "tool_id": tool_id,
-            "lease": lease,
-            "arguments": arguments,
-        }),
-    })
+    fn context(&self) -> Result<crate::Context<'_>, crate::context::ContextSessionError> {
+        crate::Context::new(self.runtime.as_ref(), &self.session)
+    }
 }
 
 #[cfg(unix)]
@@ -348,25 +262,26 @@ async fn file_read_supports_line_window_pagination() {
         file_root: Some(root),
         ..ToolRuntimeConfig::default()
     };
-    let request = ToolCoreRequest {
-        tool_name: "file.read".to_owned(),
-        payload: json!({
+    let fixture = TypedFileTestRuntime::new(&config).expect("typed file fixture");
+    let outcome = fixture
+        .context()
+        .expect("typed file context")
+        .tool(tool_path("read"))
+        .expect("read should be registered")
+        .invoke(json!({
             "path": "notes.txt",
             "offset": 2,
             "limit": 2
-        }),
-    };
-
-    let outcome = execute_file_read_with_test_context(request, &config)
+        }))
         .await
         .expect("file.read window should succeed");
 
-    assert_eq!(outcome.payload["content"], json!("beta\ngamma"));
-    assert_eq!(outcome.payload["line_start"], json!(2));
-    assert_eq!(outcome.payload["line_end"], json!(3));
-    assert_eq!(outcome.payload["total_lines"], json!(4));
-    assert_eq!(outcome.payload["next_offset"], json!(4));
-    assert_eq!(outcome.payload["truncated"], json!(false));
+    assert_eq!(outcome["content"], json!("beta\ngamma"));
+    assert_eq!(outcome["line_start"], json!(2));
+    assert_eq!(outcome["line_end"], json!(3));
+    assert_eq!(outcome["total_lines"], json!(4));
+    assert_eq!(outcome["next_offset"], json!(4));
+    assert_eq!(outcome["truncated"], json!(false));
     let _ = fs::remove_dir_all(base);
 }
 
@@ -381,26 +296,28 @@ async fn kernel_routed_file_read_uses_typed_tool_registry() {
         file_root: Some(root),
         ..ToolRuntimeConfig::default()
     };
-    let request = ToolCoreRequest {
-        tool_name: "file.read".to_owned(),
-        payload: json!({
+    let fixture = TypedFileTestRuntime::new(&config).expect("typed file fixture");
+    let outcome = fixture
+        .context()
+        .expect("typed file context")
+        .tool(tool_path("read"))
+        .expect("read should be registered")
+        .invoke(json!({
             "path": "notes.txt",
             "offset": 2,
             "limit": 1
-        }),
-    };
-
-    let (outcome, audit) = execute_request_via_kernel_tool_registry(request, &config)
+        }))
         .await
         .expect("file.read should execute through typed registry");
 
-    assert_eq!(outcome.status, "ok");
-    assert_eq!(outcome.payload["content"], json!("beta"));
-    assert_eq!(outcome.payload["line_start"], json!(2));
-    assert_eq!(outcome.payload["line_end"], json!(2));
-    let events = audit.snapshot();
+    assert_eq!(outcome["content"], json!("beta"));
+    assert_eq!(outcome["line_start"], json!(2));
+    assert_eq!(outcome["line_end"], json!(2));
+    assert!(outcome.get("adapter").is_none());
+    assert!(outcome.get("tool_name").is_none());
+    let events = fixture.audit.snapshot();
     assert!(matches!(
-        terminal_action_execution(&events, "/read"),
+        terminal_action_execution(&events, &tool_path("read")),
         Some(ActionExecutionEvent::Completed)
     ));
     assert!(!events.iter().any(|event| {
@@ -416,51 +333,7 @@ async fn kernel_routed_file_read_uses_typed_tool_registry() {
 }
 
 #[tokio::test]
-async fn kernel_routed_tool_invoke_file_read_uses_typed_tool_registry() {
-    let base = unique_temp_dir("loong-tool-invoke-read-typed-registry");
-    let root = base.join("root");
-    fs::create_dir_all(&root).expect("create root");
-    fs::write(root.join("notes.txt"), "alpha\nbeta").expect("write fixture");
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root),
-        ..ToolRuntimeConfig::default()
-    };
-    let request = tool_invoke_request(
-        "file.read",
-        json!({
-            "path": "notes.txt",
-            "offset": 2,
-            "limit": 1
-        }),
-    )
-    .unwrap_or_else(|error| panic!("issue test tool lease: {error}"));
-
-    let (outcome, audit) = execute_request_via_kernel_tool_registry(request, &config)
-        .await
-        .expect("tool.invoke file.read should execute through typed registry");
-
-    assert_eq!(outcome.status, "ok");
-    assert_eq!(outcome.payload["content"], json!("beta"));
-    let events = audit.snapshot();
-    assert!(matches!(
-        terminal_action_execution(&events, "/read"),
-        Some(ActionExecutionEvent::Completed)
-    ));
-    assert!(!events.iter().any(|event| {
-        matches!(
-            &event.kind,
-            loong_kernel::AuditEventKind::PlaneInvoked {
-                primary_adapter,
-                ..
-            } if primary_adapter.starts_with("legacy:")
-        )
-    }));
-    let _ = fs::remove_dir_all(base);
-}
-
-#[tokio::test]
-async fn kernel_routed_tool_invoke_capability_override_narrows_child_access_caps() {
+async fn capability_override_narrows_child_access_caps() {
     let base = unique_temp_dir("loong-tool-invoke-read-capability-override");
     let root = base.join("root");
     fs::create_dir_all(&root).expect("create root");
@@ -470,20 +343,16 @@ async fn kernel_routed_tool_invoke_capability_override_narrows_child_access_caps
         file_root: Some(root),
         ..ToolRuntimeConfig::default()
     };
-    let mut request = tool_invoke_request(
-        "file.read",
-        json!({
+    let fixture = TypedFileTestRuntime::new(&config).expect("typed file fixture");
+    let error = fixture
+        .context()
+        .expect("typed file context")
+        .tool(tool_path("read"))
+        .expect("read should be registered")
+        .with_capabilities_override(loong_contracts::Capabilities::new())
+        .invoke(json!({
             "path": "notes.txt",
-        }),
-    )
-    .unwrap_or_else(|error| panic!("issue test tool lease: {error}"));
-    request
-        .payload
-        .as_object_mut()
-        .expect("tool.invoke payload object")
-        .insert("capabilities_override".to_owned(), json!([]));
-
-    let error = execute_request_via_kernel_tool_registry(request, &config)
+        }))
         .await
         .expect_err("empty override should remove filesystem read from child context");
 
@@ -496,7 +365,7 @@ async fn kernel_routed_tool_invoke_capability_override_narrows_child_access_caps
 }
 
 #[tokio::test]
-async fn kernel_routed_tool_invoke_capability_override_rejects_added_capabilities() {
+async fn capability_override_rejects_added_capabilities() {
     let base = unique_temp_dir("loong-tool-invoke-read-capability-escalation");
     let root = base.join("root");
     fs::create_dir_all(&root).expect("create root");
@@ -505,36 +374,29 @@ async fn kernel_routed_tool_invoke_capability_override_rejects_added_capabilitie
         file_root: Some(root),
         ..ToolRuntimeConfig::default()
     };
-    let mut request = tool_invoke_request(
-        "file.read",
-        json!({
+    let fixture = TypedFileTestRuntime::new(&config).expect("typed file fixture");
+    let error = fixture
+        .context()
+        .expect("typed file context")
+        .tool(tool_path("read"))
+        .expect("read should be registered")
+        .with_capabilities_override(loong_contracts::Capabilities::from([
+            Capability::FilesystemWrite,
+        ]))
+        .invoke(json!({
             "path": "notes.txt",
-        }),
-    )
-    .unwrap_or_else(|error| panic!("issue test tool lease: {error}"));
-    request
-        .payload
-        .as_object_mut()
-        .expect("tool.invoke payload object")
-        .insert(
-            "capabilities_override".to_owned(),
-            json!(["filesystem_write"]),
-        );
-
-    let error = execute_request_via_kernel_tool_registry(request, &config)
+        }))
         .await
         .expect_err("override must not add capabilities beyond read descriptor");
 
     assert!(matches!(
         error,
-        crate::tools::ToolRequestError::Invocation(
-            loong_runtime::tool_plane::error::ToolInvocationError::CapabilityOverride(
-                loong_runtime::tool_plane::error::CapabilityOverrideError {
-                    path,
-                    requested,
-                    declared,
-                }
-            )
+        loong_runtime::tool_plane::error::ToolInvocationError::CapabilityOverride(
+            loong_runtime::tool_plane::error::CapabilityOverrideError {
+                path,
+                requested,
+                declared,
+            }
         ) if path == tool_path("read")
             && requested == loong_contracts::Capabilities::from([Capability::FilesystemWrite])
             && declared == loong_contracts::Capabilities::from([Capability::FilesystemRead])
@@ -555,28 +417,26 @@ async fn kernel_routed_direct_read_glob_uses_typed_tool_registry() {
         file_root: Some(root),
         ..ToolRuntimeConfig::default()
     };
-    let request = ToolCoreRequest {
-        tool_name: "read".to_owned(),
-        payload: json!({
+    let fixture = TypedFileTestRuntime::new(&config).expect("typed file fixture");
+    let outcome = fixture
+        .context()
+        .expect("typed file context")
+        .tool(tool_path("read"))
+        .expect("read should be registered")
+        .invoke(json!({
             "pattern": "src/**/*.rs",
             "max_results": 10
-        }),
-    };
-
-    let (outcome, audit) = execute_request_via_kernel_tool_registry(request, &config)
+        }))
         .await
         .expect("read glob should execute through typed registry");
 
-    assert_eq!(outcome.status, "ok");
-    let matches = outcome.payload["matches"]
-        .as_array()
-        .expect("matches array");
+    let matches = outcome["matches"].as_array().expect("matches array");
     assert_eq!(matches.len(), 2);
     assert_eq!(matches[0]["path"], "src/lib.rs");
     assert_eq!(matches[1]["path"], "src/nested/mod.rs");
-    let events = audit.snapshot();
+    let events = fixture.audit.snapshot();
     assert!(matches!(
-        terminal_action_execution(&events, "/read"),
+        terminal_action_execution(&events, &tool_path("read")),
         Some(ActionExecutionEvent::Completed)
     ));
     assert!(!events.iter().any(|event| {
@@ -607,32 +467,30 @@ async fn kernel_routed_direct_read_query_uses_typed_tool_registry() {
         file_root: Some(root),
         ..ToolRuntimeConfig::default()
     };
-    let request = ToolCoreRequest {
-        tool_name: "read".to_owned(),
-        payload: json!({
+    let fixture = TypedFileTestRuntime::new(&config).expect("typed file fixture");
+    let outcome = fixture
+        .context()
+        .expect("typed file context")
+        .tool(tool_path("read"))
+        .expect("read should be registered")
+        .invoke(json!({
             "query": "hello world",
             "glob": "src/**/*.rs",
             "max_results": 5
-        }),
-    };
-
-    let (outcome, audit) = execute_request_via_kernel_tool_registry(request, &config)
+        }))
         .await
         .expect("read query should execute through typed registry");
 
-    assert_eq!(outcome.status, "ok");
-    let matches = outcome.payload["matches"]
-        .as_array()
-        .expect("matches array");
+    let matches = outcome["matches"].as_array().expect("matches array");
     let first = matches.first().expect("first match");
     assert_eq!(matches.len(), 1);
     assert_eq!(first["path"], "src/main.rs");
     assert_eq!(first["line"], 2);
     assert_eq!(first["column"], 15);
     assert_eq!(first["snippet"], "println!(\"hello world\");");
-    let events = audit.snapshot();
+    let events = fixture.audit.snapshot();
     assert!(matches!(
-        terminal_action_execution(&events, "/read"),
+        terminal_action_execution(&events, &tool_path("read")),
         Some(ActionExecutionEvent::Completed)
     ));
     assert!(!events.iter().any(|event| {
@@ -644,40 +502,6 @@ async fn kernel_routed_direct_read_query_uses_typed_tool_registry() {
             } if primary_adapter.starts_with("legacy:")
         )
     }));
-    let _ = fs::remove_dir_all(base);
-}
-
-#[tokio::test]
-async fn kernel_routed_file_read_rejects_reserved_internal_payload_by_default() {
-    let base = unique_temp_dir("loong-file-read-reserved-internal-context");
-    let root = base.join("root");
-    fs::create_dir_all(&root).expect("create root");
-    fs::write(root.join("notes.txt"), "alpha").expect("write fixture");
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root),
-        ..ToolRuntimeConfig::default()
-    };
-    let request = ToolCoreRequest {
-        tool_name: "file.read".to_owned(),
-        payload: json!({
-            "path": "notes.txt",
-            "_loong": {
-                "workspace_root": base.display().to_string()
-            }
-        }),
-    };
-
-    let error = execute_request_via_kernel_tool_registry(request, &config)
-        .await
-        .expect_err("untrusted reserved internal context should be rejected");
-
-    assert!(
-        error
-            .to_string()
-            .contains("payload._loong is reserved for trusted internal tool context"),
-        "expected reserved internal context rejection, got: {error}"
-    );
     let _ = fs::remove_dir_all(base);
 }
 
@@ -694,14 +518,15 @@ async fn kernel_routed_file_read_rejects_path_escape_through_typed_policy() {
         file_root: Some(root),
         ..ToolRuntimeConfig::default()
     };
-    let request = ToolCoreRequest {
-        tool_name: "file.read".to_owned(),
-        payload: json!({
+    let fixture = TypedFileTestRuntime::new(&config).expect("typed file fixture");
+    let error = fixture
+        .context()
+        .expect("typed file context")
+        .tool(tool_path("read"))
+        .expect("read should be registered")
+        .invoke(json!({
             "path": "../outside/secret.txt"
-        }),
-    };
-
-    let error = execute_request_via_kernel_tool_registry(request, &config)
+        }))
         .await
         .expect_err("path escape should be denied by typed fs policy");
 
@@ -723,26 +548,34 @@ async fn kernel_routed_file_read_reports_typed_input_error() {
         file_root: Some(root),
         ..ToolRuntimeConfig::default()
     };
-    let request = ToolCoreRequest {
-        tool_name: "file.read".to_owned(),
-        payload: json!({
+    let fixture = TypedFileTestRuntime::new(&config).expect("typed file fixture");
+    let error = fixture
+        .context()
+        .expect("typed file context")
+        .tool(tool_path("read"))
+        .expect("read should be registered")
+        .invoke(json!({
             "path": "notes.txt",
             "offset": 0
-        }),
-    };
+        }))
+        .await
+        .expect_err("typed read input error should fail before execution");
 
-    let (outcome, audit) = execute_request_via_kernel_tool_registry_result(request, &config).await;
-    let error = outcome.expect_err("typed read input error should fail before execution");
-
-    assert!(
-        format!("{error}").contains("read payload.offset must be a positive integer"),
-        "expected file read input error, got: {error}"
-    );
-    let events = audit.snapshot();
     assert!(matches!(
-        terminal_action_execution(&events, "/read"),
-        Some(ActionExecutionEvent::InputRejected { error })
-            if error.to_string().contains("read payload.offset must be a positive integer")
+        &error,
+        loong_runtime::tool_plane::error::ToolInvocationError::Dispatch {
+            source: loong_runtime::tool_plane::RegisteredToolError::Input(
+                loong_contracts::ToolInputError::InvalidField { field, reason }
+            ),
+            ..
+        } if field == "offset" && reason == "must be a positive integer"
+    ));
+    let events = fixture.audit.snapshot();
+    assert!(matches!(
+        terminal_action_execution(&events, &tool_path("read")),
+        Some(ActionExecutionEvent::InputRejected {
+            error: loong_contracts::ToolInputError::InvalidField { field, reason },
+        }) if field == "offset" && reason == "must be a positive integer"
     ));
     let _ = fs::remove_dir_all(base);
 }
@@ -756,10 +589,9 @@ async fn conversation_read_input_error_is_owned_and_audited_by_typed_tool() {
     let turn = ProviderTurn {
         assistant_text: String::new(),
         tool_intents: vec![ToolIntent {
-            tool_name: "read".to_owned(),
+            tool_name: "read".into(),
             args_json: json!({}),
             source: "provider_tool_call".to_owned(),
-            session_id: "test-session".to_owned(),
             turn_id: "typed-read-input-turn".to_owned(),
             tool_call_id: "typed-read-input-call".to_owned(),
         }],
@@ -771,20 +603,30 @@ async fn conversation_read_input_error_is_owned_and_audited_by_typed_tool() {
     let TurnResult::ToolError(failure) = result else {
         panic!("typed input rejection should interrupt the turn as a tool error");
     };
-    assert!(failure.reason.contains("direct_read_requires_one_of"));
+    assert!(matches!(
+        failure.tool_input.as_deref(),
+        Some(crate::conversation::turn_engine::ToolInputFailure {
+            path,
+            provider_name,
+            error: loong_contracts::ToolInputError::MissingOneOf { fields },
+            ..
+        }) if path == &tool_path("read")
+            && provider_name == "read"
+            && fields == &["path".to_owned(), "query".to_owned(), "pattern".to_owned()]
+    ));
     let events = harness.audit.snapshot();
     assert!(matches!(
-        terminal_action_execution(&events, "/read"),
-        Some(ActionExecutionEvent::InputRejected { error })
-            if error.to_string().contains("direct_read_requires_one_of")
+        terminal_action_execution(&events, &tool_path("read")),
+        Some(ActionExecutionEvent::InputRejected {
+            error: loong_contracts::ToolInputError::MissingOneOf { fields }
+        }) if fields == &["path".to_owned(), "query".to_owned(), "pattern".to_owned()]
     ));
 }
 
 #[tokio::test]
 async fn conversation_tool_invoke_preserves_empty_capability_override() {
-    use crate::conversation::ConversationRuntimeBinding;
     use crate::conversation::turn_engine::{
-        NoopAppToolDispatcher, ProviderTurn, ToolIntent, TurnEngine, TurnResult,
+        NoopLegacyToolDispatcher, ProviderTurn, ToolIntent, TurnEngine, TurnResult,
     };
 
     let root = unique_temp_dir("loong-conversation-tool-invoke-override");
@@ -795,12 +637,13 @@ async fn conversation_tool_invoke_preserves_empty_capability_override() {
         ..ToolRuntimeConfig::default()
     };
     let audit = Arc::new(InMemoryAuditSink::default());
-    let policy = PolicyPipelineBuilder::<AppContextFactory>::new_legacy_allow_fallback()
+    let policy = PolicyPipelineBuilder::<RuntimeContextFactory>::new_legacy_allow_fallback()
+        .with_pre_policy(crate::tools::plane::ToolVisibilityPolicy)
         .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
         .with_policy(FsResolvePathAllowPolicy::target())
         .with_policy(FsPathAllowedRootsPolicy::target())
         .with_policy(FsReadAllowPolicy);
-    let mut kernel = Kernel::<AppContextFactory>::with_policy_runtime(
+    let mut kernel = Kernel::<RuntimeContextFactory>::with_policy_runtime(
         policy,
         Arc::new(SystemClock),
         audit.clone(),
@@ -817,25 +660,43 @@ async fn conversation_tool_invoke_preserves_empty_capability_override() {
     tools
         .register(
             tool_path("config.import"),
-            loong_tools::file::ReadTool::new("config.import"),
+            ToolRegistration::discoverable("config.import"),
+            loong_tools::file::ReadTool,
         )
         .expect("register hidden typed test tool");
-    let app_ctx = crate::AppContext::new(
-        Arc::new(loong_runtime::runtime::Runtime::new(kernel, tools)),
-        token,
-        config,
+    let runtime = Arc::new(loong_runtime::runtime::Runtime::new(kernel, tools));
+    let session = crate::context::Session::root(
+        runtime.as_ref(),
+        "test-agent",
         "test-session",
-        crate::tools::runtime_tool_view(),
         loong_contracts::GovernedSessionMode::MutatingCapable,
+        token.allowed_capabilities.iter().copied().collect(),
+        config,
+        crate::memory::runtime_config::MemoryRuntimeConfig::default(),
+        crate::tools::runtime_tool_view(),
+        None,
+        None,
     )
-    .expect("build test context");
+    .expect("build test session");
+    let legacy_tools = crate::conversation::DefaultLegacyToolDispatcher::from_test_token(
+        Arc::clone(&runtime),
+        crate::session::store::SessionStoreConfig::default(),
+        crate::config::ToolConfig::default(),
+        token,
+    );
+    let owner = crate::test_support::TestRuntimeSession {
+        runtime,
+        session,
+        legacy_tools,
+    };
+    let ctx = owner.context();
     let arguments = serde_json::Map::from_iter([("path".to_owned(), json!("notes.txt"))]);
-    let lease = crate::tools::issue_tool_lease("config.import", &arguments)
+    let lease = crate::tools::issue_tool_lease(&tool_path("config.import"), &arguments)
         .expect("hidden typed tool lease should be issued");
     let turn = ProviderTurn {
         assistant_text: String::new(),
         tool_intents: vec![ToolIntent {
-            tool_name: "tool.invoke".to_owned(),
+            tool_name: "tool.invoke".into(),
             args_json: json!({
                 "tool_id": "config.import",
                 "lease": lease,
@@ -843,7 +704,6 @@ async fn conversation_tool_invoke_preserves_empty_capability_override() {
                 "capabilities_override": [],
             }),
             source: "provider_tool_call".to_owned(),
-            session_id: "test-session".to_owned(),
             turn_id: "typed-override-turn".to_owned(),
             tool_call_id: "typed-override-call".to_owned(),
         }],
@@ -851,13 +711,7 @@ async fn conversation_tool_invoke_preserves_empty_capability_override() {
     };
 
     let result = TurnEngine::new(1)
-        .execute_turn_in_context(
-            &turn,
-            &app_ctx,
-            &NoopAppToolDispatcher,
-            ConversationRuntimeBinding::Context(&app_ctx),
-            None,
-        )
+        .execute_turn_in_context(&turn, &ctx, &NoopLegacyToolDispatcher, None)
         .await;
 
     let TurnResult::FinalText(output) = result else {
@@ -866,11 +720,67 @@ async fn conversation_tool_invoke_preserves_empty_capability_override() {
     assert!(output.contains("missing capability: FilesystemRead"));
     let events = audit.snapshot();
     assert!(matches!(
-        terminal_action_execution(&events, "/config.import"),
+        terminal_action_execution(&events, &tool_path("config.import")),
         Some(ActionExecutionEvent::Failed { reason })
             if reason.contains("missing capability: FilesystemRead")
     ));
     let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn tool_invoke_does_not_alias_unregistered_file_write_path() {
+    use crate::conversation::turn_engine::{
+        NoopLegacyToolDispatcher, ProviderTurn, ToolIntent, TurnEngine, TurnResult,
+    };
+
+    let root = tempfile::tempdir().expect("temporary file root");
+    let target = root.path().join("must-not-exist.txt");
+    let mut config = crate::config::LoongConfig::default();
+    config.tools.file_root = Some(root.path().display().to_string());
+    config.tools.consent.default_mode = crate::config::ToolConsentMode::Full;
+    config.tools.approval.mode = crate::config::GovernedToolApprovalMode::Disabled;
+    let owner = crate::test_support::TestRuntimeSession::from_config(
+        &config,
+        "unregistered-file-write-session",
+        "test-agent",
+        loong_contracts::GovernedSessionMode::MutatingCapable,
+    )
+    .expect("typed runtime session");
+    let arguments = serde_json::Map::from_iter([
+        ("path".to_owned(), json!(target)),
+        ("content".to_owned(), json!("must not be written")),
+    ]);
+    let lease = crate::tools::issue_tool_lease(&tool_path("file.write"), &arguments)
+        .expect("lease should preserve the requested path");
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![ToolIntent {
+            tool_name: "tool.invoke".into(),
+            args_json: json!({
+                "tool_id": "file.write",
+                "lease": lease,
+                "arguments": arguments,
+            }),
+            source: "provider_tool_call".to_owned(),
+            turn_id: "unregistered-file-write-turn".to_owned(),
+            tool_call_id: "unregistered-file-write-call".to_owned(),
+        }],
+        raw_meta: serde_json::Value::Null,
+    };
+    let ctx = owner.context();
+
+    let result = TurnEngine::new(1)
+        .execute_turn_in_context(&turn, &ctx, &NoopLegacyToolDispatcher, None)
+        .await;
+
+    let TurnResult::ToolDenied(failure) = result else {
+        panic!("unregistered file.write path should be denied before dispatch: {result:?}");
+    };
+    assert_eq!(failure.code, "tool_not_found");
+    assert!(
+        !target.exists(),
+        "tool.invoke must not reinterpret file.write as the registered write path"
+    );
 }
 
 #[tokio::test]
@@ -885,28 +795,26 @@ async fn kernel_routed_glob_search_uses_typed_tool_registry() {
         file_root: Some(root),
         ..ToolRuntimeConfig::default()
     };
-    let request = ToolCoreRequest {
-        tool_name: "glob.search".to_owned(),
-        payload: json!({
+    let fixture = TypedFileTestRuntime::new(&config).expect("typed file fixture");
+    let outcome = fixture
+        .context()
+        .expect("typed file context")
+        .tool(tool_path("glob.search"))
+        .expect("glob.search should be registered")
+        .invoke(json!({
             "pattern": "src/**/*.rs",
             "max_results": 10
-        }),
-    };
-
-    let (outcome, audit) = execute_request_via_kernel_tool_registry(request, &config)
+        }))
         .await
         .expect("glob.search should execute through typed registry");
 
-    assert_eq!(outcome.status, "ok");
-    assert_eq!(outcome.payload["tool_name"], json!("glob.search"));
-    assert_eq!(outcome.payload["match_count"], json!(2));
-    assert_eq!(
-        outcome.payload["continuation"]["recommended_tool"],
-        json!("read")
-    );
-    let events = audit.snapshot();
+    assert!(outcome.get("adapter").is_none());
+    assert!(outcome.get("tool_name").is_none());
+    assert_eq!(outcome["match_count"], json!(2));
+    assert_eq!(outcome["continuation"]["recommended_tool"], json!("read"));
+    let events = fixture.audit.snapshot();
     assert!(matches!(
-        terminal_action_execution(&events, "/glob.search"),
+        terminal_action_execution(&events, &tool_path("glob.search")),
         Some(ActionExecutionEvent::Completed)
     ));
     assert!(!events.iter().any(|event| {
@@ -936,26 +844,27 @@ async fn kernel_routed_content_search_uses_typed_tool_registry() {
         file_root: Some(root),
         ..ToolRuntimeConfig::default()
     };
-    let request = ToolCoreRequest {
-        tool_name: "content.search".to_owned(),
-        payload: json!({
+    let fixture = TypedFileTestRuntime::new(&config).expect("typed file fixture");
+    let outcome = fixture
+        .context()
+        .expect("typed file context")
+        .tool(tool_path("content.search"))
+        .expect("content.search should be registered")
+        .invoke(json!({
             "query": "hello world",
             "glob": "src/**/*.rs",
             "max_results": 5
-        }),
-    };
-
-    let (outcome, audit) = execute_request_via_kernel_tool_registry(request, &config)
+        }))
         .await
         .expect("content.search should execute through typed registry");
 
-    assert_eq!(outcome.status, "ok");
-    assert_eq!(outcome.payload["tool_name"], json!("content.search"));
-    assert_eq!(outcome.payload["match_count"], json!(1));
-    assert_eq!(outcome.payload["matches"][0]["path"], json!("src/main.rs"));
-    let events = audit.snapshot();
+    assert!(outcome.get("adapter").is_none());
+    assert!(outcome.get("tool_name").is_none());
+    assert_eq!(outcome["match_count"], json!(1));
+    assert_eq!(outcome["matches"][0]["path"], json!("src/main.rs"));
+    let events = fixture.audit.snapshot();
     assert!(matches!(
-        terminal_action_execution(&events, "/content.search"),
+        terminal_action_execution(&events, &tool_path("content.search")),
         Some(ActionExecutionEvent::Completed)
     ));
     assert!(!events.iter().any(|event| {
@@ -980,35 +889,36 @@ async fn kernel_routed_file_write_uses_typed_tool_registry() {
         file_root: Some(root.clone()),
         ..ToolRuntimeConfig::default()
     };
-    let request = ToolCoreRequest {
-        tool_name: "file.write".to_owned(),
-        payload: json!({
+    let fixture = TypedFileTestRuntime::new(&config).expect("typed file fixture");
+    let outcome = fixture
+        .context()
+        .expect("typed file context")
+        .tool(tool_path("write"))
+        .expect("write should be registered")
+        .invoke(json!({
             "path": "nested/notes.txt",
             "content": "alpha\nbeta\n",
-        }),
-    };
-
-    let (outcome, audit) = execute_request_via_kernel_tool_registry(request, &config)
+        }))
         .await
         .expect("file.write should execute through typed registry");
 
-    assert_eq!(outcome.status, "ok");
-    assert_eq!(outcome.payload["tool_name"], json!("write"));
-    let response_path = outcome.payload["path"]
+    assert!(outcome.get("adapter").is_none());
+    assert!(outcome.get("tool_name").is_none());
+    let response_path = outcome["path"]
         .as_str()
         .expect("response path should be a string");
     assert!(
         response_path.ends_with("/nested/notes.txt"),
         "unexpected response path: {response_path}"
     );
-    assert_eq!(outcome.payload["bytes_written"], json!(11));
+    assert_eq!(outcome["bytes_written"], json!(11));
     assert_eq!(
         fs::read_to_string(root.join("nested/notes.txt")).expect("read written file"),
         "alpha\nbeta\n"
     );
-    let events = audit.snapshot();
+    let events = fixture.audit.snapshot();
     assert!(matches!(
-        terminal_action_execution(&events, "/write"),
+        terminal_action_execution(&events, &tool_path("write")),
         Some(ActionExecutionEvent::Completed)
     ));
     assert!(!events.iter().any(|event| {
@@ -1033,38 +943,10 @@ async fn context_direct_write_uses_typed_tool_registry() {
         file_root: Some(root.clone()),
         ..ToolRuntimeConfig::default()
     };
-    let mut policy = PolicyPipelineBuilder::<AppContextFactory>::new_legacy_allow_fallback()
-        .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
-        .with_policy(FsResolvePathAllowPolicy::target())
-        .with_policy(FsPathAllowedRootsPolicy::target());
-    policy.push_policy(FsWriteAllowPolicy);
-    let audit = Arc::new(InMemoryAuditSink::default());
-    let mut kernel = Kernel::<AppContextFactory>::with_policy_runtime(
-        policy,
-        Arc::new(SystemClock),
-        audit.clone(),
-    );
-    let pack = test_pack();
-    kernel.register_pack(pack).expect("register pack");
-    let token = kernel
-        .issue_token("test-pack", "test-agent", 60)
-        .expect("issue token");
-    let app_ctx = crate::AppContext::new(
-        Arc::new(loong_runtime::runtime::Runtime::new(
-            kernel,
-            crate::tools::plane::test_builtin_tool_plane(),
-        )),
-        token,
-        config.clone(),
-        "test-session",
-        crate::tools::runtime_tool_view(),
-        loong_contracts::GovernedSessionMode::MutatingCapable,
-    )
-    .expect("build app context");
-    let execution_context = app_ctx
-        .for_invocation(&config)
-        .expect("build execution context");
-    let outcome = execution_context
+    let fixture = TypedFileTestRuntime::new(&config).expect("typed file fixture");
+    let outcome = fixture
+        .context()
+        .expect("typed file context")
         .tool(tool_path("write"))
         .expect("lookup typed write")
         .invoke(json!({
@@ -1074,63 +956,18 @@ async fn context_direct_write_uses_typed_tool_registry() {
         .await
         .expect("context direct write should execute");
 
-    assert_eq!(outcome["tool_name"], json!("write"));
+    assert!(outcome.get("adapter").is_none());
+    assert!(outcome.get("tool_name").is_none());
     assert_eq!(outcome["bytes_written"], json!(5));
     assert_eq!(
         fs::read_to_string(root.join("typed.txt")).expect("read written file"),
         "typed"
     );
-    let events = audit.snapshot();
+    let events = fixture.audit.snapshot();
     assert!(matches!(
-        terminal_action_execution(&events, "/write"),
+        terminal_action_execution(&events, &tool_path("write")),
         Some(ActionExecutionEvent::Completed)
     ));
-    let _ = fs::remove_dir_all(base);
-}
-
-#[tokio::test]
-async fn kernel_routed_tool_invoke_file_write_uses_typed_tool_registry() {
-    let base = unique_temp_dir("loong-tool-invoke-write-typed-registry");
-    let root = base.join("root");
-    fs::create_dir_all(&root).expect("create root");
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root.clone()),
-        ..ToolRuntimeConfig::default()
-    };
-    let request = tool_invoke_request(
-        "file.write",
-        json!({
-            "path": "notes.txt",
-            "content": "alpha",
-        }),
-    )
-    .unwrap_or_else(|error| panic!("issue test tool lease: {error}"));
-
-    let (outcome, audit) = execute_request_via_kernel_tool_registry(request, &config)
-        .await
-        .expect("tool.invoke file.write should execute through typed registry");
-
-    assert_eq!(outcome.status, "ok");
-    assert_eq!(outcome.payload["tool_name"], json!("write"));
-    assert_eq!(
-        fs::read_to_string(root.join("notes.txt")).expect("read written file"),
-        "alpha"
-    );
-    let events = audit.snapshot();
-    assert!(matches!(
-        terminal_action_execution(&events, "/write"),
-        Some(ActionExecutionEvent::Completed)
-    ));
-    assert!(!events.iter().any(|event| {
-        matches!(
-            &event.kind,
-            loong_kernel::AuditEventKind::PlaneInvoked {
-                primary_adapter,
-                ..
-            } if primary_adapter.starts_with("legacy:")
-        )
-    }));
     let _ = fs::remove_dir_all(base);
 }
 
@@ -1146,21 +983,32 @@ async fn kernel_routed_file_edit_uses_typed_tool_registry_and_preview_observer()
         file_root: Some(root.clone()),
         ..ToolRuntimeConfig::default()
     };
-    let request = make_edit_blocks_request("notes.txt", &[("old line", "new line")]);
+    let edit_blocks = json!([{
+        "old_text": "old line",
+        "new_text": "new line",
+    }]);
     let sink = Arc::new(RecordingRuntimeSink::default());
     let runtime_sink: Arc<dyn ToolRuntimeEventSink> = sink.clone();
+    let fixture = TypedFileTestRuntime::new(&config).expect("typed file fixture");
+    let context = fixture.context().expect("typed file context");
+    let invocation = context
+        .tool(tool_path("edit"))
+        .expect("edit should be registered");
 
-    let (outcome, audit) = with_tool_runtime_event_sink(
+    let outcome = with_tool_runtime_event_sink(
         runtime_sink,
-        execute_request_via_kernel_tool_registry(request, &config),
+        invocation.invoke(json!({
+            "path": "notes.txt",
+            "edits": edit_blocks,
+        })),
     )
     .await
     .expect("file.edit should execute through typed registry");
 
-    assert_eq!(outcome.status, "ok");
-    assert_eq!(outcome.payload["tool_name"], json!("edit"));
-    assert_eq!(outcome.payload["replacements_made"], json!(1));
-    assert_eq!(outcome.payload["edit_blocks_applied"], json!(1));
+    assert!(outcome.get("adapter").is_none());
+    assert!(outcome.get("tool_name").is_none());
+    assert_eq!(outcome["replacements_made"], json!(1));
+    assert_eq!(outcome["edit_blocks_applied"], json!(1));
     assert_eq!(
         fs::read_to_string(&target).expect("read edited file"),
         "new line\nshared\n"
@@ -1182,9 +1030,9 @@ async fn kernel_routed_file_edit_uses_typed_tool_registry_and_preview_observer()
     assert!(preview_text.contains("-old line"));
     assert!(preview_text.contains("+new line"));
 
-    let events = audit.snapshot();
+    let events = fixture.audit.snapshot();
     assert!(matches!(
-        terminal_action_execution(&events, "/edit"),
+        terminal_action_execution(&events, &tool_path("edit")),
         Some(ActionExecutionEvent::Completed)
     ));
     assert!(!events.iter().any(|event| {
@@ -1211,15 +1059,16 @@ async fn kernel_routed_file_write_rejects_path_escape_through_typed_policy() {
         file_root: Some(root),
         ..ToolRuntimeConfig::default()
     };
-    let request = ToolCoreRequest {
-        tool_name: "file.write".to_owned(),
-        payload: json!({
+    let fixture = TypedFileTestRuntime::new(&config).expect("typed file fixture");
+    let error = fixture
+        .context()
+        .expect("typed file context")
+        .tool(tool_path("write"))
+        .expect("write should be registered")
+        .invoke(json!({
             "path": "../outside/secret.txt",
             "content": "secret"
-        }),
-    };
-
-    let error = execute_request_via_kernel_tool_registry(request, &config)
+        }))
         .await
         .expect_err("path escape should be denied by typed fs policy");
 
@@ -1245,21 +1094,22 @@ async fn kernel_routed_file_write_requires_filesystem_write_capability() {
         file_root: Some(root.clone()),
         ..ToolRuntimeConfig::default()
     };
-    let request = ToolCoreRequest {
-        tool_name: "write".to_owned(),
-        payload: json!({
+    let fixture = TypedFileTestRuntime::with_capabilities(
+        &config,
+        loong_contracts::Capabilities::from([Capability::InvokeTool, Capability::FilesystemRead]),
+    )
+    .expect("typed file fixture");
+    fixture
+        .context()
+        .expect("typed file context")
+        .tool(tool_path("write"))
+        .expect("write should be registered")
+        .invoke(json!({
             "path": "notes.txt",
             "content": "alpha"
-        }),
-    };
-
-    execute_request_via_kernel_tool_registry_with_capabilities(
-        request,
-        &config,
-        BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead]),
-    )
-    .await
-    .expect_err("filesystem write capability should be required");
+        }))
+        .await
+        .expect_err("filesystem write capability should be required");
     assert!(
         !root.join("notes.txt").exists(),
         "denied write must not create a file"
@@ -1278,19 +1128,24 @@ async fn file_read_rejects_line_offset_beyond_end_of_file() {
         file_root: Some(root),
         ..ToolRuntimeConfig::default()
     };
-    let request = ToolCoreRequest {
-        tool_name: "file.read".to_owned(),
-        payload: json!({
+    let fixture = TypedFileTestRuntime::new(&config).expect("typed file fixture");
+    let error = fixture
+        .context()
+        .expect("typed file context")
+        .tool(tool_path("read"))
+        .expect("read should be registered")
+        .invoke(json!({
             "path": "notes.txt",
             "offset": 3
-        }),
-    };
-
-    let error = execute_file_read_with_test_context(request, &config)
+        }))
         .await
         .expect_err("out-of-bounds file.read window should fail");
 
-    assert!(error.contains("offset 3 is beyond end of file (2 lines total)"));
+    assert!(
+        error
+            .to_string()
+            .contains("offset 3 is beyond end of file (2 lines total)")
+    );
     let _ = fs::remove_dir_all(base);
 }
 
@@ -1321,25 +1176,6 @@ fn resolve_safe_file_path_accepts_private_var_alias_inside_root() {
         dunce::canonicalize(&child).expect("canonicalize child path")
     );
     let _ = fs::remove_dir_all(base);
-}
-
-fn make_edit_blocks_request(path: &str, edits: &[(&str, &str)]) -> ToolCoreRequest {
-    let edit_blocks = edits
-        .iter()
-        .map(|(old, new)| {
-            json!({
-                "old_text": old,
-                "new_text": new,
-            })
-        })
-        .collect::<Vec<_>>();
-    ToolCoreRequest {
-        tool_name: "file.edit".to_owned(),
-        payload: json!({
-            "path": path,
-            "edits": edit_blocks,
-        }),
-    }
 }
 
 #[test]

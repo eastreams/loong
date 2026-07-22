@@ -14,7 +14,6 @@ use axum::{
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
-use crate::AppContext;
 use crate::CliResult;
 use crate::channel::{
     ChannelDelivery, ChannelInboundMessage, ChannelOutboundTarget, ChannelOutboundTargetKind,
@@ -126,7 +125,8 @@ pub(in crate::channel) struct WhatsappWebhookState {
     api_base_url: String,
     allowed_phone_numbers: BTreeSet<String>,
     seen_messages: Arc<Mutex<RecentIdCache>>,
-    app_ctx: Arc<AppContext>,
+    execution_runtime: Arc<loong_runtime::runtime::Runtime<crate::RuntimeContextFactory>>,
+    agent_id: String,
     runtime: Arc<ChannelOperationRuntimeTracker>,
 }
 
@@ -135,7 +135,8 @@ impl WhatsappWebhookState {
         config: LoongConfig,
         resolved_path: PathBuf,
         resolved: &ResolvedWhatsappChannelConfig,
-        app_ctx: AppContext,
+        execution_runtime: Arc<loong_runtime::runtime::Runtime<crate::RuntimeContextFactory>>,
+        agent_id: impl Into<String>,
         runtime: Arc<ChannelOperationRuntimeTracker>,
     ) -> CliResult<Self> {
         let access_token = resolved
@@ -157,7 +158,8 @@ impl WhatsappWebhookState {
             seen_messages: Arc::new(Mutex::new(RecentIdCache::new(2_048))),
             config,
             resolved_path: Some(resolved_path),
-            app_ctx: Arc::new(app_ctx),
+            execution_runtime,
+            agent_id: agent_id.into(),
             runtime,
         })
     }
@@ -457,7 +459,8 @@ async fn handle_whatsapp_inbound_message(
                 &state.config,
                 state.resolved_path.as_deref(),
                 &channel_message,
-                state.app_ctx.as_ref(),
+                &state.execution_runtime,
+                &state.agent_id,
                 ChannelTurnFeedbackPolicy::final_trace_significant(),
             )
             .await?;
@@ -557,7 +560,6 @@ mod tests {
 
     use crate::channel::ChannelPlatform;
     use crate::channel::runtime::state::start_channel_operation_runtime_tracker_for_test;
-    use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_test_app_context};
 
     fn temp_webhook_test_dir(label: &str) -> PathBuf {
         let timestamp = SystemTime::now()
@@ -579,11 +581,14 @@ mod tests {
         )
         .await
         .expect("start runtime tracker");
-        let app_ctx = bootstrap_test_app_context("whatsapp-webhook-test", DEFAULT_TOKEN_TTL_S)
-            .expect("bootstrap app context");
+        let config = LoongConfig::default();
+        let owner = crate::test_support::runtime_session_for_test(
+            "whatsapp-webhook-test",
+            crate::tools::runtime_tool_view_from_loong_config(&config),
+        );
 
         WhatsappWebhookState {
-            config: LoongConfig::default(),
+            config,
             resolved_path: None,
             configured_account_id: "default".to_owned(),
             account_id: "whatsapp-test".to_owned(),
@@ -594,7 +599,8 @@ mod tests {
             api_base_url: "https://graph.facebook.com/v25.0".to_owned(),
             allowed_phone_numbers: BTreeSet::new(),
             seen_messages: Arc::new(Mutex::new(RecentIdCache::new(32))),
-            app_ctx: Arc::new(app_ctx),
+            execution_runtime: owner.runtime.clone(),
+            agent_id: owner.session.agent_id().to_owned(),
             runtime: Arc::new(runtime),
         }
     }

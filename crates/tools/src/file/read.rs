@@ -3,15 +3,23 @@ use std::{collections::BTreeSet, path::PathBuf};
 use async_trait::async_trait;
 use loong_contracts::{Capability, ToolInputError, ToolSchedulingClass, ToolSpec};
 use loong_core::{
+    PolicyGrantError,
     policy::context::ContextFactory,
     tool::{ToolFailureKind, ToolImpl},
 };
-use loong_kernel::{KernelAccess, access::fs::FsContentSearchOptions};
+use loong_kernel::{
+    KernelAccess,
+    access::fs::{
+        FsContentSearchError, FsContentSearchOptions, FsGlobError, FsPathError,
+        FsPathPolicyContext, FsReadError, FsResolutionContext,
+    },
+};
 use serde_json::{Value, json};
+use thiserror::Error;
 
 use super::{
-    ContentSearchReadOutput, ContentSearchReadRequest, FileToolError, GlobReadOutput,
-    GlobReadRequest, optional_positive_usize_field, optional_trimmed_string_field,
+    ContentSearchReadOutput, ContentSearchReadRequest, GlobReadOutput, GlobReadRequest,
+    optional_positive_usize_field, optional_trimmed_string_field, required_trimmed_string_field,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,6 +34,35 @@ pub enum ReadOutput {
     File(ReadFileOutput),
     Glob(GlobReadOutput),
     Content(ContentSearchReadOutput),
+}
+
+/// Failures specific to the aggregate read tool.
+///
+/// The three access variants correspond to the three payload modes. Keeping
+/// them distinct lets the tool classify policy denial before runtime erases
+/// the concrete error, while response shaping remains owned by this module.
+#[derive(Debug, Error)]
+pub enum ReadToolError {
+    #[error("{0}")]
+    Read(
+        #[from]
+        #[source]
+        FsReadError,
+    ),
+    #[error("{0}")]
+    Glob(
+        #[from]
+        #[source]
+        FsGlobError,
+    ),
+    #[error("{0}")]
+    ContentSearch(
+        #[from]
+        #[source]
+        FsContentSearchError,
+    ),
+    #[error("{reason}")]
+    InvalidLineWindow { reason: String },
 }
 
 impl From<ReadOutput> for Value {
@@ -50,7 +87,6 @@ struct FileReadSelection {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadFileOutput {
-    tool_name: String,
     path: PathBuf,
     bytes: usize,
     selection: FileReadSelection,
@@ -59,8 +95,6 @@ pub struct ReadFileOutput {
 impl From<ReadFileOutput> for Value {
     fn from(output: ReadFileOutput) -> Self {
         let mut payload = json!({
-            "adapter": "core-tools",
-            "tool_name": output.tool_name,
             "path": output.path.display().to_string(),
             "bytes": output.bytes,
             "truncated": output.selection.truncated,
@@ -87,27 +121,15 @@ impl From<ReadFileOutput> for Value {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileReadRequest {
-    pub(super) tool_name: String,
     pub(super) target: String,
     pub(super) max_bytes: usize,
     pub(super) offset: Option<usize>,
     pub(super) limit: Option<usize>,
 }
 
-pub struct ReadTool {
-    tool_name: &'static str,
-}
+pub struct ReadTool;
 
 impl ReadTool {
-    /// Creates the aggregate read implementation for an app-facing tool name.
-    ///
-    /// The name is used in legacy-compatible responses and continuation
-    /// payloads only. The actual registry path remains owned by the app plane.
-    #[must_use]
-    pub const fn new(tool_name: &'static str) -> Self {
-        Self { tool_name }
-    }
-
     fn input_schema() -> Value {
         json!({
             "type": "object",
@@ -189,11 +211,11 @@ impl ReadTool {
 impl<C> ToolImpl<C> for ReadTool
 where
     C: ContextFactory + Send + Sync,
-    for<'a> C::Cx<'a>: KernelAccess<C> + Sync,
+    for<'a> C::Cx<'a>: KernelAccess<C> + FsResolutionContext + FsPathPolicyContext + Sync,
 {
     type Input = ReadRequest;
     type Output = ReadOutput;
-    type Error = FileToolError;
+    type Error = ReadToolError;
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -218,12 +240,36 @@ where
     }
 
     fn parse_input(&self, payload: Value) -> Result<Self::Input, ToolInputError> {
-        ReadRequest::parse_payload(self.tool_name.to_owned(), &payload)
-            .map_err(ToolInputError::invalid_payload)
+        ReadRequest::parse_payload(&payload)
     }
 
     fn failure_kind(&self, error: &Self::Error) -> ToolFailureKind {
-        error.failure_kind()
+        match error {
+            ReadToolError::Read(
+                FsReadError::Authorization(source)
+                | FsReadError::Path(FsPathError::Authorization(source)),
+            )
+            | ReadToolError::Glob(
+                FsGlobError::Authorization(source)
+                | FsGlobError::Path(FsPathError::Authorization(source)),
+            )
+            | ReadToolError::ContentSearch(
+                FsContentSearchError::Authorization(source)
+                | FsContentSearchError::Path(FsPathError::Authorization(source)),
+            ) if matches!(
+                source,
+                PolicyGrantError::MissingCapability { .. }
+                    | PolicyGrantError::Denied { .. }
+                    | PolicyGrantError::PermissionDenied { .. }
+            ) =>
+            {
+                ToolFailureKind::Denied
+            }
+            ReadToolError::Read(_)
+            | ReadToolError::Glob(_)
+            | ReadToolError::ContentSearch(_)
+            | ReadToolError::InvalidLineWindow { .. } => ToolFailureKind::Execution,
+        }
     }
 
     async fn execute(
@@ -278,19 +324,17 @@ impl ReadTool {
         request: FileReadRequest,
         resolved: PathBuf,
         bytes: Vec<u8>,
-    ) -> Result<ReadFileOutput, FileToolError> {
+    ) -> Result<ReadFileOutput, ReadToolError> {
         let file_text = String::from_utf8_lossy(&bytes).to_string();
         let selection = select_file_read_content(
             file_text.as_str(),
             request.max_bytes,
             request.offset,
             request.limit,
-            request.tool_name.as_str(),
         )
-        .map_err(|reason| FileToolError::ReadResponse { reason })?;
+        .map_err(|reason| ReadToolError::InvalidLineWindow { reason })?;
 
         Ok(ReadFileOutput {
-            tool_name: request.tool_name,
             path: resolved,
             bytes: bytes.len(),
             selection,
@@ -299,59 +343,54 @@ impl ReadTool {
 }
 
 impl ReadRequest {
-    pub(super) fn parse_payload(tool_name: String, payload: &Value) -> Result<Self, String> {
+    pub(super) fn parse_payload(payload: &Value) -> Result<Self, ToolInputError> {
         let payload_object = payload
             .as_object()
-            .ok_or_else(|| format!("{tool_name} payload must be an object"))?;
+            .ok_or(ToolInputError::PayloadMustBeObject)?;
 
         let has_path = optional_trimmed_string_field(payload_object.get("path")).is_some();
         let has_query = optional_trimmed_string_field(payload_object.get("query")).is_some();
         let has_pattern = optional_trimmed_string_field(payload_object.get("pattern")).is_some()
             || optional_trimmed_string_field(payload_object.get("glob")).is_some();
 
-        if !has_path && !has_query && !has_pattern {
-            return Err(
-                "direct_read_requires_one_of: expected exactly one of `path`, `query`, or `pattern`"
-                    .to_owned(),
-            );
-        }
-
         if has_path {
-            return FileReadRequest::parse_payload(tool_name, payload).map(Self::File);
+            return FileReadRequest::parse_payload(payload).map(Self::File);
         }
 
         if has_query {
-            return ContentSearchReadRequest::parse_payload(tool_name, payload_object)
-                .map(Self::Content);
+            return ContentSearchReadRequest::parse_payload(payload_object).map(Self::Content);
         }
 
-        GlobReadRequest::parse_payload(tool_name, payload_object).map(Self::Glob)
+        if has_pattern {
+            return GlobReadRequest::parse_payload(payload_object).map(Self::Glob);
+        }
+
+        for field_name in ["path", "query", "pattern", "glob"] {
+            if payload_object.contains_key(field_name) {
+                required_trimmed_string_field(payload_object, field_name)?;
+            }
+        }
+
+        Err(ToolInputError::missing_one_of(["path", "query", "pattern"]))
     }
 }
 
 impl FileReadRequest {
-    pub(super) fn parse_payload(tool_name: String, payload: &Value) -> Result<Self, String> {
+    pub(super) fn parse_payload(payload: &Value) -> Result<Self, ToolInputError> {
         let payload = payload
             .as_object()
-            .ok_or_else(|| format!("{tool_name} payload must be an object"))?;
-        let target = payload
-            .get("path")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| format!("{tool_name} requires payload.path"))?
-            .to_owned();
+            .ok_or(ToolInputError::PayloadMustBeObject)?;
+        let target = required_trimmed_string_field(payload, "path")?.to_owned();
 
         let max_bytes = payload
             .get("max_bytes")
             .and_then(Value::as_u64)
             .unwrap_or(1_048_576)
             .min(8 * 1_048_576) as usize;
-        let offset = optional_positive_usize_field(payload, "offset", &tool_name)?;
-        let limit = optional_positive_usize_field(payload, "limit", &tool_name)?;
+        let offset = optional_positive_usize_field(payload, "offset")?;
+        let limit = optional_positive_usize_field(payload, "limit")?;
 
         Ok(Self {
-            tool_name,
             target,
             max_bytes,
             offset,
@@ -384,7 +423,6 @@ fn select_file_read_content(
     max_bytes: usize,
     offset: Option<usize>,
     limit: Option<usize>,
-    tool_name: &str,
 ) -> Result<FileReadSelection, String> {
     let line_window_requested = offset.is_some() || limit.is_some();
     if !line_window_requested {
@@ -407,7 +445,7 @@ fn select_file_read_content(
         .min(total_lines);
     let selected_lines = all_lines
         .get(start_index..end_index)
-        .ok_or_else(|| format!("{tool_name} internal line window is out of bounds"))?;
+        .ok_or_else(|| "internal line window is out of bounds".to_owned())?;
     let selected_content = selected_lines.join("\n");
     let mut selection = clip_file_read_content(selected_content.as_str(), max_bytes);
     selection.line_start = Some(line_start);

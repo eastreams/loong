@@ -1,14 +1,14 @@
-//! Typed app-tool boundary errors.
+//! Errors produced after orchestration has selected the legacy kernel fallback.
 
-use loong_contracts::{KernelError, ToolPath, ToolPathError};
-use loong_runtime::tool_plane::error::{LookupError, ToolInvocationError};
+use loong_contracts::{KernelError, ToolPathError};
+use loong_runtime::tool_plane::error::LookupError;
 use thiserror::Error;
 
 /// Failure before provider, search, or prompt metadata can be published.
 ///
 /// Only ordinary absence may select legacy catalog metadata. Invalid identity
-/// and registry corruption must remain visible so the agent never receives a
-/// tool surface assembled from untrusted or inconsistent metadata.
+/// and registry corruption remain visible so an inconsistent tool surface is
+/// never published to an agent.
 #[derive(Debug, Error)]
 pub enum ToolMetadataError {
     #[error("invalid tool catalog path `{tool_name}`: {source}")]
@@ -21,42 +21,21 @@ pub enum ToolMetadataError {
     Lookup(#[from] LookupError),
 }
 
-/// Distinguishes the new typed runtime path from the explicit legacy fallback.
+/// Failure owned by the old `ToolCoreRequest` adapter boundary.
 ///
-/// This sum exists only because the current ingress can select either owner. It
-/// preserves both sources and must disappear with the legacy tool envelope.
+/// Typed lookup, grant, parsing, and dispatch retain `ToolInvocationError` and
+/// never cross this enum.
 #[derive(Debug, Error)]
-pub(crate) enum ToolRequestError {
+pub(crate) enum LegacyToolRequestError {
+    /// A legacy dispatcher was paired with a Context from another Runtime.
+    #[error("legacy dispatcher belongs to another Runtime")]
+    RuntimeMismatch,
     /// The legacy envelope could not be normalized into a concrete request.
     #[error("invalid tool request: {0}")]
     Input(String),
     /// Untrusted payload attempted to supply runtime-owned execution context.
     #[error("reserved tool context denied: {0}")]
     ReservedContext(String),
-    /// The transitional app context could not derive this invocation scope.
-    #[error("tool execution context could not be derived: {0}")]
-    Context(String),
-    /// The typed identity violated the contracts-owned path invariant.
-    #[error(transparent)]
-    InvalidPath(#[from] ToolPathError),
-    /// Typed registry lookup failed for a reason other than ordinary absence.
-    #[error(transparent)]
-    Lookup(#[from] LookupError),
-    /// A catalog identity already belongs to the typed plane, so absence cannot
-    /// be reinterpreted as permission to enter a legacy dispatcher.
-    #[error("typed tool `{path}` is missing its runtime registration")]
-    RegistryMissing { path: ToolPath },
-    /// Neither the runtime registry nor the explicit legacy owner table knows
-    /// this path. Migrated tools deliberately have no legacy owner to revive.
-    #[error("tool_not_found: {tool_name}")]
-    NotFound { tool_name: String },
-    /// A looked-up typed invocation failed during grant, audit, or dispatch.
-    #[error(transparent)]
-    Invocation(#[from] ToolInvocationError),
-    /// Typed lookup missed and the legacy owner is the app dispatcher, which
-    /// this kernel-only bridge cannot call.
-    #[error("legacy app tool `{tool_name}` requires the app dispatcher")]
-    LegacyAppDispatch { tool_name: String },
     /// Failure after this ingress has explicitly selected the legacy plane.
     #[error(transparent)]
     Legacy(#[from] KernelError),

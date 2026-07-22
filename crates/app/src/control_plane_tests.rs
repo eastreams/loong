@@ -869,8 +869,8 @@ fn broken_pairing_registry_with_request(
 
 #[cfg(feature = "memory-sqlite")]
 fn seeded_repository_view(test_name: &str) -> ControlPlaneRepositoryView {
-    let config = isolated_memory_config(test_name);
-    let repo = SessionRepository::new(&config).expect("repository");
+    let memory_config = isolated_memory_config(test_name);
+    let repo = SessionRepository::new(&memory_config).expect("repository");
     repo.create_session(NewSessionRecord {
         session_id: "root-session".to_owned(),
         kind: SessionKind::Root,
@@ -904,7 +904,6 @@ fn seeded_repository_view(test_name: &str) -> ControlPlaneRepositoryView {
                 "allow_shell_in_child": false,
                 "child_tool_allowlist": ["read"],
                 "workspace_root": "/tmp/loong/control-plane/child-session",
-                "kernel_bound": false,
                 "runtime_narrowing": {}
             }
         }),
@@ -947,7 +946,7 @@ fn seeded_repository_view(test_name: &str) -> ControlPlaneRepositoryView {
     .expect("create visible approval request");
     repo.upsert_session_tool_policy(crate::session::repository::NewSessionToolPolicyRecord {
         session_id: "child-session".to_owned(),
-        requested_tool_ids: vec!["read".to_owned()],
+        requested_tool_ids: vec!["/read".to_owned()],
         runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
     })
     .expect("create visible tool policy");
@@ -977,7 +976,17 @@ fn seeded_repository_view(test_name: &str) -> ControlPlaneRepositoryView {
     })
     .expect("create hidden approval request");
 
-    ControlPlaneRepositoryView::new(config, ToolConfig::default(), "root-session")
+    let mut app_config = LoongConfig::default();
+    app_config.audit.mode = crate::config::AuditMode::InMemory;
+    app_config.tools.file_root = Some("/tmp/loong/control-plane".to_owned());
+    app_config.memory.sqlite_path = memory_config
+        .sqlite_path
+        .as_ref()
+        .expect("sqlite path")
+        .display()
+        .to_string();
+    let runtime = crate::runtime::bootstrap_runtime_with_config(&app_config).expect("test runtime");
+    ControlPlaneRepositoryView::new(&app_config, Arc::clone(&runtime), "root-session")
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -1110,7 +1119,7 @@ fn repository_view_lists_visible_sessions_and_snapshot_counts() {
             .as_ref()
             .expect("workflow binding")
             .mode,
-        "advisory_only"
+        "mutating_capable"
     );
     assert!(
         !sessions
@@ -1197,14 +1206,14 @@ fn repository_view_lists_visible_background_tasks_with_workflow_metadata() {
     assert_eq!(binding.session_id, "child-session");
     assert_eq!(binding.task_id, "task-child");
     assert_eq!(binding.task_session_id, "child-session");
-    assert_eq!(binding.mode, "advisory_only");
+    assert_eq!(binding.mode, "mutating_capable");
     assert_eq!(task.delegate_mode.as_deref(), Some("async"));
     assert_eq!(task.delegate_phase.as_deref(), Some("running"));
     assert_eq!(task.approval_request_count, 1);
     assert_eq!(task.approval_attention_count, 1);
-    assert_eq!(task.requested_tool_ids, vec!["read".to_owned()]);
+    assert_eq!(task.requested_tool_ids, vec!["/read".to_owned()]);
     assert_eq!(task.visible_requested_tool_ids, vec!["read".to_owned()]);
-    assert_eq!(task.effective_tool_ids, vec!["read".to_owned()]);
+    assert_eq!(task.effective_tool_ids, vec!["/read".to_owned()]);
     assert_eq!(task.visible_effective_tool_ids, vec!["read".to_owned()]);
 }
 
@@ -1262,8 +1271,8 @@ fn repository_view_reads_visible_background_task_detail() {
 #[cfg(feature = "memory-sqlite")]
 #[test]
 fn repository_view_deduplicates_background_tasks_by_canonical_task_id() {
-    let config = isolated_memory_config("task-deduplicate-control-plane");
-    let repo = SessionRepository::new(&config).expect("repository");
+    let memory_config = isolated_memory_config("task-deduplicate-control-plane");
+    let repo = SessionRepository::new(&memory_config).expect("repository");
     repo.create_session(NewSessionRecord {
         session_id: "root-session".to_owned(),
         kind: SessionKind::Root,
@@ -1299,7 +1308,6 @@ fn repository_view_deduplicates_background_tasks_by_canonical_task_id() {
                     "allow_shell_in_child": false,
                     "child_tool_allowlist": ["read"],
                     "workspace_root": format!("/tmp/loong/control-plane/{session_id}"),
-                    "kernel_bound": false,
                     "runtime_narrowing": {}
                 }
             }),
@@ -1329,7 +1337,17 @@ fn repository_view_deduplicates_background_tasks_by_canonical_task_id() {
         .expect("append task progress");
     }
 
-    let view = ControlPlaneRepositoryView::new(config, ToolConfig::default(), "root-session");
+    let mut app_config = LoongConfig::default();
+    app_config.audit.mode = crate::config::AuditMode::InMemory;
+    app_config.tools.file_root = Some("/tmp/loong/control-plane".to_owned());
+    app_config.memory.sqlite_path = memory_config
+        .sqlite_path
+        .as_ref()
+        .expect("sqlite path")
+        .display()
+        .to_string();
+    let runtime = crate::runtime::bootstrap_runtime_with_config(&app_config).expect("test runtime");
+    let view = ControlPlaneRepositoryView::new(&app_config, Arc::clone(&runtime), "root-session");
     let tasks = view
         .list_background_tasks(false, 50)
         .expect("background task list");

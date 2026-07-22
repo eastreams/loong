@@ -3,23 +3,25 @@ use std::{collections::BTreeSet, path::PathBuf};
 use async_trait::async_trait;
 use loong_contracts::{Capability, ToolInputError, ToolSchedulingClass, ToolSpec};
 use loong_core::{
+    PolicyGrantError,
     policy::context::ContextFactory,
     tool::{ToolFailureKind, ToolImpl},
 };
 use loong_kernel::{
     KernelAccess,
-    access::fs::{FsContentSearchOptions, FsContentSearchOutput, FsGlobOutput, FsPathKind},
+    access::fs::{
+        FsContentSearchError, FsContentSearchOptions, FsContentSearchOutput, FsGlobError,
+        FsGlobOutput, FsPathError, FsPathKind, FsPathPolicyContext, FsResolutionContext,
+    },
 };
 use serde_json::{Value, json};
 
 use super::{
-    FileToolError, optional_bounded_usize_field, optional_trimmed_string_field,
-    required_trimmed_string_field,
+    optional_bounded_usize_field, optional_trimmed_string_field, required_trimmed_string_field,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobReadRequest {
-    pub(super) tool_name: String,
     pub(super) root: String,
     pub(super) pattern: String,
     pub(super) max_results: usize,
@@ -28,7 +30,6 @@ pub struct GlobReadRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobReadOutput {
-    tool_name: String,
     root: PathBuf,
     pattern: String,
     max_results: usize,
@@ -51,7 +52,6 @@ impl GlobReadOutput {
             .collect();
 
         Self {
-            tool_name: request.tool_name,
             root: output.root,
             pattern: request.pattern,
             max_results: request.max_results,
@@ -75,8 +75,6 @@ impl From<GlobReadOutput> for Value {
             .collect::<Vec<_>>();
         let continuation = glob_search_continuation_payload(matches.as_slice());
         let mut payload = json!({
-            "adapter": "core-tools",
-            "tool_name": output.tool_name,
             "root": output.root.display().to_string(),
             "query": output.pattern,
             "max_results": output.max_results,
@@ -117,7 +115,6 @@ impl GlobReadMatchKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContentSearchReadRequest {
-    pub(super) tool_name: String,
     pub(super) root: String,
     pub(super) query: String,
     pub(super) glob: Option<String>,
@@ -128,7 +125,6 @@ pub struct ContentSearchReadRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContentSearchReadOutput {
-    tool_name: String,
     root: PathBuf,
     query: String,
     max_results: usize,
@@ -155,7 +151,6 @@ impl ContentSearchReadOutput {
             .collect();
 
         Self {
-            tool_name: request.tool_name,
             root: output.root,
             query: request.query,
             max_results: request.max_results,
@@ -182,8 +177,6 @@ impl From<ContentSearchReadOutput> for Value {
             })
             .collect::<Vec<_>>();
         json!({
-            "adapter": "core-tools",
-            "tool_name": output.tool_name,
             "root": output.root.display().to_string(),
             "query": output.query,
             "max_results": output.max_results,
@@ -204,20 +197,9 @@ struct ContentSearchReadMatch {
     truncated_file: bool,
 }
 
-pub struct GlobSearchTool {
-    tool_name: &'static str,
-}
+pub struct GlobSearchTool;
 
 impl GlobSearchTool {
-    /// Creates the typed implementation for the legacy `glob.search` surface.
-    ///
-    /// This keeps the old tool path and response metadata while moving
-    /// directory traversal behind fs access actions.
-    #[must_use]
-    pub const fn new(tool_name: &'static str) -> Self {
-        Self { tool_name }
-    }
-
     fn input_schema() -> Value {
         json!({
             "type": "object",
@@ -247,20 +229,9 @@ impl GlobSearchTool {
     }
 }
 
-pub struct ContentSearchTool {
-    tool_name: &'static str,
-}
+pub struct ContentSearchTool;
 
 impl ContentSearchTool {
-    /// Creates the typed implementation for the legacy `content.search` surface.
-    ///
-    /// This preserves the existing surface while file reads happen only inside
-    /// `loong_access::fs` after path and read grants.
-    #[must_use]
-    pub const fn new(tool_name: &'static str) -> Self {
-        Self { tool_name }
-    }
-
     fn input_schema() -> Value {
         json!({
             "type": "object",
@@ -300,19 +271,19 @@ impl ContentSearchTool {
     }
 }
 
-/// Typed implementation for the legacy glob search surface.
+/// Typed implementation for glob search.
 ///
-/// The tool path is still app-owned; this concrete type only parses the
-/// selected payload, calls fs access, and shapes the legacy-compatible JSON.
+/// The tool path is app-owned; this concrete type only parses the selected
+/// payload, calls fs access, and returns domain output.
 #[async_trait]
 impl<C> ToolImpl<C> for GlobSearchTool
 where
     C: ContextFactory + Send + Sync,
-    for<'a> C::Cx<'a>: KernelAccess<C> + Sync,
+    for<'a> C::Cx<'a>: KernelAccess<C> + FsResolutionContext + FsPathPolicyContext + Sync,
 {
     type Input = GlobReadRequest;
     type Output = GlobReadOutput;
-    type Error = FileToolError;
+    type Error = FsGlobError;
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -335,14 +306,30 @@ where
     fn parse_input(&self, payload: Value) -> Result<Self::Input, ToolInputError> {
         let payload_object = payload
             .as_object()
-            .ok_or_else(|| format!("{} payload must be an object", self.tool_name))
-            .map_err(ToolInputError::invalid_payload)?;
-        GlobReadRequest::parse_payload(self.tool_name.to_owned(), payload_object)
-            .map_err(ToolInputError::invalid_payload)
+            .ok_or(ToolInputError::PayloadMustBeObject)?;
+        GlobReadRequest::parse_payload(payload_object)
     }
 
     fn failure_kind(&self, error: &Self::Error) -> ToolFailureKind {
-        error.failure_kind()
+        match error {
+            FsGlobError::Authorization(source)
+            | FsGlobError::Path(FsPathError::Authorization(source))
+                if matches!(
+                    source,
+                    PolicyGrantError::MissingCapability { .. }
+                        | PolicyGrantError::Denied { .. }
+                        | PolicyGrantError::PermissionDenied { .. }
+                ) =>
+            {
+                ToolFailureKind::Denied
+            }
+            FsGlobError::Path(_)
+            | FsGlobError::Authorization(_)
+            | FsGlobError::InvalidGlobPattern { .. }
+            | FsGlobError::ReadDirectory { .. }
+            | FsGlobError::InspectPath { .. }
+            | FsGlobError::RenderRelativePath { .. } => ToolFailureKind::Execution,
+        }
     }
 
     async fn execute(
@@ -365,7 +352,7 @@ where
     }
 }
 
-/// Typed implementation for the legacy content search surface.
+/// Typed implementation for content search.
 ///
 /// Content scanning can read many files, so this surface must go through
 /// access-granted fs search rather than app-local `std::fs::read`.
@@ -373,11 +360,11 @@ where
 impl<C> ToolImpl<C> for ContentSearchTool
 where
     C: ContextFactory + Send + Sync,
-    for<'a> C::Cx<'a>: KernelAccess<C> + Sync,
+    for<'a> C::Cx<'a>: KernelAccess<C> + FsResolutionContext + FsPathPolicyContext + Sync,
 {
     type Input = ContentSearchReadRequest;
     type Output = ContentSearchReadOutput;
-    type Error = FileToolError;
+    type Error = FsContentSearchError;
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -401,14 +388,33 @@ where
     fn parse_input(&self, payload: Value) -> Result<Self::Input, ToolInputError> {
         let payload_object = payload
             .as_object()
-            .ok_or_else(|| format!("{} payload must be an object", self.tool_name))
-            .map_err(ToolInputError::invalid_payload)?;
-        ContentSearchReadRequest::parse_payload(self.tool_name.to_owned(), payload_object)
-            .map_err(ToolInputError::invalid_payload)
+            .ok_or(ToolInputError::PayloadMustBeObject)?;
+        ContentSearchReadRequest::parse_payload(payload_object)
     }
 
     fn failure_kind(&self, error: &Self::Error) -> ToolFailureKind {
-        error.failure_kind()
+        match error {
+            FsContentSearchError::Authorization(source)
+            | FsContentSearchError::Path(FsPathError::Authorization(source))
+                if matches!(
+                    source,
+                    PolicyGrantError::MissingCapability { .. }
+                        | PolicyGrantError::Denied { .. }
+                        | PolicyGrantError::PermissionDenied { .. }
+                ) =>
+            {
+                ToolFailureKind::Denied
+            }
+            FsContentSearchError::Path(_)
+            | FsContentSearchError::Authorization(_)
+            | FsContentSearchError::InvalidGlobPattern { .. }
+            | FsContentSearchError::BuildContentSearchRegex { .. }
+            | FsContentSearchError::ReadDirectory { .. }
+            | FsContentSearchError::InspectPath { .. }
+            | FsContentSearchError::RenderRelativePath { .. }
+            | FsContentSearchError::ReadFile { .. }
+            | FsContentSearchError::InvalidContentMatchRange { .. } => ToolFailureKind::Execution,
+        }
     }
 
     async fn execute(
@@ -434,28 +440,39 @@ where
 
 impl GlobReadRequest {
     pub(super) fn parse_payload(
-        tool_name: String,
         payload: &serde_json::Map<String, Value>,
-    ) -> Result<Self, String> {
-        let pattern = optional_trimmed_string_field(payload.get("pattern"))
-            .map(ToOwned::to_owned)
-            .or_else(|| {
-                optional_trimmed_string_field(payload.get("glob"))
-                    .map(normalize_direct_read_glob_alias_pattern)
-            })
-            .ok_or_else(|| format!("{tool_name} requires payload.pattern"))?;
+    ) -> Result<Self, ToolInputError> {
+        let pattern = if let Some(pattern) = optional_trimmed_string_field(payload.get("pattern")) {
+            pattern.to_owned()
+        } else if let Some(glob) = optional_trimmed_string_field(payload.get("glob")) {
+            let parts = glob
+                .split('|')
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>();
+            if glob.contains('|') && !glob.contains('{') && !glob.contains('}') && parts.len() > 1 {
+                format!("{{{}}}", parts.join(","))
+            } else {
+                glob.to_owned()
+            }
+        } else {
+            for field_name in ["pattern", "glob"] {
+                if payload.contains_key(field_name) {
+                    required_trimmed_string_field(payload, field_name)?;
+                }
+            }
+            return Err(ToolInputError::missing_field("pattern"));
+        };
         let root = optional_trimmed_string_field(payload.get("root"))
             .unwrap_or(".")
             .to_owned();
-        let max_results =
-            optional_bounded_usize_field(payload, "max_results", 50, 1, 200, tool_name.as_str())?;
+        let max_results = optional_bounded_usize_field(payload, "max_results", 50, 1, 200)?;
         let include_directories = payload
             .get("include_directories")
             .and_then(Value::as_bool)
             .unwrap_or(false);
 
         Ok(Self {
-            tool_name,
             root,
             pattern,
             max_results,
@@ -466,31 +483,22 @@ impl GlobReadRequest {
 
 impl ContentSearchReadRequest {
     pub(super) fn parse_payload(
-        tool_name: String,
         payload: &serde_json::Map<String, Value>,
-    ) -> Result<Self, String> {
-        let query = required_trimmed_string_field(payload, "query", tool_name.as_str())?.to_owned();
+    ) -> Result<Self, ToolInputError> {
+        let query = required_trimmed_string_field(payload, "query")?.to_owned();
         let root = optional_trimmed_string_field(payload.get("root"))
             .unwrap_or(".")
             .to_owned();
         let glob = optional_trimmed_string_field(payload.get("glob")).map(ToOwned::to_owned);
-        let max_results =
-            optional_bounded_usize_field(payload, "max_results", 20, 1, 100, tool_name.as_str())?;
-        let max_bytes_per_file = optional_bounded_usize_field(
-            payload,
-            "max_bytes_per_file",
-            262_144,
-            1,
-            1_048_576,
-            tool_name.as_str(),
-        )?;
+        let max_results = optional_bounded_usize_field(payload, "max_results", 20, 1, 100)?;
+        let max_bytes_per_file =
+            optional_bounded_usize_field(payload, "max_bytes_per_file", 262_144, 1, 1_048_576)?;
         let case_sensitive = payload
             .get("case_sensitive")
             .and_then(Value::as_bool)
             .unwrap_or(false);
 
         Ok(Self {
-            tool_name,
             root,
             query,
             glob,
@@ -499,21 +507,6 @@ impl ContentSearchReadRequest {
             case_sensitive,
         })
     }
-}
-
-fn normalize_direct_read_glob_alias_pattern(raw: &str) -> String {
-    let trimmed = raw.trim();
-    if trimmed.contains('|') && !trimmed.contains('{') && !trimmed.contains('}') {
-        let parts = trimmed
-            .split('|')
-            .map(str::trim)
-            .filter(|part| !part.is_empty())
-            .collect::<Vec<_>>();
-        if parts.len() > 1 {
-            return format!("{{{}}}", parts.join(","));
-        }
-    }
-    trimmed.to_owned()
 }
 
 fn glob_search_continuation_payload(matches: &[Value]) -> Option<Value> {

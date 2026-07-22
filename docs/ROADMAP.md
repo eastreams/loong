@@ -98,9 +98,9 @@ Delivered:
 - external profile integrity lock (`security_scan.profile_sha256`) with fail-closed behavior
 - external profile signature verification (`security_scan.profile_signature`, ed25519)
 - JSONL SIEM export lane (`security_scan.siem_export`) with optional fail-closed mode
-- kernel-level request-policy gate for tool calls through `PolicyEngine::authorize(...)`
-  plus `PolicyExtensionChain`, with explicit deny/approval-required outcomes before
-  tool dispatch (Rule of Two)
+- typed request-policy gate through `PolicyEngine::grant`, which combines the
+  capability gate, ordered policy report, permission decision, authorization
+  audit, and private `Granted<Action>` mint before tool dispatch
 - WASM static scan controls:
   - allowed artifact paths
   - module size cap
@@ -394,7 +394,7 @@ Focus: ship a low-friction daily-usable daemon entry for non-developers.
 - first-party Telegram polling channel adapter
 - first-party Feishu webhook channel adapter
 - SQLite-backed conversation memory with sliding-window retrieval
-- core tool execution for `browser.open`, `browser.extract`, `browser.click`, `web.fetch`, `shell.exec`, `file.read`, `file.write`, `file.edit`
+- core tool execution for `browser.open`, `browser.extract`, `browser.click`, `web.fetch`, `shell.exec`, `read`, `write`, `edit`
 - runtime-visible tool advertising so capability snapshots and provider tool schemas follow the actually enabled tool surface
 - Cargo feature flags for MVP packaging controls
 
@@ -520,10 +520,10 @@ it only when the direction still matters to source readers.
 
 ### D1: Wire Phase 3 primitives into production paths
 
-Phase 3 added generation tokens, Fault, TaskState FSM, and Namespace as additive types with tests. They are not yet used in production code paths.
+Phase 3 added generation tokens, Fault, TaskState FSM, and Namespace as additive types with tests. They are not yet used uniformly in production code paths.
 
 Candidates:
-- Issue tokens with membrane scoped to Namespace during `bootstrap_app_context_with_config`
+- Keep generation-token and Namespace work on bearer-backed legacy ingress; do not add token/pack fields to typed Runtime, Session, or Context
 - Use `TaskSupervisor` in spec runner's `execute_task` path for FSM-enforced lifecycle
 - Return `Fault` from kernel dispatch methods alongside `KernelError` for caller-side recovery matching
 - Use generation-based revocation for session rotation (e.g., Telegram channel restart)
@@ -580,13 +580,12 @@ Options:
 
 Trade-off: if D2 lands, this becomes test-only infrastructure. May not be worth optimizing independently.
 
-### D6: Retire governed/direct runtime drift
+### D6: Retire remaining legacy execution envelopes
 
-`ConversationRuntimeBinding` and `ProviderRuntimeBinding` make governance explicit, but `Direct`
-still survives as a compatibility lane deeper in the runtime than the long-term architecture wants.
-The next kernel-first closure track should push direct behavior back toward ingress, compatibility
-wrappers, and tests, while keeping governed reads and governed side effects fail-closed where
-possible.
+Runtime and Session owners now provide one borrowed recursive Context to conversation, provider,
+Tool, Access, Action, and Policy paths. Remaining direct behavior is represented by explicit legacy
+tool and kernel envelopes, not by a second optional context mode. The next closure track should
+migrate those concrete callers to typed actions and delete each envelope at its final ingress.
 
 Trade-off: improves architecture truthfulness and future maintainability, but must be executed in
 small bounded slices instead of one repo-wide kernelization patch.

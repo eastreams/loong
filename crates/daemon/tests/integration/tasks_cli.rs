@@ -237,7 +237,6 @@ fn seed_background_task_record(
                 "allow_shell_in_child": false,
                 "child_tool_allowlist": ["read"],
                 "workspace_root": workspace_root,
-                "kernel_bound": false,
                 "runtime_narrowing": {}
             }
         }),
@@ -264,7 +263,7 @@ fn seed_background_task_record(
     .expect("create approval request");
     repo.upsert_session_tool_policy(mvp::session::repository::NewSessionToolPolicyRecord {
         session_id: task_id.to_owned(),
-        requested_tool_ids: vec!["read".to_owned()],
+        requested_tool_ids: vec!["/read".to_owned()],
         runtime_narrowing: mvp::tools::runtime_config::ToolRuntimeNarrowing::default(),
     })
     .expect("upsert session tool policy");
@@ -544,7 +543,7 @@ async fn execute_tasks_command_list_returns_visible_background_tasks() {
     );
     assert_eq!(
         execution.payload["tasks"][0]["workflow"]["binding"]["mode"],
-        "advisory_only"
+        "mutating_capable"
     );
     assert_eq!(
         execution.payload["tasks"][0]["task_status"]["kind"],
@@ -868,7 +867,7 @@ async fn execute_tasks_command_status_surfaces_approval_and_tool_policy() {
         "status render should surface workflow phase: {rendered}"
     );
     assert!(
-        rendered.contains("workflow_binding_mode: advisory_only"),
+        rendered.contains("workflow_binding_mode: mutating_capable"),
         "status render should surface workflow binding mode: {rendered}"
     );
     assert!(

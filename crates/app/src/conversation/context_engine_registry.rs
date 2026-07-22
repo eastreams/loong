@@ -12,7 +12,6 @@ use super::context_engine::{
 pub const DEFAULT_CONTEXT_ENGINE_ID: &str = "default";
 pub const LEGACY_CONTEXT_ENGINE_ID: &str = "legacy";
 pub const CONTEXT_ENGINE_ENV: &str = "LOONG_CONTEXT_ENGINE";
-pub const LEGACY_CONTEXT_ENGINE_ENV: &str = "LOONG_CONTEXT_ENGINE";
 
 type ContextEngineFactory = Arc<dyn Fn() -> Box<dyn ConversationContextEngine> + Send + Sync>;
 
@@ -25,18 +24,7 @@ fn context_engine_env_override() -> &'static Mutex<Option<Option<String>>> {
 }
 
 fn registry() -> &'static RwLock<BTreeMap<String, ContextEngineFactory>> {
-    CONTEXT_ENGINE_REGISTRY.get_or_init(|| {
-        let mut map: BTreeMap<String, ContextEngineFactory> = BTreeMap::new();
-        map.insert(
-            DEFAULT_CONTEXT_ENGINE_ID.to_owned(),
-            Arc::new(|| Box::new(DefaultContextEngine)),
-        );
-        map.insert(
-            LEGACY_CONTEXT_ENGINE_ID.to_owned(),
-            Arc::new(|| Box::new(LegacyContextEngine)),
-        );
-        RwLock::new(map)
-    })
+    CONTEXT_ENGINE_REGISTRY.get_or_init(|| RwLock::new(BTreeMap::new()))
 }
 
 fn normalize_engine_id(raw: &str) -> String {
@@ -65,6 +53,14 @@ where
     if normalized.is_empty() {
         return Err("context engine id must not be empty".to_owned());
     }
+    if matches!(
+        normalized.as_str(),
+        DEFAULT_CONTEXT_ENGINE_ID | LEGACY_CONTEXT_ENGINE_ID
+    ) {
+        return Err(format!(
+            "context engine id `{normalized}` is reserved for a built-in engine"
+        ));
+    }
 
     let mut guard = registry()
         .write()
@@ -77,17 +73,24 @@ pub fn list_context_engine_ids() -> CliResult<Vec<String>> {
     let guard = registry()
         .read()
         .map_err(|_error| "context engine registry lock poisoned".to_owned())?;
-    Ok(guard.keys().cloned().collect())
+    let mut ids = guard.keys().cloned().collect::<Vec<_>>();
+    ids.extend([
+        DEFAULT_CONTEXT_ENGINE_ID.to_owned(),
+        LEGACY_CONTEXT_ENGINE_ID.to_owned(),
+    ]);
+    ids.sort();
+    Ok(ids)
 }
 
 pub fn list_context_engine_metadata() -> CliResult<Vec<ContextEngineMetadata>> {
     let guard = registry()
         .read()
         .map_err(|_error| "context engine registry lock poisoned".to_owned())?;
-    let mut metadata = guard
-        .values()
-        .map(|factory| factory().metadata())
-        .collect::<Vec<_>>();
+    let mut metadata = vec![
+        DefaultContextEngine::engine_metadata(),
+        LegacyContextEngine.metadata(),
+    ];
+    metadata.extend(guard.values().map(|factory| factory().metadata()));
     metadata.sort_by_key(|entry| entry.id);
     Ok(metadata)
 }
@@ -98,11 +101,24 @@ pub fn resolve_context_engine(id: Option<&str>) -> CliResult<Box<dyn Conversatio
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| DEFAULT_CONTEXT_ENGINE_ID.to_owned());
 
+    if normalized == DEFAULT_CONTEXT_ENGINE_ID {
+        return Ok(Box::new(DefaultContextEngine));
+    }
+    if normalized == LEGACY_CONTEXT_ENGINE_ID {
+        return Ok(Box::new(LegacyContextEngine));
+    }
+
     let guard = registry()
         .read()
         .map_err(|_error| "context engine registry lock poisoned".to_owned())?;
     let Some(factory) = guard.get(&normalized).cloned() else {
-        let available = guard.keys().cloned().collect::<Vec<_>>().join(", ");
+        let mut available = guard.keys().cloned().collect::<Vec<_>>();
+        available.extend([
+            DEFAULT_CONTEXT_ENGINE_ID.to_owned(),
+            LEGACY_CONTEXT_ENGINE_ID.to_owned(),
+        ]);
+        available.sort();
+        let available = available.join(", ");
         return Err(format!(
             "context engine `{normalized}` is not registered (available: {available})"
         ));
@@ -111,7 +127,33 @@ pub fn resolve_context_engine(id: Option<&str>) -> CliResult<Box<dyn Conversatio
 }
 
 pub fn describe_context_engine(id: Option<&str>) -> CliResult<ContextEngineMetadata> {
-    resolve_context_engine(id).map(|engine| engine.metadata())
+    let normalized = id
+        .map(normalize_engine_id)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_CONTEXT_ENGINE_ID.to_owned());
+    if normalized == DEFAULT_CONTEXT_ENGINE_ID {
+        return Ok(DefaultContextEngine::engine_metadata());
+    }
+    if normalized == LEGACY_CONTEXT_ENGINE_ID {
+        return Ok(LegacyContextEngine.metadata());
+    }
+
+    let guard = registry()
+        .read()
+        .map_err(|_error| "context engine registry lock poisoned".to_owned())?;
+    let Some(factory) = guard.get(&normalized) else {
+        let mut available = guard.keys().cloned().collect::<Vec<_>>();
+        available.extend([
+            DEFAULT_CONTEXT_ENGINE_ID.to_owned(),
+            LEGACY_CONTEXT_ENGINE_ID.to_owned(),
+        ]);
+        available.sort();
+        return Err(format!(
+            "context engine `{normalized}` is not registered (available: {})",
+            available.join(", ")
+        ));
+    };
+    Ok(factory().metadata())
 }
 
 pub fn context_engine_id_from_env() -> Option<String> {
@@ -124,7 +166,6 @@ pub fn context_engine_id_from_env() -> Option<String> {
 
     std::env::var(CONTEXT_ENGINE_ENV)
         .ok()
-        .or_else(|| std::env::var(LEGACY_CONTEXT_ENGINE_ENV).ok())
         .map(|value| normalize_engine_id(value.as_str()))
         .filter(|value| !value.is_empty())
 }
@@ -177,8 +218,7 @@ mod tests {
     use async_trait::async_trait;
     use serde_json::Value;
 
-    use super::super::runtime_binding::ConversationRuntimeBinding;
-    use crate::config::LoongConfig;
+    use crate::{Context, config::LoongConfig};
 
     use super::super::context_engine::ContextEngineCapability;
     use super::*;
@@ -194,9 +234,8 @@ mod tests {
         async fn assemble_messages(
             &self,
             _config: &LoongConfig,
-            _session_id: &str,
             _include_system_prompt: bool,
-            _binding: ConversationRuntimeBinding<'_>,
+            _ctx: &Context<'_>,
         ) -> CliResult<Vec<Value>> {
             Ok(Vec::new())
         }

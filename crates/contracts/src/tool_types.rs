@@ -34,7 +34,7 @@ pub struct ToolSpec {
     /// JSON Schema for the payload accepted by this tool.
     ///
     /// The registry path/function name is intentionally not part of the schema;
-    /// app-owned planes provide identity, while concrete tools describe input.
+    /// Runtime registration provides identity, while concrete tools describe input.
     pub input_schema: Value,
     pub required_capabilities: BTreeSet<Capability>,
     /// Execution ordering metadata for orchestration, never authorization input.
@@ -53,6 +53,10 @@ pub struct ToolSpec {
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Error, Serialize, Deserialize)]
 pub enum ToolInputError {
+    #[error("tool input payload must be an object")]
+    PayloadMustBeObject,
+    #[error("tool input requires at least one of these fields: {fields:?}")]
+    MissingOneOf { fields: Vec<String> },
     #[error("missing tool input field `{field}`")]
     MissingField { field: String },
     #[error("invalid tool input field `{field}`: {reason}")]
@@ -62,6 +66,13 @@ pub enum ToolInputError {
 }
 
 impl ToolInputError {
+    #[must_use]
+    pub fn missing_one_of(fields: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self::MissingOneOf {
+            fields: fields.into_iter().map(Into::into).collect(),
+        }
+    }
+
     #[must_use]
     pub fn missing_field(field: impl Into<String>) -> Self {
         Self::MissingField {

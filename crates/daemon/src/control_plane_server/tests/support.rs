@@ -282,11 +282,10 @@ fn seeded_turn_runtime(
     )
     .expect("write control-plane turn runtime config");
     let acp_manager = Arc::new(mvp::acp::AcpSessionManager::default());
-    Arc::new(ControlPlaneTurnRuntime::with_manager(
-        resolved_path,
-        config,
-        acp_manager,
-    ))
+    Arc::new(
+        ControlPlaneTurnRuntime::with_manager(resolved_path, config, acp_manager)
+            .expect("bootstrap control-plane test runtime"),
+    )
 }
 
 fn remote_control_plane_config(shared_token: &str) -> mvp::config::LoongConfig {
@@ -460,8 +459,9 @@ fn isolated_memory_config(test_name: &str) -> mvp::session::store::SessionStoreC
 
 #[cfg(feature = "memory-sqlite")]
 fn seeded_repository_view(test_name: &str) -> Arc<mvp::control_plane::ControlPlaneRepositoryView> {
-    let config = isolated_memory_config(test_name);
-    let repo = mvp::session::repository::SessionRepository::new(&config).expect("repository");
+    let memory_config = isolated_memory_config(test_name);
+    let repo =
+        mvp::session::repository::SessionRepository::new(&memory_config).expect("repository");
     repo.create_session(mvp::session::repository::NewSessionRecord {
         session_id: "root-session".to_owned(),
         kind: mvp::session::repository::SessionKind::Root,
@@ -495,7 +495,6 @@ fn seeded_repository_view(test_name: &str) -> Arc<mvp::control_plane::ControlPla
                 "allow_shell_in_child": false,
                 "child_tool_allowlist": ["read"],
                 "workspace_root": "/tmp/loong/control-plane/child-session",
-                "kernel_bound": false,
                 "runtime_narrowing": {}
             },
             "runtime_self_continuity": {
@@ -533,7 +532,7 @@ fn seeded_repository_view(test_name: &str) -> Arc<mvp::control_plane::ControlPla
     .expect("create visible approval");
     repo.upsert_session_tool_policy(mvp::session::repository::NewSessionToolPolicyRecord {
         session_id: "child-session".to_owned(),
-        requested_tool_ids: vec!["read".to_owned()],
+        requested_tool_ids: vec!["/read".to_owned()],
         runtime_narrowing: mvp::tools::runtime_config::ToolRuntimeNarrowing::default(),
     })
     .expect("create visible tool policy");
@@ -562,9 +561,19 @@ fn seeded_repository_view(test_name: &str) -> Arc<mvp::control_plane::ControlPla
     })
     .expect("create hidden approval");
 
+    let mut app_config = mvp::config::LoongConfig::default();
+    app_config.audit.mode = mvp::config::AuditMode::InMemory;
+    app_config.tools.file_root = Some("/tmp/loong/control-plane".to_owned());
+    app_config.memory.sqlite_path = memory_config
+        .sqlite_path
+        .as_ref()
+        .expect("sqlite path")
+        .display()
+        .to_string();
+    let runtime = mvp::runtime::bootstrap_runtime_with_config(&app_config).expect("test runtime");
     Arc::new(mvp::control_plane::ControlPlaneRepositoryView::new(
-        config,
-        mvp::config::ToolConfig::default(),
+        &app_config,
+        Arc::clone(&runtime),
         "root-session",
     ))
 }
@@ -646,6 +655,7 @@ fn seeded_control_plane_views(
     .expect("create hidden approval");
 
     let mut config = mvp::config::LoongConfig::default();
+    config.audit.mode = mvp::config::AuditMode::InMemory;
     let sqlite_path = memory_config
         .sqlite_path
         .as_ref()
@@ -709,10 +719,11 @@ fn seeded_control_plane_views(
     )
     .expect("seed hidden ACP session");
 
+    let runtime = mvp::runtime::bootstrap_runtime_with_config(&config).expect("test runtime");
     (
         Arc::new(mvp::control_plane::ControlPlaneRepositoryView::new(
-            memory_config,
-            mvp::config::ToolConfig::default(),
+            &config,
+            Arc::clone(&runtime),
             "root-session",
         )),
         Arc::new(mvp::control_plane::ControlPlaneAcpView::new(

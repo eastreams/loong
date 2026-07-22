@@ -1,24 +1,4 @@
 use super::*;
-#[cfg(test)]
-use crate::conversation::load_safe_lane_event_summary;
-
-#[cfg(test)]
-pub(super) async fn load_safe_lane_summary_output(
-    session_id: &str,
-    limit: usize,
-    conversation_config: &ConversationConfig,
-    binding: ConversationRuntimeBinding<'_>,
-    memory_config: &SessionStoreConfig,
-) -> CliResult<String> {
-    let summary = load_safe_lane_event_summary(session_id, limit, binding, memory_config).await?;
-
-    Ok(format_safe_lane_summary(
-        session_id,
-        limit,
-        conversation_config,
-        &summary,
-    ))
-}
 
 #[cfg(test)]
 pub(super) fn format_safe_lane_summary(

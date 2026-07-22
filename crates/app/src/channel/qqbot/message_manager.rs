@@ -5,7 +5,6 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tracing;
 
-use crate::AppContext;
 use crate::CliResult;
 use crate::channel::access_policy::ChannelInboundAccessPolicy;
 use crate::channel::core::types::{
@@ -31,7 +30,9 @@ const MAX_QUEUE_CAPACITY: usize = 3;
 pub(super) struct QqbotMsgManager {
     config: LoongConfig,
     resolved_path: PathBuf,
-    app_ctx: AppContext,
+    execution_runtime:
+        std::sync::Arc<loong_runtime::runtime::Runtime<crate::RuntimeContextFactory>>,
+    agent_id: String,
     account_id: String,
     configured_account_id: String,
     access_policy: ChannelInboundAccessPolicy<String>,
@@ -45,7 +46,10 @@ impl QqbotMsgManager {
         config: LoongConfig,
         resolved_path: PathBuf,
         resolved: ResolvedQqbotChannelConfig,
-        app_ctx: AppContext,
+        execution_runtime: std::sync::Arc<
+            loong_runtime::runtime::Runtime<crate::RuntimeContextFactory>,
+        >,
+        agent_id: impl Into<String>,
         account_id: String,
         outbound_tx: mpsc::Sender<QqbotOutboundMessage>,
     ) -> Self {
@@ -53,7 +57,8 @@ impl QqbotMsgManager {
         Self {
             config,
             resolved_path,
-            app_ctx,
+            execution_runtime,
+            agent_id: agent_id.into(),
             account_id,
             configured_account_id: resolved.configured_account_id,
             access_policy,
@@ -119,7 +124,8 @@ impl QqbotMsgManager {
             &self.config,
             Some(&self.resolved_path),
             &inbound,
-            &self.app_ctx,
+            &self.execution_runtime,
+            &self.agent_id,
             ChannelTurnFeedbackPolicy::final_trace_significant(),
         )
         .await?;

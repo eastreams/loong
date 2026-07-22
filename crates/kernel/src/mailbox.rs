@@ -76,13 +76,28 @@ pub struct InterAgentMessage {
 #[derive(Debug)]
 struct AgentMailboxState {
     receiver: Mutex<mpsc::UnboundedReceiver<InterAgentMessage>>,
+}
+
+#[derive(Debug)]
+struct AgentMailboxNotifications {
     sequence: AtomicU64,
     notifier: watch::Sender<u64>,
 }
 
+/// Cloneable write capability for one mailbox.
+///
+/// A sender deliberately cannot drain messages. Child execution may therefore
+/// report completion to its parent without gaining ownership of the parent's
+/// receive queue.
+#[derive(Debug, Clone)]
+pub struct AgentMailboxSender {
+    sender: mpsc::UnboundedSender<InterAgentMessage>,
+    notifications: Arc<AgentMailboxNotifications>,
+}
+
 #[derive(Debug, Clone)]
 pub struct AgentMailbox {
-    sender: mpsc::UnboundedSender<InterAgentMessage>,
+    sender: AgentMailboxSender,
     state: Arc<AgentMailboxState>,
 }
 
@@ -91,26 +106,26 @@ impl AgentMailbox {
         let (sender, receiver) = mpsc::unbounded_channel();
         let (notifier, _) = watch::channel(0_u64);
         Self {
-            sender,
+            sender: AgentMailboxSender {
+                sender,
+                notifications: Arc::new(AgentMailboxNotifications {
+                    sequence: AtomicU64::new(0),
+                    notifier,
+                }),
+            },
             state: Arc::new(AgentMailboxState {
                 receiver: Mutex::new(receiver),
-                sequence: AtomicU64::new(0),
-                notifier,
             }),
         }
     }
 
-    pub fn send(&self, msg: InterAgentMessage) -> Result<(), String> {
-        self.sender
-            .send(msg)
-            .map_err(|error| format!("agent_mailbox_closed: {error}"))?;
-        let next_seq = self.state.sequence.fetch_add(1, Ordering::Relaxed) + 1;
-        let _ = self.state.notifier.send(next_seq);
-        Ok(())
+    #[must_use]
+    pub fn sender(&self) -> AgentMailboxSender {
+        self.sender.clone()
     }
 
     pub fn subscribe(&self) -> watch::Receiver<u64> {
-        self.state.notifier.subscribe()
+        self.sender.notifications.notifier.subscribe()
     }
 
     pub async fn drain(&self) -> Vec<InterAgentMessage> {
@@ -120,6 +135,17 @@ impl AgentMailbox {
             drained.push_back(message);
         }
         drained.into_iter().collect()
+    }
+}
+
+impl AgentMailboxSender {
+    pub fn send(&self, msg: InterAgentMessage) -> Result<(), String> {
+        self.sender
+            .send(msg)
+            .map_err(|error| format!("agent_mailbox_closed: {error}"))?;
+        let next_seq = self.notifications.sequence.fetch_add(1, Ordering::Relaxed) + 1;
+        let _ = self.notifications.notifier.send(next_seq);
+        Ok(())
     }
 }
 
@@ -176,7 +202,7 @@ mod tests {
 
         let author = AgentPath::root();
         let recipient = author.join("task").unwrap_or_else(|_| AgentPath::root());
-        let send_result = mailbox.send(InterAgentMessage {
+        let send_result = mailbox.sender().send(InterAgentMessage {
             author,
             recipient,
             content: MailboxContent::StatusNotification {
@@ -198,7 +224,7 @@ mod tests {
         let mailbox = AgentMailbox::new();
         let mut subscription = mailbox.subscribe();
 
-        let first = mailbox.send(InterAgentMessage {
+        let first = mailbox.sender().send(InterAgentMessage {
             author: AgentPath::root(),
             recipient: AgentPath::root(),
             content: MailboxContent::StatusNotification {
@@ -211,7 +237,7 @@ mod tests {
         assert!(first_changed.is_ok());
         let first_seq = *subscription.borrow();
 
-        let second = mailbox.send(InterAgentMessage {
+        let second = mailbox.sender().send(InterAgentMessage {
             author: AgentPath::root(),
             recipient: AgentPath::root(),
             content: MailboxContent::DelegateResult {
@@ -233,7 +259,7 @@ mod tests {
         let mailbox = AgentMailbox::new();
         let mailbox_2 = mailbox.clone();
 
-        let send_1 = mailbox.send(InterAgentMessage {
+        let send_1 = mailbox.sender().send(InterAgentMessage {
             author: AgentPath::root(),
             recipient: AgentPath::root(),
             content: MailboxContent::StatusNotification {
@@ -243,7 +269,7 @@ mod tests {
         });
         assert!(send_1.is_ok());
 
-        let send_2 = mailbox_2.send(InterAgentMessage {
+        let send_2 = mailbox_2.sender().send(InterAgentMessage {
             author: AgentPath::root(),
             recipient: AgentPath::root(),
             content: MailboxContent::StatusNotification {

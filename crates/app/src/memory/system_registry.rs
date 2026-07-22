@@ -326,7 +326,8 @@ pub fn collect_memory_system_runtime_snapshot(
     let runtime = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let selected_runtime = resolve_memory_system_runtime(&runtime)?;
     let selected_metadata = selected_runtime.metadata().clone();
-    let core_operations = selected_runtime.supported_core_operations();
+    let core_operations =
+        super::supported_memory_core_operations(selected_runtime.config().backend);
     let available = list_memory_system_metadata()?;
     let policy = MemorySystemPolicySnapshot::from_runtime_config(&runtime);
 
@@ -343,8 +344,7 @@ pub fn collect_memory_system_runtime_snapshot(
 mod tests {
     use super::*;
     use crate::memory::{
-        BuiltinMemorySystemRuntime, MemoryCoreOperation, MemorySystemRuntime,
-        MemorySystemRuntimeFallbackKind,
+        BuiltinMemorySystemRuntime, MemorySystemRuntime, MemorySystemRuntimeFallbackKind,
     };
     use crate::memory::{MEMORY_SYSTEM_API_VERSION, MemoryRecallMode, MemorySystemCapability};
     use crate::test_utils::ScopedEnv;
@@ -529,6 +529,7 @@ mod tests {
     struct RuntimeMetadataOverrideRegistrySystem;
 
     struct RuntimeMetadataOverrideRuntime {
+        config: MemoryRuntimeConfig,
         metadata: MemorySystemMetadata,
     }
 
@@ -549,7 +550,7 @@ mod tests {
 
         fn create_runtime(
             &self,
-            _config: &MemoryRuntimeConfig,
+            config: &MemoryRuntimeConfig,
         ) -> CliResult<Option<Box<dyn MemorySystemRuntime>>> {
             let metadata = MemorySystemMetadata::new(
                 "registry-runtime-metadata-override",
@@ -557,7 +558,10 @@ mod tests {
                 "Runtime override metadata",
             )
             .with_runtime_fallback_kind(MemorySystemRuntimeFallbackKind::MetadataOnly);
-            let runtime = RuntimeMetadataOverrideRuntime { metadata };
+            let runtime = RuntimeMetadataOverrideRuntime {
+                config: config.clone(),
+                metadata,
+            };
             let boxed_runtime: Box<dyn MemorySystemRuntime> = Box::new(runtime);
 
             Ok(Some(boxed_runtime))
@@ -570,37 +574,38 @@ mod tests {
             &self.metadata
         }
 
-        fn supported_core_operations(&self) -> Vec<MemoryCoreOperation> {
-            vec![MemoryCoreOperation::ReadContext]
+        fn config(&self) -> &MemoryRuntimeConfig {
+            &self.config
         }
 
-        fn execute_core(
+        async fn read_stage_envelope(
             &self,
-            _request: loong_contracts::MemoryCoreRequest,
-        ) -> Result<loong_contracts::MemoryCoreOutcome, String> {
-            let error = "snapshot-only runtime should not execute core in this test".to_owned();
-
-            Err(error)
+            _granted: loong_core::policy::grant::Granted<
+                loong_kernel::access::memory::MemoryReadStageEnvelopeAction,
+            >,
+        ) -> Result<crate::memory::StageEnvelope, loong_kernel::access::memory::MemoryBackendError>
+        {
+            Err(
+                loong_kernel::access::memory::MemoryBackendError::Execution {
+                    operation: "read_stage_envelope",
+                    source: "snapshot-only runtime should not hydrate in this test".into(),
+                },
+            )
         }
 
-        fn hydrate_stage_envelope(
+        async fn compact(
             &self,
-            _session_id: &str,
-            _workspace_root: Option<&std::path::Path>,
-        ) -> Result<crate::memory::StageEnvelope, String> {
-            let error = "snapshot-only runtime should not hydrate in this test".to_owned();
-
-            Err(error)
-        }
-
-        async fn run_compact_stage(
-            &self,
-            _session_id: &str,
-            _workspace_root: Option<&std::path::Path>,
-        ) -> Result<crate::memory::StageDiagnostics, String> {
-            let error = "snapshot-only runtime should not compact in this test".to_owned();
-
-            Err(error)
+            _granted: loong_core::policy::grant::Granted<
+                loong_kernel::access::memory::MemoryCompactAction,
+            >,
+        ) -> Result<crate::memory::StageDiagnostics, loong_kernel::access::memory::MemoryBackendError>
+        {
+            Err(
+                loong_kernel::access::memory::MemoryBackendError::Execution {
+                    operation: "compact",
+                    source: "snapshot-only runtime should not compact in this test".into(),
+                },
+            )
         }
     }
 
@@ -973,7 +978,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_snapshot_prefers_resolved_runtime_metadata_and_core_operations() {
+    fn runtime_snapshot_uses_resolved_metadata_and_legacy_backend_operations() {
         let mut env = ScopedEnv::new();
         clear_memory_runtime_env_overrides(&mut env);
 
@@ -1005,7 +1010,9 @@ mod tests {
         );
         assert_eq!(
             snapshot.core_operations,
-            vec![MemoryCoreOperation::ReadContext]
+            crate::memory::supported_memory_core_operations(
+                crate::config::MemoryBackendKind::Sqlite,
+            )
         );
     }
 

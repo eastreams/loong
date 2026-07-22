@@ -2,7 +2,6 @@ use super::*;
 use crate::channel::ChannelPlatform;
 use crate::channel::runtime::state::start_channel_operation_runtime_tracker_for_test;
 use crate::config::{LoongConfig, ProviderConfig};
-use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_test_app_context};
 use axum::{
     Json, Router,
     body::to_bytes,
@@ -650,8 +649,10 @@ async fn feishu_webhook_file_event_reaches_provider_as_structured_text_and_repli
         .refresh_tenant_token()
         .await
         .expect("refresh tenant token before webhook test");
-    let app_ctx = bootstrap_test_app_context("feishu-webhook-test", DEFAULT_TOKEN_TTL_S)
-        .expect("bootstrap app context");
+    let owner = crate::test_support::runtime_session_for_test(
+        "feishu-webhook-test",
+        crate::tools::runtime_tool_view_from_loong_config(&config),
+    );
     let runtime = Arc::new(
         ChannelOperationRuntimeTracker::start(
             ChannelPlatform::Feishu,
@@ -662,7 +663,14 @@ async fn feishu_webhook_file_event_reaches_provider_as_structured_text_and_repli
         .await
         .expect("start runtime tracker"),
     );
-    let state = FeishuWebhookState::new(config, &resolved, adapter, app_ctx, runtime);
+    let state = FeishuWebhookState::new(
+        config,
+        &resolved,
+        adapter,
+        owner.runtime.clone(),
+        owner.session.agent_id().to_owned(),
+        runtime,
+    );
 
     let payload = json!({
         "token": "verify-token",
@@ -796,8 +804,10 @@ async fn feishu_webhook_skips_ack_reaction_when_disabled_impl() {
         .refresh_tenant_token()
         .await
         .expect("refresh tenant token before webhook test");
-    let app_ctx = bootstrap_test_app_context("feishu-webhook-no-ack-test", DEFAULT_TOKEN_TTL_S)
-        .expect("bootstrap app context");
+    let owner = crate::test_support::runtime_session_for_test(
+        "feishu-webhook-no-ack-test",
+        crate::tools::runtime_tool_view_from_loong_config(&config),
+    );
     let runtime = Arc::new(
         ChannelOperationRuntimeTracker::start(
             ChannelPlatform::Feishu,
@@ -808,7 +818,14 @@ async fn feishu_webhook_skips_ack_reaction_when_disabled_impl() {
         .await
         .expect("start runtime tracker"),
     );
-    let state = FeishuWebhookState::new(config, &resolved, adapter, app_ctx, runtime);
+    let state = FeishuWebhookState::new(
+        config,
+        &resolved,
+        adapter,
+        owner.runtime.clone(),
+        owner.session.agent_id().to_owned(),
+        runtime,
+    );
 
     let payload = json!({
         "token": "verify-token",
@@ -881,9 +898,10 @@ async fn feishu_webhook_provider_failure_retry_does_not_duplicate_ack_reaction_i
         .refresh_tenant_token()
         .await
         .expect("refresh tenant token before webhook test");
-    let app_ctx =
-        bootstrap_test_app_context("feishu-webhook-provider-failure", DEFAULT_TOKEN_TTL_S)
-            .expect("bootstrap app context");
+    let owner = crate::test_support::runtime_session_for_test(
+        "feishu-webhook-provider-failure",
+        crate::tools::runtime_tool_view_from_loong_config(&config),
+    );
     let runtime = Arc::new(
         ChannelOperationRuntimeTracker::start(
             ChannelPlatform::Feishu,
@@ -894,7 +912,14 @@ async fn feishu_webhook_provider_failure_retry_does_not_duplicate_ack_reaction_i
         .await
         .expect("start runtime tracker"),
     );
-    let state = FeishuWebhookState::new(config, &resolved, adapter, app_ctx, runtime);
+    let state = FeishuWebhookState::new(
+        config,
+        &resolved,
+        adapter,
+        owner.runtime.clone(),
+        owner.session.agent_id().to_owned(),
+        runtime,
+    );
 
     let payload = json!({
         "token": "verify-token",
@@ -996,11 +1021,10 @@ async fn feishu_webhook_reaction_failure_stays_best_effort_after_reply_impl() {
         .refresh_tenant_token()
         .await
         .expect("refresh tenant token before webhook test");
-    let app_ctx = bootstrap_test_app_context(
+    let owner = crate::test_support::runtime_session_for_test(
         "feishu-webhook-reaction-failure-best-effort",
-        DEFAULT_TOKEN_TTL_S,
-    )
-    .expect("bootstrap app context");
+        crate::tools::runtime_tool_view_from_loong_config(&config),
+    );
     let runtime = Arc::new(
         ChannelOperationRuntimeTracker::start(
             ChannelPlatform::Feishu,
@@ -1011,7 +1035,14 @@ async fn feishu_webhook_reaction_failure_stays_best_effort_after_reply_impl() {
         .await
         .expect("start runtime tracker"),
     );
-    let state = FeishuWebhookState::new(config, &resolved, adapter, app_ctx, runtime);
+    let state = FeishuWebhookState::new(
+        config,
+        &resolved,
+        adapter,
+        owner.runtime.clone(),
+        owner.session.agent_id().to_owned(),
+        runtime,
+    );
 
     let payload = json!({
         "token": "verify-token",
@@ -1093,9 +1124,10 @@ async fn feishu_webhook_provider_timeout_acknowledges_after_retry_budget_exhaust
         .refresh_tenant_token()
         .await
         .expect("refresh tenant token before webhook test");
-    let app_ctx =
-        bootstrap_test_app_context("feishu-webhook-provider-timeout", DEFAULT_TOKEN_TTL_S)
-            .expect("bootstrap app context");
+    let owner = crate::test_support::runtime_session_for_test(
+        "feishu-webhook-provider-timeout",
+        crate::tools::runtime_tool_view_from_loong_config(&config),
+    );
     let runtime = Arc::new(
         ChannelOperationRuntimeTracker::start(
             ChannelPlatform::Feishu,
@@ -1106,7 +1138,14 @@ async fn feishu_webhook_provider_timeout_acknowledges_after_retry_budget_exhaust
         .await
         .expect("start runtime tracker"),
     );
-    let state = FeishuWebhookState::new(config, &resolved, adapter, app_ctx, runtime);
+    let state = FeishuWebhookState::new(
+        config,
+        &resolved,
+        adapter,
+        owner.runtime.clone(),
+        owner.session.agent_id().to_owned(),
+        runtime,
+    );
 
     let payload = json!({
         "token": "verify-token",
@@ -1287,9 +1326,10 @@ async fn feishu_webhook_inbound_reply_stays_successful_when_runtime_end_write_fa
         .refresh_tenant_token()
         .await
         .expect("refresh tenant token before webhook test");
-    let app_ctx =
-        bootstrap_test_app_context("feishu-webhook-runtime-end-failure", DEFAULT_TOKEN_TTL_S)
-            .expect("bootstrap app context");
+    let owner = crate::test_support::runtime_session_for_test(
+        "feishu-webhook-runtime-end-failure",
+        crate::tools::runtime_tool_view_from_loong_config(&config),
+    );
     let runtime_dir = temp_webhook_test_dir("runtime-end-failure");
     std::fs::create_dir_all(&runtime_dir).expect("create runtime dir");
     let runtime = Arc::new(
@@ -1304,7 +1344,14 @@ async fn feishu_webhook_inbound_reply_stays_successful_when_runtime_end_write_fa
         .await
         .expect("start test runtime tracker"),
     );
-    let state = FeishuWebhookState::new(config, &resolved, adapter, app_ctx, runtime);
+    let state = FeishuWebhookState::new(
+        config,
+        &resolved,
+        adapter,
+        owner.runtime.clone(),
+        owner.session.agent_id().to_owned(),
+        runtime,
+    );
 
     let runtime_dir_for_delete = runtime_dir.clone();
     let runtime_delete = tokio::spawn(async move {
@@ -1395,8 +1442,10 @@ async fn feishu_webhook_card_callback_reaches_provider_and_returns_safe_noop_bod
         .resolve_account(None)
         .expect("resolve feishu account");
     let adapter = FeishuAdapter::new(&resolved).expect("build feishu adapter");
-    let app_ctx = bootstrap_test_app_context("feishu-webhook-card-callback", DEFAULT_TOKEN_TTL_S)
-        .expect("bootstrap app context");
+    let owner = crate::test_support::runtime_session_for_test(
+        "feishu-webhook-card-callback",
+        crate::tools::runtime_tool_view_from_loong_config(&config),
+    );
     let runtime = Arc::new(
         ChannelOperationRuntimeTracker::start(
             ChannelPlatform::Feishu,
@@ -1407,7 +1456,14 @@ async fn feishu_webhook_card_callback_reaches_provider_and_returns_safe_noop_bod
         .await
         .expect("start runtime tracker"),
     );
-    let state = FeishuWebhookState::new(config, &resolved, adapter, app_ctx, runtime);
+    let state = FeishuWebhookState::new(
+        config,
+        &resolved,
+        adapter,
+        owner.runtime.clone(),
+        owner.session.agent_id().to_owned(),
+        runtime,
+    );
 
     let payload = json!({
         "header": {
@@ -1507,9 +1563,10 @@ async fn feishu_webhook_card_callback_structured_toast_response_is_returned_impl
         .resolve_account(None)
         .expect("resolve feishu account");
     let adapter = FeishuAdapter::new(&resolved).expect("build feishu adapter");
-    let app_ctx =
-        bootstrap_test_app_context("feishu-webhook-card-callback-toast", DEFAULT_TOKEN_TTL_S)
-            .expect("bootstrap app context");
+    let owner = crate::test_support::runtime_session_for_test(
+        "feishu-webhook-card-callback-toast",
+        crate::tools::runtime_tool_view_from_loong_config(&config),
+    );
     let runtime = Arc::new(
         ChannelOperationRuntimeTracker::start(
             ChannelPlatform::Feishu,
@@ -1520,7 +1577,14 @@ async fn feishu_webhook_card_callback_structured_toast_response_is_returned_impl
         .await
         .expect("start runtime tracker"),
     );
-    let state = FeishuWebhookState::new(config, &resolved, adapter, app_ctx, runtime);
+    let state = FeishuWebhookState::new(
+        config,
+        &resolved,
+        adapter,
+        owner.runtime.clone(),
+        owner.session.agent_id().to_owned(),
+        runtime,
+    );
 
     let payload = json!({
         "header": {
@@ -1601,9 +1665,10 @@ async fn feishu_webhook_card_callback_structured_card_response_is_returned_impl(
         .resolve_account(None)
         .expect("resolve feishu account");
     let adapter = FeishuAdapter::new(&resolved).expect("build feishu adapter");
-    let app_ctx =
-        bootstrap_test_app_context("feishu-webhook-card-callback-card", DEFAULT_TOKEN_TTL_S)
-            .expect("bootstrap app context");
+    let owner = crate::test_support::runtime_session_for_test(
+        "feishu-webhook-card-callback-card",
+        crate::tools::runtime_tool_view_from_loong_config(&config),
+    );
     let runtime = Arc::new(
         ChannelOperationRuntimeTracker::start(
             ChannelPlatform::Feishu,
@@ -1614,7 +1679,14 @@ async fn feishu_webhook_card_callback_structured_card_response_is_returned_impl(
         .await
         .expect("start runtime tracker"),
     );
-    let state = FeishuWebhookState::new(config, &resolved, adapter, app_ctx, runtime);
+    let state = FeishuWebhookState::new(
+        config,
+        &resolved,
+        adapter,
+        owner.runtime.clone(),
+        owner.session.agent_id().to_owned(),
+        runtime,
+    );
 
     let payload = json!({
         "header": {
@@ -1699,11 +1771,10 @@ async fn feishu_webhook_card_callback_structured_card_markdown_response_is_retur
         .resolve_account(None)
         .expect("resolve feishu account");
     let adapter = FeishuAdapter::new(&resolved).expect("build feishu adapter");
-    let app_ctx = bootstrap_test_app_context(
+    let owner = crate::test_support::runtime_session_for_test(
         "feishu-webhook-card-callback-card-markdown",
-        DEFAULT_TOKEN_TTL_S,
-    )
-    .expect("bootstrap app context");
+        crate::tools::runtime_tool_view_from_loong_config(&config),
+    );
     let runtime = Arc::new(
         ChannelOperationRuntimeTracker::start(
             ChannelPlatform::Feishu,
@@ -1714,7 +1785,14 @@ async fn feishu_webhook_card_callback_structured_card_markdown_response_is_retur
         .await
         .expect("start runtime tracker"),
     );
-    let state = FeishuWebhookState::new(config, &resolved, adapter, app_ctx, runtime);
+    let state = FeishuWebhookState::new(
+        config,
+        &resolved,
+        adapter,
+        owner.runtime.clone(),
+        owner.session.agent_id().to_owned(),
+        runtime,
+    );
 
     let payload = json!({
         "header": {
@@ -1805,11 +1883,10 @@ async fn feishu_webhook_card_callback_structured_card_response_with_toast_is_ret
         .resolve_account(None)
         .expect("resolve feishu account");
     let adapter = FeishuAdapter::new(&resolved).expect("build feishu adapter");
-    let app_ctx = bootstrap_test_app_context(
+    let owner = crate::test_support::runtime_session_for_test(
         "feishu-webhook-card-callback-card-with-toast",
-        DEFAULT_TOKEN_TTL_S,
-    )
-    .expect("bootstrap app context");
+        crate::tools::runtime_tool_view_from_loong_config(&config),
+    );
     let runtime = Arc::new(
         ChannelOperationRuntimeTracker::start(
             ChannelPlatform::Feishu,
@@ -1820,7 +1897,14 @@ async fn feishu_webhook_card_callback_structured_card_response_with_toast_is_ret
         .await
         .expect("start runtime tracker"),
     );
-    let state = FeishuWebhookState::new(config, &resolved, adapter, app_ctx, runtime);
+    let state = FeishuWebhookState::new(
+        config,
+        &resolved,
+        adapter,
+        owner.runtime.clone(),
+        owner.session.agent_id().to_owned(),
+        runtime,
+    );
 
     let payload = json!({
         "header": {
@@ -1913,11 +1997,10 @@ async fn feishu_webhook_card_callback_structured_card_markdown_response_with_toa
         .resolve_account(None)
         .expect("resolve feishu account");
     let adapter = FeishuAdapter::new(&resolved).expect("build feishu adapter");
-    let app_ctx = bootstrap_test_app_context(
+    let owner = crate::test_support::runtime_session_for_test(
         "feishu-webhook-card-callback-card-markdown-with-toast",
-        DEFAULT_TOKEN_TTL_S,
-    )
-    .expect("bootstrap app context");
+        crate::tools::runtime_tool_view_from_loong_config(&config),
+    );
     let runtime = Arc::new(
         ChannelOperationRuntimeTracker::start(
             ChannelPlatform::Feishu,
@@ -1928,7 +2011,14 @@ async fn feishu_webhook_card_callback_structured_card_markdown_response_with_toa
         .await
         .expect("start runtime tracker"),
     );
-    let state = FeishuWebhookState::new(config, &resolved, adapter, app_ctx, runtime);
+    let state = FeishuWebhookState::new(
+        config,
+        &resolved,
+        adapter,
+        owner.runtime.clone(),
+        owner.session.agent_id().to_owned(),
+        runtime,
+    );
 
     let payload = json!({
         "header": {
@@ -2045,11 +2135,10 @@ async fn feishu_webhook_card_callback_invalid_structured_response_falls_back_to_
         .resolve_account(None)
         .expect("resolve feishu account");
     let adapter = FeishuAdapter::new(&resolved).expect("build feishu adapter");
-    let app_ctx = bootstrap_test_app_context(
+    let owner = crate::test_support::runtime_session_for_test(
         "feishu-webhook-card-callback-invalid-toast",
-        DEFAULT_TOKEN_TTL_S,
-    )
-    .expect("bootstrap app context");
+        crate::tools::runtime_tool_view_from_loong_config(&config),
+    );
     let runtime = Arc::new(
         ChannelOperationRuntimeTracker::start(
             ChannelPlatform::Feishu,
@@ -2060,7 +2149,14 @@ async fn feishu_webhook_card_callback_invalid_structured_response_falls_back_to_
         .await
         .expect("start runtime tracker"),
     );
-    let state = FeishuWebhookState::new(config, &resolved, adapter, app_ctx, runtime);
+    let state = FeishuWebhookState::new(
+        config,
+        &resolved,
+        adapter,
+        owner.runtime.clone(),
+        owner.session.agent_id().to_owned(),
+        runtime,
+    );
 
     let payload = json!({
         "header": {
@@ -2129,11 +2225,10 @@ async fn feishu_webhook_card_callback_invalid_structured_card_response_falls_bac
         .resolve_account(None)
         .expect("resolve feishu account");
     let adapter = FeishuAdapter::new(&resolved).expect("build feishu adapter");
-    let app_ctx = bootstrap_test_app_context(
+    let owner = crate::test_support::runtime_session_for_test(
         "feishu-webhook-card-callback-invalid-card",
-        DEFAULT_TOKEN_TTL_S,
-    )
-    .expect("bootstrap app context");
+        crate::tools::runtime_tool_view_from_loong_config(&config),
+    );
     let runtime = Arc::new(
         ChannelOperationRuntimeTracker::start(
             ChannelPlatform::Feishu,
@@ -2144,7 +2239,14 @@ async fn feishu_webhook_card_callback_invalid_structured_card_response_falls_bac
         .await
         .expect("start runtime tracker"),
     );
-    let state = FeishuWebhookState::new(config, &resolved, adapter, app_ctx, runtime);
+    let state = FeishuWebhookState::new(
+        config,
+        &resolved,
+        adapter,
+        owner.runtime.clone(),
+        owner.session.agent_id().to_owned(),
+        runtime,
+    );
 
     let payload = json!({
         "header": {
@@ -2209,9 +2311,10 @@ async fn feishu_webhook_card_callback_duplicate_is_deduped_safely_impl() {
         .resolve_account(None)
         .expect("resolve feishu account");
     let adapter = FeishuAdapter::new(&resolved).expect("build feishu adapter");
-    let app_ctx =
-        bootstrap_test_app_context("feishu-webhook-card-callback-dedupe", DEFAULT_TOKEN_TTL_S)
-            .expect("bootstrap app context");
+    let owner = crate::test_support::runtime_session_for_test(
+        "feishu-webhook-card-callback-dedupe",
+        crate::tools::runtime_tool_view_from_loong_config(&config),
+    );
     let runtime = Arc::new(
         ChannelOperationRuntimeTracker::start(
             ChannelPlatform::Feishu,
@@ -2222,7 +2325,14 @@ async fn feishu_webhook_card_callback_duplicate_is_deduped_safely_impl() {
         .await
         .expect("start runtime tracker"),
     );
-    let state = FeishuWebhookState::new(config, &resolved, adapter, app_ctx, runtime);
+    let state = FeishuWebhookState::new(
+        config,
+        &resolved,
+        adapter,
+        owner.runtime.clone(),
+        owner.session.agent_id().to_owned(),
+        runtime,
+    );
 
     let payload = json!({
         "header": {
@@ -2303,9 +2413,10 @@ async fn feishu_webhook_card_callback_provider_failure_still_returns_safe_noop_b
         .resolve_account(None)
         .expect("resolve feishu account");
     let adapter = FeishuAdapter::new(&resolved).expect("build feishu adapter");
-    let app_ctx =
-        bootstrap_test_app_context("feishu-webhook-card-callback-failure", DEFAULT_TOKEN_TTL_S)
-            .expect("bootstrap app context");
+    let owner = crate::test_support::runtime_session_for_test(
+        "feishu-webhook-card-callback-failure",
+        crate::tools::runtime_tool_view_from_loong_config(&config),
+    );
     let runtime = Arc::new(
         ChannelOperationRuntimeTracker::start(
             ChannelPlatform::Feishu,
@@ -2316,7 +2427,14 @@ async fn feishu_webhook_card_callback_provider_failure_still_returns_safe_noop_b
         .await
         .expect("start runtime tracker"),
     );
-    let state = FeishuWebhookState::new(config, &resolved, adapter, app_ctx, runtime);
+    let state = FeishuWebhookState::new(
+        config,
+        &resolved,
+        adapter,
+        owner.runtime.clone(),
+        owner.session.agent_id().to_owned(),
+        runtime,
+    );
 
     let payload = json!({
         "header": {

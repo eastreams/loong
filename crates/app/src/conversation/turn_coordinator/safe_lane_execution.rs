@@ -5,18 +5,13 @@ const SAFE_LANE_VERIFY_OUTPUT_NON_EMPTY: bool = true;
 const SAFE_LANE_VERIFY_MIN_OUTPUT_CHARS: usize = 8;
 const SAFE_LANE_VERIFY_REQUIRE_STATUS_PREFIX: bool = true;
 const SAFE_LANE_PLAN_MAX_WALL_TIME_MS: u64 = 30_000;
-const SAFE_LANE_VERIFY_DENY_MARKERS: &[&str] = &[
-    "tool_failure",
-    "provider_error",
-    "no_app_context",
-    "tool_not_found",
-];
+const SAFE_LANE_VERIFY_DENY_MARKERS: &[&str] =
+    &["tool_failure", "provider_error", "tool_not_found"];
 
 pub(super) struct SafeLanePlanNodeExecutor<'a> {
     pub(super) tool_intents: &'a [ToolIntent],
-    pub(super) session_context: &'a AppContext,
-    pub(super) app_dispatcher: &'a dyn AppToolDispatcher,
-    pub(super) binding: ConversationRuntimeBinding<'a>,
+    pub(super) session_context: &'a Context<'a>,
+    pub(super) legacy_dispatcher: &'a dyn LegacyToolDispatcher,
     pub(super) ingress: Option<&'a ConversationIngressContext>,
     pub(super) tool_outputs: Mutex<Vec<String>>,
     pub(super) tool_result_payload_summary_limit_chars: usize,
@@ -25,9 +20,8 @@ pub(super) struct SafeLanePlanNodeExecutor<'a> {
 impl<'a> SafeLanePlanNodeExecutor<'a> {
     pub(super) fn new(
         tool_intents: &'a [ToolIntent],
-        session_context: &'a AppContext,
-        app_dispatcher: &'a dyn AppToolDispatcher,
-        binding: ConversationRuntimeBinding<'a>,
+        session_context: &'a Context<'a>,
+        legacy_dispatcher: &'a dyn LegacyToolDispatcher,
         ingress: Option<&'a ConversationIngressContext>,
         seed_tool_outputs: Vec<String>,
         tool_result_payload_summary_limit_chars: usize,
@@ -35,8 +29,7 @@ impl<'a> SafeLanePlanNodeExecutor<'a> {
         Self {
             tool_intents,
             session_context,
-            app_dispatcher,
-            binding,
+            legacy_dispatcher,
             ingress,
             tool_outputs: Mutex::new(seed_tool_outputs),
             tool_result_payload_summary_limit_chars,
@@ -63,8 +56,7 @@ impl PlanNodeExecutor for SafeLanePlanNodeExecutor<'_> {
                 let output = execute_single_tool_intent(
                     intent,
                     self.session_context,
-                    self.app_dispatcher,
-                    self.binding,
+                    self.legacy_dispatcher,
                     self.ingress,
                     self.tool_result_payload_summary_limit_chars,
                 )
@@ -106,9 +98,8 @@ pub(super) fn parse_tool_node_index(node_id: &str) -> Result<usize, PlanNodeErro
 
 pub(super) async fn execute_single_tool_intent(
     intent: &ToolIntent,
-    session_context: &AppContext,
-    app_dispatcher: &dyn AppToolDispatcher,
-    binding: ConversationRuntimeBinding<'_>,
+    session_context: &Context<'_>,
+    legacy_dispatcher: &dyn LegacyToolDispatcher,
     ingress: Option<&ConversationIngressContext>,
     payload_summary_limit_chars: usize,
 ) -> Result<String, PlanNodeError> {
@@ -120,7 +111,7 @@ pub(super) async fn execute_single_tool_intent(
     };
 
     match engine
-        .execute_turn_in_context(&turn, session_context, app_dispatcher, binding, ingress)
+        .execute_turn_in_context(&turn, session_context, legacy_dispatcher, ingress)
         .await
     {
         TurnResult::FinalText(output) => Ok(output),
@@ -130,18 +121,26 @@ pub(super) async fn execute_single_tool_intent(
             format_approval_required_reply("", &requirement),
         )),
         TurnResult::ToolDenied(failure) => Err(PlanNodeError::policy_denied(failure.reason)),
-        TurnResult::ToolError(failure) => Err(PlanNodeError {
-            kind: match failure.kind {
-                TurnFailureKind::Retryable => PlanNodeErrorKind::Retryable,
-                TurnFailureKind::PolicyDenied
-                | TurnFailureKind::NonRetryable
-                | TurnFailureKind::Provider => PlanNodeErrorKind::NonRetryable,
-            },
-            message: failure.reason,
-        }),
+        TurnResult::ToolError(mut failure) => match failure.tool_input.take() {
+            Some(tool_input) => Err(PlanNodeError::input_repair_required(
+                failure.reason,
+                *tool_input,
+            )),
+            None => Err(PlanNodeError {
+                kind: match failure.kind {
+                    TurnFailureKind::Retryable => PlanNodeErrorKind::Retryable,
+                    TurnFailureKind::PolicyDenied
+                    | TurnFailureKind::NonRetryable
+                    | TurnFailureKind::Provider => PlanNodeErrorKind::NonRetryable,
+                },
+                message: failure.reason,
+                tool_input: None,
+            }),
+        },
         TurnResult::ProviderError(failure) => Err(PlanNodeError {
             kind: PlanNodeErrorKind::NonRetryable,
             message: failure.reason,
+            tool_input: None,
         }),
     }
 }
@@ -156,22 +155,19 @@ pub(super) struct SafeLaneRoundExecution {
 pub(super) async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?Sized>(
     config: &LoongConfig,
     runtime: &R,
-    session_id: &str,
     lane_decision: &LaneDecision,
     turn: &ProviderTurn,
-    session_context: &AppContext,
-    app_dispatcher: &dyn AppToolDispatcher,
-    binding: ConversationRuntimeBinding<'_>,
+    session_context: &Context<'_>,
+    legacy_dispatcher: &dyn LegacyToolDispatcher,
     ingress: Option<&ConversationIngressContext>,
 ) -> SafeLaneTurnOutcome {
     let governor_history_signals =
-        load_safe_lane_history_signals_for_governor(config, session_id, binding).await;
+        load_safe_lane_history_signals_for_governor(session_context, runtime).await;
     let governor = decide_safe_lane_session_governor(config, &governor_history_signals);
 
     emit_safe_lane_event(
         config,
         runtime,
-        session_id,
         "lane_selected",
         json!({
             "lane": "safe",
@@ -181,7 +177,7 @@ pub(super) async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?S
             "tool_intents": turn.tool_intents.len(),
             "session_governor": governor.as_json(),
         }),
-        binding,
+        session_context,
     )
     .await;
 
@@ -192,7 +188,6 @@ pub(super) async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?S
             emit_safe_lane_event(
                 config,
                 runtime,
-                session_id,
                 "verify_policy_adjusted",
                 json!({
                     "round": state.round(),
@@ -202,7 +197,7 @@ pub(super) async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?S
                     "escalation_after_failures": 2,
                     "metrics": state.metrics.as_json(),
                 }),
-                binding,
+                session_context,
             )
             .await;
         }
@@ -211,7 +206,6 @@ pub(super) async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?S
         emit_safe_lane_event(
             config,
             runtime,
-            session_id,
             "plan_round_started",
             json!({
                 "round": state.round(),
@@ -223,7 +217,7 @@ pub(super) async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?S
                 "session_governor": state.governor.as_json(),
                 "metrics": state.metrics.as_json(),
             }),
-            binding,
+            session_context,
         )
         .await;
 
@@ -232,8 +226,7 @@ pub(super) async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?S
             lane_decision,
             turn,
             session_context,
-            app_dispatcher,
-            binding,
+            legacy_dispatcher,
             ingress,
             &state,
         )
@@ -246,7 +239,6 @@ pub(super) async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?S
                 emit_safe_lane_event(
                     config,
                     runtime,
-                    session_id,
                     "plan_round_completed",
                     json!({
                         "round": state.round(),
@@ -263,7 +255,7 @@ pub(super) async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?S
                         .as_json(),
                         "metrics": state.metrics.as_json(),
                     }),
-                    binding,
+                    session_context,
                 )
                 .await;
                 let tool_output = round_execution.tool_outputs.join("\n");
@@ -277,7 +269,6 @@ pub(super) async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?S
                     emit_safe_lane_event(
                         config,
                         runtime,
-                        session_id,
                         "final_status",
                         json!({
                             "status": "succeeded",
@@ -292,7 +283,7 @@ pub(super) async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?S
                             .as_json(),
                             "metrics": state.metrics.as_json(),
                         }),
-                        binding,
+                        session_context,
                     )
                     .await;
                     return SafeLaneTurnOutcome::without_terminal_route(TurnResult::FinalText(
@@ -323,7 +314,6 @@ pub(super) async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?S
                 emit_safe_lane_event(
                     config,
                     runtime,
-                    session_id,
                     "verify_failed",
                     json!({
                         "round": state.round(),
@@ -346,7 +336,7 @@ pub(super) async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?S
                         .as_json(),
                         "metrics": state.metrics.as_json(),
                     }),
-                    binding,
+                    session_context,
                 )
                 .await;
 
@@ -360,7 +350,6 @@ pub(super) async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?S
                         emit_safe_lane_event(
                             config,
                             runtime,
-                            session_id,
                             "final_status",
                             json!({
                                 "status": "failed",
@@ -383,7 +372,7 @@ pub(super) async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?S
                                 .as_json(),
                                 "metrics": state.metrics.as_json(),
                             }),
-                            binding,
+                            session_context,
                         )
                         .await;
                         return SafeLaneTurnOutcome::with_terminal_route(result, verify_route);
@@ -397,7 +386,6 @@ pub(super) async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?S
                         emit_safe_lane_event(
                             config,
                             runtime,
-                            session_id,
                             "replan_triggered",
                             json!({
                                 "round": state.round(),
@@ -416,7 +404,7 @@ pub(super) async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?S
                                 .as_json(),
                                 "metrics": state.metrics.as_json(),
                             }),
-                            binding,
+                            session_context,
                         )
                         .await;
                     }
@@ -436,7 +424,6 @@ pub(super) async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?S
                 emit_safe_lane_event(
                     config,
                     runtime,
-                    session_id,
                     "plan_round_completed",
                     json!({
                         "round": state.round(),
@@ -460,7 +447,7 @@ pub(super) async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?S
                         .as_json(),
                         "metrics": state.metrics.as_json(),
                     }),
-                    binding,
+                    session_context,
                 )
                 .await;
                 let (next_start_tool_index, next_seed_outputs) = if route.should_replan() {
@@ -484,7 +471,6 @@ pub(super) async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?S
                         emit_safe_lane_event(
                             config,
                             runtime,
-                            session_id,
                             "final_status",
                             json!({
                                 "status": "failed",
@@ -507,7 +493,7 @@ pub(super) async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?S
                                 .as_json(),
                                 "metrics": state.metrics.as_json(),
                             }),
-                            binding,
+                            session_context,
                         )
                         .await;
                         return SafeLaneTurnOutcome::with_terminal_route(result, route);
@@ -522,7 +508,6 @@ pub(super) async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?S
                         emit_safe_lane_event(
                             config,
                             runtime,
-                            session_id,
                             "replan_triggered",
                             json!({
                                 "round": state.round(),
@@ -542,7 +527,7 @@ pub(super) async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?S
                                 .as_json(),
                                 "metrics": state.metrics.as_json(),
                             }),
-                            binding,
+                            session_context,
                         )
                         .await;
                     }
@@ -558,9 +543,8 @@ pub(super) async fn evaluate_safe_lane_round(
     config: &LoongConfig,
     lane_decision: &LaneDecision,
     turn: &ProviderTurn,
-    session_context: &AppContext,
-    app_dispatcher: &dyn AppToolDispatcher,
-    binding: ConversationRuntimeBinding<'_>,
+    session_context: &Context<'_>,
+    legacy_dispatcher: &dyn LegacyToolDispatcher,
     ingress: Option<&ConversationIngressContext>,
     state: &SafeLanePlanLoopState,
 ) -> SafeLaneRoundExecution {
@@ -574,8 +558,7 @@ pub(super) async fn evaluate_safe_lane_round(
     let executor = SafeLanePlanNodeExecutor::new(
         turn.tool_intents.as_slice(),
         session_context,
-        app_dispatcher,
-        binding,
+        legacy_dispatcher,
         ingress,
         state.seed_tool_outputs.clone(),
         TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,

@@ -323,16 +323,14 @@ async fn policy_pipeline_pre_policy_can_block_legacy_actions() {
         .policy_engine()
         .grant(&ctx, action)
         .await
-        .map_err(policy_engine_error)
         .expect_err("pre policy should deny the action");
 
     assert!(matches!(
         error,
-        PolicyError::ExtensionDenied {
-            ref extension,
+        loong_core::PolicyGrantError::Denied {
             ref reason,
-        } if extension == "policy-engine"
-            && reason.contains("network egress denied by test policy")
+            ..
+        } if reason.contains("network egress denied by test policy")
     ));
 }
 

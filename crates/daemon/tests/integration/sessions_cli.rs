@@ -180,7 +180,6 @@ async fn execute_sessions_command_list_returns_visible_sessions_with_workflow_me
                 "allow_shell_in_child": false,
                 "child_tool_allowlist": ["file.read"],
                 "workspace_root": "/tmp/loong/sessions-cli/delegate-session-1",
-                "kernel_bound": false,
                 "runtime_narrowing": {}
             }
         }),
@@ -223,7 +222,7 @@ async fn execute_sessions_command_list_returns_visible_sessions_with_workflow_me
     );
     assert_eq!(
         execution.payload["sessions"][0]["workflow"]["binding"]["mode"],
-        "advisory_only"
+        "mutating_capable"
     );
 
     let rendered = loong_daemon::sessions_cli::render_sessions_cli_text(&execution)
@@ -270,7 +269,6 @@ async fn execute_sessions_command_status_surfaces_workflow_recipes_and_rendered_
                 "allow_shell_in_child": false,
                 "child_tool_allowlist": ["file.read"],
                 "workspace_root": "/tmp/loong/sessions-cli/delegate-session-1",
-                "kernel_bound": false,
                 "runtime_narrowing": {}
             },
             "runtime_self_continuity": {
@@ -538,7 +536,7 @@ async fn execute_sessions_command_status_surfaces_workflow_recipes_and_rendered_
         "status render should surface lineage root: {rendered}"
     );
     assert!(
-        rendered.contains("workflow_binding_mode: advisory_only"),
+        rendered.contains("workflow_binding_mode: mutating_capable"),
         "status render should surface workflow binding mode: {rendered}"
     );
     assert!(
@@ -748,7 +746,6 @@ async fn execute_sessions_command_events_history_and_wait_surface_incremental_pa
                 "timeout_seconds": 60,
                 "allow_shell_in_child": false,
                 "child_tool_allowlist": ["file.read"],
-                "kernel_bound": false,
                 "runtime_narrowing": {}
             }
         }),

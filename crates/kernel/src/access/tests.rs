@@ -6,18 +6,16 @@ use std::{
 
 use loong_contracts::{AuthorizationScope, AuthorizationSubject, Capabilities, Capability};
 use loong_core::{
-    AuthorizationError, PolicyGrantError,
+    PolicyGrantError,
     policy::context::{ContextFactory, PolicyContext},
 };
 
 use super::AccessCx;
 use crate::access::fs::{
-    FsAccessError, FsPathAllowedRootsPolicy, FsPathPolicyContext, FsReadAllowPolicy,
-    FsRemoveFileAllowPolicy, FsResolutionContext, FsResolvePathAllowPolicy,
-};
-use crate::policy::{
-    FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsReadDirAllowPolicy, FsRemoveDirAllAllowPolicy,
-    FsRenameAllowPolicy,
+    FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsPathAllowedRootsPolicy, FsPathError,
+    FsPathPolicyContext, FsReadAllowPolicy, FsReadDirAllowPolicy, FsReadError,
+    FsRemoveDirAllAllowPolicy, FsRemoveDirAllError, FsRemoveFileAllowPolicy, FsRemoveFileError,
+    FsRenameAllowPolicy, FsRenameError, FsResolutionContext, FsResolvePathAllowPolicy,
 };
 
 #[derive(Debug, Clone)]
@@ -203,10 +201,8 @@ async fn fs_path_escape_is_reported_as_path_authorization_policy_denial() {
         .await
         .expect_err("path escape should be denied by policy");
 
-    let FsAccessError::Authorization(AuthorizationError::PolicyGrant(PolicyGrantError::Denied {
-        report,
-        reason,
-    })) = error
+    let FsReadError::Path(FsPathError::Authorization(PolicyGrantError::Denied { report, reason })) =
+        error
     else {
         panic!("expected path policy denial, got {error:?}");
     };
@@ -247,7 +243,7 @@ async fn fs_remove_file_denies_ancestor_symlink_escape() {
         .await
         .expect_err("ancestor symlink escape should be denied by policy");
 
-    let FsAccessError::Authorization(AuthorizationError::PolicyGrant(PolicyGrantError::Denied {
+    let FsRemoveFileError::Path(FsPathError::Authorization(PolicyGrantError::Denied {
         report,
         reason,
     })) = error
@@ -295,7 +291,7 @@ async fn fs_remove_dir_all_denies_ancestor_symlink_escape() {
         .await
         .expect_err("ancestor symlink escape should be denied by recursive removal policy");
 
-    let FsAccessError::Authorization(AuthorizationError::PolicyGrant(PolicyGrantError::Denied {
+    let FsRemoveDirAllError::Path(FsPathError::Authorization(PolicyGrantError::Denied {
         report,
         reason,
     })) = error
@@ -350,7 +346,7 @@ async fn fs_rename_path_denies_destination_ancestor_symlink_escape() {
         .await
         .expect_err("destination ancestor symlink escape should be denied by path policy");
 
-    let FsAccessError::Authorization(AuthorizationError::PolicyGrant(PolicyGrantError::Denied {
+    let FsRenameError::Path(FsPathError::Authorization(PolicyGrantError::Denied {
         report,
         reason,
     })) = error

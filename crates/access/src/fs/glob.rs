@@ -1,9 +1,192 @@
-use std::{collections::VecDeque, path::PathBuf};
+use std::{
+    borrow::Cow,
+    collections::VecDeque,
+    path::{Path, PathBuf},
+};
 
 use async_trait::async_trait;
-use loong_core::policy::{action::Action, grant::Granted};
+use loong_contracts::{Capability, PolicyDecision, PolicyGrant};
+use loong_core::{
+    error::PolicyGrantError,
+    policy::{
+        action::{Action, ActionMeta, ActionMetadata},
+        context::ContextFactory,
+        engine::PolicyEngine,
+        grant::Granted,
+        policy::Policy,
+    },
+};
+use serde_json::{Value, json};
+use thiserror::Error;
 
-use super::{access::FsAccessError, action::FsGlobAction};
+use super::{
+    access::FsAccess,
+    path::{FsPathKind, FsPathPolicyContext, FsResolutionContext, GrantedPath},
+};
+
+#[cfg(test)]
+mod tests;
+
+const FS_GLOB_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemRead];
+
+#[derive(Debug, Error)]
+pub enum FsGlobError {
+    #[error(transparent)]
+    Path(#[from] super::path::FsPathError),
+    #[error(transparent)]
+    Authorization(#[from] PolicyGrantError),
+    #[error("invalid glob pattern {pattern}: {source}")]
+    InvalidGlobPattern {
+        pattern: String,
+        #[source]
+        source: regex::Error,
+    },
+    #[error("failed to read directory {path}: {source}", path = .path.display())]
+    ReadDirectory {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to inspect path {path}: {source}", path = .path.display())]
+    InspectPath {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(
+        "failed to render relative path for {path} from {root}: {source}",
+        path = .path.display(),
+        root = .root.display()
+    )]
+    RenderRelativePath {
+        root: PathBuf,
+        path: PathBuf,
+        #[source]
+        source: std::path::StripPrefixError,
+    },
+}
+
+/// Typed action for listing filesystem paths by glob pattern.
+///
+/// Like `FsReadAction`, this is a data-leaking filesystem operation and
+/// therefore consumes a `GrantedPath` root. Pattern matching happens inside the
+/// access side-effect boundary so tools do not receive a broader directory
+/// listing than the action payload describes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsGlobAction {
+    root: GrantedPath,
+    pattern: String,
+    include_directories: bool,
+    max_results: usize,
+}
+
+impl FsGlobAction {
+    #[must_use]
+    pub fn new(
+        root: GrantedPath,
+        pattern: impl Into<String>,
+        include_directories: bool,
+        max_results: usize,
+    ) -> Self {
+        Self {
+            root,
+            pattern: pattern.into(),
+            include_directories,
+            max_results,
+        }
+    }
+
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        self.root.as_path()
+    }
+
+    #[must_use]
+    pub fn pattern(&self) -> &str {
+        self.pattern.as_str()
+    }
+
+    #[must_use]
+    pub fn include_directories(&self) -> bool {
+        self.include_directories
+    }
+
+    #[must_use]
+    pub fn max_results(&self) -> usize {
+        self.max_results
+    }
+}
+
+impl ActionMeta for FsGlobAction {
+    fn metadata(&self) -> ActionMetadata<'_> {
+        ActionMetadata {
+            kind: "fs.glob",
+            operation: Cow::Borrowed("glob_paths"),
+            required_capabilities: Cow::Borrowed(&FS_GLOB_REQUIRED_CAPABILITIES),
+        }
+    }
+
+    fn audit_resource(&self) -> Option<Cow<'_, str>> {
+        Some(self.root.as_path().display().to_string().into())
+    }
+
+    fn payload(&self) -> Cow<'_, Value> {
+        Cow::Owned(json!({
+            "root": self.root.as_path().display().to_string(),
+            "pattern": self.pattern,
+            "include_directories": self.include_directories,
+            "max_results": self.max_results,
+        }))
+    }
+}
+
+/// Terminal glob policy installed after configured deny policies.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct FsGlobAllowPolicy;
+
+#[async_trait]
+impl<C> Policy<C, FsGlobAction> for FsGlobAllowPolicy
+where
+    C: ContextFactory + Send + Sync,
+{
+    fn name(&self) -> Cow<'static, str> {
+        Cow::Borrowed("fs-glob-allow")
+    }
+
+    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &FsGlobAction) -> PolicyGrant {
+        PolicyGrant {
+            decision: PolicyDecision::Allow,
+            predicate: Some("fs.glob reached terminal allow policy".into()),
+            reason: "filesystem glob allowed after configured deny policies".into(),
+        }
+    }
+}
+
+impl<'a, 'ctx, C, P> FsAccess<'a, 'ctx, C, P>
+where
+    C: ContextFactory + 'ctx,
+    P: PolicyEngine<C>,
+    C::Cx<'ctx>: FsResolutionContext + FsPathPolicyContext,
+{
+    /// List paths under a governed root by glob pattern.
+    ///
+    /// This is the access-backed primitive for the path-listing branch of
+    /// `read`. Tools should not call `std::fs::read_dir` directly; they should
+    /// ask access for the exact listing operation they need.
+    pub async fn glob_paths(
+        self,
+        root: impl AsRef<Path>,
+        pattern: impl Into<String>,
+        include_directories: bool,
+        max_results: usize,
+    ) -> Result<FsGlobOutput, FsGlobError> {
+        let root = self.grant_target_path(root).await?;
+
+        let action = FsGlobAction::new(root, pattern, include_directories, max_results);
+        let grant = self.policy_engine.grant(self.ctx, action).await?;
+        grant.into_granted().run(self.ctx).await
+    }
+}
 
 /// Execute an already-authorized path glob.
 ///
@@ -15,7 +198,7 @@ where
     Cx: Sync,
 {
     type Output = FsGlobOutput;
-    type Error = FsAccessError;
+    type Error = FsGlobError;
 
     async fn run(granted: Granted<Self>, _ctx: &Cx) -> Result<Self::Output, Self::Error> {
         let action = granted.into_action();
@@ -28,18 +211,23 @@ where
             });
         }
 
-        let matcher = GlobMatcher::new(action.pattern())?;
+        let matcher = GlobMatcher::new(action.pattern()).map_err(|source| {
+            FsGlobError::InvalidGlobPattern {
+                pattern: action.pattern().to_owned(),
+                source,
+            }
+        })?;
         let mut matches = Vec::new();
         let mut queue = VecDeque::from([root.clone()]);
 
         while let Some(directory) = queue.pop_front() {
             let mut children = std::fs::read_dir(&directory)
-                .map_err(|source| FsAccessError::ReadDirectory {
+                .map_err(|source| FsGlobError::ReadDirectory {
                     path: directory.clone(),
                     source,
                 })?
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(|source| FsAccessError::ReadDirectory {
+                .map_err(|source| FsGlobError::ReadDirectory {
                     path: directory.clone(),
                     source,
                 })?;
@@ -49,13 +237,13 @@ where
                 let child_path = child.path();
                 let file_type = child
                     .file_type()
-                    .map_err(|source| FsAccessError::InspectPath {
+                    .map_err(|source| FsGlobError::InspectPath {
                         path: child_path.clone(),
                         source,
                     })?;
                 let is_directory = file_type.is_dir();
                 let relative_path = child_path.strip_prefix(&root).map_err(|source| {
-                    FsAccessError::RenderRelativePath {
+                    FsGlobError::RenderRelativePath {
                         root: root.clone(),
                         path: child_path.clone(),
                         source,
@@ -112,40 +300,17 @@ pub struct FsPathMatch {
     pub kind: FsPathKind,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FsPathKind {
-    File,
-    Directory,
-}
-
-impl FsPathKind {
-    pub(in crate::fs) fn from_file_type(file_type: std::fs::FileType) -> Option<Self> {
-        if file_type.is_dir() {
-            return Some(Self::Directory);
-        }
-        if file_type.is_file() || file_type.is_symlink() {
-            return Some(Self::File);
-        }
-        None
-    }
-}
-
 pub(in crate::fs) struct GlobMatcher {
     regexes: Vec<regex::Regex>,
 }
 
 impl GlobMatcher {
-    pub(in crate::fs) fn new(pattern: &str) -> Result<Self, FsAccessError> {
+    pub(in crate::fs) fn new(pattern: &str) -> Result<Self, regex::Error> {
         let regexes = Self::split_patterns(pattern)
             .into_iter()
             .map(|candidate| {
                 let regex_pattern = Self::pattern_to_regex(candidate.as_str());
-                regex::Regex::new(regex_pattern.as_str()).map_err(|source| {
-                    FsAccessError::InvalidGlobPattern {
-                        pattern: pattern.to_owned(),
-                        source,
-                    }
-                })
+                regex::Regex::new(regex_pattern.as_str())
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self { regexes })

@@ -2,20 +2,23 @@ use super::*;
 
 pub(super) fn execute_session_tool_policy_status(
     payload: Value,
-    current_session_id: &str,
-    config: &SessionStoreConfig,
-    tool_config: &ToolConfig,
+    context: &Context<'_>,
+    app_config: &LoongConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    let repo = SessionRepository::new(config)?;
+    let config = SessionStoreConfig::from_memory_config_without_env_overrides(&app_config.memory);
+    let repo = SessionRepository::new(&config)?;
+    let current_session_id = context.session().session_id();
     let target_session_id =
         resolve_session_tool_policy_target_session_id(&payload, current_session_id)?;
     ensure_visible(
         &repo,
         current_session_id,
         &target_session_id,
-        tool_config.sessions.visibility,
+        app_config.tools.sessions.visibility,
     )?;
-    let policy = build_session_tool_policy_status_payload(&repo, &target_session_id, tool_config)?;
+    let projection =
+        crate::Session::tool_policy_projection(context.runtime(), app_config, &target_session_id)?;
+    let policy = build_session_tool_policy_status(&projection, &context.session().tool_view)?;
 
     Ok(ToolCoreOutcome {
         status: "ok".to_owned(),
@@ -31,19 +34,25 @@ pub(super) fn execute_session_tool_policy_status(
 #[cfg(feature = "memory-sqlite")]
 pub(super) fn execute_session_tool_policy_set(
     payload: Value,
-    current_session_id: &str,
-    config: &SessionStoreConfig,
-    tool_config: &ToolConfig,
+    context: &Context<'_>,
+    app_config: &LoongConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    let repo = SessionRepository::new(config)?;
+    let config = SessionStoreConfig::from_memory_config_without_env_overrides(&app_config.memory);
+    let repo = SessionRepository::new(&config)?;
+    let current_session_id = context.session().session_id();
     let request = parse_session_tool_policy_set_request(&payload, current_session_id)?;
     ensure_visible(
         &repo,
         current_session_id,
         &request.session_id,
-        tool_config.sessions.visibility,
+        app_config.tools.sessions.visibility,
     )?;
     ensure_policy_target_session_exists(&repo, &request.session_id, current_session_id)?;
+    let projection =
+        crate::Session::tool_policy_projection(context.runtime(), app_config, &request.session_id)?;
+    let base_tool_view = projection
+        .base_tool_view
+        .intersect(&context.session().tool_view);
 
     let existing_policy = repo.load_session_tool_policy(&request.session_id)?;
     let existing_tool_ids = existing_policy
@@ -57,7 +66,7 @@ pub(super) fn execute_session_tool_policy_set(
 
     let next_tool_ids = match request.tool_ids {
         Some(tool_ids) => {
-            resolve_session_tool_policy_tool_ids(&repo, &request.session_id, tool_config, tool_ids)?
+            resolve_session_tool_policy_tool_ids(&request.session_id, &base_tool_view, tool_ids)?
         }
         None => existing_tool_ids,
     };
@@ -96,7 +105,9 @@ pub(super) fn execute_session_tool_policy_set(
             }
         }
     };
-    let policy = build_session_tool_policy_status_payload(&repo, &request.session_id, tool_config)?;
+    let projection =
+        crate::Session::tool_policy_projection(context.runtime(), app_config, &request.session_id)?;
+    let policy = build_session_tool_policy_status(&projection, &context.session().tool_view)?;
 
     Ok(ToolCoreOutcome {
         status: "ok".to_owned(),
@@ -113,22 +124,28 @@ pub(super) fn execute_session_tool_policy_set(
 #[cfg(feature = "memory-sqlite")]
 pub(super) fn execute_session_tool_policy_clear(
     payload: Value,
-    current_session_id: &str,
-    config: &SessionStoreConfig,
-    tool_config: &ToolConfig,
+    context: &Context<'_>,
+    app_config: &LoongConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    let repo = SessionRepository::new(config)?;
+    let config = SessionStoreConfig::from_memory_config_without_env_overrides(&app_config.memory);
+    let repo = SessionRepository::new(&config)?;
+    let current_session_id = context.session().session_id();
     let target_session_id =
         resolve_session_tool_policy_target_session_id(&payload, current_session_id)?;
     ensure_visible(
         &repo,
         current_session_id,
         &target_session_id,
-        tool_config.sessions.visibility,
+        app_config.tools.sessions.visibility,
     )?;
 
+    // Validate the complete typed lineage before mutating durable policy. A
+    // malformed or legacy-only identity must fail without deleting evidence.
+    crate::Session::tool_policy_projection(context.runtime(), app_config, &target_session_id)?;
     let cleared = repo.delete_session_tool_policy(&target_session_id)?;
-    let policy = build_session_tool_policy_status_payload(&repo, &target_session_id, tool_config)?;
+    let projection =
+        crate::Session::tool_policy_projection(context.runtime(), app_config, &target_session_id)?;
+    let policy = build_session_tool_policy_status(&projection, &context.session().tool_view)?;
 
     Ok(ToolCoreOutcome {
         status: "ok".to_owned(),

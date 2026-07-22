@@ -1,22 +1,38 @@
 #[test]
 fn parse_read_payload_requires_path() {
-    let error = FileReadRequest::parse_payload("read".to_owned(), &json!({}))
-        .expect_err("missing path should fail");
+    let error = FileReadRequest::parse_payload(&json!({})).expect_err("missing path should fail");
 
-    assert_eq!(error, "read requires payload.path");
+    assert_eq!(error, ToolInputError::missing_field("path"));
+}
+
+#[test]
+fn parse_read_payload_requires_object() {
+    let error =
+        ReadRequest::parse_payload(&json!(["notes.txt"])).expect_err("array payload should fail");
+
+    assert_eq!(error, ToolInputError::PayloadMustBeObject);
+}
+
+#[test]
+fn parse_aggregate_read_payload_requires_one_mode() {
+    let error = ReadRequest::parse_payload(&json!({})).expect_err("missing read mode should fail");
+
+    assert_eq!(
+        error,
+        loong_contracts::ToolInputError::MissingOneOf {
+            fields: vec!["path".to_owned(), "query".to_owned(), "pattern".to_owned()],
+        }
+    );
 }
 
 #[test]
 fn parse_read_payload_keeps_window_fields() {
-    let parsed = FileReadRequest::parse_payload(
-        "read".to_owned(),
-        &json!({
-            "path": "notes.txt",
-            "offset": 2,
-            "limit": 3,
-            "max_bytes": 4,
-        }),
-    )
+    let parsed = FileReadRequest::parse_payload(&json!({
+        "path": "notes.txt",
+        "offset": 2,
+        "limit": 3,
+        "max_bytes": 4,
+    }))
     .expect("payload should parse");
 
     assert_eq!(parsed.target, "notes.txt");
@@ -26,9 +42,41 @@ fn parse_read_payload_keeps_window_fields() {
 }
 
 #[test]
-fn build_output_returns_typed_payload_without_legacy_status() {
+fn parse_read_payload_preserves_invalid_window_field() {
+    let error = FileReadRequest::parse_payload(&json!({
+        "path": "notes.txt",
+        "offset": 0,
+    }))
+    .expect_err("zero offset should fail");
+
+    assert_eq!(
+        error,
+        ToolInputError::InvalidField {
+            field: "offset".to_owned(),
+            reason: "must be a positive integer".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn parse_aggregate_read_payload_preserves_invalid_mode_field() {
+    let error = ReadRequest::parse_payload(&json!({
+        "path": 42,
+    }))
+    .expect_err("non-string path should fail");
+
+    assert_eq!(
+        error,
+        ToolInputError::InvalidField {
+            field: "path".to_owned(),
+            reason: "must be a string".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn build_output_returns_domain_payload_without_legacy_envelope() {
     let request = FileReadRequest {
-        tool_name: "read".to_owned(),
         target: "notes.txt".to_owned(),
         max_bytes: 1_024,
         offset: None,
@@ -43,8 +91,6 @@ fn build_output_returns_typed_payload_without_legacy_status() {
     assert_eq!(
         payload,
         json!({
-            "adapter": "core-tools",
-            "tool_name": "read",
             "path": "notes.txt",
             "bytes": 5,
             "truncated": false,
@@ -55,13 +101,10 @@ fn build_output_returns_typed_payload_without_legacy_status() {
 
 #[test]
 fn parse_read_payload_accepts_glob_alias() {
-    let parsed = ReadRequest::parse_payload(
-        "read".to_owned(),
-        &json!({
-            "glob": "README.md|AGENTS.md",
-            "root": ".",
-        }),
-    )
+    let parsed = ReadRequest::parse_payload(&json!({
+        "glob": "README.md|AGENTS.md",
+        "root": ".",
+    }))
     .expect("glob alias should parse");
 
     assert!(matches!(
@@ -75,14 +118,11 @@ fn parse_read_payload_accepts_glob_alias() {
 
 #[test]
 fn parse_read_payload_prioritizes_path() {
-    let parsed = ReadRequest::parse_payload(
-        "read".to_owned(),
-        &json!({
-            "path": "notes.txt",
-            "query": "needle",
-            "glob": "*.txt",
-        }),
-    )
+    let parsed = ReadRequest::parse_payload(&json!({
+        "path": "notes.txt",
+        "query": "needle",
+        "glob": "*.txt",
+    }))
     .expect("path mode should parse");
 
     assert!(matches!(parsed, ReadRequest::File(_)));
@@ -90,63 +130,68 @@ fn parse_read_payload_prioritizes_path() {
 
 #[test]
 fn parse_write_payload_requires_path() {
-    let error = WriteRequest::parse_payload(
-        "write".to_owned(),
-        &json!({
-            "content": "hello",
-        }),
-    )
+    let error = WriteRequest::parse_payload(&json!({
+        "content": "hello",
+    }))
     .expect_err("missing path should fail");
 
-    assert_eq!(error, "write requires payload.path");
+    assert_eq!(error, ToolInputError::missing_field("path"));
 }
 
 #[test]
 fn parse_write_payload_requires_content() {
-    let error = WriteRequest::parse_payload(
-        "write".to_owned(),
-        &json!({
-            "path": "notes.txt",
-        }),
-    )
+    let error = WriteRequest::parse_payload(&json!({
+        "path": "notes.txt",
+    }))
     .expect_err("missing content should fail");
 
-    assert_eq!(error, "write requires payload.content");
+    assert_eq!(error, ToolInputError::missing_field("content"));
+}
+
+#[test]
+fn parse_write_payload_preserves_invalid_flag_field() {
+    let error = WriteRequest::parse_payload(&json!({
+        "path": "notes.txt",
+        "content": "hello",
+        "overwrite": "yes",
+    }))
+    .expect_err("non-boolean overwrite should fail");
+
+    assert_eq!(
+        error,
+        ToolInputError::InvalidField {
+            field: "overwrite".to_owned(),
+            reason: "must be a boolean".to_owned(),
+        }
+    );
 }
 
 #[test]
 fn parse_write_payload_keeps_flags_and_defaults() {
-    let defaulted = WriteRequest::parse_payload(
-        "write".to_owned(),
-        &json!({
-            "path": "notes.txt",
-            "content": "",
-        }),
-    )
+    let defaulted = WriteRequest::parse_payload(&json!({
+        "path": "notes.txt",
+        "content": "",
+    }))
     .expect("payload should parse");
     assert_eq!(defaulted.path, "notes.txt");
     assert_eq!(defaulted.content, "");
     assert!(defaulted.create_dirs);
     assert!(!defaulted.overwrite);
 
-    let explicit = WriteRequest::parse_payload(
-        "write".to_owned(),
-        &json!({
-            "path": "notes.txt",
-            "content": "hello",
-            "create_dirs": false,
-            "overwrite": true,
-        }),
-    )
+    let explicit = WriteRequest::parse_payload(&json!({
+        "path": "notes.txt",
+        "content": "hello",
+        "create_dirs": false,
+        "overwrite": true,
+    }))
     .expect("payload should parse");
     assert!(!explicit.create_dirs);
     assert!(explicit.overwrite);
 }
 
 #[test]
-fn build_write_output_returns_typed_payload_without_legacy_status() {
+fn build_write_output_returns_domain_payload_without_legacy_envelope() {
     let output = WriteOutput {
-        tool_name: "write".to_owned(),
         path: PathBuf::from("notes.txt"),
         bytes_written: 5,
     };
@@ -156,8 +201,6 @@ fn build_write_output_returns_typed_payload_without_legacy_status() {
     assert_eq!(
         payload,
         json!({
-            "adapter": "core-tools",
-            "tool_name": "write",
             "path": "notes.txt",
             "bytes_written": 5,
         })
@@ -166,18 +209,15 @@ fn build_write_output_returns_typed_payload_without_legacy_status() {
 
 #[test]
 fn parse_edit_payload_accepts_exact_blocks() {
-    let parsed = EditRequest::parse_payload(
-        "edit".to_owned(),
-        &json!({
-            "path": "notes.txt",
-            "edits": [
-                {
-                    "old_text": "before",
-                    "newText": "after"
-                }
-            ]
-        }),
-    )
+    let parsed = EditRequest::parse_payload(&json!({
+        "path": "notes.txt",
+        "edits": [
+            {
+                "old_text": "before",
+                "newText": "after"
+            }
+        ]
+    }))
     .expect("payload should parse");
 
     assert_eq!(parsed.path, "notes.txt");
@@ -188,6 +228,84 @@ fn parse_edit_payload_accepts_exact_blocks() {
             new_text: "after".to_owned(),
         }]
     );
+}
+
+#[test]
+fn parse_edit_payload_requires_edits() {
+    let error = EditRequest::parse_payload(&json!({
+        "path": "notes.txt",
+    }))
+    .expect_err("missing edits should fail");
+
+    assert_eq!(error, ToolInputError::missing_field("edits"));
+}
+
+#[test]
+fn parse_edit_payload_preserves_invalid_nested_field() {
+    let error = EditRequest::parse_payload(&json!({
+        "path": "notes.txt",
+        "edits": [{
+            "old_text": 42,
+            "new_text": "after",
+        }],
+    }))
+    .expect_err("non-string old_text should fail");
+
+    assert_eq!(
+        error,
+        ToolInputError::InvalidField {
+            field: "edits[0].old_text".to_owned(),
+            reason: "must be a string".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn parse_glob_payload_preserves_missing_pattern_field() {
+    let payload = json!({});
+    let error = GlobReadRequest::parse_payload(
+        payload
+            .as_object()
+            .expect("test payload should be an object"),
+    )
+    .expect_err("missing pattern should fail");
+
+    assert_eq!(error, ToolInputError::missing_field("pattern"));
+}
+
+#[test]
+fn parse_glob_payload_preserves_invalid_limit_field() {
+    let payload = json!({
+        "pattern": "*.rs",
+        "max_results": 0,
+    });
+    let error = GlobReadRequest::parse_payload(
+        payload
+            .as_object()
+            .expect("test payload should be an object"),
+    )
+    .expect_err("out-of-range max_results should fail");
+
+    assert_eq!(
+        error,
+        ToolInputError::InvalidField {
+            field: "max_results".to_owned(),
+            reason: "must be between 1 and 200".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn parse_content_search_payload_preserves_missing_query_field() {
+    let payload = json!({});
+    let error = ContentSearchReadRequest::parse_payload(
+        payload
+            .as_object()
+            .expect("test payload should be an object"),
+    )
+    .expect_err("missing query should fail");
+
+    assert_eq!(error, ToolInputError::missing_field("query"));
 }
 
 #[test]
@@ -212,9 +330,8 @@ fn apply_edit_blocks_requires_unique_non_overlapping_matches() {
 }
 
 #[test]
-fn build_edit_output_returns_response_without_preview_content() {
+fn build_edit_output_returns_domain_response_without_preview_content() {
     let output = EditOutput {
-        tool_name: "edit".to_owned(),
         path: PathBuf::from("notes.txt"),
         before: "before".to_owned(),
         after: "after".to_owned(),
@@ -227,8 +344,6 @@ fn build_edit_output_returns_response_without_preview_content() {
     assert_eq!(
         payload,
         json!({
-            "adapter": "core-tools",
-            "tool_name": "edit",
             "path": "notes.txt",
             "replacements_made": 1,
             "bytes_written": 5,
@@ -248,17 +363,18 @@ fn build_edit_output_returns_response_without_preview_content() {
 use super::*;
 use std::path::PathBuf;
 
+use loong_contracts::ToolInputError;
 use serde_json::{Value, json};
 
 #[test]
-fn file_tool_error_preserves_fs_access_error_as_source() {
-    let error = FileToolError::from(loong_kernel::access::fs::FsAccessError::ReadFile {
+fn read_tool_error_preserves_fs_read_error_as_source() {
+    let error = ReadToolError::from(loong_kernel::access::fs::FsReadError::ReadFile {
         path: PathBuf::from("notes.txt"),
         source: std::io::Error::other("test read failure"),
     });
 
-    assert!(matches!(error, FileToolError::Access(_)));
+    assert!(matches!(error, ReadToolError::Read(_)));
     std::error::Error::source(&error)
-        .and_then(|source| source.downcast_ref::<loong_kernel::access::fs::FsAccessError>())
-        .expect("file tool error should retain its filesystem access source");
+        .and_then(|source| source.downcast_ref::<loong_kernel::access::fs::FsReadError>())
+        .expect("read tool error should retain its filesystem access source");
 }

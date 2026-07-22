@@ -312,10 +312,7 @@ impl RuntimeExtensionAdapter for MockRuntimeExtension {
     }
 }
 #[async_trait]
-impl<C> CoreToolAdapter<C> for MockCoreTool
-where
-    C: ContextFactory + Send + Sync,
-{
+impl CoreToolAdapter for MockCoreTool {
     fn name(&self) -> &str {
         "core-tools"
     }
@@ -331,17 +328,14 @@ where
     }
 }
 #[async_trait]
-impl<C> ToolExtensionAdapter<C> for MockToolExtension
-where
-    C: ContextFactory + Send + Sync,
-{
+impl ToolExtensionAdapter for MockToolExtension {
     fn name(&self) -> &str {
         "sql-analytics"
     }
     async fn execute_tool_extension(
         &self,
         request: ToolExtensionRequest,
-        core: &(dyn CoreToolAdapter<C> + Sync),
+        core: &(dyn CoreToolAdapter + Sync),
     ) -> Result<ToolExtensionOutcome, crate::ToolPlaneError> {
         let core_probe = core
             .execute_core_tool(ToolCoreRequest {

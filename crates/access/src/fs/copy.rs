@@ -6,7 +6,7 @@ use std::{
 use async_trait::async_trait;
 use loong_contracts::{Capability, PolicyDecision, PolicyGrant};
 use loong_core::{
-    error::AuthorizationError,
+    error::PolicyGrantError,
     policy::{
         action::{Action, ActionMeta, ActionMetadata},
         context::ContextFactory,
@@ -16,15 +16,54 @@ use loong_core::{
     },
 };
 use serde_json::{Value, json};
+use thiserror::Error;
 
 use super::{
-    access::{FsAccess, FsAccessError},
-    path::{FsResolutionContext, GrantedPath},
+    access::FsAccess,
+    path::{FsPathPolicyContext, FsResolutionContext, GrantedPath},
     write::FsWriteOptions,
 };
 
+#[cfg(test)]
+mod tests;
+
 const FS_COPY_FILE_REQUIRED_CAPABILITIES: [Capability; 2] =
     [Capability::FilesystemRead, Capability::FilesystemWrite];
+
+#[derive(Debug, Error)]
+pub enum FsCopyFileError {
+    #[error(transparent)]
+    Path(#[from] super::path::FsPathError),
+    #[error(transparent)]
+    Authorization(#[from] PolicyGrantError),
+    #[error("failed to inspect path {path}: {source}", path = .path.display())]
+    InspectPath {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to create parent directory {path}: {source}", path = .path.display())]
+    CreateParentDirectory {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("path {path} is a directory, not a file", path = .path.display())]
+    PathIsDirectory { path: PathBuf },
+    #[error("file {path} already exists; overwrite is required", path = .path.display())]
+    FileExistsRequiresOverwrite { path: PathBuf },
+    #[error(
+        "failed to copy file {source_path} to {destination_path}: {source}",
+        source_path = .source_path.display(),
+        destination_path = .destination_path.display()
+    )]
+    CopyFile {
+        source_path: PathBuf,
+        destination_path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+}
 
 /// Typed action for copying bytes between two governed filesystem paths.
 ///
@@ -119,7 +158,7 @@ impl<'a, 'ctx, C, P> FsAccess<'a, 'ctx, C, P>
 where
     C: ContextFactory + 'ctx,
     P: PolicyEngine<C>,
-    C::Cx<'ctx>: FsResolutionContext,
+    C::Cx<'ctx>: FsResolutionContext + FsPathPolicyContext,
 {
     /// Copy one file through source/destination path policy and copy policy.
     pub async fn copy_file(
@@ -127,17 +166,12 @@ where
         source: impl AsRef<Path>,
         destination: impl AsRef<Path>,
         options: FsWriteOptions,
-    ) -> Result<FsCopyFileOutput, FsAccessError> {
+    ) -> Result<FsCopyFileOutput, FsCopyFileError> {
         let source = self.grant_target_path(source).await?;
         let destination = self.grant_target_path(destination).await?;
 
         let action = FsCopyFileAction::new(source, destination, options);
-        let grant = self
-            .policy_engine
-            .grant(self.ctx, action)
-            .await
-            .map_err(AuthorizationError::from)
-            .map_err(FsAccessError::Authorization)?;
+        let grant = self.policy_engine.grant(self.ctx, action).await?;
         grant.into_granted().run(self.ctx).await
     }
 }
@@ -152,7 +186,7 @@ where
     Cx: Sync,
 {
     type Output = FsCopyFileOutput;
-    type Error = FsAccessError;
+    type Error = FsCopyFileError;
 
     async fn run(granted: Granted<Self>, _ctx: &Cx) -> Result<Self::Output, Self::Error> {
         let action = granted.into_action();
@@ -161,13 +195,13 @@ where
         let options = action.options();
 
         if destination.is_dir() {
-            return Err(FsAccessError::PathIsDirectory { path: destination });
+            return Err(FsCopyFileError::PathIsDirectory { path: destination });
         }
         if options.create_dirs
             && let Some(parent) = destination.parent()
         {
             std::fs::create_dir_all(parent).map_err(|source| {
-                FsAccessError::CreateParentDirectory {
+                FsCopyFileError::CreateParentDirectory {
                     path: parent.to_path_buf(),
                     source,
                 }
@@ -177,16 +211,16 @@ where
         let overwritten =
             destination
                 .try_exists()
-                .map_err(|source| FsAccessError::InspectPath {
+                .map_err(|source| FsCopyFileError::InspectPath {
                     path: destination.clone(),
                     source,
                 })?;
         if overwritten && !options.overwrite {
-            return Err(FsAccessError::FileExistsRequiresOverwrite { path: destination });
+            return Err(FsCopyFileError::FileExistsRequiresOverwrite { path: destination });
         }
 
         let bytes_copied = std::fs::copy(&source, &destination).map_err(|source_error| {
-            FsAccessError::CopyFile {
+            FsCopyFileError::CopyFile {
                 source_path: source.clone(),
                 destination_path: destination.clone(),
                 source: source_error,

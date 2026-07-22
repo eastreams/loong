@@ -22,7 +22,7 @@ use super::{
     runtime::state::ChannelOperationRuntimeTracker,
 };
 use crate::config::{ChannelDefaultAccountSelectionSource, LoongConfig};
-use crate::{AppContext, CliResult, config::ResolvedWhatsappChannelConfig};
+use crate::{CliResult, config::ResolvedWhatsappChannelConfig};
 use webhook::{WhatsappWebhookState, whatsapp_verify_handler, whatsapp_webhook_handler};
 
 pub(super) async fn run_whatsapp_send(
@@ -111,7 +111,8 @@ pub(super) async fn run_whatsapp_channel(
     default_account_source: ChannelDefaultAccountSelectionSource,
     bind_override: Option<&str>,
     path_override: Option<&str>,
-    app_ctx: AppContext,
+    execution_runtime: Arc<loong_runtime::runtime::Runtime<crate::RuntimeContextFactory>>,
+    agent_id: impl Into<String>,
     runtime: Arc<ChannelOperationRuntimeTracker>,
     stop: ChannelServeStopHandle,
 ) -> CliResult<()> {
@@ -139,7 +140,8 @@ pub(super) async fn run_whatsapp_channel(
         config.clone(),
         resolved_path.to_path_buf(),
         resolved,
-        app_ctx,
+        execution_runtime,
+        agent_id,
         runtime,
     )?;
     let app = build_whatsapp_webhook_router(state, path.as_str());
@@ -180,7 +182,8 @@ pub(in crate::channel) fn build_gateway_whatsapp_ingress_router(
     config: &LoongConfig,
     resolved: &ResolvedWhatsappChannelConfig,
     resolved_path: &Path,
-    app_ctx: AppContext,
+    execution_runtime: Arc<loong_runtime::runtime::Runtime<crate::RuntimeContextFactory>>,
+    agent_id: impl Into<String>,
     runtime: Arc<ChannelOperationRuntimeTracker>,
 ) -> CliResult<Router> {
     let path = resolved.resolved_webhook_path();
@@ -188,7 +191,8 @@ pub(in crate::channel) fn build_gateway_whatsapp_ingress_router(
         config.clone(),
         resolved_path.to_path_buf(),
         resolved,
-        app_ctx,
+        execution_runtime,
+        agent_id,
         runtime,
     )?;
     Ok(build_whatsapp_webhook_router(state, path.as_str()))
@@ -246,7 +250,7 @@ pub(super) async fn run_whatsapp_channel_with_context(
         validate_whatsapp_security_config,
         stop,
         initialize_runtime_environment,
-        move |context, app_ctx, runtime, stop| {
+        move |context, execution_runtime, agent_id, runtime, stop| {
             Box::pin(async move {
                 let route = context.route.clone();
                 let resolved_path = context.resolved_path.clone();
@@ -260,7 +264,8 @@ pub(super) async fn run_whatsapp_channel_with_context(
                     route.default_account_source,
                     bind_override.as_deref(),
                     path_override.as_deref(),
-                    app_ctx,
+                    execution_runtime,
+                    agent_id,
                     runtime,
                     stop,
                 )

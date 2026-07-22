@@ -1,59 +1,8 @@
+use std::collections::BTreeMap;
+
 use serde_json::json;
 
 use super::*;
-
-fn discovery_followup_messages(tool_id: &str, lease: &str) -> Vec<Value> {
-    let payload_summary = serde_json::to_string(&json!({
-        "results": [
-            {
-                "tool_id": tool_id,
-                "lease": lease,
-            }
-        ]
-    }))
-    .expect("encode search payload summary");
-    let envelope = serde_json::to_string(&json!({
-        "status": "ok",
-        "tool": "tool.search",
-        "tool_call_id": "call-search",
-        "payload_summary": payload_summary,
-        "payload_chars": payload_summary.chars().count(),
-        "payload_truncated": false,
-    }))
-    .expect("encode search envelope");
-    vec![json!({
-        "role": "assistant",
-        "content": format!("[tool_result]\n[ok] {envelope}"),
-    })]
-}
-
-fn discovery_followup_part_messages(tool_id: &str, lease: &str) -> Vec<Value> {
-    let payload_summary = serde_json::to_string(&json!({
-        "results": [
-            {
-                "tool_id": tool_id,
-                "lease": lease,
-            }
-        ]
-    }))
-    .expect("encode search payload summary");
-    let envelope = serde_json::to_string(&json!({
-        "status": "ok",
-        "tool": "tool.search",
-        "tool_call_id": "call-search",
-        "payload_summary": payload_summary,
-        "payload_chars": payload_summary.chars().count(),
-        "payload_truncated": false,
-    }))
-    .expect("encode search envelope");
-    vec![json!({
-        "role": "assistant",
-        "content": [{
-            "type": "input_text",
-            "text": format!("[tool_result]\n[ok] {envelope}"),
-        }],
-    })]
-}
 
 #[test]
 fn extract_provider_turn_parses_tool_calls() {
@@ -75,7 +24,11 @@ fn extract_provider_turn_parses_tool_calls() {
     let turn = extract_provider_turn(&body).expect("turn");
     assert_eq!(turn.assistant_text, "checking");
     assert_eq!(turn.tool_intents.len(), 1);
-    assert_eq!(turn.tool_intents[0].tool_name, "read");
+    assert_eq!(turn.tool_intents[0].tool_name(), "file.read");
+    assert!(matches!(
+        &turn.tool_intents[0].tool_name,
+        ToolIntentTarget::Unresolved { .. }
+    ));
     assert_eq!(turn.tool_intents[0].args_json, json!({"path":"README.md"}));
     assert_eq!(turn.tool_intents[0].tool_call_id, "call_1");
 }
@@ -129,12 +82,12 @@ fn extract_provider_turn_normalizes_underscore_tool_aliases() {
     });
     let turn = extract_provider_turn(&body).expect("turn");
     assert_eq!(turn.tool_intents.len(), 1);
-    assert_eq!(turn.tool_intents[0].tool_name, "read");
+    assert_eq!(turn.tool_intents[0].tool_name.name(), "file_read");
     assert_eq!(turn.tool_intents[0].args_json, json!({"path":"README.md"}));
 }
 
 #[test]
-fn extract_provider_turn_with_scope_prefers_direct_surface_for_direct_tools_after_search() {
+fn extract_provider_turn_with_scope_does_not_reinterpret_unregistered_file_paths() {
     let body = serde_json::json!({
         "choices": [{
             "message": {
@@ -150,22 +103,48 @@ fn extract_provider_turn_with_scope_prefers_direct_surface_for_direct_tools_afte
             }
         }]
     });
-    let messages = discovery_followup_messages("read", "lease-openai");
-
-    let turn = extract_provider_turn_with_scope_and_messages(
-        &body,
-        Some("session-shape"),
-        Some("turn-shape"),
-        &messages,
-    )
-    .expect("turn");
+    let turn = extract_provider_turn_with_scope(&body, Some("turn-shape")).expect("turn");
     assert_eq!(turn.assistant_text, "checking");
     assert_eq!(turn.tool_intents.len(), 1);
-    assert_eq!(turn.tool_intents[0].tool_name, "read");
-    assert_eq!(turn.tool_intents[0].session_id, "session-shape");
+    assert_eq!(turn.tool_intents[0].tool_name(), "file.read");
     assert_eq!(turn.tool_intents[0].turn_id, "turn-shape");
     assert_eq!(turn.tool_intents[0].tool_call_id, "call_compat");
     assert_eq!(turn.tool_intents[0].args_json, json!({"path":"README.md"}));
+}
+
+#[test]
+fn request_surface_resolves_provider_name_to_exact_registered_path() {
+    let body = json!({
+        "choices": [{
+            "message": {
+                "content": null,
+                "tool_calls": [{
+                    "id": "call_typed",
+                    "type": "function",
+                    "function": { "name": "typed_only", "arguments": "{}" }
+                }]
+            }
+        }]
+    });
+    let path =
+        loong_contracts::ToolPath::new(["typed.only"]).expect("test tool path must be valid");
+    let surface = ProviderToolRequestSurface::new(
+        vec![json!({
+            "type": "function",
+            "function": { "name": "typed_only", "parameters": { "type": "object" } }
+        })],
+        BTreeMap::from([("typed_only".to_owned(), path.clone())]),
+    )
+    .expect("typed request surface");
+
+    let turn = extract_provider_turn_for_request(&body, Some("turn-typed"), &surface)
+        .expect("provider turn");
+
+    assert_eq!(
+        turn.tool_intents[0].tool_name.registered_path(),
+        Some(&path)
+    );
+    assert_eq!(turn.tool_intents[0].tool_name(), "typed_only");
 }
 
 #[cfg(feature = "feishu-integration")]
@@ -186,70 +165,12 @@ fn extract_provider_turn_with_scope_ignores_runtime_discovered_feishu_hidden_too
             }
         }]
     });
-    let messages = discovery_followup_messages("feishu.card.update", "lease-feishu");
-
-    let turn = extract_provider_turn_with_scope_and_messages(
-        &body,
-        Some("session-feishu"),
-        Some("turn-feishu"),
-        &messages,
-    )
-    .expect("turn");
+    let surface = ProviderToolRequestSurface::new(Vec::new(), BTreeMap::new())
+        .expect("empty request surface");
+    let turn =
+        extract_provider_turn_for_request(&body, Some("turn-feishu"), &surface).expect("turn");
     assert_eq!(turn.assistant_text, "updating card");
     assert!(turn.tool_intents.is_empty());
-}
-
-#[test]
-fn bridge_context_skips_truncated_search_results() {
-    let payload_summary = serde_json::to_string(&json!({
-        "results": [
-            {
-                "tool_id": "read",
-                "lease": "lease-truncated",
-            }
-        ]
-    }))
-    .expect("encode");
-    let envelope = serde_json::to_string(&json!({
-        "status": "ok",
-        "tool": "tool.search",
-        "tool_call_id": "call-search",
-        "payload_summary": payload_summary,
-        "payload_chars": payload_summary.chars().count(),
-        "payload_truncated": true,
-    }))
-    .expect("encode envelope");
-    let messages = vec![json!({
-        "role": "assistant",
-        "content": format!("[tool_result]\n[ok] {envelope}"),
-    })];
-
-    let body = serde_json::json!({
-        "choices": [{
-            "message": {
-                "content": "reading",
-                "tool_calls": [{
-                    "id": "call_trunc",
-                    "type": "function",
-                    "function": {
-                        "name": "file_read",
-                        "arguments": "{\"path\":\"README.md\"}"
-                    }
-                }]
-            }
-        }]
-    });
-    let turn = extract_provider_turn_with_scope_and_messages(
-        &body,
-        Some("session-trunc"),
-        Some("turn-trunc"),
-        &messages,
-    )
-    .expect("turn");
-    // When payload is truncated, bridge context should be empty,
-    // so the hidden alias should fall back to the direct visible surface instead of tool.invoke.
-    assert_eq!(turn.tool_intents[0].tool_name, "read");
-    assert_eq!(turn.tool_intents[0].args_json, json!({"path": "README.md"}));
 }
 
 #[test]
@@ -285,32 +206,18 @@ fn extract_provider_turn_supports_responses_function_calls() {
             }
         ]
     });
-    let messages = discovery_followup_messages("read", "lease-responses");
-    let turn =
-        extract_provider_turn_with_scope(&body, Some("session-responses"), Some("turn-responses"))
-            .expect("responses turn without search context should stay direct");
+    let turn = extract_provider_turn_with_scope(&body, Some("turn-responses"))
+        .expect("responses turn without search context should stay direct");
     assert_eq!(turn.assistant_text, "Reading the file.");
     assert_eq!(turn.tool_intents.len(), 1);
-    assert_eq!(turn.tool_intents[0].tool_name, "read");
-    assert_eq!(turn.tool_intents[0].session_id, "session-responses");
+    assert_eq!(turn.tool_intents[0].tool_name.name(), "file_read");
     assert_eq!(turn.tool_intents[0].turn_id, "turn-responses");
     assert_eq!(turn.tool_intents[0].args_json, json!({"path": "README.md"}));
     assert_eq!(turn.tool_intents[0].tool_call_id, "call_resp_1");
-
-    let turn = extract_provider_turn_with_scope_and_messages(
-        &body,
-        Some("session-responses"),
-        Some("turn-responses"),
-        &messages,
-    )
-    .expect("responses turn with search context");
-    assert_eq!(turn.tool_intents.len(), 1);
-    assert_eq!(turn.tool_intents[0].tool_name, "read");
-    assert_eq!(turn.tool_intents[0].args_json, json!({"path": "README.md"}));
 }
 
 #[test]
-fn extract_provider_turn_supports_responses_function_calls_with_array_followup_messages() {
+fn extract_provider_turn_supports_responses_function_calls_with_array_content() {
     let body = serde_json::json!({
         "output": [
             {
@@ -328,17 +235,10 @@ fn extract_provider_turn_supports_responses_function_calls_with_array_followup_m
             }
         ]
     });
-    let messages = discovery_followup_part_messages("file.read", "lease-responses-parts");
-
-    let turn = extract_provider_turn_with_scope_and_messages(
-        &body,
-        Some("session-responses"),
-        Some("turn-responses"),
-        &messages,
-    )
-    .expect("responses turn with array-form search context");
+    let turn = extract_provider_turn_with_scope(&body, Some("turn-responses"))
+        .expect("responses turn with array-form content");
     assert_eq!(turn.tool_intents.len(), 1);
-    assert_eq!(turn.tool_intents[0].tool_name, "read");
+    assert_eq!(turn.tool_intents[0].tool_name.name(), "file_read");
     assert_eq!(turn.tool_intents[0].args_json, json!({"path": "README.md"}));
 }
 
@@ -351,16 +251,13 @@ fn extract_provider_turn_parses_inline_shell_function_block() {
             }
         }]
     });
-    let messages = discovery_followup_messages("exec", "lease-shell-inline");
-
-    let turn =
-        extract_provider_turn_with_scope_and_messages(&body, None, None, &messages).expect("turn");
+    let turn = extract_provider_turn(&body).expect("turn");
     assert_eq!(
         turn.assistant_text,
         "sorry, that command failed. let me retry with a simpler approach:"
     );
     assert_eq!(turn.tool_intents.len(), 1);
-    assert_eq!(turn.tool_intents[0].tool_name, "bash");
+    assert_eq!(turn.tool_intents[0].tool_name.name(), "bash");
     assert_eq!(
         turn.tool_intents[0].args_json,
         json!({"command":"ls /root"})
@@ -393,7 +290,7 @@ fn extract_provider_turn_parses_invoke_blocks_with_quoted_gt_in_arguments() {
 
     assert_eq!(turn.assistant_text, "let me run the shell command.");
     assert_eq!(turn.tool_intents.len(), 1);
-    assert_eq!(turn.tool_intents[0].tool_name, "bash");
+    assert_eq!(turn.tool_intents[0].tool_name.name(), "bash");
     assert_eq!(
         turn.tool_intents[0].args_json,
         json!({
@@ -404,7 +301,7 @@ fn extract_provider_turn_parses_invoke_blocks_with_quoted_gt_in_arguments() {
 }
 
 #[test]
-fn extract_provider_turn_prefers_direct_surface_for_function_call_followups_after_search() {
+fn extract_provider_turn_normalizes_direct_surface_in_function_call_blocks() {
     let body = serde_json::json!({
         "choices": [{
             "message": {
@@ -412,18 +309,15 @@ fn extract_provider_turn_prefers_direct_surface_for_function_call_followups_afte
             }
         }]
     });
-    let messages = discovery_followup_messages("read", "lease-invoke-followup");
-
-    let turn =
-        extract_provider_turn_with_scope_and_messages(&body, None, None, &messages).expect("turn");
+    let turn = extract_provider_turn(&body).expect("turn");
     assert_eq!(turn.assistant_text, "now i'll read the file.");
     assert_eq!(turn.tool_intents.len(), 1);
-    assert_eq!(turn.tool_intents[0].tool_name, "read");
+    assert_eq!(turn.tool_intents[0].tool_name.name(), "file_read");
     assert_eq!(turn.tool_intents[0].args_json, json!({"path": "note.md"}));
 }
 
 #[test]
-fn extract_provider_turn_prefers_direct_surface_for_plain_json_followups_after_search() {
+fn extract_provider_turn_normalizes_direct_surface_in_json_blocks() {
     let body = serde_json::json!({
         "choices": [{
             "message": {
@@ -431,18 +325,15 @@ fn extract_provider_turn_prefers_direct_surface_for_plain_json_followups_after_s
             }
         }]
     });
-    let messages = discovery_followup_messages("read", "lease-json-followup");
-
-    let turn =
-        extract_provider_turn_with_scope_and_messages(&body, None, None, &messages).expect("turn");
+    let turn = extract_provider_turn(&body).expect("turn");
     assert_eq!(turn.assistant_text, "now i'll read the file.");
     assert_eq!(turn.tool_intents.len(), 1);
-    assert_eq!(turn.tool_intents[0].tool_name, "read");
+    assert_eq!(turn.tool_intents[0].tool_name.name(), "file_read");
     assert_eq!(turn.tool_intents[0].args_json, json!({"path": "note.md"}));
 }
 
 #[test]
-fn extract_provider_turn_accepts_legacy_request_wrapper_for_browse_followups() {
+fn extract_provider_turn_accepts_legacy_browse_request_wrapper() {
     let body = serde_json::json!({
         "choices": [{
             "message": {
@@ -450,13 +341,10 @@ fn extract_provider_turn_accepts_legacy_request_wrapper_for_browse_followups() {
             }
         }]
     });
-    let messages = discovery_followup_messages("browse", "browse-wrapper-followup");
-
-    let turn =
-        extract_provider_turn_with_scope_and_messages(&body, None, None, &messages).expect("turn");
+    let turn = extract_provider_turn(&body).expect("turn");
     assert_eq!(turn.assistant_text, "now i'll open the page.");
     assert_eq!(turn.tool_intents.len(), 1);
-    assert_eq!(turn.tool_intents[0].tool_name, "browse");
+    assert_eq!(turn.tool_intents[0].tool_name.name(), "browse");
     assert_eq!(
         turn.tool_intents[0].args_json,
         json!({"url": "https://example.com"})
@@ -464,7 +352,7 @@ fn extract_provider_turn_accepts_legacy_request_wrapper_for_browse_followups() {
 }
 
 #[test]
-fn extract_provider_turn_repairs_misordered_browse_wrapper_after_search() {
+fn extract_provider_turn_repairs_misordered_browse_wrapper() {
     let body = serde_json::json!({
         "choices": [{
             "message": {
@@ -472,13 +360,10 @@ fn extract_provider_turn_repairs_misordered_browse_wrapper_after_search() {
             }
         }]
     });
-    let messages = discovery_followup_messages("browse", "browse-misordered-followup");
-
-    let turn =
-        extract_provider_turn_with_scope_and_messages(&body, None, None, &messages).expect("turn");
+    let turn = extract_provider_turn(&body).expect("turn");
     assert_eq!(turn.assistant_text, "open the page.");
     assert_eq!(turn.tool_intents.len(), 1);
-    assert_eq!(turn.tool_intents[0].tool_name, "browse");
+    assert_eq!(turn.tool_intents[0].tool_name.name(), "browse");
     assert_eq!(
         turn.tool_intents[0].args_json,
         json!({"url": "https://example.com"})
@@ -501,7 +386,7 @@ fn extract_provider_turn_recovers_glued_tool_request_markup_and_trailing_summary
         "Example Domain is a short documentation example page."
     );
     assert_eq!(turn.tool_intents.len(), 1);
-    assert_eq!(turn.tool_intents[0].tool_name, "web");
+    assert_eq!(turn.tool_intents[0].tool_name.name(), "web");
     assert_eq!(
         turn.tool_intents[0].args_json,
         json!({"url": "https://example.com"})
@@ -524,9 +409,9 @@ fn extract_provider_turn_recovers_multiple_glued_tool_request_wrappers_before_fi
         "I do not yet have the tool outputs needed to summarize the repository."
     );
     assert_eq!(turn.tool_intents.len(), 2);
-    assert_eq!(turn.tool_intents[0].tool_name, "read");
+    assert_eq!(turn.tool_intents[0].tool_name.name(), "read");
     assert_eq!(turn.tool_intents[0].args_json, json!({"path": "AGENTS.md"}));
-    assert_eq!(turn.tool_intents[1].tool_name, "read");
+    assert_eq!(turn.tool_intents[1].tool_name.name(), "read");
     assert_eq!(
         turn.tool_intents[1].args_json,
         json!({"path": "docs/README.md"})
@@ -546,14 +431,14 @@ fn extract_provider_turn_recovers_multiple_glued_tool_request_wrappers_without_f
     let turn = extract_provider_turn(&body).expect("turn");
     assert_eq!(turn.assistant_text, "");
     assert_eq!(turn.tool_intents.len(), 3);
-    assert_eq!(turn.tool_intents[0].tool_name, "read");
+    assert_eq!(turn.tool_intents[0].tool_name.name(), "read");
     assert_eq!(turn.tool_intents[0].args_json, json!({"path": "README.md"}));
-    assert_eq!(turn.tool_intents[1].tool_name, "read");
+    assert_eq!(turn.tool_intents[1].tool_name.name(), "read");
     assert_eq!(
         turn.tool_intents[1].args_json,
         json!({"path": "ARCHITECTURE.md"})
     );
-    assert_eq!(turn.tool_intents[2].tool_name, "read");
+    assert_eq!(turn.tool_intents[2].tool_name.name(), "read");
     assert_eq!(
         turn.tool_intents[2].args_json,
         json!({"path": "docs/ROADMAP.md"})
@@ -576,7 +461,7 @@ fn extract_provider_turn_strips_same_line_tool_request_wrapper_after_leading_pre
         "to summarize repo need inspect key docs."
     );
     assert_eq!(turn.tool_intents.len(), 1);
-    assert_eq!(turn.tool_intents[0].tool_name, "read");
+    assert_eq!(turn.tool_intents[0].tool_name.name(), "read");
     assert_eq!(
         turn.tool_intents[0].args_json,
         json!({"path": "docs/README.md"})
@@ -596,9 +481,9 @@ fn extract_provider_turn_recovers_tool_request_array_wrapper_with_trailing_text(
     let turn = extract_provider_turn(&body).expect("turn");
     assert_eq!(turn.assistant_text, "This repository is a Rust workspace.");
     assert_eq!(turn.tool_intents.len(), 2);
-    assert_eq!(turn.tool_intents[0].tool_name, "read");
+    assert_eq!(turn.tool_intents[0].tool_name.name(), "read");
     assert_eq!(turn.tool_intents[0].args_json, json!({"path": "AGENTS.md"}));
-    assert_eq!(turn.tool_intents[1].tool_name, "read");
+    assert_eq!(turn.tool_intents[1].tool_name.name(), "read");
     assert_eq!(
         turn.tool_intents[1].args_json,
         json!({"path": "docs/README.md"})
@@ -792,7 +677,7 @@ fn extract_provider_turn_parses_indented_inline_function_when_not_code_block() {
     let turn = extract_provider_turn(&body).expect("turn");
     assert_eq!(turn.assistant_text, "let me retry:");
     assert_eq!(turn.tool_intents.len(), 1);
-    assert_eq!(turn.tool_intents[0].tool_name, "bash");
+    assert_eq!(turn.tool_intents[0].tool_name.name(), "bash");
     assert_eq!(turn.tool_intents[0].args_json, json!({"command": "ls"}));
 }
 
@@ -809,7 +694,7 @@ fn extract_provider_turn_parses_tab_indented_inline_function_when_not_code_block
     let turn = extract_provider_turn(&body).expect("turn");
     assert_eq!(turn.assistant_text, "let me retry:");
     assert_eq!(turn.tool_intents.len(), 1);
-    assert_eq!(turn.tool_intents[0].tool_name, "bash");
+    assert_eq!(turn.tool_intents[0].tool_name.name(), "bash");
     assert_eq!(turn.tool_intents[0].args_json, json!({"command": "ls"}));
 }
 
@@ -846,7 +731,22 @@ fn extract_provider_turn_preserves_string_typed_inline_parameters() {
         }]
     });
 
-    let turn = extract_provider_turn(&body).expect("turn");
+    let tool_definitions = vec![json!({
+        "type": "function",
+        "function": {
+            "name": "shell.exec",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string"},
+                    "args": {"type": "array", "items": {"type": "string"}}
+                }
+            }
+        }
+    })];
+    let surface = ProviderToolRequestSurface::new(tool_definitions, BTreeMap::new())
+        .expect("request surface");
+    let turn = extract_provider_turn_for_request(&body, None, &surface).expect("turn");
     assert_eq!(turn.tool_intents.len(), 1);
     assert_eq!(
         turn.tool_intents[0].args_json,
@@ -855,6 +755,21 @@ fn extract_provider_turn_preserves_string_typed_inline_parameters() {
             "args": ["hello"]
         })
     );
+}
+
+#[test]
+fn extract_provider_turn_without_tool_definitions_does_not_use_catalog_schema() {
+    let body = serde_json::json!({
+        "choices": [{
+            "message": {
+                "content": "let me retry.\n<function=shell.exec><parameter=command>true</parameter></function>"
+            }
+        }]
+    });
+
+    let turn = extract_provider_turn(&body).expect("turn");
+    assert_eq!(turn.tool_intents.len(), 1);
+    assert_eq!(turn.tool_intents[0].args_json, json!({"command": true}));
 }
 
 #[test]
@@ -937,12 +852,10 @@ fn extract_provider_turn_supports_anthropic_native_content_blocks() {
             }
         ]
     });
-    let messages = discovery_followup_messages("read", "lease-anthropic");
-    let turn =
-        extract_provider_turn_with_scope_and_messages(&body, None, None, &messages).expect("turn");
+    let turn = extract_provider_turn(&body).expect("turn");
     assert_eq!(turn.assistant_text, "checking");
     assert_eq!(turn.tool_intents.len(), 1);
-    assert_eq!(turn.tool_intents[0].tool_name, "read");
+    assert_eq!(turn.tool_intents[0].tool_name.name(), "file_read");
     assert_eq!(turn.tool_intents[0].tool_call_id, "toolu_1");
     assert_eq!(turn.tool_intents[0].args_json, json!({"path": "README.md"}));
 }
@@ -971,12 +884,10 @@ fn extract_provider_turn_supports_bedrock_converse_content_blocks() {
         },
         "stopReason": "tool_use"
     });
-    let messages = discovery_followup_messages("read", "lease-bedrock");
-    let turn =
-        extract_provider_turn_with_scope_and_messages(&body, None, None, &messages).expect("turn");
+    let turn = extract_provider_turn(&body).expect("turn");
     assert_eq!(turn.assistant_text, "checking");
     assert_eq!(turn.tool_intents.len(), 1);
-    assert_eq!(turn.tool_intents[0].tool_name, "read");
+    assert_eq!(turn.tool_intents[0].tool_name.name(), "file_read");
     assert_eq!(turn.tool_intents[0].tool_call_id, "toolu_1");
     assert_eq!(turn.tool_intents[0].args_json, json!({"path": "README.md"}));
     assert_eq!(turn.raw_meta["content"][1]["type"], "tool_use");

@@ -44,7 +44,7 @@ pub trait ActionMeta: Any + Send + Sync + 'static {
 /// Implement this only at the domain side-effect boundary. `run` consumes a
 /// [`Granted<Self>`], so raw action values cannot execute side effects.
 #[async_trait]
-pub trait Action<Cx>: ActionMeta + Sized
+pub trait Action<Cx: ?Sized>: ActionMeta + Sized
 where
     Cx: Sync,
 {

@@ -3,13 +3,21 @@ use std::{collections::BTreeSet, path::PathBuf};
 use async_trait::async_trait;
 use loong_contracts::{Capability, ToolInputError, ToolSchedulingClass, ToolSpec};
 use loong_core::{
+    PolicyGrantError,
     policy::context::ContextFactory,
     tool::{ToolFailureKind, ToolImpl},
 };
-use loong_kernel::{KernelAccess, access::fs::FsWriteOptions};
+use loong_kernel::{
+    KernelAccess,
+    access::fs::{
+        FsPathError, FsPathPolicyContext, FsReadError, FsResolutionContext, FsWriteError,
+        FsWriteOptions,
+    },
+};
 use serde_json::{Value, json};
+use thiserror::Error;
 
-use super::{FileToolError, required_trimmed_string_field};
+use super::required_trimmed_string_field;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExactTextEditBlock {
@@ -19,7 +27,6 @@ pub struct ExactTextEditBlock {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditRequest {
-    pub(super) tool_name: String,
     pub(super) path: String,
     pub(super) blocks: Vec<ExactTextEditBlock>,
 }
@@ -32,7 +39,6 @@ pub struct AppliedExactEdit {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditOutput {
-    pub tool_name: String,
     pub path: PathBuf,
     pub before: String,
     pub after: String,
@@ -40,11 +46,36 @@ pub struct EditOutput {
     pub edit_blocks_applied: usize,
 }
 
+/// Failures owned by the read-transform-write edit operation.
+#[derive(Debug, Error)]
+pub enum EditToolError {
+    #[error("{0}")]
+    Read(
+        #[from]
+        #[source]
+        FsReadError,
+    ),
+    #[error("{0}")]
+    Write(
+        #[from]
+        #[source]
+        FsWriteError,
+    ),
+    /// File editing currently requires UTF-8 text. Supporting other encodings
+    /// may require an explicit decoding policy later; this path does not guess one yet.
+    #[error("failed to decode {path} as UTF-8: {source}", path = .path.display())]
+    InvalidUtf8 {
+        path: PathBuf,
+        #[source]
+        source: std::string::FromUtf8Error,
+    },
+    #[error("{reason}")]
+    ApplyEdit { reason: String },
+}
+
 impl From<EditOutput> for Value {
     fn from(output: EditOutput) -> Self {
         json!({
-            "adapter": "core-tools",
-            "tool_name": output.tool_name,
             "path": output.path.display().to_string(),
             "replacements_made": output.replacements_made,
             "bytes_written": output.after.len(),
@@ -62,21 +93,9 @@ impl From<EditOutput> for Value {
     }
 }
 
-pub struct EditTool {
-    tool_name: &'static str,
-}
+pub struct EditTool;
 
 impl EditTool {
-    /// Creates the exact text edit implementation for an app-facing tool name.
-    ///
-    /// The app plane owns registration and preview-event observation. This tool
-    /// only parses the edit payload, calls governed fs access, and returns a
-    /// typed output that the app boundary can observe before JSON erasure.
-    #[must_use]
-    pub const fn new(tool_name: &'static str) -> Self {
-        Self { tool_name }
-    }
-
     fn input_schema() -> Value {
         json!({
             "type": "object",
@@ -153,11 +172,11 @@ impl EditTool {
 impl<C> ToolImpl<C> for EditTool
 where
     C: ContextFactory + Send + Sync,
-    for<'a> C::Cx<'a>: KernelAccess<C> + Sync,
+    for<'a> C::Cx<'a>: KernelAccess<C> + FsResolutionContext + FsPathPolicyContext + Sync,
 {
     type Input = EditRequest;
     type Output = EditOutput;
-    type Error = FileToolError;
+    type Error = EditToolError;
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -180,12 +199,32 @@ where
     }
 
     fn parse_input(&self, payload: Value) -> Result<Self::Input, ToolInputError> {
-        EditRequest::parse_payload(self.tool_name.to_owned(), &payload)
-            .map_err(ToolInputError::invalid_payload)
+        EditRequest::parse_payload(&payload)
     }
 
     fn failure_kind(&self, error: &Self::Error) -> ToolFailureKind {
-        error.failure_kind()
+        match error {
+            EditToolError::Read(
+                FsReadError::Authorization(source)
+                | FsReadError::Path(FsPathError::Authorization(source)),
+            )
+            | EditToolError::Write(
+                FsWriteError::Authorization(source)
+                | FsWriteError::Path(FsPathError::Authorization(source)),
+            ) if matches!(
+                source,
+                PolicyGrantError::MissingCapability { .. }
+                    | PolicyGrantError::Denied { .. }
+                    | PolicyGrantError::PermissionDenied { .. }
+            ) =>
+            {
+                ToolFailureKind::Denied
+            }
+            EditToolError::Read(_)
+            | EditToolError::Write(_)
+            | EditToolError::InvalidUtf8 { .. }
+            | EditToolError::ApplyEdit { .. } => ToolFailureKind::Execution,
+        }
     }
 
     async fn execute(
@@ -195,12 +234,12 @@ where
     ) -> Result<Self::Output, Self::Error> {
         let read_output = ctx.access().fs().read_file(input.path.as_str()).await?;
         let before =
-            String::from_utf8(read_output.bytes).map_err(|source| FileToolError::InvalidUtf8 {
+            String::from_utf8(read_output.bytes).map_err(|source| EditToolError::InvalidUtf8 {
                 path: read_output.path.clone(),
                 source,
             })?;
         let applied = Self::apply_exact_edit_blocks(before.as_str(), input.blocks.as_slice())
-            .map_err(|reason| FileToolError::ApplyEdit { reason })?;
+            .map_err(|reason| EditToolError::ApplyEdit { reason })?;
 
         let write_output = ctx
             .access()
@@ -216,7 +255,6 @@ where
             .await?;
 
         Ok(EditOutput {
-            tool_name: input.tool_name,
             path: write_output.path,
             before,
             after: applied.updated,
@@ -227,17 +265,49 @@ where
 }
 
 impl EditRequest {
-    pub(super) fn parse_payload(tool_name: String, payload: &Value) -> Result<Self, String> {
+    pub(super) fn parse_payload(payload: &Value) -> Result<Self, ToolInputError> {
         let payload = payload
             .as_object()
-            .ok_or_else(|| format!("{tool_name} payload must be an object"))?;
-        let path = required_trimmed_string_field(payload, "path", tool_name.as_str())?.to_owned();
-        let blocks = parse_exact_edit_blocks(payload, tool_name.as_str())?;
+            .ok_or(ToolInputError::PayloadMustBeObject)?;
+        let path = required_trimmed_string_field(payload, "path")?.to_owned();
+        let raw_blocks = payload
+            .get("edits")
+            .ok_or_else(|| ToolInputError::missing_field("edits"))?;
+        let blocks = raw_blocks
+            .as_array()
+            .ok_or_else(|| ToolInputError::invalid_field("edits", "must be an array"))?;
+        if blocks.is_empty() {
+            return Err(ToolInputError::invalid_field(
+                "edits",
+                "must contain at least one edit block",
+            ));
+        }
+
+        let mut parsed_blocks = Vec::with_capacity(blocks.len());
+        for (index, raw_block) in blocks.iter().enumerate() {
+            let field_prefix = format!("edits[{index}]");
+            let block = raw_block
+                .as_object()
+                .ok_or_else(|| ToolInputError::invalid_field(field_prefix, "must be an object"))?;
+            let old_text =
+                required_exact_edit_block_string_field(block, "old_text", "oldText", index)?;
+            if old_text.is_empty() {
+                return Err(ToolInputError::invalid_field(
+                    format!("edits[{index}].old_text"),
+                    "must not be empty",
+                ));
+            }
+            let new_text =
+                required_exact_edit_block_string_field(block, "new_text", "newText", index)?;
+            parsed_blocks.push(ExactTextEditBlock {
+                old_text: old_text.to_owned(),
+                new_text: new_text.to_owned(),
+            });
+        }
 
         Ok(Self {
-            tool_name,
             path,
-            blocks,
+            blocks: parsed_blocks,
         })
     }
 }
@@ -249,56 +319,27 @@ struct LocatedExactTextEditBlock<'a> {
     block: &'a ExactTextEditBlock,
 }
 
-fn exact_edit_block_field<'a>(
+// Both edit text fields accept snake_case and camelCase aliases. Keeping that
+// precedence here also gives every nested failure the same canonical field path.
+fn required_exact_edit_block_string_field<'a>(
     block: &'a serde_json::Map<String, Value>,
     snake_case_field: &str,
     camel_case_field: &str,
-) -> Option<&'a str> {
-    block
-        .get(snake_case_field)
-        .and_then(Value::as_str)
-        .or_else(|| block.get(camel_case_field).and_then(Value::as_str))
-}
-
-fn parse_exact_edit_blocks(
-    payload: &serde_json::Map<String, Value>,
-    tool_name: &str,
-) -> Result<Vec<ExactTextEditBlock>, String> {
-    let raw_blocks = payload
-        .get("edits")
-        .ok_or_else(|| format!("{tool_name} requires payload.edits"))?;
-    let blocks = raw_blocks
-        .as_array()
-        .ok_or_else(|| format!("{tool_name} payload.edits must be an array"))?;
-    if blocks.is_empty() {
-        return Err(format!(
-            "{tool_name} payload.edits must contain at least one edit block"
-        ));
+    index: usize,
+) -> Result<&'a str, ToolInputError> {
+    if let Some(value) = block.get(snake_case_field).and_then(Value::as_str) {
+        return Ok(value);
+    }
+    if let Some(value) = block.get(camel_case_field).and_then(Value::as_str) {
+        return Ok(value);
     }
 
-    let mut parsed_blocks = Vec::with_capacity(blocks.len());
-    for (index, raw_block) in blocks.iter().enumerate() {
-        let block = raw_block
-            .as_object()
-            .ok_or_else(|| format!("{tool_name} payload.edits[{index}] must be an object"))?;
-        let old_text = exact_edit_block_field(block, "old_text", "oldText").ok_or_else(|| {
-            format!("{tool_name} payload.edits[{index}].old_text must be a string")
-        })?;
-        if old_text.is_empty() {
-            return Err(format!(
-                "edit_failed: edits[{index}].old_text must not be empty"
-            ));
-        }
-        let new_text = exact_edit_block_field(block, "new_text", "newText").ok_or_else(|| {
-            format!("{tool_name} payload.edits[{index}].new_text must be a string")
-        })?;
-        parsed_blocks.push(ExactTextEditBlock {
-            old_text: old_text.to_owned(),
-            new_text: new_text.to_owned(),
-        });
+    let field = format!("edits[{index}].{snake_case_field}");
+    if block.contains_key(snake_case_field) || block.contains_key(camel_case_field) {
+        Err(ToolInputError::invalid_field(field, "must be a string"))
+    } else {
+        Err(ToolInputError::missing_field(field))
     }
-
-    Ok(parsed_blocks)
 }
 
 fn locate_exact_edit_block<'a>(

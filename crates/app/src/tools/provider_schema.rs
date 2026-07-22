@@ -1,23 +1,19 @@
-use std::collections::{BTreeMap, BTreeSet};
-
-use loong_contracts::{ToolPath, ToolSpec};
-use loong_runtime::{runtime::Runtime, tool_plane::error::LookupError};
+use loong_runtime::{runtime::Runtime, tool_plane::ToolRegistration};
 use serde_json::{Value, json};
 
-use super::error::ToolMetadataError;
 use super::{
-    ToolAvailability, ToolDescriptor, ToolView, catalog, runtime_config,
-    runtime_tool_view_for_runtime_config, tool_catalog, tool_surface,
+    ToolAvailability, ToolDescriptor, ToolMetadataError, ToolView, runtime_config,
+    runtime_visible_tool_view, tool_catalog, tool_surface,
 };
 
 pub fn provider_tool_definitions(
-    runtime: Option<&Runtime<crate::context::AppContextFactory>>,
+    runtime: &Runtime<crate::context::RuntimeContextFactory>,
 ) -> Result<Vec<Value>, ToolMetadataError> {
     provider_tool_definitions_with_config(runtime, Some(runtime_config::get_tool_runtime_config()))
 }
 
 pub(crate) fn provider_tool_definitions_with_config(
-    runtime: Option<&Runtime<crate::context::AppContextFactory>>,
+    runtime: &Runtime<crate::context::RuntimeContextFactory>,
     config: Option<&runtime_config::ToolRuntimeConfig>,
 ) -> Result<Vec<Value>, ToolMetadataError> {
     let default_runtime_config;
@@ -29,41 +25,38 @@ pub(crate) fn provider_tool_definitions_with_config(
         }
     };
 
-    let view = runtime_tool_view_for_runtime_config(config);
-    provider_tool_definitions_for_view_with_config(runtime, &view)
+    let view = runtime_visible_tool_view(runtime, config, None);
+    provider_tool_definitions_for_view(runtime, &view)
 }
 
-pub fn try_provider_tool_definitions_for_view(
-    runtime: Option<&Runtime<crate::context::AppContextFactory>>,
-    view: &ToolView,
-) -> Result<Vec<Value>, ToolMetadataError> {
-    provider_tool_definitions_for_view_with_config(runtime, view)
-}
-
-fn provider_tool_definitions_for_view_with_config(
-    runtime: Option<&Runtime<crate::context::AppContextFactory>>,
+pub fn provider_tool_definitions_for_view(
+    runtime: &Runtime<crate::context::RuntimeContextFactory>,
     view: &ToolView,
 ) -> Result<Vec<Value>, ToolMetadataError> {
     let catalog = tool_catalog();
-    let typed_tool_paths = runtime
-        .map(Runtime::registered_tool_paths)
-        .unwrap_or_default()
-        .into_iter()
-        .collect::<BTreeSet<_>>();
     let mut tools = Vec::new();
+
+    for path in runtime.registered_tool_paths() {
+        let (registration, spec) = runtime.tool_metadata(&path)?;
+        let ToolRegistration::Direct { provider_name } = registration else {
+            continue;
+        };
+        if !view.contains_path(&path) {
+            continue;
+        }
+        tools.push(sanitize_provider_parameter_combinators(json!({
+            "type": "function",
+            "function": {
+                "name": provider_name,
+                "description": spec.description,
+                "parameters": spec.input_schema
+            }
+        })));
+    }
 
     for descriptor in catalog.descriptors().iter() {
         if descriptor.availability != ToolAvailability::Runtime || !descriptor.is_provider_exposed()
         {
-            continue;
-        }
-
-        let typed_path =
-            ToolPath::new([descriptor.name]).map_err(|source| ToolMetadataError::InvalidPath {
-                tool_name: descriptor.name.to_owned(),
-                source,
-            })?;
-        if descriptor.requires_typed_plane_metadata() && !typed_tool_paths.contains(&typed_path) {
             continue;
         }
 
@@ -73,26 +66,13 @@ fn provider_tool_definitions_for_view_with_config(
             continue;
         }
 
-        tools.push(provider_definition_for_view(runtime, descriptor, view)?);
+        tools.push(sanitize_provider_parameter_combinators(
+            legacy_tool_metadata_definition_for_view(descriptor, view),
+        ));
     }
 
     tools.sort_by(|left, right| tool_function_name(left).cmp(tool_function_name(right)));
     Ok(tools)
-}
-
-pub fn tool_parameter_schema_types() -> BTreeMap<String, BTreeMap<String, &'static str>> {
-    let mut tools_by_name = BTreeMap::<String, BTreeMap<String, &'static str>>::new();
-    for entry in catalog::all_tool_catalog() {
-        let parameters = entry
-            .parameter_types
-            .iter()
-            .map(|(parameter_name, parameter_type)| ((*parameter_name).to_owned(), *parameter_type))
-            .collect::<BTreeMap<_, _>>();
-        if !parameters.is_empty() {
-            tools_by_name.insert(entry.canonical_name.to_owned(), parameters);
-        }
-    }
-    tools_by_name
 }
 
 fn tool_function_name(tool: &Value) -> &str {
@@ -102,70 +82,17 @@ fn tool_function_name(tool: &Value) -> &str {
         .unwrap_or("")
 }
 
-pub(super) fn provider_definition_for_view(
-    runtime: Option<&Runtime<crate::context::AppContextFactory>>,
+pub(super) fn legacy_tool_metadata_definition_for_view(
     descriptor: &ToolDescriptor,
     view: &ToolView,
-) -> Result<Value, ToolMetadataError> {
-    Ok(sanitize_provider_parameter_combinators(
-        tool_metadata_definition_for_view(runtime, descriptor, view)?,
-    ))
-}
-
-pub(super) fn tool_metadata_definition_for_view(
-    runtime: Option<&Runtime<crate::context::AppContextFactory>>,
-    descriptor: &ToolDescriptor,
-    view: &ToolView,
-) -> Result<Value, ToolMetadataError> {
-    // `tool.search` consumes this internal projection, so keep combinators that
-    // describe payload variants. Provider submission sanitizes them above.
-    let definition = typed_provider_definition_for_descriptor(runtime, descriptor)?
-        .unwrap_or_else(|| descriptor.provider_definition());
-    Ok(match descriptor.name {
+) -> Value {
+    // Search keeps schema combinators; provider submission sanitizes the same
+    // legacy projection at its external boundary.
+    let definition = descriptor.provider_definition();
+    match descriptor.name {
         "web" => direct_web_provider_definition_for_view(definition, view),
         "browse" => direct_browser_provider_definition_for_view(definition, view),
         _ => definition,
-    })
-}
-
-fn typed_provider_definition_for_descriptor(
-    runtime: Option<&Runtime<crate::context::AppContextFactory>>,
-    descriptor: &ToolDescriptor,
-) -> Result<Option<Value>, ToolMetadataError> {
-    let Some(spec) = typed_tool_spec_for_descriptor(runtime, descriptor)? else {
-        return Ok(None);
-    };
-
-    // Transitional boundary: app still wraps provider JSON, but migrated tools
-    // own their input schema through ToolSpec instead of the legacy catalog.
-    Ok(Some(json!({
-        "type": "function",
-        "function": {
-            "name": descriptor.provider_name,
-            "description": spec.description.clone(),
-            "parameters": spec.input_schema.clone()
-        }
-    })))
-}
-
-pub(super) fn typed_tool_spec_for_descriptor<'a>(
-    runtime: Option<&'a Runtime<crate::context::AppContextFactory>>,
-    descriptor: &ToolDescriptor,
-) -> Result<Option<&'a ToolSpec>, ToolMetadataError> {
-    // Legacy descriptors still enumerate provider-visible tools, while
-    // migrated metadata lives in the runtime plane under the same identity.
-    let path =
-        ToolPath::new([descriptor.name]).map_err(|source| ToolMetadataError::InvalidPath {
-            tool_name: descriptor.name.to_owned(),
-            source,
-        })?;
-    let Some(runtime) = runtime else {
-        return Ok(None);
-    };
-    match runtime.tool_spec(&path) {
-        Ok(spec) => Ok(Some(spec)),
-        Err(LookupError::NotRegistered { .. }) => Ok(None),
-        Err(error) => Err(error.into()),
     }
 }
 

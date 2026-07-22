@@ -1,29 +1,13 @@
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use loong_contracts::{
-    AuthorizationScope, AuthorizationSubject, Capabilities, CapabilityToken, GovernedSessionMode,
-    ToolPath,
+    AuthorizationScope, AuthorizationSubject, Capabilities, GovernedSessionMode, ToolPath,
 };
 use loong_core::policy::context::{ContextFactory, PolicyContext};
-use loong_kernel::access::fs::{
-    FsAtomicWriteAllowPolicy, FsCopyFileAllowPolicy, FsCreateDirAllAllowPolicy,
-    FsPathAllowedRootsPolicy, FsPathPolicyContext, FsReadAllowPolicy, FsReadFilenameDenyPolicy,
-    FsRemoveFileAllowPolicy, FsResolutionContext, FsResolvePathAllowPolicy, FsWriteAllowPolicy,
-};
-use loong_kernel::{
-    AccessCx, AuditSink, Capability, Clock, ExecutionRoute, FanoutAuditSink, HarnessKind,
-    InMemoryAuditSink, JsonlAuditSink, Kernel, KernelAccess, SystemClock, VerticalPackManifest,
-    policy::{
-        FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsInspectPathAllowPolicy,
-        FsReadDirAllowPolicy, FsRemoveDirAllAllowPolicy, FsRenameAllowPolicy,
-        PolicyPipelineBuilder,
-    },
-};
+use loong_kernel::access::fs::{FsPathPolicyContext, FsResolutionContext};
+use loong_kernel::{AccessCx, KernelAccess};
 use loong_runtime::{
     runtime::Runtime,
     tool_plane::{
@@ -32,1229 +16,346 @@ use loong_runtime::{
     },
 };
 
-use crate::config::{AuditMode, LoongConfig};
-use crate::conversation::{
-    ConstrainedSubagentContractView, ConstrainedSubagentExecution, ConstrainedSubagentIdentity,
-    ConstrainedSubagentProfile, DelegateBuiltinProfile,
-};
-use crate::runtime_self_continuity::RuntimeSelfContinuity;
-use crate::tools::ToolView;
-use crate::tools::runtime_config::ToolRuntimeNarrowing;
+mod memory;
+mod session;
 
-/// Default pack identifier used by embedded runtime entry points.
-const EMBEDDED_RUNTIME_PACK_ID: &str = "dev-automation";
+pub use session::Session;
+#[cfg(feature = "memory-sqlite")]
+pub(crate) use session::SessionToolPolicyProjection;
 
-/// Default token TTL (24 hours) for long-running embedded runtime entry points.
-pub const DEFAULT_TOKEN_TTL_S: u64 = 86400;
-
-/// App-owned execution context shared by session, tool, action, and policy paths.
+/// Borrowed recursive execution scope shared by Tool, Access, Action, and Policy.
 ///
-/// Long-lived authority is shared through `Arc`; per-invocation state is an
-/// immutable overlay. Deriving a child context can replace invocation metadata
-/// or narrow capabilities, but can never add authority beyond its parent.
+/// Runtime and Session remain the only long-lived owners. Base fields borrow the
+/// Session baseline; child scopes allocate only the views they actually narrow.
 #[derive(Clone)]
-pub struct AppContext {
-    inner: Arc<AppContextInner>,
+pub struct Context<'a> {
+    runtime: &'a Runtime<RuntimeContextFactory>,
+    session: &'a Session,
+    effective_capabilities: Cow<'a, Capabilities>,
 }
 
-impl fmt::Debug for AppContext {
+#[derive(Debug, thiserror::Error)]
+pub enum ContextSessionError {
+    #[error("cannot construct Context from a Session owned by a different Runtime")]
+    RuntimeMismatch,
+    #[error(
+        "cannot derive Context for unrelated Session `{target}` from `{current}` (parent: {parent:?})"
+    )]
+    Unrelated {
+        current: String,
+        target: String,
+        parent: Option<String>,
+    },
+    #[error("cannot derive Context because target Session expands {dimension} authority")]
+    AuthorityExpanded { dimension: &'static str },
+    #[error("cannot derive Context because target Session replaces the memory backend")]
+    MemoryBackendChanged,
+}
+
+impl fmt::Debug for Context<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Capability tokens are authority-bearing and must never enter debug logs.
         formatter
-            .debug_struct("AppContext")
-            .field("session_id", &self.session_id)
-            .field("parent_session_id", &self.parent_session_id)
-            .field("session_mode", &self.session_mode)
+            .debug_struct("Context")
+            .field("session_id", &self.session.session_id)
+            .field("parent_session_id", &self.session.parent_session_id)
+            .field("session_mode", &self.session.session_mode)
             .finish_non_exhaustive()
     }
 }
 
-/// Storage behind the cheap-clone [`AppContext`] handle.
-///
-/// This type has no independent lifecycle or behavior. It is public only so
-/// Rust's `Deref` contract can preserve direct read access to context fields.
-#[doc(hidden)]
-#[derive(Clone)]
-pub struct AppContextInner {
-    pub(crate) runtime: Arc<Runtime<AppContextFactory>>,
-    pub(crate) token: Arc<CapabilityToken>,
-    pub(crate) tool_runtime_config: Arc<crate::tools::runtime_config::ToolRuntimeConfig>,
-    pub(crate) effective_capabilities: Capabilities,
-    pub(crate) fs_resolution_root: Arc<PathBuf>,
-    pub(crate) fs_allowed_roots: Arc<[PathBuf]>,
-    // Transitional host contexts need legacy attribution, but identity stays
-    // sourced from the current token or session fields instead of being copied here.
-    pub(crate) legacy_authorization_boundary: Option<String>,
-    pub session_id: String,
-    pub parent_session_id: Option<String>,
-    pub profile: Option<DelegateBuiltinProfile>,
-    pub tool_view: ToolView,
-    pub session_mode: GovernedSessionMode,
-    pub workspace_root: Option<PathBuf>,
-    pub active_skill_roots: Vec<PathBuf>,
-    pub visible_skill_roots: Vec<PathBuf>,
-    pub runtime_narrowing: Option<ToolRuntimeNarrowing>,
-    pub subagent_execution: Option<ConstrainedSubagentExecution>,
-    pub subagent_contract: Option<ConstrainedSubagentContractView>,
-    pub(crate) runtime_self_continuity: Option<RuntimeSelfContinuity>,
-}
-
-impl Deref for AppContext {
-    type Target = AppContextInner;
-
-    fn deref(&self) -> &Self::Target {
-        self.inner.as_ref()
-    }
-}
-
-impl DerefMut for AppContext {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        Arc::make_mut(&mut self.inner)
-    }
-}
-
-impl AppContext {
-    pub fn new(
-        runtime: Arc<Runtime<AppContextFactory>>,
-        token: CapabilityToken,
-        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig,
-        session_id: impl Into<String>,
-        tool_view: ToolView,
-        session_mode: GovernedSessionMode,
-    ) -> Result<Self, String> {
-        runtime
-            .kernel()
-            .pack_manifest(&token.pack_id)
-            .map_err(|error| format!("app context pack lookup failed: {error}"))?;
-        let effective_capabilities = token.allowed_capabilities.iter().copied().collect();
-        let (fs_resolution_root, fs_allowed_roots) = fs_access_root_view(&tool_runtime_config)?;
-        let session_id = normalize_session_id(session_id.into());
-        let _ = crate::conversation::mailbox_for_session(&session_id);
-        Ok(Self {
-            inner: Arc::new(AppContextInner {
-                runtime,
-                token: Arc::new(token),
-                tool_runtime_config: Arc::new(tool_runtime_config),
-                effective_capabilities,
-                fs_resolution_root: Arc::new(fs_resolution_root),
-                fs_allowed_roots: fs_allowed_roots.into(),
-                legacy_authorization_boundary: None,
-                session_id,
-                parent_session_id: None,
-                profile: None,
-                tool_view,
-                session_mode,
-                workspace_root: None,
-                active_skill_roots: Vec::new(),
-                visible_skill_roots: Vec::new(),
-                runtime_narrowing: None,
-                subagent_execution: None,
-                subagent_contract: None,
-                runtime_self_continuity: None,
-            }),
-        })
-    }
-
-    /// Constructs authority for one concrete session after its identity is known.
+impl<'a> Context<'a> {
+    /// Borrow the two long-lived owners into one recursive execution scope.
     ///
-    /// Hosts retain the runtime and call this once when they create or attach to
-    /// a session. Invocation overlays derive from the returned context and must
-    /// not mint replacement session tokens.
-    pub fn new_session(
-        runtime: Arc<Runtime<AppContextFactory>>,
-        config: &LoongConfig,
-        session_id: impl Into<String>,
-        agent_id: &str,
-        session_mode: GovernedSessionMode,
-        ttl_s: u64,
-    ) -> Result<Self, String> {
-        let token = match session_mode {
-            GovernedSessionMode::MutatingCapable => {
-                runtime
-                    .kernel()
-                    .issue_token(EMBEDDED_RUNTIME_PACK_ID, agent_id, ttl_s)
-            }
-            GovernedSessionMode::AdvisoryOnly => {
-                // Advisory sessions may assemble governed read/provider input,
-                // but never receive generic tool invocation or write authority.
-                let allowed_capabilities = BTreeSet::from([
-                    Capability::MemoryRead,
-                    Capability::FilesystemRead,
-                    Capability::NetworkEgress,
-                ]);
-                runtime.kernel().issue_scoped_token(
-                    EMBEDDED_RUNTIME_PACK_ID,
-                    agent_id,
-                    &allowed_capabilities,
-                    ttl_s,
-                )
-            }
+    /// Construction does not create authority: Session construction has already
+    /// fixed the stable baseline, and recursive children may only narrow it.
+    pub fn new(
+        runtime: &'a Runtime<RuntimeContextFactory>,
+        session: &'a Session,
+    ) -> Result<Self, ContextSessionError> {
+        if runtime.id() != session.runtime_id {
+            return Err(ContextSessionError::RuntimeMismatch);
         }
-        .map_err(|error| format!("kernel session token issue failed: {error}"))?;
-        let tool_runtime_config =
-            crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
-
-        Self::new(
-            runtime,
-            token,
-            tool_runtime_config,
-            session_id,
-            crate::tools::runtime_tool_view_from_loong_config(config),
-            session_mode,
-        )
-    }
-
-    pub fn child(
-        &self,
-        session_id: impl Into<String>,
-        parent_session_id: impl Into<String>,
-        tool_view: ToolView,
-    ) -> Self {
-        let session_id = normalize_session_id(session_id.into());
-        let parent_session_id = normalize_session_id(parent_session_id.into());
-        let _ = crate::conversation::mailbox_for_session(&session_id);
-        let _ = crate::conversation::mailbox_for_session(&parent_session_id);
-        let mut child = self.clone();
-        let state = Arc::make_mut(&mut child.inner);
-        state.legacy_authorization_boundary = None;
-        state.session_id = session_id;
-        state.parent_session_id = Some(parent_session_id);
-        state.profile = None;
-        state.tool_view = tool_view;
-        state.workspace_root = None;
-        state.active_skill_roots.clear();
-        state.visible_skill_roots.clear();
-        state.runtime_narrowing = None;
-        state.subagent_execution = None;
-        state.subagent_contract = None;
-        state.runtime_self_continuity = None;
-        child
-    }
-
-    #[must_use]
-    pub fn for_session(&self, session_id: impl Into<String>, tool_view: ToolView) -> Self {
-        let session_id = normalize_session_id(session_id.into());
-        let _ = crate::conversation::mailbox_for_session(&session_id);
-        let mut session = self.clone();
-        let state = Arc::make_mut(&mut session.inner);
-        state.legacy_authorization_boundary = None;
-        state.session_id = session_id;
-        state.parent_session_id = None;
-        state.profile = None;
-        state.tool_view = tool_view;
-        state.workspace_root = None;
-        state.active_skill_roots.clear();
-        state.visible_skill_roots.clear();
-        state.runtime_narrowing = None;
-        state.subagent_execution = None;
-        state.subagent_contract = None;
-        state.runtime_self_continuity = None;
-        session
-    }
-
-    #[must_use]
-    pub fn with_workspace_root(mut self, workspace_root: PathBuf) -> Self {
-        self.workspace_root = Some(workspace_root);
-        self
-    }
-
-    #[must_use]
-    pub fn with_active_skill_roots(mut self, active_skill_roots: Vec<PathBuf>) -> Self {
-        self.active_skill_roots = active_skill_roots
-            .into_iter()
-            .map(|path| std::fs::canonicalize(&path).unwrap_or(path))
-            .collect();
-        self
-    }
-
-    #[must_use]
-    pub fn with_visible_skill_roots(mut self, visible_skill_roots: Vec<PathBuf>) -> Self {
-        self.visible_skill_roots = visible_skill_roots
-            .into_iter()
-            .map(|path| std::fs::canonicalize(&path).unwrap_or(path))
-            .collect();
-        self
-    }
-
-    #[must_use]
-    pub fn with_profile(mut self, profile: DelegateBuiltinProfile) -> Self {
-        self.profile = Some(profile);
-        self
-    }
-
-    #[must_use]
-    pub fn with_runtime_narrowing(mut self, runtime_narrowing: ToolRuntimeNarrowing) -> Self {
-        if !runtime_narrowing.is_empty() {
-            self.runtime_narrowing = Some(runtime_narrowing.clone());
-            let contract = self.subagent_contract.take().unwrap_or_default();
-            self.subagent_contract = Some(contract.with_runtime_narrowing(runtime_narrowing));
-            self.synchronize_runtime_narrowing_views();
-        }
-        self
-    }
-
-    #[must_use]
-    pub fn with_subagent_execution(
-        mut self,
-        subagent_execution: ConstrainedSubagentExecution,
-    ) -> Self {
-        let existing_contract = self.subagent_contract.take();
-        let existing_workspace_root = self.workspace_root.clone();
-        let existing_identity = existing_contract
-            .as_ref()
-            .and_then(ConstrainedSubagentContractView::resolved_identity)
-            .cloned();
-        let existing_profile = existing_contract
-            .as_ref()
-            .and_then(|contract| contract.profile);
-        let existing_runtime_narrowing = existing_contract
-            .as_ref()
-            .map(|contract| contract.runtime_narrowing.clone())
-            .filter(|runtime_narrowing| !runtime_narrowing.is_empty());
-        let mut subagent_execution = subagent_execution.with_resolved_profile();
-        if subagent_execution.identity.is_none()
-            && let Some(identity) = existing_identity
-        {
-            subagent_execution.identity = Some(identity);
-        }
-        let mut merged_contract = subagent_execution.contract_view();
-        if merged_contract.profile.is_none()
-            && let Some(profile) = existing_profile
-        {
-            merged_contract = merged_contract.with_profile(profile);
-        }
-        if merged_contract.runtime_narrowing.is_empty()
-            && let Some(runtime_narrowing) = existing_runtime_narrowing
-        {
-            merged_contract = merged_contract.with_runtime_narrowing(runtime_narrowing);
-        }
-        if self.workspace_root.is_none() {
-            self.workspace_root = subagent_execution
-                .workspace_root
-                .clone()
-                .or(existing_workspace_root);
-        }
-        self.subagent_contract = Some(merged_contract);
-        self.subagent_execution = Some(subagent_execution);
-        self.synchronize_runtime_narrowing_views();
-        self
-    }
-
-    #[must_use]
-    pub fn with_subagent_profile(mut self, subagent_profile: ConstrainedSubagentProfile) -> Self {
-        if let Some(subagent_execution) = self.subagent_execution.as_mut() {
-            subagent_execution.profile = Some(subagent_profile);
-        }
-        let contract = self.subagent_contract.take().unwrap_or_default();
-        self.subagent_contract = Some(contract.with_profile(subagent_profile));
-        self.synchronize_runtime_narrowing_views();
-        self
-    }
-
-    #[must_use]
-    pub fn with_subagent_identity(
-        mut self,
-        subagent_identity: ConstrainedSubagentIdentity,
-    ) -> Self {
-        if subagent_identity.is_empty() {
-            return self;
-        }
-        if let Some(subagent_execution) = self.subagent_execution.as_mut() {
-            subagent_execution.identity = Some(subagent_identity.clone());
-        }
-        let contract = self.subagent_contract.take().unwrap_or_default();
-        self.subagent_contract = Some(contract.with_identity(subagent_identity));
-        self.synchronize_runtime_narrowing_views();
-        self
-    }
-
-    pub fn resolved_runtime_narrowing(&self) -> Option<&ToolRuntimeNarrowing> {
-        self.resolve_runtime_narrowing_ref()
-    }
-
-    pub fn resolved_subagent_profile(&self) -> Option<ConstrainedSubagentProfile> {
-        self.subagent_execution
-            .as_ref()
-            .map(ConstrainedSubagentExecution::resolved_profile)
-            .or_else(|| {
-                self.subagent_contract
-                    .as_ref()
-                    .and_then(ConstrainedSubagentContractView::resolved_profile)
-            })
-    }
-
-    pub fn resolved_subagent_identity(&self) -> Option<&ConstrainedSubagentIdentity> {
-        self.subagent_execution
-            .as_ref()
-            .and_then(|execution| execution.identity.as_ref())
-            .or_else(|| {
-                self.subagent_contract
-                    .as_ref()
-                    .and_then(ConstrainedSubagentContractView::resolved_identity)
-            })
-    }
-
-    pub fn resolved_subagent_contract(&self) -> Option<ConstrainedSubagentContractView> {
-        let mut contract = self
-            .subagent_execution
-            .as_ref()
-            .map(ConstrainedSubagentExecution::contract_view)
-            .or(self.subagent_contract.clone())?;
-        if let Some(stored_contract) = self.subagent_contract.as_ref()
-            && contract.profile.is_none()
-            && let Some(profile) = stored_contract.profile
-        {
-            contract = contract.with_profile(profile);
-        }
-        if let Some(runtime_narrowing) = self.resolved_runtime_narrowing().cloned() {
-            contract = contract.with_runtime_narrowing(runtime_narrowing);
-        }
-        (!contract.is_empty()).then_some(contract)
-    }
-
-    pub fn subagent_runtime_narrowing(&self) -> Option<&ToolRuntimeNarrowing> {
-        self.resolved_runtime_narrowing()
-    }
-
-    #[must_use]
-    pub(crate) fn with_runtime_self_continuity(
-        mut self,
-        runtime_self_continuity: RuntimeSelfContinuity,
-    ) -> Self {
-        if !runtime_self_continuity.is_empty() {
-            self.runtime_self_continuity = Some(runtime_self_continuity);
-        }
-        self
-    }
-
-    fn synchronize_runtime_narrowing_views(&mut self) {
-        let resolved = self.resolve_runtime_narrowing_ref().cloned();
-        let execution_narrowing = resolved.clone().unwrap_or_default();
-        self.runtime_narrowing = resolved;
-        if let Some(execution) = self.subagent_execution.as_mut() {
-            execution.runtime_narrowing = execution_narrowing.clone();
-        }
-        if let Some(contract) = self.subagent_contract.as_mut() {
-            contract.runtime_narrowing = execution_narrowing;
-        }
-    }
-
-    fn resolve_runtime_narrowing_ref(&self) -> Option<&ToolRuntimeNarrowing> {
-        self.runtime_narrowing
-            .as_ref()
-            .filter(|narrowing| !narrowing.is_empty())
-            .or_else(|| {
-                self.subagent_execution
-                    .as_ref()
-                    .map(|execution| &execution.runtime_narrowing)
-                    .filter(|narrowing| !narrowing.is_empty())
-            })
-            .or_else(|| {
-                self.subagent_contract
-                    .as_ref()
-                    .map(|contract| &contract.runtime_narrowing)
-                    .filter(|narrowing| !narrowing.is_empty())
-            })
-    }
-
-    pub fn pack_id(&self) -> &str {
-        &self.token.pack_id
-    }
-
-    pub fn agent_id(&self) -> &str {
-        &self.token.agent_id
-    }
-
-    #[must_use]
-    pub(crate) fn runtime(&self) -> &Runtime<AppContextFactory> {
-        self.runtime.as_ref()
-    }
-
-    #[must_use]
-    pub fn token(&self) -> &CapabilityToken {
-        self.token.as_ref()
-    }
-
-    #[must_use]
-    pub(crate) fn tool_runtime_config(&self) -> &crate::tools::runtime_config::ToolRuntimeConfig {
-        self.tool_runtime_config.as_ref()
-    }
-
-    // Typed execution domains are expressed by ToolInvocation, AccessCx, and concrete
-    // Action types; legacy routes are passed explicitly only at legacy kernel boundaries.
-    pub(crate) fn for_invocation(
-        &self,
-        tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
-    ) -> Result<Self, String> {
-        self.for_invocation_with_capabilities(
-            self.effective_capabilities.clone(),
-            tool_runtime_config,
-        )
-    }
-
-    pub(crate) fn for_invocation_with_capabilities(
-        &self,
-        effective_capabilities: Capabilities,
-        tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
-    ) -> Result<Self, String> {
-        if !effective_capabilities.is_subset(&self.effective_capabilities) {
-            let missing_capabilities = effective_capabilities
-                .difference(&self.effective_capabilities)
-                .map(|capability| capability.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(format!(
-                "child execution context cannot add capabilities: missing {missing_capabilities}"
-            ));
-        }
-
-        let (fs_resolution_root, fs_allowed_roots) = fs_access_root_view(tool_runtime_config)?;
         Ok(Self {
-            inner: Arc::new(AppContextInner {
-                runtime: self.runtime.clone(),
-                token: self.token.clone(),
-                tool_runtime_config: Arc::new(tool_runtime_config.clone()),
-                effective_capabilities,
-                fs_resolution_root: Arc::new(fs_resolution_root),
-                fs_allowed_roots: fs_allowed_roots.into(),
-                legacy_authorization_boundary: self.legacy_authorization_boundary.clone(),
-                session_id: self.session_id.clone(),
-                parent_session_id: self.parent_session_id.clone(),
-                profile: self.profile,
-                tool_view: self.tool_view.clone(),
-                session_mode: self.session_mode,
-                workspace_root: self.workspace_root.clone(),
-                active_skill_roots: self.active_skill_roots.clone(),
-                visible_skill_roots: self.visible_skill_roots.clone(),
-                runtime_narrowing: self.runtime_narrowing.clone(),
-                subagent_execution: self.subagent_execution.clone(),
-                subagent_contract: self.subagent_contract.clone(),
-                runtime_self_continuity: self.runtime_self_continuity.clone(),
-            }),
+            runtime,
+            session,
+            effective_capabilities: Cow::Borrowed(&session.baseline_capabilities),
         })
     }
 
     #[must_use]
-    pub(crate) fn access(&self) -> AccessCx<'_, '_, AppContextFactory> {
+    pub(crate) fn runtime(&self) -> &'a Runtime<RuntimeContextFactory> {
+        self.runtime
+    }
+
+    /// Rebind recursive execution to a rematerialized Session or direct child.
+    ///
+    /// Unlike [`Context::new`], this path inherits the current capability ceiling.
+    /// It is the only valid constructor when execution already owns a Context.
+    pub(crate) fn rebind_session<'b>(
+        &'b self,
+        session: &'b Session,
+    ) -> Result<Context<'b>, ContextSessionError> {
+        if self.runtime.id() != session.runtime_id {
+            return Err(ContextSessionError::RuntimeMismatch);
+        }
+        let same_session = session.session_id() == self.session.session_id();
+        let direct_child = session.parent_session_id() == Some(self.session.session_id());
+        if !same_session && !direct_child {
+            return Err(ContextSessionError::Unrelated {
+                current: self.session.session_id().to_owned(),
+                target: session.session_id().to_owned(),
+                parent: session.parent_session_id().map(str::to_owned),
+            });
+        }
+
+        if session.agent_id != self.session.agent_id {
+            return Err(ContextSessionError::AuthorityExpanded {
+                dimension: "agent identity",
+            });
+        }
+        if same_session && session.parent_session_id != self.session.parent_session_id {
+            return Err(ContextSessionError::AuthorityExpanded {
+                dimension: "session lineage",
+            });
+        }
+        if self.session.session_mode == GovernedSessionMode::AdvisoryOnly
+            && session.session_mode == GovernedSessionMode::MutatingCapable
+        {
+            return Err(ContextSessionError::AuthorityExpanded {
+                dimension: "session mode",
+            });
+        }
+        if !session
+            .baseline_capabilities
+            .is_subset(&self.session.baseline_capabilities)
+        {
+            return Err(ContextSessionError::AuthorityExpanded {
+                dimension: "capability",
+            });
+        }
+        if !session.tool_view.is_subset(&self.session.tool_view) {
+            return Err(ContextSessionError::AuthorityExpanded {
+                dimension: "tool visibility",
+            });
+        }
+        if session.fs_allowed_roots.iter().any(|target_root| {
+            !self
+                .session
+                .fs_allowed_roots
+                .iter()
+                .any(|current_root| target_root.starts_with(current_root))
+        }) {
+            return Err(ContextSessionError::AuthorityExpanded {
+                dimension: "filesystem root",
+            });
+        }
+        let authority_ceiling = if direct_child {
+            &self.session.fs_allowed_roots
+        } else {
+            &self.session.fs_authority_ceiling_roots
+        };
+        if session
+            .fs_authority_ceiling_roots
+            .iter()
+            .any(|target_root| {
+                !authority_ceiling
+                    .iter()
+                    .any(|current_root| target_root.starts_with(current_root))
+            })
+        {
+            return Err(ContextSessionError::AuthorityExpanded {
+                dimension: "filesystem authority ceiling",
+            });
+        }
+        if session.fs_allowed_roots.iter().any(|allowed_root| {
+            !session
+                .fs_authority_ceiling_roots
+                .iter()
+                .any(|ceiling_root| allowed_root.starts_with(ceiling_root))
+        }) {
+            return Err(ContextSessionError::AuthorityExpanded {
+                dimension: "filesystem root",
+            });
+        }
+        if !session
+            .fs_allowed_roots
+            .iter()
+            .any(|root| session.fs_resolution_root.starts_with(root))
+        {
+            return Err(ContextSessionError::AuthorityExpanded {
+                dimension: "filesystem resolution",
+            });
+        }
+        if session.visible_skill_roots.iter().any(|target_root| {
+            !self
+                .session
+                .visible_skill_roots
+                .iter()
+                .any(|current_root| target_root.starts_with(current_root))
+        }) {
+            return Err(ContextSessionError::AuthorityExpanded {
+                dimension: "visible skill root",
+            });
+        }
+        if !std::sync::Arc::ptr_eq(&session.memory_backend, &self.session.memory_backend) {
+            return Err(ContextSessionError::MemoryBackendChanged);
+        }
+
+        let current_runtime_narrowing = self
+            .session
+            .resolved_runtime_narrowing()
+            .cloned()
+            .unwrap_or_default();
+        let target_runtime_narrowing = session
+            .resolved_runtime_narrowing()
+            .cloned()
+            .unwrap_or_default();
+        if !target_runtime_narrowing.is_no_wider_than(&current_runtime_narrowing) {
+            return Err(ContextSessionError::AuthorityExpanded {
+                dimension: "tool runtime narrowing",
+            });
+        }
+
+        let mut expected_tool_runtime_config = self.session.tool_runtime_config.clone();
+        if let Some(runtime_narrowing) = session.resolved_runtime_narrowing() {
+            expected_tool_runtime_config = expected_tool_runtime_config.narrowed(runtime_narrowing);
+        }
+        if direct_child && let Some(workspace_root) = session.workspace_root.as_ref() {
+            expected_tool_runtime_config.file_root = Some(workspace_root.clone());
+            expected_tool_runtime_config.workspace_root = Some(workspace_root.clone());
+        }
+        if session.tool_runtime_config != expected_tool_runtime_config {
+            return Err(ContextSessionError::AuthorityExpanded {
+                dimension: "tool runtime configuration",
+            });
+        }
+
+        let current = self.effective_capabilities.as_ref();
+        let effective_capabilities = if current.is_subset(&session.baseline_capabilities) {
+            Cow::Borrowed(current)
+        } else {
+            Cow::Owned(
+                current
+                    .intersection(&session.baseline_capabilities)
+                    .collect(),
+            )
+        };
+        Ok(Context {
+            runtime: self.runtime,
+            session,
+            effective_capabilities,
+        })
+    }
+
+    #[must_use]
+    pub fn session(&self) -> &'a Session {
+        self.session
+    }
+
+    #[must_use]
+    pub fn agent_id(&self) -> &str {
+        self.session.agent_id()
+    }
+
+    #[must_use]
+    pub fn tool_runtime_config(&self) -> &crate::tools::runtime_config::ToolRuntimeConfig {
+        &self.session.tool_runtime_config
+    }
+
+    #[must_use]
+    pub fn access(&self) -> AccessCx<'_, 'a, RuntimeContextFactory> {
         // AccessCx construction is localized at the concrete context boundary.
         // Tool/action code should call ctx.access() rather than rethreading the
         // kernel reference or recreating access facades by hand.
-        AccessCx::new(self.runtime.kernel(), self)
+        self.runtime.access(self)
     }
 
-    pub(crate) fn tool(
+    pub fn tool(
         &self,
         path: ToolPath,
-    ) -> Result<ToolInvocation<'_, '_, AppContextFactory>, LookupError> {
+    ) -> Result<ToolInvocation<'a, 'a, RuntimeContextFactory>, LookupError> {
         self.runtime.tool(self, path)
     }
 }
 
-impl ToolInvocationContext for AppContext {
+impl ToolInvocationContext for Context<'_> {
     fn derive_tool_child(
         &self,
         capabilities: Capabilities,
     ) -> Result<Self, CapabilityNarrowingError> {
-        if !capabilities.is_subset(&self.effective_capabilities) {
+        if !capabilities.is_subset(self.effective_capabilities.as_ref()) {
             return Err(CapabilityNarrowingError {
-                allowed: self.effective_capabilities.clone(),
+                allowed: self.effective_capabilities.clone().into_owned(),
                 derived: capabilities,
             });
         }
 
-        // Recursive invocations inherit stable context state but cannot regain
-        // authority removed by their parent scope.
-        let mut child = self.clone();
-        child.effective_capabilities = capabilities;
-        Ok(child)
+        // Recursive invocations borrow the same owners and allocate only their
+        // narrowed capability view.
+        Ok(Self {
+            runtime: self.runtime,
+            session: self.session,
+            effective_capabilities: Cow::Owned(capabilities),
+        })
     }
 }
 
-impl KernelAccess<AppContextFactory> for AppContext {
-    fn access(&self) -> AccessCx<'_, '_, AppContextFactory> {
+impl crate::tools::plane::ToolVisibilityContext for Context<'_> {
+    fn tool_is_visible(&self, path: &ToolPath) -> bool {
+        self.session.tool_view.contains_path(path)
+    }
+}
+
+impl KernelAccess<RuntimeContextFactory> for Context<'_> {
+    fn access(&self) -> AccessCx<'_, '_, RuntimeContextFactory> {
         // Concrete tools depend on this narrow requirement instead of the app
         // context type. Delegate to the inherent accessor so this concrete
         // context has one AccessCx construction point.
-        AppContext::access(self)
+        Context::access(self)
     }
 }
 
-impl PolicyContext for AppContext {
+impl PolicyContext for Context<'_> {
     fn allowed_capabilities(&self) -> Cow<'_, Capabilities> {
-        Cow::Borrowed(&self.effective_capabilities)
+        Cow::Borrowed(self.effective_capabilities.as_ref())
     }
 
     fn authorization_subject(&self) -> AuthorizationSubject {
-        let scope = self.legacy_authorization_boundary.as_ref().map_or_else(
-            || AuthorizationScope::Session {
-                session_id: self.session_id.clone(),
-            },
-            |boundary| AuthorizationScope::LegacyToken {
-                boundary: boundary.clone(),
-                pack_id: self.token.pack_id.clone(),
-                token_id: self.token.token_id.clone(),
-            },
-        );
         AuthorizationSubject {
             actor_id: self.agent_id().to_owned(),
-            scope,
+            scope: AuthorizationScope::Session {
+                session_id: self.session.session_id.clone(),
+            },
         }
     }
 }
 
-impl FsResolutionContext for AppContext {
+impl FsResolutionContext for Context<'_> {
     fn fs_resolution_root(&self) -> &Path {
-        self.fs_resolution_root.as_path()
+        self.session.fs_resolution_root.as_path()
     }
 }
 
-impl FsPathPolicyContext for AppContext {
+impl FsPathPolicyContext for Context<'_> {
     fn fs_allowed_roots(&self) -> &[PathBuf] {
-        self.fs_allowed_roots.as_ref()
+        self.session.fs_allowed_roots.as_slice()
+    }
+
+    fn fs_authority_ceiling_roots(&self) -> &[PathBuf] {
+        self.session.fs_authority_ceiling_roots.as_slice()
     }
 }
 
+/// Selects the app's borrowed Context for generic policy/runtime integration.
+///
+/// This marker constructs no values and owns no runtime state.
 #[derive(Debug, Clone, Copy)]
-pub struct AppContextFactory;
+pub struct RuntimeContextFactory;
 
-impl ContextFactory for AppContextFactory {
-    type Cx<'a> = AppContext;
-}
-
-fn fs_access_root_view(
-    config: &crate::tools::runtime_config::ToolRuntimeConfig,
-) -> Result<(PathBuf, Vec<PathBuf>), String> {
-    let allowed_roots = collect_allowed_roots(config)?;
-    let Some(default_resolution_root) = allowed_roots.first().cloned() else {
-        return Err("filesystem access requires at least one allowed root".to_owned());
-    };
-    let resolution_root = config
-        .path_resolution_root()
-        .map(Path::to_path_buf)
-        .unwrap_or(default_resolution_root);
-    Ok((resolution_root, allowed_roots))
-}
-
-fn collect_allowed_roots(
-    config: &crate::tools::runtime_config::ToolRuntimeConfig,
-) -> Result<Vec<PathBuf>, String> {
-    let mut raw_roots = Vec::new();
-
-    if let Some(file_root) = config.file_root.as_ref() {
-        raw_roots.push(file_root.clone());
-    }
-
-    if let Some(workspace_root) = config.workspace_root.as_ref() {
-        let workspace_root_is_new = raw_roots.iter().all(|root| root != workspace_root);
-        if workspace_root_is_new {
-            raw_roots.push(workspace_root.clone());
-        }
-    }
-
-    if raw_roots.is_empty() {
-        raw_roots.push(std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    }
-
-    raw_roots
-        .into_iter()
-        .map(canonicalize_or_fallback)
-        .collect::<Result<Vec<_>, _>>()
-}
-
-fn canonicalize_or_fallback(path: PathBuf) -> Result<PathBuf, String> {
-    if path.exists() {
-        let canonical = dunce::canonicalize(&path)
-            .map_err(|error| format!("failed to canonicalize {}: {error}", path.display()))?;
-        return Ok(dunce::simplified(&canonical).to_path_buf());
-    }
-    Ok(crate::tools::normalize_without_fs(&path))
-}
-
-fn normalize_session_id(session_id: String) -> String {
-    let trimmed = session_id.trim();
-    if trimmed.is_empty() {
-        "default".to_owned()
-    } else {
-        trimmed.to_owned()
-    }
-}
-
-/// Bootstrap a minimal in-memory kernel suitable for tests.
-///
-/// Registers a default pack manifest with the embedded runtime tool, memory, filesystem,
-/// and public-web capabilities, then issues a long-lived token for the given
-/// `agent_id`.
-///
-/// Production hosts should retain `bootstrap_runtime_with_config` and call
-/// `AppContext::new_session` after resolving concrete session identity.
-#[cfg(test)]
-pub(crate) fn bootstrap_test_app_context(agent_id: &str, ttl_s: u64) -> Result<AppContext, String> {
-    bootstrap_app_context_with_audit_sink(
-        agent_id,
-        ttl_s,
-        Arc::new(InMemoryAuditSink::default()) as Arc<dyn AuditSink>,
-        &LoongConfig::default(),
-    )
-}
-
-/// Bootstrap a governed host context for transitional runtime entrypoints.
-///
-/// This installs the audit sink selected by `config.audit`, registers the
-/// embedded runtime pack plus the core tool/memory adapters and policy
-/// pipeline, and issues a long-lived capability token before a concrete
-/// session is known.
-///
-/// The helper intentionally stays below higher-level runtime initialization: it
-/// does not export `LOONG_*` environment variables, resolve chat session
-/// ids, or prepare channel/conversation state. Callers that need those side
-/// effects should compose it with `runtime_env::initialize_runtime_environment`
-/// or a surface-specific bootstrap such as `chat::initialize_cli_turn_runtime`.
-// TODO(session-owned-context): delete this host/root-context bootstrap after
-// runtime owners construct one AppContext per concrete session.
-pub fn bootstrap_app_context_with_config(
-    agent_id: &str,
-    ttl_s: u64,
-    config: &LoongConfig,
-) -> Result<AppContext, String> {
-    bootstrap_app_context_with_audit_sink(agent_id, ttl_s, build_audit_sink(config)?, config)
-}
-
-/// Bootstrap the long-lived runtime authority shared by app sessions.
-///
-/// This constructs the configured kernel and tool plane without issuing a
-/// session token or inventing a host-level context. Hosts should retain the
-/// returned runtime and construct `AppContext` values for concrete sessions.
-pub fn bootstrap_runtime_with_config(
-    config: &LoongConfig,
-) -> Result<Arc<Runtime<AppContextFactory>>, String> {
-    let tool_rt = crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
-    bootstrap_runtime_with_audit_sink(build_audit_sink(config)?, config, &tool_rt)
-}
-
-fn build_audit_sink(config: &LoongConfig) -> Result<Arc<dyn AuditSink>, String> {
-    match config.audit.mode {
-        AuditMode::InMemory => Ok(Arc::new(InMemoryAuditSink::default()) as Arc<dyn AuditSink>),
-        AuditMode::Jsonl => build_jsonl_audit_sink(config),
-        AuditMode::Fanout => {
-            let durable = build_jsonl_audit_sink(config)?;
-            if !config.audit.retain_in_memory {
-                return Ok(durable);
-            }
-
-            Ok(Arc::new(FanoutAuditSink::new(vec![
-                durable,
-                Arc::new(InMemoryAuditSink::default()) as Arc<dyn AuditSink>,
-            ])) as Arc<dyn AuditSink>)
-        }
-    }
-}
-
-fn build_jsonl_audit_sink(config: &LoongConfig) -> Result<Arc<dyn AuditSink>, String> {
-    let path = config.audit.resolved_path();
-    JsonlAuditSink::new(path.clone())
-        .map(|sink| Arc::new(sink) as Arc<dyn AuditSink>)
-        .map_err(|error| {
-            format!(
-                "failed to initialize durable audit journal {}: {error}",
-                path.display()
-            )
-        })
-}
-
-fn bootstrap_app_context_with_audit_sink(
-    agent_id: &str,
-    ttl_s: u64,
-    audit_sink: Arc<dyn AuditSink>,
-    config: &LoongConfig,
-) -> Result<AppContext, String> {
-    let tool_rt = crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
-    let runtime = bootstrap_runtime_with_audit_sink(audit_sink, config, &tool_rt)?;
-    let token = runtime
-        .kernel()
-        .issue_token(EMBEDDED_RUNTIME_PACK_ID, agent_id, ttl_s)
-        .map_err(|e| format!("kernel token issue failed: {e}"))?;
-
-    let mut context = AppContext::new(
-        runtime,
-        token,
-        tool_rt,
-        agent_id,
-        crate::tools::runtime_tool_view_from_loong_config(config),
-        GovernedSessionMode::MutatingCapable,
-    )?;
-    // This bootstrap has no Session owner. Keep its bearer identity explicit
-    // until step 7 removes the transitional host context entirely.
-    Arc::make_mut(&mut context.inner).legacy_authorization_boundary = Some("app.host".to_owned());
-    Ok(context)
-}
-
-// Keep production-selected and test-injected audit sinks on one runtime construction path.
-fn bootstrap_runtime_with_audit_sink(
-    audit_sink: Arc<dyn AuditSink>,
-    config: &LoongConfig,
-    tool_rt: &crate::tools::runtime_config::ToolRuntimeConfig,
-) -> Result<Arc<Runtime<AppContextFactory>>, String> {
-    let mut policy = PolicyPipelineBuilder::<AppContextFactory>::new_legacy_allow_fallback()
-        .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
-        .with_policy(FsResolvePathAllowPolicy::target())
-        .with_policy(FsResolvePathAllowPolicy::entry())
-        .with_policy(FsPathAllowedRootsPolicy::target())
-        .with_policy(FsPathAllowedRootsPolicy::entry());
-    if !tool_rt.fs.deny_read_filenames.is_empty() {
-        policy.push_policy(FsReadFilenameDenyPolicy::new(
-            tool_rt.fs.deny_read_filenames.clone(),
-        ));
-    }
-    policy.push_policy(FsReadAllowPolicy);
-    policy.push_policy(FsWriteAllowPolicy);
-    policy.push_policy(FsAtomicWriteAllowPolicy);
-    policy.push_policy(FsCopyFileAllowPolicy);
-    policy.push_policy(FsCreateDirAllAllowPolicy);
-    policy.push_policy(FsRemoveFileAllowPolicy);
-    policy.push_policy(FsRemoveDirAllAllowPolicy);
-    policy.push_policy(FsRenameAllowPolicy);
-    policy.push_policy(FsInspectPathAllowPolicy);
-    policy.push_policy(FsGlobAllowPolicy);
-    policy.push_policy(FsReadDirAllowPolicy);
-    policy.push_policy(FsContentSearchAllowPolicy);
-    let mut kernel =
-        Kernel::with_policy_runtime(policy, Arc::new(SystemClock) as Arc<dyn Clock>, audit_sink);
-
-    let pack = VerticalPackManifest {
-        pack_id: EMBEDDED_RUNTIME_PACK_ID.to_owned(),
-        domain: "mvp".to_owned(),
-        version: "0.1.0".to_owned(),
-        default_route: ExecutionRoute {
-            harness_kind: HarnessKind::EmbeddedPi,
-            adapter: None,
-        },
-        allowed_connectors: BTreeSet::new(),
-        granted_capabilities: BTreeSet::from([
-            Capability::InvokeTool,
-            Capability::NetworkEgress,
-            Capability::MemoryRead,
-            Capability::MemoryWrite,
-            Capability::FilesystemRead,
-            Capability::FilesystemWrite,
-        ]),
-        metadata: BTreeMap::new(),
-    };
-    kernel
-        .register_pack(pack)
-        .map_err(|e| format!("kernel pack registration failed: {e}"))?;
-
-    #[cfg(feature = "memory-sqlite")]
-    {
-        let mem_config =
-            crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config_without_env_overrides(
-                &config.memory,
-            );
-        kernel.register_core_memory_adapter(crate::memory::KernelMemoryAdapter::with_config(
-            mem_config,
-        ));
-        kernel
-            .set_default_core_memory_adapter("mvp-memory")
-            .map_err(|e| format!("set default memory adapter failed: {e}"))?;
-    }
-
-    crate::tools::register_kernel_tools(&mut kernel, tool_rt.clone(), config.observability.clone())
-        .map_err(|e| format!("kernel tool registration failed: {e}"))?;
-
-    let tools = crate::tools::plane::builtin_tool_plane()
-        .map_err(|error| format!("builtin tool registration failed: {error}"))?;
-    Ok(Arc::new(Runtime::new(kernel, tools)))
+impl ContextFactory for RuntimeContextFactory {
+    type Cx<'a> = Context<'a>;
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::BTreeSet;
-    use std::fs;
-
-    use loong_contracts::Capability;
-    use tempfile::tempdir;
-
-    use super::*;
-    use crate::config::MemoryProfile;
-    use crate::memory::runtime_config::MemoryRuntimeConfig;
-    use crate::test_utils::ScopedEnv;
-
-    // Path validation is covered by contracts; context tests use valid
-    // registered identities so they can focus on authority derivation.
-    #[allow(clippy::expect_used)]
-    fn tool_path(segment: &str) -> ToolPath {
-        ToolPath::new([segment]).expect("test tool path must be valid")
-    }
-
-    #[test]
-    fn runtime_bootstrap_does_not_issue_a_host_token() {
-        let audit = Arc::new(InMemoryAuditSink::default());
-        let config = LoongConfig::default();
-        let tool_rt =
-            crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(&config, None);
-
-        let runtime = bootstrap_runtime_with_audit_sink(audit.clone(), &config, &tool_rt)
-            .expect("runtime bootstrap");
-
-        assert!(
-            runtime
-                .kernel()
-                .pack_manifest(EMBEDDED_RUNTIME_PACK_ID)
-                .is_ok()
-        );
-        assert!(
-            audit.snapshot().is_empty(),
-            "runtime ownership must not mint a host-level token"
-        );
-    }
-
-    #[test]
-    fn advisory_session_context_uses_non_mutating_capabilities() {
-        let audit = Arc::new(InMemoryAuditSink::default());
-        let config = LoongConfig::default();
-        let tool_runtime_config =
-            crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(&config, None);
-        let runtime = bootstrap_runtime_with_audit_sink(audit, &config, &tool_runtime_config)
-            .expect("runtime bootstrap");
-
-        let context = AppContext::new_session(
-            runtime,
-            &config,
-            "advisory-session",
-            "advisory-agent",
-            GovernedSessionMode::AdvisoryOnly,
-            60,
-        )
-        .expect("advisory session context");
-
-        assert_eq!(
-            context.token().allowed_capabilities,
-            BTreeSet::from([
-                Capability::MemoryRead,
-                Capability::FilesystemRead,
-                Capability::NetworkEgress,
-            ])
-        );
-        assert!(matches!(
-            context.authorization_subject().scope,
-            AuthorizationScope::Session { ref session_id }
-                if session_id == "advisory-session"
-        ));
-    }
-
-    #[test]
-    fn authorization_subject_reads_the_current_session_identity() {
-        let context = bootstrap_test_app_context("session-identity-agent", 60)
-            .expect("test app context")
-            .for_session("initial-session", crate::tools::runtime_tool_view());
-        let mut context = context;
-
-        context.session_id = "updated-session".to_owned();
-
-        assert!(matches!(
-            context.authorization_subject().scope,
-            AuthorizationScope::Session { ref session_id }
-                if session_id == "updated-session"
-        ));
-    }
-
-    #[test]
-    fn app_context_rejects_token_for_unregistered_pack() {
-        let runtime = Arc::new(Runtime::new(
-            Kernel::<AppContextFactory>::new(),
-            crate::tools::plane::test_builtin_tool_plane(),
-        ));
-        let token = CapabilityToken {
-            token_id: "unregistered-pack-token".to_owned(),
-            pack_id: "missing-pack".to_owned(),
-            agent_id: "test-agent".to_owned(),
-            allowed_capabilities: BTreeSet::new(),
-            issued_at_epoch_s: 0,
-            expires_at_epoch_s: 60,
-            generation: 1,
-        };
-
-        let error = match AppContext::new(
-            runtime,
-            token,
-            crate::tools::runtime_config::ToolRuntimeConfig::default(),
-            "test-session",
-            crate::tools::runtime_tool_view(),
-            loong_contracts::GovernedSessionMode::MutatingCapable,
-        ) {
-            Ok(_) => panic!("unregistered token pack must not construct an app context"),
-            Err(error) => error,
-        };
-
-        assert!(error.contains("pack not found: missing-pack"));
-    }
-
-    #[test]
-    fn bootstrap_app_context_with_config_writes_jsonl_audit_events() {
-        let tempdir = tempdir().expect("tempdir");
-        let audit_path = tempdir.path().join("audit").join("events.jsonl");
-        let mut config = LoongConfig::default();
-        config.audit.mode = AuditMode::Jsonl;
-        config.audit.path = audit_path.display().to_string();
-        config.audit.retain_in_memory = false;
-
-        let context = bootstrap_app_context_with_config("test-agent", 60, &config)
-            .expect("bootstrap with jsonl audit should succeed");
-
-        assert_eq!(context.agent_id(), "test-agent");
-        assert!(matches!(
-            context.authorization_subject().scope,
-            AuthorizationScope::LegacyToken {
-                ref boundary,
-                ref pack_id,
-                ref token_id,
-            } if boundary == "app.host"
-                && pack_id == EMBEDDED_RUNTIME_PACK_ID
-                && token_id == &context.token().token_id
-        ));
-
-        let journal = fs::read_to_string(&audit_path).expect("audit journal should exist");
-        assert_eq!(
-            journal.lines().count(),
-            1,
-            "token bootstrap should emit one audit event"
-        );
-        assert!(
-            journal.contains("\"TokenIssued\"") || journal.contains("\"token_id\""),
-            "bootstrap journal should capture token issuance"
-        );
-    }
-
-    #[test]
-    fn bootstrap_app_context_with_config_writes_fanout_audit_events() {
-        let tempdir = tempdir().expect("tempdir");
-        let audit_path = tempdir.path().join("audit").join("events.jsonl");
-        let mut config = LoongConfig::default();
-        config.audit.mode = AuditMode::Fanout;
-        config.audit.path = audit_path.display().to_string();
-        config.audit.retain_in_memory = true;
-
-        let context = bootstrap_app_context_with_config("test-agent", 60, &config)
-            .expect("bootstrap with fanout audit should succeed");
-
-        assert_eq!(context.agent_id(), "test-agent");
-
-        let journal = fs::read_to_string(&audit_path).expect("audit journal should exist");
-        assert_eq!(
-            journal.lines().count(),
-            1,
-            "token bootstrap should emit one audit event"
-        );
-        assert!(
-            journal.contains("\"TokenIssued\"") || journal.contains("\"token_id\""),
-            "fanout journal should capture token issuance"
-        );
-    }
-
-    #[test]
-    fn bootstrap_app_context_with_config_grants_network_egress() {
-        let mut config = LoongConfig::default();
-        config.audit.mode = AuditMode::InMemory;
-
-        let context = bootstrap_app_context_with_config("test-agent", 60, &config)
-            .expect("bootstrap with default config should succeed");
-
-        let allowed_capabilities = &context.token().allowed_capabilities;
-
-        assert!(
-            allowed_capabilities.contains(&Capability::InvokeTool),
-            "bootstrap token should retain invoke tool capability"
-        );
-        assert!(
-            allowed_capabilities.contains(&Capability::NetworkEgress),
-            "bootstrap token should grant network egress for context-bound web tools"
-        );
-    }
-
-    #[test]
-    fn invocation_context_updates_policy_caps_without_changing_token() {
-        let context = bootstrap_test_app_context("test-agent", 60).expect("bootstrap context");
-        let narrowed = Capabilities::from([Capability::MemoryRead]);
-
-        let execution_context = context
-            .for_invocation_with_capabilities(narrowed.clone(), context.tool_runtime_config())
-            .expect("narrowed execution context should build");
-
-        assert_eq!(execution_context.allowed_capabilities().as_ref(), &narrowed);
-        assert!(
-            execution_context
-                .token()
-                .allowed_capabilities
-                .contains(&Capability::InvokeTool),
-            "token evidence should keep the originally issued capabilities"
-        );
-    }
-
-    #[test]
-    fn invocation_context_rejects_added_capabilities() {
-        let context = bootstrap_test_app_context("test-agent", 60).expect("bootstrap context");
-        let widened = Capabilities::from([Capability::MemoryRead, Capability::ControlRead]);
-
-        let error = match context
-            .for_invocation_with_capabilities(widened, context.tool_runtime_config())
-        {
-            Ok(_) => panic!("execution context must not add capabilities"),
-            Err(error) => error,
-        };
-
-        assert_eq!(
-            error,
-            "child execution context cannot add capabilities: missing control_read"
-        );
-    }
-
-    #[test]
-    fn tool_child_rejects_capabilities_removed_by_parent_context() {
-        let context = bootstrap_test_app_context("test-agent", 60).expect("bootstrap context");
-        let parent = context
-            .for_invocation_with_capabilities(
-                Capabilities::from([Capability::MemoryRead]),
-                context.tool_runtime_config(),
-            )
-            .expect("parent execution context should build");
-        let child_caps = Capabilities::from([Capability::MemoryRead, Capability::FilesystemRead]);
-
-        let error = match parent.derive_tool_child(child_caps.clone()) {
-            Ok(_) => panic!("child context must not regain parent-removed capabilities"),
-            Err(error) => error,
-        };
-
-        assert_eq!(error.derived, child_caps);
-        assert_eq!(error.allowed, Capabilities::from([Capability::MemoryRead]));
-    }
-
-    #[cfg(feature = "tool-file")]
-    #[tokio::test]
-    async fn typed_tool_capability_override_rejects_added_capabilities() {
-        let context = bootstrap_test_app_context("test-agent", 60).expect("bootstrap context");
-        let execution_context = context
-            .for_invocation(context.tool_runtime_config())
-            .expect("build execution context");
-        let invocation = execution_context
-            .tool(tool_path("read"))
-            .expect("read should be registered");
-
-        let error = invocation
-            .with_capabilities_override(Capabilities::from([Capability::FilesystemWrite]))
-            .invoke(serde_json::json!({ "path": "notes.txt" }))
-            .await
-            .expect_err("override must not add capabilities");
-
-        assert!(
-            error
-                .to_string()
-                .contains("not a subset of declared capabilities"),
-            "expected capability override rejection, got: {error}"
-        );
-    }
-
-    #[cfg(feature = "tool-file")]
-    #[tokio::test]
-    async fn typed_tool_capability_override_narrows_domain_action_caps() {
-        let tempdir = tempdir().expect("tempdir");
-        fs::write(tempdir.path().join("notes.txt"), "alpha").expect("write fixture");
-        let mut config = LoongConfig::default();
-        config.tools.file_root = Some(tempdir.path().display().to_string());
-        let context = bootstrap_app_context_with_config("test-agent", 60, &config)
-            .expect("bootstrap context");
-        let execution_context = context
-            .for_invocation(context.tool_runtime_config())
-            .expect("build execution context");
-        let invocation = execution_context
-            .tool(tool_path("read"))
-            .expect("read should be registered");
-
-        let error = invocation
-            .with_capabilities_override(Capabilities::new())
-            .invoke(serde_json::json!({ "path": "notes.txt" }))
-            .await
-            .expect_err("filesystem read should lose FilesystemRead capability");
-
-        assert!(
-            error.to_string().contains("FilesystemRead")
-                || error.to_string().contains("filesystem_read"),
-            "expected filesystem read capability denial, got: {error}"
-        );
-    }
-
-    #[cfg(feature = "memory-sqlite")]
-    #[tokio::test]
-    async fn bootstrap_app_context_with_config_ignores_memory_env_overrides() {
-        let tempdir = tempdir().expect("tempdir");
-        let sqlite_path = tempdir.path().join("memory.sqlite3");
-
-        let mut seeded_runtime = MemoryRuntimeConfig::for_sqlite_path(sqlite_path.clone());
-        seeded_runtime.profile = MemoryProfile::WindowPlusSummary;
-        seeded_runtime.sliding_window = 2;
-
-        crate::memory::append_turn_direct(
-            "kernel-bootstrap-env-session",
-            "user",
-            "turn 1",
-            &seeded_runtime,
-        )
-        .expect("append turn 1");
-        crate::memory::append_turn_direct(
-            "kernel-bootstrap-env-session",
-            "assistant",
-            "turn 2",
-            &seeded_runtime,
-        )
-        .expect("append turn 2");
-        crate::memory::append_turn_direct(
-            "kernel-bootstrap-env-session",
-            "user",
-            "turn 3",
-            &seeded_runtime,
-        )
-        .expect("append turn 3");
-
-        let mut env = ScopedEnv::new();
-        env.set("LOONG_MEMORY_PROFILE", "window_plus_summary");
-        env.set("LOONG_SQLITE_PATH", "/tmp/env-bootstrap-memory.sqlite3");
-
-        let mut config = LoongConfig::default();
-        config.audit.mode = AuditMode::InMemory;
-        config.memory.profile = MemoryProfile::WindowOnly;
-        config.memory.sqlite_path = sqlite_path.display().to_string();
-        config.memory.sliding_window = 2;
-
-        let context = bootstrap_app_context_with_config("test-agent", 60, &config)
-            .expect("bootstrap with config should succeed");
-        let request = crate::memory::build_read_context_request("kernel-bootstrap-env-session");
-        let caps = BTreeSet::from([Capability::MemoryRead]);
-        let execution_context = context
-            .for_invocation(context.tool_runtime_config())
-            .expect("build memory execution context");
-        let outcome = context
-            .runtime()
-            .kernel()
-            .execute_memory_core(
-                context.pack_id(),
-                context.token(),
-                &caps,
-                None,
-                request,
-                &execution_context,
-            )
-            .await
-            .expect("read context via kernel");
-        let entries = outcome
-            .payload
-            .get("entries")
-            .and_then(serde_json::Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-
-        assert!(
-            entries
-                .iter()
-                .all(|entry| entry.get("kind") != Some(&serde_json::json!("summary"))),
-            "window-only bootstrap should ignore env-driven summary profile"
-        );
-    }
-}
+#[path = "context/tests.rs"]
+mod tests;

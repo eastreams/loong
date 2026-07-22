@@ -1,14 +1,18 @@
 use std::collections::BTreeSet;
 
 use loong_contracts::ToolPath;
-use loong_runtime::{runtime::Runtime, tool_plane::error::LookupError};
+use loong_runtime::{
+    runtime::Runtime,
+    tool_plane::{ToolRegistration, error::LookupError},
+};
 use serde::{Deserialize, Serialize};
 
-use super::error::ToolMetadataError;
-use super::runtime_config;
 use super::skills;
 use super::tool_surface;
-use super::{ToolView, runtime_tool_view_for_runtime_config};
+use super::{ToolMetadataError, runtime_config};
+use super::{
+    ToolView, runtime_tool_view_for_runtime_config, runtime_visible_tool_view, tool_catalog,
+};
 
 #[derive(Debug, Clone)]
 pub struct ToolRegistryEntry {
@@ -28,13 +32,13 @@ pub struct DiscoverableToolSurfaceSummary {
 }
 
 pub fn tool_registry(
-    runtime: Option<&Runtime<crate::context::AppContextFactory>>,
+    runtime: Option<&Runtime<crate::context::RuntimeContextFactory>>,
 ) -> Result<Vec<ToolRegistryEntry>, ToolMetadataError> {
     tool_registry_with_config(runtime, Some(runtime_config::get_tool_runtime_config()))
 }
 
 pub fn tool_registry_with_config(
-    runtime: Option<&Runtime<crate::context::AppContextFactory>>,
+    runtime: Option<&Runtime<crate::context::RuntimeContextFactory>>,
     config: Option<&runtime_config::ToolRuntimeConfig>,
 ) -> Result<Vec<ToolRegistryEntry>, ToolMetadataError> {
     let default_runtime_config;
@@ -46,12 +50,17 @@ pub fn tool_registry_with_config(
         }
     };
 
-    let runtime_view = runtime_tool_view_for_runtime_config(config);
+    let runtime_view = runtime.map_or_else(
+        || runtime_tool_view_for_runtime_config(config),
+        |runtime| runtime_visible_tool_view(runtime, config, None),
+    );
     let visible_direct_states = tool_surface::visible_direct_tool_states_for_view(&runtime_view);
     let mut entries = Vec::new();
 
     for state in visible_direct_states {
-        let summary = agent_visible_summary_for_direct_state(runtime, &state)?;
+        let Some(summary) = agent_visible_summary_for_direct_state(runtime, &state)? else {
+            continue;
+        };
         let registry_entry = ToolRegistryEntry {
             name: state.surface_id,
             description: format!("{} {}", summary, state.usage_guidance),
@@ -64,24 +73,24 @@ pub fn tool_registry_with_config(
 }
 
 pub fn capability_snapshot(
-    runtime: Option<&Runtime<crate::context::AppContextFactory>>,
+    runtime: Option<&Runtime<crate::context::RuntimeContextFactory>>,
 ) -> Result<String, ToolMetadataError> {
     capability_snapshot_with_config(runtime, runtime_config::get_tool_runtime_config())
 }
 
 pub fn capability_snapshot_with_config(
-    runtime: Option<&Runtime<crate::context::AppContextFactory>>,
+    runtime: Option<&Runtime<crate::context::RuntimeContextFactory>>,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<String, ToolMetadataError> {
-    capability_snapshot_for_view_with_config(
-        runtime,
-        &runtime_tool_view_for_runtime_config(config),
-        config,
-    )
+    let view = runtime.map_or_else(
+        || runtime_tool_view_for_runtime_config(config),
+        |runtime| runtime_visible_tool_view(runtime, config, None),
+    );
+    capability_snapshot_for_view_with_config(runtime, &view, config)
 }
 
 pub fn capability_snapshot_for_view(
-    runtime: Option<&Runtime<crate::context::AppContextFactory>>,
+    runtime: Option<&Runtime<crate::context::RuntimeContextFactory>>,
     view: &ToolView,
 ) -> Result<String, ToolMetadataError> {
     capability_snapshot_for_view_with_config(
@@ -92,7 +101,7 @@ pub fn capability_snapshot_for_view(
 }
 
 pub(crate) fn capability_snapshot_for_view_with_config(
-    runtime: Option<&Runtime<crate::context::AppContextFactory>>,
+    runtime: Option<&Runtime<crate::context::RuntimeContextFactory>>,
     view: &ToolView,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<String, ToolMetadataError> {
@@ -101,7 +110,7 @@ pub(crate) fn capability_snapshot_for_view_with_config(
 }
 
 pub(crate) fn capability_snapshot_for_direct_states_with_config(
-    runtime: Option<&Runtime<crate::context::AppContextFactory>>,
+    runtime: Option<&Runtime<crate::context::RuntimeContextFactory>>,
     _view: &ToolView,
     config: &runtime_config::ToolRuntimeConfig,
     visible_direct_states: Vec<super::ToolSurfaceState>,
@@ -129,13 +138,15 @@ pub(crate) fn capability_snapshot_for_direct_states_with_config(
 }
 
 fn render_visible_direct_tool_lines(
-    runtime: Option<&Runtime<crate::context::AppContextFactory>>,
+    runtime: Option<&Runtime<crate::context::RuntimeContextFactory>>,
     states: &[super::ToolSurfaceState],
 ) -> Result<Vec<String>, ToolMetadataError> {
     let mut lines = Vec::new();
 
     for state in states {
-        let summary = agent_visible_summary_for_direct_state(runtime, state)?;
+        let Some(summary) = agent_visible_summary_for_direct_state(runtime, state)? else {
+            continue;
+        };
         let line = format!(
             "- {}: {} {}",
             state.surface_id, summary, state.usage_guidance
@@ -147,9 +158,9 @@ fn render_visible_direct_tool_lines(
 }
 
 fn agent_visible_summary_for_direct_state(
-    runtime: Option<&Runtime<crate::context::AppContextFactory>>,
+    runtime: Option<&Runtime<crate::context::RuntimeContextFactory>>,
     state: &super::ToolSurfaceState,
-) -> Result<String, ToolMetadataError> {
+) -> Result<Option<String>, ToolMetadataError> {
     // Concrete typed tools own their action-level summary. The app surface keeps
     // usage guidance because it describes prompt/orchestration behavior, not the
     // tool's payload or side effect boundary.
@@ -160,11 +171,24 @@ fn agent_visible_summary_for_direct_state(
         }
     })?;
     let Some(runtime) = runtime else {
-        return Ok(state.prompt_snippet.clone());
+        return Ok(tool_catalog()
+            .descriptor(state.surface_id.as_str())
+            .map(|_| state.prompt_snippet.clone()));
     };
-    match runtime.tool_spec(&path) {
-        Ok(spec) => Ok(spec.description.clone()),
-        Err(LookupError::NotRegistered { .. }) => Ok(state.prompt_snippet.clone()),
+    match runtime.tool_metadata(&path) {
+        Ok((ToolRegistration::Direct { .. }, spec)) => Ok(Some(spec.description.clone())),
+        Ok(_) => Ok(None),
+        Err(LookupError::NotRegistered { .. })
+            if tool_catalog()
+                .descriptor(state.surface_id.as_str())
+                .is_some() =>
+        {
+            // Only an actual legacy descriptor may supply a static summary.
+            // Missing typed registration stays absent instead of resurrecting
+            // stale schema or prompt metadata.
+            Ok(Some(state.prompt_snippet.clone()))
+        }
+        Err(LookupError::NotRegistered { .. }) => Ok(None),
         Err(error) => Err(error.into()),
     }
 }

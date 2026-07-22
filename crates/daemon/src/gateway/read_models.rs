@@ -52,7 +52,7 @@ mod tests {
             surface_id: "read".to_owned(),
             prompt_snippet: "inspect files".to_owned(),
             usage_guidance: "prefer direct read before shell".to_owned(),
-            tool_ids: vec!["file.read".to_owned(), "file.write".to_owned()],
+            tool_ids: vec!["read".to_owned(), "write".to_owned()],
         };
 
         let read_model = core::build_tool_surface_read_model(&surface);

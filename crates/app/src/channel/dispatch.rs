@@ -88,7 +88,7 @@ use crate::config::LoongConfig;
     feature = "channel-whatsapp",
     feature = "channel-imessage",
 ))]
-use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_app_context_with_config};
+use crate::runtime::bootstrap_runtime_with_config;
 
 #[cfg(feature = "channel-feishu")]
 use crate::config::ResolvedFeishuChannelConfig;
@@ -336,11 +336,7 @@ async fn run_telegram_channel_with_context(
             Some(context.resolved_path.as_path()),
         );
     }
-    let app_ctx = bootstrap_app_context_with_config(
-        "channel-telegram",
-        DEFAULT_TOKEN_TTL_S,
-        &context.config,
-    )?;
+    let execution_runtime = bootstrap_runtime_with_config(&context.config)?;
     let token = context
         .resolved
         .bot_token()
@@ -349,7 +345,7 @@ async fn run_telegram_channel_with_context(
     let resolved_path = context.resolved_path.clone();
     let resolved = context.resolved.clone();
     let batch_config = context.config.clone();
-    let batch_app_ctx = Arc::new(app_ctx.clone());
+    let batch_execution_runtime = execution_runtime.clone();
     let runtime_account_id = resolved.account.id.clone();
     let runtime_account_label = resolved.account.label.clone();
 
@@ -382,21 +378,22 @@ async fn run_telegram_channel_with_context(
                     batch = adapter.receive_batch() => batch?,
                 };
                 let config = batch_config.clone();
-                let app_ctx = batch_app_ctx.clone();
+                let execution_runtime = batch_execution_runtime.clone();
                 let had_messages = process_channel_batch(
                     &mut adapter,
                     batch,
                     Some(runtime.as_ref()),
                     |message, turn_feedback_policy| {
                         let config = config.clone();
-                        let app_ctx = app_ctx.clone();
+                        let execution_runtime = execution_runtime.clone();
                         let resolved_path = resolved_path.clone();
                         Box::pin(async move {
                             process_inbound_with_provider(
                                 &config,
                                 Some(resolved_path.as_path()),
                                 &message,
-                                app_ctx.as_ref(),
+                                &execution_runtime,
+                                "channel-telegram",
                                 turn_feedback_policy,
                             )
                             .await
@@ -1727,7 +1724,7 @@ async fn run_feishu_channel_with_context(
         validate_feishu_security_config,
         stop,
         initialize_runtime_environment,
-        move |context, app_ctx, runtime, stop| {
+        move |context, execution_runtime, agent_id, runtime, stop| {
             Box::pin(async move {
                 let route = context.route.clone();
                 let resolved_path = context.resolved_path.clone();
@@ -1741,7 +1738,8 @@ async fn run_feishu_channel_with_context(
                     route.default_account_source,
                     bind_override.as_deref(),
                     path_override.as_deref(),
-                    app_ctx,
+                    execution_runtime,
+                    agent_id,
                     runtime,
                     stop,
                 )
@@ -1925,13 +1923,13 @@ async fn run_matrix_channel_with_context(
         validate_matrix_security_config,
         stop,
         initialize_runtime_environment,
-        move |context, app_ctx, runtime, stop| {
+        move |context, execution_runtime, agent_id, runtime, stop| {
             Box::pin(async move {
                 let route = context.route.clone();
                 let resolved_path = context.resolved_path.clone();
                 let resolved = context.resolved.clone();
                 let config = context.config.clone();
-                let batch_app_ctx = Arc::new(app_ctx.clone());
+                let batch_execution_runtime = execution_runtime.clone();
                 let token = resolved.access_token().ok_or_else(|| {
                     "matrix access token missing (set matrix.access_token or env)".to_owned()
                 })?;
@@ -1959,14 +1957,15 @@ async fn run_matrix_channel_with_context(
                         Some(runtime.as_ref()),
                         |message, turn_feedback_policy| {
                             let config = config.clone();
-                            let app_ctx = batch_app_ctx.clone();
+                            let execution_runtime = batch_execution_runtime.clone();
                             let resolved_path = resolved_path.clone();
                             Box::pin(async move {
                                 process_inbound_with_provider(
                                     &config,
                                     Some(resolved_path.as_path()),
                                     &message,
-                                    app_ctx.as_ref(),
+                                    &execution_runtime,
+                                    agent_id,
                                     turn_feedback_policy,
                                 )
                                 .await
@@ -2092,7 +2091,7 @@ async fn run_wecom_channel_with_context(
         validate_wecom_security_config,
         stop,
         initialize_runtime_environment,
-        move |context, app_ctx, runtime, stop| {
+        move |context, execution_runtime, agent_id, runtime, stop| {
             Box::pin(async move {
                 let route = context.route.clone();
                 let resolved_path = context.resolved_path.clone();
@@ -2104,7 +2103,8 @@ async fn run_wecom_channel_with_context(
                     &resolved_path,
                     route.selected_by_default(),
                     route.default_account_source,
-                    app_ctx,
+                    execution_runtime,
+                    agent_id,
                     runtime,
                     stop,
                 )

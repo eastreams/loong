@@ -5,45 +5,31 @@ impl ConversationTurnCoordinator {
     pub async fn compact_production_session(
         &self,
         config: &LoongConfig,
-        app_ctx: &AppContext,
-        session_id: &str,
-        binding: ConversationRuntimeBinding<'_>,
+        ctx: &Context<'_>,
     ) -> CliResult<ContextCompactionReport> {
-        let prepared = Self::build_default_runtime_with_production_binding(config, binding, None)?;
-        let runtime = prepared.0;
-        let production_binding = prepared.1;
+        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
 
-        self.compact_session_with_runtime(config, app_ctx, session_id, &runtime, production_binding)
+        self.compact_session_with_runtime(config, ctx, &runtime)
             .await
     }
 
     pub(crate) async fn compact_session_with_runtime<R: ConversationRuntime + ?Sized>(
         &self,
         config: &LoongConfig,
-        app_ctx: &AppContext,
-        session_id: &str,
+        ctx: &Context<'_>,
         runtime: &R,
-        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<ContextCompactionReport> {
-        if binding.is_context_bound() {
-            runtime.bootstrap(config, session_id, app_ctx).await?;
-        }
+        runtime.bootstrap(config, ctx).await?;
 
-        let session_context = runtime.session_context(config, app_ctx, session_id, binding)?;
-        let tool_view = session_context.tool_view.clone();
-        let before_messages = runtime
-            .build_messages(config, &session_context, true, &tool_view, binding)
-            .await?;
+        let before_messages = runtime.build_messages(config, ctx, true).await?;
         let estimated_tokens_before = estimate_tokens(&before_messages);
         let compaction_outcome = maybe_compact_context(
             config,
             runtime,
-            &session_context,
-            session_id,
+            ctx,
             &before_messages,
             estimated_tokens_before,
             None,
-            binding,
             true,
         )
         .await?;
@@ -52,10 +38,7 @@ impl ConversationTurnCoordinator {
         let mut estimated_tokens_after = estimated_tokens_before;
 
         if compaction_outcome == ContextCompactionOutcome::Completed {
-            match runtime
-                .build_messages(config, &session_context, true, &tool_view, binding)
-                .await
-            {
+            match runtime.build_messages(config, ctx, true).await {
                 Ok(after_messages) => {
                     let did_change = before_messages != after_messages;
                     let next_estimated_tokens = estimate_tokens(&after_messages);
@@ -85,44 +68,23 @@ impl ConversationTurnCoordinator {
     pub async fn repair_production_turn_checkpoint_tail(
         &self,
         config: &LoongConfig,
-        app_ctx: &AppContext,
-        session_id: &str,
-        binding: ConversationRuntimeBinding<'_>,
+        ctx: &Context<'_>,
     ) -> CliResult<TurnCheckpointTailRepairOutcome> {
-        let prepared = Self::build_default_runtime_with_production_binding(config, binding, None)?;
-        let runtime = prepared.0;
-        let production_binding = prepared.1;
+        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
 
-        self.repair_turn_checkpoint_tail_with_runtime(
-            config,
-            app_ctx,
-            session_id,
-            &runtime,
-            production_binding,
-        )
-        .await
+        self.repair_turn_checkpoint_tail_with_runtime(config, ctx, &runtime)
+            .await
     }
 
     pub(crate) async fn load_production_turn_checkpoint_diagnostics_with_limit(
         &self,
         config: &LoongConfig,
-        app_ctx: &AppContext,
-        session_id: &str,
+        ctx: &Context<'_>,
         limit: usize,
-        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<TurnCheckpointDiagnostics> {
-        let prepared = Self::build_default_runtime_with_production_binding(config, binding, None)?;
-        let runtime = prepared.0;
-        let production_binding = prepared.1;
-        self.load_turn_checkpoint_diagnostics_with_runtime_and_limit(
-            config,
-            app_ctx,
-            session_id,
-            limit,
-            &runtime,
-            production_binding,
-        )
-        .await
+        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        self.load_turn_checkpoint_diagnostics_with_runtime_and_limit(config, ctx, limit, &runtime)
+            .await
     }
 
     pub(crate) async fn repair_turn_checkpoint_tail_with_runtime<
@@ -130,32 +92,24 @@ impl ConversationTurnCoordinator {
     >(
         &self,
         config: &LoongConfig,
-        app_ctx: &AppContext,
-        session_id: &str,
+        ctx: &Context<'_>,
         runtime: &R,
-        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<TurnCheckpointTailRepairOutcome> {
         #[cfg(feature = "memory-sqlite")]
         {
-            let memory_config = store::session_store_config_from_memory_config(&config.memory);
-            let Some(entry) = load_latest_turn_checkpoint_entry(
-                session_id,
-                config.memory.sliding_window,
-                binding,
-                &memory_config,
-            )
-            .await?
+            let Some(entry) =
+                load_latest_turn_checkpoint_entry(config.memory.sliding_window, ctx, runtime)
+                    .await?
             else {
                 return Ok(TurnCheckpointTailRepairOutcome::no_checkpoint());
             };
 
-            repair_turn_checkpoint_tail_entry(config, app_ctx, runtime, session_id, &entry, binding)
-                .await
+            repair_turn_checkpoint_tail_entry(config, ctx, runtime, &entry).await
         }
 
         #[cfg(not(feature = "memory-sqlite"))]
         {
-            let _ = (config, app_ctx, session_id, runtime, binding);
+            let _ = (config, ctx, runtime);
             Err("turn checkpoint repair unavailable: memory-sqlite feature disabled".to_owned())
         }
     }
@@ -165,17 +119,14 @@ impl ConversationTurnCoordinator {
     >(
         &self,
         config: &LoongConfig,
-        app_ctx: &AppContext,
-        session_id: &str,
+        ctx: &Context<'_>,
         limit: usize,
         runtime: &R,
-        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<TurnCheckpointDiagnostics> {
         #[cfg(feature = "memory-sqlite")]
         {
-            let memory_config = store::session_store_config_from_memory_config(&config.memory);
             let (summary, latest_entry) =
-                load_turn_checkpoint_history_snapshot(session_id, limit, binding, &memory_config)
+                load_turn_checkpoint_history_snapshot(limit, ctx, runtime)
                     .await?
                     .into_summary_and_latest_entry();
             let recovery = TurnCheckpointRecoveryAssessment::from_summary(&summary);
@@ -188,7 +139,7 @@ impl ConversationTurnCoordinator {
                     match latest_entry.as_ref() {
                         Some(entry) => {
                             probe_turn_checkpoint_tail_runtime_gate_entry(
-                                config, app_ctx, runtime, session_id, entry, binding,
+                                config, ctx, runtime, entry,
                             )
                             .await?
                         }
@@ -205,7 +156,7 @@ impl ConversationTurnCoordinator {
 
         #[cfg(not(feature = "memory-sqlite"))]
         {
-            let _ = (config, app_ctx, session_id, limit, runtime, binding);
+            let _ = (config, ctx, limit, runtime);
             Err(
                 "turn checkpoint diagnostics unavailable: memory-sqlite feature disabled"
                     .to_owned(),
@@ -218,23 +169,19 @@ impl ConversationTurnCoordinator {
     >(
         &self,
         config: &LoongConfig,
-        app_ctx: &AppContext,
-        session_id: &str,
+        ctx: &Context<'_>,
         limit: usize,
         runtime: &R,
-        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Option<TurnCheckpointTailRepairRuntimeProbe>> {
         #[cfg(feature = "memory-sqlite")]
         {
-            probe_turn_checkpoint_tail_runtime_gate_entry_with_limit(
-                config, app_ctx, runtime, session_id, limit, binding,
-            )
-            .await
+            probe_turn_checkpoint_tail_runtime_gate_entry_with_limit(config, ctx, runtime, limit)
+                .await
         }
 
         #[cfg(not(feature = "memory-sqlite"))]
         {
-            let _ = (config, app_ctx, session_id, runtime, binding);
+            let _ = (config, ctx, runtime);
             Err(
                 "turn checkpoint runtime probe unavailable: memory-sqlite feature disabled"
                     .to_owned(),

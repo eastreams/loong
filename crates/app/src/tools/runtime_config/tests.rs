@@ -120,7 +120,6 @@ fn autonomy_profile_runtime_config_defaults_to_discovery_only() {
     );
     assert_eq!(snapshot.provider_switch_mode, AutonomyOperationMode::Deny);
     assert_eq!(snapshot.topology_mutation_mode, AutonomyOperationMode::Deny);
-    assert!(!snapshot.requires_kernel_binding);
     assert_eq!(snapshot.budget.max_capability_acquisitions_per_turn, 0);
     assert_eq!(snapshot.budget.max_provider_switches_per_turn, 0);
     assert_eq!(snapshot.budget.max_topology_mutations_per_turn, 0);
@@ -156,7 +155,6 @@ fn autonomy_profile_runtime_config_from_loong_config_uses_explicit_profile() {
         snapshot.topology_mutation_mode,
         AutonomyOperationMode::ApprovalRequired
     );
-    assert!(snapshot.requires_kernel_binding);
     assert_eq!(snapshot.budget.max_capability_acquisitions_per_turn, 1);
     assert_eq!(snapshot.budget.max_provider_switches_per_turn, 1);
     assert_eq!(snapshot.budget.max_topology_mutations_per_turn, 1);
@@ -303,7 +301,6 @@ fn autonomy_profile_runtime_config_compiles_bounded_autonomous_snapshot() {
         snapshot.topology_mutation_mode,
         AutonomyOperationMode::ApprovalRequired
     );
-    assert!(snapshot.requires_kernel_binding);
     assert_eq!(snapshot.budget.max_capability_acquisitions_per_turn, 2);
     assert_eq!(snapshot.budget.max_provider_switches_per_turn, 1);
     assert_eq!(snapshot.budget.max_topology_mutations_per_turn, 1);
@@ -1288,6 +1285,57 @@ fn tool_runtime_narrowing_intersect_fail_closes_disjoint_allowlists() {
     assert_eq!(effective.web_fetch.timeout_seconds, Some(5));
     assert_eq!(effective.web_fetch.max_bytes, Some(4_096));
     assert_eq!(effective.web_fetch.max_redirects, Some(2));
+}
+
+#[test]
+fn tool_runtime_narrowing_intersection_is_idempotent_for_implicit_allowlist() {
+    let narrowing = ToolRuntimeNarrowing {
+        web_fetch: WebFetchRuntimeNarrowing {
+            allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
+            ..WebFetchRuntimeNarrowing::default()
+        },
+        ..ToolRuntimeNarrowing::default()
+    };
+
+    assert_eq!(narrowing.intersect(&narrowing), narrowing);
+}
+
+#[test]
+fn tool_runtime_narrowing_intersect_preserves_explicit_private_host_allowance() {
+    let left = ToolRuntimeNarrowing {
+        web_fetch: WebFetchRuntimeNarrowing {
+            allow_private_hosts: Some(true),
+            ..WebFetchRuntimeNarrowing::default()
+        },
+        ..ToolRuntimeNarrowing::default()
+    };
+    let right = left.clone();
+
+    let effective = left.intersect(&right);
+
+    assert_eq!(effective.web_fetch.allow_private_hosts, Some(true));
+}
+
+#[test]
+fn tool_runtime_narrowing_intersect_preserves_single_explicit_private_host_allowance() {
+    let left = ToolRuntimeNarrowing {
+        web_fetch: WebFetchRuntimeNarrowing {
+            allow_private_hosts: Some(true),
+            ..WebFetchRuntimeNarrowing::default()
+        },
+        ..ToolRuntimeNarrowing::default()
+    };
+    let right = ToolRuntimeNarrowing {
+        browser: BrowserRuntimeNarrowing {
+            max_sessions: Some(1),
+            ..BrowserRuntimeNarrowing::default()
+        },
+        ..ToolRuntimeNarrowing::default()
+    };
+
+    let effective = left.intersect(&right);
+
+    assert_eq!(effective.web_fetch.allow_private_hosts, Some(true));
 }
 
 #[test]

@@ -6,14 +6,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::access::fs::{
-    FsContentSearchAction, FsGlobAction, FsInspectPathAction, FsReadDirAction,
-    FsRemoveDirAllAction, FsRenameAction,
-};
-use crate::{
-    audit::SharedAuditState,
-    errors::{AuditError, PolicyError},
-};
+use crate::{audit::SharedAuditState, errors::AuditError};
 use async_trait::async_trait;
 use loong_contracts::{
     AuthorizationAttemptId, AuthorizationEvidence, Capability, GrantId, PolicyDecision,
@@ -21,7 +14,6 @@ use loong_contracts::{
     PolicyRegistrationSource, PolicyReport,
 };
 use loong_core::{
-    error::AuthorizationError,
     policy::action::{ActionMeta, ActionMetadata},
     policy::{
         context::ContextFactory,
@@ -32,18 +24,19 @@ use loong_core::{
 
 const DEFAULT_DENY_REASON: &str = "No matching policy.";
 
-/// Compatibility action for legacy kernel envelopes.
+/// Typed policy adapter for the remaining legacy kernel envelopes.
 ///
-/// `operation` remains routing metadata while `payload` preserves the original request body.
+/// This type is crate-private so new callers cannot use a generic envelope in
+/// place of a concrete Action. Delete it with pack/token authorization.
 #[derive(Debug)]
-pub struct LegacyKernelAction {
+pub(crate) struct LegacyKernelAction {
     operation: String,
     required_capabilities: Vec<Capability>,
     payload: serde_json::Value,
 }
 
 impl LegacyKernelAction {
-    pub fn new(
+    pub(crate) fn new(
         operation: impl Into<String>,
         required_capabilities: BTreeSet<Capability>,
         payload: serde_json::Value,
@@ -56,7 +49,7 @@ impl LegacyKernelAction {
     }
 
     /// Consume the granted legacy action and recover its sole owned request body.
-    pub fn into_payload(self) -> serde_json::Value {
+    pub(crate) fn into_payload(self) -> serde_json::Value {
         self.payload
     }
 }
@@ -451,17 +444,6 @@ where
     }
 }
 
-// TODO(deprecate-legacy-policy-error): add `#[deprecated]` after callers stop
-// expecting the old extension-oriented `PolicyError` surface. New access-backed
-// side effects should keep typed grant errors at their owning boundary.
-pub(crate) fn policy_engine_error(error: impl Into<AuthorizationError>) -> PolicyError {
-    let error = error.into();
-    PolicyError::ExtensionDenied {
-        extension: "policy-engine".to_owned(),
-        reason: error.to_string(),
-    }
-}
-
 #[async_trait]
 impl<C> PolicyEngineBackend<C> for PolicyPipeline<C>
 where
@@ -529,132 +511,6 @@ where
             decision: PolicyDecision::Allow,
             predicate: Some("action has concrete LegacyKernelAction type".into()),
             reason: "legacy kernel operation allowed by migration fallback".into(),
-        }
-    }
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct FsRemoveDirAllAllowPolicy;
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct FsRenameAllowPolicy;
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct FsInspectPathAllowPolicy;
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct FsGlobAllowPolicy;
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct FsReadDirAllowPolicy;
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct FsContentSearchAllowPolicy;
-
-#[async_trait]
-impl<C> Policy<C, FsRemoveDirAllAction> for FsRemoveDirAllAllowPolicy
-where
-    C: ContextFactory + Send + Sync,
-{
-    fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("fs-remove-dir-all-allow")
-    }
-
-    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &FsRemoveDirAllAction) -> PolicyGrant {
-        PolicyGrant {
-            decision: PolicyDecision::Allow,
-            predicate: Some("fs.remove_dir_all reached terminal allow policy".into()),
-            reason: "filesystem directory removal allowed after configured deny policies".into(),
-        }
-    }
-}
-
-#[async_trait]
-impl<C> Policy<C, FsRenameAction> for FsRenameAllowPolicy
-where
-    C: ContextFactory + Send + Sync,
-{
-    fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("fs-rename-allow")
-    }
-
-    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &FsRenameAction) -> PolicyGrant {
-        PolicyGrant {
-            decision: PolicyDecision::Allow,
-            predicate: Some("fs.rename reached terminal allow policy".into()),
-            reason: "filesystem rename allowed after configured deny policies".into(),
-        }
-    }
-}
-
-#[async_trait]
-impl<C> Policy<C, FsInspectPathAction> for FsInspectPathAllowPolicy
-where
-    C: ContextFactory + Send + Sync,
-{
-    fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("fs-inspect-path-allow")
-    }
-
-    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &FsInspectPathAction) -> PolicyGrant {
-        PolicyGrant {
-            decision: PolicyDecision::Allow,
-            predicate: Some("fs.inspect_path reached terminal allow policy".into()),
-            reason: "filesystem path inspection allowed after configured deny policies".into(),
-        }
-    }
-}
-
-#[async_trait]
-impl<C> Policy<C, FsGlobAction> for FsGlobAllowPolicy
-where
-    C: ContextFactory + Send + Sync,
-{
-    fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("fs-glob-allow")
-    }
-
-    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &FsGlobAction) -> PolicyGrant {
-        PolicyGrant {
-            decision: PolicyDecision::Allow,
-            predicate: Some("fs.glob reached terminal allow policy".into()),
-            reason: "filesystem glob allowed after configured deny policies".into(),
-        }
-    }
-}
-
-#[async_trait]
-impl<C> Policy<C, FsReadDirAction> for FsReadDirAllowPolicy
-where
-    C: ContextFactory + Send + Sync,
-{
-    fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("fs-read-dir-allow")
-    }
-
-    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &FsReadDirAction) -> PolicyGrant {
-        PolicyGrant {
-            decision: PolicyDecision::Allow,
-            predicate: Some("fs.read_dir reached terminal allow policy".into()),
-            reason: "filesystem directory listing allowed after path policy".into(),
-        }
-    }
-}
-
-#[async_trait]
-impl<C> Policy<C, FsContentSearchAction> for FsContentSearchAllowPolicy
-where
-    C: ContextFactory + Send + Sync,
-{
-    fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("fs-content-search-allow")
-    }
-
-    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &FsContentSearchAction) -> PolicyGrant {
-        PolicyGrant {
-            decision: PolicyDecision::Allow,
-            predicate: Some("fs.content_search reached terminal allow policy".into()),
-            reason: "filesystem content search allowed after configured deny policies".into(),
         }
     }
 }

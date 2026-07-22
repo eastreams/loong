@@ -1,9 +1,7 @@
-use std::{collections::BTreeMap, sync::OnceLock};
-
 use serde_json::Value;
 
 use super::{
-    ProviderToolBridgeContext, attach_provider_parse_telemetry, build_provider_tool_intent,
+    ProviderToolSchemaView, attach_provider_parse_telemetry, build_provider_tool_intent,
     decode_inline_xml_text, is_inside_markdown_fence, is_inside_markdown_indented_code_block,
     is_standalone_block_end, is_standalone_block_start, normalize_text,
 };
@@ -112,13 +110,12 @@ pub(super) fn attach_inline_function_parse_telemetry(
 
 pub(super) fn extract_inline_function_call_turn(
     text: &str,
-    session_id: Option<&str>,
     turn_id: Option<&str>,
-    bridge_context: &ProviderToolBridgeContext,
+    schema: &ProviderToolSchemaView,
 ) -> InlineFunctionParseResult {
-    match extract_xml_inline_function_call_turn(text, session_id, turn_id, bridge_context) {
+    match extract_xml_inline_function_call_turn(text, turn_id, schema) {
         InlineFunctionParseResult::Absent => {
-            extract_bracket_inline_function_call_turn(text, session_id, turn_id, bridge_context)
+            extract_bracket_inline_function_call_turn(text, turn_id, schema)
         }
         result @ InlineFunctionParseResult::Parsed { .. }
         | result @ InlineFunctionParseResult::Malformed { .. } => result,
@@ -127,9 +124,8 @@ pub(super) fn extract_inline_function_call_turn(
 
 fn extract_xml_inline_function_call_turn(
     text: &str,
-    session_id: Option<&str>,
     turn_id: Option<&str>,
-    bridge_context: &ProviderToolBridgeContext,
+    schema: &ProviderToolSchemaView,
 ) -> InlineFunctionParseResult {
     const FUNCTION_OPEN: &str = "<function=";
     const FUNCTION_CLOSE: &str = "</function>";
@@ -190,28 +186,30 @@ fn extract_xml_inline_function_call_turn(
         }
 
         let canonical_tool_name = tools::canonical_tool_name(raw_tool_name).to_owned();
-        let args_json =
-            match parse_inline_function_parameters(canonical_tool_name.as_str(), function_body) {
-                Ok(args_json) => args_json,
-                Err(error_code) => {
-                    return InlineFunctionParseResult::Malformed {
-                        telemetry: InlineFunctionParseTelemetry::malformed(
-                            tool_intents.len(),
-                            error_code,
-                        ),
-                    };
-                }
-            };
+        let args_json = match parse_inline_function_parameters(
+            canonical_tool_name.as_str(),
+            function_body,
+            schema,
+        ) {
+            Ok(args_json) => args_json,
+            Err(error_code) => {
+                return InlineFunctionParseResult::Malformed {
+                    telemetry: InlineFunctionParseTelemetry::malformed(
+                        tool_intents.len(),
+                        error_code,
+                    ),
+                };
+            }
+        };
 
         let tool_call_id = format!("inline-call-{}", tool_intents.len());
         let tool_intent = build_provider_tool_intent(
             canonical_tool_name.as_str(),
             args_json,
             "provider_inline_function_call",
-            session_id,
             turn_id,
             tool_call_id,
-            bridge_context,
+            schema,
         );
         if let Some(tool_intent) = tool_intent {
             found_inline_function = true;
@@ -239,9 +237,8 @@ fn extract_xml_inline_function_call_turn(
 
 fn extract_bracket_inline_function_call_turn(
     text: &str,
-    session_id: Option<&str>,
     turn_id: Option<&str>,
-    bridge_context: &ProviderToolBridgeContext,
+    schema: &ProviderToolSchemaView,
 ) -> InlineFunctionParseResult {
     const FUNCTION_OPEN: &str = "[";
     const FUNCTION_CLOSE: &str = "</function>";
@@ -313,28 +310,30 @@ fn extract_bracket_inline_function_call_turn(
         }
 
         let canonical_tool_name = tools::canonical_tool_name(raw_tool_name).to_owned();
-        let args_json =
-            match parse_inline_function_parameters(canonical_tool_name.as_str(), function_body) {
-                Ok(args_json) => args_json,
-                Err(error_code) => {
-                    return InlineFunctionParseResult::Malformed {
-                        telemetry: InlineFunctionParseTelemetry::malformed(
-                            tool_intents.len(),
-                            error_code,
-                        ),
-                    };
-                }
-            };
+        let args_json = match parse_inline_function_parameters(
+            canonical_tool_name.as_str(),
+            function_body,
+            schema,
+        ) {
+            Ok(args_json) => args_json,
+            Err(error_code) => {
+                return InlineFunctionParseResult::Malformed {
+                    telemetry: InlineFunctionParseTelemetry::malformed(
+                        tool_intents.len(),
+                        error_code,
+                    ),
+                };
+            }
+        };
 
         let tool_call_id = format!("inline-call-{}", tool_intents.len());
         let tool_intent = build_provider_tool_intent(
             canonical_tool_name.as_str(),
             args_json,
             "provider_inline_function_call",
-            session_id,
             turn_id,
             tool_call_id,
-            bridge_context,
+            schema,
         );
         if let Some(tool_intent) = tool_intent {
             found_inline_function = true;
@@ -363,6 +362,7 @@ fn extract_bracket_inline_function_call_turn(
 fn parse_inline_function_parameters(
     tool_name: &str,
     body: &str,
+    schema: &ProviderToolSchemaView<'_>,
 ) -> Result<Value, InlineFunctionParseError> {
     const PARAMETER_OPEN: &str = "<parameter=";
     const PARAMETER_CLOSE: &str = "</parameter>";
@@ -401,7 +401,7 @@ fn parse_inline_function_parameters(
         let raw_value = &value_remainder[..value_end];
         payload.insert(
             parameter_name.to_owned(),
-            parse_inline_parameter_value(tool_name, parameter_name, raw_value),
+            parse_inline_parameter_value(tool_name, parameter_name, raw_value, schema),
         );
 
         cursor = value_start + value_end + PARAMETER_CLOSE.len();
@@ -410,13 +410,18 @@ fn parse_inline_function_parameters(
     Ok(Value::Object(payload))
 }
 
-fn parse_inline_parameter_value(tool_name: &str, parameter_name: &str, raw_value: &str) -> Value {
+fn parse_inline_parameter_value(
+    tool_name: &str,
+    parameter_name: &str,
+    raw_value: &str,
+    schema: &ProviderToolSchemaView<'_>,
+) -> Value {
     let decoded = decode_inline_xml_text(raw_value);
     let trimmed = decoded.trim();
     if trimmed.is_empty() {
         return Value::String(String::new());
     }
-    match inline_parameter_schema_type(tool_name, parameter_name) {
+    match inline_parameter_schema_type(schema, tool_name, parameter_name) {
         Some(InlineParameterSchemaType::String) => parse_inline_string_value(trimmed),
         Some(
             InlineParameterSchemaType::Integer
@@ -438,34 +443,13 @@ fn parse_inline_string_value(raw: &str) -> Value {
 }
 
 fn inline_parameter_schema_type(
+    schema: &ProviderToolSchemaView<'_>,
     tool_name: &str,
     parameter_name: &str,
 ) -> Option<InlineParameterSchemaType> {
-    inline_parameter_schema_types()
-        .get(tool_name)
-        .and_then(|parameters| parameters.get(parameter_name))
-        .copied()
-}
-
-fn inline_parameter_schema_types()
--> &'static BTreeMap<String, BTreeMap<String, InlineParameterSchemaType>> {
-    static SCHEMA_TYPES: OnceLock<BTreeMap<String, BTreeMap<String, InlineParameterSchemaType>>> =
-        OnceLock::new();
-
-    SCHEMA_TYPES.get_or_init(|| {
-        let mut tools_by_name =
-            BTreeMap::<String, BTreeMap<String, InlineParameterSchemaType>>::new();
-        for (tool_name, properties) in tools::tool_parameter_schema_types() {
-            let entry = tools_by_name.entry(tool_name).or_default();
-            for (parameter_name, schema_type) in properties {
-                let Some(parameter_type) = InlineParameterSchemaType::parse(schema_type) else {
-                    continue;
-                };
-                entry.insert(parameter_name, parameter_type);
-            }
-        }
-        tools_by_name
-    })
+    schema
+        .parameter_schema_type(tool_name, parameter_name)
+        .and_then(InlineParameterSchemaType::parse)
 }
 
 fn is_standalone_inline_function_start(text: &str, start: usize) -> bool {

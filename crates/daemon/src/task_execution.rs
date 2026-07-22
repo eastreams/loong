@@ -35,7 +35,7 @@ pub(crate) async fn execute_daemon_task_with_supervisor(
     intent: TaskIntent,
 ) -> CliResult<DaemonTaskExecution> {
     let mut supervisor = TaskSupervisor::new(intent);
-    let policy_context = SpecExecutionContext::new(token);
+    let policy_context = SpecExecutionContext::from_legacy_token(token);
     let dispatch_result = supervisor
         .execute(kernel, pack_id, token, &policy_context)
         .await;
@@ -182,6 +182,7 @@ pub(crate) fn normalize_explicit_acp_turn_execution_request(
 }
 
 pub(crate) async fn execute_explicit_acp_turn_request(
+    runtime: Arc<loong_runtime::runtime::Runtime<loong_app::RuntimeContextFactory>>,
     resolved_path: std::path::PathBuf,
     config: loong_app::config::LoongConfig,
     acp_manager: Arc<loong_app::acp::AcpSessionManager>,
@@ -190,6 +191,7 @@ pub(crate) async fn execute_explicit_acp_turn_request(
 ) -> CliResult<loong_app::agent_runtime::AgentTurnResult> {
     let (_address, gateway_request) = normalize_explicit_acp_turn_execution_request(request)?;
     execute_explicit_acp_turn_gateway_request(
+        runtime,
         resolved_path,
         config,
         acp_manager,
@@ -200,6 +202,7 @@ pub(crate) async fn execute_explicit_acp_turn_request(
 }
 
 pub(crate) async fn execute_explicit_acp_turn_gateway_request(
+    runtime: Arc<loong_runtime::runtime::Runtime<loong_app::RuntimeContextFactory>>,
     resolved_path: std::path::PathBuf,
     config: loong_app::config::LoongConfig,
     acp_manager: Arc<loong_app::acp::AcpSessionManager>,
@@ -209,7 +212,8 @@ pub(crate) async fn execute_explicit_acp_turn_gateway_request(
     let execution = loong_app::turn_gateway::TurnGatewayExecution {
         resolved_path,
         config,
-        app_ctx: None,
+        runtime,
+        agent_id: "gateway-acp".to_owned(),
         acp_manager: Some(acp_manager),
         event_sink,
         initialize_runtime_environment: false,
@@ -275,6 +279,7 @@ pub(crate) fn build_seeded_gateway_turn_execution(
 }
 
 pub(crate) async fn execute_seeded_gateway_turn(
+    runtime: Arc<loong_runtime::runtime::Runtime<loong_app::RuntimeContextFactory>>,
     execution: &SeededGatewayTurnExecution,
     observer: Option<loong_app::conversation::ConversationTurnObserverHandle>,
 ) -> Result<loong_app::agent_runtime::AgentTurnResult, String> {
@@ -299,6 +304,7 @@ pub(crate) async fn execute_seeded_gateway_turn(
         resolved_path,
         execution.run_config.clone(),
     )
+    .with_runtime(runtime, "gateway-openai")
     .without_runtime_environment_init();
     execute_daemon_turn_gateway_request(
         &turn_service,
@@ -464,7 +470,7 @@ pub async fn run_demo() -> CliResult<()> {
         route.harness_kind, task_dispatch.supervisor_state, outcome.output
     );
 
-    let policy_context = SpecExecutionContext::new(&token);
+    let policy_context = SpecExecutionContext::from_legacy_token(&token);
     let connector_dispatch = kernel
         .execute_connector_core(
             DEFAULT_PACK_ID,

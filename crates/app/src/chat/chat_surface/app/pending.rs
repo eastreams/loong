@@ -573,15 +573,14 @@ pub(super) async fn build_command_lines(
         crate::chat::CLI_CHAT_HISTORY_COMMAND => {
             #[cfg(feature = "memory-sqlite")]
             {
+                let context = runtime.context().map_err(|error| error.to_string())?;
                 let history_lines = crate::chat::ops::load_history_lines(
-                    &runtime.session_id,
                     runtime.config.memory.sliding_window,
-                    runtime.conversation_binding(),
-                    &runtime.memory_config,
+                    &context,
                 )
                 .await?;
                 Ok(crate::chat::ops::render_cli_chat_history_lines_with_width(
-                    &runtime.session_id,
+                    runtime.session.session_id(),
                     runtime.config.memory.sliding_window,
                     &history_lines,
                     width,
@@ -601,16 +600,15 @@ pub(super) async fn build_command_lines(
         crate::chat::CLI_CHAT_COMPACT_COMMAND => {
             #[cfg(feature = "memory-sqlite")]
             {
+                let context = runtime.context().map_err(|error| error.to_string())?;
                 let result = crate::chat::ops::load_manual_compaction_result(
                     &runtime.config,
-                    &runtime.app_context,
-                    &runtime.session_id,
+                    &context,
                     &runtime.turn_coordinator,
-                    runtime.conversation_binding(),
                 )
                 .await?;
                 Ok(crate::chat::ops::render_manual_compaction_lines_with_width(
-                    &runtime.session_id,
+                    runtime.session.session_id(),
                     &result,
                     width,
                 ))
@@ -638,15 +636,19 @@ pub(super) async fn build_command_lines(
         "/fast_lane_summary" => {
             #[cfg(feature = "memory-sqlite")]
             {
+                let context = runtime.context().map_err(|error| error.to_string())?;
+                let history_runtime =
+                    crate::conversation::DefaultConversationRuntime::from_config_or_env(
+                        &runtime.config,
+                    )?;
                 let summary = crate::conversation::load_fast_lane_tool_batch_event_summary(
-                    &runtime.session_id,
                     runtime.config.memory.sliding_window,
-                    runtime.conversation_binding(),
-                    &runtime.memory_config,
+                    &context,
+                    &history_runtime,
                 )
                 .await?;
                 Ok(crate::chat::render_fast_lane_summary_lines_with_width(
-                    &runtime.session_id,
+                    runtime.session.session_id(),
                     runtime.config.memory.sliding_window,
                     &summary,
                     width,
@@ -666,15 +668,19 @@ pub(super) async fn build_command_lines(
         "/safe_lane_summary" => {
             #[cfg(feature = "memory-sqlite")]
             {
+                let context = runtime.context().map_err(|error| error.to_string())?;
+                let history_runtime =
+                    crate::conversation::DefaultConversationRuntime::from_config_or_env(
+                        &runtime.config,
+                    )?;
                 let summary = crate::conversation::load_safe_lane_event_summary(
-                    &runtime.session_id,
                     runtime.config.memory.sliding_window,
-                    runtime.conversation_binding(),
-                    &runtime.memory_config,
+                    &context,
+                    &history_runtime,
                 )
                 .await?;
                 Ok(crate::chat::render_safe_lane_summary_lines_with_width(
-                    &runtime.session_id,
+                    runtime.session.session_id(),
                     runtime.config.memory.sliding_window,
                     &runtime.config.conversation,
                     &summary,
@@ -695,19 +701,18 @@ pub(super) async fn build_command_lines(
         "/turn_checkpoint_summary" => {
             #[cfg(feature = "memory-sqlite")]
             {
+                let context = runtime.context().map_err(|error| error.to_string())?;
                 let diagnostics = runtime
                     .turn_coordinator
                     .load_production_turn_checkpoint_diagnostics_with_limit(
                         &runtime.config,
-                        &runtime.app_context,
-                        &runtime.session_id,
+                        &context,
                         runtime.config.memory.sliding_window,
-                        runtime.conversation_binding(),
                     )
                     .await?;
                 Ok(
                     crate::chat::render_turn_checkpoint_summary_lines_with_width(
-                        &runtime.session_id,
+                        runtime.session.session_id(),
                         runtime.config.memory.sliding_window,
                         &diagnostics,
                         width,
@@ -728,17 +733,13 @@ pub(super) async fn build_command_lines(
         "/turn_checkpoint_repair" => {
             #[cfg(feature = "memory-sqlite")]
             {
+                let context = runtime.context().map_err(|error| error.to_string())?;
                 let outcome = runtime
                     .turn_coordinator
-                    .repair_production_turn_checkpoint_tail(
-                        &runtime.config,
-                        &runtime.app_context,
-                        &runtime.session_id,
-                        runtime.conversation_binding(),
-                    )
+                    .repair_production_turn_checkpoint_tail(&runtime.config, &context)
                     .await?;
                 Ok(crate::chat::render_turn_checkpoint_repair_lines_with_width(
-                    &runtime.session_id,
+                    runtime.session.session_id(),
                     &outcome,
                     width,
                 ))
@@ -1084,7 +1085,7 @@ pub(super) fn render_cwd_command_lines_with_width(
                 },
                 TuiKeyValueSpec::Plain {
                     key: "session".to_owned(),
-                    value: runtime.session_id.clone(),
+                    value: runtime.session.session_id().to_owned(),
                 },
             ],
         }],
@@ -1213,7 +1214,7 @@ pub(super) fn render_sessions_lines(
     width: usize,
 ) -> CliResult<Vec<String>> {
     let store = ChatControlPlaneStore::new(&runtime.memory_config)?;
-    let sessions = store.visible_sessions(&runtime.session_id, 24)?;
+    let sessions = store.visible_sessions(runtime.session.session_id(), 24)?;
     let mut items = Vec::new();
     for session in sessions.iter().take(12) {
         items.push(TuiKeyValueSpec::Plain {
@@ -1284,7 +1285,7 @@ pub(super) fn render_sessions_lines(
     }
     let message_spec = TuiMessageSpec {
         role: "sessions".to_owned(),
-        caption: Some(format!("scope={}", runtime.session_id)),
+        caption: Some(format!("scope={}", runtime.session.session_id())),
         sections,
         footer_lines: vec![
             "Use /subagents for delegate lanes and /review for approvals.".to_owned(),
@@ -1302,7 +1303,7 @@ pub(super) fn render_workers_lines(
     width: usize,
 ) -> CliResult<Vec<String>> {
     let store = ChatControlPlaneStore::new(&runtime.memory_config)?;
-    let workers = store.visible_worker_sessions(&runtime.session_id, 24)?;
+    let workers = store.visible_worker_sessions(runtime.session.session_id(), 24)?;
     let mut items = Vec::new();
     for worker in workers.iter().take(12) {
         items.push(TuiKeyValueSpec::Plain {
@@ -1367,7 +1368,7 @@ pub(super) fn render_workers_lines(
     }
     let message_spec = TuiMessageSpec {
         role: "workers".to_owned(),
-        caption: Some(format!("scope={}", runtime.session_id)),
+        caption: Some(format!("scope={}", runtime.session.session_id())),
         sections,
         footer_lines: vec![
             "Use /sessions for the full lineage and /mission for lane rollups.".to_owned(),
@@ -1385,7 +1386,7 @@ pub(super) fn render_review_lines(
     width: usize,
 ) -> CliResult<Vec<String>> {
     let store = ChatControlPlaneStore::new(&runtime.memory_config)?;
-    let approvals = store.approval_queue(&runtime.session_id, 16)?;
+    let approvals = store.approval_queue(runtime.session.session_id(), 16)?;
     let mut sections = Vec::new();
     let mut queue_items = Vec::new();
     for approval in approvals.iter().take(8) {
@@ -1441,7 +1442,7 @@ pub(super) fn render_review_lines(
     }
     let message_spec = TuiMessageSpec {
         role: "review".to_owned(),
-        caption: Some(format!("scope={}", runtime.session_id)),
+        caption: Some(format!("scope={}", runtime.session.session_id())),
         sections,
         footer_lines: vec![
             "Governed actions will surface approval screens here when needed.".to_owned(),
@@ -1459,15 +1460,15 @@ pub(super) fn render_mission_lines(
     width: usize,
 ) -> CliResult<Vec<String>> {
     let store = ChatControlPlaneStore::new(&runtime.memory_config)?;
-    let sessions = store.visible_sessions(&runtime.session_id, 32)?;
-    let workers = store.visible_worker_sessions(&runtime.session_id, 32)?;
-    let approvals = store.approval_queue(&runtime.session_id, 32)?;
+    let sessions = store.visible_sessions(runtime.session.session_id(), 32)?;
+    let workers = store.visible_worker_sessions(runtime.session.session_id(), 32)?;
+    let approvals = store.approval_queue(runtime.session.session_id(), 32)?;
     let state_mix = summarize_state_mix(sessions.iter().map(|session| session.state.as_str()));
     let worker_mix = summarize_state_mix(workers.iter().map(|worker| worker.state.as_str()));
     let summary_items = vec![
         TuiKeyValueSpec::Plain {
             key: "scope".to_owned(),
-            value: runtime.session_id.clone(),
+            value: runtime.session.session_id().to_owned(),
         },
         TuiKeyValueSpec::Plain {
             key: "provider".to_owned(),

@@ -49,9 +49,13 @@ fn classify_tool_execution_reason(reason: &str) -> KernelFailureClass {
     }
 }
 
-pub(super) struct RepairableToolPreflight;
+/// String envelope retained only for legacy dispatcher preflight errors.
+///
+/// Typed invocation carries `ToolInputError` as a source and must never encode
+/// or parse this prefix.
+pub(super) struct LegacyRepairablePreflight;
 
-impl RepairableToolPreflight {
+impl LegacyRepairablePreflight {
     const PREFIX: &str = "tool_preflight_repairable: ";
 
     pub(super) fn encode(reason: &str) -> String {

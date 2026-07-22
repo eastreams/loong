@@ -11,7 +11,7 @@ use crate::kernel::{
 };
 use loong_contracts::{
     AuthorizationAttempt, AuthorizationAttemptEvent, AuthorizationPolicyEvent, AuthorizationScope,
-    AuthorizationTerminalOutcome,
+    AuthorizationTerminalOutcome, RuntimeOperationOutcome,
 };
 use loong_spec::CliResult;
 use serde_json::{Map, Value, json};
@@ -2403,11 +2403,12 @@ fn audit_event_pack_id(kind: &AuditEventKind) -> Option<&str> {
         | AuditEventKind::SecurityScanEvaluated { pack_id, .. }
         | AuditEventKind::PluginTrustEvaluated { pack_id, .. }
         | AuditEventKind::ToolSearchEvaluated { pack_id, .. }
-        | AuditEventKind::ProviderFailover { pack_id, .. }
         | AuditEventKind::AuthorizationDenied { pack_id, .. } => Some(pack_id.as_str()),
         AuditEventKind::ToolInvocation { pack_id, .. } => Some(pack_id.as_str()),
         AuditEventKind::ActionExecution { .. }
-        | AuditEventKind::ToolCapabilityOverrideRejected { .. } => None,
+        | AuditEventKind::ToolCapabilityOverrideRejected { .. }
+        | AuditEventKind::ProviderFailover { .. }
+        | AuditEventKind::RuntimeOperation { .. } => None,
         AuditEventKind::TokenRevoked { .. } => None,
         _ => None,
     }
@@ -2514,7 +2515,6 @@ fn triage_event_summary(kind: &AuditEventKind) -> Option<String> {
     }
 
     if let AuditEventKind::ProviderFailover {
-        pack_id,
         provider_id,
         reason,
         attempt,
@@ -2525,8 +2525,7 @@ fn triage_event_summary(kind: &AuditEventKind) -> Option<String> {
     } = kind
     {
         let summary = format!(
-            "pack_id={} provider_id={} reason={} attempt={}/{} request_id={} auth_error_code={}",
-            pack_id,
+            "provider_id={} reason={} attempt={}/{} request_id={} auth_error_code={}",
             provider_id,
             reason,
             attempt,
@@ -2654,6 +2653,7 @@ fn triage_event_label(kind: &AuditEventKind) -> Option<&'static str> {
         | AuditEventKind::PlaneInvoked { .. }
         | AuditEventKind::ActionExecution { .. }
         | AuditEventKind::ToolCapabilityOverrideRejected { .. }
+        | AuditEventKind::RuntimeOperation { .. }
         | AuditEventKind::ToolInvocation { .. }
         | AuditEventKind::SecurityScanEvaluated { .. }
         | AuditEventKind::PluginTrustEvaluated { .. }
@@ -2672,6 +2672,7 @@ fn audit_event_kind_label(kind: &AuditEventKind) -> &'static str {
         AuditEventKind::PlaneInvoked { .. } => "PlaneInvoked",
         AuditEventKind::ActionExecution { .. } => "ActionExecution",
         AuditEventKind::ToolCapabilityOverrideRejected { .. } => "ToolCapabilityOverrideRejected",
+        AuditEventKind::RuntimeOperation { .. } => "RuntimeOperation",
         AuditEventKind::ToolInvocation { .. } => "ToolInvocation",
         AuditEventKind::SecurityScanEvaluated { .. } => "SecurityScanEvaluated",
         AuditEventKind::PluginTrustEvaluated { .. } => "PluginTrustEvaluated",
@@ -2827,7 +2828,6 @@ fn format_audit_event_detail(kind: &AuditEventKind) -> String {
             }
         ),
         AuditEventKind::ProviderFailover {
-            pack_id,
             provider_id,
             reason,
             attempt,
@@ -2836,8 +2836,7 @@ fn format_audit_event_detail(kind: &AuditEventKind) -> String {
             auth_error_code,
             ..
         } => format!(
-            "pack_id={} provider_id={} reason={} attempt={}/{} request_id={} auth_error_code={}",
-            pack_id,
+            "provider_id={} reason={} attempt={}/{} request_id={} auth_error_code={}",
             provider_id,
             reason,
             attempt,
@@ -2853,6 +2852,14 @@ fn format_audit_event_detail(kind: &AuditEventKind) -> String {
             "pack_id={} token_id={} reason={}",
             pack_id, token_id, reason
         ),
+        AuditEventKind::RuntimeOperation { operation, outcome } => match outcome {
+            RuntimeOperationOutcome::Completed => {
+                format!("operation={operation} outcome=completed")
+            }
+            RuntimeOperationOutcome::Failed { reason } => {
+                format!("operation={operation} outcome=failed reason={reason}")
+            }
+        },
         _ => "detail unavailable for unknown/non-exhaustive audit event variant".to_owned(),
     }
 }

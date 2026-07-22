@@ -1,4 +1,5 @@
 use super::*;
+use crate::Context;
 
 pub(super) fn execute_sessions_list(
     payload: Value,
@@ -805,17 +806,18 @@ pub(super) fn inspect_visible_session_with_policies(
 #[allow(dead_code)]
 pub(super) async fn wait_for_single_session_with_policies(
     target_session_id: &str,
-    current_session_id: &str,
+    context: &Context<'_>,
     config: &SessionStoreConfig,
     tool_config: &ToolConfig,
     after_id: Option<i64>,
     timeout_ms: u64,
     event_limit: usize,
 ) -> Result<ToolCoreOutcome, String> {
+    let current_session_id = context.session().session_id();
     let started_at = Instant::now();
     let mut next_after_id = after_id.unwrap_or(0).max(0);
     let mut observed_events = Vec::new();
-    let mailbox = mailbox_for_session(current_session_id);
+    let mailbox = context.session().mailbox();
     let mut mailbox_subscription = mailbox.subscribe();
 
     loop {
@@ -888,15 +890,16 @@ pub(super) async fn wait_for_single_session_with_policies(
 #[allow(dead_code)]
 pub(super) async fn wait_for_session_batch_with_policies(
     target_session_ids: Vec<String>,
-    current_session_id: &str,
+    context: &Context<'_>,
     config: &SessionStoreConfig,
     tool_config: &ToolConfig,
     after_id: Option<i64>,
     timeout_ms: u64,
     event_limit: usize,
 ) -> Result<ToolCoreOutcome, String> {
+    let current_session_id = context.session().session_id();
     let repo = SessionRepository::new(config)?;
-    let mailbox = mailbox_for_session(current_session_id);
+    let mailbox = context.session().mailbox();
     let mut mailbox_subscription = mailbox.subscribe();
     let mut results = vec![None; target_session_ids.len()];
     let mut pending = Vec::new();
@@ -1382,7 +1385,6 @@ fn session_workflow_binding_record(
 
     let (execution, execution_surface) =
         latest_delegate_execution_binding_components(delegate_events)?;
-    let mode = session_workflow_binding_mode(&execution);
     let worktree = session_workflow_worktree_binding(session, &execution);
     let task_id = resolved_task_identity
         .map(|task_identity| task_identity.task_id.clone())
@@ -1394,7 +1396,9 @@ fn session_workflow_binding_record(
         session_id: session.session_id.clone(),
         task_id,
         task_session_id,
-        mode,
+        // Delegate workflows enter through a typed mutating Session/Context;
+        // the persisted execution payload no longer duplicates that invariant.
+        mode: GovernedSessionMode::MutatingCapable,
         execution_surface,
         worktree,
     };
@@ -1438,15 +1442,6 @@ fn session_workflow_execution_surface(
     };
 
     fallback_surface.to_owned()
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn session_workflow_binding_mode(execution: &ConstrainedSubagentExecution) -> GovernedSessionMode {
-    if execution.kernel_bound {
-        return GovernedSessionMode::MutatingCapable;
-    }
-
-    GovernedSessionMode::AdvisoryOnly
 }
 
 #[cfg(feature = "memory-sqlite")]

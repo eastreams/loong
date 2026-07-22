@@ -189,27 +189,6 @@ const MEMORY_GUIDELINES: &[&str] = &[
     "Use memory for persisted notes and cross-session recall.",
     "Prefer read for normal workspace files and memory only for durable note content.",
 ];
-const READ_DIRECT_PARAMETER_TYPES: &[(&str, &str)] = &[
-    ("path", "string"),
-    ("offset", "integer"),
-    ("limit", "integer"),
-    ("max_bytes", "integer"),
-    ("query", "string"),
-    ("pattern", "string"),
-    ("root", "string"),
-    ("glob", "string"),
-    ("max_results", "integer"),
-    ("max_bytes_per_file", "integer"),
-    ("case_sensitive", "boolean"),
-    ("include_directories", "boolean"),
-];
-const WRITE_DIRECT_PARAMETER_TYPES: &[(&str, &str)] = &[
-    ("path", "string"),
-    ("content", "string"),
-    ("create_dirs", "boolean"),
-    ("overwrite", "boolean"),
-];
-const EDIT_DIRECT_PARAMETER_TYPES: &[(&str, &str)] = &[("path", "string"), ("edits", "array")];
 const BASH_DIRECT_PARAMETER_TYPES: &[(&str, &str)] = &[
     ("command", "string"),
     ("timeout_ms", "integer"),
@@ -241,35 +220,14 @@ const MEMORY_DIRECT_PARAMETER_TYPES: &[(&str, &str)] = &[
     ("lines", "integer"),
 ];
 
-const READ_COVERED_TOOL_NAMES: &[&str] = &["file.read", "glob.search", "content.search"];
-const WRITE_COVERED_TOOL_NAMES: &[&str] = &["file.write"];
-const EDIT_COVERED_TOOL_NAMES: &[&str] = &["file.edit"];
+const READ_COVERED_TOOL_NAMES: &[&str] = &["glob.search", "content.search"];
+const WRITE_COVERED_TOOL_NAMES: &[&str] = &[];
+const EDIT_COVERED_TOOL_NAMES: &[&str] = &[];
 const BASH_COVERED_TOOL_NAMES: &[&str] = &["shell.exec", "bash.exec"];
 const WEB_COVERED_TOOL_NAMES: &[&str] = &["web.fetch", "web.search", "http.request"];
 const BROWSER_COVERED_TOOL_NAMES: &[&str] = &["browser.open", "browser.extract", "browser.click"];
 const MEMORY_COVERED_TOOL_NAMES: &[&str] = &["memory.retrieve", "memory_search", "memory_get"];
 
-const READ_DIRECT_METADATA: DirectToolSurfaceMetadata = DirectToolSurfaceMetadata {
-    argument_hint: "path?:string,offset?:integer,limit?:integer,max_bytes?:integer,query?:string,pattern?:string,root?:string,glob?:string,max_results?:integer,max_bytes_per_file?:integer,case_sensitive?:boolean,include_directories?:boolean",
-    search_hint: "read one file, page through a large file, search workspace content, or list matching paths through one direct tool",
-    parameter_types: READ_DIRECT_PARAMETER_TYPES,
-    required_fields: &[],
-    tags: &["surface", "read", "file", "search"],
-};
-const WRITE_DIRECT_METADATA: DirectToolSurfaceMetadata = DirectToolSurfaceMetadata {
-    argument_hint: "path:string,content:string,create_dirs?:boolean,overwrite?:boolean",
-    search_hint: "create a file or replace a file with complete content through one direct write tool",
-    parameter_types: WRITE_DIRECT_PARAMETER_TYPES,
-    required_fields: &["path", "content"],
-    tags: &["surface", "write", "file", "replace"],
-};
-const EDIT_DIRECT_METADATA: DirectToolSurfaceMetadata = DirectToolSurfaceMetadata {
-    argument_hint: "path:string,edits:array",
-    search_hint: "apply one or more exact text edits to an existing file through one direct edit tool",
-    parameter_types: EDIT_DIRECT_PARAMETER_TYPES,
-    required_fields: &["path", "edits"],
-    tags: &["surface", "edit", "file", "patch"],
-};
 const BASH_DIRECT_METADATA: DirectToolSurfaceMetadata = DirectToolSurfaceMetadata {
     argument_hint: "command:string,timeout_ms?:integer,cwd?:string",
     search_hint: "run one guarded bash command through one direct bash tool",
@@ -306,7 +264,8 @@ const READ_SURFACE: ToolSurfaceDescriptor = ToolSurfaceDescriptor {
     prompt_guidelines: READ_GUIDELINES,
     direct_tool_name: Some(DIRECT_READ_TOOL_NAME),
     covered_tool_names: READ_COVERED_TOOL_NAMES,
-    direct_metadata: Some(READ_DIRECT_METADATA),
+    // Schema/search metadata belongs to the runtime ToolSpec registration.
+    direct_metadata: None,
     hidden_search_summary: None,
     hidden_search_argument_hint: None,
 };
@@ -318,7 +277,7 @@ const WRITE_SURFACE: ToolSurfaceDescriptor = ToolSurfaceDescriptor {
     prompt_guidelines: WRITE_GUIDELINES,
     direct_tool_name: Some(DIRECT_WRITE_TOOL_NAME),
     covered_tool_names: WRITE_COVERED_TOOL_NAMES,
-    direct_metadata: Some(WRITE_DIRECT_METADATA),
+    direct_metadata: None,
     hidden_search_summary: None,
     hidden_search_argument_hint: None,
 };
@@ -330,7 +289,7 @@ const EDIT_SURFACE: ToolSurfaceDescriptor = ToolSurfaceDescriptor {
     prompt_guidelines: EDIT_GUIDELINES,
     direct_tool_name: Some(DIRECT_EDIT_TOOL_NAME),
     covered_tool_names: EDIT_COVERED_TOOL_NAMES,
-    direct_metadata: Some(EDIT_DIRECT_METADATA),
+    direct_metadata: None,
     hidden_search_summary: None,
     hidden_search_argument_hint: None,
 };
@@ -698,7 +657,7 @@ mod tests {
 
     #[test]
     fn visible_direct_tool_states_follow_runtime_view() {
-        let view = ToolView::from_tool_names([
+        let view = ToolView::from_legacy_paths([
             "read",
             "write",
             "edit",
@@ -721,7 +680,7 @@ mod tests {
 
     #[test]
     fn direct_tool_visibility_accepts_direct_file_allowlist_names() {
-        let view = ToolView::from_tool_names(["read", "write", "edit"]);
+        let view = ToolView::from_legacy_paths(["read", "write", "edit"]);
 
         assert!(direct_tool_visible_in_view("read", &view));
         assert!(direct_tool_visible_in_view("write", &view));
@@ -744,7 +703,7 @@ mod tests {
 
     #[test]
     fn direct_surface_coverage_only_applies_to_common_hidden_tools() {
-        let view = ToolView::from_tool_names([
+        let view = ToolView::from_legacy_paths([
             "shell.exec",
             "browser.open",
             "browser.extract",
@@ -774,19 +733,18 @@ mod tests {
     }
 
     #[test]
-    fn direct_surface_metadata_stays_definition_first() {
+    fn legacy_direct_surface_metadata_stays_definition_first() {
         let exec_parameter_types =
             direct_tool_parameter_types(DIRECT_BASH_TOOL_NAME).expect("bash parameter types");
         assert!(exec_parameter_types.contains(&("command", "string")));
         assert!(!exec_parameter_types.contains(&("script", "string")));
-        assert_eq!(
-            direct_tool_required_fields(DIRECT_WRITE_TOOL_NAME),
-            Some(["path", "content"].as_slice())
-        );
-        assert_eq!(
-            direct_tool_required_fields("edit"),
-            Some(["path", "edits"].as_slice())
-        );
+        for typed_name in [
+            DIRECT_READ_TOOL_NAME,
+            DIRECT_WRITE_TOOL_NAME,
+            DIRECT_EDIT_TOOL_NAME,
+        ] {
+            assert_eq!(direct_tool_surface_metadata(typed_name), None);
+        }
         assert_eq!(
             direct_tool_tags(DIRECT_WEB_TOOL_NAME),
             Some(["surface", "web", "fetch", "search"].as_slice())
@@ -795,11 +753,6 @@ mod tests {
             direct_tool_search_hint(DIRECT_WEB_TOOL_NAME)
                 .expect("web search hint")
                 .contains("web-search providers")
-        );
-        assert!(
-            direct_tool_argument_hint(DIRECT_READ_TOOL_NAME)
-                .expect("read argument hint")
-                .contains("offset?:integer")
         );
         assert!(
             direct_tool_search_hint(DIRECT_BROWSER_TOOL_NAME)
@@ -817,14 +770,13 @@ mod tests {
     #[test]
     fn discovery_ids_prefer_surfaces_over_curated_long_tail_aliases() {
         assert_eq!(
-            discovery_tool_name_for_tool_name("file.read"),
+            discovery_tool_name_for_tool_name("glob.search"),
             DIRECT_READ_TOOL_NAME
         );
         assert_eq!(
             discovery_tool_name_for_tool_name("bash.exec"),
             DIRECT_BASH_TOOL_NAME
         );
-        assert_eq!(discovery_tool_name_for_tool_name("file.edit"), "edit");
         assert_eq!(
             discovery_tool_name_for_tool_name("browser.extract"),
             DIRECT_BROWSER_TOOL_NAME
@@ -849,8 +801,8 @@ mod tests {
 
     #[test]
     fn surface_visibility_checks_only_report_direct_paths() {
-        let view = ToolView::from_tool_names([
-            "file.read",
+        let view = ToolView::from_legacy_paths([
+            "read",
             "shell.exec",
             "browser.extract",
             "provider.switch",
@@ -867,7 +819,7 @@ mod tests {
 
     #[test]
     fn visible_web_surface_state_distinguishes_search_from_network_modes() {
-        let search_only_view = ToolView::from_tool_names(["web.search"]);
+        let search_only_view = ToolView::from_legacy_paths(["web.search"]);
         let search_only_state = visible_direct_tool_states_for_view(&search_only_view)
             .into_iter()
             .find(|state| state.surface_id == "web")
@@ -883,7 +835,7 @@ mod tests {
                 .contains("Query mode uses web-search providers")
         );
 
-        let network_only_view = ToolView::from_tool_names(["web.fetch"]);
+        let network_only_view = ToolView::from_legacy_paths(["web.fetch"]);
         let network_only_state = visible_direct_tool_states_for_view(&network_only_view)
             .into_iter()
             .find(|state| state.surface_id == "web")

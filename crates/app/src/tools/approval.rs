@@ -56,11 +56,7 @@ pub(crate) struct ApprovalResolutionOutcome {
 #[cfg(feature = "memory-sqlite")]
 #[async_trait]
 pub(crate) trait ApprovalResolutionRuntime: Send + Sync {
-    fn can_replay_approved_request(&self) -> bool {
-        true
-    }
-
-    fn ensure_resolution_binding_allows_decision(
+    fn ensure_resolution_allowed(
         &self,
         approval_request: &ApprovalRequestRecord,
         decision: ApprovalDecision,
@@ -578,7 +574,7 @@ async fn resolve_approval_request_with_runtime(
     let repo = SessionRepository::new(config)?;
     let approval_request = load_visible_approval_request(&repo, &request)?;
 
-    runtime.ensure_resolution_binding_allows_decision(&approval_request, request.decision)?;
+    runtime.ensure_resolution_allowed(&approval_request, request.decision)?;
 
     match request.decision {
         ApprovalDecision::Deny => {
@@ -855,13 +851,6 @@ async fn finish_approved_resolution(
     runtime: &(dyn ApprovalResolutionRuntime + '_),
     approved: ApprovalRequestRecord,
 ) -> Result<ApprovalResolutionOutcome, String> {
-    if !runtime.can_replay_approved_request() {
-        return Ok(ApprovalResolutionOutcome {
-            approval_request: approved,
-            resumed_tool_output: None,
-        });
-    }
-
     let approval_request_id = approved.approval_request_id;
     execute_approved_request(repo, runtime, approval_request_id.as_str()).await
 }
@@ -1546,8 +1535,6 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     #[derive(Clone)]
     struct MockApprovalResolutionRuntime {
-        binding_error: Option<String>,
-        can_replay: bool,
         replay_result: Result<ToolCoreOutcome, String>,
         replayed_request_ids: Arc<Mutex<Vec<String>>>,
     }
@@ -1560,16 +1547,9 @@ mod tests {
                 payload,
             };
             Self {
-                binding_error: None,
-                can_replay: true,
                 replay_result: Ok(outcome),
                 replayed_request_ids: Arc::new(Mutex::new(Vec::new())),
             }
-        }
-
-        fn without_replay(mut self) -> Self {
-            self.can_replay = false;
-            self
         }
 
         fn replayed_request_ids(&self) -> Vec<String> {
@@ -1584,21 +1564,6 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     #[async_trait]
     impl ApprovalResolutionRuntime for MockApprovalResolutionRuntime {
-        fn can_replay_approved_request(&self) -> bool {
-            self.can_replay
-        }
-
-        fn ensure_resolution_binding_allows_decision(
-            &self,
-            _approval_request: &ApprovalRequestRecord,
-            _decision: ApprovalDecision,
-        ) -> Result<(), String> {
-            match &self.binding_error {
-                Some(binding_error) => Err(binding_error.clone()),
-                None => Ok(()),
-            }
-        }
-
         async fn replay_approved_request(
             &self,
             approval_request: &ApprovalRequestRecord,
@@ -1612,6 +1577,40 @@ mod tests {
             drop(guard);
 
             self.replay_result.clone()
+        }
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    struct FinalizingReplayFailureRuntime {
+        memory_config: SessionStoreConfig,
+        replay_error: String,
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[async_trait]
+    impl ApprovalResolutionRuntime for FinalizingReplayFailureRuntime {
+        async fn replay_approved_request(
+            &self,
+            approval_request: &ApprovalRequestRecord,
+        ) -> Result<ToolCoreOutcome, String> {
+            let repo = SessionRepository::new(&self.memory_config)?;
+            let finalized = repo.transition_approval_request_if_current(
+                &approval_request.approval_request_id,
+                TransitionApprovalRequestIfCurrentRequest {
+                    expected_status: ApprovalRequestStatus::Executing,
+                    next_status: ApprovalRequestStatus::Executed,
+                    decision: None,
+                    resolved_by_session_id: None,
+                    executed_at: Some(1),
+                    last_error: Some("out_of_band_finalize".to_owned()),
+                },
+            )?;
+            assert!(
+                finalized.is_some(),
+                "replay must observe the request in executing state"
+            );
+
+            Err(self.replay_error.clone())
         }
     }
 
@@ -1650,7 +1649,7 @@ mod tests {
             "rule-hidden",
         );
 
-        let outcome = crate::tools::execute_app_tool_with_config(
+        let outcome = crate::tools::execute_legacy_app_tool_with_config(
             ToolCoreRequest {
                 tool_name: "approval_requests_list".to_owned(),
                 payload: json!({}),
@@ -1719,7 +1718,7 @@ mod tests {
             "governed_tool_requires_approval",
         );
 
-        let outcome = crate::tools::execute_app_tool_with_config(
+        let outcome = crate::tools::execute_legacy_app_tool_with_config(
             ToolCoreRequest {
                 tool_name: "approval_request_status".to_owned(),
                 payload: json!({
@@ -1787,7 +1786,7 @@ mod tests {
         })
         .expect("seed shell approval request");
 
-        let outcome = crate::tools::execute_app_tool_with_config(
+        let outcome = crate::tools::execute_legacy_app_tool_with_config(
             ToolCoreRequest {
                 tool_name: "approval_request_status".to_owned(),
                 payload: json!({
@@ -1828,7 +1827,7 @@ mod tests {
             "rule-hidden",
         );
 
-        let error = crate::tools::execute_app_tool_with_config(
+        let error = crate::tools::execute_legacy_app_tool_with_config(
             ToolCoreRequest {
                 tool_name: "approval_request_status".to_owned(),
                 payload: json!({
@@ -1872,7 +1871,7 @@ mod tests {
             Some("delegate replay failed"),
         );
 
-        let outcome = crate::tools::execute_app_tool_with_config(
+        let outcome = crate::tools::execute_legacy_app_tool_with_config(
             ToolCoreRequest {
                 tool_name: "approval_request_status".to_owned(),
                 payload: json!({
@@ -1962,7 +1961,7 @@ mod tests {
         mark_request_executed(&repo, "apr-clean-grant", None);
         seed_runtime_grant(&repo, "root-session", "tool:session_recover");
 
-        let outcome = crate::tools::execute_app_tool_with_config(
+        let outcome = crate::tools::execute_legacy_app_tool_with_config(
             ToolCoreRequest {
                 tool_name: "approval_requests_list".to_owned(),
                 payload: json!({}),
@@ -2063,7 +2062,7 @@ mod tests {
         );
         mark_request_executed(&repo, "apr-grant-attention", None);
 
-        let outcome = crate::tools::execute_app_tool_with_config(
+        let outcome = crate::tools::execute_legacy_app_tool_with_config(
             ToolCoreRequest {
                 tool_name: "approval_requests_list".to_owned(),
                 payload: json!({
@@ -2103,7 +2102,7 @@ mod tests {
             "rule-invalid-filter",
         );
 
-        let error = crate::tools::execute_app_tool_with_config(
+        let error = crate::tools::execute_legacy_app_tool_with_config(
             ToolCoreRequest {
                 tool_name: "approval_requests_list".to_owned(),
                 payload: json!({
@@ -2155,7 +2154,7 @@ mod tests {
         })
         .expect("seed approval request");
 
-        let outcome = crate::tools::execute_app_tool_with_config(
+        let outcome = crate::tools::execute_legacy_app_tool_with_config(
             ToolCoreRequest {
                 tool_name: "approval_requests_list".to_owned(),
                 payload: json!({}),
@@ -2215,7 +2214,7 @@ mod tests {
         seed_runtime_grant(&repo, "root-session", "tool:delegate");
         age_runtime_grant(&config, "root-session", "tool:delegate", 0);
 
-        let outcome = crate::tools::execute_app_tool_with_config(
+        let outcome = crate::tools::execute_legacy_app_tool_with_config(
             ToolCoreRequest {
                 tool_name: "approval_request_status".to_owned(),
                 payload: json!({
@@ -2262,7 +2261,7 @@ mod tests {
         seed_runtime_grant(&repo, "root-session", "tool:delegate");
         delete_session_row(&config, "root-session");
 
-        let outcome = crate::tools::execute_app_tool_with_config(
+        let outcome = crate::tools::execute_legacy_app_tool_with_config(
             ToolCoreRequest {
                 tool_name: "approval_request_status".to_owned(),
                 payload: json!({
@@ -2329,7 +2328,7 @@ mod tests {
         seed_runtime_grant(&repo, "root-session", "tool:delegate");
         delete_session_row(&config, "root-session");
 
-        let outcome = crate::tools::execute_app_tool_with_config(
+        let outcome = crate::tools::execute_legacy_app_tool_with_config(
             ToolCoreRequest {
                 tool_name: "approval_request_status".to_owned(),
                 payload: json!({
@@ -2404,7 +2403,48 @@ mod tests {
 
     #[cfg(feature = "memory-sqlite")]
     #[tokio::test]
-    async fn approval_request_resolve_approve_always_persists_runtime_grant_without_session_row() {
+    async fn approval_replay_error_reports_concurrent_finalization() {
+        let config = isolated_memory_config("approval-replay-finalization-conflict");
+        let repo = SessionRepository::new(&config).expect("repository");
+        let approval_request_id = "apr-finalization-conflict";
+
+        seed_session(&repo, "root-session", SessionKind::Root, None);
+        seed_request(
+            &repo,
+            approval_request_id,
+            "root-session",
+            "delegate",
+            "governed_tool_requires_approval",
+        );
+        approve_request(
+            &repo,
+            approval_request_id,
+            ApprovalDecision::ApproveOnce,
+            "root-session",
+        );
+        let runtime = FinalizingReplayFailureRuntime {
+            memory_config: config,
+            replay_error: "synthetic_replay_failure".to_owned(),
+        };
+
+        let error = execute_approved_request(&repo, &runtime, approval_request_id)
+            .await
+            .expect_err("concurrent finalization must preserve the replay error");
+
+        assert!(error.contains("approval_request_not_executing"), "{error}");
+        assert!(error.contains("synthetic_replay_failure"), "{error}");
+        let resolved = repo
+            .load_approval_request(approval_request_id)
+            .expect("load approval request")
+            .expect("approval request row");
+        assert_eq!(resolved.status, ApprovalRequestStatus::Executed);
+        assert_eq!(resolved.last_error.as_deref(), Some("out_of_band_finalize"));
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn approval_request_resolve_approve_always_persists_grant_and_replays_without_session_row()
+     {
         let config = isolated_memory_config("approval-resolve-always-missing-session-row");
         let repo = SessionRepository::new(&config).expect("repository");
 
@@ -2421,8 +2461,7 @@ mod tests {
         let runtime = MockApprovalResolutionRuntime::succeeds_with(json!({
             "tool": "delegate",
             "ok": true,
-        }))
-        .without_replay();
+        }));
         let outcome = resolve_approval_request_with_runtime(
             &config,
             &runtime,
@@ -2443,13 +2482,23 @@ mod tests {
 
         assert_eq!(
             outcome.approval_request.status,
-            ApprovalRequestStatus::Approved
+            ApprovalRequestStatus::Executed
+        );
+        assert_eq!(
+            outcome
+                .resumed_tool_output
+                .as_ref()
+                .map(|output| output.payload["tool"].clone()),
+            Some(json!("delegate"))
         );
         assert!(
             grant.is_some(),
             "expected root-session grant to be persisted"
         );
-        assert!(runtime.replayed_request_ids().is_empty());
+        assert_eq!(
+            runtime.replayed_request_ids(),
+            vec!["apr-resolve-always".to_owned()]
+        );
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -2484,8 +2533,7 @@ mod tests {
         let runtime = MockApprovalResolutionRuntime::succeeds_with(json!({
             "tool": "sessions_list",
             "ok": true,
-        }))
-        .without_replay();
+        }));
         let outcome = resolve_approval_request_with_runtime(
             &config,
             &runtime,
@@ -2507,10 +2555,13 @@ mod tests {
 
         assert_eq!(
             outcome.approval_request.status,
-            ApprovalRequestStatus::Approved
+            ApprovalRequestStatus::Executed
         );
         assert_eq!(stored.mode, ToolConsentMode::Auto);
-        assert!(runtime.replayed_request_ids().is_empty());
+        assert_eq!(
+            runtime.replayed_request_ids(),
+            vec!["apr-resolve-retry".to_owned()]
+        );
     }
 
     #[cfg(feature = "memory-sqlite")]

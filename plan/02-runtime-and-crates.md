@@ -1,7 +1,7 @@
 # plan: Runtime / Session / Context / Crate 收敛
 
-本文件固定 execution runtime 的 owner contract。当前执行顺序与完成线见
-`08-next-steps.md`；长期 grant、Access、Tool 和 migration 原则见
+本文件记录 execution runtime 已确认的边界，以及尚未闭合的 owner/control 候选。当前设计门禁、
+执行顺序与完成线见 `08-next-steps.md`；长期 grant、Access、Tool 和 migration 原则见
 `01-principles-and-boundaries.md`。
 
 ## 当前过渡事实
@@ -26,10 +26,27 @@
   `Arc<Mutex<_>>` 包装并由外部 `drain`，消息还携带 `trigger_turn`。它不是目标 Session actor mailbox，
   不能继续扩展；Runtime owner cutover 必须迁移真实 caller 后删除它。
 
-这些事实说明 typed grant path 可复用，但 owner cutover 尚未完成。不能把下面的目标再次拆成
-“以后再做”的独立架构。
+这些事实说明 typed grant path 可复用，但 owner cutover 尚未完成。
 
-## 目标形状
+## 设计状态：未完成
+
+Runtime、Session 与 execution Context 的最终 owner/control 形状尚未定型。尤其还没有决定：
+
+- Session state 应由单一 runner 独占，还是由受控的共享 state 配合唯一 lifecycle loop；
+- host 应以 `invoke(I) -> Invocation<I>` 为主，还是以 `submit(input/control) -> event/status stream` 为主；
+- turn snapshot、model-step snapshot 与 recursive Tool/Access authority Context 应如何分层；
+- 哪些长期状态必须由 Runtime registry 强拥有，哪些只应通过 control/event endpoint 暴露。
+
+OpenAI Codex 当前的 `ThreadManager -> CodexThread -> Session -> ActiveTurn -> TurnContext ->
+StepContext -> ToolInvocation` 形状是重要参考：subagent 是独立 Thread/Session，长期 Session 通过
+submission/event/status channel 驱动，tool cancellation 从 active turn 派生。但它不是待照抄的目标；
+Codex 的 broad `Arc<Session>` ToolInvocation 与大量共享可变状态不符合 Loong 的窄 Context 和
+`Granted<Action>` 边界。
+
+在上述问题形成明确结论前，下面内容只保存先前候选，不能作为可直接实施的 contract。不得以实现
+候选步骤的方式替代设计决策，也不得据此引入兼容层。
+
+## 待决候选形状
 
 ```text
 loong_runtime::Runtime

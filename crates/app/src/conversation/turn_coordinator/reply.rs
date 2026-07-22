@@ -13,6 +13,7 @@ impl MissingToolCallExpectation {
                 .starts_with("missing_tool_call_followup:")
                 .then_some(Self::Initial),
             ToolDrivenFollowupPayload::ToolFailure { .. }
+            | ToolDrivenFollowupPayload::ToolInputFailure { .. }
             | ToolDrivenFollowupPayload::ToolResult { .. }
             | ToolDrivenFollowupPayload::DiscoveryRecovery { .. } => None,
         }
@@ -28,6 +29,7 @@ impl MissingToolCallExpectation {
                 }
             }
             ToolDrivenFollowupPayload::ToolFailure { .. }
+            | ToolDrivenFollowupPayload::ToolInputFailure { .. }
             | ToolDrivenFollowupPayload::ToolResult { .. }
             | ToolDrivenFollowupPayload::DiscoveryRecovery { .. } => None,
         }
@@ -88,6 +90,7 @@ impl ToolResultContinuationExpectation {
                 })
             }
             ToolDrivenFollowupPayload::ToolFailure { .. }
+            | ToolDrivenFollowupPayload::ToolInputFailure { .. }
             | ToolDrivenFollowupPayload::ToolResult { .. }
             | ToolDrivenFollowupPayload::DiscoveryRecovery { .. } => None,
         }
@@ -569,10 +572,9 @@ fn finalize_provider_reply(
 
 async fn handle_guard_followup_reply<R: ConversationRuntime + ?Sized>(
     runtime: &R,
-    session_id: &str,
+    ctx: &Context<'_>,
     preparation: &ProviderTurnPreparation,
     user_input: &str,
-    binding: ConversationRuntimeBinding<'_>,
     retry_progress: crate::provider::ProviderRetryProgressCallback,
     state: &ProviderReplyLoopState,
     raw_reply: String,
@@ -583,7 +585,7 @@ async fn handle_guard_followup_reply<R: ConversationRuntime + ?Sized>(
     if let Some(latest_tool_payload) = latest_tool_payload.as_ref() {
         persist_active_skills_from_followup_payload_if_needed(
             &state.current_continue_phase.followup_config,
-            session_id,
+            ctx.session().session_id(),
             latest_tool_payload,
         );
     }
@@ -603,7 +605,7 @@ async fn handle_guard_followup_reply<R: ConversationRuntime + ?Sized>(
         runtime,
         &state.current_continue_phase.followup_config,
         &guard_messages,
-        binding,
+        ctx,
         raw_reply.as_str(),
         retry_progress,
     )
@@ -635,13 +637,13 @@ fn provider_turn_missing_tool_followup_payload(
 
 async fn handle_followup_reply_decision<R: ConversationRuntime + ?Sized>(
     runtime: &R,
+    ctx: &Context<'_>,
     config: &LoongConfig,
-    session_id: &str,
     preparation: &ProviderTurnPreparation,
     user_input: &str,
     turn_loop_policy: &ProviderTurnLoopPolicy,
     turn_loop_state: &mut ProviderTurnLoopState,
-    binding: ConversationRuntimeBinding<'_>,
+    legacy_tools: &DefaultLegacyToolDispatcher,
     ingress: Option<&ConversationIngressContext>,
     observer: Option<&ConversationTurnObserverHandle>,
     retry_progress: crate::provider::ProviderRetryProgressCallback,
@@ -656,6 +658,7 @@ async fn handle_followup_reply_decision<R: ConversationRuntime + ?Sized>(
     requires_completion_pass: bool,
     loop_warning_reason: Option<String>,
 ) -> Option<ResolvedProviderTurn> {
+    let session_id = ctx.session().session_id();
     let continuation_expectation = PendingProviderFollowupExpectation::from_followup_payload(
         &followup,
         &current_continue_phase.lane_execution,
@@ -703,22 +706,33 @@ async fn handle_followup_reply_decision<R: ConversationRuntime + ?Sized>(
             .zip(followup_request_estimated_tokens)
             .map(|(initial, followup): (usize, usize)| followup.saturating_sub(initial));
         let followup_preparation = current_preparation.for_followup_messages(follow_up_messages);
-        let followup_tool_view =
-            match runtime.tool_view(&current_continue_phase.followup_config, session_id, binding) {
-                Ok(tool_view) => tool_view,
-                Err(_error) => {
-                    let checkpoint = current_continue_phase.checkpoint(
-                        preparation,
-                        user_input,
-                        raw_reply.as_str(),
-                    );
-                    return Some(ResolvedProviderTurn::persist_reply(
-                        raw_reply,
-                        current_continue_phase.lane_execution.provider_usage.clone(),
-                        checkpoint,
-                    ));
-                }
-            };
+        let followup_session = match ctx
+            .session()
+            .rematerialize(ctx.runtime(), &current_continue_phase.followup_config)
+        {
+            Ok(session) => session,
+            Err(_error) => {
+                let checkpoint =
+                    current_continue_phase.checkpoint(preparation, user_input, raw_reply.as_str());
+                return Some(ResolvedProviderTurn::persist_reply(
+                    raw_reply,
+                    current_continue_phase.lane_execution.provider_usage.clone(),
+                    checkpoint,
+                ));
+            }
+        };
+        let followup_ctx = match ctx.rebind_session(&followup_session) {
+            Ok(context) => context,
+            Err(_error) => {
+                let checkpoint =
+                    current_continue_phase.checkpoint(preparation, user_input, raw_reply.as_str());
+                return Some(ResolvedProviderTurn::persist_reply(
+                    raw_reply,
+                    current_continue_phase.lane_execution.provider_usage.clone(),
+                    checkpoint,
+                ));
+            }
+        };
         let followup_message_count = followup_preparation.session.messages.len();
         let followup_context_estimated_tokens = followup_preparation.session.estimated_tokens;
         let followup_request_event = ConversationTurnPhaseEvent::requesting_followup_provider(
@@ -731,17 +745,15 @@ async fn handle_followup_reply_decision<R: ConversationRuntime + ?Sized>(
         observe_turn_phase(observer, followup_request_event);
         emit_prompt_frame_event(
             runtime,
-            session_id,
             next_provider_round,
             "followup",
             followup_preparation.session.prompt_frame_summary(),
-            binding,
+            &followup_ctx,
         )
         .await;
         if current_continue_phase.lane_execution.discovery_search_turn {
             emit_discovery_first_event(
                 runtime,
-                session_id,
                 "discovery_first_followup_requested",
                 json!({
                     "provider_round": provider_round_index.saturating_add(1),
@@ -752,7 +764,7 @@ async fn handle_followup_reply_decision<R: ConversationRuntime + ?Sized>(
                     "followup_estimated_tokens": followup_request_estimated_tokens,
                     "followup_added_estimated_tokens": followup_added_estimated_tokens,
                 }),
-                binding,
+                &followup_ctx,
             )
             .await;
         }
@@ -760,11 +772,9 @@ async fn handle_followup_reply_decision<R: ConversationRuntime + ?Sized>(
             request_provider_turn_with_observer(
                 &current_continue_phase.followup_config,
                 runtime,
-                session_id,
                 followup_preparation.turn_id.as_str(),
                 &followup_preparation.session.messages,
-                &followup_tool_view,
-                binding,
+                &followup_ctx,
                 observer,
                 retry_progress.clone(),
             )
@@ -772,17 +782,13 @@ async fn handle_followup_reply_decision<R: ConversationRuntime + ?Sized>(
             ProviderErrorMode::Propagate,
         ) {
             ProviderTurnRequestAction::Continue { turn } => {
-                let turn = scope_provider_turn_tool_intents(
-                    turn,
-                    session_id,
-                    followup_preparation.turn_id.as_str(),
-                );
+                let turn =
+                    scope_provider_turn_tool_intents(turn, followup_preparation.turn_id.as_str());
                 let returned_tool_intent_count = turn.tool_intents.len();
                 let followup_result = summarize_followup_turn(&turn);
                 if current_continue_phase.lane_execution.discovery_search_turn {
                     emit_discovery_first_event(
                         runtime,
-                        session_id,
                         "discovery_first_followup_result",
                         json!({
                             "provider_round": provider_round_index.saturating_add(1),
@@ -794,8 +800,8 @@ async fn handle_followup_reply_decision<R: ConversationRuntime + ?Sized>(
                                 .lane_execution
                                 .raw_tool_output_requested,
                         }),
-                        binding,
-                    )
+                        &followup_ctx,
+                        )
                     .await;
                 }
                 if let Some(reply) = turn_loop_state
@@ -811,12 +817,12 @@ async fn handle_followup_reply_decision<R: ConversationRuntime + ?Sized>(
                 *current_continue_phase = prepare_provider_turn_continue_phase(
                     &current_continue_phase.followup_config,
                     runtime,
-                    session_id,
+                    &followup_ctx,
                     &followup_preparation,
                     turn,
                     turn_loop_policy,
                     turn_loop_state,
-                    binding,
+                    legacy_tools,
                     ingress,
                     observer,
                     next_provider_round,
@@ -845,7 +851,6 @@ async fn handle_followup_reply_decision<R: ConversationRuntime + ?Sized>(
                 if current_continue_phase.lane_execution.discovery_search_turn {
                     emit_discovery_first_event(
                         runtime,
-                        session_id,
                         "discovery_first_followup_result",
                         json!({
                             "provider_round": provider_round_index.saturating_add(1),
@@ -857,16 +862,15 @@ async fn handle_followup_reply_decision<R: ConversationRuntime + ?Sized>(
                                 .lane_execution
                                 .raw_tool_output_requested,
                         }),
-                        binding,
+                        &followup_ctx,
                     )
                     .await;
                 }
                 emit_provider_failover_trust_event_if_needed(
                     config,
                     runtime,
-                    session_id,
                     provider_error_text.as_str(),
-                    binding,
+                    &followup_ctx,
                 )
                 .await;
                 let checkpoint =
@@ -885,7 +889,7 @@ async fn handle_followup_reply_decision<R: ConversationRuntime + ?Sized>(
             runtime,
             &current_continue_phase.followup_config,
             &follow_up_messages,
-            binding,
+            ctx,
             raw_reply.as_str(),
             retry_progress.clone(),
         )
@@ -912,7 +916,7 @@ async fn handle_followup_reply_decision<R: ConversationRuntime + ?Sized>(
                             runtime,
                             &current_continue_phase.followup_config,
                             &repair_messages,
-                            binding,
+                            ctx,
                             raw_reply.as_str(),
                             retry_progress.clone(),
                         )
@@ -959,12 +963,12 @@ async fn handle_followup_reply_decision<R: ConversationRuntime + ?Sized>(
 
 async fn handle_repair_followup_reply<R: ConversationRuntime + ?Sized>(
     runtime: &R,
-    session_id: &str,
+    ctx: &Context<'_>,
     preparation: &ProviderTurnPreparation,
     user_input: &str,
     turn_loop_policy: &ProviderTurnLoopPolicy,
     turn_loop_state: &mut ProviderTurnLoopState,
-    binding: ConversationRuntimeBinding<'_>,
+    legacy_tools: &DefaultLegacyToolDispatcher,
     ingress: Option<&ConversationIngressContext>,
     observer: Option<&ConversationTurnObserverHandle>,
     retry_progress: crate::provider::ProviderRetryProgressCallback,
@@ -1003,24 +1007,43 @@ async fn handle_repair_followup_reply<R: ConversationRuntime + ?Sized>(
     let next_provider_round = current_provider_round.saturating_add(1);
     *remaining_provider_rounds -= 1;
     let repair_preparation = current_preparation.for_followup_messages(repair_messages);
-    let repair_tool_view =
-        match runtime.tool_view(&current_continue_phase.followup_config, session_id, binding) {
-            Ok(tool_view) => tool_view,
-            Err(_error) => {
-                let reply = pending_provider_followup_blocked_reply(&expectation);
-                let checkpoint = current_continue_phase.checkpoint_with_continuation_state(
-                    preparation,
-                    user_input,
-                    reply.as_str(),
-                    Some(ToolDrivenContinuationState::Blocked),
-                );
-                return Some(ResolvedProviderTurn::persist_reply(
-                    reply,
-                    current_continue_phase.lane_execution.provider_usage.clone(),
-                    checkpoint,
-                ));
-            }
-        };
+    let repair_session = match ctx
+        .session()
+        .rematerialize(ctx.runtime(), &current_continue_phase.followup_config)
+    {
+        Ok(session) => session,
+        Err(_error) => {
+            let reply = pending_provider_followup_blocked_reply(&expectation);
+            let checkpoint = current_continue_phase.checkpoint_with_continuation_state(
+                preparation,
+                user_input,
+                reply.as_str(),
+                Some(ToolDrivenContinuationState::Blocked),
+            );
+            return Some(ResolvedProviderTurn::persist_reply(
+                reply,
+                current_continue_phase.lane_execution.provider_usage.clone(),
+                checkpoint,
+            ));
+        }
+    };
+    let repair_ctx = match ctx.rebind_session(&repair_session) {
+        Ok(context) => context,
+        Err(_error) => {
+            let reply = pending_provider_followup_blocked_reply(&expectation);
+            let checkpoint = current_continue_phase.checkpoint_with_continuation_state(
+                preparation,
+                user_input,
+                reply.as_str(),
+                Some(ToolDrivenContinuationState::Blocked),
+            );
+            return Some(ResolvedProviderTurn::persist_reply(
+                reply,
+                current_continue_phase.lane_execution.provider_usage.clone(),
+                checkpoint,
+            ));
+        }
+    };
     let repair_request_event = ConversationTurnPhaseEvent::requesting_followup_provider(
         next_provider_round,
         current_continue_phase.lane_execution.lane,
@@ -1031,22 +1054,19 @@ async fn handle_repair_followup_reply<R: ConversationRuntime + ?Sized>(
     observe_turn_phase(observer, repair_request_event);
     emit_prompt_frame_event(
         runtime,
-        session_id,
         next_provider_round,
         "followup_repair",
         repair_preparation.session.prompt_frame_summary(),
-        binding,
+        &repair_ctx,
     )
     .await;
     match decide_provider_turn_request_action(
         request_provider_turn_with_observer(
             &current_continue_phase.followup_config,
             runtime,
-            session_id,
             repair_preparation.turn_id.as_str(),
             &repair_preparation.session.messages,
-            &repair_tool_view,
-            binding,
+            &repair_ctx,
             observer,
             retry_progress,
         )
@@ -1054,11 +1074,7 @@ async fn handle_repair_followup_reply<R: ConversationRuntime + ?Sized>(
         ProviderErrorMode::Propagate,
     ) {
         ProviderTurnRequestAction::Continue { turn } => {
-            let turn = scope_provider_turn_tool_intents(
-                turn,
-                session_id,
-                repair_preparation.turn_id.as_str(),
-            );
+            let turn = scope_provider_turn_tool_intents(turn, repair_preparation.turn_id.as_str());
             let repair_tool_intent_count = turn.tool_intents.len();
             if let Some(reply) =
                 turn_loop_state.circuit_breaker_reply(turn_loop_policy, repair_tool_intent_count)
@@ -1073,12 +1089,12 @@ async fn handle_repair_followup_reply<R: ConversationRuntime + ?Sized>(
             *current_continue_phase = prepare_provider_turn_continue_phase(
                 &current_continue_phase.followup_config,
                 runtime,
-                session_id,
+                &repair_ctx,
                 &repair_preparation,
                 turn,
                 turn_loop_policy,
                 turn_loop_state,
-                binding,
+                legacy_tools,
                 ingress,
                 observer,
                 next_provider_round,
@@ -1115,19 +1131,20 @@ async fn handle_repair_followup_reply<R: ConversationRuntime + ?Sized>(
 
 pub(super) async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
     runtime: &R,
+    ctx: &Context<'_>,
     config: &LoongConfig,
-    session_id: &str,
     preparation: &ProviderTurnPreparation,
     continue_phase: &ProviderTurnContinuePhase,
     user_input: &str,
     turn_loop_policy: &ProviderTurnLoopPolicy,
     turn_loop_state: &mut ProviderTurnLoopState,
     remaining_provider_rounds: usize,
-    binding: ConversationRuntimeBinding<'_>,
+    legacy_tools: &DefaultLegacyToolDispatcher,
     ingress: Option<&ConversationIngressContext>,
     observer: Option<&ConversationTurnObserverHandle>,
     retry_progress: crate::provider::ProviderRetryProgressCallback,
 ) -> ResolvedProviderTurn {
+    let session_id = ctx.session().session_id();
     let mut state =
         ProviderReplyLoopState::new(preparation, continue_phase, remaining_provider_rounds);
 
@@ -1140,7 +1157,6 @@ pub(super) async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>
         {
             emit_discovery_first_event(
                 runtime,
-                session_id,
                 "discovery_first_search_round",
                 json!({
                     "provider_round": current_provider_round,
@@ -1155,7 +1171,7 @@ pub(super) async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>
                         &state.current_preparation.session.messages,
                     ),
                 }),
-                binding,
+                ctx,
             )
             .await;
         }
@@ -1185,13 +1201,13 @@ pub(super) async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>
             } => {
                 if let Some(resolved) = handle_followup_reply_decision(
                     runtime,
+                    ctx,
                     config,
-                    session_id,
                     preparation,
                     user_input,
                     turn_loop_policy,
                     turn_loop_state,
-                    binding,
+                    legacy_tools,
                     ingress,
                     observer,
                     retry_progress.clone(),
@@ -1219,12 +1235,12 @@ pub(super) async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>
             } => {
                 if let Some(resolved) = handle_repair_followup_reply(
                     runtime,
-                    session_id,
+                    ctx,
                     preparation,
                     user_input,
                     turn_loop_policy,
                     turn_loop_state,
-                    binding,
+                    legacy_tools,
                     ingress,
                     observer,
                     retry_progress.clone(),
@@ -1251,10 +1267,9 @@ pub(super) async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>
             } => {
                 return handle_guard_followup_reply(
                     runtime,
-                    session_id,
+                    ctx,
                     preparation,
                     user_input,
-                    binding,
                     retry_progress.clone(),
                     &state,
                     raw_reply,

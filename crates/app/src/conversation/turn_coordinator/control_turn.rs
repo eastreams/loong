@@ -8,21 +8,19 @@ impl ConversationTurnCoordinator {
     >(
         &self,
         config: &LoongConfig,
-        app_ctx: &AppContext,
+        ctx: &Context<'_>,
         runtime: &R,
-        session_id: &str,
         user_input: &str,
         error_mode: ProviderErrorMode,
-        binding: ConversationRuntimeBinding<'_>,
+        legacy_tools: &DefaultLegacyToolDispatcher,
         observer: Option<&ConversationTurnObserverHandle>,
     ) -> CliResult<Option<String>> {
+        let session_id = ctx.session().session_id();
         let Some(control_decision) = parse_pending_approval_input_decision(user_input) else {
             return Ok(None);
         };
 
-        if binding.is_context_bound() {
-            runtime.bootstrap(config, session_id, app_ctx).await?;
-        }
+        runtime.bootstrap(config, ctx).await?;
 
         let memory_config = store::session_store_config_from_memory_config(&config.memory);
         let repo = SessionRepository::new(&memory_config)?;
@@ -35,14 +33,10 @@ impl ConversationTurnCoordinator {
         };
 
         observe_turn_phase(observer, ConversationTurnPhaseEvent::preparing());
-        let session_context = runtime.session_context(config, app_ctx, session_id, binding)?;
-        let assembled_context = runtime
-            .build_context(config, &session_context, true, binding)
-            .await?;
+        let assembled_context = runtime.build_context(config, ctx, true).await?;
         let turn_id = next_conversation_turn_id();
         let preparation = ProviderTurnPreparation::from_assembled_context_with_turn_id(
             config,
-            &session_context,
             assembled_context,
             user_input,
             turn_id.as_str(),
@@ -75,10 +69,9 @@ impl ConversationTurnCoordinator {
         let approval_turn = ProviderTurn {
             assistant_text: String::new(),
             tool_intents: vec![ToolIntent {
-                tool_name: "approval_request_resolve".to_owned(),
+                tool_name: "approval_request_resolve".into(),
                 args_json: Value::Object(approval_args),
                 source: "approval_control".to_owned(),
-                session_id: session_context.session_id.clone(),
                 turn_id: preparation.turn_id.clone(),
                 tool_call_id: format!(
                     "call-approval-control-{}",
@@ -91,12 +84,12 @@ impl ConversationTurnCoordinator {
         let resolved_turn = resolve_provider_turn(
             config,
             runtime,
-            session_id,
+            ctx,
             user_input,
             &preparation,
             Ok(approval_turn),
             error_mode,
-            binding,
+            legacy_tools,
             None,
             observer,
             None,
@@ -105,11 +98,10 @@ impl ConversationTurnCoordinator {
         let reply = apply_resolved_provider_turn(
             config,
             runtime,
-            session_id,
+            ctx,
             user_input,
             &preparation,
             &resolved_turn,
-            binding,
             observer,
         )
         .await?;
@@ -121,14 +113,14 @@ impl ConversationTurnCoordinator {
     >(
         &self,
         config: &LoongConfig,
-        app_ctx: &AppContext,
+        ctx: &Context<'_>,
         runtime: &R,
-        session_id: &str,
         user_input: &str,
         error_mode: ProviderErrorMode,
-        binding: ConversationRuntimeBinding<'_>,
+        legacy_tools: &DefaultLegacyToolDispatcher,
         observer: Option<&ConversationTurnObserverHandle>,
     ) -> CliResult<Option<ConversationTurnOutcome>> {
+        let session_id = ctx.session().session_id();
         let tool_runtime_config =
             crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
         let visible_skill_ids =
@@ -143,18 +135,12 @@ impl ConversationTurnCoordinator {
         let followup_request = explicit_activation.followup_request.as_str();
         let turn_id = next_conversation_turn_id();
 
-        if binding.is_context_bound() {
-            runtime.bootstrap(config, session_id, app_ctx).await?;
-        }
+        runtime.bootstrap(config, ctx).await?;
 
         observe_turn_phase(observer, ConversationTurnPhaseEvent::preparing());
-        let session_context = runtime.session_context(config, app_ctx, session_id, binding)?;
-        let assembled_context = runtime
-            .build_context(config, &session_context, true, binding)
-            .await?;
+        let assembled_context = runtime.build_context(config, ctx, true).await?;
         let preparation = ProviderTurnPreparation::from_assembled_context_with_turn_id(
             config,
-            &session_context,
             assembled_context,
             followup_request,
             turn_id.as_str(),
@@ -167,10 +153,11 @@ impl ConversationTurnCoordinator {
                 preparation.session.estimated_tokens,
             ),
         );
-        let activation_payload = crate::tools::model_visible_skill_context_payload_for_skill_id(
-            &tool_runtime_config,
-            explicit_activation.skill_id.as_str(),
-        );
+        let activation_payload =
+            crate::tools::skills::model_visible_skill_context_payload_for_skill_id(
+                &tool_runtime_config,
+                explicit_activation.skill_id.as_str(),
+            );
         let activation_payload = match activation_payload {
             Ok(Some(payload)) => payload,
             Ok(None) => {
@@ -182,15 +169,7 @@ impl ConversationTurnCoordinator {
                     ProviderErrorMode::Propagate => Err(error),
                     ProviderErrorMode::InlineMessage => {
                         let synthetic = format_provider_error_reply(&error);
-                        persist_reply_turns_raw_with_mode(
-                            runtime,
-                            session_id,
-                            followup_request,
-                            &synthetic,
-                            ReplyPersistenceMode::InlineProviderError,
-                            binding,
-                        )
-                        .await?;
+                        persist_reply_turns_raw(runtime, followup_request, &synthetic, ctx).await?;
                         Ok(Some(ConversationTurnOutcome {
                             reply: synthetic,
                             usage: None,
@@ -203,15 +182,7 @@ impl ConversationTurnCoordinator {
                     ProviderErrorMode::Propagate => Err(error),
                     ProviderErrorMode::InlineMessage => {
                         let synthetic = format_provider_error_reply(&error);
-                        persist_reply_turns_raw_with_mode(
-                            runtime,
-                            session_id,
-                            followup_request,
-                            &synthetic,
-                            ReplyPersistenceMode::InlineProviderError,
-                            binding,
-                        )
-                        .await?;
+                        persist_reply_turns_raw(runtime, followup_request, &synthetic, ctx).await?;
                         Ok(Some(ConversationTurnOutcome {
                             reply: synthetic,
                             usage: None,
@@ -255,28 +226,29 @@ impl ConversationTurnCoordinator {
             None,
         );
         let followup_preparation = preparation.for_followup_messages(follow_up_messages.clone());
+        let followup_session = ctx.session().rematerialize(ctx.runtime(), config)?;
+        let followup_ctx = ctx
+            .rebind_session(&followup_session)
+            .map_err(|error| error.to_string())?;
         if observer.is_some() {
-            let followup_tool_view = runtime.tool_view(config, session_id, binding)?;
             let resolved_turn = resolve_provider_turn(
                 config,
                 runtime,
-                session_id,
+                &followup_ctx,
                 followup_request,
                 &followup_preparation,
                 request_provider_turn_with_observer(
                     config,
                     runtime,
-                    session_id,
                     followup_preparation.turn_id.as_str(),
                     &followup_preparation.session.messages,
-                    &followup_tool_view,
-                    binding,
+                    &followup_ctx,
                     observer,
                     None,
                 )
                 .await,
                 error_mode,
-                binding,
+                legacy_tools,
                 None,
                 observer,
                 None,
@@ -285,11 +257,10 @@ impl ConversationTurnCoordinator {
             let reply = apply_resolved_provider_turn(
                 config,
                 runtime,
-                session_id,
+                &followup_ctx,
                 followup_request,
                 &followup_preparation,
                 &resolved_turn,
-                binding,
                 observer,
             )
             .await?;
@@ -299,20 +270,12 @@ impl ConversationTurnCoordinator {
             runtime,
             config,
             &follow_up_messages,
-            binding,
+            &followup_ctx,
             followup_request,
             None,
         )
         .await;
-        persist_reply_turns_raw_with_mode(
-            runtime,
-            session_id,
-            followup_request,
-            &reply,
-            ReplyPersistenceMode::Success,
-            binding,
-        )
-        .await?;
+        persist_reply_turns_raw(runtime, followup_request, &reply, &followup_ctx).await?;
         Ok(Some(ConversationTurnOutcome { reply, usage: None }))
     }
 
@@ -321,17 +284,14 @@ impl ConversationTurnCoordinator {
         turn: &ProviderTurn,
     ) -> LoongConfig {
         let config_path_from_tool = turn.tool_intents.iter().rev().find_map(|intent| {
-            let request = loong_contracts::ToolCoreRequest {
-                tool_name: intent.tool_name.clone(),
-                payload: intent.args_json.clone(),
-            };
-            let direct_payload = crate::tools::canonical_tool_name(intent.tool_name.as_str())
+            let direct_payload = crate::tools::canonical_tool_name(intent.tool_name())
                 .eq("provider.switch")
                 .then(|| intent.args_json.as_object())
                 .flatten();
-            let wrapped_payload = crate::tools::peek_tool_invoke_request(&request)
-                .filter(|peeked| peeked.tool_name == "provider.switch")
-                .and_then(|peeked| peeked.arguments.as_object());
+            let wrapped_payload =
+                crate::tools::peek_tool_invoke_request(intent.tool_name(), &intent.args_json)
+                    .filter(|peeked| peeked.tool_name == "provider.switch")
+                    .and_then(|peeked| peeked.arguments.as_object());
             let payload = direct_payload.or(wrapped_payload);
 
             payload
@@ -364,7 +324,7 @@ impl ConversationTurnCoordinator {
         error_mode: ProviderErrorMode,
         runtime: &R,
         acp_options: &AcpConversationTurnOptions<'_>,
-        binding: ConversationRuntimeBinding<'_>,
+        ctx: &Context<'_>,
     ) -> CliResult<String> {
         self.handle_turn_via_acp_with_manager(
             config,
@@ -373,7 +333,7 @@ impl ConversationTurnCoordinator {
             error_mode,
             runtime,
             acp_options,
-            binding,
+            ctx,
             None,
         )
         .await
@@ -387,10 +347,9 @@ impl ConversationTurnCoordinator {
         error_mode: ProviderErrorMode,
         runtime: &R,
         acp_options: &AcpConversationTurnOptions<'_>,
-        binding: ConversationRuntimeBinding<'_>,
+        ctx: &Context<'_>,
         acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
     ) -> CliResult<String> {
-        let session_id = address.session_id.as_str();
         let executed = execute_acp_conversation_turn_for_address(
             config,
             address,
@@ -405,15 +364,7 @@ impl ConversationTurnCoordinator {
             |success| async move {
                 let reply = success.result.output_text.clone();
 
-                persist_reply_turns_raw_with_mode(
-                    runtime,
-                    session_id,
-                    user_input,
-                    &reply,
-                    ReplyPersistenceMode::Success,
-                    binding,
-                )
-                .await?;
+                persist_reply_turns_raw(runtime, user_input, &reply, ctx).await?;
 
                 if config.acp.emit_runtime_events {
                     let runtime_events = &success.runtime_events;
@@ -422,12 +373,11 @@ impl ConversationTurnCoordinator {
 
                     let _ = persist_acp_runtime_events(
                         runtime,
-                        session_id,
                         persistence_context,
                         runtime_events,
                         Some(result),
                         None,
-                        binding,
+                        ctx,
                     )
                     .await;
                 }
@@ -444,12 +394,11 @@ impl ConversationTurnCoordinator {
 
                     let _ = persist_acp_runtime_events(
                         runtime,
-                        session_id,
                         persistence_context,
                         runtime_events,
                         None,
                         Some(error_text),
-                        binding,
+                        ctx,
                     )
                     .await;
                 }
@@ -459,15 +408,7 @@ impl ConversationTurnCoordinator {
                     ProviderErrorMode::InlineMessage => {
                         let synthetic = format_provider_error_reply(&error);
 
-                        persist_reply_turns_raw_with_mode(
-                            runtime,
-                            session_id,
-                            user_input,
-                            &synthetic,
-                            ReplyPersistenceMode::InlineProviderError,
-                            binding,
-                        )
-                        .await?;
+                        persist_reply_turns_raw(runtime, user_input, &synthetic, ctx).await?;
 
                         Ok(synthetic)
                     }

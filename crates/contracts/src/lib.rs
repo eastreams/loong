@@ -30,7 +30,7 @@ pub use action_grant::{
 };
 pub use audit_types::{
     ActionExecutionEvent, AuditEvent, AuditEventKind, ExecutionPlane,
-    HistoricalToolInvocationOutcome, PlaneTier,
+    HistoricalToolInvocationOutcome, PlaneTier, RuntimeOperationOutcome,
 };
 pub use authorization_evidence::{
     AuthorizationActionSnapshot, AuthorizationAttempt, AuthorizationAttemptEvent,

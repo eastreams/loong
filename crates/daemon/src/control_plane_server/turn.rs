@@ -14,6 +14,7 @@ pub(super) async fn turn_submit(
 
     let turn_snapshot = turn_runtime.registry.issue_turn(session_id.as_str());
     let turn_id = turn_snapshot.turn_id.clone();
+    let runtime = Arc::clone(&turn_runtime.runtime);
     let resolved_path = turn_runtime.resolved_path.clone();
     let config = turn_runtime.config.clone();
     let acp_manager = turn_runtime.acp_manager.clone();
@@ -24,6 +25,7 @@ pub(super) async fn turn_submit(
         .with_required_text(session_id.clone(), input);
 
     spawn_control_plane_turn_execution(
+        runtime,
         resolved_path,
         config,
         acp_manager,
@@ -73,6 +75,7 @@ async fn prepare_turn_submit<'a>(
 }
 
 fn spawn_control_plane_turn_execution(
+    runtime: Arc<loong_runtime::runtime::Runtime<mvp::RuntimeContextFactory>>,
     resolved_path: std::path::PathBuf,
     config: mvp::config::LoongConfig,
     acp_manager: Arc<mvp::acp::AcpSessionManager>,
@@ -89,6 +92,7 @@ fn spawn_control_plane_turn_execution(
             turn_id: turn_id.clone(),
         };
         let execution_result = execute_explicit_acp_turn_request(
+            runtime,
             resolved_path,
             config,
             acp_manager,

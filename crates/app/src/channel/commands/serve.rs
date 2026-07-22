@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
-use crate::AppContext;
 use crate::CliResult;
-use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_app_context_with_config};
+use crate::runtime::bootstrap_runtime_with_config;
 
 #[cfg(any(
     feature = "channel-plugin-bridge",
@@ -92,7 +91,8 @@ where
     V: FnOnce(&R) -> CliResult<()>,
     F: for<'a> FnOnce(
         &'a ChannelCommandContext<R>,
-        AppContext,
+        Arc<loong_runtime::runtime::Runtime<crate::RuntimeContextFactory>>,
+        &'static str,
         Arc<ChannelOperationRuntimeTracker>,
         ChannelServeStopHandle,
     ) -> ChannelCommandFuture<'a>,
@@ -104,11 +104,8 @@ where
             Some(context.resolved_path.as_path()),
         );
     }
-    let app_ctx = bootstrap_app_context_with_config(
-        spec.family.runtime.serve_bootstrap_agent_id,
-        DEFAULT_TOKEN_TTL_S,
-        &context.config,
-    )?;
+    let execution_runtime = bootstrap_runtime_with_config(&context.config)?;
+    let agent_id = spec.family.runtime.serve_bootstrap_agent_id;
     let runtime_account_id = context.resolved.runtime_account_id().to_owned();
     let runtime_account_label = context.resolved.runtime_account_label().to_owned();
 
@@ -123,7 +120,7 @@ where
         move |runtime, stop| async move {
             let channel_id = spec.family.channel_id();
             context.emit_route_notice(channel_id);
-            run(&context, app_ctx, runtime, stop).await
+            run(&context, execution_runtime, agent_id, runtime, stop).await
         },
     )
     .await

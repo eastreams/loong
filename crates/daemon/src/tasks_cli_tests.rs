@@ -271,7 +271,7 @@ fn render_task_brief_line_prefers_derived_task_status_summary() {
 }
 
 #[test]
-fn best_effort_task_approvals_payload_falls_back_when_session_tools_are_disabled() {
+fn best_effort_task_approvals_payload_degrades_on_session_tool_visibility_denial() {
     let memory_config = mvp::memory::runtime_config::MemoryRuntimeConfig::default();
     let mut tool_config = mvp::config::ToolConfig::default();
     tool_config.sessions.enabled = false;
@@ -291,17 +291,14 @@ fn best_effort_task_approvals_payload_falls_back_when_session_tools_are_disabled
     assert_eq!(payload["matched_count"], 0);
     assert_eq!(payload["returned_count"], 0);
     assert_eq!(payload["requests"], json!([]));
-    assert!(
-        lookup_error
-            .as_str()
-            .expect("lookup error")
-            .contains("session tools are disabled"),
-        "expected degraded approval lookup error, got: {lookup_error:?}"
+    assert_eq!(
+        lookup_error,
+        json!("tool_not_visible: approval_requests_list")
     );
 }
 
 #[test]
-fn best_effort_task_tool_policy_payload_falls_back_when_session_tools_are_disabled() {
+fn best_effort_task_tool_policy_payload_degrades_on_session_tool_visibility_denial() {
     let memory_config = mvp::memory::runtime_config::MemoryRuntimeConfig::default();
     let mut tool_config = mvp::config::ToolConfig::default();
     tool_config.sessions.enabled = false;
@@ -322,12 +319,9 @@ fn best_effort_task_tool_policy_payload_falls_back_when_session_tools_are_disabl
         payload.is_null(),
         "expected null fallback payload, got: {payload:?}"
     );
-    assert!(
-        lookup_error
-            .as_str()
-            .expect("lookup error")
-            .contains("session tools are disabled"),
-        "expected degraded tool-policy lookup error, got: {lookup_error:?}"
+    assert_eq!(
+        lookup_error,
+        json!("tool_not_visible: session_tool_policy_status")
     );
 }
 
@@ -481,8 +475,17 @@ async fn execute_cancel_command_uses_canonical_task_identity() {
         store.sqlite_path.clone().expect("sqlite path"),
     );
     let tool_config = mvp::config::ToolConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
+    config.memory.sqlite_path = memory_config
+        .sqlite_path
+        .as_ref()
+        .expect("sqlite path")
+        .display()
+        .to_string();
+    config.tools = tool_config.clone();
     let payload = execute_cancel_command(
         "/tmp/loong.toml",
+        &config,
         "root-session",
         &memory_config,
         &tool_config,
@@ -562,8 +565,17 @@ async fn execute_recover_command_uses_canonical_task_identity() {
         store.sqlite_path.clone().expect("sqlite path"),
     );
     let tool_config = mvp::config::ToolConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
+    config.memory.sqlite_path = memory_config
+        .sqlite_path
+        .as_ref()
+        .expect("sqlite path")
+        .display()
+        .to_string();
+    config.tools = tool_config.clone();
     let payload = execute_recover_command(
         "/tmp/loong.toml",
+        &config,
         "root-session",
         &memory_config,
         &tool_config,

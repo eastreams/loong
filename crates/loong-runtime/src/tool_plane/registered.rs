@@ -15,6 +15,8 @@ use loong_core::{
 };
 use serde_json::Value;
 
+use super::ToolRegistration;
+
 /// Failure produced while invoking a runtime-erased registered tool.
 ///
 /// Parsing remains a stable tool contract, while execution retains the
@@ -51,6 +53,7 @@ impl RegisteredToolError {
 }
 
 pub(crate) struct RegisteredTool<C: ContextFactory> {
+    registration: ToolRegistration,
     spec: ToolSpec,
     erased: Box<dyn ErasedTool<C>>,
 }
@@ -59,11 +62,12 @@ impl<C> RegisteredTool<C>
 where
     C: ContextFactory,
 {
-    pub(super) fn from_tool<T>(tool: T) -> Self
+    pub(super) fn from_tool<T>(registration: ToolRegistration, tool: T) -> Self
     where
         T: ToolImpl<C>,
     {
         Self {
+            registration,
             spec: tool.spec(),
             erased: Box::new(PlainTool { tool }),
         }
@@ -75,12 +79,17 @@ where
     /// is a non-authoritative app side channel and therefore cannot return an
     /// error that rewrites the tool result. Like all production runtime code,
     /// the callback must not panic; release builds abort rather than unwind.
-    pub(super) fn from_tool_with_success_observer<T, F>(tool: T, observer: F) -> Self
+    pub(super) fn from_tool_with_success_observer<T, F>(
+        registration: ToolRegistration,
+        tool: T,
+        observer: F,
+    ) -> Self
     where
         T: ToolImpl<C>,
         F: for<'a> Fn(&C::Cx<'a>, &T::Output) + Send + Sync + 'static,
     {
         Self {
+            registration,
             spec: tool.spec(),
             erased: Box::new(ObservedTool { tool, observer }),
         }
@@ -88,6 +97,10 @@ where
 
     pub(crate) fn spec(&self) -> &ToolSpec {
         &self.spec
+    }
+
+    pub(crate) fn registration(&self) -> &ToolRegistration {
+        &self.registration
     }
 
     pub(super) async fn invoke(

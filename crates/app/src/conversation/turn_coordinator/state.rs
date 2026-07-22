@@ -146,7 +146,7 @@ impl ProviderTurnLoopState {
 pub(super) fn provider_turn_tool_name_signature(intents: &[ToolIntent]) -> String {
     intents
         .iter()
-        .map(|intent| intent.tool_name.trim())
+        .map(|intent| intent.tool_name.name().trim())
         .collect::<Vec<_>>()
         .join("||")
 }
@@ -243,27 +243,27 @@ impl ProviderTurnContinuePhase {
     pub(super) async fn resolve<R: ConversationRuntime + ?Sized>(
         &self,
         runtime: &R,
-        session_id: &str,
+        ctx: &Context<'_>,
         preparation: &ProviderTurnPreparation,
         user_input: &str,
         turn_loop_policy: &ProviderTurnLoopPolicy,
         turn_loop_state: &mut ProviderTurnLoopState,
         remaining_provider_rounds: usize,
-        binding: ConversationRuntimeBinding<'_>,
+        legacy_tools: &DefaultLegacyToolDispatcher,
         observer: Option<&ConversationTurnObserverHandle>,
         retry_progress: crate::provider::ProviderRetryProgressCallback,
     ) -> ResolvedProviderTurn {
         resolve_provider_turn_reply(
             runtime,
+            ctx,
             &self.followup_config,
-            session_id,
             preparation,
             self,
             user_input,
             turn_loop_policy,
             turn_loop_state,
             remaining_provider_rounds,
-            binding,
+            legacy_tools,
             self.ingress.as_ref(),
             observer,
             retry_progress,
@@ -373,10 +373,8 @@ impl<'a> ProviderTurnTerminalPhase<'a> {
         self,
         config: &LoongConfig,
         runtime: &R,
-        ctx: &AppContext,
-        session_id: &str,
+        ctx: &Context<'_>,
         user_input: &str,
-        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<ConversationTurnOutcome> {
         match self {
             Self::PersistReply(phase) => {
@@ -385,23 +383,15 @@ impl<'a> ProviderTurnTerminalPhase<'a> {
                     config,
                     runtime,
                     ctx,
-                    session_id,
                     user_input,
                     &phase.tail_phase,
                     phase.usage,
                     phase.checkpoint,
-                    binding,
                 )
                 .await
             }
             Self::ReturnError(phase) => {
-                persist_resolved_provider_error_checkpoint(
-                    runtime,
-                    session_id,
-                    phase.checkpoint,
-                    binding,
-                )
-                .await?;
+                persist_resolved_provider_error_checkpoint(runtime, phase.checkpoint, ctx).await?;
                 Err(phase.error.to_owned())
             }
         }

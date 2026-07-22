@@ -1,4 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+#[cfg(feature = "memory-sqlite")]
+use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -17,8 +19,6 @@ use crate::acp::{
 #[cfg(feature = "memory-sqlite")]
 use crate::config::LoongConfig;
 #[cfg(feature = "memory-sqlite")]
-use crate::config::ToolConfig;
-#[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
     ApprovalRequestRecord, ApprovalRequestStatus, ControlPlaneDeviceTokenRecord,
     ControlPlanePairingRequestRecord as PersistedControlPlanePairingRequestRecord,
@@ -32,8 +32,7 @@ use crate::session::store::{self, SessionStoreConfig};
 #[cfg(feature = "memory-sqlite")]
 use crate::tools::session::{
     SessionRuntimeSelfContinuityRecord, SessionWorkflowBindingRecord, SessionWorkflowRecord,
-    build_session_tool_policy_status_payload, load_session_workflow_record,
-    session_delegate_lifecycle_at,
+    build_session_tool_policy_status, load_session_workflow_record, session_delegate_lifecycle_at,
 };
 
 const DEFAULT_RECENT_EVENT_LIMIT: usize = 256;
@@ -1787,23 +1786,35 @@ pub struct ControlPlaneAcpSessionReadView {
 }
 
 #[cfg(feature = "memory-sqlite")]
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ControlPlaneRepositoryView {
-    memory_config: SessionStoreConfig,
-    tool_config: ToolConfig,
+    // Repository reads and Session policy materialization must derive from this
+    // same snapshot. A separate SessionStoreConfig would create two competing
+    // durable authority sources for one control-plane view.
+    config: Arc<LoongConfig>,
+    runtime: Arc<loong_runtime::runtime::Runtime<crate::RuntimeContextFactory>>,
+    // Runtime tool registration is immutable after bootstrap. Freeze its
+    // effective view here so repository projections never resurrect or omit
+    // tool identity through the legacy static catalog.
+    authority_tool_view: crate::tools::ToolView,
     current_session_id: String,
 }
 
 #[cfg(feature = "memory-sqlite")]
 impl ControlPlaneRepositoryView {
     pub fn new(
-        memory_config: SessionStoreConfig,
-        tool_config: ToolConfig,
+        config: &LoongConfig,
+        runtime: Arc<loong_runtime::runtime::Runtime<crate::RuntimeContextFactory>>,
         current_session_id: impl Into<String>,
     ) -> Self {
+        let runtime_config =
+            crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
+        let authority_tool_view =
+            crate::tools::runtime_visible_tool_view(runtime.as_ref(), &runtime_config, None);
         Self {
-            memory_config,
-            tool_config,
+            config: Arc::new(config.clone()),
+            runtime,
+            authority_tool_view,
             current_session_id: normalize_control_plane_session_id(&current_session_id.into()),
         }
     }
@@ -1985,7 +1996,7 @@ impl ControlPlaneRepositoryView {
     }
 
     fn open_repo(&self) -> Result<SessionRepository, String> {
-        SessionRepository::new(&self.memory_config)
+        SessionRepository::from_memory_config_without_env_overrides(&self.config.memory)
     }
 
     fn visible_sessions(
@@ -2123,16 +2134,18 @@ impl ControlPlaneRepositoryView {
             .map(|record| record.updated_at)
             .unwrap_or(session.updated_at);
         let workflow = control_plane_session_workflow_view(workflow_record);
-        let tool_policy_payload =
-            build_session_tool_policy_status_payload(repo, &session.session_id, &self.tool_config)?;
-        let requested_tool_ids = control_plane_requested_tool_ids(&tool_policy_payload);
-        let visible_requested_tool_ids =
-            control_plane_visible_requested_tool_ids(&tool_policy_payload);
-        let effective_tool_ids = control_plane_effective_tool_ids(&tool_policy_payload);
-        let visible_effective_tool_ids =
-            control_plane_visible_effective_tool_ids(&tool_policy_payload);
-        let effective_runtime_narrowing =
-            control_plane_effective_runtime_narrowing(&tool_policy_payload);
+        let tool_policy_projection = crate::Session::tool_policy_projection(
+            self.runtime.as_ref(),
+            self.config.as_ref(),
+            &session.session_id,
+        )?;
+        let tool_policy =
+            build_session_tool_policy_status(&tool_policy_projection, &self.authority_tool_view)?;
+        let requested_tool_ids = tool_policy.requested_tool_ids;
+        let visible_requested_tool_ids = tool_policy.visible_requested_tool_ids;
+        let effective_tool_ids = tool_policy.effective_tool_ids;
+        let visible_effective_tool_ids = tool_policy.visible_effective_tool_ids;
+        let effective_runtime_narrowing = json!(tool_policy.effective_runtime_narrowing);
         let approval_requests =
             repo.list_approval_requests_for_session(&session.session_id, None)?;
         let pending_approval_requests = repo.list_approval_requests_for_session(
@@ -2311,80 +2324,6 @@ fn current_control_plane_unix_timestamp() -> i64 {
     let seconds_since_epoch = duration_since_epoch.as_secs();
     let bounded_seconds = seconds_since_epoch.min(i64::MAX as u64);
     bounded_seconds as i64
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn control_plane_requested_tool_ids(tool_policy_payload: &Value) -> Vec<String> {
-    control_plane_tool_ids(tool_policy_payload, "requested_tool_ids")
-        .into_iter()
-        .map(|tool_id| crate::tools::model_visible_tool_name(tool_id.as_str()))
-        .collect()
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn control_plane_visible_requested_tool_ids(tool_policy_payload: &Value) -> Vec<String> {
-    let visible_tool_ids =
-        control_plane_tool_ids(tool_policy_payload, "visible_requested_tool_ids");
-    if !visible_tool_ids.is_empty() {
-        return visible_tool_ids;
-    }
-
-    let requested_tool_ids = control_plane_requested_tool_ids(tool_policy_payload);
-    requested_tool_ids
-        .iter()
-        .map(|tool_id| crate::tools::model_visible_tool_name(tool_id.as_str()))
-        .collect()
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn control_plane_effective_tool_ids(tool_policy_payload: &Value) -> Vec<String> {
-    control_plane_tool_ids(tool_policy_payload, "effective_tool_ids")
-        .into_iter()
-        .map(|tool_id| crate::tools::model_visible_tool_name(tool_id.as_str()))
-        .collect()
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn control_plane_visible_effective_tool_ids(tool_policy_payload: &Value) -> Vec<String> {
-    let visible_tool_ids =
-        control_plane_tool_ids(tool_policy_payload, "visible_effective_tool_ids");
-    if !visible_tool_ids.is_empty() {
-        return visible_tool_ids;
-    }
-
-    let effective_tool_ids = control_plane_effective_tool_ids(tool_policy_payload);
-    effective_tool_ids
-        .iter()
-        .map(|tool_id| crate::tools::model_visible_tool_name(tool_id.as_str()))
-        .collect()
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn control_plane_tool_ids(tool_policy_payload: &Value, field_name: &str) -> Vec<String> {
-    let tool_id_values = tool_policy_payload
-        .get(field_name)
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-
-    let mut tool_ids = Vec::new();
-    for tool_id_value in tool_id_values {
-        let tool_id = tool_id_value.as_str();
-        let Some(tool_id) = tool_id else {
-            continue;
-        };
-        let owned_tool_id = tool_id.to_owned();
-        tool_ids.push(owned_tool_id);
-    }
-    tool_ids
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn control_plane_effective_runtime_narrowing(tool_policy_payload: &Value) -> Value {
-    tool_policy_payload
-        .get("effective_runtime_narrowing")
-        .cloned()
-        .unwrap_or(Value::Null)
 }
 
 #[cfg(feature = "memory-sqlite")]

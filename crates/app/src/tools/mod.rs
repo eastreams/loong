@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use loong_contracts::{Capabilities, ToolCoreOutcome, ToolCoreRequest, ToolPath};
-use loong_runtime::tool_plane::error::LookupError;
+use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loong_core::policy::context::PolicyContext;
 use serde_json::{Value, json};
 pub(crate) use tool_internal_context::{
     ensure_untrusted_payload_does_not_use_reserved_internal_tool_context,
@@ -21,8 +21,8 @@ use tool_search::searchable_entry_from_provider_definition;
 #[cfg(test)]
 use tool_search::{runtime_discoverable_tool_entries, runtime_tool_search_entries};
 
-use crate::AppContext;
-use provider_schema::{tool_metadata_definition_for_view, typed_tool_spec_for_descriptor};
+use crate::Context;
+use provider_schema::legacy_tool_metadata_definition_for_view;
 #[cfg(test)]
 use routing::{
     route_direct_browser_tool_name, route_direct_web_tool_name, route_direct_web_tool_name_for_view,
@@ -48,7 +48,6 @@ mod file_path;
 mod file_policy_ext;
 #[cfg(feature = "tool-http")]
 mod http_request;
-mod kernel_adapter;
 #[cfg(feature = "tool-file")]
 mod memory_tools;
 pub(crate) mod messaging;
@@ -69,16 +68,15 @@ mod session_search;
 mod shell;
 pub mod shell_policy_ext;
 mod shell_request_prep;
-mod skills;
+pub(crate) mod skills;
 mod skills_scan;
 mod skills_sources;
 mod tool_app_runtime;
-mod tool_dispatch;
+pub(crate) mod tool_dispatch;
 mod tool_identity;
 mod tool_internal_context;
 mod tool_lease;
 mod tool_lease_authority;
-mod tool_path;
 mod tool_runtime_view;
 mod tool_search;
 mod tool_snapshot;
@@ -99,7 +97,7 @@ mod workspace_root_tests;
 
 pub use catalog::{
     CapabilityActionClass, ToolApprovalMode, ToolAvailability, ToolCatalog, ToolDescriptor,
-    ToolExecutionKind, ToolGovernanceProfile, ToolGovernanceScope, ToolRiskClass, ToolView,
+    ToolGovernanceProfile, ToolGovernanceScope, ToolOwner, ToolRiskClass, ToolView,
     capability_action_class_for_descriptor, capability_action_class_for_tool_name,
     delegate_child_tool_view_for_config, delegate_child_tool_view_for_config_with_delegate,
     delegate_child_tool_view_for_contract, delegate_child_tool_view_with_constraints,
@@ -108,11 +106,9 @@ pub use catalog::{
     runtime_tool_view_for_config, runtime_tool_view_for_config_with_skills,
     runtime_tool_view_for_runtime_config, tool_catalog,
 };
-pub(crate) use error::ToolRequestError;
+pub(crate) use error::LegacyToolRequestError;
 #[cfg(feature = "feishu-integration")]
 pub(crate) use feishu::{DeferredFeishuCardUpdate, drain_deferred_feishu_card_updates};
-pub use kernel_adapter::KernelToolAdapter;
-pub(crate) use kernel_adapter::register_kernel_tools;
 pub use security_posture::{
     BrowserSurfaceSecurityPosture, ShellExecutionSecurityPosture, SkillsSecurityPosture,
     SkillsSecurityPostureProbeFailure, ToolFileRootSecurityPosture, WebFetchSecurityPosture,
@@ -128,36 +124,27 @@ pub(crate) use shell_request_prep::{
     prepare_kernel_tool_request,
 };
 pub(crate) use tool_dispatch::execute_discoverable_tool_core_with_config;
-pub use tool_dispatch::execute_tool_core_with_config;
+pub(crate) use tool_dispatch::execute_tool_core_with_config;
 #[cfg(test)]
 pub(crate) use tool_dispatch::{
     is_expected_tool_request_error, run_blocking_with_timeout, tool_uses_dedicated_timeout,
 };
 pub(crate) use tool_identity::{
-    direct_tool_name_for_hidden_tool, is_provider_exposed_tool_name, model_visible_tool_name,
-    required_capabilities_for_request, required_capabilities_for_tool_name_and_payload,
+    ResolvedLegacyToolExecution, direct_tool_name_for_hidden_tool, is_provider_exposed_tool_name,
+    legacy_required_capabilities_for_request,
+    legacy_required_capabilities_for_tool_name_and_payload, model_visible_tool_name,
     resolve_legacy_tool_execution,
 };
 
-pub use error::ToolMetadataError;
-pub use tool_identity::{
-    canonical_tool_name, is_known_tool_name, is_known_tool_name_in_view, legacy_display_tool_name,
-};
-pub(crate) use tool_lease::{
-    ToolInvokeProviderExposure, peek_tool_invoke_request, resolve_tool_invoke_request,
-};
+pub use tool_identity::{canonical_tool_name, legacy_display_tool_name};
 pub(crate) use tool_lease::{bridge_provider_tool_call_with_scope, issue_tool_lease};
+pub(crate) use tool_lease::{parse_tool_invoke_request, peek_tool_invoke_request};
 #[cfg(test)]
 pub(crate) use tool_lease::{
     synthesize_test_provider_tool_call, synthesize_test_provider_tool_call_with_scope,
 };
-pub(crate) use tool_path::normalize_without_fs;
 pub use tool_runtime_view::runtime_tool_view_from_loong_config;
-pub(crate) use tool_runtime_view::{
-    effective_runtime_visible_tool_view, full_runtime_tool_view_for_runtime_config,
-    model_visible_skill_context_payload_for_path, model_visible_skill_context_payload_for_skill_id,
-    model_visible_skill_roots_for_runtime_config, runtime_tool_view_with_runtime_config,
-};
+pub(crate) use tool_runtime_view::{runtime_delegate_child_tool_view, runtime_visible_tool_view};
 pub(crate) use tool_snapshot::capability_snapshot_for_direct_states_with_config;
 pub use tool_snapshot::{
     DiscoverableToolSurfaceSummary, ToolRegistryEntry,
@@ -171,16 +158,13 @@ pub use tool_snapshot::{
 pub use web_http::build_ssrf_safe_client;
 
 pub(crate) const BROWSER_SESSION_SCOPE_FIELD: &str = "__loong_browser_scope";
-pub(crate) const LEGACY_BROWSER_SESSION_SCOPE_FIELD: &str = "__loong_browser_scope";
 pub use bundled_skills::{
     BundledPreinstallTarget, BundledPreinstallTargetKind, BundledSkillPack,
     bundled_preinstall_targets, bundled_skill_pack, bundled_skill_pack_memberships,
     bundled_skill_packs,
 };
 pub(crate) use provider_schema::provider_tool_definitions_with_config;
-pub use provider_schema::{
-    provider_tool_definitions, tool_parameter_schema_types, try_provider_tool_definitions_for_view,
-};
+pub use provider_schema::{provider_tool_definitions, provider_tool_definitions_for_view};
 pub(crate) use routing::route_direct_tool_name;
 pub use tool_snapshot::{
     capability_snapshot, capability_snapshot_for_view, capability_snapshot_with_config,
@@ -188,11 +172,6 @@ pub use tool_snapshot::{
 };
 pub use tool_surface::ToolSurfaceState;
 pub(crate) use tool_surface::visible_direct_tool_states_for_view;
-
-#[cfg(test)]
-pub(crate) fn tool_id_visible_in_view(tool_id: &str, view: &ToolView) -> bool {
-    tool_search::tool_id_visible_in_view(tool_id, view)
-}
 
 const DELEGATE_ASYNC_TOOL_NAME: &str = "delegate_async";
 const DELEGATE_TOOL_NAME: &str = "delegate";
@@ -208,12 +187,8 @@ pub(crate) const LOONG_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY: &str = "visibl
 pub(crate) const LOONG_INTERNAL_RUNTIME_NARROWING_KEY: &str = "runtime_narrowing";
 pub(crate) const LOONG_INTERNAL_WORKSPACE_ROOT_KEY: &str = "workspace_root";
 
-pub fn normalize_skills_domain_rule(raw: &str) -> Result<String, String> {
-    skills::normalize_domain_rule(raw)
-}
-
 pub fn normalize_skill_domain_rule(raw: &str) -> Result<String, String> {
-    normalize_skills_domain_rule(raw)
+    skills::normalize_domain_rule(raw)
 }
 
 pub fn skills_list_with_config(
@@ -364,285 +339,52 @@ pub(crate) fn resolve_installable_skill_id(root: &Path) -> Result<String, String
     skills::resolve_installable_skill_id(root)
 }
 
-/// Execute the legacy `ToolCoreRequest` envelope during migration.
+/// Execute the sole daemon migration command that still owns a legacy core tool.
 ///
-/// Registered tools are handed to the runtime-owned plane first; only an
-/// ordinary typed lookup miss may reach `kernel.execute_tool_core`. New callers
-/// must use `ctx.tool(path)?.invoke(payload)` instead of this ingress boundary.
-// TODO(tool-plane): delete this legacy ToolCoreRequest/ToolCoreOutcome envelope
-// after every app runtime caller holds AppContext and invokes tools via
-// ctx.tool(path)?.invoke(...). Typed tools must not add new behavior here.
-pub async fn execute_legacy_tool_envelope(
-    request: ToolCoreRequest,
-    app_ctx: &AppContext,
+/// The concrete name is fixed here so this compatibility boundary cannot revive
+/// migrated tools through the old adapter. Delete it when `config.import` moves
+/// to the typed plane.
+pub async fn execute_legacy_config_import(
+    payload: Value,
+    ctx: &Context<'_>,
+    fallback: &crate::conversation::DefaultLegacyToolDispatcher,
 ) -> Result<ToolCoreOutcome, String> {
+    let allowed_capabilities = ctx.allowed_capabilities();
+    let allowed_capabilities = allowed_capabilities.iter().collect();
     let request = prepare_kernel_tool_request(
-        request,
-        &app_ctx.token().allowed_capabilities,
-        Some(app_ctx.token().token_id.as_str()),
+        ToolCoreRequest {
+            tool_name: "config.import".to_owned(),
+            payload,
+        },
+        &allowed_capabilities,
+        None,
         None,
         None,
     );
-    execute_kernel_tool_request(app_ctx, request, None, false)
-        .await
-        .map_err(|e| format!("{e}"))
+    crate::conversation::turn_engine::LegacyToolDispatcher::execute_core_tool(
+        fallback, ctx, request, false,
+    )
+    .await
+    .map_err(|e| format!("{e}"))
 }
 
-// TODO(tool-plane): collapse this bridge into Context::tool(...)
-// call sites. During migration this legacy envelope ingress first attempts the
-// runtime-owned typed plane through ctx.tool(path)?.invoke(payload), then falls back
-// to the legacy kernel adapter plane only for tools that are not registered yet.
-// Every other typed failure keeps its owning error type and never falls back.
-pub(crate) async fn execute_kernel_tool_request(
-    ctx: &AppContext,
-    request: ToolCoreRequest,
-    capabilities_override: Option<Capabilities>,
-    trusted_internal_payload: bool,
-) -> Result<ToolCoreOutcome, ToolRequestError> {
-    let request = ToolCoreRequest {
-        tool_name: canonical_tool_name(request.tool_name.as_str()).to_owned(),
-        payload: request.payload,
-    };
-    let execute = async {
-        let effective_config = tool_dispatch::effective_tool_runtime_config_for_payload(
-            &request.payload,
-            ctx.tool_runtime_config(),
-        )
-        .map_err(ToolRequestError::Input)?;
-
-        let execution_context = ctx
-            .for_invocation(&effective_config)
-            .map_err(ToolRequestError::Context)?;
-
-        ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
-            request.tool_name.as_str(),
-            &request.payload,
-            "payload",
-        )
-        .map_err(ToolRequestError::ReservedContext)?;
-
-        let outer_path = ToolPath::new([request.tool_name.clone()])?;
-        let (typed_path, effective_request, capability_override, typed_invocation) =
-            match execution_context.tool(outer_path.clone()) {
-                Ok(invocation) => (outer_path, request, capabilities_override, Some(invocation)),
-                Err(LookupError::NotRegistered { .. }) if request.tool_name == "tool.invoke" => {
-                    let inner_arguments = request.payload.get("arguments").unwrap_or(&Value::Null);
-                    ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
-                        request.tool_name.as_str(),
-                        inner_arguments,
-                        "payload.arguments",
-                    )
-                    .map_err(ToolRequestError::ReservedContext)?;
-                    if capabilities_override.is_some() {
-                        return Err(ToolRequestError::Input(
-                            "capability override was supplied both outside and inside tool.invoke"
-                                .to_owned(),
-                        ));
-                    }
-                    let resolved = resolve_tool_invoke_request(
-                        &request,
-                        ToolInvokeProviderExposure::AllowProviderExposed,
-                    )
-                    .map_err(ToolRequestError::Input)?;
-                    let typed_path = ToolPath::new([resolved.request.tool_name.clone()])?;
-                    let typed_invocation = match execution_context.tool(typed_path.clone()) {
-                        Ok(invocation) => Some(invocation),
-                        Err(LookupError::NotRegistered { .. }) => None,
-                        Err(error) => return Err(error.into()),
-                    };
-                    (
-                        typed_path,
-                        resolved.request,
-                        resolved.capabilities_override,
-                        typed_invocation,
-                    )
-                }
-                Err(LookupError::NotRegistered { .. }) => {
-                    (outer_path, request, capabilities_override, None)
-                }
-                Err(error) => return Err(error.into()),
-            };
-
-        if let Some(invocation) = typed_invocation {
-            // A legacy envelope may shape Context, but runtime-owned overlay
-            // fields never enter the concrete tool's input contract.
-            let mut typed_payload = effective_request.payload;
-            if let Some(body) = typed_payload.as_object_mut() {
-                let _trusted_overlay = take_trusted_internal_tool_context(body);
-            }
-            let invocation = match capability_override {
-                Some(capabilities) => invocation.with_capabilities_override(capabilities),
-                None => invocation,
-            };
-            let payload = invocation.invoke(typed_payload).await?;
-            return Ok(ToolCoreOutcome {
-                status: "ok".to_owned(),
-                payload,
-            });
-        }
-        if capability_override.is_some() {
-            return Err(ToolRequestError::Input(format!(
-                "tool.invoke capabilities_override requires a registered typed tool; `{typed_path}` is legacy-only"
-            )));
-        }
-
-        let Some(resolved) = resolve_legacy_tool_execution(effective_request.tool_name.as_str())
-        else {
-            return Err(ToolRequestError::NotFound {
-                tool_name: effective_request.tool_name,
-            });
-        };
-        match resolved.execution_kind {
-            ToolExecutionKind::App => {
-                return Err(ToolRequestError::LegacyAppDispatch {
-                    tool_name: effective_request.tool_name,
-                });
-            }
-            ToolExecutionKind::Core => {}
-        }
-
-        let caps = required_capabilities_for_request(&effective_request);
-        let outcome = ctx
-            .runtime()
-            .kernel()
-            .execute_tool_core(
-                ctx.pack_id(),
-                ctx.token(),
-                &caps,
-                None,
-                effective_request,
-                &execution_context,
-            )
-            .await?;
-        Ok::<ToolCoreOutcome, ToolRequestError>(outcome)
-    };
-    if trusted_internal_payload {
-        return with_trusted_internal_tool_payload_async(execute).await;
-    }
-
-    execute.await
-}
-
-/// Execute a request whose owner was already fixed as a registered typed tool.
+/// Execute `config.import` for the context-free legacy spec adapter.
 ///
-/// This boundary never falls back. It is used after preparation or approval
-/// replay has persisted typed ownership, so a missing registration is a
-/// terminal lookup error rather than permission to reinterpret the request.
-pub(crate) async fn execute_registered_tool_request(
-    ctx: &AppContext,
-    request: ToolCoreRequest,
-    capabilities_override: Option<Capabilities>,
-    trusted_internal_payload: bool,
-) -> Result<ToolCoreOutcome, ToolRequestError> {
-    let execute = async {
-        let effective_config = tool_dispatch::effective_tool_runtime_config_for_payload(
-            &request.payload,
-            ctx.tool_runtime_config(),
-        )
-        .map_err(ToolRequestError::Input)?;
-        let execution_context = ctx
-            .for_invocation(&effective_config)
-            .map_err(ToolRequestError::Context)?;
-        ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
-            request.tool_name.as_str(),
-            &request.payload,
-            "payload",
-        )
-        .map_err(ToolRequestError::ReservedContext)?;
-
-        let path = ToolPath::new([request.tool_name])?;
-        // The trusted overlay has already shaped `execution_context`; it is
-        // runtime state, never part of the concrete tool's input contract.
-        let mut payload = request.payload;
-        if let Some(body) = payload.as_object_mut() {
-            let _trusted_overlay = take_trusted_internal_tool_context(body);
-        }
-        let invocation = match execution_context.tool(path.clone()) {
-            Ok(invocation) => invocation,
-            Err(LookupError::NotRegistered { .. }) => {
-                return Err(ToolRequestError::RegistryMissing { path });
-            }
-            Err(error) => return Err(error.into()),
-        };
-        let invocation = match capabilities_override {
-            Some(capabilities) => invocation.with_capabilities_override(capabilities),
-            None => invocation,
-        };
-        let payload = invocation.invoke(payload).await?;
-        Ok(ToolCoreOutcome {
-            status: "ok".to_owned(),
+/// The fixed tool name is the boundary: callers cannot use this API to revive
+/// any migrated or otherwise arbitrary legacy tool implementation.
+pub fn execute_legacy_config_import_for_spec(payload: Value) -> Result<ToolCoreOutcome, String> {
+    execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "config.import".to_owned(),
             payload,
-        })
-    };
-    if trusted_internal_payload {
-        return with_trusted_internal_tool_payload_async(execute).await;
-    }
-    execute.await
+        },
+        &runtime_config::ToolRuntimeConfig::default(),
+    )
 }
 
-/// Execute a request whose dispatch owner was already fixed as legacy kernel.
-///
-/// Approval replay uses this boundary so a persisted legacy decision cannot be
-/// reinterpreted as a typed invocation after registrations change. Delete it
-/// with the remaining `ToolCoreRequest` fallback.
-pub(crate) async fn execute_legacy_kernel_tool_request(
-    ctx: &AppContext,
-    request: ToolCoreRequest,
-    trusted_internal_payload: bool,
-) -> Result<ToolCoreOutcome, ToolRequestError> {
-    let request = ToolCoreRequest {
-        tool_name: canonical_tool_name(request.tool_name.as_str()).to_owned(),
-        payload: request.payload,
-    };
-    let execute = async {
-        if request.tool_name == "tool.invoke" {
-            return Err(ToolRequestError::Input(
-                "legacy kernel replay requires a normalized concrete request".to_owned(),
-            ));
-        }
-        let effective_config = tool_dispatch::effective_tool_runtime_config_for_payload(
-            &request.payload,
-            ctx.tool_runtime_config(),
-        )
-        .map_err(ToolRequestError::Input)?;
-        let execution_context = ctx
-            .for_invocation(&effective_config)
-            .map_err(ToolRequestError::Context)?;
-        ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
-            request.tool_name.as_str(),
-            &request.payload,
-            "payload",
-        )
-        .map_err(ToolRequestError::ReservedContext)?;
-        let caps = required_capabilities_for_request(&request);
-        ctx.runtime()
-            .kernel()
-            .execute_tool_core(
-                ctx.pack_id(),
-                ctx.token(),
-                &caps,
-                None,
-                request,
-                &execution_context,
-            )
-            .await
-            .map_err(ToolRequestError::Legacy)
-    };
-    if trusted_internal_payload {
-        return with_trusted_internal_tool_payload_async(execute).await;
-    }
-    execute.await
-}
-
-pub fn execute_tool_core(request: ToolCoreRequest) -> Result<ToolCoreOutcome, String> {
-    execute_tool_core_with_config(request, runtime_config::get_tool_runtime_config())
-}
-
-pub(crate) use tool_app_runtime::{
-    continue_session_with_runtime, execute_app_tool_with_visibility_checked_config,
-};
+pub(crate) use tool_app_runtime::execute_legacy_app_tool_in_view;
 pub use tool_app_runtime::{
-    execute_app_tool_with_config, wait_for_session_with_config, wait_for_task_with_config,
+    execute_legacy_app_tool_with_config, wait_for_session_with_config, wait_for_task_with_config,
 };
 
 /// Tool registry entry for capability snapshot disclosure.
@@ -691,3 +433,4 @@ mod test_utils;
 
 #[cfg(test)]
 mod tests;
+pub use error::ToolMetadataError;

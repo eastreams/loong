@@ -222,6 +222,19 @@ pub struct SessionEventRecord {
     pub ts: i64,
 }
 
+/// Canonical records needed to materialize one live Session from a SQLite snapshot.
+///
+/// Repository code owns transaction consistency; conversation code owns the
+/// interpretation of lifecycle and policy event payloads. Legacy summaries are
+/// deliberately absent because they are read models, not typed Session authority.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionMaterializationSnapshot {
+    pub session: SessionRecord,
+    pub tool_policy: Option<SessionToolPolicyRecord>,
+    pub latest_events: Vec<SessionEventRecord>,
+    pub delegate_events: Vec<SessionEventRecord>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionTerminalOutcomeRecord {
     pub session_id: String,

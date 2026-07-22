@@ -3,25 +3,16 @@ use std::collections::BTreeSet;
 use loong_contracts::{Capability, ToolCoreRequest};
 use serde_json::json;
 
-use super::{canonical_tool_name, required_capabilities_for_request};
+use super::legacy_required_capabilities_for_request;
 
 #[test]
-fn required_capabilities_follow_effective_tool_request() {
+fn legacy_required_capabilities_follow_effective_tool_request() {
     let direct_read = ToolCoreRequest {
         tool_name: "read".to_owned(),
         payload: json!({"path": "README.md"}),
     };
     assert_eq!(
-        required_capabilities_for_request(&direct_read),
-        BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead])
-    );
-
-    let direct_file_read = ToolCoreRequest {
-        tool_name: "file.read".to_owned(),
-        payload: json!({"path": "README.md"}),
-    };
-    assert_eq!(
-        required_capabilities_for_request(&direct_file_read),
+        legacy_required_capabilities_for_request(&direct_read),
         BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead])
     );
 
@@ -30,7 +21,7 @@ fn required_capabilities_follow_effective_tool_request() {
         payload: json!({"pattern": "**/*.rs"}),
     };
     assert_eq!(
-        required_capabilities_for_request(&direct_glob_search),
+        legacy_required_capabilities_for_request(&direct_glob_search),
         BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead])
     );
 
@@ -39,17 +30,8 @@ fn required_capabilities_follow_effective_tool_request() {
         payload: json!({"query": "Loong"}),
     };
     assert_eq!(
-        required_capabilities_for_request(&direct_content_search),
+        legacy_required_capabilities_for_request(&direct_content_search),
         BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead])
-    );
-
-    let direct_file_write = ToolCoreRequest {
-        tool_name: "file.write".to_owned(),
-        payload: json!({"path": "notes.txt", "content": "hello"}),
-    };
-    assert_eq!(
-        required_capabilities_for_request(&direct_file_write),
-        BTreeSet::from([Capability::InvokeTool, Capability::FilesystemWrite])
     );
 
     let direct_write = ToolCoreRequest {
@@ -57,16 +39,7 @@ fn required_capabilities_follow_effective_tool_request() {
         payload: json!({"path": "notes.txt", "content": "hello"}),
     };
     assert_eq!(
-        required_capabilities_for_request(&direct_write),
-        BTreeSet::from([Capability::InvokeTool, Capability::FilesystemWrite])
-    );
-
-    let direct_file_edit = ToolCoreRequest {
-        tool_name: "file.edit".to_owned(),
-        payload: json!({"path": "notes.txt", "edits": [{"old_text": "a", "new_text": "b"}]}),
-    };
-    assert_eq!(
-        required_capabilities_for_request(&direct_file_edit),
+        legacy_required_capabilities_for_request(&direct_write),
         BTreeSet::from([Capability::InvokeTool, Capability::FilesystemWrite])
     );
 
@@ -75,7 +48,7 @@ fn required_capabilities_follow_effective_tool_request() {
         payload: json!({"path": "notes.txt", "edits": [{"old_text": "a", "new_text": "b"}]}),
     };
     assert_eq!(
-        required_capabilities_for_request(&direct_edit),
+        legacy_required_capabilities_for_request(&direct_edit),
         BTreeSet::from([Capability::InvokeTool, Capability::FilesystemWrite])
     );
 
@@ -84,7 +57,7 @@ fn required_capabilities_follow_effective_tool_request() {
         payload: json!({"query": "deploy freeze"}),
     };
     assert_eq!(
-        required_capabilities_for_request(&direct_memory_search),
+        legacy_required_capabilities_for_request(&direct_memory_search),
         BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead])
     );
 
@@ -93,7 +66,7 @@ fn required_capabilities_follow_effective_tool_request() {
         payload: json!({"session_id": "session-1", "query": "deploy freeze"}),
     };
     assert_eq!(
-        required_capabilities_for_request(&direct_memory_retrieve),
+        legacy_required_capabilities_for_request(&direct_memory_retrieve),
         BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead])
     );
 
@@ -102,7 +75,7 @@ fn required_capabilities_follow_effective_tool_request() {
         payload: json!({"path": "MEMORY.md"}),
     };
     assert_eq!(
-        required_capabilities_for_request(&direct_memory_get),
+        legacy_required_capabilities_for_request(&direct_memory_get),
         BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead])
     );
 
@@ -125,7 +98,7 @@ fn required_capabilities_follow_effective_tool_request() {
         },
     ] {
         assert_eq!(
-            required_capabilities_for_request(&request),
+            legacy_required_capabilities_for_request(&request),
             BTreeSet::from([Capability::InvokeTool, Capability::MemoryRead])
         );
     }
@@ -135,7 +108,7 @@ fn required_capabilities_follow_effective_tool_request() {
         payload: json!({"url": "https://example.com"}),
     };
     assert_eq!(
-        required_capabilities_for_request(&direct_web_fetch),
+        legacy_required_capabilities_for_request(&direct_web_fetch),
         BTreeSet::from([Capability::InvokeTool, Capability::NetworkEgress])
     );
 
@@ -144,7 +117,7 @@ fn required_capabilities_follow_effective_tool_request() {
         payload: json!({"url": "https://example.com"}),
     };
     assert_eq!(
-        required_capabilities_for_request(&direct_http_request),
+        legacy_required_capabilities_for_request(&direct_http_request),
         BTreeSet::from([Capability::InvokeTool, Capability::NetworkEgress])
     );
 
@@ -153,7 +126,7 @@ fn required_capabilities_follow_effective_tool_request() {
         payload: json!({"query": "loong"}),
     };
     assert_eq!(
-        required_capabilities_for_request(&direct_web_search),
+        legacy_required_capabilities_for_request(&direct_web_search),
         BTreeSet::from([Capability::InvokeTool, Capability::NetworkEgress])
     );
 
@@ -162,7 +135,7 @@ fn required_capabilities_follow_effective_tool_request() {
         payload: json!({"url": "https://example.com"}),
     };
     assert_eq!(
-        required_capabilities_for_request(&direct_browser_open),
+        legacy_required_capabilities_for_request(&direct_browser_open),
         BTreeSet::from([Capability::InvokeTool, Capability::NetworkEgress])
     );
 
@@ -171,7 +144,7 @@ fn required_capabilities_follow_effective_tool_request() {
         payload: json!({"mode": "page_text"}),
     };
     assert_eq!(
-        required_capabilities_for_request(&direct_browser_extract),
+        legacy_required_capabilities_for_request(&direct_browser_extract),
         BTreeSet::from([Capability::InvokeTool])
     );
 
@@ -180,7 +153,7 @@ fn required_capabilities_follow_effective_tool_request() {
         payload: json!({"id": 1}),
     };
     assert_eq!(
-        required_capabilities_for_request(&direct_browser_click),
+        legacy_required_capabilities_for_request(&direct_browser_click),
         BTreeSet::from([Capability::InvokeTool, Capability::NetworkEgress])
     );
 
@@ -189,7 +162,7 @@ fn required_capabilities_follow_effective_tool_request() {
         payload: json!({"command": "printf ok"}),
     };
     assert_eq!(
-        required_capabilities_for_request(&direct_bash_exec),
+        legacy_required_capabilities_for_request(&direct_bash_exec),
         BTreeSet::from([
             Capability::InvokeTool,
             Capability::FilesystemRead,
@@ -198,16 +171,16 @@ fn required_capabilities_follow_effective_tool_request() {
         ])
     );
 
-    let invoked_file_read = ToolCoreRequest {
+    let invoked_read = ToolCoreRequest {
         tool_name: "tool.invoke".to_owned(),
         payload: json!({
-            "tool_id": "file.read",
+            "tool_id": "read",
             "lease": "unused",
             "arguments": {"path": "README.md"}
         }),
     };
     assert_eq!(
-        required_capabilities_for_request(&invoked_file_read),
+        legacy_required_capabilities_for_request(&invoked_read),
         BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead])
     );
 
@@ -220,7 +193,7 @@ fn required_capabilities_follow_effective_tool_request() {
         }),
     };
     assert_eq!(
-        required_capabilities_for_request(&invoked_memory_search),
+        legacy_required_capabilities_for_request(&invoked_memory_search),
         BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead])
     );
 
@@ -233,7 +206,7 @@ fn required_capabilities_follow_effective_tool_request() {
         }),
     };
     assert_eq!(
-        required_capabilities_for_request(&invoked_web_fetch),
+        legacy_required_capabilities_for_request(&invoked_web_fetch),
         BTreeSet::from([Capability::InvokeTool, Capability::NetworkEgress])
     );
 
@@ -246,7 +219,7 @@ fn required_capabilities_follow_effective_tool_request() {
         }),
     };
     assert_eq!(
-        required_capabilities_for_request(&invoked_browser_click),
+        legacy_required_capabilities_for_request(&invoked_browser_click),
         BTreeSet::from([Capability::InvokeTool, Capability::NetworkEgress])
     );
 
@@ -259,7 +232,7 @@ fn required_capabilities_follow_effective_tool_request() {
         }),
     };
     assert_eq!(
-        required_capabilities_for_request(&invoked_bash_exec),
+        legacy_required_capabilities_for_request(&invoked_bash_exec),
         BTreeSet::from([
             Capability::InvokeTool,
             Capability::FilesystemRead,
@@ -277,7 +250,7 @@ fn required_capabilities_follow_effective_tool_request() {
         }),
     };
     assert_eq!(
-        required_capabilities_for_request(&invoked_config_import_plan),
+        legacy_required_capabilities_for_request(&invoked_config_import_plan),
         BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead])
     );
 
@@ -294,7 +267,7 @@ fn required_capabilities_follow_effective_tool_request() {
         }),
     };
     assert_eq!(
-        required_capabilities_for_request(&invoked_config_import_apply),
+        legacy_required_capabilities_for_request(&invoked_config_import_apply),
         BTreeSet::from([
             Capability::InvokeTool,
             Capability::FilesystemRead,
@@ -316,7 +289,7 @@ fn required_capabilities_follow_effective_tool_request() {
         }),
     };
     assert_eq!(
-        required_capabilities_for_request(&invoked_config_import_apply_selected),
+        legacy_required_capabilities_for_request(&invoked_config_import_apply_selected),
         BTreeSet::from([
             Capability::InvokeTool,
             Capability::FilesystemRead,
@@ -336,7 +309,7 @@ fn required_capabilities_follow_effective_tool_request() {
         }),
     };
     assert_eq!(
-        required_capabilities_for_request(&invoked_config_import_rollback),
+        legacy_required_capabilities_for_request(&invoked_config_import_rollback),
         BTreeSet::from([
             Capability::InvokeTool,
             Capability::FilesystemRead,
@@ -349,9 +322,7 @@ fn required_capabilities_follow_effective_tool_request() {
         payload: json!({"lease": "unused"}),
     };
     assert_eq!(
-        required_capabilities_for_request(&malformed_invoke),
+        legacy_required_capabilities_for_request(&malformed_invoke),
         BTreeSet::from([Capability::InvokeTool])
     );
-
-    assert_eq!(canonical_tool_name("file.read"), "read");
 }

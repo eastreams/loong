@@ -2,14 +2,14 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use loong_contracts::{Capability, ExecutionRoute, HarnessKind, ToolCoreOutcome, ToolCoreRequest};
+use loong_contracts::{Capabilities, Capability, GovernedSessionMode};
 use loong_kernel::{
-    InMemoryAuditSink, Kernel, SystemClock, VerticalPackManifest,
+    InMemoryAuditSink, Kernel, SystemClock,
     access::fs::{
-        FsPathAllowedRootsPolicy, FsReadAllowPolicy, FsReadFilenameDenyPolicy,
-        FsResolvePathAllowPolicy, FsWriteAllowPolicy,
+        FsContentSearchAllowPolicy, FsGlobAllowPolicy, FsPathAllowedRootsPolicy, FsReadAllowPolicy,
+        FsReadFilenameDenyPolicy, FsResolvePathAllowPolicy, FsWriteAllowPolicy,
     },
-    policy::{FsContentSearchAllowPolicy, FsGlobAllowPolicy, PolicyPipelineBuilder},
+    policy::PolicyPipelineBuilder,
 };
 use serde_json::json;
 
@@ -32,13 +32,15 @@ fn test_tool_runtime_config(root: PathBuf) -> runtime_config::ToolRuntimeConfig 
     }
 }
 
-async fn execute_tool_core_with_test_context(
-    request: ToolCoreRequest,
+/// Build the real policy/runtime boundary once per case while keeping the tests
+/// focused on Context-owned filesystem authority rather than legacy envelopes.
+async fn invoke_read_with_test_context(
+    payload: serde_json::Value,
     config: &runtime_config::ToolRuntimeConfig,
-) -> Result<ToolCoreOutcome, String> {
-    let trusted_internal_payload = payload_uses_reserved_internal_tool_context(&request.payload);
+) -> Result<serde_json::Value, String> {
     let mut policy =
-        PolicyPipelineBuilder::<crate::context::AppContextFactory>::new_legacy_allow_fallback()
+        PolicyPipelineBuilder::<crate::context::RuntimeContextFactory>::new_legacy_allow_fallback()
+            .with_pre_policy(crate::tools::plane::ToolVisibilityPolicy)
             .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
             .with_policy(FsResolvePathAllowPolicy::target())
             .with_policy(FsResolvePathAllowPolicy::entry())
@@ -53,52 +55,37 @@ async fn execute_tool_core_with_test_context(
     policy.push_policy(FsWriteAllowPolicy);
     policy.push_policy(FsGlobAllowPolicy);
     policy.push_policy(FsContentSearchAllowPolicy);
-    let mut kernel = Kernel::with_policy_runtime(
+    let kernel = Kernel::with_policy_runtime(
         policy,
         Arc::new(SystemClock),
         Arc::new(InMemoryAuditSink::default()),
     );
-    let pack = VerticalPackManifest {
-        pack_id: "test-pack".to_owned(),
-        domain: "test".to_owned(),
-        version: "0.1.0".to_owned(),
-        default_route: ExecutionRoute {
-            harness_kind: HarnessKind::EmbeddedPi,
-            adapter: None,
-        },
-        allowed_connectors: BTreeSet::new(),
-        granted_capabilities: BTreeSet::from([
+    let runtime = Arc::new(loong_runtime::runtime::Runtime::new(
+        kernel,
+        crate::tools::plane::test_builtin_tool_plane(),
+    ));
+    let session = crate::Session::root(
+        runtime.as_ref(),
+        "test-agent",
+        "test-session",
+        GovernedSessionMode::MutatingCapable,
+        Capabilities::from([
             Capability::InvokeTool,
             Capability::FilesystemRead,
             Capability::FilesystemWrite,
         ]),
-        metadata: Default::default(),
-    };
-    kernel
-        .register_pack(pack)
-        .map_err(|error| format!("kernel pack registration failed: {error}"))?;
-    crate::tools::register_kernel_tools(
-        &mut kernel,
         config.clone(),
-        crate::config::ObservabilityConfig::runtime_default(),
-    )
-    .map_err(|error| format!("kernel tool registration failed: {error}"))?;
-    let token = kernel
-        .issue_token("test-pack", "test-agent", 60)
-        .map_err(|error| format!("kernel token issue failed: {error}"))?;
-    let app_ctx = crate::AppContext::new(
-        Arc::new(loong_runtime::runtime::Runtime::new(
-            kernel,
-            crate::tools::plane::test_builtin_tool_plane(),
-        )),
-        token,
-        config.clone(),
-        "test-session",
-        crate::tools::runtime_tool_view(),
-        loong_contracts::GovernedSessionMode::MutatingCapable,
+        crate::memory::runtime_config::MemoryRuntimeConfig::default(),
+        crate::tools::runtime_visible_tool_view(runtime.as_ref(), config, None),
+        None,
+        None,
     )?;
-
-    execute_kernel_tool_request(&app_ctx, request, None, trusted_internal_payload)
+    let context = crate::Context::new(runtime.as_ref(), &session)
+        .expect("workspace test Session must remain bound to its construction Runtime");
+    context
+        .tool(loong_contracts::ToolPath::new(["read"]).expect("test tool path must be valid"))
+        .map_err(|error| error.to_string())?
+        .invoke(payload)
         .await
         .map_err(|error| format!("{error}"))
 }
@@ -124,21 +111,17 @@ async fn file_read_uses_runtime_workspace_root_from_runtime_config() {
     let mut config = test_tool_runtime_config(outer_root.clone());
     config.workspace_root = Some(runtime_root.clone());
 
-    let outcome = execute_tool_core_with_test_context(
-        ToolCoreRequest {
-            tool_name: "file.read".to_owned(),
-            payload: json!({
-                "path": "note.txt"
-            }),
-        },
+    let outcome = invoke_read_with_test_context(
+        json!({
+            "path": "note.txt"
+        }),
         &config,
     )
     .await
     .expect("runtime workspace root should be used for default resolution");
 
-    assert_eq!(outcome.status, "ok");
-    assert_eq!(outcome.payload["content"], "runtime");
-    assert_eq!(outcome.payload["path"], expected_path.display().to_string());
+    assert_eq!(outcome["content"], "runtime");
+    assert_eq!(outcome["path"], expected_path.display().to_string());
 
     std::fs::remove_dir_all(&outer_root).ok();
     std::fs::remove_dir_all(&runtime_root).ok();
@@ -160,13 +143,10 @@ async fn file_read_rejects_configured_denied_filename() {
         .deny_read_filenames
         .insert("clippy.toml".to_owned());
 
-    let error = execute_tool_core_with_test_context(
-        ToolCoreRequest {
-            tool_name: "file.read".to_owned(),
-            payload: json!({
-                "path": "clippy.toml"
-            }),
-        },
+    let error = invoke_read_with_test_context(
+        json!({
+            "path": "clippy.toml"
+        }),
         &config,
     )
     .await
@@ -195,107 +175,25 @@ async fn file_read_relative_resolution_uses_workspace_root_without_shrinking_fil
     let mut config = test_tool_runtime_config(outer_root.clone());
     config.workspace_root = Some(runtime_root);
 
-    let relative_outcome = execute_tool_core_with_test_context(
-        ToolCoreRequest {
-            tool_name: "file.read".to_owned(),
-            payload: json!({
-                "path": "inner.txt"
-            }),
-        },
+    let relative_outcome = invoke_read_with_test_context(
+        json!({
+            "path": "inner.txt"
+        }),
         &config,
     )
     .await
     .expect("relative path should resolve from workspace root");
-    assert_eq!(relative_outcome.payload["content"], "inner");
+    assert_eq!(relative_outcome["content"], "inner");
 
-    let absolute_outcome = execute_tool_core_with_test_context(
-        ToolCoreRequest {
-            tool_name: "file.read".to_owned(),
-            payload: json!({
-                "path": outer_root.join("outer.txt").display().to_string()
-            }),
-        },
+    let absolute_outcome = invoke_read_with_test_context(
+        json!({
+            "path": outer_root.join("outer.txt").display().to_string()
+        }),
         &config,
     )
     .await
     .expect("absolute path inside file_root should still be allowed");
-    assert_eq!(absolute_outcome.payload["content"], "outer");
-
-    std::fs::remove_dir_all(&outer_root).ok();
-}
-
-#[cfg(feature = "tool-file")]
-#[tokio::test]
-async fn file_read_uses_workspace_root_from_trusted_internal_payload() {
-    let outer_root = std::env::temp_dir().join(format!(
-        "loong-file-read-workspace-root-outer-{}",
-        std::process::id()
-    ));
-    let child_root = std::env::temp_dir().join(format!(
-        "loong-file-read-workspace-root-child-{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&outer_root).expect("create outer root");
-    std::fs::create_dir_all(&child_root).expect("create child root");
-    std::fs::write(outer_root.join("note.txt"), "outer").expect("write outer note");
-    std::fs::write(child_root.join("note.txt"), "child").expect("write child note");
-
-    let config = test_tool_runtime_config(outer_root.clone());
-    let outcome = execute_tool_core_with_test_context(
-        ToolCoreRequest {
-            tool_name: "file.read".to_owned(),
-            payload: json!({
-                "path": "note.txt",
-                "_loong": {
-                    "workspace_root": child_root.display().to_string()
-                }
-            }),
-        },
-        &config,
-    )
-    .await
-    .expect("trusted workspace root override should succeed");
-
-    assert_eq!(outcome.status, "ok");
-    assert_eq!(outcome.payload["content"], "child");
-    let expected_path =
-        dunce::canonicalize(child_root.join("note.txt")).expect("canonicalize child note");
-    assert_eq!(outcome.payload["path"], expected_path.display().to_string());
-
-    std::fs::remove_dir_all(&outer_root).ok();
-    std::fs::remove_dir_all(&child_root).ok();
-}
-
-#[cfg(feature = "tool-file")]
-#[tokio::test]
-async fn file_read_rejects_relative_workspace_root_from_trusted_internal_payload() {
-    let outer_root = std::env::temp_dir().join(format!(
-        "loong-file-read-relative-workspace-root-outer-{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&outer_root).expect("create outer root");
-    std::fs::write(outer_root.join("note.txt"), "outer").expect("write outer note");
-
-    let config = test_tool_runtime_config(outer_root.clone());
-    let error = execute_tool_core_with_test_context(
-        ToolCoreRequest {
-            tool_name: "file.read".to_owned(),
-            payload: json!({
-                "path": "note.txt",
-                "_loong": {
-                    "workspace_root": "relative/path"
-                }
-            }),
-        },
-        &config,
-    )
-    .await
-    .expect_err("relative workspace root override should be rejected");
-
-    assert!(
-        error.contains("path must be absolute"),
-        "expected absolute-path rejection, got: {error}"
-    );
+    assert_eq!(absolute_outcome["content"], "outer");
 
     std::fs::remove_dir_all(&outer_root).ok();
 }

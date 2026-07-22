@@ -5,7 +5,7 @@ use crate::session::store::SessionStoreConfig;
 use crate::task_progress::resolve_canonical_task_id_for_session;
 use loong_contracts::{KernelError, ToolPlaneError};
 
-use super::{AppContext, AugmentedToolPayload};
+use super::{AugmentedToolPayload, Context};
 
 pub(crate) fn render_kernel_error_reason(error: &KernelError) -> String {
     #[allow(clippy::wildcard_enum_match_arm)]
@@ -21,7 +21,7 @@ pub(crate) fn render_kernel_error_reason(error: &KernelError) -> String {
 pub(super) fn augment_tool_payload_for_kernel(
     canonical_tool_name: &str,
     payload: serde_json::Value,
-    session_context: &AppContext,
+    session_context: &Context<'_>,
     memory_config: &SessionStoreConfig,
 ) -> AugmentedToolPayload {
     let nested_browser_scope_required = if canonical_tool_name == "tool.invoke" {
@@ -38,19 +38,10 @@ pub(super) fn augment_tool_payload_for_kernel(
         inject_runtime_narrowing_context_trusted(payload, session_context, false);
     let payload_after_runtime_narrowing = augmented_runtime_narrowing.payload;
     let runtime_narrowing_trusted = augmented_runtime_narrowing.trusted_internal_context;
-    let augmented_active_skill_workspace_root = inject_active_skill_workspace_root_context_trusted(
-        canonical_tool_name,
+    let augmented_workspace_root = inject_workspace_root_context_trusted(
         payload_after_runtime_narrowing,
         session_context,
         runtime_narrowing_trusted,
-    );
-    let payload_after_active_skill_workspace_root = augmented_active_skill_workspace_root.payload;
-    let active_skill_workspace_root_trusted =
-        augmented_active_skill_workspace_root.trusted_internal_context;
-    let augmented_workspace_root = inject_workspace_root_context_trusted(
-        payload_after_active_skill_workspace_root,
-        session_context,
-        active_skill_workspace_root_trusted,
     );
     let mut payload = augmented_workspace_root.payload;
     let trusted_internal_context = augmented_workspace_root.trusted_internal_context;
@@ -65,7 +56,7 @@ pub(super) fn augment_tool_payload_for_kernel(
     }
 
     if browser_scope_injection_required(canonical_tool_name) {
-        payload = inject_browser_scope_field(payload, &session_context.session_id);
+        payload = inject_browser_scope_field(payload, &session_context.session().session_id);
         return AugmentedToolPayload {
             payload,
             trusted_internal_context,
@@ -73,7 +64,7 @@ pub(super) fn augment_tool_payload_for_kernel(
     }
 
     if nested_browser_scope_required {
-        payload = inject_nested_browser_scope_field(payload, &session_context.session_id);
+        payload = inject_nested_browser_scope_field(payload, &session_context.session().session_id);
         return AugmentedToolPayload {
             payload,
             trusted_internal_context,
@@ -84,143 +75,6 @@ pub(super) fn augment_tool_payload_for_kernel(
         payload,
         trusted_internal_context,
     }
-}
-
-fn inject_active_skill_workspace_root_context_trusted(
-    canonical_tool_name: &str,
-    payload: serde_json::Value,
-    session_context: &AppContext,
-    preserve_existing_internal_context: bool,
-) -> AugmentedToolPayload {
-    let workspace_root = active_skill_workspace_root_for_tool_payload(
-        canonical_tool_name,
-        &payload,
-        session_context,
-    )
-    .or_else(|| {
-        visible_skill_workspace_root_for_tool_payload(
-            canonical_tool_name,
-            &payload,
-            session_context,
-        )
-    });
-    let Some(workspace_root) = workspace_root else {
-        return AugmentedToolPayload {
-            payload,
-            trusted_internal_context: preserve_existing_internal_context,
-        };
-    };
-
-    inject_workspace_root_path_context_trusted(
-        payload,
-        &workspace_root,
-        preserve_existing_internal_context,
-    )
-}
-
-fn active_skill_workspace_root_for_tool_payload(
-    canonical_tool_name: &str,
-    payload: &serde_json::Value,
-    session_context: &AppContext,
-) -> Option<std::path::PathBuf> {
-    if session_context.active_skill_roots.is_empty() {
-        return None;
-    }
-
-    if crate::tools::legacy_display_tool_name(canonical_tool_name) != "read" {
-        return None;
-    }
-
-    let requested_path = requested_file_tool_path(canonical_tool_name, payload)?;
-    if requested_path.is_absolute() {
-        let normalized_requested_path = if requested_path.exists() {
-            std::fs::canonicalize(&requested_path).unwrap_or(requested_path)
-        } else {
-            requested_path
-        };
-
-        return session_context
-            .active_skill_roots
-            .iter()
-            .find(|root| normalized_requested_path.starts_with(root))
-            .cloned();
-    }
-
-    resolve_active_skill_root_for_relative_path(
-        &session_context.active_skill_roots,
-        requested_path.as_path(),
-    )
-}
-
-fn visible_skill_workspace_root_for_tool_payload(
-    canonical_tool_name: &str,
-    payload: &serde_json::Value,
-    session_context: &AppContext,
-) -> Option<std::path::PathBuf> {
-    if session_context.visible_skill_roots.is_empty() {
-        return None;
-    }
-
-    if crate::tools::legacy_display_tool_name(canonical_tool_name) != "read" {
-        return None;
-    }
-
-    let requested_path = requested_file_tool_path(canonical_tool_name, payload)?;
-    if !requested_path.is_absolute() {
-        return None;
-    }
-
-    let normalized_requested_path = if requested_path.exists() {
-        std::fs::canonicalize(&requested_path).unwrap_or(requested_path)
-    } else {
-        requested_path
-    };
-
-    session_context
-        .visible_skill_roots
-        .iter()
-        .find(|root| normalized_requested_path.starts_with(root))
-        .cloned()
-}
-
-fn resolve_active_skill_root_for_relative_path(
-    active_skill_roots: &[std::path::PathBuf],
-    requested_path: &std::path::Path,
-) -> Option<std::path::PathBuf> {
-    let mut matches = active_skill_roots
-        .iter()
-        .filter_map(|root| {
-            let candidate = root.join(requested_path);
-            candidate.exists().then(|| root.clone())
-        })
-        .collect::<Vec<_>>();
-    matches.dedup();
-    (matches.len() == 1).then(|| matches.remove(0))
-}
-
-fn requested_file_tool_path(
-    tool_name: &str,
-    payload: &serde_json::Value,
-) -> Option<std::path::PathBuf> {
-    let payload_object = payload.as_object()?;
-    if crate::tools::legacy_display_tool_name(tool_name) != "read" {
-        return None;
-    }
-
-    payload_object
-        .get("path")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            payload_object
-                .get("root")
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(std::path::PathBuf::from)
-        })
 }
 
 fn task_scope_injection_required(tool_name: &str) -> bool {
@@ -251,28 +105,28 @@ fn inject_task_scope_field(payload: serde_json::Value, task_id: &str) -> serde_j
 }
 
 fn resolve_canonical_task_id_for_runtime(
-    session_context: &AppContext,
+    session_context: &Context<'_>,
     memory_config: &SessionStoreConfig,
 ) -> String {
     #[cfg(feature = "memory-sqlite")]
     {
         if let Ok(repo) = SessionRepository::new(memory_config)
             && let Some(task_id) =
-                resolve_canonical_task_id_for_session(&repo, &session_context.session_id)
+                resolve_canonical_task_id_for_session(&repo, &session_context.session().session_id)
         {
             return task_id;
         }
     }
 
-    session_context.session_id.clone()
+    session_context.session().session_id.clone()
 }
 
 fn inject_runtime_narrowing_context_trusted(
     payload: serde_json::Value,
-    session_context: &AppContext,
+    session_context: &Context<'_>,
     preserve_existing_internal_context: bool,
 ) -> AugmentedToolPayload {
-    let Some(runtime_narrowing) = session_context.resolved_runtime_narrowing() else {
+    let Some(runtime_narrowing) = session_context.session().resolved_runtime_narrowing() else {
         return AugmentedToolPayload {
             payload,
             trusted_internal_context: preserve_existing_internal_context,
@@ -313,28 +167,15 @@ fn inject_runtime_narrowing_context_trusted(
 
 fn inject_workspace_root_context_trusted(
     payload: serde_json::Value,
-    session_context: &AppContext,
+    session_context: &Context<'_>,
     preserve_existing_internal_context: bool,
 ) -> AugmentedToolPayload {
-    let Some(workspace_root) = session_context.workspace_root.as_ref() else {
+    let Some(workspace_root) = session_context.session().workspace_root.as_ref() else {
         return AugmentedToolPayload {
             payload,
             trusted_internal_context: preserve_existing_internal_context,
         };
     };
-
-    inject_workspace_root_path_context_trusted(
-        payload,
-        workspace_root.as_path(),
-        preserve_existing_internal_context,
-    )
-}
-
-fn inject_workspace_root_path_context_trusted(
-    payload: serde_json::Value,
-    workspace_root: &std::path::Path,
-    preserve_existing_internal_context: bool,
-) -> AugmentedToolPayload {
     let serde_json::Value::Object(mut object) = payload else {
         return AugmentedToolPayload {
             payload,

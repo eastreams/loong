@@ -892,7 +892,7 @@ async fn execute_spec_operation(
             required_capabilities,
             payload,
         } => {
-            let policy_context = crate::context::SpecExecutionContext::new(token);
+            let policy_context = crate::context::SpecExecutionContext::from_legacy_token(token);
             let mut supervisor = TaskSupervisor::new(TaskIntent {
                 task_id: task_id.clone(),
                 objective: objective.clone(),
@@ -927,7 +927,7 @@ async fn execute_spec_operation(
             required_capabilities,
             payload,
         } => {
-            let policy_context = crate::context::SpecExecutionContext::new(token);
+            let policy_context = crate::context::SpecExecutionContext::from_legacy_token(token);
             let dispatch = kernel
                 .execute_connector_core(
                     pack_id,
@@ -958,7 +958,7 @@ async fn execute_spec_operation(
             payload,
             core,
         } => {
-            let policy_context = crate::context::SpecExecutionContext::new(token);
+            let policy_context = crate::context::SpecExecutionContext::from_legacy_token(token);
             let dispatch = kernel
                 .execute_connector_core(
                     pack_id,
@@ -990,7 +990,7 @@ async fn execute_spec_operation(
             extension,
             core,
         } => {
-            let policy_context = crate::context::SpecExecutionContext::new(token);
+            let policy_context = crate::context::SpecExecutionContext::from_legacy_token(token);
             let dispatch = kernel
                 .execute_connector_extension(
                     pack_id,
@@ -1023,7 +1023,7 @@ async fn execute_spec_operation(
             payload,
             core,
         } => {
-            let policy_context = crate::context::SpecExecutionContext::new(token);
+            let policy_context = crate::context::SpecExecutionContext::from_legacy_token(token);
             let outcome = kernel
                 .execute_runtime_core(
                     pack_id,
@@ -1047,7 +1047,7 @@ async fn execute_spec_operation(
             extension,
             core,
         } => {
-            let policy_context = crate::context::SpecExecutionContext::new(token);
+            let policy_context = crate::context::SpecExecutionContext::from_legacy_token(token);
             let outcome = kernel
                 .execute_runtime_extension(
                     pack_id,
@@ -1073,7 +1073,7 @@ async fn execute_spec_operation(
             payload,
             core,
         } => {
-            let policy_context = crate::context::SpecExecutionContext::new(token);
+            let policy_context = crate::context::SpecExecutionContext::from_legacy_token(token);
             let outcome = kernel
                 .execute_tool_core(
                     pack_id,
@@ -1097,7 +1097,7 @@ async fn execute_spec_operation(
             extension,
             core,
         } => {
-            let policy_context = crate::context::SpecExecutionContext::new(token);
+            let policy_context = crate::context::SpecExecutionContext::from_legacy_token(token);
             let outcome = kernel
                 .execute_tool_extension(
                     pack_id,
@@ -1121,7 +1121,7 @@ async fn execute_spec_operation(
             payload,
             core,
         } => {
-            let policy_context = crate::context::SpecExecutionContext::new(token);
+            let policy_context = crate::context::SpecExecutionContext::from_legacy_token(token);
             let outcome = kernel
                 .execute_memory_core(
                     pack_id,
@@ -1145,7 +1145,7 @@ async fn execute_spec_operation(
             extension,
             core,
         } => {
-            let policy_context = crate::context::SpecExecutionContext::new(token);
+            let policy_context = crate::context::SpecExecutionContext::from_legacy_token(token);
             let outcome = kernel
                 .execute_memory_extension(
                     pack_id,

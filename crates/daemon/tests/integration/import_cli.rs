@@ -1650,13 +1650,25 @@ requires_openai_auth = true
         .expect("imported config should fetch models from the codex-derived endpoint");
     assert_eq!(models, vec!["openai/gpt-5.1-codex".to_owned()]);
 
+    let execution_runtime =
+        mvp::runtime::bootstrap_runtime_with_config(&imported).expect("provider runtime");
+    let session = mvp::Session::from_config(
+        &execution_runtime,
+        &imported,
+        "import-codex-completion",
+        "import-codex-test",
+        loong_contracts::GovernedSessionMode::AdvisoryOnly,
+    )
+    .expect("provider session");
+    let context = mvp::Context::new(&execution_runtime, &session)
+        .expect("provider Session must remain bound to its Runtime");
     let completion = mvp::provider::request_completion(
         &imported,
         &[json!({
             "role": "user",
             "content": "ping"
         })],
-        mvp::provider::ProviderRuntimeBinding::AdvisoryOnly,
+        &context,
     )
     .await
     .expect("imported config should support a provider completion request");
@@ -1784,13 +1796,25 @@ requires_openai_auth = true
         .expect("imported config should fetch models from the custom chat-path-derived endpoint");
     assert_eq!(models, vec!["openai/gpt-5.1-codex".to_owned()]);
 
+    let execution_runtime =
+        mvp::runtime::bootstrap_runtime_with_config(&imported).expect("provider runtime");
+    let session = mvp::Session::from_config(
+        &execution_runtime,
+        &imported,
+        "import-custom-completion",
+        "import-codex-test",
+        loong_contracts::GovernedSessionMode::AdvisoryOnly,
+    )
+    .expect("provider session");
+    let context = mvp::Context::new(&execution_runtime, &session)
+        .expect("provider Session must remain bound to its Runtime");
     let completion = mvp::provider::request_completion(
         &imported,
         &[json!({
             "role": "user",
             "content": "ping"
         })],
-        mvp::provider::ProviderRuntimeBinding::AdvisoryOnly,
+        &context,
     )
     .await
     .expect("imported config should send chat completions to the custom endpoint");
@@ -1900,15 +1924,26 @@ requires_openai_auth = true
 
     let (_, imported) = mvp::config::load(Some(output_path.to_string_lossy().as_ref()))
         .expect("load imported config");
-    let turn = mvp::provider::request_turn(
+    let execution_runtime =
+        mvp::runtime::bootstrap_runtime_with_config(&imported).expect("provider runtime");
+    let session = mvp::Session::from_config(
+        &execution_runtime,
         &imported,
         "import-codex-session",
+        "import-codex-test",
+        loong_contracts::GovernedSessionMode::AdvisoryOnly,
+    )
+    .expect("provider session");
+    let context = mvp::Context::new(&execution_runtime, &session)
+        .expect("provider Session must remain bound to its Runtime");
+    let turn = mvp::provider::request_turn(
+        &imported,
         "import-codex-turn",
         &[json!({
             "role": "user",
             "content": "ping"
         })],
-        mvp::provider::ProviderRuntimeBinding::AdvisoryOnly,
+        &context,
     )
     .await
     .expect("imported config should fallback from Responses to chat-completions for turn requests");
@@ -2012,15 +2047,26 @@ requires_openai_auth = true
 
     let (_, imported) = mvp::config::load(Some(output_path.to_string_lossy().as_ref()))
         .expect("load imported config");
-    let turn = mvp::provider::request_turn(
+    let execution_runtime =
+        mvp::runtime::bootstrap_runtime_with_config(&imported).expect("provider runtime");
+    let session = mvp::Session::from_config(
+        &execution_runtime,
         &imported,
         "import-codex-session",
+        "import-codex-test",
+        loong_contracts::GovernedSessionMode::AdvisoryOnly,
+    )
+    .expect("provider session");
+    let context = mvp::Context::new(&execution_runtime, &session)
+        .expect("provider Session must remain bound to its Runtime");
+    let turn = mvp::provider::request_turn(
+        &imported,
         "import-codex-turn",
         &[json!({
             "role": "user",
             "content": "ping"
         })],
-        mvp::provider::ProviderRuntimeBinding::AdvisoryOnly,
+        &context,
     )
     .await
     .expect(

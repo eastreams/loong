@@ -6,7 +6,7 @@ use std::{
 use async_trait::async_trait;
 use loong_contracts::{Capability, PolicyDecision, PolicyGrant};
 use loong_core::{
-    error::AuthorizationError,
+    error::PolicyGrantError,
     policy::{
         action::{Action, ActionMeta, ActionMetadata},
         context::ContextFactory,
@@ -16,13 +16,37 @@ use loong_core::{
     },
 };
 use serde_json::{Value, json};
+use thiserror::Error;
 
 use super::{
-    access::{FsAccess, FsAccessError},
-    path::{FsResolutionContext, GrantedPath},
+    access::FsAccess,
+    path::{FsPathPolicyContext, FsResolutionContext, GrantedPath},
 };
 
+#[cfg(test)]
+mod tests;
+
 const FS_CREATE_DIR_ALL_REQUIRED_CAPABILITIES: [Capability; 1] = [Capability::FilesystemWrite];
+
+#[derive(Debug, Error)]
+pub enum FsCreateDirAllError {
+    #[error(transparent)]
+    Path(#[from] super::path::FsPathError),
+    #[error(transparent)]
+    Authorization(#[from] PolicyGrantError),
+    #[error("failed to inspect path {path}: {source}", path = .path.display())]
+    InspectPath {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to create directory {path}: {source}", path = .path.display())]
+    CreateDirectory {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+}
 
 /// Typed action for creating one governed directory tree.
 ///
@@ -92,22 +116,17 @@ impl<'a, 'ctx, C, P> FsAccess<'a, 'ctx, C, P>
 where
     C: ContextFactory + 'ctx,
     P: PolicyEngine<C>,
-    C::Cx<'ctx>: FsResolutionContext,
+    C::Cx<'ctx>: FsResolutionContext + FsPathPolicyContext,
 {
     /// Create a directory tree through resolution, path, and write policy.
     pub async fn create_dir_all(
         self,
         path: impl AsRef<Path>,
-    ) -> Result<FsCreateDirAllOutput, FsAccessError> {
+    ) -> Result<FsCreateDirAllOutput, FsCreateDirAllError> {
         let path = self.grant_target_path(path).await?;
 
         let action = FsCreateDirAllAction::new(path);
-        let grant = self
-            .policy_engine
-            .grant(self.ctx, action)
-            .await
-            .map_err(AuthorizationError::from)
-            .map_err(FsAccessError::Authorization)?;
+        let grant = self.policy_engine.grant(self.ctx, action).await?;
         grant.into_granted().run(self.ctx).await
     }
 }
@@ -122,19 +141,19 @@ where
     Cx: Sync,
 {
     type Output = FsCreateDirAllOutput;
-    type Error = FsAccessError;
+    type Error = FsCreateDirAllError;
 
     async fn run(granted: Granted<Self>, _ctx: &Cx) -> Result<Self::Output, Self::Error> {
         let action = granted.into_action();
         let path = action.path().to_path_buf();
-        let already_exists = path
-            .try_exists()
-            .map_err(|source| FsAccessError::InspectPath {
-                path: path.clone(),
-                source,
-            })?;
+        let already_exists =
+            path.try_exists()
+                .map_err(|source| FsCreateDirAllError::InspectPath {
+                    path: path.clone(),
+                    source,
+                })?;
 
-        std::fs::create_dir_all(&path).map_err(|source| FsAccessError::CreateDirectory {
+        std::fs::create_dir_all(&path).map_err(|source| FsCreateDirAllError::CreateDirectory {
             path: path.clone(),
             source,
         })?;

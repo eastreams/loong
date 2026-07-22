@@ -1,6 +1,5 @@
 use super::tests::{cleanup_chat_test_memory, init_chat_test_memory};
 use super::*;
-use crate::conversation::ConversationRuntimeBinding;
 use crate::session::repository::{NewSessionRecord, SessionKind, SessionRepository, SessionState};
 use crate::session::store;
 use crate::test_utils::unique_temp_dir;
@@ -106,7 +105,7 @@ fn cli_runtime_resolves_latest_session_selector_to_latest_resumable_root() {
     )
     .expect("latest selector runtime");
 
-    assert_eq!(runtime.session_id, "selected-session");
+    assert_eq!(runtime.session.session_id(), "selected-session");
 
     cleanup_chat_test_memory(&sqlite_path);
 }
@@ -128,7 +127,10 @@ fn cli_runtime_context_is_owned_by_resolved_session() {
     )
     .expect("session-owned runtime");
 
-    assert_eq!(runtime.app_context.session_id, runtime.session_id);
+    let context = runtime
+        .context()
+        .expect("CLI Session must remain bound to its resolved Runtime");
+    assert_eq!(context.session().session_id(), runtime.session.session_id());
 
     cleanup_chat_test_memory(&sqlite_path);
 }
@@ -154,7 +156,7 @@ fn cli_runtime_latest_session_selector_updates_startup_summary_session_id() {
     let summary =
         build_cli_chat_startup_summary(&runtime, &options).expect("build startup summary");
 
-    assert_eq!(runtime.session_id, "selected-session");
+    assert_eq!(runtime.session.session_id(), "selected-session");
     assert_eq!(summary.session_id, "selected-session");
     assert_ne!(summary.session_id, crate::session::LATEST_SESSION_SELECTOR);
 
@@ -197,11 +199,11 @@ fn cli_runtime_creates_new_root_session_when_no_hint_is_provided() {
     )
     .expect("implicit-new runtime");
 
-    assert_ne!(runtime.session_id, "default");
+    assert_ne!(runtime.session.session_id(), "default");
 
     let repo = SessionRepository::new(&memory_config).expect("repository");
     assert!(
-        repo.load_session(runtime.session_id.as_str())
+        repo.load_session(runtime.session.session_id())
             .expect("load startup session")
             .is_some()
     );
@@ -258,7 +260,10 @@ fn cli_runtime_reopens_explicit_im_local_session_id() {
     )
     .expect("explicit IM local session runtime");
 
-    assert_eq!(runtime.session_id, "feishu:cfg=work:lark_cli_a1b2c3:oc_123");
+    assert_eq!(
+        runtime.session.session_id(),
+        "feishu:cfg=work:lark_cli_a1b2c3:oc_123"
+    );
 
     cleanup_chat_test_memory(&sqlite_path);
 }
@@ -281,7 +286,7 @@ fn concurrent_cli_runtime_resolves_latest_when_explicit_session_is_required() {
     )
     .expect("concurrent runtime");
 
-    assert_eq!(runtime.session_id, "selected-session");
+    assert_eq!(runtime.session.session_id(), "selected-session");
 
     cleanup_chat_test_memory(&sqlite_path);
 }
@@ -358,7 +363,7 @@ fn cli_runtime_latest_session_selector_prefers_newest_resumable_root() {
     )
     .expect("latest selector runtime");
 
-    assert_eq!(runtime.session_id, "root-new");
+    assert_eq!(runtime.session.session_id(), "root-new");
 
     cleanup_chat_test_memory(&sqlite_path);
 }
@@ -421,21 +426,24 @@ async fn cli_runtime_latest_session_selector_drives_history_loads() {
         false,
     )
     .expect("latest selector runtime");
-    let history_lines = load_history_lines(
-        &runtime.session_id,
-        32,
-        ConversationRuntimeBinding::AdvisoryOnly,
-        &memory_config,
+    let advisory_owner = crate::test_support::TestRuntimeSession::from_config(
+        &runtime.config,
+        runtime.session.session_id().to_owned(),
+        "cli-chat-latest-history-test",
+        loong_contracts::GovernedSessionMode::AdvisoryOnly,
     )
-    .await
-    .expect("load history lines");
+    .expect("advisory history runtime session");
+    let advisory_ctx = advisory_owner.context();
+    let history_lines = load_history_lines(32, &advisory_ctx)
+        .await
+        .expect("load history lines");
 
-    assert_eq!(runtime.session_id, "root-new");
+    assert_eq!(runtime.session.session_id(), "root-new");
     assert_eq!(
         history_lines,
         vec![
-            "user: selected user turn".to_owned(),
-            "assistant: selected assistant turn".to_owned(),
+            "[200] user: selected user turn".to_owned(),
+            "[200] assistant: selected assistant turn".to_owned(),
         ]
     );
 
@@ -455,25 +463,24 @@ async fn rebuild_active_route_loads_target_history_and_rebinds_runtime() {
         config,
         "resume-target",
         &CliChatOptions::default(),
-        RouteOrigin::Existing,
+        CliRuntimeSessionOrigin::Existing,
     )
     .await
     .expect("rebuild route");
-    assert_eq!(route.runtime.session_id, "resume-target");
+    assert_eq!(route.runtime.session.session_id(), "resume-target");
     assert_eq!(route.runtime.session_address.session_id, "resume-target");
     assert_eq!(
         route.runtime.session_origin,
         CliRuntimeSessionOrigin::Existing
     );
-    assert_eq!(route.route_origin, RouteOrigin::Existing);
-    let _ = load_history_lines(
-        route.runtime.session_id.as_str(),
-        32,
-        route.runtime.conversation_binding(),
-        &memory_config,
-    )
-    .await
-    .expect("load rebuilt runtime history");
+    assert_eq!(route.route_origin, CliRuntimeSessionOrigin::Existing);
+    let context = route
+        .runtime
+        .context()
+        .expect("rebuilt route Session must remain bound to its Runtime");
+    let _ = load_history_lines(32, &context)
+        .await
+        .expect("load rebuilt runtime history");
 
     cleanup_chat_test_memory(&sqlite_path);
 }

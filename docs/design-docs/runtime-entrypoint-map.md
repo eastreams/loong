@@ -1,191 +1,149 @@
-# Runtime Entrypoint and Bootstrap Map
+# Runtime Entrypoint and Ownership Map
 
-This document is the repository-native reading map for Loong's runtime
-entrypoints.
+This document is the repository-native reading map for Loong's live runtime
+entrypoints. It distinguishes long-lived owners from the borrowed execution
+scope so new surfaces do not recreate the retired root-context model.
 
-It exists for contributors who can already find the code, but want to know
-which bootstrap/helper surface to open first and what each one deliberately
-owns or does **not** own.
+## Ownership Spine
 
-The workspace also contains an additive SDK family (`loong-core`,
-`loong-plugin-sdk`, `loong-runtime`, `loong-app-protocol`, `loong-cli`).
-`loong-runtime` owns the typed kernel/tool-plane root, but the shipped `loong`
-product path still bootstraps through `crates/app` and `crates/daemon` while
-Session and Context ownership migrate into that runtime.
+```text
+host
+  -> Arc<Runtime<RuntimeContextFactory>>
+       owns Kernel + typed ToolPlane
+  -> Session
+       owns stable identity, authority ceiling, config, mailbox, and backends
+  -> Context<'a>
+       borrows Runtime + Session for recursive execution
+       -> ctx.tool(path)?.invoke(payload)
+       -> ctx.access().fs()...
 
-## Read This Document When
+typed registry miss
+  -> explicit legacy dispatcher
+       owns bearer token and ToolCore envelope
+```
 
-- you are comparing `init` / `bootstrap` / `run_turn` variants that look
-  similar but are not interchangeable
-- you need to trace how a turn enters the shared runtime from CLI, channels,
-  gateway, control plane, or daemon task execution
-- you are deciding whether a new surface should mint fresh kernel/ACP state or
-  reuse authority that an outer host already owns
+`Context<'a>` is never a startup owner. A host retains Runtime and Session,
+rematerializes the Session when durable policy may have changed, and constructs
+Context inside the structured call that consumes it. Detached work moves owned
+Runtime/Session state into its future and creates a fresh borrow there.
 
-## Shared Bootstrap Primitives
+## Primary Construction Boundaries
 
-These helpers are the main seam lines. Reading them in this order usually gives
-the fastest mental model.
-
-| Helper | Location | Owns | Deliberately does **not** own |
+| Boundary | Location | Owns | Does not own |
 | --- | --- | --- | --- |
-| `bootstrap_app_context_with_config` | `crates/app/src/context.rs` | audit sink selection, MVP pack registration, tool/memory adapter registration, policy extensions, capability token issuance | process env export, session selection, channel/conversation state |
-| `initialize_runtime_environment` | `crates/app/src/runtime_env.rs` | `LOONG_*` env export, runtime singleton/cache initialization | app-context bootstrap, session selection, durable turn state |
-| `initialize_cli_turn_runtime` | `crates/app/src/chat.rs` | config load, runtime env export, fresh app-context bootstrap, implicit default session allowance | channel-owned app-context reuse, ACP manager reuse |
-| `initialize_cli_turn_runtime_with_loaded_config` | `crates/app/src/chat.rs` | runtime assembly from an already loaded config, fresh app-context bootstrap | config reload from disk, kernel/ACP reuse from an outer host |
-| `initialize_cli_turn_runtime_with_loaded_config_and_app_ctx` | `crates/app/src/chat.rs` | ACP defaults, memory/sqlite prep, session id/address derivation, task-scope derivation, `CliTurnRuntime` assembly | env export, fresh app-context bootstrap |
-| `load_runtime_turn_config` | `crates/app/src/agent_runtime.rs` | provider-facing config refresh for long-lived hosts | channel account re-resolution, full runtime rebuild |
-| `reload_channel_turn_config` | `crates/app/src/channel/dispatch.rs` | channel turn-time provider refresh | serve-loop account selection, serve runtime mutation |
+| `bootstrap_runtime_with_config` | `crates/app/src/runtime.rs` | configured Kernel, policy pipeline, audit sink, typed ToolPlane; legacy pack registration while fallback exists | Session identity, Context, turn state |
+| `Session::from_config` | `crates/app/src/context/session/materialize.rs` | one owned Session materialized from runtime availability, config, and one canonical repository lineage snapshot | Runtime, Context, legacy bearer evidence |
+| `Context::new` | `crates/app/src/context.rs` | borrowed recursive execution scope and effective capability view | independent lifecycle, token/pack, audit sink |
+| `initialize_cli_turn_runtime*` | `crates/app/src/chat/boot.rs` | session selection plus assembly of Runtime, Session, coordinator, and explicit legacy fallback owner | a retained Context |
+| `TurnExecutionService::with_runtime` | `crates/app/src/agent_runtime.rs` | reuse of an outer host's Runtime while materializing the requested Session | replacement Kernel or second ToolPlane |
+| `DefaultLegacyToolDispatcher::with_config` | `crates/app/src/conversation/turn_engine_dispatcher.rs` | bearer evidence for unmatched or unmigrated ToolCore requests | typed Tool/Access authorization |
+
+The `RuntimeContextFactory` marker has only the ContextFactory GAT. It does not
+construct Context and must not become a service locator.
+
+## Shared Turn Flow
+
+For a non-ACP provider turn, the live path is:
+
+```text
+host-owned Runtime + Session
+  -> load turn config
+  -> Session::rematerialize(Runtime, config)
+  -> Context::new(Runtime, rematerialized Session)
+  -> ConversationTurnCoordinator
+  -> TurnEngine prepares each tool intent
+       -> registered path: Context::tool(path)?.invoke(payload)
+       -> missing path: explicit LegacyToolDispatcher fallback
+```
+
+Typed registration wins once lookup succeeds. Policy denial, input failure,
+execution failure, or audit failure after a typed hit must return from the typed
+path; none of them may be reinterpreted as a reason to try legacy dispatch.
 
 ## Surface Map
 
-| Surface | Main entrypoint | Shared pieces it reuses | What makes it different |
-| --- | --- | --- | --- |
-| CLI turn wrappers | `crates/daemon/src/turn_cli.rs` → `run_chat_cli`, `run_ask_cli`, `run_turn_run_cli` | delegates to the normal CLI chat/ask helpers today | remains a daemon entry surface; it no longer routes through a synthetic runtime projection |
-| CLI chat / ask | `crates/app/src/chat.rs` → `run_cli_chat`, `run_cli_ask` | `initialize_cli_turn_runtime`, `AgentRuntime`, conversation runtime | owns the full user-facing runtime shell, can fall back to implicit/default session |
-| Generic agent runtime | `crates/app/src/agent_runtime.rs` → `run_turn`, `run_turn_with_loaded_config`, `run_turn_with_loaded_config_and_acp_manager` | chat runtime assembly + provider/ACP execution | transport-neutral wrapper used by multiple outer surfaces |
-| Long-running channel serve | `crates/app/src/channel/commands/serve.rs` and `channel/runtime/serve.rs` | `initialize_runtime_environment`, `bootstrap_app_context_with_config` | owns serve-loop governance authority and singleton runtime slot tracking |
-| Channel inbound message bridge | `crates/app/src/channel/dispatch.rs` → `process_inbound_with_provider` | channel-owned `app_ctx`, `initialize_cli_turn_runtime_with_loaded_config_and_app_ctx`, `AgentRuntime` | reuses an already bootstrapped kernel because the outer serve loop already owns it |
-| Gateway HTTP turn | `crates/daemon/src/gateway/api_turn.rs` → `handle_turn` | loaded config snapshot, shared ACP manager, `AgentRuntime::run_turn_with_loaded_config_and_acp_manager` | always executes as an ACP turn; no interactive runtime shell |
-| Control plane turn submit | `crates/daemon/src/control_plane_server.rs` → `/turn/submit` path + `ControlPlaneTurnRuntime` | loaded config snapshot, shared ACP manager, per-turn registry, `AgentRuntime::run_turn_with_loaded_config_and_acp_manager` | turn execution only exists when the control plane was launched with a concrete config |
-| Daemon task/turn CLI | `crates/daemon/src/task_execution.rs` → `run_turn_cli`, `execute_daemon_task_with_supervisor` | kernel task supervisor + embedded harness + `AgentRuntime` | deliberately routes turns through the same task/harness lane the daemon uses for generic task execution |
-| Background tasks create | `crates/daemon/src/tasks_cli.rs` → `build_tasks_create_runtime` | detached sqlite runtime when available | prefers detached/background-safe runtime instead of foreground CLI lifetime |
+| Surface | Main entrypoint | Runtime/Session ownership |
+| --- | --- | --- |
+| CLI chat / ask | `crates/app/src/chat.rs` | `initialize_cli_turn_runtime` builds one Runtime and selected Session for the interactive host |
+| Generic agent API | `crates/app/src/agent_runtime.rs` | `TurnExecutionService` either bootstraps Runtime or reuses one supplied by an outer host, then materializes Session |
+| Channel serve | `crates/app/src/channel/commands/serve.rs` and `channel/dispatch.rs` | serve loop owns one Runtime; each routed session is materialized against that Runtime |
+| Gateway turn | `crates/daemon/src/gateway/api_turn.rs` | request service supplies loaded config and shared ACP state; structured execution owns the selected Session |
+| Control-plane turn | `crates/daemon/src/control_plane_server/{support,turn}.rs` | `ControlPlaneTurnRuntime` owns shared Runtime/ACP manager; spawned turn moves the Runtime Arc and materializes Session inside the task |
+| Daemon task execution | `crates/daemon/src/task_execution.rs` | supervised request passes the daemon Runtime into `TurnExecutionService::with_runtime` |
+| Background task / delegate | `crates/app/src/conversation/runtime_delegate.rs` and daemon task surfaces | child Session derives from live parent authority; detached execution owns the child Session and Runtime Arc |
 
-## Call Paths by Surface
+## Entrypoint Call Paths
 
-### 0. `turn_cli` wrappers
-
-```text
-run_turn_run_cli / run_ask_cli / run_chat_cli
-  -> mvp::chat::run_cli_*
-```
-
-The shipped CLI turn/chat bootstrap still terminates in the app-layer runtime
-helpers today. `loong-app-protocol` contains host command/response contracts;
-it is not a turn executor or runtime projection layer.
-
-### 1. CLI chat / ask
+### CLI chat / ask
 
 ```text
 run_cli_chat / run_cli_ask
   -> initialize_cli_turn_runtime
   -> initialize_cli_turn_runtime_with_loaded_config
-  -> initialize_runtime_environment
-  -> bootstrap_app_context_with_config
-  -> initialize_cli_turn_runtime_with_loaded_config_and_app_ctx
+  -> bootstrap_runtime_with_config
+  -> Session::from_config
+  -> CliTurnRuntime { runtime, session, legacy_tools, ... }
+  -> runtime.context() or per-turn Session::rematerialize + Context::new
+```
+
+`CliTurnRuntime::context()` is a short borrow for non-turn operations. Provider
+and tool turns rematerialize first so a durable session-policy update cannot be
+skipped by retaining an older Context.
+
+### Channel ingress
+
+```text
+channel serve bootstrap
+  -> bootstrap_runtime_with_config
+  -> receive message
+  -> initialize_cli_turn_runtime_with_loaded_config_and_runtime
+  -> Session::from_config using the serve Runtime
   -> AgentRuntime / ConversationTurnCoordinator
 ```
 
-Use this path as the baseline for answering “what does a full fresh turn
-bootstrap look like?”
+The serve loop reuses Runtime, not Context. Minting a new Kernel or bearer token
+for every typed message would split policy/audit/tool-plane authority.
 
-### 2. Generic `AgentRuntime` wrappers
+### Gateway and control plane
 
-`AgentRuntime` is intentionally a **transport-neutral veneer**:
+Gateway and control-plane hosts reuse their configured Runtime and shared ACP
+manager. A submitted turn moves cloned long-lived handles into the spawned
+future, materializes its Session there, and creates Context only while running
+the recursive execution. No `&Context` escapes into the `'static` task.
 
-- `run_turn` is the simplest path: load config, assemble chat runtime, run turn
-- `run_turn_with_loaded_config` skips config load but still bootstraps a fresh
-  chat runtime
-- `run_turn_with_loaded_config_and_acp_manager` also reuses an existing ACP
-  manager, which matters for gateway/control-plane style hosts that should share
-  ACP session ownership across turns
+### Child and detached execution
 
-### 3. Channel inbound bridge
+- Inline recursive work derives a child Context whose capabilities are a subset
+  of its parent.
+- A subagent is an owned child Session. Its durable parent id is lookup evidence;
+  executable authority is derived from the live parent Session or the canonical
+  persisted lineage materializer.
+- Detached work is registered with a runtime owner and moves an owned Session;
+  transferring a Context reference is invalid because Context has no lifecycle
+  independent of those owners.
 
-```text
-channel webhook/socket receive
-  -> process_inbound_with_provider
-  -> reload_channel_turn_config
-  -> resolve_channel_acp_turn_hints
-  -> initialize_cli_turn_runtime_with_loaded_config_and_app_ctx
-  -> AgentRuntime::run_turn_with_runtime_...
-```
+## Guardrails
 
-Important distinction:
+Before adding a runtime surface, answer these questions in code comments at the
+ownership boundary:
 
-- the outer channel serve loop already owns the governed `app_ctx`
-- the inbound bridge must **reuse** that authority instead of minting another
-  kernel token for each message
+1. Which component owns the Runtime, and is it reused rather than rebuilt?
+2. Which component owns the Session and cancellation/lifecycle state?
+3. Where is Session rematerialized before durable policy is observed?
+4. In which structured call is `Context<'a>` borrowed?
+5. Is legacy fallback entered only after a typed registry miss?
 
-### 4. Gateway HTTP turn
+The following are architecture regressions:
 
-```text
-gateway/api_turn.rs::handle_turn
-  -> validate target address
-  -> reuse app_state config + ACP manager
-  -> AgentRuntime::run_turn_with_loaded_config_and_acp_manager
-```
-
-This path is narrower than CLI chat:
-
-- it always executes as an ACP turn
-- it does not own long-lived interactive runtime state
-- it behaves more like “submit one governed turn to the ACP lane”
-
-### 5. Control plane `/turn/submit`
-
-```text
-run_control_plane_serve_cli
-  -> ControlPlaneTurnRuntime::new
-  -> HTTP /turn/submit handler
-  -> per-turn registry issue_turn(...)
-  -> AgentRuntime::run_turn_with_loaded_config_and_acp_manager
-```
-
-Two subtleties matter here:
-
-1. `ControlPlaneTurnRuntime` is intentionally a **narrow shell**, not the full
-   router state
-2. no-config control-plane mode can still expose control/read routes, but it
-   cannot synthesize governed chat turns
-
-### 6. Daemon task / turn path
-
-```text
-run_turn_cli
-  -> build_daemon_runtime_kernel
-  -> execute_daemon_task_with_supervisor
-  -> EmbeddedAgentHarness::execute
-  -> AgentRuntime::run_turn
-```
-
-This is the path to read when the question is not “how does chat work?” but
-“how does a daemon task eventually land in the same runtime?”
-
-## Reading Guide by Problem
-
-| If you are debugging... | Start here | Then open |
-| --- | --- | --- |
-| why a CLI/chat turn picked the wrong session | `crates/app/src/chat.rs` | `agent_runtime.rs`, `session_*` helpers |
-| why ACP is or is not used for a turn | `crates/app/src/agent_runtime.rs` | `channel/dispatch.rs`, `control_plane_server.rs`, `gateway/api_turn.rs` |
-| why a channel message reused or did not reuse governance authority | `crates/app/src/channel/dispatch.rs` | `chat.rs`, `context.rs` |
-| why gateway/control-plane turns behave differently from chat | `gateway/api_turn.rs` or `control_plane_server.rs` | `agent_runtime.rs` |
-| why a daemon task path differs from direct chat execution | `daemon/src/task_execution.rs` | `agent_runtime.rs`, `chat.rs` |
-| why background task creation uses a detached runtime | `daemon/src/tasks_cli.rs` | `conversation` runtime implementations |
-
-## Guardrails for Future Modifiers
-
-When adding a new surface, decide these questions explicitly before writing the
-code:
-
-1. **Does this surface already own governance authority?**
-   - If yes, prefer reusing `initialize_cli_turn_runtime_with_loaded_config_and_app_ctx`
-   - If no, bootstrap fresh authority through the higher-level chat helpers
-
-2. **Does this surface need to share ACP manager ownership across turns?**
-   - If yes, reuse `AgentRuntime::run_turn_with_loaded_config_and_acp_manager`
-   - If no, the simpler `run_turn` or `run_turn_with_loaded_config` is safer
-
-3. **Is only provider-facing state supposed to refresh between turns?**
-   - If yes, use `load_runtime_turn_config` / `reload_channel_turn_config`
-   - Do not silently rebuild unrelated serve-loop state
-
-4. **Is this surface interactive, one-shot, or daemon-supervised?**
-   - The answer should show up in the chosen entrypoint, not be hidden inside a
-     late-stage conditional
+- retaining an owned/root Context beside Runtime or Session
+- placing pack/token, audit sink, or ToolCore envelopes in Context
+- rebuilding a ToolPath from a provider display name
+- treating typed denial or execution failure as legacy fallback eligibility
+- constructing a child Session from host config when a live parent Session is available
 
 ## Related Documents
 
+- [Core Beliefs](core-beliefs.md)
 - [Layered Kernel Design](layered-kernel-design.md)
-- [Harness Engineering](harness-engineering.md)
+- [Reliability](../RELIABILITY.md)
 - [Architecture Map](../../ARCHITECTURE.md)

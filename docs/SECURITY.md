@@ -58,14 +58,14 @@ Loong implements a multi-layer security model. Higher layers add defense-in-dept
 
 ### Policy Engine (L1)
 
-Every kernel-bound core tool call passes through capability + policy gates:
+Every typed Tool or Access action passes through the sealed grant path:
 
 ```
-CapabilityToken → PolicyEngine.authorize(...) → PolicyExtensionChain → Execution → Audit
+Context → PolicyEngine::grant → ActionGrant<A> → Granted<A> → Execution
 ```
 
-Tool-specific request approval currently lives in the `PolicyExtensionChain`; the legacy
-`PolicyEngine::check_tool_call` hook is deprecated.
+The capability gate, policy report, authorization audit, and private grant mint are one
+algorithm. Pack/token authorization remains only inside explicitly legacy ingress owners.
 
 ### Current Coverage
 
@@ -75,27 +75,21 @@ inventory.
 
 #### Core Runtime And Tool Surfaces
 
-- `shell.exec` — kernel-mediated core tool execution with capability checks,
+- `shell.exec` — still an explicit legacy fallback with capability checks,
   shell policy extensions, and audit events
-- `file.read` / `file.write` / `file.edit` — kernel-mediated core tool
-  execution with filesystem capabilities, file policy extension checks,
-  execution-layer path sandboxing, and audit events
+- `read` / `write` / `edit` — typed tools whose physical filesystem effects occur
+  only through Access actions after path and operation grants
 - Conversation tool turns — fast-lane and safe-lane inner tool execution flow
-  through explicit `ConversationRuntimeBinding` (`Context` or `AdvisoryOnly`);
-  missing app execution context fails closed as `no_app_context`, and async
-  delegate children inherit the parent context and its narrowed authority
-- Memory/runtime/context orchestration — the conversation module now carries
-  `ConversationRuntimeBinding` end-to-end across runtime, context,
-  persistence, turn coordination, loop followup, history, and app-dispatch
-  seams; context-bound history readers fail closed on kernel memory-window
+  through one borrowed `Context<'_>`; advisory sessions use the same Context type with a
+  non-mutating capability baseline, and delegate children inherit a narrowed ceiling
+- Memory/runtime/context orchestration — runtime and Session are the long-lived owners, while
+  conversation, persistence, turn coordination, followup, history, and app dispatch borrow the
+  same recursive Context; history readers fail closed on kernel memory-window
   errors or non-`ok` statuses instead of silently downgrading to direct sqlite
-- Provider request/failover orchestration — provider request entrypoints and
-  failover telemetry use explicit `ProviderRuntimeBinding` (`Context` or
-  `AdvisoryOnly`); failover metrics record in both modes, but governed audit
-  emission only occurs when provider execution has an app context
-- Outer integration wrappers receive the same owned `AppContext` used by CLI,
-  channel, conversation, and provider paths. They derive narrower invocation
-  overlays instead of carrying a second optional authority representation.
+- Provider request/failover orchestration — provider entrypoints receive the same borrowed Context;
+  failover audit is runtime operational evidence and does not invent a legacy pack association
+- Outer integration owners retain Runtime and owned Session separately, then construct Context
+  inside the structured call; they do not retain a second root or optional authority representation.
 
 #### Plugin Intake And Compatibility
 
@@ -185,31 +179,16 @@ inventory.
 - Connector/ACP/runtime-only analytics — not uniformly routed through the L1
   policy chain yet
 
-#### Binding Notes
+#### Context Ownership Notes
 
-Conversation runtime binding:
-
-- `Context` carries the unified app context used for governed execution;
-  `AdvisoryOnly` allows conversation orchestration to continue, but governed
-  tool execution must fail closed
-- it removes ambiguity from conversation traits and dispatcher seams where
-  `None` previously overloaded "direct mode", "not wired yet", and "forgot to
-  pass kernel authority"
-- detached async delegate spawns carry an owned app context forward when the
-  parent is context-bound; advisory-only parents remain advisory-only
-- context-bound history helpers do not reuse direct sqlite fallback behind
-  the caller's back, and diagnostics now surface explicit history load status
-  plus normalized error codes
-- user-facing chat diagnostics and the discovery-first session-history path now
-  preserve explicit `ConversationRuntimeBinding` semantics end-to-end
-
-Provider runtime binding:
-
-- `Context` means failover/audit behavior may emit governed audit events;
-  `Direct` means provider execution is intentionally running without that
-  authority while still recording in-process failover metrics
-- this keeps provider governance explicit without importing conversation-layer
-  semantics into provider code
+- Every live Session mode has a Context; advisory authority is represented by capabilities, not by
+  omitting Context.
+- Detached work moves its Runtime and owned Session into the task, then reconstructs a borrowed
+  Context inside the future. A Context reference never escapes as a `'static` owner.
+- Context-bound history helpers do not reuse direct sqlite fallback behind the caller's back, and
+  diagnostics surface explicit history load status plus normalized error codes.
+- Provider and conversation code obtain identity and authority from `ctx.session()` and
+  `ctx.allowed_capabilities()` instead of parallel string or binding parameters.
 
 ### Capability Tokens
 

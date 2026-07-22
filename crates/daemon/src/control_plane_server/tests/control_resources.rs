@@ -307,7 +307,7 @@ async fn session_list_returns_visible_repository_sessions() {
             .as_ref()
             .expect("workflow binding")
             .mode,
-        "advisory_only"
+        "mutating_capable"
     );
     let continuity = child
         .workflow
@@ -441,9 +441,9 @@ async fn task_list_returns_visible_background_tasks() {
         "child-session"
     );
     assert_eq!(task.delegate_mode.as_deref(), Some("async"));
-    assert_eq!(task.requested_tool_ids, vec!["read".to_owned()]);
+    assert_eq!(task.requested_tool_ids, vec!["/read".to_owned()]);
     assert_eq!(task.visible_requested_tool_ids, vec!["read".to_owned()]);
-    assert_eq!(task.effective_tool_ids, vec!["read".to_owned()]);
+    assert_eq!(task.effective_tool_ids, vec!["/read".to_owned()]);
     assert_eq!(task.visible_effective_tool_ids, vec!["read".to_owned()]);
 }
 
@@ -493,12 +493,12 @@ async fn task_read_returns_visible_background_task_detail() {
     );
     assert_eq!(task.task.delegate_phase.as_deref(), Some("running"));
     assert_eq!(task.task.approval_request_count, 1);
-    assert_eq!(task.task.requested_tool_ids, vec!["read".to_owned()]);
+    assert_eq!(task.task.requested_tool_ids, vec!["/read".to_owned()]);
     assert_eq!(
         task.task.visible_requested_tool_ids,
         vec!["read".to_owned()]
     );
-    assert_eq!(task.task.effective_tool_ids, vec!["read".to_owned()]);
+    assert_eq!(task.task.effective_tool_ids, vec!["/read".to_owned()]);
     assert_eq!(
         task.task.visible_effective_tool_ids,
         vec!["read".to_owned()]

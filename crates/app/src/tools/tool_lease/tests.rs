@@ -2,10 +2,15 @@ use serde_json::json;
 
 use super::*;
 
+#[allow(clippy::expect_used)]
+fn tool_path(segment: &str) -> ToolPath {
+    ToolPath::new([segment]).expect("test tool path must be valid")
+}
+
 #[test]
 fn standalone_legacy_tool_invoke_rejects_capability_override() {
     let arguments = serde_json::Map::new();
-    let lease = issue_tool_lease("config.import", &arguments)
+    let lease = issue_tool_lease(&tool_path("config.import"), &arguments)
         .expect("legacy config import lease should be issued");
     let request = ToolCoreRequest {
         tool_name: "tool.invoke".to_owned(),
@@ -27,46 +32,44 @@ fn standalone_legacy_tool_invoke_rejects_capability_override() {
 }
 
 #[cfg(feature = "tool-file")]
-// Both exposure modes must receive the same valid leased envelope; only the
-// policy at the caller boundary is allowed to differ.
-fn file_read_alias_request() -> ToolCoreRequest {
+#[test]
+fn typed_alias_lease_validates_against_runtime_canonical_path() {
+    let lease_payload = serde_json::Map::new();
+    let lease = issue_tool_lease(&tool_path("read"), &lease_payload)
+        .expect("canonical read lease should be issued");
+    let envelope = json!({
+        "tool_id": "file.read",
+        "lease": lease,
+        "arguments": { "path": "notes.txt" },
+    });
+    let parsed = parse_tool_invoke_request("tool.invoke", &envelope)
+        .expect("valid envelope should preserve its raw typed path");
+    assert_eq!(parsed.path, tool_path("file.read"));
+
+    let resolved = parsed
+        .resolve(tool_path("read"))
+        .expect("canonical runtime path should match the issued lease");
+    assert_eq!(resolved.path, tool_path("read"));
+}
+
+#[test]
+fn tool_lease_binds_exact_canonical_path_segments() {
+    let exact_path = tool_path("alpha.beta");
+    let split_path = ToolPath::new(["alpha", "beta"]).expect("test tool path must be valid");
     let lease_payload = serde_json::Map::new();
     let lease =
-        issue_tool_lease("read", &lease_payload).expect("canonical read lease should be issued");
-    ToolCoreRequest {
-        tool_name: "tool.invoke".to_owned(),
-        payload: json!({
-            "tool_id": "file.read",
-            "lease": lease,
-            "arguments": { "path": "notes.txt" },
-        }),
-    }
-}
+        issue_tool_lease(&exact_path, &lease_payload).expect("exact path lease should be issued");
+    let envelope = json!({
+        "tool_id": exact_path.to_string(),
+        "lease": lease,
+        "arguments": {},
+    });
+    let parsed = parse_tool_invoke_request("tool.invoke", &envelope)
+        .expect("canonical exact path should parse");
 
-#[cfg(feature = "tool-file")]
-#[test]
-fn provider_exposed_alias_is_rejected_after_path_canonicalization() {
-    let error = resolve_tool_invoke_request(
-        &file_read_alias_request(),
-        ToolInvokeProviderExposure::RejectProviderExposed,
-    )
-    .expect_err("provider-exposed read must remain a direct provider call");
-
-    assert_eq!(
-        error,
-        "tool_not_provider_exposed: read must be called directly as a core tool"
-    );
-}
-
-#[cfg(feature = "tool-file")]
-#[test]
-fn provider_exposed_alias_is_canonicalized_for_typed_lookup() {
-    let resolved = resolve_tool_invoke_request(
-        &file_read_alias_request(),
-        ToolInvokeProviderExposure::AllowProviderExposed,
-    )
-    .expect("typed ingress may invoke provider-exposed tools");
-
-    assert_eq!(resolved.request.tool_name, "read");
-    assert_eq!(resolved.request.payload, json!({ "path": "notes.txt" }));
+    assert_eq!(parsed.path, exact_path);
+    let error = parsed
+        .resolve(split_path)
+        .expect_err("a split path must not satisfy an embedded-dot lease");
+    assert!(error.contains("tool mismatch"));
 }

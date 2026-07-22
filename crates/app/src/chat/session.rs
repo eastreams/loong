@@ -203,7 +203,7 @@ impl ChatSessionSurface {
 
     fn load_visible_worker_sessions(&self, limit: usize) -> CliResult<Vec<WorkerQueueItemSummary>> {
         let store = self.control_plane_store()?;
-        let sessions = store.visible_worker_sessions(&self.runtime.session_id, limit)?;
+        let sessions = store.visible_worker_sessions(self.runtime.session.session_id(), limit)?;
         let mut items = Vec::new();
 
         for session in sessions {
@@ -216,7 +216,7 @@ impl ChatSessionSurface {
 
     fn load_visible_sessions(&self, limit: usize) -> CliResult<Vec<SessionQueueItemSummary>> {
         let store = self.control_plane_store()?;
-        let sessions = store.visible_sessions(&self.runtime.session_id, limit)?;
+        let sessions = store.visible_sessions(self.runtime.session.session_id(), limit)?;
         let mut items = Vec::new();
 
         for session in sessions {

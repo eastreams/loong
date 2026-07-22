@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use tokio::time::{Duration, Instant, sleep};
 
 use crate::config::{SessionVisibility, ToolConfig};
-use crate::conversation::{InterAgentMessage, mailbox_for_session};
+use crate::conversation::InterAgentMessage;
 use crate::session::repository::{
     FinalizeSessionTerminalRequest, NewSessionEvent, NewSessionRecord, SessionEventRecord,
     SessionKind, SessionRepository, SessionState, SessionSummaryRecord,
@@ -15,8 +15,8 @@ use crate::session::repository::{
 use crate::session::store::{SessionStoreConfig, append_session_turn_direct};
 
 use super::{
-    execute_session_tool_with_config, execute_session_tool_with_policies,
-    wait_for_single_session_with_policies,
+    execute_session_policy_tool, execute_session_tool_with_config,
+    execute_session_tool_with_policies, wait_for_single_session_with_policies,
 };
 
 fn isolated_memory_config(test_name: &str) -> SessionStoreConfig {
@@ -37,6 +37,32 @@ fn execute_session_mutation_tool_with_config(
     let mut tool_config = ToolConfig::default();
     tool_config.sessions.allow_mutation = true;
     execute_session_tool_with_policies(request, current_session_id, config, &tool_config)
+}
+
+fn execute_session_policy_tool_with_config(
+    request: ToolCoreRequest,
+    current_session_id: &str,
+    config: &SessionStoreConfig,
+) -> Result<ToolCoreOutcome, String> {
+    let sqlite_path = config
+        .sqlite_path
+        .as_ref()
+        .ok_or_else(|| "session policy test requires sqlite_path".to_owned())?;
+    let mut app_config = crate::config::LoongConfig::default();
+    app_config.audit.mode = crate::config::AuditMode::InMemory;
+    app_config.memory.sqlite_path = sqlite_path.display().to_string();
+    app_config.tools.sessions.allow_mutation = true;
+    let runtime = crate::runtime::bootstrap_runtime_with_config(&app_config)?;
+    let session = crate::Session::from_config(
+        runtime.as_ref(),
+        &app_config,
+        current_session_id,
+        "test-agent",
+        loong_contracts::GovernedSessionMode::MutatingCapable,
+    )?;
+    let context =
+        crate::Context::new(runtime.as_ref(), &session).map_err(|error| error.to_string())?;
+    execute_session_policy_tool(request, &context, &app_config)
 }
 
 fn overwrite_session_event_ts(
@@ -671,7 +697,6 @@ fn sessions_list_includes_workflow_metadata_for_delegate_children() {
                 "allow_shell_in_child": false,
                 "child_tool_allowlist": ["read"],
                 "workspace_root": "/tmp/loong/sessions-list-workflow/child-session",
-                "kernel_bound": false,
                 "runtime_narrowing": {}
             }
         }),
@@ -713,7 +738,7 @@ fn sessions_list_includes_workflow_metadata_for_delegate_children() {
         child["workflow"]["binding"]["task_session_id"],
         "child-session"
     );
-    assert_eq!(child["workflow"]["binding"]["mode"], "advisory_only");
+    assert_eq!(child["workflow"]["binding"]["mode"], "mutating_capable");
     assert_eq!(
         child["workflow"]["binding"]["execution_surface"],
         "delegate.async"
@@ -1180,7 +1205,6 @@ fn session_status_includes_workflow_metadata_for_delegate_child() {
                     "allow_shell_in_child": false,
                     "child_tool_allowlist": ["read"],
                     "workspace_root": "/tmp/loong/session-status-workflow/child-session",
-                    "kernel_bound": false,
                     "runtime_narrowing": {}
                 },
                 "runtime_self_continuity": {
@@ -1249,7 +1273,7 @@ fn session_status_includes_workflow_metadata_for_delegate_child() {
     );
     assert_eq!(
         outcome.payload["workflow"]["binding"]["mode"],
-        "advisory_only"
+        "mutating_capable"
     );
     assert_eq!(
         outcome.payload["workflow"]["binding"]["execution_surface"],
@@ -1702,7 +1726,6 @@ fn task_status_resolves_binding_only_task_identity_before_task_progress_exists()
                 "allow_shell_in_child": false,
                 "child_tool_allowlist": ["read"],
                 "workspace_root": "/tmp/loong/task-status-binding-only/child-session",
-                "kernel_bound": false,
                 "runtime_narrowing": {}
             }
         }),
@@ -1884,7 +1907,6 @@ fn task_history_aggregates_visible_task_lineage_across_owner_sessions() {
                 "allow_shell_in_child": false,
                 "child_tool_allowlist": ["read"],
                 "workspace_root": "/tmp/loong/task-history-lineage/owner-new",
-                "kernel_bound": false,
                 "runtime_narrowing": {}
             }
         }),
@@ -2751,7 +2773,7 @@ fn session_tool_policy_tools_round_trip_and_clear_policy() {
     })
     .expect("create root session");
 
-    let set = execute_session_mutation_tool_with_config(
+    let set = execute_session_policy_tool_with_config(
         ToolCoreRequest {
             tool_name: "session_tool_policy_set".to_owned(),
             payload: json!({
@@ -2777,7 +2799,7 @@ fn session_tool_policy_tools_round_trip_and_clear_policy() {
     assert_eq!(set.payload["policy"]["has_policy"], true);
     assert_eq!(
         set.payload["policy"]["requested_tool_ids"],
-        json!(["read", "session_status"])
+        json!(["/read", "/session_status"])
     );
     assert_eq!(
         set.payload["policy"]["visible_requested_tool_ids"],
@@ -2785,7 +2807,7 @@ fn session_tool_policy_tools_round_trip_and_clear_policy() {
     );
     assert_eq!(
         set.payload["policy"]["effective_tool_ids"],
-        json!(["read", "session_status"])
+        json!(["/read", "/session_status"])
     );
     assert_eq!(
         set.payload["policy"]["visible_effective_tool_ids"],
@@ -2800,7 +2822,7 @@ fn session_tool_policy_tools_round_trip_and_clear_policy() {
         json!(["docs.example.com"])
     );
 
-    let status = execute_session_tool_with_config(
+    let status = execute_session_policy_tool_with_config(
         ToolCoreRequest {
             tool_name: "session_tool_policy_status".to_owned(),
             payload: json!({}),
@@ -2813,7 +2835,7 @@ fn session_tool_policy_tools_round_trip_and_clear_policy() {
     assert_eq!(status.payload["policy"]["has_policy"], true);
     assert_eq!(
         status.payload["policy"]["requested_tool_ids"],
-        json!(["read", "session_status"])
+        json!(["/read", "/session_status"])
     );
     assert_eq!(
         status.payload["policy"]["visible_requested_tool_ids"],
@@ -2824,7 +2846,7 @@ fn session_tool_policy_tools_round_trip_and_clear_policy() {
         json!(["deny.example.com"])
     );
 
-    let clear = execute_session_mutation_tool_with_config(
+    let clear = execute_session_policy_tool_with_config(
         ToolCoreRequest {
             tool_name: "session_tool_policy_clear".to_owned(),
             payload: json!({}),
@@ -2842,7 +2864,71 @@ fn session_tool_policy_tools_round_trip_and_clear_policy() {
             .as_array()
             .expect("effective tool ids")
             .iter()
-            .any(|value| value == "session_status")
+            .any(|value| value == "/session_status")
+    );
+}
+
+#[test]
+fn session_tool_policy_clear_preserves_policy_when_projection_is_invalid() {
+    let config = isolated_memory_config("session-tool-policy-clear-invalid-projection");
+    let sqlite_path = config
+        .sqlite_path
+        .as_ref()
+        .expect("session policy test sqlite path");
+    let mut app_config = crate::config::LoongConfig::default();
+    app_config.audit.mode = crate::config::AuditMode::InMemory;
+    app_config.memory.sqlite_path = sqlite_path.display().to_string();
+    app_config.tools.sessions.allow_mutation = true;
+    let repo = SessionRepository::new(&config).expect("repository");
+    repo.create_session(NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: SessionState::Ready,
+    })
+    .expect("create root Session");
+    repo.upsert_session_tool_policy(crate::session::repository::NewSessionToolPolicyRecord {
+        session_id: "root-session".to_owned(),
+        requested_tool_ids: vec!["/read".to_owned()],
+        runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
+    })
+    .expect("persist Session tool policy");
+
+    let runtime = crate::runtime::bootstrap_runtime_with_config(&app_config).expect("runtime");
+    let session = crate::Session::from_config(
+        runtime.as_ref(),
+        &app_config,
+        "root-session",
+        "test-agent",
+        loong_contracts::GovernedSessionMode::MutatingCapable,
+    )
+    .expect("materialize valid Session before corruption");
+    let context = crate::Context::new(runtime.as_ref(), &session).expect("Session context");
+    repo.append_event(NewSessionEvent {
+        session_id: "root-session".to_owned(),
+        event_kind: "delegate_started".to_owned(),
+        actor_session_id: None,
+        payload_json: json!({}),
+    })
+    .expect("persist malformed authority event");
+
+    let error = execute_session_policy_tool(
+        ToolCoreRequest {
+            tool_name: "session_tool_policy_clear".to_owned(),
+            payload: json!({}),
+        },
+        &context,
+        &app_config,
+    )
+    .expect_err("invalid typed projection must reject policy clear");
+
+    assert!(error.contains("contains no execution"), "error={error}");
+    assert!(
+        repo.load_session_tool_policy("root-session")
+            .expect("reload Session tool policy")
+            .is_some(),
+        "failed validation must not delete durable policy"
     );
 }
 
@@ -2851,7 +2937,7 @@ fn session_tool_policy_set_bootstraps_current_root_session_when_missing() {
     let config = isolated_memory_config("session-tool-policy-bootstrap");
     let repo = SessionRepository::new(&config).expect("repository");
 
-    let set = execute_session_mutation_tool_with_config(
+    let set = execute_session_policy_tool_with_config(
         ToolCoreRequest {
             tool_name: "session_tool_policy_set".to_owned(),
             payload: json!({
@@ -2877,7 +2963,7 @@ fn session_tool_policy_set_bootstraps_current_root_session_when_missing() {
         .expect("bootstrapped session tool policy");
     assert_eq!(
         policy.requested_tool_ids,
-        vec!["read".to_owned(), "session_status".to_owned()]
+        vec!["/read".to_owned(), "/session_status".to_owned()]
     );
 }
 
@@ -2894,7 +2980,7 @@ fn session_tool_policy_set_rejects_legacy_discovery_wrappers() {
     })
     .expect("create root session");
 
-    let error = execute_session_mutation_tool_with_config(
+    let error = execute_session_policy_tool_with_config(
         ToolCoreRequest {
             tool_name: "session_tool_policy_set".to_owned(),
             payload: json!({
@@ -2911,7 +2997,7 @@ fn session_tool_policy_set_rejects_legacy_discovery_wrappers() {
 
 #[cfg(feature = "feishu-integration")]
 #[test]
-fn session_tool_policy_root_tool_view_includes_runtime_discovered_feishu_tools() {
+fn runtime_tool_view_includes_runtime_discovered_feishu_tools() {
     let runtime_config = crate::tools::runtime_config::ToolRuntimeConfig {
         feishu: Some(crate::tools::runtime_config::FeishuToolRuntimeConfig {
             channel: crate::config::FeishuChannelConfig {
@@ -2928,8 +3014,7 @@ fn session_tool_policy_root_tool_view_includes_runtime_discovered_feishu_tools()
         }),
         ..crate::tools::runtime_config::ToolRuntimeConfig::default()
     };
-    let tool_config = ToolConfig::default();
-    let tool_view = super::session_tool_policy_root_tool_view(&tool_config, &runtime_config);
+    let tool_view = crate::tools::runtime_tool_view_for_runtime_config(&runtime_config);
 
     assert!(tool_view.contains("feishu.whoami"));
     assert!(tool_view.contains("feishu.messages.send"));
@@ -4514,7 +4599,6 @@ fn session_status_includes_delegate_lifecycle_for_queued_child() {
                 "timeout_seconds": 60,
                 "allow_shell_in_child": false,
                 "child_tool_allowlist": ["read", "write", "edit"],
-                "kernel_bound": false,
                 "runtime_narrowing": {
                     "web_fetch": {
                         "allowed_domains": ["docs.example.com"],
@@ -4589,9 +4673,15 @@ fn session_status_includes_delegate_lifecycle_for_queued_child() {
         outcome.payload["delegate_lifecycle"]["execution"]["child_tool_allowlist"],
         json!(["read", "write", "edit"])
     );
-    assert_eq!(
-        outcome.payload["delegate_lifecycle"]["execution"]["kernel_bound"],
-        false
+    assert!(
+        outcome.payload["delegate_lifecycle"]["execution"]
+            .get("kernel_bound")
+            .is_none()
+    );
+    assert!(
+        outcome.payload["subagent_contract"]
+            .get("runtime_binding")
+            .is_none()
     );
     assert_eq!(
         outcome.payload["delegate_lifecycle"]["execution"]["runtime_narrowing"]["web_fetch"]["allowed_domains"],
@@ -4721,7 +4811,6 @@ fn session_delegate_lifecycle_prefers_execution_mode_when_history_is_partial() {
                     "timeout_seconds": 60,
                     "allow_shell_in_child": false,
                     "child_tool_allowlist": ["read"],
-                    "kernel_bound": false
                 }
             }),
             ts: 110,
@@ -5324,6 +5413,12 @@ async fn session_wait_wakes_when_parent_mailbox_receives_delegate_result() {
     })
     .expect("create child");
 
+    let owner = crate::test_support::runtime_session_for_test(
+        "root-session",
+        crate::tools::runtime_tool_view(),
+    );
+    let context = owner.context();
+    let mailbox = owner.session.mailbox().sender();
     let config_for_completion = config.clone();
     let completion = tokio::spawn(async move {
         sleep(Duration::from_millis(50)).await;
@@ -5348,7 +5443,6 @@ async fn session_wait_wakes_when_parent_mailbox_receives_delegate_result() {
         )
         .expect("finalize child");
 
-        let mailbox = mailbox_for_session("root-session");
         let send_result = mailbox.send(InterAgentMessage {
             author: AgentPath::root(),
             recipient: AgentPath::root(),
@@ -5367,7 +5461,7 @@ async fn session_wait_wakes_when_parent_mailbox_receives_delegate_result() {
     let poll_interval_ms = 10_usize;
     let outcome = wait_for_single_session_with_policies(
         "child-session",
-        "root-session",
+        &context,
         &config,
         &ToolConfig::default(),
         None,
@@ -5415,6 +5509,12 @@ async fn task_wait_wakes_when_canonical_task_owner_session_completes() {
     })
     .expect("append task progress event");
 
+    let owner = crate::test_support::runtime_session_for_test(
+        "task-owner",
+        crate::tools::runtime_tool_view(),
+    );
+    let context = owner.context();
+    let mailbox = owner.session.mailbox().sender();
     let config_for_completion = config.clone();
     let completion = tokio::spawn(async move {
         sleep(Duration::from_millis(50)).await;
@@ -5439,7 +5539,6 @@ async fn task_wait_wakes_when_canonical_task_owner_session_completes() {
         )
         .expect("finalize task");
 
-        let mailbox = mailbox_for_session("task-owner");
         let send_result = mailbox.send(InterAgentMessage {
             author: AgentPath::root(),
             recipient: AgentPath::root(),
@@ -5459,7 +5558,7 @@ async fn task_wait_wakes_when_canonical_task_owner_session_completes() {
             "task_id": "task-root",
             "timeout_ms": 1_000
         }),
-        "task-owner",
+        &context,
         &config,
         &ToolConfig::default(),
     )
@@ -5524,13 +5623,18 @@ async fn task_wait_returns_immediately_for_waiting_canonical_task_state() {
     })
     .expect("append task progress event");
 
+    let owner = crate::test_support::runtime_session_for_test(
+        "task-owner",
+        crate::tools::runtime_tool_view(),
+    );
+    let context = owner.context();
     let started_at = Instant::now();
     let outcome = crate::tools::wait_for_task_with_config(
         json!({
             "task_id": "task-root",
             "timeout_ms": 1_000
         }),
-        "task-owner",
+        &context,
         &config,
         &ToolConfig::default(),
     )
@@ -5570,12 +5674,17 @@ async fn session_wait_waiting_state_exposes_generic_continuation_metadata() {
     })
     .expect("create child");
 
+    let owner = crate::test_support::runtime_session_for_test(
+        "root-session",
+        crate::tools::runtime_tool_view(),
+    );
+    let context = owner.context();
     let outcome = crate::tools::wait_for_session_with_config(
         json!({
             "session_id": "child-session",
             "timeout_ms": 100
         }),
-        "root-session",
+        &context,
         &config,
         &ToolConfig::default(),
     )
@@ -5629,6 +5738,12 @@ async fn task_wait_follows_latest_owner_session_for_reassigned_task() {
     })
     .expect("append old owner task progress");
 
+    let owner = crate::test_support::runtime_session_for_test(
+        "root-session",
+        crate::tools::runtime_tool_view(),
+    );
+    let context = owner.context();
+    let mailbox = owner.session.mailbox().sender();
     let config_for_completion = config.clone();
     let completion = tokio::spawn(async move {
         sleep(Duration::from_millis(50)).await;
@@ -5653,7 +5768,6 @@ async fn task_wait_follows_latest_owner_session_for_reassigned_task() {
         })
         .expect("append new owner task progress");
 
-        let mailbox = mailbox_for_session("root-session");
         let send_result = mailbox.send(InterAgentMessage {
             author: AgentPath::root(),
             recipient: AgentPath::root(),
@@ -5673,7 +5787,7 @@ async fn task_wait_follows_latest_owner_session_for_reassigned_task() {
             "task_id": "task-root",
             "timeout_ms": 5_000
         }),
-        "root-session",
+        &context,
         &config,
         &ToolConfig::default(),
     )

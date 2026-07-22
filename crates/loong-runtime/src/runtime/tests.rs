@@ -32,12 +32,11 @@ impl PolicyContext for TestContext {
 }
 
 #[test]
-fn runtime_owns_kernel_and_selected_tool_plane() {
+fn runtime_owns_kernel_and_concrete_tool_plane_registry() {
     let runtime = Runtime::new(
         Kernel::<TestContextFactory>::new(),
         ToolPlaneRegistry::new(),
     );
 
-    assert!(runtime.kernel().now_epoch_s() > 0);
     assert_eq!(runtime.registered_tool_paths(), Vec::<ToolPath>::new());
 }

@@ -1,6 +1,4 @@
 use super::*;
-use crate::context::SpecContextFactory;
-
 pub struct WebhookConnector;
 
 #[async_trait]
@@ -275,7 +273,7 @@ impl CoreToolRuntime {
 }
 
 #[async_trait]
-impl CoreToolAdapter<SpecContextFactory> for CoreToolRuntime {
+impl CoreToolAdapter for CoreToolRuntime {
     fn name(&self) -> &str {
         "core-tools"
     }
@@ -294,7 +292,7 @@ impl CoreToolAdapter<SpecContextFactory> for CoreToolRuntime {
 pub struct SqlAnalyticsToolExtension;
 
 #[async_trait]
-impl ToolExtensionAdapter<SpecContextFactory> for SqlAnalyticsToolExtension {
+impl ToolExtensionAdapter for SqlAnalyticsToolExtension {
     fn name(&self) -> &str {
         "sql-analytics"
     }
@@ -302,7 +300,7 @@ impl ToolExtensionAdapter<SpecContextFactory> for SqlAnalyticsToolExtension {
     async fn execute_tool_extension(
         &self,
         request: ToolExtensionRequest,
-        core: &(dyn CoreToolAdapter<SpecContextFactory> + Sync),
+        core: &(dyn CoreToolAdapter + Sync),
     ) -> Result<ToolExtensionOutcome, kernel::ToolPlaneError> {
         let core_probe = core
             .execute_core_tool(ToolCoreRequest {
@@ -325,7 +323,7 @@ impl ToolExtensionAdapter<SpecContextFactory> for SqlAnalyticsToolExtension {
 pub struct ClawMigrationToolExtension;
 
 #[async_trait]
-impl ToolExtensionAdapter<SpecContextFactory> for ClawMigrationToolExtension {
+impl ToolExtensionAdapter for ClawMigrationToolExtension {
     fn name(&self) -> &str {
         "claw-migration"
     }
@@ -333,7 +331,7 @@ impl ToolExtensionAdapter<SpecContextFactory> for ClawMigrationToolExtension {
     async fn execute_tool_extension(
         &self,
         request: ToolExtensionRequest,
-        core: &(dyn CoreToolAdapter<SpecContextFactory> + Sync),
+        core: &(dyn CoreToolAdapter + Sync),
     ) -> Result<ToolExtensionOutcome, kernel::ToolPlaneError> {
         let mut payload = request.payload.clone();
         if payload.get("mode").is_none()

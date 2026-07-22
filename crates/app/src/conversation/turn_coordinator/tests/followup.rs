@@ -124,7 +124,7 @@ fn build_turn_reply_followup_messages_reduces_file_read_payload_summary() {
         .join("\n");
     let payload_summary = serde_json::json!({
         "adapter": "core-tools",
-        "tool_name": "file.read",
+        "tool_name": "read",
         "path": "/repo/README.md",
         "bytes": 8_192,
         "truncated": false,
@@ -135,7 +135,7 @@ fn build_turn_reply_followup_messages_reduces_file_read_payload_summary() {
         "[ok] {}",
         serde_json::json!({
             "status": "ok",
-            "tool": "file.read",
+            "tool": "read",
             "tool_call_id": "call-file",
             "payload_summary": payload_summary,
             "payload_chars": 8_192,

@@ -73,6 +73,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"]
 opentelemetry = { version = "0.29", features = ["trace", "futures"] }
 opentelemetry_sdk = { version = "0.29", features = ["rt-tokio", "trace", "experimental_async_runtime", "experimental_trace_batch_span_processor_with_async_runtime"] }
 opentelemetry-otlp = { version = "0.29", features = ["trace", "http-proto"] }
+percent-encoding = "2"
 zip = { version = "8", default-features = false, features = ["deflate"] }
 
 [profile.release]

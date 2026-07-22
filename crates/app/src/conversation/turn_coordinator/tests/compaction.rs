@@ -67,13 +67,14 @@ fn persist_runtime_self_continuity_for_compaction_merges_live_and_stored_delegat
         },
         ..Default::default()
     };
-
-    persist_runtime_self_continuity_for_compaction(
-        &config,
+    let owner = crate::test_support::runtime_session_for_test(
         child_session_id,
-        Some(&live_continuity),
-    )
-    .expect("persist merged runtime self continuity");
+        crate::tools::runtime_tool_view_from_loong_config(&config),
+    );
+    let ctx = owner.context();
+
+    persist_runtime_self_continuity_for_compaction(&config, &ctx, Some(&live_continuity))
+        .expect("persist merged runtime self continuity");
 
     let recent_events = repo
         .list_recent_events(child_session_id, 10)
@@ -169,7 +170,11 @@ fn persist_runtime_self_continuity_for_compaction_reconstructs_legacy_delegate_s
     .expect("insert legacy delegate event");
     drop(conn);
 
-    persist_runtime_self_continuity_for_compaction(&config, child_session_id, None)
+    let owner = crate::test_support::runtime_session_for_test(
+        child_session_id,
+        crate::tools::runtime_tool_view_from_loong_config(&config),
+    );
+    persist_runtime_self_continuity_for_compaction(&config, &owner.context(), None)
         .expect("persist runtime self continuity");
 
     let reconstructed_session = repo
@@ -207,9 +212,11 @@ fn maybe_compact_context_fails_open_when_runtime_self_continuity_persist_cannot_
     config.conversation.compact_trigger_estimated_tokens = Some(1);
     config.conversation.compact_fail_open = true;
 
-    let app_ctx = bootstrap_test_app_context("turn-coordinator-compaction", 3600)
-        .expect("bootstrap app context");
-    let binding = ConversationRuntimeBinding::from_optional_context(Some(&app_ctx));
+    let owner = crate::test_support::runtime_session_for_test(
+        "delegate:missing-lineage",
+        crate::tools::runtime_tool_view_from_loong_config(&config),
+    );
+    let ctx = owner.context();
     let runtime_handle = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -221,12 +228,10 @@ fn maybe_compact_context_fails_open_when_runtime_self_continuity_persist_cannot_
     let outcome = runtime_handle.block_on(maybe_compact_context(
         &config,
         &runtime,
-        &app_ctx,
-        "delegate:missing-lineage",
+        &ctx,
         &messages,
         Some(16),
         None,
-        binding,
         false,
     ));
 
@@ -244,22 +249,22 @@ fn maybe_compact_context_fails_open_when_runtime_self_continuity_persist_cannot_
 #[cfg(feature = "memory-sqlite")]
 #[test]
 fn maybe_compact_context_fails_open_when_durable_flush_cannot_write_workspace_export() {
-    let workspace_root_parent = unique_workspace_root("compaction-durable-flush-fail-open");
-    let workspace_root_file = workspace_root_parent.join("workspace-root-file");
+    let workspace_root = unique_workspace_root("compaction-durable-flush-fail-open");
+    let durable_memory_blocker = workspace_root.join("memory");
     let sqlite_path = unique_sqlite_path("compaction-durable-flush-fail-open");
     let runtime = RecordingCompactRuntime::default();
     let mut config = LoongConfig::default();
 
-    std::fs::create_dir_all(&workspace_root_parent).expect("create workspace root parent");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
     std::fs::write(
-        workspace_root_parent.join("AGENTS.md"),
+        workspace_root.join("AGENTS.md"),
         "Keep continuity explicit.",
     )
     .expect("write AGENTS");
-    std::fs::write(&workspace_root_file, "not a workspace directory")
-        .expect("write workspace root file");
+    std::fs::write(&durable_memory_blocker, "not a memory directory")
+        .expect("write durable memory blocker");
     config.memory.sqlite_path = sqlite_path.display().to_string();
-    config.tools.file_root = Some(workspace_root_file.display().to_string());
+    config.tools.file_root = Some(workspace_root.display().to_string());
     config.memory.profile = crate::config::MemoryProfile::WindowPlusSummary;
     config.memory.sliding_window = 1;
     config.conversation.compact_min_messages = Some(1);
@@ -268,6 +273,8 @@ fn maybe_compact_context_fails_open_when_durable_flush_cannot_write_workspace_ex
 
     let runtime_memory_config =
         crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+    crate::test_support::ensure_root_session_for_test(&config, "session-durable-flush-fail-open")
+        .expect("persist durable flush test Session identity");
     crate::memory::append_turn_direct(
         "session-durable-flush-fail-open",
         "user",
@@ -297,9 +304,14 @@ fn maybe_compact_context_fails_open_when_durable_flush_cannot_write_workspace_ex
     )
     .expect("append second assistant turn");
 
-    let app_ctx = bootstrap_test_app_context("turn-coordinator-compaction", 3600)
-        .expect("bootstrap app context");
-    let binding = ConversationRuntimeBinding::from_optional_context(Some(&app_ctx));
+    let owner = crate::test_support::TestRuntimeSession::from_config(
+        &config,
+        "session-durable-flush-fail-open",
+        "test-agent",
+        loong_contracts::GovernedSessionMode::MutatingCapable,
+    )
+    .expect("materialize compaction Session from its final config");
+    let ctx = owner.context();
     let runtime_handle = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -311,12 +323,10 @@ fn maybe_compact_context_fails_open_when_durable_flush_cannot_write_workspace_ex
     let outcome = runtime_handle.block_on(maybe_compact_context(
         &config,
         &runtime,
-        &app_ctx,
-        "session-durable-flush-fail-open",
+        &ctx,
         &messages,
         Some(16),
         None,
-        binding,
         false,
     ));
 
@@ -327,7 +337,7 @@ fn maybe_compact_context_fails_open_when_durable_flush_cannot_write_workspace_ex
     let compact_calls = runtime.compact_calls.lock().expect("compact lock");
     assert_eq!(*compact_calls, 0);
 
-    let _ = std::fs::remove_dir_all(&workspace_root_parent);
+    let _ = std::fs::remove_dir_all(&workspace_root);
     let _ = std::fs::remove_file(&sqlite_path);
 }
 
@@ -348,21 +358,17 @@ async fn compact_session_uses_session_context_tool_view_and_turn_like_build_flag
     )
     .expect("append user turn");
 
-    let expected_tool_view = crate::tools::ToolView::from_tool_names(["status.inspect"]);
-    let runtime = CompactSessionBuildMessagesRuntime::new(expected_tool_view.clone(), false);
-    let app_ctx = bootstrap_test_app_context("compact-session-build-messages", 3600)
-        .expect("bootstrap app context");
-    let binding = ConversationRuntimeBinding::from_optional_context(Some(&app_ctx));
+    let expected_tool_view = crate::tools::ToolView::from_legacy_paths(["status.inspect"]);
+    let runtime = CompactSessionBuildMessagesRuntime::new(false);
+    let owner = crate::test_support::runtime_session_for_test(
+        "compact-session-build-messages",
+        expected_tool_view.clone(),
+    );
+    let ctx = owner.context();
     let coordinator = ConversationTurnCoordinator::new();
 
     let report = coordinator
-        .compact_session_with_runtime(
-            &config,
-            &app_ctx,
-            "compact-session-build-messages",
-            &runtime,
-            binding,
-        )
+        .compact_session_with_runtime(&config, &ctx, &runtime)
         .await
         .expect("manual compaction should succeed");
 
@@ -406,23 +412,17 @@ async fn compact_session_skips_when_post_compaction_readback_fails() {
     )
     .expect("append user turn");
 
-    let runtime = CompactSessionBuildMessagesRuntime::new(
-        crate::tools::ToolView::from_tool_names(["status.inspect"]),
-        true,
+    let expected_tool_view = crate::tools::ToolView::from_legacy_paths(["status.inspect"]);
+    let runtime = CompactSessionBuildMessagesRuntime::new(true);
+    let owner = crate::test_support::runtime_session_for_test(
+        "compact-session-readback-fail",
+        expected_tool_view,
     );
-    let app_ctx = bootstrap_test_app_context("compact-session-readback-fail", 3600)
-        .expect("bootstrap app context");
-    let binding = ConversationRuntimeBinding::from_optional_context(Some(&app_ctx));
+    let ctx = owner.context();
     let coordinator = ConversationTurnCoordinator::new();
 
     let report = coordinator
-        .compact_session_with_runtime(
-            &config,
-            &app_ctx,
-            "compact-session-readback-fail",
-            &runtime,
-            binding,
-        )
+        .compact_session_with_runtime(&config, &ctx, &runtime)
         .await
         .expect("manual compaction should degrade to skipped");
 

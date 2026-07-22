@@ -7,23 +7,6 @@ use super::{
 };
 use super::{DELEGATE_ASYNC_TOOL_NAME, DELEGATE_TOOL_NAME, config_import};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DirectReadRoute {
-    Path,
-    Query,
-    Pattern,
-}
-
-impl DirectReadRoute {
-    fn executor_name(self) -> &'static str {
-        match self {
-            Self::Path => "file.read",
-            Self::Query => "content.search",
-            Self::Pattern => "glob.search",
-        }
-    }
-}
-
 pub(super) fn resolved_inner_tool_name_for_logs(canonical_name: &str, payload: &Value) -> String {
     if canonical_name == "tool.invoke" {
         let inner_tool_id = payload.get("tool_id").and_then(Value::as_str);
@@ -36,20 +19,13 @@ pub(super) fn resolved_inner_tool_name_for_logs(canonical_name: &str, payload: &
 
     let is_direct_tool = matches!(
         canonical_name,
-        "read" | "write" | "edit" | "bash" | "web" | "browse" | "memory" | "browser"
+        "bash" | "web" | "browse" | "memory" | "browser"
     );
     if !is_direct_tool {
         return "-".to_owned();
     }
 
-    let direct_tool_name = canonical_name;
-    let resolved_tool_name = if direct_tool_name == "read" {
-        classify_direct_read_route(payload)
-            .ok()
-            .map(DirectReadRoute::executor_name)
-    } else {
-        route_direct_tool_name(direct_tool_name, payload).ok()
-    };
+    let resolved_tool_name = route_direct_tool_name(canonical_name, payload).ok();
     let resolved_tool_name = resolved_tool_name
         .map(display_inner_tool_name_for_logs)
         .unwrap_or("-");
@@ -60,44 +36,8 @@ pub(super) fn execute_direct_tool_core_with_config(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    if request.tool_name == "read" {
-        // This context-free legacy entry only validates the payload. Migrated
-        // reads must enter through the typed runtime so Access can own I/O.
-        let (_read_route, _direct_request) = route_direct_read_request_for_kernel(request, config)?;
-        return Err("read requires kernel access context".to_owned());
-    }
-    if request.tool_name == "write" {
-        // As above, payload validation remains for legacy callers, while the
-        // side effect is reachable only through typed ToolInvocation + Access.
-        let _direct_request = route_direct_tool_request(request, config)?;
-        return Err("write requires kernel access context".to_owned());
-    }
-
     let routed_request = route_direct_tool_request(request, config)?;
     execute_discoverable_tool_core_with_config(routed_request, config)
-}
-
-fn route_direct_read_request_for_kernel(
-    request: ToolCoreRequest,
-    config: &runtime_config::ToolRuntimeConfig,
-) -> Result<(DirectReadRoute, ToolCoreRequest), String> {
-    let runtime_view = runtime_tool_view_for_runtime_config(config);
-    if !runtime_view.contains("read") {
-        let unavailable_hint = unavailable_runtime_hint("read", &runtime_view);
-        return Err(format!(
-            "tool_surface_unavailable: `read` cannot route to `read` in this runtime{}",
-            unavailable_hint
-        ));
-    }
-
-    let read_route = classify_direct_read_route(&request.payload)?;
-    let mut payload = request.payload;
-    normalize_direct_read_payload_for_route(read_route, &mut payload);
-    let direct_request = ToolCoreRequest {
-        tool_name: "read".to_owned(),
-        payload,
-    };
-    Ok((read_route, direct_request))
 }
 
 fn route_direct_tool_request(
@@ -167,9 +107,6 @@ pub(crate) fn route_direct_tool_name(
     payload: &Value,
 ) -> Result<&'static str, String> {
     match tool_name {
-        "read" => route_direct_read_tool_name(payload),
-        "write" => route_direct_write_tool_name(payload),
-        "edit" => route_direct_edit_tool_name(payload),
         "bash" => route_direct_bash_tool_name(payload),
         "web" => route_direct_web_tool_name(payload),
         "browse" | "browser" => route_direct_browser_tool_name(payload),
@@ -177,7 +114,6 @@ pub(crate) fn route_direct_tool_name(
         _ => Ok("-"),
     }
 }
-
 fn route_direct_bash_tool_name(payload: &Value) -> Result<&'static str, String> {
     let command = payload
         .get("command")
@@ -188,65 +124,6 @@ fn route_direct_bash_tool_name(payload: &Value) -> Result<&'static str, String> 
         return Err("direct_bash_requires_command: expected `command`".to_owned());
     }
     Ok(BASH_EXEC_TOOL_NAME)
-}
-
-fn route_direct_read_tool_name(payload: &Value) -> Result<&'static str, String> {
-    classify_direct_read_route(payload)?;
-    Ok("read")
-}
-
-fn classify_direct_read_route(payload: &Value) -> Result<DirectReadRoute, String> {
-    let has_path = payload_has_non_empty_string_field(payload, "path");
-    let has_query = payload_has_non_empty_string_field(payload, "query");
-    let has_pattern = payload_has_non_empty_string_field(payload, "pattern")
-        || payload_has_non_empty_string_field(payload, "glob");
-
-    if !has_path && !has_query && !has_pattern {
-        return Err(
-            "direct_read_requires_one_of: expected exactly one of `path`, `query`, or `pattern`"
-                .to_owned(),
-        );
-    }
-
-    if has_path {
-        return Ok(DirectReadRoute::Path);
-    }
-
-    if has_query {
-        return Ok(DirectReadRoute::Query);
-    }
-
-    Ok(DirectReadRoute::Pattern)
-}
-
-fn payload_has_non_empty_string_field(payload: &Value, field_name: &str) -> bool {
-    payload
-        .get(field_name)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty())
-}
-
-fn route_direct_write_tool_name(payload: &Value) -> Result<&'static str, String> {
-    let has_content = payload_has_non_null_field(payload, "content");
-    if !payload_has_non_null_field(payload, "path") {
-        return Err("direct_write_requires_path: expected `path` for direct write".to_owned());
-    }
-    if !has_content {
-        return Err("direct_write_requires_content: expected `content`".to_owned());
-    }
-    Ok("write")
-}
-
-fn route_direct_edit_tool_name(payload: &Value) -> Result<&'static str, String> {
-    let has_edits = payload_has_non_null_field(payload, "edits");
-    if !has_edits {
-        return Err("direct_edit_requires_edits: expected `edits`".to_owned());
-    }
-    if !payload_has_non_null_field(payload, "path") {
-        return Err("direct_edit_requires_path: expected `path` for direct edit".to_owned());
-    }
-    Ok("edit")
 }
 
 pub(super) fn route_direct_web_tool_name(payload: &Value) -> Result<&'static str, String> {
@@ -790,67 +667,6 @@ pub(super) fn payload_has_non_null_field(payload: &Value, field_name: &str) -> b
         .is_some()
 }
 
-fn normalize_direct_read_payload_for_route(route: DirectReadRoute, payload: &mut Value) {
-    let Some(payload_object) = payload.as_object_mut() else {
-        return;
-    };
-
-    match route {
-        DirectReadRoute::Path => {
-            payload_object.remove("query");
-            payload_object.remove("pattern");
-            payload_object.remove("glob");
-            payload_object.remove("root");
-            payload_object.remove("max_results");
-            payload_object.remove("max_bytes_per_file");
-            payload_object.remove("case_sensitive");
-            payload_object.remove("include_directories");
-        }
-        DirectReadRoute::Query => {
-            payload_object.remove("path");
-            payload_object.remove("pattern");
-            payload_object.remove("include_directories");
-            payload_object.remove("offset");
-            payload_object.remove("limit");
-        }
-        DirectReadRoute::Pattern => {
-            let pattern_missing = payload_object
-                .get("pattern")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .is_none_or(str::is_empty);
-            if pattern_missing
-                && let Some(glob_value) = payload_object
-                    .get("glob")
-                    .cloned()
-                    .filter(|value| value.as_str().map(str::trim).is_some_and(|v| !v.is_empty()))
-            {
-                let normalized_glob = glob_value
-                    .as_str()
-                    .map(normalize_direct_read_glob_alias_pattern)
-                    .map(Value::String)
-                    .unwrap_or(glob_value);
-                payload_object.insert("pattern".to_owned(), normalized_glob);
-            }
-        }
-    }
-}
-
-fn normalize_direct_read_glob_alias_pattern(raw: &str) -> String {
-    let trimmed = raw.trim();
-    if trimmed.contains('|') && !trimmed.contains('{') && !trimmed.contains('}') {
-        let parts = trimmed
-            .split('|')
-            .map(str::trim)
-            .filter(|part| !part.is_empty())
-            .collect::<Vec<_>>();
-        if parts.len() > 1 {
-            return format!("{{{}}}", parts.join(","));
-        }
-    }
-    trimmed.to_owned()
-}
-
 pub(super) fn count_true<const N: usize>(values: [bool; N]) -> usize {
     let mut count = 0usize;
 
@@ -915,7 +731,7 @@ mod tests {
 
     #[test]
     fn browser_surface_unavailable_hint_mentions_read_only_fallbacks() {
-        let runtime_view = ToolView::from_tool_names(["browser.open", "browser.extract"]);
+        let runtime_view = ToolView::from_legacy_paths(["browser.open", "browser.extract"]);
         let payload = json!({
             "session_id": "browser-companion-1",
             "selector": "#submit",

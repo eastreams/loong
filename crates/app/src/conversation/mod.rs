@@ -1,4 +1,4 @@
-mod active_skills;
+pub(crate) mod active_skills;
 pub mod analytics;
 mod announce;
 mod approval_resolution;
@@ -22,11 +22,9 @@ mod prompt_fragments;
 mod prompt_frame;
 mod prompt_orchestrator;
 mod runtime;
-mod runtime_binding;
 mod safe_lane_failure;
 mod session_address;
 mod session_history;
-mod session_state;
 mod subagent;
 mod tool_input_contract;
 mod tool_result_compaction;
@@ -66,8 +64,6 @@ pub use analytics::{
 };
 pub(crate) use compaction::{COMPACTED_SUMMARY_PREFIX, is_compacted_summary_content};
 pub(crate) use compaction_diagnostics::ContextCompactionDiagnostics;
-#[cfg(feature = "memory-sqlite")]
-pub(crate) use compaction_snapshot::load_compaction_session_snapshot;
 pub use context_engine::{
     AssembledConversationContext, CONTEXT_ENGINE_API_VERSION, ContextArtifactDescriptor,
     ContextArtifactKind, ContextEngineBootstrapResult, ContextEngineCapability,
@@ -80,13 +76,14 @@ pub use context_engine_registry::{
     list_context_engine_metadata, register_context_engine, resolve_context_engine,
 };
 #[cfg(feature = "memory-sqlite")]
-pub(crate) use delegate_support::with_prepared_subagent_spawn_cleanup_if_kernel_bound;
+pub(crate) use delegate_support::with_subagent_lifecycle;
 pub use ingress::{
     ConversationIngressChannel, ConversationIngressContext, ConversationIngressDelivery,
     ConversationIngressDeliveryResource, ConversationIngressFeishuCallbackContext,
     ConversationIngressPrivateContext,
 };
 pub use lane_arbiter::{ExecutionLane, LaneArbiterPolicy, LaneDecision};
+pub(crate) use loong_kernel::mailbox::InterAgentMessage;
 pub use prompt_fragments::{
     PromptFragment, PromptFrameAuthority, PromptFrameLayer, PromptLane, PromptRenderPolicy,
 };
@@ -102,12 +99,10 @@ pub use runtime::{
     ContextEngineRuntimeSnapshot, ContextEngineSelection, ContextEngineSelectionSource,
     ConversationRuntime, DefaultConversationRuntime, HostedConversationRuntime,
     TurnMiddlewareRuntimeSnapshot, TurnMiddlewareSelection, TurnMiddlewareSelectionSource,
-    async_delegate_spawn_request_from_serialized_parts, collect_context_engine_runtime_snapshot,
-    execute_async_delegate_spawn_request, load_default_conversation_runtime,
-    load_hosted_default_conversation_runtime, resolve_context_engine_selection,
-    resolve_turn_middleware_selection,
+    collect_context_engine_runtime_snapshot, execute_async_delegate_spawn_request,
+    load_default_conversation_runtime, load_hosted_default_conversation_runtime,
+    resolve_context_engine_selection, resolve_turn_middleware_selection,
 };
-pub use runtime_binding::{ConversationRuntimeBinding, OwnedConversationRuntimeBinding};
 pub use safe_lane_failure::{
     SafeLaneFailureCode, SafeLaneFailureRouteDecision, SafeLaneFailureRouteSource,
     SafeLaneTerminalRouteSnapshot, classify_safe_lane_plan_failure,
@@ -118,20 +113,22 @@ pub use session_address::{
     ConversationSessionAddress, decode_route_session_segment, encode_route_session_segment,
     parse_route_session_id,
 };
-pub use session_history::{load_discovery_first_event_summary, load_prompt_frame_event_summary};
+pub use session_history::{
+    AssistantHistoryLoadError, AssistantHistoryLoadErrorCode, load_discovery_first_event_summary,
+    load_prompt_frame_event_summary,
+};
 pub use session_history::{
     load_fast_lane_tool_batch_event_summary, load_safe_lane_event_summary,
     load_turn_checkpoint_event_summary,
 };
-pub(crate) use session_state::{InterAgentMessage, mailbox_for_session};
 pub use subagent::{
     ConstrainedSubagentBudgetSnapshot, ConstrainedSubagentContractView,
     ConstrainedSubagentControlScope, ConstrainedSubagentCoordinationAction,
     ConstrainedSubagentCoordinationActionKind, ConstrainedSubagentExecution,
     ConstrainedSubagentHandle, ConstrainedSubagentIdentity, ConstrainedSubagentIsolation,
     ConstrainedSubagentMode, ConstrainedSubagentOwnerKind, ConstrainedSubagentProfile,
-    ConstrainedSubagentRole, ConstrainedSubagentRuntimeBinding, ConstrainedSubagentTerminalReason,
-    DelegateBuiltinProfile, coordination_actions_for_subagent_handle, subagent_surface_fields,
+    ConstrainedSubagentRole, ConstrainedSubagentTerminalReason, DelegateBuiltinProfile,
+    coordination_actions_for_subagent_handle, subagent_surface_fields,
 };
 pub use turn_budget::SafeLaneFailureRouteReason;
 pub(crate) use turn_checkpoint::{TurnCheckpointDiagnostics, TurnCheckpointRecoveryAssessment};
@@ -146,9 +143,11 @@ pub use turn_coordinator::{
     ContextCompactionReport, ConversationTurnCoordinator, ConversationTurnOutcome,
     spawn_background_delegate_with_runtime,
 };
+#[cfg(test)]
+pub(crate) use turn_engine::NoopLegacyToolDispatcher;
 pub use turn_engine::{
-    AppToolDispatcher, DefaultAppToolDispatcher, NoopAppToolDispatcher, ProviderTurn, ToolDecision,
-    ToolIntent, ToolOutcome, TurnEngine, TurnFailure, TurnFailureKind, TurnResult,
+    DefaultLegacyToolDispatcher, ProviderTurn, ToolDecision, ToolIntent, ToolOutcome, TurnEngine,
+    TurnFailure, TurnFailureKind, TurnResult,
 };
 pub use turn_middleware::{
     ConversationTurnMiddleware, SYSTEM_PROMPT_ADDITION_TURN_MIDDLEWARE_ID,

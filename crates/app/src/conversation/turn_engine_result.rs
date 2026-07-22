@@ -1,4 +1,3 @@
-use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 use serde_json::json;
 
 use super::super::tool_result_compaction::compact_discovery_payload_summary;
@@ -8,35 +7,26 @@ use super::{
     TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS, ToolBatchExecutionIntentStatus,
     ToolBatchExecutionIntentTrace, ToolDecisionTelemetry, ToolDecisionTraceRecord, ToolIntent,
     ToolOutcomeTelemetry, ToolOutcomeTraceRecord, ToolResultEnvelope, ToolResultPayloadSemantics,
-    TurnFailure, TurnFailureKind, TurnResult,
+    TurnFailure, TurnResult,
 };
-
-pub(crate) fn turn_result_from_tool_execution_failure(failure: TurnFailure) -> TurnResult {
-    match failure.kind {
-        TurnFailureKind::PolicyDenied => TurnResult::ToolDenied(failure),
-        TurnFailureKind::Retryable | TurnFailureKind::NonRetryable => {
-            TurnResult::ToolError(failure)
-        }
-        TurnFailureKind::Provider => TurnResult::ProviderError(failure),
-    }
-}
 
 pub(crate) fn format_tool_result_line_with_limit(
     intent: &ToolIntent,
-    outcome: &ToolCoreOutcome,
+    status: &str,
+    payload: &serde_json::Value,
     payload_summary_limit_chars: usize,
 ) -> String {
-    let envelope = build_tool_result_envelope(intent, outcome, payload_summary_limit_chars);
+    let envelope = build_tool_result_envelope(intent, status, payload, payload_summary_limit_chars);
     let effective_tool_name = effective_result_tool_name(intent);
     let encoded = serde_json::to_string(&envelope).unwrap_or_else(|_| {
         format!(
             "{{\"status\":\"{}\",\"tool\":\"{}\",\"tool_call_id\":\"{}\",\"payload_summary\":\"[tool_payload_unserializable]\",\"payload_chars\":0,\"payload_truncated\":false}}",
-            outcome.status,
+            status,
             effective_tool_name,
             intent.tool_call_id
         )
     });
-    format!("[{}] {encoded}", outcome.status)
+    format!("[{status}] {encoded}")
 }
 
 pub(crate) fn format_tool_denied_result_line_with_limit(
@@ -44,36 +34,34 @@ pub(crate) fn format_tool_denied_result_line_with_limit(
     failure: &TurnFailure,
     payload_summary_limit_chars: usize,
 ) -> String {
-    let outcome = ToolCoreOutcome {
-        status: "error".to_owned(),
-        payload: json!({
-            "code": failure.code,
-            "reason": failure.reason,
-            "retryable": failure.retryable,
-        }),
-    };
-    format_tool_result_line_with_limit(intent, &outcome, payload_summary_limit_chars)
+    let payload = json!({
+        "code": failure.code,
+        "reason": failure.reason,
+        "retryable": failure.retryable,
+    });
+    format_tool_result_line_with_limit(intent, "error", &payload, payload_summary_limit_chars)
 }
 
 pub(crate) fn build_tool_result_envelope(
     intent: &ToolIntent,
-    outcome: &ToolCoreOutcome,
+    status: &str,
+    payload: &serde_json::Value,
     payload_summary_limit_chars: usize,
 ) -> ToolResultEnvelope {
     let effective_tool_name = effective_result_tool_name(intent);
-    let payload_semantics = detect_tool_result_payload_semantics(&outcome.payload);
+    let payload_semantics = detect_tool_result_payload_semantics(payload);
     let normalized_limit = payload_summary_limit_chars.clamp(
         MIN_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
         MAX_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
     );
-    let compacted_payload = compact_tool_result_payload_value(payload_semantics, &outcome.payload);
+    let compacted_payload = compact_tool_result_payload_value(payload_semantics, payload);
     let payload_text = serde_json::to_string(&compacted_payload)
         .unwrap_or_else(|_| "[tool_payload_unserializable]".to_owned());
     let (payload_summary, payload_chars, payload_truncated) =
         summarize_tool_result_payload(payload_text.as_str(), payload_semantics, normalized_limit);
 
     ToolResultEnvelope {
-        status: outcome.status.clone(),
+        status: status.to_owned(),
         tool: effective_tool_name,
         tool_call_id: intent.tool_call_id.clone(),
         payload_semantics,
@@ -210,14 +198,18 @@ fn payload_looks_like_skill_context(payload: &serde_json::Value) -> bool {
 }
 
 pub(crate) fn effective_result_tool_name(intent: &ToolIntent) -> String {
-    let request = ToolCoreRequest {
-        tool_name: intent.tool_name.clone(),
-        payload: intent.args_json.clone(),
-    };
-    let canonical_tool_name = crate::tools::peek_tool_invoke_request(&request)
-        .map(|peeked| peeked.tool_name)
-        .unwrap_or_else(|| crate::tools::canonical_tool_name(intent.tool_name.as_str()));
-    crate::tools::legacy_display_tool_name(canonical_tool_name)
+    match &intent.tool_name {
+        // Preparation binds typed execution to this provider-facing identity.
+        // Reapplying legacy aliases here would conflate presentation with path.
+        super::ToolIntentTarget::Registered { provider_name, .. } => provider_name.clone(),
+        super::ToolIntentTarget::Unresolved { name } => {
+            let canonical_tool_name =
+                crate::tools::peek_tool_invoke_request(name, &intent.args_json)
+                    .map(|peeked| peeked.tool_name)
+                    .unwrap_or_else(|| crate::tools::canonical_tool_name(name));
+            crate::tools::legacy_display_tool_name(canonical_tool_name)
+        }
+    }
 }
 
 pub(crate) fn effective_denied_tool_name(intent: &ToolIntent) -> String {
@@ -237,13 +229,14 @@ pub(crate) fn build_tool_decision_trace_record(
 
 pub(crate) fn build_success_tool_outcome_trace_record(
     intent: &ToolIntent,
-    outcome: &ToolCoreOutcome,
+    status: &str,
+    payload: &serde_json::Value,
 ) -> ToolOutcomeTraceRecord {
     let tool_name = effective_result_tool_name(intent);
     let outcome = ToolOutcomeTelemetry {
         tool_name,
-        status: outcome.status.clone(),
-        payload: build_bounded_tool_outcome_payload(intent, outcome),
+        status: status.to_owned(),
+        payload: build_bounded_tool_outcome_payload(payload),
         error_code: None,
         human_reason: None,
         audit_event_id: None,
@@ -255,22 +248,19 @@ pub(crate) fn build_success_tool_outcome_trace_record(
     }
 }
 
-fn build_bounded_tool_outcome_payload(
-    _intent: &ToolIntent,
-    outcome: &ToolCoreOutcome,
-) -> serde_json::Value {
-    let payload_semantics = detect_tool_result_payload_semantics(&outcome.payload);
+fn build_bounded_tool_outcome_payload(payload: &serde_json::Value) -> serde_json::Value {
+    let payload_semantics = detect_tool_result_payload_semantics(payload);
     let normalized_limit = TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS.clamp(
         MIN_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
         MAX_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
     );
-    let payload_text = serde_json::to_string(&outcome.payload)
+    let payload_text = serde_json::to_string(payload)
         .unwrap_or_else(|_| "[tool_payload_unserializable]".to_owned());
     let (payload_summary, payload_chars, payload_truncated) =
         summarize_tool_result_payload(payload_text.as_str(), payload_semantics, normalized_limit);
 
     if !payload_truncated {
-        return outcome.payload.clone();
+        return payload.clone();
     }
 
     json!({
@@ -318,10 +308,11 @@ fn build_tool_failure_outcome_trace_record(
 
 pub(crate) fn build_tool_intent_completed_trace(
     intent: &ToolIntent,
-    outcome: &ToolCoreOutcome,
+    status: &str,
+    payload: &serde_json::Value,
 ) -> ToolBatchExecutionIntentTrace {
     let tool_name = effective_result_tool_name(intent);
-    let detail = summarize_completed_tool_trace_detail(tool_name.as_str(), outcome);
+    let detail = summarize_completed_tool_trace_detail(tool_name.as_str(), status, payload);
 
     ToolBatchExecutionIntentTrace {
         tool_call_id: intent.tool_call_id.clone(),
@@ -333,16 +324,17 @@ pub(crate) fn build_tool_intent_completed_trace(
 
 fn summarize_completed_tool_trace_detail(
     tool_name: &str,
-    outcome: &ToolCoreOutcome,
+    status: &str,
+    payload: &serde_json::Value,
 ) -> Option<String> {
-    let normalized_status = outcome.status.trim();
+    let normalized_status = status.trim();
     if !normalized_status.is_empty() && normalized_status != "ok" {
         return Some(normalized_status.to_owned());
     }
 
-    let payload_semantics = detect_tool_result_payload_semantics(&outcome.payload);
+    let payload_semantics = detect_tool_result_payload_semantics(payload);
     if payload_semantics == Some(ToolResultPayloadSemantics::DiscoveryResult) {
-        return summarize_tool_search_completed_trace_detail(&outcome.payload);
+        return summarize_tool_search_completed_trace_detail(payload);
     }
 
     let _ = tool_name;

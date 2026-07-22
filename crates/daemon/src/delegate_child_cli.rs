@@ -13,71 +13,30 @@ const DETACHED_DELEGATE_CHILD_COMMAND: &str = "delegate-child-run";
 const DETACHED_DELEGATE_CHILD_CONFIG_ARG: &str = "--config-path";
 const DETACHED_DELEGATE_CHILD_PAYLOAD_ARG: &str = "--payload-file";
 const DETACHED_DELEGATE_CHILD_EXECUTABLE_ENV: &str = "CARGO_BIN_EXE_loong";
-const DETACHED_DELEGATE_CHILD_CONTEXT_SCOPE: &str = "delegate-child-worker";
 const DETACHED_DELEGATE_CHILD_PASSTHROUGH_ENV_KEYS: &[&str] = &["LOONG_CONFIG_PATH", "LOONG_HOME"];
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum DetachedDelegateChildBinding {
-    Context,
-    AdvisoryOnly,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct DetachedDelegateChildPayload {
     child_session_id: String,
-    parent_session_id: String,
-    task: String,
-    canonical_task_id: Option<String>,
-    label: Option<String>,
-    profile: Option<app::conversation::DelegateBuiltinProfile>,
-    execution: app::conversation::ConstrainedSubagentExecution,
-    runtime_self_continuity: Option<serde_json::Value>,
-    timeout_seconds: u64,
-    binding: DetachedDelegateChildBinding,
+    agent_id: String,
 }
 
 impl DetachedDelegateChildPayload {
     fn from_request(request: &app::conversation::AsyncDelegateSpawnRequest) -> Self {
-        let binding = if request.binding.is_context_bound() {
-            DetachedDelegateChildBinding::Context
-        } else {
-            DetachedDelegateChildBinding::AdvisoryOnly
-        };
-
         Self {
-            child_session_id: request.child_session_id.clone(),
-            parent_session_id: request.parent_session_id.clone(),
-            task: request.task.clone(),
-            canonical_task_id: request.canonical_task_id.clone(),
-            label: request.label.clone(),
-            profile: request.profile,
-            execution: request.execution.clone(),
-            runtime_self_continuity: request
-                .runtime_self_continuity_json()
-                .expect("delegate payload serialization should succeed"),
-            timeout_seconds: request.timeout_seconds,
-            binding,
+            child_session_id: request.child_session_id().to_owned(),
+            agent_id: request.session().agent_id().to_owned(),
         }
     }
 
     fn into_spawn_request(
         self,
-        app_ctx: app::AppContext,
-        binding: app::conversation::OwnedConversationRuntimeBinding,
+        config: &app::config::LoongConfig,
     ) -> CliResult<app::conversation::AsyncDelegateSpawnRequest> {
-        app::conversation::async_delegate_spawn_request_from_serialized_parts(
-            app_ctx,
-            self.child_session_id,
-            self.parent_session_id,
-            self.task,
-            self.canonical_task_id,
-            self.label,
-            self.profile,
-            self.execution,
-            self.runtime_self_continuity,
-            self.timeout_seconds,
-            binding,
+        app::conversation::AsyncDelegateSpawnRequest::from_persisted_child(
+            config,
+            &self.child_session_id,
+            &self.agent_id,
         )
     }
 }
@@ -184,25 +143,10 @@ pub async fn run_detached_delegate_child_cli(
     let (resolved_path, config) = app::config::load(Some(config_path))?;
     app::runtime_env::initialize_runtime_environment(&config, Some(&resolved_path));
 
-    // AppContext is process-local authority and is deliberately absent from
-    // the serialized payload. Rebuild it at this process boundary, then keep
-    // the legacy binding as a separate mutation-mode signal.
-    let mut app_context = app::context::bootstrap_app_context_with_config(
-        DETACHED_DELEGATE_CHILD_CONTEXT_SCOPE,
-        app::context::DEFAULT_TOKEN_TTL_S,
-        &config,
-    )?;
-    let binding = match payload.binding {
-        DetachedDelegateChildBinding::Context => {
-            app_context.session_mode = loong_contracts::GovernedSessionMode::MutatingCapable;
-            app::conversation::OwnedConversationRuntimeBinding::with_context(app_context.clone())
-        }
-        DetachedDelegateChildBinding::AdvisoryOnly => {
-            app_context.session_mode = loong_contracts::GovernedSessionMode::AdvisoryOnly;
-            app::conversation::OwnedConversationRuntimeBinding::AdvisoryOnly
-        }
-    };
-    let spawn_request = payload.into_spawn_request(app_context, binding)?;
+    // Runtime authority is process-local and is deliberately absent from the
+    // serialized payload. Rebuild the Runtime, Session, and legacy fallback
+    // token together at this explicit process ingress.
+    let spawn_request = payload.into_spawn_request(&config)?;
 
     app::conversation::execute_async_delegate_spawn_request(&config, spawn_request).await?;
 

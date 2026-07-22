@@ -7,15 +7,21 @@ use serde_json::Value;
 
 use super::*;
 
-pub fn execute_tool_core_with_config(
+/// Execute the context-free legacy tool implementation used by static callers.
+///
+/// It cannot expose registry-owned metadata. Production fallback enters through
+/// `DefaultLegacyToolDispatcher`, which supplies the current Runtime and Session config.
+// TODO(legacy-tool-core): delete this helper with the remaining direct ToolCore callers.
+pub(crate) fn execute_tool_core_with_config(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
     let observability_config = crate::config::ObservabilityConfig::runtime_default();
-    execute_tool_core_with_config_and_observability(request, config, &observability_config)
+    execute_tool_core_with_config_and_observability(None, request, config, &observability_config)
 }
 
 pub(crate) fn execute_tool_core_with_config_and_observability(
+    runtime: Option<&loong_runtime::runtime::Runtime<crate::RuntimeContextFactory>>,
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
     observability_config: &crate::config::ObservabilityConfig,
@@ -81,10 +87,10 @@ pub(crate) fn execute_tool_core_with_config_and_observability(
 
         match canonical_name.as_str() {
             "tool.search" => {
-                tool_search::execute_tool_search_tool_with_config(None, request, config)
+                tool_search::execute_tool_search_tool_with_config(runtime, request, config)
             }
             "tool.invoke" => tool_lease::execute_tool_invoke_tool_with_config(request, config),
-            "read" | "write" | "edit" | "bash" | "web" | "browse" | "memory" => {
+            "bash" | "web" | "browse" | "memory" => {
                 super::routing::execute_direct_tool_core_with_config(request, config)
             }
             _ => execute_discoverable_tool_core_with_config(request, config),
@@ -145,28 +151,6 @@ pub(crate) fn execute_tool_core_with_config_and_observability(
     otel_span.end();
 
     result
-}
-
-pub(crate) fn effective_tool_runtime_config_for_payload(
-    payload: &Value,
-    config: &runtime_config::ToolRuntimeConfig,
-) -> Result<runtime_config::ToolRuntimeConfig, String> {
-    let workspace_root = trusted_workspace_root_from_payload(payload)?;
-    let runtime_narrowing = trusted_runtime_narrowing_from_payload(payload)?;
-    let mut effective_config = config
-        .workspace_root
-        .clone()
-        .map(|workspace_root| config.with_workspace_root_override(workspace_root))
-        .unwrap_or_else(|| config.clone());
-    if let Some(workspace_root) = workspace_root {
-        effective_config = effective_config
-            .with_workspace_root_override(workspace_root.clone())
-            .with_file_root_override(workspace_root);
-    }
-    if let Some(runtime_narrowing) = runtime_narrowing {
-        effective_config = effective_config.narrowed(&runtime_narrowing);
-    }
-    Ok(effective_config)
 }
 
 fn truncate_tool_payload_for_otel(payload: &str) -> String {
@@ -360,16 +344,6 @@ fn dispatch_tool_request(
         "shell.exec" => shell::execute_shell_tool_with_config(request, config),
         #[cfg(feature = "tool-shell")]
         "bash.exec" => bash::execute_bash_tool_with_config(request, config),
-        #[cfg(feature = "tool-file")]
-        "read" => Err("read requires kernel access context".to_owned()),
-        #[cfg(feature = "tool-file")]
-        "write" => Err("write requires kernel access context".to_owned()),
-        #[cfg(feature = "tool-file")]
-        "edit" => Err("edit requires kernel access context".to_owned()),
-        #[cfg(feature = "tool-file")]
-        "glob.search" => Err("glob.search requires kernel access context".to_owned()),
-        #[cfg(feature = "tool-file")]
-        "content.search" => Err("content.search requires kernel access context".to_owned()),
         #[cfg(feature = "tool-file")]
         "memory.retrieve" => {
             memory_tools::execute_memory_retrieve_tool_with_config(request, config)

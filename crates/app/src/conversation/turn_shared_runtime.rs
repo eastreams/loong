@@ -4,13 +4,12 @@ use super::super::super::config::LoongConfig;
 use super::super::ProviderErrorMode;
 use super::super::persistence::format_provider_error_reply;
 use super::super::runtime::ConversationRuntime;
-use super::super::runtime_binding::ConversationRuntimeBinding;
 use super::super::turn_engine::ProviderTurn;
 use super::{
     ParsedToolDrivenContinuationReply, parse_tool_driven_continuation_reply,
     salvage_missing_tool_call_reply_text, sanitize_reply_text,
 };
-use crate::CliResult;
+use crate::{CliResult, Context};
 
 #[derive(Debug, Clone)]
 pub enum ProviderTurnRequestAction {
@@ -40,12 +39,12 @@ pub async fn request_completion_with_raw_fallback_detailed<R: ConversationRuntim
     runtime: &R,
     config: &LoongConfig,
     messages: &[Value],
-    binding: ConversationRuntimeBinding<'_>,
+    ctx: &Context<'_>,
     raw_reply: &str,
     retry_progress: crate::provider::ProviderRetryProgressCallback,
 ) -> ParsedToolDrivenContinuationReply {
     match runtime
-        .request_completion_with_retry_progress(config, messages, binding, retry_progress)
+        .request_completion_with_retry_progress(config, messages, ctx, retry_progress)
         .await
     {
         Ok(final_reply) => {
@@ -74,7 +73,7 @@ pub async fn request_completion_with_raw_fallback<R: ConversationRuntime + ?Size
     runtime: &R,
     config: &LoongConfig,
     messages: &[Value],
-    binding: ConversationRuntimeBinding<'_>,
+    ctx: &Context<'_>,
     raw_reply: &str,
     retry_progress: crate::provider::ProviderRetryProgressCallback,
 ) -> String {
@@ -82,7 +81,7 @@ pub async fn request_completion_with_raw_fallback<R: ConversationRuntime + ?Size
         runtime,
         config,
         messages,
-        binding,
+        ctx,
         raw_reply,
         retry_progress,
     )

@@ -83,7 +83,7 @@ pub(super) fn current_pending_approval_count(runtime: &CliTurnRuntime) -> CliRes
     #[cfg(feature = "memory-sqlite")]
     {
         let store = ChatControlPlaneStore::new(&runtime.memory_config)?;
-        let approvals = store.approval_queue(&runtime.session_id, 256)?;
+        let approvals = store.approval_queue(runtime.session.session_id(), 256)?;
         Ok(approvals.len())
     }
     #[cfg(not(feature = "memory-sqlite"))]

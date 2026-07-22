@@ -1,4 +1,5 @@
 use loong_access::fs::FsAccess;
+use loong_access::memory::MemoryAccess;
 use loong_core::{
     kernel::Kernel as CoreKernel,
     policy::{context::ContextFactory, engine::PolicyEngine},
@@ -8,22 +9,37 @@ use crate::kernel::Kernel;
 
 pub mod fs {
     pub use loong_access::fs::{
-        FsAccess, FsAccessError, FsAtomicWriteAction, FsAtomicWriteAllowPolicy,
-        FsContentSearchAction, FsContentSearchMatch, FsContentSearchOptions, FsContentSearchOutput,
-        FsCopyFileAction, FsCopyFileAllowPolicy, FsCopyFileOutput, FsCreateDirAllAction,
-        FsCreateDirAllAllowPolicy, FsCreateDirAllOutput, FsGlobAction, FsGlobOutput,
-        FsInspectPathAction, FsInspectPathOutput, FsPathAction, FsPathAllowedRootsPolicy,
-        FsPathKind, FsPathMatch, FsPathPolicyContext, FsReadAction, FsReadAllowPolicy,
-        FsReadDirAction, FsReadDirEntry, FsReadDirOutput, FsReadFilenameDenyPolicy, FsReadOutput,
-        FsRemoveDirAllAction, FsRemoveDirAllOutput, FsRemoveFileAction, FsRemoveFileAllowPolicy,
-        FsRemoveFileKind, FsRemoveFileOutput, FsRenameAction, FsRenameOutput, FsResolutionContext,
+        FsAccess, FsAtomicWriteAction, FsAtomicWriteAllowPolicy, FsContentSearchAction,
+        FsContentSearchAllowPolicy, FsContentSearchError, FsContentSearchMatch,
+        FsContentSearchOptions, FsContentSearchOutput, FsCopyFileAction, FsCopyFileAllowPolicy,
+        FsCopyFileError, FsCopyFileOutput, FsCreateDirAllAction, FsCreateDirAllAllowPolicy,
+        FsCreateDirAllError, FsCreateDirAllOutput, FsGlobAction, FsGlobAllowPolicy, FsGlobError,
+        FsGlobOutput, FsInspectPathAction, FsInspectPathAllowPolicy, FsInspectPathError,
+        FsInspectPathOutput, FsPathAction, FsPathAllowedRootsPolicy, FsPathError, FsPathKind,
+        FsPathMatch, FsPathPolicyContext, FsReadAction, FsReadAllowPolicy, FsReadDirAction,
+        FsReadDirAllowPolicy, FsReadDirEntry, FsReadDirError, FsReadDirOutput, FsReadError,
+        FsReadFilenameDenyPolicy, FsReadOutput, FsRemoveDirAllAction, FsRemoveDirAllAllowPolicy,
+        FsRemoveDirAllError, FsRemoveDirAllOutput, FsRemoveFileAction, FsRemoveFileAllowPolicy,
+        FsRemoveFileError, FsRemoveFileKind, FsRemoveFileOutput, FsRenameAction,
+        FsRenameAllowPolicy, FsRenameError, FsRenameOutput, FsResolutionContext,
         FsResolvePathAction, FsResolvePathAllowPolicy, FsWriteAction, FsWriteAllowPolicy,
-        FsWriteOptions, FsWriteOutput, GrantedEntryPath, GrantedPath, ResolvedEntryPath,
-        ResolvedPath,
+        FsWriteError, FsWriteOptions, FsWriteOutput, GrantedEntryPath, GrantedPath,
+        ResolvedEntryPath, ResolvedPath, normalize_path_lexically,
     };
 }
 
-use fs::FsResolutionContext;
+pub mod memory {
+    pub use loong_access::memory::{
+        MemoryAccess, MemoryAccessError, MemoryAppendTurnAction, MemoryAppendTurnAllowPolicy,
+        MemoryBackend, MemoryBackendError, MemoryCompactAction, MemoryCompactAllowPolicy,
+        MemoryExecutionContext, MemoryReadStageEnvelopeAction, MemoryReadStageEnvelopeAllowPolicy,
+        MemoryReplaceTurnsAction, MemoryReplaceTurnsAllowPolicy, MemoryReplaceTurnsOutcome,
+        MemorySessionContext, MemorySnapshot, MemoryTranscriptAction, MemoryTranscriptAllowPolicy,
+        MemoryTurn, MemoryWindowAction, MemoryWindowAllowPolicy, MemoryWorkspaceContext,
+    };
+}
+
+use fs::{FsPathPolicyContext, FsResolutionContext};
 
 /// Kernel-defined access facade.
 ///
@@ -47,12 +63,17 @@ where
     pub fn new(kernel: &'a Kernel<C>, ctx: &'a C::Cx<'ctx>) -> Self {
         Self { kernel, ctx }
     }
+
+    /// Memory access bound to the current recursive Context's Session.
+    pub fn memory(self) -> MemoryAccess<'a, 'ctx, C, impl PolicyEngine<C> + 'a> {
+        MemoryAccess::new(self.kernel.policy_engine(), self.ctx)
+    }
 }
 
 impl<'a, 'ctx, C> AccessCx<'a, 'ctx, C>
 where
     C: ContextFactory + 'ctx,
-    C::Cx<'ctx>: FsResolutionContext,
+    C::Cx<'ctx>: FsResolutionContext + FsPathPolicyContext,
 {
     /// Filesystem access entry point.
     ///
@@ -69,13 +90,12 @@ where
 /// Context capability for tools that need governed access facades.
 ///
 /// Concrete tool implementations live outside `loong-app`, so they cannot rely
-/// on its concrete `AppContext`. This trait is the narrow boundary they need:
+/// on its concrete `Context`. This trait is the narrow boundary they need:
 /// given the current invocation context, obtain the kernel-defined access facade
 /// and let access/actions perform policy-gated side effects.
 pub trait KernelAccess<C>
 where
     C: ContextFactory,
-    Self: FsResolutionContext,
 {
     fn access(&self) -> AccessCx<'_, '_, C>;
 }
