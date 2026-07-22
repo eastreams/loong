@@ -101,6 +101,7 @@ pub enum SafeLaneFailureCode {
     PlanWallTimeExceeded,
     PlanNodePolicyDenied,
     PlanNodeRetryableError,
+    PlanNodeInputRepairRequired,
     PlanNodeNonRetryableError,
     VerifyFailed,
     VerifyFailedBackpressureGuard,
@@ -119,6 +120,7 @@ impl SafeLaneFailureCode {
             Self::PlanWallTimeExceeded => "safe_lane_plan_wall_time_exceeded",
             Self::PlanNodePolicyDenied => "safe_lane_plan_node_policy_denied",
             Self::PlanNodeRetryableError => "safe_lane_plan_node_retryable_error",
+            Self::PlanNodeInputRepairRequired => "safe_lane_plan_node_input_repair_required",
             Self::PlanNodeNonRetryableError => "safe_lane_plan_node_non_retryable_error",
             Self::VerifyFailed => "safe_lane_plan_verify_failed",
             Self::VerifyFailedBackpressureGuard => {
@@ -139,6 +141,7 @@ impl SafeLaneFailureCode {
             "safe_lane_plan_wall_time_exceeded" => Some(Self::PlanWallTimeExceeded),
             "safe_lane_plan_node_policy_denied" => Some(Self::PlanNodePolicyDenied),
             "safe_lane_plan_node_retryable_error" => Some(Self::PlanNodeRetryableError),
+            "safe_lane_plan_node_input_repair_required" => Some(Self::PlanNodeInputRepairRequired),
             "safe_lane_plan_node_non_retryable_error" => Some(Self::PlanNodeNonRetryableError),
             "safe_lane_plan_verify_failed" => Some(Self::VerifyFailed),
             "safe_lane_plan_verify_failed_backpressure_guard" => {
@@ -209,9 +212,7 @@ pub fn classify_safe_lane_plan_failure(
             SafeLaneFailureCode::PlanWallTimeExceeded,
             TurnFailureKind::NonRetryable,
         ),
-        PlanRunFailure::NodeFailed {
-            last_error_kind, ..
-        } => match last_error_kind {
+        PlanRunFailure::NodeFailed { last_error, .. } => match last_error.kind {
             PlanNodeErrorKind::ApprovalRequired => (
                 SafeLaneFailureCode::PlanNodePolicyDenied,
                 TurnFailureKind::PolicyDenied,
@@ -223,6 +224,10 @@ pub fn classify_safe_lane_plan_failure(
             PlanNodeErrorKind::Retryable => (
                 SafeLaneFailureCode::PlanNodeRetryableError,
                 TurnFailureKind::Retryable,
+            ),
+            PlanNodeErrorKind::InputRepairRequired => (
+                SafeLaneFailureCode::PlanNodeInputRepairRequired,
+                TurnFailureKind::NonRetryable,
             ),
             PlanNodeErrorKind::NonRetryable => (
                 SafeLaneFailureCode::PlanNodeNonRetryableError,
@@ -259,7 +264,7 @@ mod tests {
         is_safe_lane_backpressure_failure_code, is_safe_lane_backpressure_route_reason,
         is_safe_lane_terminal_instability_failure_code,
     };
-    use crate::conversation::plan_executor::{PlanNodeErrorKind, PlanRunFailure};
+    use crate::conversation::plan_executor::{PlanNodeError, PlanRunFailure};
     use crate::conversation::turn_budget::SafeLaneFailureRouteReason;
     use crate::conversation::turn_engine::TurnFailureKind;
 
@@ -392,8 +397,7 @@ mod tests {
         let approval_node = PlanRunFailure::NodeFailed {
             node_id: "tool-approval".to_owned(),
             attempts_used: 1,
-            last_error_kind: PlanNodeErrorKind::ApprovalRequired,
-            last_error: "approval required".to_owned(),
+            last_error: PlanNodeError::approval_required("approval required"),
         };
         assert_eq!(
             classify_safe_lane_plan_failure(&approval_node),
@@ -406,8 +410,7 @@ mod tests {
         let retryable_node = PlanRunFailure::NodeFailed {
             node_id: "tool-1".to_owned(),
             attempts_used: 1,
-            last_error_kind: PlanNodeErrorKind::Retryable,
-            last_error: "transient".to_owned(),
+            last_error: PlanNodeError::retryable("transient"),
         };
         assert_eq!(
             classify_safe_lane_plan_failure(&retryable_node),

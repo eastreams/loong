@@ -254,7 +254,11 @@ fn collect_runtime_snapshot_cli_state_from_parts(
             &snapshot_tool_runtime,
             Some(&tool_view),
         );
-    let capability_snapshot = mvp::tools::capability_snapshot_with_config(&snapshot_tool_runtime);
+    // This command inspects config without starting a live runtime, so it must
+    // not claim metadata from a process-global typed tool registry.
+    let capability_snapshot =
+        mvp::tools::capability_snapshot_with_config(None, &snapshot_tool_runtime)
+            .map_err(|error| error.to_string())?;
     let capability_snapshot_sha256 =
         runtime_snapshot_tool_digest(&visible_tools, &capability_snapshot)?;
     let tool_calling = collect_runtime_snapshot_tool_calling_state(config, visible_tools.len());

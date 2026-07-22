@@ -69,7 +69,7 @@ pub(crate) fn collect_active_skills_from_tool_result_text_with_config(
         let Some(tool_result_line) = ToolResultLine::parse(line) else {
             continue;
         };
-        if crate::tools::user_visible_tool_name(tool_result_line.tool_name()) != "read" {
+        if tool_result_line.tool_name() != "read" {
             continue;
         }
         let Some(payload_json) = tool_result_line.payload_summary_json() else {
@@ -83,10 +83,12 @@ pub(crate) fn collect_active_skills_from_tool_result_text_with_config(
         else {
             continue;
         };
-        let Ok(Some(skill_payload)) = crate::tools::model_visible_skill_context_payload_for_path(
-            config,
-            std::path::Path::new(path),
-        ) else {
+        let Ok(Some(skill_payload)) =
+            crate::tools::skills::model_visible_skill_context_payload_for_path(
+                config,
+                std::path::Path::new(path),
+            )
+        else {
             continue;
         };
         let Some(skill_context) = skill_context_from_payload_summary(&skill_payload) else {
@@ -158,9 +160,13 @@ pub(crate) fn render_active_skills_section(active_skills: &ActiveSkillsState) ->
 #[cfg(feature = "memory-sqlite")]
 pub(crate) fn active_skills_from_event_payload(
     payload: &serde_json::Value,
-) -> Option<ActiveSkillsState> {
-    let active_skills = payload.get("active_skills")?.clone();
-    serde_json::from_value(active_skills).ok()
+) -> Result<ActiveSkillsState, String> {
+    let active_skills = payload
+        .get("active_skills")
+        .cloned()
+        .ok_or_else(|| "active-skills event is missing `active_skills`".to_owned())?;
+    serde_json::from_value(active_skills)
+        .map_err(|error| format!("active-skills event contains invalid state: {error}"))
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -169,9 +175,9 @@ pub(crate) fn load_persisted_active_skills(
     session_id: &str,
 ) -> Result<Option<ActiveSkillsState>, String> {
     let latest_event = repo.load_latest_event_by_kind(session_id, ACTIVE_SKILLS_EVENT_KIND)?;
-    Ok(latest_event
-        .as_ref()
-        .and_then(|event| active_skills_from_event_payload(&event.payload_json)))
+    latest_event
+        .map(|event| active_skills_from_event_payload(&event.payload_json))
+        .transpose()
 }
 
 fn upsert_active_skill(active_skills: &mut Vec<ActiveSkill>, update: ActiveSkill) {
@@ -206,7 +212,7 @@ mod tests {
             "[ok] {}",
             serde_json::json!({
                 "status": "ok",
-                "tool": "file.read",
+                "tool": "read",
                 "tool_call_id": "call-1",
                 "payload_semantics": "skill_context",
                 "payload_summary": serde_json::to_string(&serde_json::json!({
@@ -223,7 +229,7 @@ mod tests {
             "[ok] {}",
             serde_json::json!({
                 "status": "ok",
-                "tool": "file.read",
+                "tool": "read",
                 "tool_call_id": "call-2",
                 "payload_semantics": "skill_context",
                 "payload_summary": serde_json::to_string(&serde_json::json!({
@@ -243,7 +249,7 @@ mod tests {
             "[ok] {}",
             serde_json::json!({
                 "status": "ok",
-                "tool": "file.read",
+                "tool": "read",
                 "tool_call_id": "call-3",
                 "payload_semantics": "skill_context",
                 "payload_summary": serde_json::to_string(&serde_json::json!({
@@ -317,7 +323,7 @@ mod tests {
             "[ok] {}",
             serde_json::json!({
                 "status": "ok",
-                "tool": "file.read",
+                "tool": "read",
                 "tool_call_id": "call-1",
                 "payload_summary": serde_json::to_string(&serde_json::json!({
                     "path": skill_path.display().to_string(),
@@ -382,7 +388,7 @@ mod tests {
             "[ok] {}",
             serde_json::json!({
                 "status": "ok",
-                "tool": "file.read",
+                "tool": "read",
                 "tool_call_id": "call-1",
                 "payload_summary": serde_json::to_string(&serde_json::json!({
                     "path": skill_path.display().to_string(),

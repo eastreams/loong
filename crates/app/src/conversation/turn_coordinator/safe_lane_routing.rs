@@ -15,14 +15,15 @@ impl SafeLaneFailureRoute {
             return Self::terminal(reason);
         }
 
+        if failure.tool_input.is_some() {
+            return Self::terminal(SafeLaneFailureRouteReason::InputRepairRequired);
+        }
+
         match failure.code.as_str() {
-            "tool_not_found" if failure.supports_discovery_recovery => {
+            "tool_not_found" | "invalid_tool_lease" if failure.supports_discovery_recovery => {
                 return Self::replan(SafeLaneFailureRouteReason::RetryableFailure);
             }
-            "kernel_policy_denied"
-            | "tool_not_found"
-            | "max_tool_steps_exceeded"
-            | "no_kernel_context" => {
+            "kernel_policy_denied" | "tool_not_found" | "max_tool_steps_exceeded" => {
                 return Self::terminal(SafeLaneFailureRouteReason::PolicyDenied);
             }
             "tool_execution_failed" => {
@@ -53,6 +54,9 @@ impl SafeLaneFailureRoute {
                         return Self::replan(SafeLaneFailureRouteReason::RetryableFailure);
                     }
                     return Self::terminal(SafeLaneFailureRouteReason::RetryableFlagFalse);
+                }
+                SafeLaneFailureCode::PlanNodeInputRepairRequired => {
+                    return Self::terminal(SafeLaneFailureRouteReason::InputRepairRequired);
                 }
                 SafeLaneFailureCode::VerifyFailedBudgetExhausted => {
                     return Self::terminal(SafeLaneFailureRouteReason::RoundBudgetExhausted);
@@ -411,11 +415,13 @@ pub(super) fn summarize_plan_failure(failure: &PlanRunFailure) -> String {
         }
         PlanRunFailure::NodeFailed {
             node_id,
-            last_error_kind,
             last_error,
             ..
         } => {
-            format!("node_failed node={node_id} error_kind={last_error_kind:?} reason={last_error}")
+            format!(
+                "node_failed node={node_id} error_kind={:?} reason={}",
+                last_error.kind, last_error.message
+            )
         }
     }
 }
@@ -430,6 +436,14 @@ pub(super) fn format_turn_failure_kind(kind: TurnFailureKind) -> &'static str {
 }
 
 pub(super) fn turn_failure_from_plan_failure(failure: &PlanRunFailure) -> TurnFailure {
+    if let PlanRunFailure::NodeFailed { last_error, .. } = failure
+        && let Some(tool_input) = last_error.tool_input.as_ref()
+    {
+        return TurnFailure::input_repair_required(
+            last_error.message.clone(),
+            tool_input.as_ref().clone(),
+        );
+    }
     let (code, kind) = classify_safe_lane_plan_failure(failure);
     match failure {
         PlanRunFailure::ValidationFailed(error) => {
@@ -457,7 +471,7 @@ pub(super) fn turn_failure_from_plan_failure(failure: &PlanRunFailure) -> TurnFa
             ),
         ),
         PlanRunFailure::NodeFailed { last_error, .. } => {
-            code.into_turn_failure(kind, last_error.clone())
+            code.into_turn_failure(kind, last_error.message.clone())
         }
     }
 }

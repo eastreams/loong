@@ -1,50 +1,55 @@
-use async_trait::async_trait;
-use serde_json::Value;
-
 use super::runtime::ConversationRuntime;
-use super::runtime_binding::ConversationRuntimeBinding;
 use super::turn_coordinator::{execute_delegate_async_tool, execute_delegate_tool};
-use super::turn_engine::{AppToolDispatcher, DefaultAppToolDispatcher};
+use super::turn_engine::{
+    DefaultLegacyToolDispatcher, LegacyToolDispatchKind, LegacyToolDispatcher,
+};
+use crate::Context;
 use crate::config::LoongConfig;
 use crate::session::repository::{ApprovalDecision, ApprovalRequestRecord};
-use crate::tools::ToolExecutionKind;
+use async_trait::async_trait;
+#[cfg(feature = "memory-sqlite")]
+use loong_contracts::Capability;
+#[cfg(feature = "memory-sqlite")]
+use loong_core::policy::context::PolicyContext;
+use serde_json::Value;
 
 #[cfg(feature = "memory-sqlite")]
-pub(super) struct CoordinatorApprovalResolutionRuntime<'a, R: ?Sized> {
-    config: &'a LoongConfig,
-    runtime: &'a R,
-    fallback: &'a DefaultAppToolDispatcher,
-    binding: ConversationRuntimeBinding<'a>,
+pub(super) struct CoordinatorApprovalResolutionRuntime<'owner, 'context, R: ?Sized> {
+    config: &'owner LoongConfig,
+    ctx: &'owner Context<'context>,
+    runtime: &'owner R,
+    fallback: &'owner DefaultLegacyToolDispatcher,
 }
 
 #[cfg(feature = "memory-sqlite")]
-struct ApprovalReplayRequest {
-    request: loong_contracts::ToolCoreRequest,
-    execution_kind: crate::tools::ToolExecutionKind,
-    trusted_internal_context: bool,
+#[derive(Debug)]
+enum ApprovalReplayRequest {
+    LegacyCore {
+        request: loong_contracts::ToolCoreRequest,
+        trusted_internal_context: bool,
+    },
+    LegacyApp {
+        request: loong_contracts::ToolCoreRequest,
+    },
 }
 
 #[cfg(feature = "memory-sqlite")]
-impl<'a, R> CoordinatorApprovalResolutionRuntime<'a, R>
+impl<'owner, 'context, R> CoordinatorApprovalResolutionRuntime<'owner, 'context, R>
 where
     R: ConversationRuntime + ?Sized,
 {
     pub(super) fn new(
-        config: &'a LoongConfig,
-        runtime: &'a R,
-        fallback: &'a DefaultAppToolDispatcher,
-        binding: ConversationRuntimeBinding<'a>,
+        config: &'owner LoongConfig,
+        ctx: &'owner Context<'context>,
+        runtime: &'owner R,
+        fallback: &'owner DefaultLegacyToolDispatcher,
     ) -> Self {
         Self {
             config,
+            ctx,
             runtime,
             fallback,
-            binding,
         }
-    }
-
-    fn can_replay_approved_request(&self) -> bool {
-        self.binding.is_kernel_bound()
     }
 
     fn replay_shell_request(
@@ -86,12 +91,11 @@ where
             &internal_context,
         )?;
 
-        Ok(ApprovalReplayRequest {
+        Ok(ApprovalReplayRequest::LegacyCore {
             request: loong_contracts::ToolCoreRequest {
                 tool_name: crate::tools::SHELL_EXEC_TOOL_NAME.to_owned(),
                 payload,
             },
-            execution_kind: crate::tools::ToolExecutionKind::Core,
             trusted_internal_context: true,
         })
     }
@@ -100,7 +104,7 @@ where
         &self,
         approval_request: &ApprovalRequestRecord,
     ) -> Result<ApprovalReplayRequest, String> {
-        let execution_kind = self.replay_execution_kind(approval_request)?;
+        let dispatch_kind = self.replay_dispatch_kind(approval_request)?;
         let tool_name = approval_request
             .request_payload_json
             .get("tool_name")
@@ -113,62 +117,77 @@ where
             .get("args_json")
             .cloned()
             .ok_or_else(|| "approval_request_invalid_payload: missing args_json".to_owned())?;
-
-        match execution_kind {
-            ToolExecutionKind::App => Ok(ApprovalReplayRequest {
+        match dispatch_kind {
+            LegacyToolDispatchKind::LegacyApp => Ok(ApprovalReplayRequest::LegacyApp {
                 request: loong_contracts::ToolCoreRequest {
                     tool_name: tool_name.to_owned(),
                     payload,
                 },
-                execution_kind: crate::tools::ToolExecutionKind::App,
-                trusted_internal_context: false,
             }),
-            ToolExecutionKind::Core => {
+            LegacyToolDispatchKind::LegacyCore => {
                 let canonical_tool_name = crate::tools::canonical_tool_name(tool_name);
                 if canonical_tool_name == crate::tools::SHELL_EXEC_TOOL_NAME {
                     return self.replay_shell_request(approval_request, tool_name, &payload);
                 }
+                let trusted_internal_context = approval_request
+                    .request_payload_json
+                    .get("trusted_internal_context")
+                    .and_then(Value::as_bool)
+                    .ok_or_else(|| {
+                        "approval_request_invalid_payload: missing trusted_internal_context"
+                            .to_owned()
+                    })?;
 
-                Ok(ApprovalReplayRequest {
+                Ok(ApprovalReplayRequest::LegacyCore {
                     request: loong_contracts::ToolCoreRequest {
                         tool_name: tool_name.to_owned(),
                         payload,
                     },
-                    execution_kind: crate::tools::ToolExecutionKind::Core,
-                    trusted_internal_context: false,
+                    trusted_internal_context,
                 })
             }
         }
     }
 
-    fn replay_execution_kind(
+    fn replay_dispatch_kind(
         &self,
         approval_request: &ApprovalRequestRecord,
-    ) -> Result<ToolExecutionKind, String> {
-        let execution_kind = approval_request
+    ) -> Result<LegacyToolDispatchKind, String> {
+        // Replay is an explicitly legacy protocol. Persisted typed requests
+        // cannot be reinterpreted after registrations or policies have changed.
+        let dispatch_kind = approval_request
             .request_payload_json
-            .get("execution_kind")
+            .get("dispatch_kind")
             .and_then(Value::as_str)
-            .ok_or_else(|| "approval_request_invalid_payload: missing execution_kind".to_owned())?;
+            .ok_or_else(|| "approval_request_invalid_payload: missing dispatch_kind".to_owned())?;
 
-        match execution_kind {
-            "core" => Ok(ToolExecutionKind::Core),
-            "app" => Ok(ToolExecutionKind::App),
+        match dispatch_kind {
+            "legacy_core" => Ok(LegacyToolDispatchKind::LegacyCore),
+            "legacy_app" => Ok(LegacyToolDispatchKind::LegacyApp),
+            "typed" => Err(
+                "approval_request_unsupported_dispatch_kind: typed approval replay is not supported"
+                    .to_owned(),
+            ),
             _ => {
                 let error = format!(
-                    "approval_request_invalid_execution_kind: expected `core` or `app`, got `{execution_kind}`"
+                    "approval_request_invalid_dispatch_kind: expected `legacy_core` or `legacy_app`, got `{dispatch_kind}`"
                 );
                 Err(error)
             }
         }
     }
 
-    fn replay_requires_mutating_binding(
+    /// Re-evaluate legacy descriptor authority when persisted approval is replayed.
+    ///
+    /// The stored request records consent, not a permanent capability grant.
+    /// Current Session visibility and descriptor governance therefore remain
+    /// mandatory even when the operator previously approved the payload.
+    fn replay_requires_legacy_authority(
         &self,
         approval_request: &ApprovalRequestRecord,
     ) -> Result<bool, String> {
-        let execution_kind = self.replay_execution_kind(approval_request)?;
-        if execution_kind == ToolExecutionKind::Core {
+        let dispatch_kind = self.replay_dispatch_kind(approval_request)?;
+        if dispatch_kind == LegacyToolDispatchKind::LegacyCore {
             return Ok(true);
         }
 
@@ -176,17 +195,32 @@ where
             .request_payload_json
             .get("tool_name")
             .and_then(Value::as_str)
-            .map(crate::tools::canonical_tool_name)
             .ok_or_else(|| "approval_request_invalid_payload: missing tool_name".to_owned())?;
+        let descriptor = crate::tools::tool_catalog()
+            .resolve(tool_name)
+            .ok_or_else(|| format!("approval_request_tool_not_found: {tool_name}"))?;
+        if descriptor.owner != crate::tools::ToolOwner::LegacyApp {
+            return Err(format!(
+                "approval_request_owner_mismatch: expected legacy_app tool, got {}",
+                descriptor.name
+            ));
+        }
+        if !self.ctx.session().tool_view.contains(descriptor.name) {
+            return Err(format!("tool_not_visible: {}", descriptor.name));
+        }
 
-        Ok(tool_name == "delegate_async")
+        Ok(descriptor.requires_kernel_binding())
     }
 
-    fn ensure_resolution_binding_allows_decision(
+    fn ensure_resolution_allowed(
         &self,
         approval_request: &ApprovalRequestRecord,
         decision: ApprovalDecision,
     ) -> Result<(), String> {
+        // Validate the persisted execution owner before approval resolution may
+        // write consent or grants. Typed records belong to PolicyEngine
+        // permission handling and must never enter this legacy replay protocol.
+        self.replay_dispatch_kind(approval_request)?;
         let mutating_resolution_requested = matches!(
             decision,
             ApprovalDecision::ApproveOnce | ApprovalDecision::ApproveAlways
@@ -195,54 +229,45 @@ where
             return Ok(());
         }
 
-        if self.binding.allows_mutation() {
+        if self
+            .ctx
+            .allowed_capabilities()
+            .contains(Capability::InvokeTool)
+        {
             return Ok(());
         }
 
-        let replay_requires_mutation = self.replay_requires_mutating_binding(approval_request)?;
-        if !replay_requires_mutation {
+        let replay_requires_legacy_authority =
+            self.replay_requires_legacy_authority(approval_request)?;
+        if !replay_requires_legacy_authority {
             return Ok(());
         }
 
-        Err("app_tool_denied: governed_runtime_binding_required".to_owned())
+        Err("app_tool_denied: session lacks invoke_tool capability".to_owned())
     }
 
     pub(super) async fn replay_approved_request(
         &self,
         approval_request: &ApprovalRequestRecord,
     ) -> Result<loong_contracts::ToolCoreOutcome, String> {
-        let replay_request = self.replay_request(approval_request)?;
-
-        match replay_request.execution_kind {
-            crate::tools::ToolExecutionKind::Core => {
-                let kernel_ctx = self
-                    .binding
-                    .kernel_context()
-                    .ok_or_else(|| "no_kernel_context".to_owned())?;
-                crate::tools::execute_kernel_tool_request(
-                    kernel_ctx,
-                    replay_request.request,
-                    replay_request.trusted_internal_context,
-                )
+        match self.replay_request(approval_request)? {
+            ApprovalReplayRequest::LegacyCore {
+                request,
+                trusted_internal_context,
+            } => self
+                .fallback
+                .execute_core_tool(self.ctx, request, trusted_internal_context)
                 .await
-                .map_err(|error| error.to_string())
-            }
-            crate::tools::ToolExecutionKind::App => {
-                let session_context = self
-                    .runtime
-                    .session_context(self.config, &approval_request.session_id, self.binding)
-                    .map_err(|error| {
-                        format!("load approval request session context failed: {error}")
-                    })?;
-
-                match crate::tools::canonical_tool_name(replay_request.request.tool_name.as_str()) {
+                .map_err(|error| error.to_string()),
+            ApprovalReplayRequest::LegacyApp { request } => {
+                match crate::tools::canonical_tool_name(request.tool_name.as_str()) {
                     "delegate" => {
                         execute_delegate_tool(
                             self.config,
                             self.runtime,
-                            &session_context,
-                            replay_request.request.payload,
-                            self.binding,
+                            self.ctx,
+                            request.payload,
+                            self.fallback,
                         )
                         .await
                     }
@@ -250,21 +275,13 @@ where
                         execute_delegate_async_tool(
                             self.config,
                             self.runtime,
-                            &session_context,
-                            replay_request.request.payload,
-                            self.binding,
+                            self.ctx,
+                            request.payload,
+                            self.fallback,
                         )
                         .await
                     }
-                    _ => {
-                        self.fallback
-                            .execute_app_tool(
-                                &session_context,
-                                replay_request.request,
-                                self.binding,
-                            )
-                            .await
-                    }
+                    _ => self.fallback.execute_app_tool(self.ctx, request).await,
                 }
             }
         }
@@ -274,20 +291,16 @@ where
 #[cfg(feature = "memory-sqlite")]
 #[async_trait]
 impl<R> crate::tools::approval::ApprovalResolutionRuntime
-    for CoordinatorApprovalResolutionRuntime<'_, R>
+    for CoordinatorApprovalResolutionRuntime<'_, '_, R>
 where
     R: ConversationRuntime + ?Sized,
 {
-    fn can_replay_approved_request(&self) -> bool {
-        CoordinatorApprovalResolutionRuntime::can_replay_approved_request(self)
-    }
-
-    fn ensure_resolution_binding_allows_decision(
+    fn ensure_resolution_allowed(
         &self,
         approval_request: &ApprovalRequestRecord,
         decision: ApprovalDecision,
     ) -> Result<(), String> {
-        CoordinatorApprovalResolutionRuntime::ensure_resolution_binding_allows_decision(
+        CoordinatorApprovalResolutionRuntime::ensure_resolution_allowed(
             self,
             approval_request,
             decision,
@@ -301,3 +314,7 @@ where
         CoordinatorApprovalResolutionRuntime::replay_approved_request(self, approval_request).await
     }
 }
+
+#[cfg(all(test, feature = "memory-sqlite"))]
+#[path = "approval_resolution/tests.rs"]
+mod tests;

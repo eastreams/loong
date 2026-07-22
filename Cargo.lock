@@ -3044,13 +3044,13 @@ dependencies = [
  "hex",
  "libc",
  "loong-app",
- "loong-app-protocol",
  "loong-bench",
  "loong-bridge-runtime",
  "loong-contracts",
  "loong-core",
  "loong-kernel",
  "loong-protocol",
+ "loong-runtime",
  "loong-spec",
  "opentelemetry",
  "opentelemetry-otlp",
@@ -3085,7 +3085,9 @@ dependencies = [
  "dunce",
  "loong-contracts",
  "loong-core",
+ "regex",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -3122,6 +3124,7 @@ dependencies = [
  "loong-contracts",
  "loong-core",
  "loong-kernel",
+ "loong-runtime",
  "loong-tools",
  "opentelemetry",
  "prost 0.14.3",
@@ -3166,12 +3169,8 @@ dependencies = [
 name = "loong-app-protocol"
 version = "0.1.2-alpha.1"
 dependencies = [
- "async-trait",
- "dunce",
- "loong-runtime",
+ "loong-core",
  "serde",
- "serde_json",
- "tokio",
 ]
 
 [[package]]
@@ -3218,6 +3217,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "toml",
+ "uuid",
  "zeroize",
 ]
 
@@ -3230,6 +3230,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -3278,10 +3279,13 @@ name = "loong-runtime"
 version = "0.1.2-alpha.1"
 dependencies = [
  "async-trait",
+ "loong-contracts",
  "loong-core",
- "serde",
+ "loong-kernel",
  "serde_json",
+ "thiserror 2.0.18",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -3318,6 +3322,7 @@ dependencies = [
  "loong-core",
  "loong-kernel",
  "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

@@ -457,9 +457,7 @@ impl SessionRepository {
         record: NewSessionToolPolicyRecord,
     ) -> Result<SessionToolPolicyRecord, String> {
         let session_id = normalize_required_text(&record.session_id, "session_id")?;
-        let session_exists = self
-            .load_session_summary_with_legacy_fallback(&session_id)?
-            .is_some();
+        let session_exists = self.load_session(&session_id)?.is_some();
         if !session_exists {
             return Err(format!("session `{session_id}` not found"));
         }
@@ -506,6 +504,13 @@ impl SessionRepository {
     ) -> Result<Option<SessionToolPolicyRecord>, String> {
         let session_id = normalize_required_text(session_id, "session_id")?;
         let conn = self.open_connection()?;
+        Self::load_session_tool_policy_with_conn(&conn, &session_id)
+    }
+
+    pub(super) fn load_session_tool_policy_with_conn(
+        conn: &Connection,
+        session_id: &str,
+    ) -> Result<Option<SessionToolPolicyRecord>, String> {
         let raw = conn
             .query_row(
                 "SELECT

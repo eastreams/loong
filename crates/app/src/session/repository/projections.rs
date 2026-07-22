@@ -1,6 +1,83 @@
 use super::*;
 
 impl SessionRepository {
+    /// Load every authority-bearing projection for a Session lineage from one transaction.
+    ///
+    /// Callers must interpret event payloads after this method returns; issuing
+    /// additional repository reads while materializing the same lineage would
+    /// break the snapshot guarantee restored here.
+    pub fn load_session_materialization_lineage(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<SessionMaterializationSnapshot>, String> {
+        let session_id = normalize_required_text(session_id, "session_id")?;
+        let mut conn = self.open_connection()?;
+        let tx = conn
+            .transaction()
+            .map_err(|error| format!("open session materialization transaction failed: {error}"))?;
+        let mut snapshots = Vec::new();
+        let mut seen = BTreeSet::new();
+        let mut next_session_id = Some(session_id);
+        while let Some(current_session_id) = next_session_id {
+            if !seen.insert(current_session_id.clone()) {
+                return Err(format!(
+                    "session materialization lineage contains a cycle at `{current_session_id}`"
+                ));
+            }
+            let Some(session) = Self::load_session_with_conn(&tx, &current_session_id)? else {
+                if !snapshots.is_empty() {
+                    return Err(format!(
+                        "session materialization lineage references missing session `{current_session_id}`"
+                    ));
+                }
+                let existing_identity_evidence = tx
+                    .query_row(
+                        "SELECT EXISTS(
+                            SELECT 1 FROM turns WHERE session_id = ?1
+                            UNION ALL SELECT 1 FROM session_events WHERE session_id = ?1
+                            UNION ALL SELECT 1 FROM session_tool_policies WHERE session_id = ?1
+                            UNION ALL SELECT 1 FROM session_nodes WHERE session_id = ?1
+                            UNION ALL SELECT 1 FROM session_heads WHERE session_id = ?1
+                            UNION ALL SELECT 1 FROM session_artifacts WHERE session_id = ?1
+                            UNION ALL SELECT 1 FROM session_terminal_outcomes WHERE session_id = ?1
+                            UNION ALL SELECT 1 FROM approval_requests WHERE session_id = ?1
+                            UNION ALL SELECT 1 FROM approval_grants WHERE scope_session_id = ?1
+                            UNION ALL SELECT 1 FROM session_tool_consent WHERE scope_session_id = ?1
+                            UNION ALL SELECT 1 FROM session_route_bindings WHERE active_session_id = ?1
+                         )",
+                        [&current_session_id],
+                        |row| row.get::<_, bool>(0),
+                    )
+                    .map_err(|error| {
+                        format!("inspect missing session identity evidence failed: {error}")
+                    })?;
+                if existing_identity_evidence {
+                    return Err(format!(
+                        "typed Session materialization requires a canonical session row for existing identity `{current_session_id}`"
+                    ));
+                }
+                break;
+            };
+            next_session_id = session.parent_session_id.clone();
+            snapshots.push(SessionMaterializationSnapshot {
+                session,
+                tool_policy: Self::load_session_tool_policy_with_conn(&tx, &current_session_id)?,
+                latest_events: Self::list_latest_session_events_by_kind_with_conn(
+                    &tx,
+                    &current_session_id,
+                )?,
+                delegate_events: Self::list_delegate_lifecycle_events_with_conn(
+                    &tx,
+                    &current_session_id,
+                )?,
+            });
+        }
+        tx.commit().map_err(|error| {
+            format!("commit session materialization transaction failed: {error}")
+        })?;
+        Ok(snapshots)
+    }
+
     pub fn load_session_summary(
         &self,
         session_id: &str,
@@ -906,6 +983,45 @@ impl SessionRepository {
         };
         let event = SessionEventRecord::try_from_raw(raw)?;
         Ok(Some(event))
+    }
+
+    fn list_latest_session_events_by_kind_with_conn(
+        conn: &Connection,
+        session_id: &str,
+    ) -> Result<Vec<SessionEventRecord>, String> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT event.id, event.session_id, event.event_kind,
+                        event.actor_session_id, event.payload_json, event.ts
+                 FROM session_events AS event
+                 INNER JOIN (
+                     SELECT event_kind, MAX(id) AS id
+                     FROM session_events
+                     WHERE session_id = ?1
+                     GROUP BY event_kind
+                 ) AS latest ON latest.id = event.id
+                 ORDER BY event.id ASC",
+            )
+            .map_err(|error| format!("prepare latest session events query failed: {error}"))?;
+        let rows = stmt
+            .query_map(params![session_id], |row| {
+                Ok(RawSessionEventRecord {
+                    id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    event_kind: row.get(2)?,
+                    actor_session_id: row.get(3)?,
+                    payload_json: row.get(4)?,
+                    ts: row.get(5)?,
+                })
+            })
+            .map_err(|error| format!("query latest session events failed: {error}"))?;
+
+        rows.map(|row| {
+            let raw =
+                row.map_err(|error| format!("decode latest session event failed: {error}"))?;
+            SessionEventRecord::try_from_raw(raw)
+        })
+        .collect()
     }
 
     fn list_events_after_with_conn(

@@ -3,10 +3,7 @@ use std::collections::BTreeSet;
 use loong_contracts::{Capability, ToolCoreRequest};
 use serde_json::Value;
 
-use super::{
-    HTTP_REQUEST_TOOL_NAME, ToolExecutionKind, ToolView, config_import, feishu, runtime_tool_view,
-    tool_catalog, tool_surface,
-};
+use super::{HTTP_REQUEST_TOOL_NAME, ToolOwner, config_import, feishu, tool_catalog, tool_surface};
 
 pub fn canonical_tool_name(raw: &str) -> &str {
     match raw {
@@ -26,31 +23,42 @@ pub fn canonical_tool_name(raw: &str) -> &str {
     raw
 }
 
-pub(crate) fn required_capabilities_for_request(request: &ToolCoreRequest) -> BTreeSet<Capability> {
-    if let Some(peeked_request) = super::peek_tool_invoke_request(request) {
-        return required_capabilities_for_tool_name_and_payload(
+/// Recover capability metadata after dispatch has entered the legacy envelope.
+///
+/// `ToolCoreRequest` carries no `ToolSpec`, so the explicit fallback and its
+/// discovery read model share this mapping until that envelope is deleted.
+/// Registered tools must read required capabilities from their registry entry.
+pub(crate) fn legacy_required_capabilities_for_request(
+    request: &ToolCoreRequest,
+) -> BTreeSet<Capability> {
+    if let Some(peeked_request) =
+        super::peek_tool_invoke_request(request.tool_name.as_str(), &request.payload)
+    {
+        return legacy_required_capabilities_for_tool_name_and_payload(
             peeked_request.tool_name,
             peeked_request.arguments,
         );
     }
 
-    required_capabilities_for_tool_name_and_payload(
+    legacy_required_capabilities_for_tool_name_and_payload(
         canonical_tool_name(request.tool_name.as_str()),
         &request.payload,
     )
 }
 
-pub(crate) fn required_capabilities_for_tool_name_and_payload(
+pub(crate) fn legacy_required_capabilities_for_tool_name_and_payload(
     tool_name: &str,
     payload: &Value,
 ) -> BTreeSet<Capability> {
     let _ = payload;
     let mut caps = BTreeSet::from([Capability::InvokeTool]);
-    let visible_tool_name = user_visible_tool_name(tool_name);
+    let canonical_name = canonical_tool_name(tool_name);
+    let capability_surface_name =
+        direct_tool_name_for_hidden_tool(canonical_name).unwrap_or(canonical_name);
     if tool_requires_network_egress(tool_name) {
         caps.insert(Capability::NetworkEgress);
     }
-    match visible_tool_name.as_str() {
+    match capability_surface_name {
         "read" => {
             caps.insert(Capability::FilesystemRead);
         }
@@ -112,28 +120,6 @@ fn tool_requires_network_egress(tool_name: &str) -> bool {
     )
 }
 
-pub fn is_known_tool_name(raw: &str) -> bool {
-    if tool_catalog().resolve(raw).is_some() {
-        return true;
-    }
-    if is_known_tool_name_in_view(raw, &runtime_tool_view()) {
-        return true;
-    }
-    #[cfg(feature = "feishu-integration")]
-    {
-        feishu::is_known_feishu_tool_name(raw)
-    }
-    #[cfg(not(feature = "feishu-integration"))]
-    {
-        false
-    }
-}
-
-pub fn is_known_tool_name_in_view(raw: &str, view: &ToolView) -> bool {
-    let canonical_name = canonical_tool_name(raw);
-    is_provider_exposed_tool_name(canonical_name) || view.contains(canonical_name)
-}
-
 pub fn is_provider_exposed_tool_name(raw: &str) -> bool {
     super::catalog::find_tool_catalog_entry(canonical_tool_name(raw))
         .is_some_and(|entry| entry.is_provider_exposed())
@@ -147,7 +133,10 @@ pub(crate) fn direct_tool_name_for_hidden_tool(raw: &str) -> Option<&'static str
     tool_surface::direct_tool_name_for_hidden_tool(canonical_name)
 }
 
-pub fn user_visible_tool_name(raw: &str) -> String {
+// TODO(tool-plane-display): this is a legacy display alias bridge for
+// conversation/result surfaces. Do not use it for typed dispatch, policy, or
+// capability ownership; those should read plane/tool metadata directly.
+pub fn legacy_display_tool_name(raw: &str) -> String {
     let canonical_name = canonical_tool_name(raw);
 
     if canonical_name == "tool.search" {
@@ -170,7 +159,7 @@ pub fn user_visible_tool_name(raw: &str) -> String {
 
 pub(crate) fn model_visible_tool_name(raw: &str) -> String {
     let canonical_name = canonical_tool_name(raw);
-    user_visible_tool_name(canonical_name)
+    legacy_display_tool_name(canonical_name)
 }
 
 pub(crate) fn is_tool_surface_id(surface_id: &str) -> bool {
@@ -178,25 +167,36 @@ pub(crate) fn is_tool_surface_id(surface_id: &str) -> bool {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct ResolvedToolExecution {
-    pub canonical_name: &'static str,
-    pub execution_kind: ToolExecutionKind,
+pub(crate) enum ResolvedLegacyToolExecution {
+    Core { canonical_name: &'static str },
+    App { canonical_name: &'static str },
 }
 
-pub(crate) fn resolve_tool_execution(raw: &str) -> Option<ResolvedToolExecution> {
+pub(crate) fn resolve_legacy_tool_execution(raw: &str) -> Option<ResolvedLegacyToolExecution> {
+    let canonical_name = canonical_tool_name(raw);
+    // `tool.search` is the legacy lease-refresh gateway, not a catalog tool.
+    // Keep its exceptional owner inside this legacy-only resolver until the
+    // gateway itself is registered in the typed plane.
+    if canonical_name == "tool.search" {
+        return Some(ResolvedLegacyToolExecution::Core {
+            canonical_name: "tool.search",
+        });
+    }
+
     let catalog = tool_catalog();
     if let Some(descriptor) = catalog.resolve(raw) {
-        return Some(ResolvedToolExecution {
-            canonical_name: descriptor.name,
-            execution_kind: descriptor.execution_kind,
-        });
+        return match descriptor.owner {
+            ToolOwner::LegacyCore => Some(ResolvedLegacyToolExecution::Core {
+                canonical_name: descriptor.name,
+            }),
+            ToolOwner::LegacyApp => Some(ResolvedLegacyToolExecution::App {
+                canonical_name: descriptor.name,
+            }),
+        };
     }
     #[cfg(feature = "feishu-integration")]
     if let Some(canonical_name) = feishu::canonical_feishu_tool_name(raw) {
-        return Some(ResolvedToolExecution {
-            canonical_name,
-            execution_kind: ToolExecutionKind::Core,
-        });
+        return Some(ResolvedLegacyToolExecution::Core { canonical_name });
     }
     None
 }

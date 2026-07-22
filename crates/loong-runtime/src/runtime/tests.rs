@@ -1,0 +1,42 @@
+use std::borrow::Cow;
+
+use loong_contracts::{AuthorizationScope, AuthorizationSubject, Capabilities, ToolPath};
+use loong_core::policy::context::{ContextFactory, PolicyContext};
+use loong_kernel::Kernel;
+
+use super::Runtime;
+use crate::tool_plane::ToolPlaneRegistry;
+
+struct TestContextFactory;
+
+impl ContextFactory for TestContextFactory {
+    type Cx<'a> = TestContext;
+}
+
+struct TestContext;
+
+impl PolicyContext for TestContext {
+    fn allowed_capabilities(&self) -> Cow<'_, Capabilities> {
+        static EMPTY: Capabilities = Capabilities::new();
+        Cow::Borrowed(&EMPTY)
+    }
+
+    fn authorization_subject(&self) -> AuthorizationSubject {
+        AuthorizationSubject {
+            actor_id: "test:runtime:owner:actor".to_owned(),
+            scope: AuthorizationScope::Session {
+                session_id: "test:runtime:owner:session".to_owned(),
+            },
+        }
+    }
+}
+
+#[test]
+fn runtime_owns_kernel_and_concrete_tool_plane_registry() {
+    let runtime = Runtime::new(
+        Kernel::<TestContextFactory>::new(),
+        ToolPlaneRegistry::new(),
+    );
+
+    assert_eq!(runtime.registered_tool_paths(), Vec::<ToolPath>::new());
+}

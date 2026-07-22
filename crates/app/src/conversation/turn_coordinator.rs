@@ -6,7 +6,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 #[cfg(feature = "memory-sqlite")]
 use futures_util::FutureExt;
-use loong_contracts::{AuditEventKind, ExecutionPlane, PlaneTier};
+use loong_contracts::{AuditEventKind, Capability, GovernedSessionMode, RuntimeOperationOutcome};
+use loong_core::policy::context::PolicyContext;
 use serde::Serialize;
 use serde_json::{Value, json};
 #[cfg(feature = "memory-sqlite")]
@@ -65,8 +66,6 @@ mod state;
 mod support;
 
 use crate::CliResult;
-#[cfg(test)]
-use crate::KernelContext;
 use crate::acp::{
     AcpConversationTurnEntryDecision, AcpConversationTurnOptions,
     consume_finalized_acp_conversation_turn, evaluate_acp_conversation_turn_entry_for_address,
@@ -85,7 +84,7 @@ use crate::task_progress::{
     task_progress_event_payload, unix_ts_now,
 };
 
-use self::app_tools::CoordinatorAppToolDispatcher;
+use self::app_tools::CoordinatorLegacyToolDispatcher;
 use self::checkpoint_tail::{
     probe_turn_checkpoint_tail_runtime_gate_entry,
     probe_turn_checkpoint_tail_runtime_gate_entry_with_limit, repair_turn_checkpoint_tail_entry,
@@ -128,7 +127,7 @@ use self::safe_lane_governor::*;
 pub(crate) use self::safe_lane_routing::SafeLaneFailureRoute;
 use self::safe_lane_routing::*;
 use self::safe_lane_state::{SafeLaneExecutionMetrics, SafeLanePlanLoopState};
-use self::setup::{lane_policy_from_config, require_production_kernel_binding};
+use self::setup::lane_policy_from_config;
 use self::skill_activation::{
     explicit_skill_activation_tool_call_id, parse_explicit_skill_activation_input,
     parse_named_skill_activation_input,
@@ -148,7 +147,7 @@ use super::analytics::{
 use super::announce::DelegateAnnounceSettings;
 #[cfg(feature = "memory-sqlite")]
 use super::approval_resolution::CoordinatorApprovalResolutionRuntime;
-use super::context_engine::{AssembledConversationContext, ConversationContextEngine};
+use super::context_engine::AssembledConversationContext;
 #[cfg(feature = "memory-sqlite")]
 use super::delegate_support::{
     enqueue_delegate_result_announce_with_memory_config,
@@ -158,12 +157,10 @@ use super::delegate_support::{
 };
 use super::ingress::ConversationIngressContext;
 use super::lane_arbiter::{ExecutionLane, LaneArbiterPolicy, LaneDecision};
-#[cfg(feature = "memory-sqlite")]
-use super::mailbox_for_session;
 use super::persistence::{
     format_provider_error_reply, persist_acp_runtime_events, persist_conversation_event,
-    persist_reply_turns_raw_with_mode, persist_reply_turns_with_mode, persist_tool_decision,
-    persist_tool_outcome, provider_error_reply_body,
+    persist_reply_turns, persist_reply_turns_raw, persist_tool_decision, persist_tool_outcome,
+    provider_error_reply_body,
 };
 use super::plan_executor::{
     PlanExecutor, PlanNodeError, PlanNodeErrorKind, PlanNodeExecutor, PlanRunFailure,
@@ -176,10 +173,7 @@ use super::plan_verifier::{
     PlanVerificationContext, PlanVerificationFailureCode, PlanVerificationPolicy,
     PlanVerificationReport, verify_output,
 };
-use super::runtime::{
-    AsyncDelegateSpawnRequest, ConversationRuntime, DefaultConversationRuntime, SessionContext,
-};
-use super::runtime_binding::{ConversationRuntimeBinding, OwnedConversationRuntimeBinding};
+use super::runtime::{AsyncDelegateSpawnRequest, ConversationRuntime, DefaultConversationRuntime};
 use super::safe_lane_failure::{
     SafeLaneFailureCode, SafeLaneFailureRouteDecision, SafeLaneFailureRouteSource,
     classify_safe_lane_plan_failure,
@@ -193,15 +187,13 @@ use super::session_history::{
 use super::subagent::{
     ConstrainedSubagentExecution, ConstrainedSubagentMode, ConstrainedSubagentTerminalReason,
 };
-use super::trust_projection::{
-    emit_provider_failover_trust_event_if_needed, emit_runtime_binding_trust_event_if_needed,
-};
+use super::trust_projection::emit_provider_failover_trust_event_if_needed;
 use super::turn_budget::{
     EscalatingAttemptBudget, SafeLaneBackpressureBudget, SafeLaneContinuationBudgetDecision,
     SafeLaneFailureRouteReason, SafeLaneReplanBudget,
 };
+use crate::Context;
 
-type DefaultTurnRuntime = DefaultConversationRuntime<Box<dyn ConversationContextEngine>>;
 #[cfg(feature = "memory-sqlite")]
 use self::support::active_task_progress_record;
 #[cfg(feature = "memory-sqlite")]
@@ -231,8 +223,8 @@ use super::turn_checkpoint::{
     restore_analytics_turn_checkpoint_progress_status, turn_checkpoint_result_kind,
 };
 use super::turn_engine::{
-    AppToolDispatcher, DefaultAppToolDispatcher, ProviderTurn, ToolBatchExecutionIntentStatus,
-    ToolBatchExecutionTrace, ToolExecutionPreflight, ToolIntent, TurnEngine, TurnFailure,
+    DefaultLegacyToolDispatcher, LegacyToolDispatcher, LegacyToolExecutionPreflight, ProviderTurn,
+    ToolBatchExecutionIntentStatus, ToolBatchExecutionTrace, ToolIntent, TurnEngine, TurnFailure,
     TurnFailureKind, TurnResult, TurnValidation, effective_result_tool_name,
 };
 use super::turn_observer::{
@@ -280,8 +272,6 @@ use loong_kernel::mailbox::{AgentPath, InterAgentMessage, MailboxContent};
 #[derive(Clone, Default)]
 pub struct ConversationTurnCoordinator;
 
-const PRODUCTION_CONVERSATION_RUNTIME_REQUIRES_KERNEL_BINDING: &str =
-    "production conversation runtime requires kernel-bound execution";
 pub use self::compact::ContextCompactionReport;
 
 #[allow(dead_code)]

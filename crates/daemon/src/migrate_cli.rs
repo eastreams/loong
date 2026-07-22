@@ -5,7 +5,7 @@ use std::{
 };
 
 use clap::ValueEnum;
-use kernel::{ToolCoreOutcome, ToolCoreRequest};
+use kernel::ToolCoreOutcome;
 use loong_app as mvp;
 use loong_spec::CliResult;
 use serde_json::{Value, json};
@@ -67,14 +67,26 @@ pub fn run_migrate_cli(options: MigrateCommandOptions) -> CliResult<()> {
 async fn run_migrate_cli_async(options: MigrateCommandOptions) -> CliResult<()> {
     validate_migrate_cli_options(&options)?;
     let config = load_migrate_cli_runtime_config(&options)?;
-    let runtime_kernel = bootstrap_migrate_runtime_kernel(&config)?;
-    let kernel_ctx = runtime_kernel.kernel_context();
-    let outcome = mvp::tools::execute_tool(
-        ToolCoreRequest {
-            tool_name: "config.import".to_owned(),
-            payload: build_migrate_tool_payload(&options),
-        },
-        kernel_ctx,
+    let execution_runtime = mvp::runtime::bootstrap_runtime_with_config(&config)?;
+    let session = mvp::Session::from_config(
+        execution_runtime.as_ref(),
+        &config,
+        "daemon-migrate-cli",
+        "daemon-migrate-cli",
+        loong_contracts::GovernedSessionMode::MutatingCapable,
+    )?;
+    let legacy_tools = mvp::conversation::DefaultLegacyToolDispatcher::with_config(
+        execution_runtime.clone(),
+        &session,
+        mvp::session::store::SessionStoreConfig::from_memory_config(&config.memory),
+        config.clone(),
+    )?;
+    let context =
+        mvp::Context::new(&execution_runtime, &session).map_err(|error| error.to_string())?;
+    let outcome = mvp::tools::execute_legacy_config_import(
+        build_migrate_tool_payload(&options),
+        &context,
+        &legacy_tools,
     )
     .await
     .map_err(|error| translate_migrate_cli_error(&options, error))?;
@@ -114,14 +126,6 @@ fn require_flag_value(value: Option<&str>, flag: &str, mode: MigrateMode) -> Cli
         command_name,
         mode.as_id()
     ))
-}
-
-fn bootstrap_migrate_runtime_kernel(
-    config: &mvp::config::LoongConfig,
-) -> CliResult<mvp::runtime_bridge::RuntimeKernelOwner> {
-    let agent_id = "daemon-migrate-cli";
-    let runtime_kernel = mvp::runtime_bridge::RuntimeKernelOwner::bootstrap(agent_id, config)?;
-    Ok(runtime_kernel)
 }
 
 fn block_on_migrate_cli<F>(future: F) -> CliResult<()>
@@ -850,21 +854,6 @@ fn yes_no(value: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mvp;
-
-    #[test]
-    fn bootstrap_migrate_runtime_kernel_provides_kernel_context() {
-        let mut config = mvp::config::LoongConfig::default();
-        config.audit.mode = mvp::config::AuditMode::InMemory;
-
-        let runtime_kernel =
-            bootstrap_migrate_runtime_kernel(&config).expect("bootstrap migrate runtime kernel");
-
-        assert_eq!(
-            runtime_kernel.kernel_context().agent_id(),
-            "daemon-migrate-cli"
-        );
-    }
 
     #[test]
     fn render_migrate_surface_text_uses_operator_header() {

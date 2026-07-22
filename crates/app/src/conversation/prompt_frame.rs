@@ -982,6 +982,7 @@ mod tests {
             estimated_tokens: None,
             prompt_fragments,
             system_prompt_addition: None,
+            runtime_self_continuity: None,
         };
 
         let summary = summarize_assembled_prompt_frame(&assembled);
@@ -1146,6 +1147,7 @@ mod tests {
             estimated_tokens: None,
             prompt_fragments: Vec::new(),
             system_prompt_addition: None,
+            runtime_self_continuity: None,
         };
 
         let summary = summarize_assembled_prompt_frame(&assembled);

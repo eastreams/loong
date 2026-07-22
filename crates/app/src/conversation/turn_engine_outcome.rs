@@ -1,7 +1,8 @@
 use std::fmt;
 use std::ops::Deref;
 
-use loong_contracts::ToolCoreOutcome;
+use loong_contracts::ToolInputError;
+use loong_contracts::ToolPath;
 use serde::{Deserialize, Serialize};
 
 use super::ToolDecisionTelemetry;
@@ -9,7 +10,7 @@ use super::ToolDecisionTelemetry;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalRequirementKind {
-    KernelContextRequired,
+    ContextRequired,
     GovernedTool,
 }
 
@@ -43,7 +44,7 @@ impl ApprovalRequirement {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ToolPreflightOutcome {
+pub(crate) enum LegacyToolPreflightOutcome {
     Allow(ToolDecisionTelemetry),
     NeedsApproval {
         requirement: ApprovalRequirement,
@@ -83,6 +84,67 @@ pub enum TurnFailureKind {
     Provider,
 }
 
+/// Structured typed-tool input rejection retained across orchestration layers.
+///
+/// Runtime path is execution identity, while provider name is presentation.
+/// Keeping both prevents follow-up repair from consulting the legacy catalog or
+/// reconstructing identity from an error string.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolInputFailure {
+    pub path: ToolPath,
+    pub provider_name: String,
+    pub argument_hint: Option<String>,
+    pub error: ToolInputError,
+}
+
+impl ToolInputFailure {
+    /// Render model-facing repair instructions from typed input evidence only.
+    #[must_use]
+    pub fn repair_guidance(&self) -> String {
+        let mut lines = vec![format!("Repair guidance for {}:", self.provider_name)];
+        match &self.error {
+            ToolInputError::PayloadMustBeObject => {
+                lines.push("Send a JSON object payload instead of a scalar or list.".to_owned());
+            }
+            ToolInputError::MissingOneOf { fields } => {
+                let fields = fields
+                    .iter()
+                    .map(|field| format!("`{field}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                lines.push(format!("Add at least one of these fields: {fields}."));
+            }
+            ToolInputError::MissingField { field } => {
+                lines.push(format!("Add required field `payload.{field}`."));
+            }
+            ToolInputError::InvalidField { field, reason } => {
+                lines.push(format!(
+                    "Fix `payload.{field}`: {}.",
+                    reason.trim_end_matches('.')
+                ));
+            }
+            ToolInputError::InvalidPayload { reason } => {
+                lines.push(format!(
+                    "Fix the payload: {}.",
+                    reason.trim_end_matches('.')
+                ));
+            }
+            error => {
+                lines.push(format!("Fix the payload: {error}."));
+            }
+        }
+        if let Some(argument_hint) = self
+            .argument_hint
+            .as_deref()
+            .map(str::trim)
+            .filter(|hint| !hint.is_empty())
+        {
+            lines.push(format!("Expected payload shape: {argument_hint}."));
+        }
+        lines.join("\n")
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TurnFailure {
     pub kind: TurnFailureKind,
@@ -91,6 +153,8 @@ pub struct TurnFailure {
     pub retryable: bool,
     #[serde(default, skip_serializing_if = "turn_failure_flag_is_false")]
     pub supports_discovery_recovery: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_input: Option<Box<ToolInputFailure>>,
 }
 
 fn turn_failure_flag_is_false(value: &bool) -> bool {
@@ -105,6 +169,7 @@ impl TurnFailure {
             reason: reason.into(),
             retryable: false,
             supports_discovery_recovery: false,
+            tool_input: None,
         }
     }
 
@@ -118,6 +183,7 @@ impl TurnFailure {
             reason: reason.into(),
             retryable: false,
             supports_discovery_recovery: true,
+            tool_input: None,
         }
     }
 
@@ -128,6 +194,20 @@ impl TurnFailure {
             reason: reason.into(),
             retryable: true,
             supports_discovery_recovery: false,
+            tool_input: None,
+        }
+    }
+
+    pub fn input_repair_required(reason: impl Into<String>, tool_input: ToolInputFailure) -> Self {
+        Self {
+            // Re-executing the same payload cannot recover. Structured input
+            // detail drives a separate model-repair path after execution stops.
+            kind: TurnFailureKind::NonRetryable,
+            code: "tool_input_invalid".to_owned(),
+            reason: reason.into(),
+            retryable: false,
+            supports_discovery_recovery: false,
+            tool_input: Some(Box::new(tool_input)),
         }
     }
 
@@ -138,6 +218,7 @@ impl TurnFailure {
             reason: reason.into(),
             retryable: false,
             supports_discovery_recovery: false,
+            tool_input: None,
         }
     }
 
@@ -148,11 +229,22 @@ impl TurnFailure {
             reason: reason.into(),
             retryable: false,
             supports_discovery_recovery: false,
+            tool_input: None,
         }
     }
 
     pub fn as_str(&self) -> &str {
         self.reason.as_str()
+    }
+
+    pub(crate) fn into_turn_result(self) -> TurnResult {
+        match self.kind {
+            TurnFailureKind::PolicyDenied => TurnResult::ToolDenied(self),
+            TurnFailureKind::Retryable | TurnFailureKind::NonRetryable => {
+                TurnResult::ToolError(self)
+            }
+            TurnFailureKind::Provider => TurnResult::ProviderError(self),
+        }
     }
 }
 
@@ -184,7 +276,10 @@ pub enum TurnResult {
 
 #[derive(Debug, Clone)]
 pub(crate) enum PreparedToolExecutionOutcome {
-    Completed(ToolCoreOutcome),
+    Completed {
+        status: String,
+        payload: serde_json::Value,
+    },
     Denied(TurnFailure),
     Interrupted(TurnResult),
 }

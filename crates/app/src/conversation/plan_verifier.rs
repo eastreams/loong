@@ -196,7 +196,7 @@ fn default_deny_markers() -> Vec<String> {
     vec![
         "tool_failure".to_owned(),
         "provider_error".to_owned(),
-        "no_kernel_context".to_owned(),
+        "no_app_context".to_owned(),
         "tool_not_found".to_owned(),
     ]
 }
@@ -238,7 +238,7 @@ mod tests {
     fn verifier_rejects_output_with_deny_markers() {
         let policy = PlanVerificationPolicy::default();
         let report = verify_output(
-            "[ok] no_kernel_context",
+            "[ok] no_app_context",
             &PlanVerificationContext::default(),
             &policy,
         );

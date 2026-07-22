@@ -61,7 +61,6 @@ impl Default for ArchitectureBoundaryPolicy {
                 "crates/kernel/src/memory.rs".to_owned(),
                 "crates/kernel/src/plugin.rs".to_owned(),
                 "crates/kernel/src/plugin_ir.rs".to_owned(),
-                "crates/kernel/src/policy_ext.rs".to_owned(),
                 "crates/kernel/src/runtime.rs".to_owned(),
                 "crates/kernel/src/tests.rs".to_owned(),
                 "crates/kernel/src/tool.rs".to_owned(),

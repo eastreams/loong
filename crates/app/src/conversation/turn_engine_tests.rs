@@ -1,15 +1,27 @@
-use crate::context::bootstrap_test_kernel_context;
 use std::fs;
+use std::sync::Arc;
 use std::time::Duration;
 
+use loong_contracts::ToolPath;
 use serde_json::json;
 
+use super::prepare::{
+    PreparedLegacyToolInvocation, PreparedToolInvocation, PreparedTypedToolInvocation,
+};
 use super::*;
 use crate::config::{AutonomyProfile, GovernedToolApprovalMode, ToolConfig};
 use crate::session::repository::{
     ApprovalRequestStatus, NewApprovalGrantRecord, NewSessionEvent, NewSessionRecord, SessionKind,
     SessionRepository, SessionState,
 };
+use crate::tools::{runtime_tool_view, runtime_tool_view_for_config};
+
+// Contracts tests validation; turn-engine fixtures use valid one-segment
+// identities so these tests stay focused on routing and execution semantics.
+#[allow(clippy::expect_used)]
+fn tool_path(segment: &str) -> ToolPath {
+    ToolPath::new([segment]).expect("test tool path must be valid")
+}
 
 fn isolated_memory_config(test_name: &str) -> SessionStoreConfig {
     let base = std::env::temp_dir().join(format!(
@@ -25,13 +37,134 @@ fn isolated_memory_config(test_name: &str) -> SessionStoreConfig {
     }
 }
 
-fn test_kernel_context(agent_id: &str) -> KernelContext {
-    crate::context::bootstrap_test_kernel_context(agent_id, 60)
-        .expect("bootstrap test kernel context")
+struct TypedOnlyPrepareTool;
+
+#[async_trait::async_trait]
+impl<C> loong_core::tool::ToolImpl<C> for TypedOnlyPrepareTool
+where
+    C: loong_core::policy::context::ContextFactory,
+{
+    type Input = serde_json::Value;
+    type Output = serde_json::Value;
+    type Error = std::convert::Infallible;
+
+    fn spec(&self) -> loong_contracts::ToolSpec {
+        loong_contracts::ToolSpec {
+            description: "Typed-only preparation test tool.".to_owned(),
+            input_schema: json!({ "type": "object" }),
+            required_capabilities: std::collections::BTreeSet::new(),
+            scheduling: loong_contracts::ToolSchedulingClass::ParallelSafe,
+            argument_hint: None,
+            search_hint: None,
+            tags: Vec::new(),
+        }
+    }
+
+    fn parse_input(
+        &self,
+        payload: serde_json::Value,
+    ) -> Result<Self::Input, loong_contracts::ToolInputError> {
+        Ok(payload)
+    }
+
+    async fn execute(
+        &self,
+        _ctx: &C::Cx<'_>,
+        input: Self::Input,
+    ) -> Result<Self::Output, Self::Error> {
+        Ok(input)
+    }
 }
 
-fn kernel_context(agent_id: &str) -> KernelContext {
-    test_kernel_context(agent_id)
+struct TypedIngressTestOwner {
+    runtime: std::sync::Arc<loong_runtime::runtime::Runtime<crate::context::RuntimeContextFactory>>,
+    session: crate::Session,
+}
+
+impl TypedIngressTestOwner {
+    fn context(&self) -> crate::Context<'_> {
+        crate::Context::new(&self.runtime, &self.session).expect("typed ingress owner")
+    }
+}
+
+/// Build typed ingress without registering pack or minting bearer evidence.
+/// A test that reaches legacy dispatch must supply that owner separately.
+fn typed_ingress_test_runtime_session(
+    tools: loong_runtime::tool_plane::ToolPlaneRegistry<crate::context::RuntimeContextFactory>,
+    tool_view: crate::tools::ToolView,
+) -> (
+    TypedIngressTestOwner,
+    std::sync::Arc<loong_kernel::InMemoryAuditSink>,
+) {
+    use std::sync::Arc;
+
+    use loong_contracts::{Capabilities, Capability, GovernedSessionMode};
+    use loong_kernel::{FixedClock, InMemoryAuditSink, Kernel};
+    use loong_runtime::runtime::Runtime;
+
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let policy =
+        loong_kernel::policy::PolicyPipelineBuilder::<crate::context::RuntimeContextFactory>::new()
+            .with_pre_policy(crate::tools::plane::ToolVisibilityPolicy)
+            .with_policy(crate::tools::plane::ToolInvocationAllowPolicy);
+    let kernel = Kernel::<crate::context::RuntimeContextFactory>::with_policy_runtime(
+        policy,
+        Arc::new(FixedClock::new(1_700_000_000)),
+        audit.clone(),
+    );
+    let runtime = Arc::new(Runtime::new(kernel, tools));
+    let session = crate::context::Session::root(
+        runtime.as_ref(),
+        "typed-ingress-agent",
+        "typed-ingress-session",
+        GovernedSessionMode::MutatingCapable,
+        Capabilities::from([Capability::InvokeTool]),
+        crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        crate::memory::runtime_config::MemoryRuntimeConfig::default(),
+        tool_view,
+        None,
+        None,
+    )
+    .expect("build typed ingress test session");
+    let owner = TypedIngressTestOwner { runtime, session };
+    (owner, audit)
+}
+
+#[cfg(feature = "tool-file")]
+async fn assert_migrated_tool_has_no_legacy_fallback(
+    tool_name: &'static str,
+    payload: serde_json::Value,
+) {
+    let (owner, _) = typed_ingress_test_runtime_session(
+        loong_runtime::tool_plane::ToolPlaneRegistry::new(),
+        crate::tools::ToolView::from_legacy_paths([tool_name]),
+    );
+    let session_context = owner.context();
+    let intent = ToolIntent {
+        tool_name: tool_name.into(),
+        args_json: payload,
+        source: "assistant".to_owned(),
+        turn_id: format!("missing-{tool_name}-turn"),
+        tool_call_id: format!("missing-{tool_name}-call"),
+    };
+
+    let failure = TurnEngine::new(1)
+        .prepare_tool_intent(
+            &intent,
+            0,
+            &session_context,
+            &NoopLegacyToolDispatcher,
+            &AutonomyTurnBudgetState::default(),
+            None,
+        )
+        .await
+        .expect_err("migrated typed tool must not fall back when registration is absent");
+
+    assert!(matches!(
+        failure.turn_result,
+        TurnResult::ToolDenied(ref error)
+            if error.code == "tool_not_found" && error.reason.contains(tool_name)
+    ));
 }
 
 #[test]
@@ -73,13 +206,13 @@ fn turn_failure_discovery_recovery_builder_marks_non_retryable_policy_denial() {
 
 #[test]
 fn tool_execution_preflight_ready_clears_trusted_internal_context() {
-    let preflight = ToolExecutionPreflight::ready(ToolCoreRequest {
+    let preflight = LegacyToolExecutionPreflight::ready(ToolCoreRequest {
         tool_name: "shell.exec".to_owned(),
         payload: json!({"command": "echo hello"}),
     });
 
     match preflight {
-        ToolExecutionPreflight::Ready {
+        LegacyToolExecutionPreflight::Ready {
             request,
             trusted_internal_context,
         } => {
@@ -87,20 +220,30 @@ fn tool_execution_preflight_ready_clears_trusted_internal_context() {
             assert_eq!(request.payload, json!({"command": "echo hello"}));
             assert!(!trusted_internal_context);
         }
-        ToolExecutionPreflight::NeedsApproval(requirement) => {
+        LegacyToolExecutionPreflight::NeedsApproval(requirement) => {
             panic!("unexpected approval requirement: {:?}", requirement)
         }
     }
 }
 
 #[test]
-fn default_app_tool_dispatcher_scopes_child_sessions_to_self_only_visibility() {
-    let dispatcher = DefaultAppToolDispatcher::new(
+fn default_legacy_tool_dispatcher_scopes_child_sessions_to_self_only_visibility() {
+    let root_owner =
+        crate::test_support::runtime_session_for_test("root-session", runtime_tool_view());
+    let dispatcher = DefaultLegacyToolDispatcher::new(
+        Arc::clone(&root_owner.runtime),
+        &root_owner.session,
         store::current_session_store_config().clone(),
         ToolConfig::default(),
+    )
+    .expect("legacy app tool dispatcher");
+    let child_owner = crate::test_support::child_runtime_session_for_test(
+        "child-session",
+        "root-session",
+        runtime_tool_view(),
     );
-    let root = SessionContext::root_with_tool_view("root-session", runtime_tool_view());
-    let child = SessionContext::child("child-session", "root-session", runtime_tool_view());
+    let root = root_owner.context();
+    let child = child_owner.context();
 
     assert_eq!(
         dispatcher
@@ -119,61 +262,7 @@ fn default_app_tool_dispatcher_scopes_child_sessions_to_self_only_visibility() {
 }
 
 #[test]
-fn session_context_from_turn_uses_first_intent_session_id() {
-    let turn = ProviderTurn {
-        assistant_text: String::new(),
-        tool_intents: vec![ToolIntent {
-            tool_name: "shell.exec".to_owned(),
-            args_json: json!({"command": "echo hello"}),
-            source: "assistant".to_owned(),
-            session_id: "session-from-first-intent".to_owned(),
-            turn_id: "turn-1".to_owned(),
-            tool_call_id: "call-1".to_owned(),
-        }],
-        raw_meta: Value::Null,
-    };
-
-    let session_context = session_context_from_turn(&turn, runtime_tool_view());
-    assert_eq!(session_context.session_id, "session-from-first-intent");
-}
-
-#[test]
-fn validate_turn_in_context_allows_internal_approval_control_resolve_tool() {
-    let turn = ProviderTurn {
-        assistant_text: String::new(),
-        tool_intents: vec![ToolIntent {
-            tool_name: "approval_request_resolve".to_owned(),
-            args_json: json!({
-                "approval_request_id": "apr-allow-1",
-                "decision": "approve_once"
-            }),
-            source: "approval_control".to_owned(),
-            session_id: "session-approval-control".to_owned(),
-            turn_id: "turn-approval-control".to_owned(),
-            tool_call_id: "call-approval-control".to_owned(),
-        }],
-        raw_meta: Value::Null,
-    };
-    let tool_view = crate::tools::ToolView::from_tool_names([
-        "approval_request_resolve",
-        "approval_request_status",
-        "approval_requests_list",
-    ]);
-    let session_context =
-        SessionContext::root_with_tool_view("session-approval-control", tool_view);
-
-    let validation = TurnEngine::new(4)
-        .validate_turn_in_context(&turn, &session_context)
-        .expect("approval-control resolve should stay executable");
-
-    assert_eq!(validation, TurnValidation::ToolExecutionRequired);
-}
-
-#[test]
 fn prepare_tool_intent_uses_direct_shell_metadata_for_provider_shell_requests() {
-    use crate::test_support::TurnTestHarness;
-
-    let harness = TurnTestHarness::new();
     let (tool_name, args_json) = crate::tools::synthesize_test_provider_tool_call(
         "shell.exec",
         json!({
@@ -182,15 +271,17 @@ fn prepare_tool_intent_uses_direct_shell_metadata_for_provider_shell_requests() 
         }),
     );
     let intent = ToolIntent {
-        tool_name,
+        tool_name: tool_name.into(),
         args_json,
         source: "provider_tool_call".to_owned(),
-        session_id: "session-shell-invoke-trace".to_owned(),
         turn_id: "turn-shell-invoke-trace".to_owned(),
         tool_call_id: "call-shell-invoke-trace".to_owned(),
     };
-    let session_context =
-        SessionContext::root_with_tool_view("session-shell-invoke-trace", runtime_tool_view());
+    let owner = crate::test_support::runtime_session_for_test(
+        "session-shell-invoke-trace",
+        runtime_tool_view(),
+    );
+    let session_context = owner.context();
     let engine = TurnEngine::new(4);
     let runtime = tokio::runtime::Runtime::new().expect("test runtime");
     let prepared_intent = runtime.block_on(async {
@@ -200,8 +291,7 @@ fn prepare_tool_intent_uses_direct_shell_metadata_for_provider_shell_requests() 
                 &intent,
                 0,
                 &session_context,
-                &DefaultAppToolDispatcher::runtime(),
-                ConversationRuntimeBinding::kernel(&harness.kernel_ctx),
+                &owner.legacy_tools,
                 &autonomy_budget_state,
                 None,
             )
@@ -209,14 +299,384 @@ fn prepare_tool_intent_uses_direct_shell_metadata_for_provider_shell_requests() 
             .expect("provider shell request should prepare successfully")
     });
 
-    assert_eq!(prepared_intent.request.tool_name, "shell.exec");
-    assert_eq!(prepared_intent.intent.tool_name, "shell.exec");
+    let PreparedToolInvocation::Legacy {
+        invocation: PreparedLegacyToolInvocation::Core { request, .. },
+        ..
+    } = &prepared_intent.invocation
+    else {
+        panic!("shell request should remain in the legacy core fallback");
+    };
+    assert_eq!(request.tool_name, "shell.exec");
+    assert_eq!(prepared_intent.intent.tool_name.name(), "shell.exec");
     assert_eq!(
         prepared_intent.intent.args_json,
         json!({
             "command": "echo",
             "args": ["hello"],
         })
+    );
+}
+
+#[tokio::test]
+async fn typed_only_registration_executes_without_a_legacy_catalog_row() {
+    use loong_contracts::ToolSchedulingClass;
+    use loong_runtime::tool_plane::{ToolPlaneRegistry, ToolRegistration};
+
+    let mut tools = ToolPlaneRegistry::new();
+    tools
+        .register(
+            tool_path("typed.only"),
+            ToolRegistration::direct("typed_only"),
+            TypedOnlyPrepareTool,
+        )
+        .expect("register typed-only tool");
+    let (owner, audit) = typed_ingress_test_runtime_session(
+        tools,
+        crate::tools::ToolView::from_legacy_paths(["typed.only"]),
+    );
+    let session_context = owner.context();
+    let intent = ToolIntent {
+        tool_name: ToolIntentTarget::registered(tool_path("typed.only"), "typed_only"),
+        args_json: json!({}),
+        source: "provider_tool_call".to_owned(),
+        turn_id: "typed-only-turn".to_owned(),
+        tool_call_id: "typed-only-call".to_owned(),
+    };
+
+    let prepared = TurnEngine::new(1)
+        .prepare_tool_intent(
+            &intent,
+            0,
+            &session_context,
+            &NoopLegacyToolDispatcher,
+            &AutonomyTurnBudgetState::default(),
+            None,
+        )
+        .await
+        .expect("typed-only registration should not require a legacy descriptor");
+
+    let PreparedToolInvocation::Typed(PreparedTypedToolInvocation {
+        invocation,
+        payload,
+    }) = &prepared.invocation
+    else {
+        panic!("typed registration should prepare a typed invocation");
+    };
+    assert_eq!(invocation.path().to_string(), "/typed.only");
+    assert_eq!(prepared.intent.tool_name.name(), "typed_only");
+    assert_eq!(
+        prepared.intent.tool_name.registered_path(),
+        Some(&tool_path("typed.only"))
+    );
+    assert_eq!(payload, &json!({}));
+    assert_eq!(prepared.scheduling_class, ToolSchedulingClass::ParallelSafe);
+
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![intent],
+        raw_meta: serde_json::Value::Null,
+    };
+    let (result, trace) = TurnEngine::new(1)
+        .execute_turn_in_context_with_trace(
+            &turn,
+            &session_context,
+            &NoopLegacyToolDispatcher,
+            None,
+            None,
+        )
+        .await;
+
+    assert!(matches!(
+        result,
+        TurnResult::FinalText(ref output)
+            if output.contains("typed-only-call")
+                && output.contains("\"tool\":\"typed_only\"")
+                && !output.contains("\"tool\":\"typed.only\"")
+    ));
+    let trace = trace.expect("typed execution trace");
+    assert!(
+        trace.decision_records.is_empty(),
+        "typed authorization must come from PolicyEngine evidence, not a synthetic preflight allow"
+    );
+    assert_eq!(trace.intent_outcomes.len(), 1);
+    assert_eq!(trace.intent_outcomes[0].tool_name, "typed_only");
+    let events = audit.snapshot();
+    assert!(
+        events.iter().any(|event| matches!(
+            event.kind,
+            loong_contracts::AuditEventKind::ActionExecution { .. }
+        )),
+        "typed execution audit: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn typed_registration_precedes_same_name_legacy_catalog_validation() {
+    use loong_runtime::tool_plane::{ToolPlaneRegistry, ToolRegistration};
+
+    let mut tools = ToolPlaneRegistry::new();
+    tools
+        .register(
+            tool_path("config.import"),
+            ToolRegistration::direct("config.import"),
+            TypedOnlyPrepareTool,
+        )
+        .expect("register typed owner for a legacy catalog name");
+    let (owner, _) = typed_ingress_test_runtime_session(
+        tools,
+        crate::tools::ToolView::from_legacy_paths(["config.import"]),
+    );
+    let context = owner.context();
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![ToolIntent {
+            tool_name: ToolIntentTarget::Unresolved {
+                name: "config.import".to_owned(),
+            },
+            args_json: json!({ "typed_owner": true }),
+            source: "provider_tool_call".to_owned(),
+            turn_id: "typed-owner-before-legacy-turn".to_owned(),
+            tool_call_id: "typed-owner-before-legacy-call".to_owned(),
+        }],
+        raw_meta: serde_json::Value::Null,
+    };
+
+    let result = TurnEngine::new(1)
+        .execute_turn_in_context(&turn, &context, &NoopLegacyToolDispatcher, None)
+        .await;
+
+    assert!(matches!(
+        result,
+        TurnResult::FinalText(ref output)
+            if output.contains("typed-owner-before-legacy-call")
+                && output.contains("typed_owner")
+    ));
+}
+
+#[tokio::test]
+async fn registered_target_execution_never_reparses_its_provider_name() {
+    use loong_runtime::tool_plane::{ToolPlaneRegistry, ToolRegistration};
+
+    let mut tools = ToolPlaneRegistry::new();
+    tools
+        .register(
+            tool_path("typed.only"),
+            ToolRegistration::direct("config.import"),
+            TypedOnlyPrepareTool,
+        )
+        .expect("register typed path with a colliding legacy provider name");
+    let (owner, _) = typed_ingress_test_runtime_session(
+        tools,
+        crate::tools::ToolView::from_legacy_paths(["typed.only"]),
+    );
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![ToolIntent {
+            tool_name: ToolIntentTarget::registered(tool_path("typed.only"), "config.import"),
+            args_json: json!({}),
+            source: "provider_tool_call".to_owned(),
+            turn_id: "registered-path-validation-turn".to_owned(),
+            tool_call_id: "registered-path-validation-call".to_owned(),
+        }],
+        raw_meta: serde_json::Value::Null,
+    };
+
+    let result = TurnEngine::new(1)
+        .execute_turn_in_context(&turn, &owner.context(), &NoopLegacyToolDispatcher, None)
+        .await;
+
+    assert!(
+        matches!(result, TurnResult::FinalText(ref output) if output.contains("registered-path-validation-call"))
+    );
+}
+
+#[tokio::test]
+async fn typed_execution_does_not_interpret_legacy_runtime_overlay() {
+    use loong_runtime::tool_plane::{ToolPlaneRegistry, ToolRegistration};
+
+    let mut tools = ToolPlaneRegistry::new();
+    tools
+        .register(
+            tool_path("typed.only"),
+            ToolRegistration::direct("typed.only"),
+            TypedOnlyPrepareTool,
+        )
+        .expect("register typed-only tool");
+    let (owner, _) = typed_ingress_test_runtime_session(
+        tools,
+        crate::tools::ToolView::from_legacy_paths(["typed.only"]),
+    );
+    let context = owner.context();
+
+    let outcome = context
+        .tool(tool_path("typed.only"))
+        .expect("typed tool should be registered")
+        .invoke(json!({
+            "_loong": {},
+            "visible_input": true,
+        }))
+        .await
+        .expect("legacy overlay keys are ordinary typed payload data");
+
+    assert_eq!(outcome, json!({ "_loong": {}, "visible_input": true }));
+}
+
+#[tokio::test]
+async fn registered_tool_invoke_path_precedes_the_legacy_envelope() {
+    use loong_runtime::tool_plane::{ToolPlaneRegistry, ToolRegistration};
+
+    let mut tools = ToolPlaneRegistry::new();
+    tools
+        .register(
+            tool_path("tool.invoke"),
+            ToolRegistration::direct("tool.invoke"),
+            TypedOnlyPrepareTool,
+        )
+        .expect("register concrete tool.invoke tool");
+    let (owner, _) = typed_ingress_test_runtime_session(
+        tools,
+        crate::tools::ToolView::from_legacy_paths(["tool.invoke"]),
+    );
+    let context = owner.context();
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![ToolIntent {
+            tool_name: "tool.invoke".into(),
+            args_json: json!({ "visible_input": true }),
+            source: "assistant".to_owned(),
+            turn_id: "registered-tool-invoke-turn".to_owned(),
+            tool_call_id: "registered-tool-invoke-call".to_owned(),
+        }],
+        raw_meta: serde_json::Value::Null,
+    };
+
+    let result = TurnEngine::new(1)
+        .execute_turn_in_context(&turn, &context, &NoopLegacyToolDispatcher, None)
+        .await;
+
+    assert!(matches!(
+        result,
+        TurnResult::FinalText(ref output)
+            if output.contains("registered-tool-invoke-call")
+                && output.contains("visible_input")
+    ));
+}
+
+#[tokio::test]
+async fn registered_tool_invoke_path_still_requires_visibility() {
+    use loong_runtime::tool_plane::{ToolPlaneRegistry, ToolRegistration};
+
+    let mut tools = ToolPlaneRegistry::new();
+    tools
+        .register(
+            tool_path("tool.invoke"),
+            ToolRegistration::direct("tool.invoke"),
+            TypedOnlyPrepareTool,
+        )
+        .expect("register concrete tool.invoke tool");
+    let (owner, _) = typed_ingress_test_runtime_session(tools, crate::tools::ToolView::default());
+    let context = owner.context();
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![ToolIntent {
+            tool_name: "tool.invoke".into(),
+            args_json: json!({}),
+            source: "assistant".to_owned(),
+            turn_id: "hidden-tool-invoke-turn".to_owned(),
+            tool_call_id: "hidden-tool-invoke-call".to_owned(),
+        }],
+        raw_meta: serde_json::Value::Null,
+    };
+
+    let result = TurnEngine::new(1)
+        .execute_turn_in_context(&turn, &context, &NoopLegacyToolDispatcher, None)
+        .await;
+
+    let TurnResult::FinalText(output) = result else {
+        panic!("expected batch-local typed visibility denial, got {result:?}");
+    };
+    assert!(output.contains("tool_authorization_denied"), "{output}");
+    assert!(output.contains("not visible"), "{output}");
+}
+
+#[cfg(feature = "tool-file")]
+#[tokio::test]
+async fn read_requires_its_typed_runtime_registration() {
+    assert_migrated_tool_has_no_legacy_fallback("read", json!({ "path": "README.md" })).await;
+}
+
+#[cfg(feature = "tool-file")]
+#[tokio::test]
+async fn write_requires_its_typed_runtime_registration() {
+    assert_migrated_tool_has_no_legacy_fallback(
+        "write",
+        json!({ "path": "notes.txt", "content": "text" }),
+    )
+    .await;
+}
+
+#[cfg(feature = "tool-file")]
+#[tokio::test]
+async fn edit_requires_its_typed_runtime_registration() {
+    assert_migrated_tool_has_no_legacy_fallback(
+        "edit",
+        json!({
+            "path": "notes.txt",
+            "edits": [{ "old_text": "old", "new_text": "new" }],
+        }),
+    )
+    .await;
+}
+
+#[cfg(feature = "tool-file")]
+#[tokio::test]
+async fn glob_search_requires_its_typed_runtime_registration() {
+    assert_migrated_tool_has_no_legacy_fallback("glob.search", json!({ "pattern": "**/*.rs" }))
+        .await;
+}
+
+#[cfg(feature = "tool-file")]
+#[tokio::test]
+async fn content_search_requires_its_typed_runtime_registration() {
+    assert_migrated_tool_has_no_legacy_fallback("content.search", json!({ "query": "needle" }))
+        .await;
+}
+
+#[tokio::test]
+async fn turn_validates_lease_before_resolving_an_unknown_target() {
+    let owner =
+        crate::test_support::runtime_session_for_test("invalid-lease-session", runtime_tool_view());
+    let session_context = owner.context();
+    let intent = ToolIntent {
+        tool_name: "tool.invoke".into(),
+        args_json: json!({
+            "tool_id": "typed.missing",
+            "lease": "invalid-lease",
+            "arguments": {},
+        }),
+        source: "assistant".to_owned(),
+        turn_id: "invalid-lease-turn".to_owned(),
+        tool_call_id: "invalid-lease-call".to_owned(),
+    };
+
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![intent],
+        raw_meta: serde_json::Value::Null,
+    };
+    let engine = TurnEngine::new(1);
+    let result = engine
+        .execute_turn_in_context(&turn, &session_context, &NoopLegacyToolDispatcher, None)
+        .await;
+
+    let TurnResult::ToolDenied(failure) = &result else {
+        panic!("expected tool denial, got {result:?}")
+    };
+    assert_eq!(failure.code, "invalid_tool_lease");
+    assert!(failure.supports_discovery_recovery);
+    assert!(
+        !failure.reason.contains("typed.missing"),
+        "invalid lease denial must not disclose the unresolved target: {failure:?}"
     );
 }
 
@@ -232,10 +692,9 @@ fn delegate_async_turn(session_id: &str, turn_id: &str, tool_call_id: &str) -> P
     ProviderTurn {
         assistant_text: "queueing child delegate".to_owned(),
         tool_intents: vec![ToolIntent {
-            tool_name,
+            tool_name: tool_name.into(),
             args_json,
             source: "assistant".to_owned(),
-            session_id: session_id.to_owned(),
             turn_id: turn_id.to_owned(),
             tool_call_id: tool_call_id.to_owned(),
         }],
@@ -264,10 +723,9 @@ fn skills_policy_get_turn(session_id: &str, turn_id: &str, tool_call_id: &str) -
     ProviderTurn {
         assistant_text: "reading skills policy".to_owned(),
         tool_intents: vec![ToolIntent {
-            tool_name,
+            tool_name: tool_name.into(),
             args_json,
             source: "assistant".to_owned(),
-            session_id: session_id.to_owned(),
             turn_id: turn_id.to_owned(),
             tool_call_id: tool_call_id.to_owned(),
         }],
@@ -288,10 +746,9 @@ fn discovered_shell_exec_turn(session_id: &str, turn_id: &str, tool_call_id: &st
     ProviderTurn {
         assistant_text: "checking cargo version".to_owned(),
         tool_intents: vec![ToolIntent {
-            tool_name,
+            tool_name: tool_name.into(),
             args_json,
             source: "assistant".to_owned(),
-            session_id: session_id.to_owned(),
             turn_id: turn_id.to_owned(),
             tool_call_id: tool_call_id.to_owned(),
         }],
@@ -315,10 +772,9 @@ fn provider_tool_turn(
     ProviderTurn {
         assistant_text: format!("calling {tool_name}"),
         tool_intents: vec![ToolIntent {
-            tool_name,
+            tool_name: tool_name.into(),
             args_json,
             source: "assistant".to_owned(),
-            session_id: session_id.to_owned(),
             turn_id: turn_id.to_owned(),
             tool_call_id: tool_call_id.to_owned(),
         }],
@@ -340,10 +796,9 @@ fn provider_app_tool_intent(
         Some(turn_id),
     );
     ToolIntent {
-        tool_name,
+        tool_name: tool_name.into(),
         args_json,
         source: "assistant".to_owned(),
-        session_id: session_id.to_owned(),
         turn_id: turn_id.to_owned(),
         tool_call_id: tool_call_id.to_owned(),
     }
@@ -400,12 +855,11 @@ fn fast_lane_observed_execution_turn(
 struct DelayedObservedExecutionDispatcher;
 
 #[async_trait::async_trait]
-impl AppToolDispatcher for DelayedObservedExecutionDispatcher {
+impl LegacyToolDispatcher for DelayedObservedExecutionDispatcher {
     async fn execute_app_tool(
         &self,
-        session_context: &SessionContext,
+        session_context: &Context<'_>,
         request: ToolCoreRequest,
-        _binding: ConversationRuntimeBinding<'_>,
     ) -> Result<ToolCoreOutcome, String> {
         let payload_delay_ms = request.payload.get("delay_ms").and_then(Value::as_u64);
         let delay_ms = match payload_delay_ms {
@@ -421,7 +875,7 @@ impl AppToolDispatcher for DelayedObservedExecutionDispatcher {
             status: "ok".to_owned(),
             payload: json!({
                 "tool": request.tool_name,
-                "session_id": session_context.session_id,
+                "session_id": session_context.session().session_id,
             }),
         })
     }
@@ -432,12 +886,11 @@ struct AfterExecutionSequenceRecordingDispatcher {
 }
 
 #[async_trait::async_trait]
-impl AppToolDispatcher for AfterExecutionSequenceRecordingDispatcher {
+impl LegacyToolDispatcher for AfterExecutionSequenceRecordingDispatcher {
     async fn execute_app_tool(
         &self,
-        session_context: &SessionContext,
+        session_context: &Context<'_>,
         request: ToolCoreRequest,
-        _binding: ConversationRuntimeBinding<'_>,
     ) -> Result<ToolCoreOutcome, String> {
         if request
             .payload
@@ -458,19 +911,18 @@ impl AppToolDispatcher for AfterExecutionSequenceRecordingDispatcher {
             status: "ok".to_owned(),
             payload: json!({
                 "tool": request.tool_name,
-                "session_id": session_context.session_id,
+                "session_id": session_context.session().session_id,
             }),
         })
     }
 
     async fn after_tool_execution(
         &self,
-        _session_context: &SessionContext,
+        _session_context: &Context<'_>,
         intent: &ToolIntent,
         intent_sequence: usize,
         _request: &ToolCoreRequest,
         _outcome: &ToolCoreOutcome,
-        _binding: ConversationRuntimeBinding<'_>,
     ) {
         let mut after_calls = self.after_calls.lock().expect("after call lock");
         let call_record = (intent.tool_call_id.clone(), intent_sequence);
@@ -504,19 +956,18 @@ fn partially_failing_observed_execution_turn(session_id: &str, turn_id: &str) ->
 struct PartiallyFailingObservedExecutionDispatcher;
 
 #[async_trait::async_trait]
-impl AppToolDispatcher for PartiallyFailingObservedExecutionDispatcher {
+impl LegacyToolDispatcher for PartiallyFailingObservedExecutionDispatcher {
     async fn execute_app_tool(
         &self,
-        session_context: &SessionContext,
+        session_context: &Context<'_>,
         request: ToolCoreRequest,
-        _binding: ConversationRuntimeBinding<'_>,
     ) -> Result<ToolCoreOutcome, String> {
         match request.tool_name.as_str() {
             "sessions_list" => Ok(ToolCoreOutcome {
                 status: "ok".to_owned(),
                 payload: json!({
                     "tool": request.tool_name,
-                    "session_id": session_context.session_id,
+                    "session_id": session_context.session().session_id,
                 }),
             }),
             "session_status" => Err("simulated observed tool failure".to_owned()),
@@ -542,17 +993,31 @@ async fn autonomy_policy_approval_request_is_persisted_for_delegate_async() {
         autonomy_profile: AutonomyProfile::GuidedAcquisition,
         ..ToolConfig::default()
     };
-    let tool_view = runtime_tool_view_for_config(&tool_config);
-    let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
-    let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
-    let kernel_ctx = test_kernel_context("turn-engine-governed-approval-delegate-async");
+    let owner_config = crate::config::LoongConfig {
+        tools: tool_config.clone(),
+        ..crate::config::LoongConfig::default()
+    };
+    let owner = crate::test_support::TestRuntimeSession::from_config(
+        &owner_config,
+        "root-session",
+        "test-agent",
+        loong_contracts::GovernedSessionMode::MutatingCapable,
+    )
+    .expect("guided runtime session");
+    let session_context = owner.context();
+    let dispatcher = DefaultLegacyToolDispatcher::new(
+        Arc::clone(&owner.runtime),
+        &owner.session,
+        memory_config.clone(),
+        tool_config,
+    )
+    .expect("legacy app tool dispatcher");
 
     let result = TurnEngine::new(4)
         .execute_turn_in_context(
             &delegate_async_turn("root-session", "turn-1", "call-1"),
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
             None,
         )
         .await;
@@ -618,17 +1083,31 @@ async fn autonomy_policy_approval_request_is_persisted_for_discovered_delegate_a
         autonomy_profile: AutonomyProfile::GuidedAcquisition,
         ..ToolConfig::default()
     };
-    let tool_view = runtime_tool_view_for_config(&tool_config);
-    let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
-    let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
-    let kernel_ctx = test_kernel_context("turn-engine-governed-approval-discovered-delegate-async");
+    let owner_config = crate::config::LoongConfig {
+        tools: tool_config.clone(),
+        ..crate::config::LoongConfig::default()
+    };
+    let owner = crate::test_support::TestRuntimeSession::from_config(
+        &owner_config,
+        "root-session",
+        "test-agent",
+        loong_contracts::GovernedSessionMode::MutatingCapable,
+    )
+    .expect("guided runtime session");
+    let session_context = owner.context();
+    let dispatcher = DefaultLegacyToolDispatcher::new(
+        Arc::clone(&owner.runtime),
+        &owner.session,
+        memory_config.clone(),
+        tool_config,
+    )
+    .expect("legacy app tool dispatcher");
 
     let result = TurnEngine::new(4)
         .execute_turn_in_context(
             &discovered_delegate_async_turn("root-session", "turn-discovered", "call-discovered"),
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
             None,
         )
         .await;
@@ -688,9 +1167,15 @@ async fn auto_mode_requires_approval_for_high_risk_core_tool() {
     let mut tool_config = ToolConfig::default();
     tool_config.consent.default_mode = ToolConsentMode::Auto;
     let tool_view = runtime_tool_view_for_config(&tool_config);
-    let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
-    let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
-    let kernel_ctx = kernel_context("turn-engine-config-import-auto");
+    let owner = crate::test_support::runtime_session_for_test("root-session", tool_view);
+    let session_context = owner.context();
+    let dispatcher = DefaultLegacyToolDispatcher::new(
+        Arc::clone(&owner.runtime),
+        &owner.session,
+        memory_config.clone(),
+        tool_config,
+    )
+    .expect("legacy app tool dispatcher");
 
     let result = TurnEngine::new(4)
         .execute_turn_in_context(
@@ -703,7 +1188,6 @@ async fn auto_mode_requires_approval_for_high_risk_core_tool() {
             ),
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
             None,
         )
         .await;
@@ -730,7 +1214,7 @@ async fn auto_mode_requires_approval_for_high_risk_core_tool() {
         .expect("approval request row");
     assert_eq!(stored.status, ApprovalRequestStatus::Pending);
     assert_eq!(stored.tool_name, "config.import");
-    assert_eq!(stored.request_payload_json["execution_kind"], "core");
+    assert_eq!(stored.request_payload_json["dispatch_kind"], "legacy_core");
 }
 
 #[tokio::test]
@@ -754,9 +1238,15 @@ async fn full_session_consent_skips_approval_for_high_risk_core_tool() {
 
     let tool_config = ToolConfig::default();
     let tool_view = runtime_tool_view_for_config(&tool_config);
-    let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
-    let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
-    let kernel_ctx = kernel_context("turn-engine-config-import-full");
+    let owner = crate::test_support::runtime_session_for_test("root-session", tool_view);
+    let session_context = owner.context();
+    let dispatcher = DefaultLegacyToolDispatcher::new(
+        Arc::clone(&owner.runtime),
+        &owner.session,
+        memory_config.clone(),
+        tool_config,
+    )
+    .expect("legacy app tool dispatcher");
 
     let result = TurnEngine::new(4)
         .execute_turn_in_context(
@@ -769,7 +1259,6 @@ async fn full_session_consent_skips_approval_for_high_risk_core_tool() {
             ),
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
             None,
         )
         .await;
@@ -802,29 +1291,32 @@ async fn autonomy_policy_approval_request_reuses_deterministic_id_for_same_block
         autonomy_profile: AutonomyProfile::GuidedAcquisition,
         ..ToolConfig::default()
     };
-    let tool_view = runtime_tool_view_for_config(&tool_config);
-    let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
-    let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
+    let owner_config = crate::config::LoongConfig {
+        tools: tool_config.clone(),
+        ..crate::config::LoongConfig::default()
+    };
+    let owner = crate::test_support::TestRuntimeSession::from_config(
+        &owner_config,
+        "root-session",
+        "test-agent",
+        loong_contracts::GovernedSessionMode::MutatingCapable,
+    )
+    .expect("guided runtime session");
+    let session_context = owner.context();
+    let dispatcher = DefaultLegacyToolDispatcher::new(
+        Arc::clone(&owner.runtime),
+        &owner.session,
+        memory_config.clone(),
+        tool_config,
+    )
+    .expect("legacy app tool dispatcher");
     let turn = delegate_async_turn("root-session", "turn-reuse", "call-reuse");
-    let kernel_ctx = test_kernel_context("turn-engine-governed-approval-reuse");
 
     let first = TurnEngine::new(4)
-        .execute_turn_in_context(
-            &turn,
-            &session_context,
-            &dispatcher,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
-            None,
-        )
+        .execute_turn_in_context(&turn, &session_context, &dispatcher, None)
         .await;
     let second = TurnEngine::new(4)
-        .execute_turn_in_context(
-            &turn,
-            &session_context,
-            &dispatcher,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
-            None,
-        )
+        .execute_turn_in_context(&turn, &session_context, &dispatcher, None)
         .await;
 
     let first_request_id = match first {
@@ -885,19 +1377,19 @@ async fn autonomy_policy_preapproved_call_executes_without_persisting_request() 
     approved_calls.push(approval_key);
 
     let tool_view = runtime_tool_view_for_config(&tool_config);
-    let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
-    let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
-    let kernel_ctx = kernel_context("turn-engine-autonomy-preapproved");
+    let owner = crate::test_support::runtime_session_for_test("root-session", tool_view);
+    let session_context = owner.context();
+    let dispatcher = DefaultLegacyToolDispatcher::new(
+        Arc::clone(&owner.runtime),
+        &owner.session,
+        memory_config.clone(),
+        tool_config,
+    )
+    .expect("legacy app tool dispatcher");
     let turn = skills_policy_get_turn("root-session", "turn-preapproved", "call-preapproved");
 
     let result = TurnEngine::new(4)
-        .execute_turn_in_context(
-            &turn,
-            &session_context,
-            &dispatcher,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
-            None,
-        )
+        .execute_turn_in_context(&turn, &session_context, &dispatcher, None)
         .await;
 
     let failure = match result {
@@ -942,19 +1434,19 @@ async fn autonomy_policy_predenied_call_returns_policy_denial_without_persisting
     denied_calls.push(denial_key);
 
     let tool_view = runtime_tool_view_for_config(&tool_config);
-    let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
-    let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
-    let kernel_ctx = kernel_context("turn-engine-autonomy-predenied");
+    let owner = crate::test_support::runtime_session_for_test("root-session", tool_view);
+    let session_context = owner.context();
+    let dispatcher = DefaultLegacyToolDispatcher::new(
+        Arc::clone(&owner.runtime),
+        &owner.session,
+        memory_config.clone(),
+        tool_config,
+    )
+    .expect("legacy app tool dispatcher");
     let turn = skills_policy_get_turn("root-session", "turn-predenied", "call-predenied");
 
     let result = TurnEngine::new(4)
-        .execute_turn_in_context(
-            &turn,
-            &session_context,
-            &dispatcher,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
-            None,
-        )
+        .execute_turn_in_context(&turn, &session_context, &dispatcher, None)
         .await;
 
     let failure = match result {
@@ -995,10 +1487,15 @@ async fn governed_tool_approval_request_is_persisted_for_discovered_shell_exec()
     tool_config.approval.mode = GovernedToolApprovalMode::Strict;
     tool_config.consent.default_mode = ToolConsentMode::Prompt;
     let tool_view = runtime_tool_view_for_config(&tool_config);
-    let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
-    let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
-    let kernel_ctx = bootstrap_test_kernel_context("turn-engine-governed-shell-approval", 60)
-        .expect("kernel context");
+    let owner = crate::test_support::runtime_session_for_test("root-session", tool_view);
+    let session_context = owner.context();
+    let dispatcher = DefaultLegacyToolDispatcher::new(
+        Arc::clone(&owner.runtime),
+        &owner.session,
+        memory_config.clone(),
+        tool_config,
+    )
+    .expect("legacy app tool dispatcher");
 
     let result = TurnEngine::new(4)
         .execute_turn_in_context(
@@ -1009,7 +1506,6 @@ async fn governed_tool_approval_request_is_persisted_for_discovered_shell_exec()
             ),
             &session_context,
             &dispatcher,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
             None,
         )
         .await;
@@ -1042,7 +1538,7 @@ async fn governed_tool_approval_request_is_persisted_for_discovered_shell_exec()
     assert_eq!(stored.tool_call_id, "call-shell-discovered");
     assert_eq!(stored.approval_key, "tool:shell.exec");
     assert_eq!(stored.request_payload_json["tool_name"], "shell.exec");
-    assert_eq!(stored.request_payload_json["execution_kind"], "core");
+    assert_eq!(stored.request_payload_json["dispatch_kind"], "legacy_core");
     assert_eq!(
         stored.request_payload_json["args_json"],
         json!({
@@ -1070,29 +1566,22 @@ async fn governed_tool_approval_request_reuses_deterministic_id_for_same_blocked
     tool_config.consent.default_mode = ToolConsentMode::Prompt;
 
     let tool_view = runtime_tool_view_for_config(&tool_config);
-    let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
-    let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
-    let kernel_ctx = bootstrap_test_kernel_context("turn-engine-governed-shell-reuse", 60)
-        .expect("kernel context");
+    let owner = crate::test_support::runtime_session_for_test("root-session", tool_view);
+    let session_context = owner.context();
+    let dispatcher = DefaultLegacyToolDispatcher::new(
+        Arc::clone(&owner.runtime),
+        &owner.session,
+        memory_config.clone(),
+        tool_config,
+    )
+    .expect("legacy app tool dispatcher");
     let turn = discovered_shell_exec_turn("root-session", "turn-reuse", "call-reuse");
 
     let first = TurnEngine::new(4)
-        .execute_turn_in_context(
-            &turn,
-            &session_context,
-            &dispatcher,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
-            None,
-        )
+        .execute_turn_in_context(&turn, &session_context, &dispatcher, None)
         .await;
     let second = TurnEngine::new(4)
-        .execute_turn_in_context(
-            &turn,
-            &session_context,
-            &dispatcher,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
-            None,
-        )
+        .execute_turn_in_context(&turn, &session_context, &dispatcher, None)
         .await;
 
     let first_request_id = match first {
@@ -1153,9 +1642,15 @@ async fn autonomy_policy_allowlist_does_not_bypass_prompt_session_consent() {
     approved_calls.push("tool:skills.policy".to_owned());
 
     let tool_view = runtime_tool_view_for_config(&tool_config);
-    let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
-    let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
-    let kernel_ctx = kernel_context("turn-engine-autonomy-allowlist-prompt");
+    let owner = crate::test_support::runtime_session_for_test("root-session", tool_view);
+    let session_context = owner.context();
+    let dispatcher = DefaultLegacyToolDispatcher::new(
+        Arc::clone(&owner.runtime),
+        &owner.session,
+        memory_config.clone(),
+        tool_config,
+    )
+    .expect("legacy app tool dispatcher");
     let turn = skills_policy_get_turn(
         "root-session",
         "turn-autonomy-allowlist-prompt",
@@ -1163,13 +1658,7 @@ async fn autonomy_policy_allowlist_does_not_bypass_prompt_session_consent() {
     );
 
     let result = TurnEngine::new(4)
-        .execute_turn_in_context(
-            &turn,
-            &session_context,
-            &dispatcher,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
-            None,
-        )
+        .execute_turn_in_context(&turn, &session_context, &dispatcher, None)
         .await;
 
     let TurnResult::ToolDenied(failure) = result else {
@@ -1210,9 +1699,15 @@ async fn autonomy_policy_grant_does_not_bypass_prompt_session_consent() {
     tool_config.consent.default_mode = ToolConsentMode::Prompt;
 
     let tool_view = runtime_tool_view_for_config(&tool_config);
-    let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
-    let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
-    let kernel_ctx = kernel_context("turn-engine-autonomy-grant-prompt");
+    let owner = crate::test_support::runtime_session_for_test("root-session", tool_view);
+    let session_context = owner.context();
+    let dispatcher = DefaultLegacyToolDispatcher::new(
+        Arc::clone(&owner.runtime),
+        &owner.session,
+        memory_config.clone(),
+        tool_config,
+    )
+    .expect("legacy app tool dispatcher");
     let turn = skills_policy_get_turn(
         "root-session",
         "turn-autonomy-grant-prompt",
@@ -1220,13 +1715,7 @@ async fn autonomy_policy_grant_does_not_bypass_prompt_session_consent() {
     );
 
     let result = TurnEngine::new(4)
-        .execute_turn_in_context(
-            &turn,
-            &session_context,
-            &dispatcher,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
-            None,
-        )
+        .execute_turn_in_context(&turn, &session_context, &dispatcher, None)
         .await;
 
     let TurnResult::ToolDenied(failure) = result else {
@@ -1249,6 +1738,7 @@ async fn governed_tool_predenied_reason_omits_internal_prefix() {
         reason: "app_tool_denied: tool:browse.click".to_owned(),
         retryable: false,
         supports_discovery_recovery: false,
+        tool_input: None,
     };
     let rendered = super::render_app_tool_denied_reason(&failure.reason);
     assert_eq!(failure.code, "app_tool_denied");
@@ -1261,20 +1751,16 @@ async fn observed_fast_lane_execution_trace_records_batch_and_segment_metrics() 
         "turn-observed-fast-lane",
         "call-observed-fast-lane",
     );
-    let session_context =
-        SessionContext::root_with_tool_view("session-observed-fast-lane", runtime_tool_view());
+    let owner = crate::test_support::runtime_session_for_test(
+        "session-observed-fast-lane",
+        runtime_tool_view(),
+    );
+    let session_context = owner.context();
     let dispatcher = DelayedObservedExecutionDispatcher;
     let engine = TurnEngine::with_parallel_tool_execution(8, 512, true, 2);
 
     let (result, trace) = engine
-        .execute_turn_in_context_with_trace(
-            &turn,
-            &session_context,
-            &dispatcher,
-            ConversationRuntimeBinding::direct(),
-            None,
-            None,
-        )
+        .execute_turn_in_context_with_trace(&turn, &session_context, &dispatcher, None, None)
         .await;
 
     assert!(
@@ -1323,8 +1809,11 @@ async fn parallel_execution_reports_global_intent_sequence_to_after_tool_executi
         "turn-observed-sequence",
         "call-observed-sequence",
     );
-    let session_context =
-        SessionContext::root_with_tool_view("session-observed-sequence", runtime_tool_view());
+    let owner = crate::test_support::runtime_session_for_test(
+        "session-observed-sequence",
+        runtime_tool_view(),
+    );
+    let session_context = owner.context();
     let after_calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let dispatcher = AfterExecutionSequenceRecordingDispatcher {
         after_calls: std::sync::Arc::clone(&after_calls),
@@ -1332,14 +1821,7 @@ async fn parallel_execution_reports_global_intent_sequence_to_after_tool_executi
     let engine = TurnEngine::with_parallel_tool_execution(8, 512, true, 2);
 
     let (result, _trace) = engine
-        .execute_turn_in_context_with_trace(
-            &turn,
-            &session_context,
-            &dispatcher,
-            ConversationRuntimeBinding::direct(),
-            None,
-            None,
-        )
+        .execute_turn_in_context_with_trace(&turn, &session_context, &dispatcher, None, None)
         .await;
 
     assert!(
@@ -1368,22 +1850,16 @@ async fn observed_fast_lane_execution_treats_single_in_flight_batches_as_sequent
         "turn-observed-fast-lane-single",
         "call-observed-fast-lane-single",
     );
-    let session_context = SessionContext::root_with_tool_view(
+    let owner = crate::test_support::runtime_session_for_test(
         "session-observed-fast-lane-single",
         runtime_tool_view(),
     );
+    let session_context = owner.context();
     let dispatcher = DelayedObservedExecutionDispatcher;
     let engine = TurnEngine::with_parallel_tool_execution(8, 512, true, 1);
 
     let (_result, trace) = engine
-        .execute_turn_in_context_with_trace(
-            &turn,
-            &session_context,
-            &dispatcher,
-            ConversationRuntimeBinding::direct(),
-            None,
-            None,
-        )
+        .execute_turn_in_context_with_trace(&turn, &session_context, &dispatcher, None, None)
         .await;
 
     let trace = trace.expect("trace should exist");
@@ -1426,20 +1902,16 @@ async fn parallel_execution_records_trace_items_in_intent_order() {
         ],
         raw_meta: json!({}),
     };
-    let session_context =
-        SessionContext::root_with_tool_view("session-observed-trace-order", runtime_tool_view());
+    let owner = crate::test_support::runtime_session_for_test(
+        "session-observed-trace-order",
+        runtime_tool_view(),
+    );
+    let session_context = owner.context();
     let dispatcher = DelayedObservedExecutionDispatcher;
     let engine = TurnEngine::with_parallel_tool_execution(8, 512, true, 2);
 
     let (result, trace) = engine
-        .execute_turn_in_context_with_trace(
-            &turn,
-            &session_context,
-            &dispatcher,
-            ConversationRuntimeBinding::direct(),
-            None,
-            None,
-        )
+        .execute_turn_in_context_with_trace(&turn, &session_context, &dispatcher, None, None)
         .await;
 
     assert!(
@@ -1486,22 +1958,18 @@ async fn parallel_execution_keeps_successful_tool_results_when_one_tool_is_denie
         ],
         raw_meta: json!({}),
     };
-    let session_context =
-        SessionContext::root_with_tool_view("session-observed-partial-denial", runtime_tool_view());
+    let owner = crate::test_support::runtime_session_for_test(
+        "session-observed-partial-denial",
+        runtime_tool_view(),
+    );
+    let session_context = owner.context();
     let dispatcher = AfterExecutionSequenceRecordingDispatcher {
         after_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
     };
     let engine = TurnEngine::with_parallel_tool_execution(8, 512, true, 2);
 
     let (result, trace) = engine
-        .execute_turn_in_context_with_trace(
-            &turn,
-            &session_context,
-            &dispatcher,
-            ConversationRuntimeBinding::direct(),
-            None,
-            None,
-        )
+        .execute_turn_in_context_with_trace(&turn, &session_context, &dispatcher, None, None)
         .await;
 
     let TurnResult::FinalText(text) = result else {
@@ -1552,10 +2020,11 @@ async fn sequential_execution_continues_after_single_tool_denial() {
         ],
         raw_meta: json!({}),
     };
-    let session_context = SessionContext::root_with_tool_view(
+    let owner = crate::test_support::runtime_session_for_test(
         "session-observed-sequential-denial",
         runtime_tool_view(),
     );
+    let session_context = owner.context();
     let after_calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let dispatcher = AfterExecutionSequenceRecordingDispatcher {
         after_calls: std::sync::Arc::clone(&after_calls),
@@ -1563,14 +2032,7 @@ async fn sequential_execution_continues_after_single_tool_denial() {
     let engine = TurnEngine::with_parallel_tool_execution(8, 512, false, 1);
 
     let (result, trace) = engine
-        .execute_turn_in_context_with_trace(
-            &turn,
-            &session_context,
-            &dispatcher,
-            ConversationRuntimeBinding::direct(),
-            None,
-            None,
-        )
+        .execute_turn_in_context_with_trace(&turn, &session_context, &dispatcher, None, None)
         .await;
 
     let TurnResult::FinalText(text) = result else {
@@ -1617,22 +2079,16 @@ async fn observed_fast_lane_execution_trace_records_partial_tool_failure_outcome
         "session-observed-partial-failure",
         "turn-observed-partial-failure",
     );
-    let session_context = SessionContext::root_with_tool_view(
+    let owner = crate::test_support::runtime_session_for_test(
         "session-observed-partial-failure",
         runtime_tool_view(),
     );
+    let session_context = owner.context();
     let dispatcher = PartiallyFailingObservedExecutionDispatcher;
     let engine = TurnEngine::with_parallel_tool_execution(4, 512, false, 1);
 
     let (result, trace) = engine
-        .execute_turn_in_context_with_trace(
-            &turn,
-            &session_context,
-            &dispatcher,
-            ConversationRuntimeBinding::direct(),
-            None,
-            None,
-        )
+        .execute_turn_in_context_with_trace(&turn, &session_context, &dispatcher, None, None)
         .await;
 
     assert!(
@@ -1665,7 +2121,7 @@ async fn observed_fast_lane_execution_trace_records_partial_tool_failure_outcome
 #[test]
 fn success_outcome_trace_record_bounds_large_payloads() {
     let intent = provider_app_tool_intent(
-        "file.read",
+        "read",
         json!({"path": "note.md"}),
         "session-bounded-payload",
         "turn-bounded-payload",
@@ -1674,12 +2130,7 @@ fn success_outcome_trace_record_bounds_large_payloads() {
     let large_payload = json!({
         "contents": "x".repeat(TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS + 128),
     });
-    let outcome = ToolCoreOutcome {
-        status: "ok".to_owned(),
-        payload: large_payload,
-    };
-
-    let record = build_success_tool_outcome_trace_record(&intent, &outcome);
+    let record = build_success_tool_outcome_trace_record(&intent, "ok", &large_payload);
 
     assert_eq!(record.outcome.tool_name, "read");
     assert_eq!(record.outcome.status, "ok");
@@ -1743,7 +2194,8 @@ fn continuation_payload_summary_is_compacted_before_low_limit_truncation() {
         }),
     };
 
-    let envelope = result::build_tool_result_envelope(&intent, &outcome, 256);
+    let envelope =
+        result::build_tool_result_envelope(&intent, outcome.status.as_str(), &outcome.payload, 256);
     let payload_summary =
         serde_json::from_str::<Value>(envelope.payload_summary.as_str()).expect("payload json");
 
@@ -1763,10 +2215,11 @@ fn continuation_payload_summary_is_compacted_before_low_limit_truncation() {
 
 #[test]
 fn augment_tool_payload_injects_browser_scope_for_browse_request() {
-    let session_context = SessionContext::root_with_tool_view(
+    let owner = crate::test_support::runtime_session_for_test(
         "root-session",
-        crate::tools::ToolView::from_tool_names(["browse"]),
+        crate::tools::ToolView::from_legacy_paths(["browse"]),
     );
+    let session_context = owner.context();
     let augmented = augment_tool_payload_for_kernel(
         "browser.open",
         json!({
@@ -1779,183 +2232,6 @@ fn augment_tool_payload_injects_browser_scope_for_browse_request() {
     assert_eq!(
         augmented.payload[crate::tools::BROWSER_SESSION_SCOPE_FIELD],
         "root-session"
-    );
-}
-
-#[test]
-fn augment_tool_payload_uses_active_skill_root_for_absolute_direct_read_targets() {
-    let workspace_root = crate::test_utils::unique_temp_dir("turn-engine-active-skill-workspace");
-    let skill_root = workspace_root.join(".loong/skills/demo-skill");
-    std::fs::create_dir_all(skill_root.join("references")).expect("create skill root");
-    let reference_path = skill_root.join("references/guide.md");
-    std::fs::write(&reference_path, "# Guide\n").expect("write guide");
-    let canonical_skill_root = std::fs::canonicalize(&skill_root).expect("canonical skill root");
-
-    let session_context = SessionContext::root_with_tool_view(
-        "root-session",
-        crate::tools::ToolView::from_tool_names(["read"]),
-    )
-    .with_workspace_root(workspace_root)
-    .with_active_skill_roots(vec![skill_root]);
-    let payload = json!({
-        "path": reference_path.display().to_string(),
-    });
-
-    let augmented = augment_tool_payload_for_kernel(
-        "read",
-        payload,
-        &session_context,
-        &SessionStoreConfig::default(),
-    );
-
-    assert_eq!(
-        augmented.payload[crate::tools::LOONG_INTERNAL_TOOL_CONTEXT_KEY]
-            [crate::tools::LOONG_INTERNAL_WORKSPACE_ROOT_KEY],
-        json!(canonical_skill_root.display().to_string())
-    );
-}
-
-#[test]
-fn augment_tool_payload_uses_visible_skill_root_for_absolute_skill_direct_reads() {
-    let workspace_root = crate::test_utils::unique_temp_dir("turn-engine-visible-skill-workspace");
-    let skill_root = workspace_root.join(".loong/skills/demo-skill");
-    std::fs::create_dir_all(&skill_root).expect("create skill root");
-    let skill_path = skill_root.join("SKILL.md");
-    std::fs::write(&skill_path, "# Demo Skill\n").expect("write skill file");
-    let canonical_skill_root = std::fs::canonicalize(&skill_root).expect("canonical skill root");
-
-    let session_context = SessionContext::root_with_tool_view(
-        "root-session",
-        crate::tools::ToolView::from_tool_names(["read"]),
-    )
-    .with_workspace_root(workspace_root)
-    .with_visible_skill_roots(vec![skill_root]);
-    let payload = json!({
-        "path": skill_path.display().to_string(),
-    });
-
-    let augmented = augment_tool_payload_for_kernel(
-        "read",
-        payload,
-        &session_context,
-        &SessionStoreConfig::default(),
-    );
-
-    assert_eq!(
-        augmented.payload[crate::tools::LOONG_INTERNAL_TOOL_CONTEXT_KEY]
-            [crate::tools::LOONG_INTERNAL_WORKSPACE_ROOT_KEY],
-        json!(canonical_skill_root.display().to_string())
-    );
-}
-
-#[test]
-fn augment_tool_payload_uses_visible_skill_root_for_absolute_skill_resource_direct_reads() {
-    let workspace_root =
-        crate::test_utils::unique_temp_dir("turn-engine-visible-skill-resource-workspace");
-    let skill_root = workspace_root.join(".loong/skills/demo-skill");
-    std::fs::create_dir_all(skill_root.join("references")).expect("create skill root");
-    let reference_path = skill_root.join("references/guide.md");
-    std::fs::write(&reference_path, "# Guide\n").expect("write guide");
-    let canonical_skill_root = std::fs::canonicalize(&skill_root).expect("canonical skill root");
-
-    let session_context = SessionContext::root_with_tool_view(
-        "root-session",
-        crate::tools::ToolView::from_tool_names(["read"]),
-    )
-    .with_workspace_root(workspace_root)
-    .with_visible_skill_roots(vec![skill_root]);
-    let payload = json!({
-        "path": reference_path.display().to_string(),
-    });
-
-    let augmented = augment_tool_payload_for_kernel(
-        "read",
-        payload,
-        &session_context,
-        &SessionStoreConfig::default(),
-    );
-
-    assert_eq!(
-        augmented.payload[crate::tools::LOONG_INTERNAL_TOOL_CONTEXT_KEY]
-            [crate::tools::LOONG_INTERNAL_WORKSPACE_ROOT_KEY],
-        json!(canonical_skill_root.display().to_string())
-    );
-}
-
-#[test]
-fn augment_tool_payload_uses_unique_active_skill_root_for_relative_direct_read_targets() {
-    let workspace_root =
-        crate::test_utils::unique_temp_dir("turn-engine-active-skill-relative-workspace");
-    let first_skill_root = workspace_root.join(".loong/skills/demo-skill");
-    let second_skill_root = workspace_root.join(".loong/skills/other-skill");
-    std::fs::create_dir_all(first_skill_root.join("references")).expect("create first skill");
-    std::fs::create_dir_all(second_skill_root.join("references")).expect("create second skill");
-    std::fs::write(first_skill_root.join("references/guide.md"), "# First\n")
-        .expect("write first guide");
-    std::fs::write(second_skill_root.join("references/other.md"), "# Second\n")
-        .expect("write second guide");
-    let canonical_first_skill_root =
-        std::fs::canonicalize(&first_skill_root).expect("canonical first skill root");
-
-    let session_context = SessionContext::root_with_tool_view(
-        "root-session",
-        crate::tools::ToolView::from_tool_names(["read"]),
-    )
-    .with_workspace_root(workspace_root)
-    .with_active_skill_roots(vec![first_skill_root, second_skill_root]);
-    let payload = json!({
-        "path": "references/guide.md",
-    });
-
-    let augmented = augment_tool_payload_for_kernel(
-        "read",
-        payload,
-        &session_context,
-        &SessionStoreConfig::default(),
-    );
-
-    assert_eq!(
-        augmented.payload[crate::tools::LOONG_INTERNAL_TOOL_CONTEXT_KEY]
-            [crate::tools::LOONG_INTERNAL_WORKSPACE_ROOT_KEY],
-        json!(canonical_first_skill_root.display().to_string())
-    );
-}
-
-#[test]
-fn augment_tool_payload_does_not_guess_when_relative_direct_read_matches_multiple_skill_roots() {
-    let workspace_root =
-        crate::test_utils::unique_temp_dir("turn-engine-active-skill-relative-ambiguous");
-    let first_skill_root = workspace_root.join(".loong/skills/demo-skill");
-    let second_skill_root = workspace_root.join(".loong/skills/other-skill");
-    std::fs::create_dir_all(first_skill_root.join("references")).expect("create first skill");
-    std::fs::create_dir_all(second_skill_root.join("references")).expect("create second skill");
-    std::fs::write(first_skill_root.join("references/shared.md"), "# First\n")
-        .expect("write first guide");
-    std::fs::write(second_skill_root.join("references/shared.md"), "# Second\n")
-        .expect("write second guide");
-    let expected_workspace_root = workspace_root.display().to_string();
-
-    let session_context = SessionContext::root_with_tool_view(
-        "root-session",
-        crate::tools::ToolView::from_tool_names(["read"]),
-    )
-    .with_workspace_root(workspace_root)
-    .with_active_skill_roots(vec![first_skill_root, second_skill_root]);
-    let payload = json!({
-        "path": "references/shared.md",
-    });
-
-    let augmented = augment_tool_payload_for_kernel(
-        "read",
-        payload,
-        &session_context,
-        &SessionStoreConfig::default(),
-    );
-
-    assert_eq!(
-        augmented.payload[crate::tools::LOONG_INTERNAL_TOOL_CONTEXT_KEY]
-            [crate::tools::LOONG_INTERNAL_WORKSPACE_ROOT_KEY],
-        json!(expected_workspace_root)
     );
 }
 
@@ -1992,10 +2268,11 @@ fn augment_tool_payload_injects_canonical_task_id_for_task_tools() {
     })
     .expect("append task progress");
 
-    let session_context = SessionContext::root_with_tool_view(
+    let owner = crate::test_support::runtime_session_for_test(
         "root-session",
-        crate::tools::ToolView::from_tool_names(["task_wait"]),
+        crate::tools::ToolView::from_legacy_paths(["task_wait"]),
     );
+    let session_context = owner.context();
 
     let augmented =
         augment_tool_payload_for_kernel("task_wait", json!({}), &session_context, &memory_config);
@@ -2036,10 +2313,11 @@ fn augment_tool_payload_injects_canonical_task_id_for_task_events() {
     })
     .expect("append task progress");
 
-    let session_context = SessionContext::root_with_tool_view(
+    let owner = crate::test_support::runtime_session_for_test(
         "root-session",
-        crate::tools::ToolView::from_tool_names(["task_events"]),
+        crate::tools::ToolView::from_legacy_paths(["task_events"]),
     );
+    let session_context = owner.context();
 
     let augmented =
         augment_tool_payload_for_kernel("task_events", json!({}), &session_context, &memory_config);

@@ -15,7 +15,6 @@ use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::CliResult;
-use crate::KernelContext;
 use crate::channel::feishu::api::{FeishuClient, FeishuWsEndpointClientConfig};
 use crate::channel::{ChannelServeStopHandle, runtime::state::ChannelOperationRuntimeTracker};
 use crate::config::{
@@ -206,7 +205,8 @@ pub(super) async fn run_feishu_websocket_channel(
     resolved_path: &Path,
     selected_by_default: bool,
     default_account_source: ChannelDefaultAccountSelectionSource,
-    kernel_ctx: KernelContext,
+    execution_runtime: Arc<loong_runtime::runtime::Runtime<crate::RuntimeContextFactory>>,
+    agent_id: impl Into<String>,
     runtime: Arc<ChannelOperationRuntimeTracker>,
     stop: ChannelServeStopHandle,
 ) -> CliResult<()> {
@@ -217,7 +217,8 @@ pub(super) async fn run_feishu_websocket_channel(
         resolved_path.to_path_buf(),
         resolved,
         adapter,
-        kernel_ctx,
+        execution_runtime,
+        agent_id,
         runtime,
     ));
     let client = FeishuClient::from_configs(resolved, &config.feishu_integration)?;
@@ -567,7 +568,6 @@ mod tests {
     const MOCK_PROVIDER_MARKDOWN_REPLY: &str = "## structured inbound ack\n\n- rendered";
     const FEISHU_WEBSOCKET_TEST_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
     use crate::config::{FeishuChannelServeMode, LoongConfig, ProviderConfig};
-    use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_test_kernel_context};
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct MockRequest {
@@ -1276,9 +1276,10 @@ data: [DONE]\n\n",
             .refresh_tenant_token()
             .await
             .expect("refresh tenant token before websocket tls test");
-        let kernel_ctx =
-            bootstrap_test_kernel_context("feishu-websocket-wss-test", DEFAULT_TOKEN_TTL_S)
-                .expect("bootstrap kernel context");
+        let owner = crate::test_support::runtime_session_for_test(
+            "feishu-websocket-wss-test",
+            crate::tools::runtime_tool_view_from_loong_config(&config),
+        );
         let runtime = Arc::new(
             ChannelOperationRuntimeTracker::start(
                 ChannelPlatform::Feishu,
@@ -1290,7 +1291,12 @@ data: [DONE]\n\n",
             .expect("start runtime tracker"),
         );
         let state = Arc::new(FeishuWebhookState::new(
-            config, &resolved, adapter, kernel_ctx, runtime,
+            config,
+            &resolved,
+            adapter,
+            owner.runtime.clone(),
+            owner.session.agent_id().to_owned(),
+            runtime,
         ));
 
         let listener = TcpListener::bind("127.0.0.1:0")
@@ -1362,9 +1368,10 @@ data: [DONE]\n\n",
             .refresh_tenant_token()
             .await
             .expect("refresh tenant token before websocket stop test");
-        let kernel_ctx =
-            bootstrap_test_kernel_context("feishu-websocket-stop-test", DEFAULT_TOKEN_TTL_S)
-                .expect("bootstrap kernel context");
+        let owner = crate::test_support::runtime_session_for_test(
+            "feishu-websocket-stop-test",
+            crate::tools::runtime_tool_view_from_loong_config(&config),
+        );
         let runtime = Arc::new(
             ChannelOperationRuntimeTracker::start(
                 ChannelPlatform::Feishu,
@@ -1376,7 +1383,12 @@ data: [DONE]\n\n",
             .expect("start runtime tracker"),
         );
         let state = Arc::new(FeishuWebhookState::new(
-            config, &resolved, adapter, kernel_ctx, runtime,
+            config,
+            &resolved,
+            adapter,
+            owner.runtime.clone(),
+            owner.session.agent_id().to_owned(),
+            runtime,
         ));
 
         let listener = TcpListener::bind("127.0.0.1:0")
@@ -1462,11 +1474,10 @@ data: [DONE]\n\n",
             .refresh_tenant_token()
             .await
             .expect("refresh tenant token before websocket ping test");
-        let kernel_ctx = bootstrap_test_kernel_context(
+        let owner = crate::test_support::runtime_session_for_test(
             "feishu-websocket-ping-during-turn-test",
-            DEFAULT_TOKEN_TTL_S,
-        )
-        .expect("bootstrap kernel context");
+            crate::tools::runtime_tool_view_from_loong_config(&config),
+        );
         let runtime = Arc::new(
             ChannelOperationRuntimeTracker::start(
                 ChannelPlatform::Feishu,
@@ -1478,7 +1489,12 @@ data: [DONE]\n\n",
             .expect("start runtime tracker"),
         );
         let state = Arc::new(FeishuWebhookState::new(
-            config, &resolved, adapter, kernel_ctx, runtime,
+            config,
+            &resolved,
+            adapter,
+            owner.runtime.clone(),
+            owner.session.agent_id().to_owned(),
+            runtime,
         ));
 
         let payload = json!({
@@ -1566,9 +1582,10 @@ data: [DONE]\n\n",
             .refresh_tenant_token()
             .await
             .expect("refresh tenant token before websocket test");
-        let kernel_ctx =
-            bootstrap_test_kernel_context("feishu-websocket-test", DEFAULT_TOKEN_TTL_S)
-                .expect("bootstrap kernel context");
+        let owner = crate::test_support::runtime_session_for_test(
+            "feishu-websocket-test",
+            crate::tools::runtime_tool_view_from_loong_config(&config),
+        );
         let runtime = Arc::new(
             ChannelOperationRuntimeTracker::start(
                 ChannelPlatform::Feishu,
@@ -1580,7 +1597,12 @@ data: [DONE]\n\n",
             .expect("start runtime tracker"),
         );
         let state = Arc::new(FeishuWebhookState::new(
-            config, &resolved, adapter, kernel_ctx, runtime,
+            config,
+            &resolved,
+            adapter,
+            owner.runtime.clone(),
+            owner.session.agent_id().to_owned(),
+            runtime,
         ));
 
         let payload = json!({
@@ -1717,9 +1739,10 @@ data: [DONE]\n\n",
             .refresh_tenant_token()
             .await
             .expect("refresh tenant token before ordered websocket test");
-        let kernel_ctx =
-            bootstrap_test_kernel_context("feishu-websocket-order-test", DEFAULT_TOKEN_TTL_S)
-                .expect("bootstrap kernel context");
+        let owner = crate::test_support::runtime_session_for_test(
+            "feishu-websocket-order-test",
+            crate::tools::runtime_tool_view_from_loong_config(&config),
+        );
         let runtime = Arc::new(
             ChannelOperationRuntimeTracker::start(
                 ChannelPlatform::Feishu,
@@ -1731,7 +1754,12 @@ data: [DONE]\n\n",
             .expect("start runtime tracker"),
         );
         let state = Arc::new(FeishuWebhookState::new(
-            config, &resolved, adapter, kernel_ctx, runtime,
+            config,
+            &resolved,
+            adapter,
+            owner.runtime.clone(),
+            owner.session.agent_id().to_owned(),
+            runtime,
         ));
 
         let first_payload = json!({

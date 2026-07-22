@@ -44,6 +44,10 @@ mod startup_view;
 mod status_view;
 
 use self::boot::*;
+pub(crate) use self::boot::{
+    initialize_cli_turn_runtime, initialize_cli_turn_runtime_with_loaded_config,
+    initialize_cli_turn_runtime_with_loaded_config_and_runtime,
+};
 use self::checkpoint::*;
 use self::checkpoint_labels::*;
 #[cfg(test)]
@@ -103,13 +107,6 @@ use self::ops::should_run_missing_config_onboard;
 use self::render::*;
 use self::safe::*;
 use self::safe_text::*;
-#[cfg(test)]
-use crate::conversation::DefaultConversationRuntime;
-
-pub(crate) use self::boot::{
-    initialize_cli_turn_runtime, initialize_cli_turn_runtime_with_loaded_config,
-    initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx,
-};
 
 use super::config::{self, ConversationConfig, LoongConfig};
 #[cfg(test)]
@@ -117,10 +114,10 @@ use super::conversation::ContextCompactionReport;
 #[cfg(test)]
 use super::conversation::TurnCheckpointTailRepairRuntimeProbe;
 use super::conversation::{
-    ConversationRuntimeBinding, ConversationSessionAddress, ConversationTurnCoordinator,
-    ConversationTurnObserver, ConversationTurnObserverHandle, ConversationTurnPhase,
-    ConversationTurnPhaseEvent, ConversationTurnRuntimeEvent, ConversationTurnToolEvent,
-    ConversationTurnToolState, ExecutionLane, ProviderErrorMode, parse_approval_prompt_view,
+    ConversationSessionAddress, ConversationTurnCoordinator, ConversationTurnObserver,
+    ConversationTurnObserverHandle, ConversationTurnPhase, ConversationTurnPhaseEvent,
+    ConversationTurnRuntimeEvent, ConversationTurnToolEvent, ConversationTurnToolState,
+    ExecutionLane, ProviderErrorMode, parse_approval_prompt_view,
 };
 #[cfg(any(test, feature = "memory-sqlite"))]
 use super::conversation::{
@@ -294,18 +291,18 @@ pub(crate) enum CliRuntimeSessionOrigin {
     CreatedThisRun,
 }
 
-pub(crate) type RouteOrigin = CliRuntimeSessionOrigin;
-
 #[derive(Clone)]
 pub(crate) struct CliTurnRuntime {
     pub(crate) resolved_path: PathBuf,
     pub(crate) config_present: bool,
     pub(crate) config: LoongConfig,
-    pub(crate) session_id: String,
     pub(crate) session_origin: CliRuntimeSessionOrigin,
     pub(crate) session_address: ConversationSessionAddress,
     pub(crate) turn_coordinator: ConversationTurnCoordinator,
-    pub(crate) runtime_kernel: crate::runtime_bridge::RuntimeKernelOwner,
+    pub(crate) runtime: Arc<loong_runtime::runtime::Runtime<crate::RuntimeContextFactory>>,
+    pub(crate) session: crate::Session,
+    /// Explicit owner of bearer-backed, unported tool execution.
+    pub(crate) legacy_tools: crate::conversation::DefaultLegacyToolDispatcher,
     pub(crate) effective_bootstrap_mcp_servers: Vec<String>,
     pub(crate) effective_working_directory: Option<PathBuf>,
     pub(crate) memory_label: String,
@@ -314,22 +311,28 @@ pub(crate) struct CliTurnRuntime {
 }
 
 impl CliTurnRuntime {
-    pub(crate) fn conversation_binding(&self) -> ConversationRuntimeBinding<'_> {
-        self.runtime_kernel.conversation_binding()
+    /// Borrow the stable Session snapshot for non-turn runtime operations.
+    ///
+    /// Provider/tool turns must first call `Session::rematerialize` with the
+    /// current turn config so durable policy changes cannot be skipped.
+    pub(crate) fn context(
+        &self,
+    ) -> Result<crate::Context<'_>, crate::context::ContextSessionError> {
+        crate::Context::new(&self.runtime, &self.session)
     }
 }
 
 pub(crate) struct RebuiltActiveSessionRoute {
     pub(crate) runtime: CliTurnRuntime,
     pub(crate) loaded_history_lines: Vec<String>,
-    pub(crate) route_origin: RouteOrigin,
+    pub(crate) route_origin: CliRuntimeSessionOrigin,
 }
 
 impl RebuiltActiveSessionRoute {
     pub(crate) fn new(
         runtime: CliTurnRuntime,
         loaded_history_lines: Vec<String>,
-        route_origin: RouteOrigin,
+        route_origin: CliRuntimeSessionOrigin,
     ) -> Self {
         Self {
             runtime,
@@ -548,29 +551,29 @@ pub async fn run_cli_ask(
         AcpTurnProvenance::default(),
     );
     let turn_config = reload_cli_turn_config(&runtime.config, runtime.resolved_path.as_path())?;
+    let turn_session = runtime
+        .session
+        .rematerialize(runtime.runtime.as_ref(), &turn_config)?;
     #[cfg(feature = "memory-sqlite")]
-    let memory_config =
-        crate::session::store::session_store_config_from_memory_config_without_env_overrides(
-            &turn_config.memory,
-        );
-    #[cfg(feature = "memory-sqlite")]
-    let hosted_runtime = crate::conversation::HostedConversationRuntime::new_with_memory_config(
+    let hosted_runtime = crate::conversation::HostedConversationRuntime::new(
         crate::conversation::DefaultConversationRuntime::from_config_or_env(&turn_config)?,
-        memory_config,
     );
     #[cfg(not(feature = "memory-sqlite"))]
     let hosted_runtime =
         crate::conversation::DefaultConversationRuntime::from_config_or_env(&turn_config)?;
+    let context =
+        crate::Context::new(&runtime.runtime, &turn_session).map_err(|error| error.to_string())?;
     let assistant_text = runtime
         .turn_coordinator
         .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             &turn_config,
+            &context,
             &runtime.session_address,
             input,
             ProviderErrorMode::InlineMessage,
             &hosted_runtime,
             &acp_options,
-            runtime.conversation_binding(),
+            &runtime.legacy_tools,
             None,
             None,
             None,
@@ -655,7 +658,7 @@ pub(crate) async fn rebuild_active_session_route(
     config: LoongConfig,
     session_id: &str,
     options: &CliChatOptions,
-    route_origin: RouteOrigin,
+    route_origin: CliRuntimeSessionOrigin,
 ) -> CliResult<RebuiltActiveSessionRoute> {
     let runtime = initialize_cli_turn_runtime_with_loaded_config(
         resolved_path,
@@ -666,13 +669,8 @@ pub(crate) async fn rebuild_active_session_route(
         CliSessionRequirement::AllowImplicitDefault,
         false,
     )?;
-    let history_lines = load_history_lines(
-        runtime.session_id.as_str(),
-        128,
-        runtime.conversation_binding(),
-        &runtime.memory_config,
-    )
-    .await?;
+    let context = runtime.context().map_err(|error| error.to_string())?;
+    let history_lines = load_history_lines(128, &context).await?;
     Ok(RebuiltActiveSessionRoute::new(
         runtime,
         history_lines,

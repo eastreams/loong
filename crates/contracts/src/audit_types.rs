@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    PolicyReport,
+    AuthorizationEvidence, AuthorizationSubject, Capabilities, GrantId, ToolInputError,
     contracts::{Capability, CapabilityToken, ExecutionRoute},
 };
 
@@ -38,22 +38,55 @@ pub enum PlaneTier {
     Extension,
 }
 
+/// Execution evidence for one granted typed action.
+///
+/// The authorization event referenced by `grant_id` owns action identity,
+/// required capabilities, policy report, and subject attribution. Repeating
+/// those fields here would permit the execution record to drift from its grant.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ToolInvocationOutcome {
-    /// Tool dispatch reached a concrete tool and it completed normally.
+pub enum ActionExecutionEvent {
+    /// The domain executor accepted the grant and is about to dispatch.
+    Started,
+    /// The concrete action completed normally.
     Completed,
-    /// Tool dispatch reached a concrete tool, but execution failed.
+    /// Post-grant input parsing rejected the action payload.
+    InputRejected { error: ToolInputError },
+    /// Dispatch reached a terminal non-input failure.
+    Failed { reason: String },
+    /// Dispatch started, but its owner was dropped before observing an outcome.
+    ///
+    /// This deliberately records only the fact known by the owner. It does not
+    /// guess whether the action completed, failed, or was externally cancelled.
+    OutcomeUnknown,
+}
+
+/// Terminal shape used by tool invocation events written before grant-linked
+/// execution evidence existed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HistoricalToolInvocationOutcome {
+    Completed,
     Failed { error_kind: String, reason: String },
-    /// Governance rejected the invocation before tool execution.
-    Denied {
-        reason: String,
-        report: Option<PolicyReport>,
-    },
+}
+
+/// Result of an app-runtime operation that is observable but carries no grant.
+///
+/// This evidence must not be interpreted as authorization or action execution;
+/// those stronger claims are represented by `Authorization` and
+/// `ActionExecution`, whose writers require the corresponding typed proof.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RuntimeOperationOutcome {
+    Completed,
+    Failed { reason: String },
 }
 
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AuditEventKind {
+    /// Typed evidence emitted by the authorization engine.
+    Authorization {
+        evidence: AuthorizationEvidence,
+    },
     TokenIssued {
         token: CapabilityToken,
     },
@@ -81,15 +114,32 @@ pub enum AuditEventKind {
         operation: String,
         required_capabilities: Vec<Capability>,
     },
+    /// Execution evidence correlated to one real typed action grant.
+    ActionExecution {
+        grant_id: GrantId,
+        event: ActionExecutionEvent,
+    },
+    /// A tool invocation requested authority outside its declared default.
+    ToolCapabilityOverrideRejected {
+        subject: AuthorizationSubject,
+        path_display: String,
+        requested: Capabilities,
+        declared: Capabilities,
+    },
+    /// Pack-free operational evidence emitted by the app runtime owner.
+    RuntimeOperation {
+        operation: String,
+        outcome: RuntimeOperationOutcome,
+    },
+    /// Historical pre-grant-linked tool invocation journal record.
+    ///
+    /// New code must use `ActionExecution`; this variant remains decodable
+    /// because append-only audit journals are immutable input.
     ToolInvocation {
         pack_id: String,
-        /// Audit-facing display path for the app-owned tool plane.
-        ///
-        /// This is evidence for one invocation attempt, not a global route
-        /// model. The concrete plane still owns the registry key type.
         path_display: String,
         required_capabilities: Vec<Capability>,
-        outcome: ToolInvocationOutcome,
+        outcome: HistoricalToolInvocationOutcome,
     },
     SecurityScanEvaluated {
         pack_id: String,
@@ -128,8 +178,8 @@ pub enum AuditEventKind {
         filtered_out_tier_counts: BTreeMap<String, usize>,
         top_provider_ids: Vec<String>,
     },
+    /// Provider retry evidence belongs to the runtime request, not a legacy pack.
     ProviderFailover {
-        pack_id: String,
         provider_id: String,
         reason: String,
         stage: String,

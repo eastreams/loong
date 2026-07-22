@@ -10,7 +10,7 @@ impl ConversationTurnCoordinator {
         error_mode: ProviderErrorMode,
         runtime: &R,
         acp_options: &AcpConversationTurnOptions<'_>,
-        binding: ConversationRuntimeBinding<'_>,
+        ctx: &Context<'_>,
         observer: Option<&ConversationTurnObserverHandle>,
         acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
     ) -> CliResult<Option<String>> {
@@ -31,15 +31,7 @@ impl ConversationTurnCoordinator {
                     ProviderErrorMode::Propagate => return Err(error),
                     ProviderErrorMode::InlineMessage => {
                         let synthetic = format_provider_error_reply(&error);
-                        persist_reply_turns_raw_with_mode(
-                            runtime,
-                            address.session_id.as_str(),
-                            user_input,
-                            &synthetic,
-                            ReplyPersistenceMode::InlineProviderError,
-                            binding,
-                        )
-                        .await?;
+                        persist_reply_turns_raw(runtime, user_input, &synthetic, ctx).await?;
                         synthetic
                     }
                 };
@@ -62,7 +54,7 @@ impl ConversationTurnCoordinator {
                         error_mode,
                         runtime,
                         acp_options,
-                        binding,
+                        ctx,
                         acp_manager,
                     )
                     .await?;
@@ -72,54 +64,26 @@ impl ConversationTurnCoordinator {
         }
     }
 
-    async fn handle_turn_with_session_and_acp_options_and_ingress(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        user_input: &str,
-        error_mode: ProviderErrorMode,
-        acp_options: &AcpConversationTurnOptions<'_>,
-        binding: ConversationRuntimeBinding<'_>,
-        ingress: Option<&ConversationIngressContext>,
-    ) -> CliResult<String> {
-        let address = ConversationSessionAddress::from_session_id(session_id);
-        let prepared = Self::build_default_runtime_with_binding(config, binding, None)?;
-        let runtime = prepared.0;
-        let effective_binding = prepared.1;
-        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
-            config,
-            &address,
-            user_input,
-            error_mode,
-            &runtime,
-            acp_options,
-            effective_binding,
-            ingress,
-            None,
-            None,
-            None,
-        )
-        .await
-    }
-
     pub(crate) async fn handle_turn_with_address_and_acp_options_and_ingress_and_observer(
         &self,
         config: &LoongConfig,
+        ctx: &Context<'_>,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
         acp_options: &AcpConversationTurnOptions<'_>,
-        binding: ConversationRuntimeBinding<'_>,
+        legacy_tools: &DefaultLegacyToolDispatcher,
         ingress: Option<&ConversationIngressContext>,
         observer: Option<ConversationTurnObserverHandle>,
     ) -> CliResult<String> {
         self.handle_turn_with_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
+            ctx,
             address,
             user_input,
             error_mode,
             acp_options,
-            binding,
+            legacy_tools,
             ingress,
             observer,
             None,
@@ -131,28 +95,33 @@ impl ConversationTurnCoordinator {
     pub(crate) async fn handle_turn_with_address_and_acp_options_and_ingress_and_observer_with_manager(
         &self,
         config: &LoongConfig,
+        ctx: &Context<'_>,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
         acp_options: &AcpConversationTurnOptions<'_>,
-        binding: ConversationRuntimeBinding<'_>,
+        legacy_tools: &DefaultLegacyToolDispatcher,
         ingress: Option<&ConversationIngressContext>,
         observer: Option<ConversationTurnObserverHandle>,
         retry_progress: crate::provider::ProviderRetryProgressCallback,
         acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
     ) -> CliResult<String> {
-        let prepared =
-            Self::build_default_runtime_with_binding(config, binding, observer.as_ref())?;
-        let runtime = prepared.0;
-        let effective_binding = prepared.1;
+        let runtime = match DefaultConversationRuntime::from_config_or_env(config) {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                observe_turn_phase(observer.as_ref(), ConversationTurnPhaseEvent::failed());
+                return Err(error);
+            }
+        };
         self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
+            ctx,
             address,
             user_input,
             error_mode,
             &runtime,
             acp_options,
-            effective_binding,
+            legacy_tools,
             ingress,
             observer,
             retry_progress,
@@ -164,20 +133,22 @@ impl ConversationTurnCoordinator {
     pub(crate) async fn handle_turn_with_address_and_acp_options_and_observer(
         &self,
         config: &LoongConfig,
+        ctx: &Context<'_>,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
         acp_options: &AcpConversationTurnOptions<'_>,
-        binding: ConversationRuntimeBinding<'_>,
+        legacy_tools: &DefaultLegacyToolDispatcher,
         observer: Option<ConversationTurnObserverHandle>,
     ) -> CliResult<String> {
         self.handle_turn_with_address_and_acp_options_and_ingress_and_observer(
             config,
+            ctx,
             address,
             user_input,
             error_mode,
             acp_options,
-            binding,
+            legacy_tools,
             None,
             observer,
         )
@@ -187,20 +158,22 @@ impl ConversationTurnCoordinator {
     pub async fn handle_production_turn_with_address_and_acp_options_and_observer(
         &self,
         config: &LoongConfig,
+        ctx: &Context<'_>,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
         acp_options: &AcpConversationTurnOptions<'_>,
-        binding: ConversationRuntimeBinding<'_>,
+        legacy_tools: &DefaultLegacyToolDispatcher,
         observer: Option<ConversationTurnObserverHandle>,
     ) -> CliResult<String> {
         self.handle_production_turn_with_address_and_acp_options_and_observer_with_manager(
             config,
+            ctx,
             address,
             user_input,
             error_mode,
             acp_options,
-            binding,
+            legacy_tools,
             observer,
             None,
             None,
@@ -211,22 +184,24 @@ impl ConversationTurnCoordinator {
     pub(crate) async fn handle_production_turn_with_address_and_acp_options_and_observer_with_manager(
         &self,
         config: &LoongConfig,
+        ctx: &Context<'_>,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
         acp_options: &AcpConversationTurnOptions<'_>,
-        binding: ConversationRuntimeBinding<'_>,
+        legacy_tools: &DefaultLegacyToolDispatcher,
         observer: Option<ConversationTurnObserverHandle>,
         retry_progress: crate::provider::ProviderRetryProgressCallback,
         acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
     ) -> CliResult<String> {
         self.handle_turn_with_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
+            ctx,
             address,
             user_input,
             error_mode,
             acp_options,
-            require_production_kernel_binding(binding, observer.as_ref())?,
+            legacy_tools,
             None,
             observer,
             retry_progress,
@@ -238,51 +213,24 @@ impl ConversationTurnCoordinator {
     pub(crate) async fn handle_turn_with_runtime<R: ConversationRuntime + ?Sized>(
         &self,
         config: &LoongConfig,
-        session_id: &str,
+        ctx: &Context<'_>,
         user_input: &str,
         error_mode: ProviderErrorMode,
         runtime: &R,
-        binding: ConversationRuntimeBinding<'_>,
+        legacy_tools: &DefaultLegacyToolDispatcher,
     ) -> CliResult<String> {
         let acp_options = AcpConversationTurnOptions::automatic();
-        Box::pin(
-            self.handle_turn_with_runtime_and_session_and_acp_options_and_ingress(
-                config,
-                session_id,
-                user_input,
-                error_mode,
-                runtime,
-                &acp_options,
-                binding,
-                None,
-            ),
-        )
-        .await
-    }
-
-    async fn handle_turn_with_runtime_and_session_and_acp_options_and_ingress<
-        R: ConversationRuntime + ?Sized,
-    >(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        user_input: &str,
-        error_mode: ProviderErrorMode,
-        runtime: &R,
-        acp_options: &AcpConversationTurnOptions<'_>,
-        binding: ConversationRuntimeBinding<'_>,
-        ingress: Option<&ConversationIngressContext>,
-    ) -> CliResult<String> {
-        let address = ConversationSessionAddress::from_session_id(session_id);
+        let address = ConversationSessionAddress::from_session_id(ctx.session().session_id());
         self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
+            ctx,
             &address,
             user_input,
             error_mode,
             runtime,
-            acp_options,
-            binding,
-            ingress,
+            &acp_options,
+            legacy_tools,
+            None,
             None,
             None,
             None,
@@ -295,21 +243,23 @@ impl ConversationTurnCoordinator {
     >(
         &self,
         config: &LoongConfig,
+        ctx: &Context<'_>,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
         runtime: &R,
         acp_options: &AcpConversationTurnOptions<'_>,
-        binding: ConversationRuntimeBinding<'_>,
+        legacy_tools: &DefaultLegacyToolDispatcher,
     ) -> CliResult<String> {
         self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
+            ctx,
             address,
             user_input,
             error_mode,
             runtime,
             acp_options,
-            binding,
+            legacy_tools,
             None,
             None,
             None,
@@ -323,24 +273,26 @@ impl ConversationTurnCoordinator {
     >(
         &self,
         config: &LoongConfig,
+        ctx: &Context<'_>,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
         runtime: &R,
         acp_options: &AcpConversationTurnOptions<'_>,
-        binding: ConversationRuntimeBinding<'_>,
+        legacy_tools: &DefaultLegacyToolDispatcher,
         ingress: Option<&ConversationIngressContext>,
         observer: Option<ConversationTurnObserverHandle>,
         retry_progress: crate::provider::ProviderRetryProgressCallback,
     ) -> CliResult<String> {
         self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
+            ctx,
             address,
             user_input,
             error_mode,
             runtime,
             acp_options,
-            binding,
+            legacy_tools,
             ingress,
             observer,
             retry_progress,
@@ -354,17 +306,27 @@ impl ConversationTurnCoordinator {
     >(
         &self,
         config: &LoongConfig,
+        ctx: &Context<'_>,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
         runtime: &R,
         acp_options: &AcpConversationTurnOptions<'_>,
-        binding: ConversationRuntimeBinding<'_>,
+        legacy_tools: &DefaultLegacyToolDispatcher,
         ingress: Option<&ConversationIngressContext>,
         observer: Option<ConversationTurnObserverHandle>,
         retry_progress: crate::provider::ProviderRetryProgressCallback,
         acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
     ) -> CliResult<String> {
+        // Address carries channel/thread routing data, but its canonical
+        // Session identity must be the one already owned by Context.
+        if address.session_id != ctx.session().session_id() {
+            return Err(format!(
+                "conversation address session `{}` does not match Context Session `{}`",
+                address.session_id,
+                ctx.session().session_id()
+            ));
+        }
         if let Some(reply) = self
             .handle_acp_entry_decision(
                 config,
@@ -373,7 +335,7 @@ impl ConversationTurnCoordinator {
                 error_mode,
                 runtime,
                 acp_options,
-                binding,
+                ctx,
                 observer.as_ref(),
                 acp_manager,
             )
@@ -385,11 +347,11 @@ impl ConversationTurnCoordinator {
 
         self.handle_turn_with_runtime_and_address_and_ingress_and_observer_outcome(
             config,
-            address,
+            ctx,
             user_input,
             error_mode,
             runtime,
-            binding,
+            legacy_tools,
             ingress,
             observer,
             retry_progress,
@@ -403,23 +365,25 @@ impl ConversationTurnCoordinator {
     >(
         &self,
         config: &LoongConfig,
+        ctx: &Context<'_>,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
         runtime: &R,
         acp_options: &AcpConversationTurnOptions<'_>,
-        binding: ConversationRuntimeBinding<'_>,
+        legacy_tools: &DefaultLegacyToolDispatcher,
         ingress: Option<&ConversationIngressContext>,
         observer: Option<ConversationTurnObserverHandle>,
     ) -> CliResult<String> {
         self.handle_production_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
+            ctx,
             address,
             user_input,
             error_mode,
             runtime,
             acp_options,
-            binding,
+            legacy_tools,
             ingress,
             observer,
             None,
@@ -433,27 +397,27 @@ impl ConversationTurnCoordinator {
     >(
         &self,
         config: &LoongConfig,
+        ctx: &Context<'_>,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
         runtime: &R,
         acp_options: &AcpConversationTurnOptions<'_>,
-        binding: ConversationRuntimeBinding<'_>,
+        legacy_tools: &DefaultLegacyToolDispatcher,
         ingress: Option<&ConversationIngressContext>,
         observer: Option<ConversationTurnObserverHandle>,
         retry_progress: crate::provider::ProviderRetryProgressCallback,
         acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
     ) -> CliResult<String> {
-        let production_binding = require_production_kernel_binding(binding, observer.as_ref())?;
-
         self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
+            ctx,
             address,
             user_input,
             error_mode,
             runtime,
             acp_options,
-            production_binding,
+            legacy_tools,
             ingress,
             observer,
             retry_progress,

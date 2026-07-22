@@ -1,8 +1,10 @@
 use async_trait::async_trait;
+use loong_contracts::{Capability, GovernedSessionMode};
+use loong_core::policy::context::PolicyContext;
 
 use super::*;
 
-impl DefaultAppToolDispatcher {
+impl DefaultLegacyToolDispatcher {
     fn autonomy_policy_decision_base(
         tool_name: &str,
         policy_snapshot: &crate::tools::runtime_config::AutonomyPolicySnapshot,
@@ -78,68 +80,19 @@ impl DefaultAppToolDispatcher {
 
     pub(super) fn effective_tool_config_for_session(
         &self,
-        session_context: &SessionContext,
+        session_context: &Context<'_>,
     ) -> ToolConfig {
         let mut tool_config = self.tool_config.clone();
-        if session_context.parent_session_id.is_some() {
+        if session_context.session().parent_session_id.is_some() {
             tool_config.sessions.visibility = SessionVisibility::SelfOnly;
         }
         tool_config
     }
 
     #[cfg(feature = "memory-sqlite")]
-    fn effective_tool_view_for_session(
-        &self,
-        session_context: &SessionContext,
-    ) -> Result<ToolView, String> {
-        let repo = SessionRepository::new(&self.memory_config)?;
-        if let Some(session) = repo.load_session(&session_context.session_id)? {
-            if session.parent_session_id.is_some() {
-                let subagent_contract = match session_context.resolved_subagent_contract() {
-                    Some(subagent_contract) => Some(subagent_contract),
-                    None => resolve_delegate_child_contract(
-                        &repo,
-                        &session_context.session_id,
-                        self.tool_config.delegate.max_depth,
-                    )?,
-                };
-                return Ok(delegate_child_tool_view_for_contract(
-                    &self.tool_config,
-                    subagent_contract.as_ref(),
-                ));
-            }
-            return Ok(runtime_tool_view_for_config(&self.tool_config));
-        }
-        if repo
-            .load_session_summary_with_legacy_fallback(&session_context.session_id)?
-            .is_some_and(|session| session.kind == SessionKind::DelegateChild)
-        {
-            let subagent_contract = resolve_delegate_child_contract(
-                &repo,
-                &session_context.session_id,
-                self.tool_config.delegate.max_depth,
-            )?;
-            return Ok(delegate_child_tool_view_for_contract(
-                &self.tool_config,
-                subagent_contract.as_ref(),
-            ));
-        }
-        Ok(runtime_tool_view_for_config(&self.tool_config))
-    }
-
-    #[cfg(not(feature = "memory-sqlite"))]
-    fn effective_tool_view_for_session(
-        &self,
-        session_context: &SessionContext,
-    ) -> Result<ToolView, String> {
-        let _ = session_context;
-        Ok(runtime_tool_view_for_config(&self.tool_config))
-    }
-
-    #[cfg(feature = "memory-sqlite")]
     async fn execute_sessions_send(
         &self,
-        session_context: &SessionContext,
+        session_context: &Context<'_>,
         payload: serde_json::Value,
     ) -> Result<ToolCoreOutcome, String> {
         let app_config = self
@@ -149,7 +102,7 @@ impl DefaultAppToolDispatcher {
         let effective_tool_config = self.effective_tool_config_for_session(session_context);
         crate::tools::messaging::execute_sessions_send_with_config(
             payload,
-            &session_context.session_id,
+            &session_context.session().session_id,
             &self.memory_config,
             &effective_tool_config,
             app_config.as_ref(),
@@ -160,18 +113,12 @@ impl DefaultAppToolDispatcher {
     #[cfg(feature = "memory-sqlite")]
     fn lineage_root_session_id(
         repo: &SessionRepository,
-        session_context: &SessionContext,
+        session_context: &Context<'_>,
     ) -> Result<String, String> {
         let session_graph = OperatorSessionGraph::new(repo);
         session_graph.effective_lineage_root_session_id(
-            &session_context.session_id,
-            session_context.parent_session_id.as_deref(),
-        )
-    }
-
-    fn autonomy_policy_snapshot(&self) -> crate::tools::runtime_config::AutonomyPolicySnapshot {
-        crate::tools::runtime_config::AutonomyPolicySnapshot::from_profile(
-            self.tool_config.autonomy_profile,
+            &session_context.session().session_id,
+            session_context.session().parent_session_id.as_deref(),
         )
     }
 
@@ -190,33 +137,47 @@ impl DefaultAppToolDispatcher {
     }
 
     #[cfg(feature = "memory-sqlite")]
+    /// Build the legacy replay protocol in one place so every approval producer
+    /// records the exact fallback owner, effective request, and trust state.
     fn approval_request_payload_json(
-        session_context: &SessionContext,
+        session_context: &Context<'_>,
         intent: &ToolIntent,
+        execution_request: &ToolCoreRequest,
+        trusted_internal_context: bool,
         descriptor: &crate::tools::ToolDescriptor,
+        dispatch_kind: LegacyToolDispatchKind,
         approval_request_id: &str,
         approval_key: &str,
         rule_id: &str,
-        binding: ConversationRuntimeBinding<'_>,
     ) -> serde_json::Value {
         let payload = json!({
-            "session_id": session_context.session_id,
-            "parent_session_id": session_context.parent_session_id,
+            "session_id": session_context.session().session_id,
+            "parent_session_id": session_context.session().parent_session_id,
             "turn_id": intent.turn_id,
             "tool_call_id": intent.tool_call_id,
-            "tool_name": descriptor.name,
+            "tool_name": execution_request.tool_name,
             "approval_key": approval_key,
             "approval_request_id": approval_request_id,
-            "args_json": intent.args_json,
+            "args_json": execution_request.payload,
+            "trusted_internal_context": trusted_internal_context,
             "source": intent.source,
-            "execution_kind": match descriptor.execution_kind {
-                ToolExecutionKind::Core => "core",
-                ToolExecutionKind::App => "app",
+            "dispatch_kind": match dispatch_kind {
+                LegacyToolDispatchKind::LegacyCore => "legacy_core",
+                LegacyToolDispatchKind::LegacyApp => "legacy_app",
             },
         });
-        let provenance_ref = approval_request_provenance_ref(binding);
+        let provenance_ref = if session_context.session().session_mode
+            == GovernedSessionMode::AdvisoryOnly
+            || !session_context
+                .allowed_capabilities()
+                .contains(Capability::InvokeTool)
+        {
+            "advisory_only"
+        } else {
+            "kernel"
+        };
         let trust_event = approval_required_trust_event(
-            &session_context.session_id,
+            &session_context.session().session_id,
             "conversation.approval",
             provenance_ref,
             rule_id,
@@ -230,25 +191,27 @@ impl DefaultAppToolDispatcher {
     #[cfg(feature = "memory-sqlite")]
     fn persist_approval_request(
         &self,
-        session_context: &SessionContext,
+        session_context: &Context<'_>,
         intent: &ToolIntent,
+        execution_request: &ToolCoreRequest,
+        trusted_internal_context: bool,
         descriptor: &crate::tools::ToolDescriptor,
+        dispatch_kind: LegacyToolDispatchKind,
         approval_key: &str,
         reason: &str,
         rule_id: &str,
         governance_snapshot_json: serde_json::Value,
-        binding: ConversationRuntimeBinding<'_>,
     ) -> Result<ApprovalRequirement, String> {
         let repo = SessionRepository::new(&self.memory_config)?;
-        let kind = if session_context.parent_session_id.is_some() {
+        let kind = if session_context.session().parent_session_id.is_some() {
             SessionKind::DelegateChild
         } else {
             SessionKind::Root
         };
         let _ = repo.ensure_session(NewSessionRecord {
-            session_id: session_context.session_id.clone(),
+            session_id: session_context.session().session_id.clone(),
             kind,
-            parent_session_id: session_context.parent_session_id.clone(),
+            parent_session_id: session_context.session().parent_session_id.clone(),
             label: None,
             state: SessionState::Ready,
         })?;
@@ -258,15 +221,17 @@ impl DefaultAppToolDispatcher {
         let request_payload_json = Self::approval_request_payload_json(
             session_context,
             intent,
+            execution_request,
+            trusted_internal_context,
             descriptor,
+            dispatch_kind,
             &approval_request_id,
             approval_key,
             rule_id,
-            binding,
         );
         let stored = repo.ensure_approval_request(NewApprovalRequestRecord {
             approval_request_id,
-            session_id: session_context.session_id.clone(),
+            session_id: session_context.session().session_id.clone(),
             turn_id: intent.turn_id.clone(),
             tool_call_id: intent.tool_call_id.clone(),
             tool_name: descriptor.name.to_owned(),
@@ -287,29 +252,31 @@ impl DefaultAppToolDispatcher {
     #[cfg(feature = "memory-sqlite")]
     fn has_approval_grant(
         &self,
-        session_context: &SessionContext,
+        session_context: &Context<'_>,
         approval_key: &str,
     ) -> Result<bool, String> {
         let repo = SessionRepository::new(&self.memory_config)?;
         let approval_runtime = OperatorApprovalRuntime::new(&repo);
         let grant = approval_runtime.load_runtime_grant_for_context(
-            &session_context.session_id,
-            session_context.parent_session_id.as_deref(),
+            &session_context.session().session_id,
+            session_context.session().parent_session_id.as_deref(),
             approval_key,
         )?;
         Ok(grant.is_some())
     }
 
     #[cfg(feature = "memory-sqlite")]
-    fn maybe_require_governed_tool_approval_with_binding(
+    fn maybe_require_governed_tool_approval(
         &self,
-        session_context: &SessionContext,
+        session_context: &Context<'_>,
         intent: &ToolIntent,
+        execution_request: &ToolCoreRequest,
+        trusted_internal_context: bool,
         descriptor: &crate::tools::ToolDescriptor,
-        binding: ConversationRuntimeBinding<'_>,
+        dispatch_kind: LegacyToolDispatchKind,
     ) -> Result<Option<ApprovalRequirement>, String> {
         let governance = governance_profile_for_descriptor(descriptor);
-        if descriptor.execution_kind != ToolExecutionKind::App
+        if descriptor.owner != ToolOwner::LegacyApp
             || governance.approval_mode != ToolApprovalMode::PolicyDriven
         {
             return Ok(None);
@@ -340,8 +307,8 @@ impl DefaultAppToolDispatcher {
         let repo = SessionRepository::new(&self.memory_config)?;
         let approval_runtime = OperatorApprovalRuntime::new(&repo);
         let runtime_grant = approval_runtime.load_runtime_grant_for_context(
-            &session_context.session_id,
-            session_context.parent_session_id.as_deref(),
+            &session_context.session().session_id,
+            session_context.session().parent_session_id.as_deref(),
             &approval_key,
         )?;
         if runtime_grant.is_some() {
@@ -353,41 +320,46 @@ impl DefaultAppToolDispatcher {
             descriptor.name
         );
         let rule_id = "governed_tool_requires_approval";
-        let approval_request = GovernedToolApprovalRequest {
-            session_id: &session_context.session_id,
-            parent_session_id: session_context.parent_session_id.as_deref(),
-            turn_id: &intent.turn_id,
-            tool_call_id: &intent.tool_call_id,
-            tool_name: descriptor.name,
-            args_json: intent.args_json.clone(),
-            source: &intent.source,
-            governance_scope: governance.scope.as_str(),
-            risk_class: governance.risk_class.as_str(),
-            approval_mode: governance.approval_mode.as_str(),
-            reason: &reason,
+        let governance_snapshot_json = json!({
+            "governance_scope": governance.scope.as_str(),
+            "risk_class": governance.risk_class.as_str(),
+            "approval_mode": governance.approval_mode.as_str(),
+            "rule_id": rule_id,
+            "reason": reason,
+        });
+        let requirement = self.persist_approval_request(
+            session_context,
+            intent,
+            execution_request,
+            trusted_internal_context,
+            descriptor,
+            dispatch_kind,
+            approval_key.as_str(),
+            reason.as_str(),
             rule_id,
-            provenance_ref: approval_request_provenance_ref(binding),
-        };
-        let stored = approval_runtime.ensure_governed_tool_approval_request(approval_request)?;
-        let requirement = ApprovalRequirement::governed_tool(
-            descriptor.name,
-            approval_key,
-            reason,
-            rule_id,
-            Some(stored.approval_request_id),
-        );
+            governance_snapshot_json,
+        )?;
         Ok(Some(requirement))
     }
 
     #[cfg(not(feature = "memory-sqlite"))]
-    fn maybe_require_governed_tool_approval_with_binding(
+    fn maybe_require_governed_tool_approval(
         &self,
-        session_context: &SessionContext,
+        session_context: &Context<'_>,
         intent: &ToolIntent,
+        execution_request: &ToolCoreRequest,
+        trusted_internal_context: bool,
         descriptor: &crate::tools::ToolDescriptor,
-        binding: ConversationRuntimeBinding<'_>,
+        dispatch_kind: LegacyToolDispatchKind,
     ) -> Result<Option<ApprovalRequirement>, String> {
-        let _ = (session_context, intent, descriptor, binding);
+        let _ = (
+            session_context,
+            intent,
+            descriptor,
+            execution_request,
+            trusted_internal_context,
+            dispatch_kind,
+        );
         Ok(None)
     }
 
@@ -411,17 +383,17 @@ impl DefaultAppToolDispatcher {
     fn ensure_governed_tool_session_scope(
         &self,
         repo: &SessionRepository,
-        session_context: &SessionContext,
+        session_context: &Context<'_>,
     ) -> Result<String, String> {
-        let session_kind = if session_context.parent_session_id.is_some() {
+        let session_kind = if session_context.session().parent_session_id.is_some() {
             SessionKind::DelegateChild
         } else {
             SessionKind::Root
         };
         let session_record = NewSessionRecord {
-            session_id: session_context.session_id.clone(),
+            session_id: session_context.session().session_id.clone(),
             kind: session_kind,
-            parent_session_id: session_context.parent_session_id.clone(),
+            parent_session_id: session_context.session().parent_session_id.clone(),
             label: None,
             state: SessionState::Ready,
         };
@@ -432,28 +404,29 @@ impl DefaultAppToolDispatcher {
     #[cfg(feature = "memory-sqlite")]
     fn governed_app_tool_preflight(
         &self,
-        session_context: &SessionContext,
+        session_context: &Context<'_>,
         intent: &ToolIntent,
+        execution_request: &ToolCoreRequest,
+        trusted_internal_context: bool,
         descriptor: &crate::tools::ToolDescriptor,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> Result<GovernedToolPreflight, String> {
+    ) -> Result<LegacyGovernedToolPreflight, String> {
         let governance = governance_profile_for_descriptor(descriptor);
-        if descriptor.execution_kind != ToolExecutionKind::App
+        if descriptor.owner != ToolOwner::LegacyApp
             || governance.approval_mode != ToolApprovalMode::PolicyDriven
         {
-            return Ok(GovernedToolPreflight::Allowed);
+            return Ok(LegacyGovernedToolPreflight::Allowed);
         }
 
         let requires_approval = self.governed_tool_requires_operator_approval(descriptor);
         if !requires_approval {
-            return Ok(GovernedToolPreflight::Allowed);
+            return Ok(LegacyGovernedToolPreflight::Allowed);
         }
 
         let approval_key = format!("tool:{}", descriptor.name);
         let approved_calls = &self.tool_config.approval.approved_calls;
         let approved_by_policy = approved_calls.iter().any(|entry| entry == &approval_key);
         if approved_by_policy {
-            return Ok(GovernedToolPreflight::Allowed);
+            return Ok(LegacyGovernedToolPreflight::Allowed);
         }
 
         let denied_calls = &self.tool_config.approval.denied_calls;
@@ -469,7 +442,7 @@ impl DefaultAppToolDispatcher {
         let scope_session_id = self.ensure_governed_tool_session_scope(&repo, session_context)?;
         let grant_record = repo.load_approval_grant(&scope_session_id, &approval_key)?;
         if grant_record.is_some() {
-            return Ok(GovernedToolPreflight::Allowed);
+            return Ok(LegacyGovernedToolPreflight::Allowed);
         }
 
         let approval_request_id =
@@ -482,11 +455,13 @@ impl DefaultAppToolDispatcher {
         let request_payload_json = Self::approval_request_payload_json(
             session_context,
             intent,
+            execution_request,
+            trusted_internal_context,
             descriptor,
+            LegacyToolDispatchKind::LegacyApp,
             &approval_request_id,
             &approval_key,
             rule_id,
-            binding,
         );
         let governance_snapshot_json = json!({
             "governance_scope": governance.scope.as_str(),
@@ -497,7 +472,7 @@ impl DefaultAppToolDispatcher {
         });
         let stored = repo.ensure_approval_request(NewApprovalRequestRecord {
             approval_request_id,
-            session_id: session_context.session_id.clone(),
+            session_id: session_context.session().session_id.clone(),
             turn_id: intent.turn_id.clone(),
             tool_call_id: intent.tool_call_id.clone(),
             tool_name: descriptor.name.to_owned(),
@@ -512,33 +487,32 @@ impl DefaultAppToolDispatcher {
             rule_id,
             Some(stored.approval_request_id),
         );
-        Ok(GovernedToolPreflight::NeedsApproval(requirement))
+        Ok(LegacyGovernedToolPreflight::NeedsApproval(requirement))
     }
 
     #[cfg(feature = "memory-sqlite")]
     fn governed_shell_tool_preflight(
         &self,
-        session_context: &SessionContext,
+        session_context: &Context<'_>,
         intent: &ToolIntent,
         request: &ToolCoreRequest,
         descriptor: &crate::tools::ToolDescriptor,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> Result<GovernedToolPreflight, String> {
+    ) -> Result<LegacyGovernedToolPreflight, String> {
         if descriptor.name != crate::tools::SHELL_EXEC_TOOL_NAME {
-            return Ok(GovernedToolPreflight::Allowed);
+            return Ok(LegacyGovernedToolPreflight::Allowed);
         }
 
         let payload = request.payload.as_object();
         let Some(payload) = payload else {
-            return Ok(GovernedToolPreflight::Allowed);
+            return Ok(LegacyGovernedToolPreflight::Allowed);
         };
         let command = payload.get("command").and_then(Value::as_str);
         let Some(command) = command else {
-            return Ok(GovernedToolPreflight::Allowed);
+            return Ok(LegacyGovernedToolPreflight::Allowed);
         };
         let trimmed_command = command.trim();
         if trimmed_command.is_empty() {
-            return Ok(GovernedToolPreflight::Allowed);
+            return Ok(LegacyGovernedToolPreflight::Allowed);
         }
         let normalized_command = crate::tools::shell_policy_ext::validate_shell_command_name(
             trimmed_command,
@@ -548,7 +522,7 @@ impl DefaultAppToolDispatcher {
                 let stripped = crate::tools::shell_policy_ext::strip_repairable_tool_input_prefix(
                     reason.as_str(),
                 );
-                return RepairableToolPreflight::encode(stripped);
+                return LegacyRepairablePreflight::encode(stripped);
             }
             format!("tool_preflight_denied: {reason}")
         })?;
@@ -570,12 +544,12 @@ impl DefaultAppToolDispatcher {
             .any(|entry| entry.eq_ignore_ascii_case(&normalized_command));
         let default_allows = self.tool_config.shell_default_mode == "allow";
         if explicitly_allowed || default_allows {
-            return Ok(GovernedToolPreflight::Allowed);
+            return Ok(LegacyGovernedToolPreflight::Allowed);
         }
 
         let requires_approval = self.governed_tool_requires_operator_approval(descriptor);
         if !requires_approval {
-            return Ok(GovernedToolPreflight::Allowed);
+            return Ok(LegacyGovernedToolPreflight::Allowed);
         }
 
         let approval_key =
@@ -589,9 +563,9 @@ impl DefaultAppToolDispatcher {
                 crate::tools::shell_policy_ext::shell_exec_internal_approval_context(
                     approval_key.as_str(),
                 );
-            return Ok(GovernedToolPreflight::AllowedWithTrustedInternalContext(
-                internal_context,
-            ));
+            return Ok(
+                LegacyGovernedToolPreflight::AllowedWithTrustedInternalContext(internal_context),
+            );
         }
 
         let denied_calls = &self.tool_config.approval.denied_calls;
@@ -611,9 +585,9 @@ impl DefaultAppToolDispatcher {
                 crate::tools::shell_policy_ext::shell_exec_internal_approval_context(
                     approval_key.as_str(),
                 );
-            return Ok(GovernedToolPreflight::AllowedWithTrustedInternalContext(
-                internal_context,
-            ));
+            return Ok(
+                LegacyGovernedToolPreflight::AllowedWithTrustedInternalContext(internal_context),
+            );
         }
 
         let approval_request_id =
@@ -626,11 +600,13 @@ impl DefaultAppToolDispatcher {
         let request_payload_json = Self::approval_request_payload_json(
             session_context,
             intent,
+            request,
+            crate::tools::payload_uses_reserved_internal_tool_context(&request.payload),
             descriptor,
+            LegacyToolDispatchKind::LegacyCore,
             &approval_request_id,
             &approval_key,
             rule_id,
-            binding,
         );
         let governance = governance_profile_for_descriptor(descriptor);
         let governance_snapshot_json = json!({
@@ -642,7 +618,7 @@ impl DefaultAppToolDispatcher {
         });
         let stored = repo.ensure_approval_request(NewApprovalRequestRecord {
             approval_request_id,
-            session_id: session_context.session_id.clone(),
+            session_id: session_context.session().session_id.clone(),
             turn_id: intent.turn_id.clone(),
             tool_call_id: intent.tool_call_id.clone(),
             tool_name: descriptor.name.to_owned(),
@@ -657,21 +633,20 @@ impl DefaultAppToolDispatcher {
             rule_id,
             Some(stored.approval_request_id),
         );
-        Ok(GovernedToolPreflight::NeedsApproval(requirement))
+        Ok(LegacyGovernedToolPreflight::NeedsApproval(requirement))
     }
 
     #[cfg(feature = "memory-sqlite")]
     fn governed_tool_preflight(
         &self,
-        session_context: &SessionContext,
+        session_context: &Context<'_>,
         intent: &ToolIntent,
         request: &ToolCoreRequest,
         descriptor: &crate::tools::ToolDescriptor,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> Result<GovernedToolPreflight, String> {
+    ) -> Result<LegacyGovernedToolPreflight, String> {
         let governance = governance_profile_for_descriptor(descriptor);
         if governance.approval_mode != ToolApprovalMode::PolicyDriven {
-            return Ok(GovernedToolPreflight::Allowed);
+            return Ok(LegacyGovernedToolPreflight::Allowed);
         }
 
         if descriptor.name == crate::tools::SHELL_EXEC_TOOL_NAME {
@@ -680,40 +655,44 @@ impl DefaultAppToolDispatcher {
                 intent,
                 request,
                 descriptor,
-                binding,
             );
         }
 
-        self.governed_app_tool_preflight(session_context, intent, descriptor, binding)
-    }
-}
-
-impl Default for DefaultAppToolDispatcher {
-    fn default() -> Self {
-        Self::runtime()
+        self.governed_app_tool_preflight(
+            session_context,
+            intent,
+            request,
+            crate::tools::payload_uses_reserved_internal_tool_context(&request.payload),
+            descriptor,
+        )
     }
 }
 
 #[async_trait]
-impl AppToolDispatcher for DefaultAppToolDispatcher {
+impl LegacyToolDispatcher for DefaultLegacyToolDispatcher {
     fn memory_config(&self) -> Option<&SessionStoreConfig> {
         Some(&self.memory_config)
     }
 
-    async fn preflight_tool_intent_with_binding(
+    async fn preflight_tool_intent(
         &self,
-        session_context: &SessionContext,
+        session_context: &Context<'_>,
         intent: &ToolIntent,
+        execution_request: &ToolCoreRequest,
+        trusted_internal_context: bool,
         descriptor: &crate::tools::ToolDescriptor,
-        binding: ConversationRuntimeBinding<'_>,
+        dispatch_kind: LegacyToolDispatchKind,
         budget_state: &AutonomyTurnBudgetState,
-    ) -> Result<ToolPreflightOutcome, String> {
-        let policy_snapshot = self.autonomy_policy_snapshot();
+    ) -> Result<LegacyToolPreflightOutcome, String> {
+        let policy_snapshot = session_context
+            .tool_runtime_config()
+            .autonomy_policy_snapshot();
         let action_class = descriptor.capability_action_class();
+        let capabilities = session_context.allowed_capabilities();
         let policy_input = PolicyDecisionInput {
             snapshot: &policy_snapshot,
             action_class,
-            binding,
+            capabilities: capabilities.as_ref(),
             budget: budget_state,
         };
         let autonomy_policy_applies =
@@ -735,8 +714,7 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
                 rule_id,
                 reason_code,
             } => {
-                let reason =
-                    render_reason(&policy_snapshot, action_class, descriptor.name, reason_code);
+                let reason = render_reason(&policy_snapshot, descriptor.name, reason_code);
                 let approval_key = Self::approval_key_for_descriptor(descriptor);
 
                 #[cfg(not(feature = "memory-sqlite"))]
@@ -754,7 +732,7 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
                         reason_code,
                         reason,
                     );
-                    return Ok(ToolPreflightOutcome::Denied { failure, decision });
+                    return Ok(LegacyToolPreflightOutcome::Denied { failure, decision });
                 }
 
                 #[cfg(feature = "memory-sqlite")]
@@ -766,7 +744,7 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
                             format!("governed tool `{approval_key}` is denied by approval policy");
                         let failure = TurnFailure::policy_denied("app_tool_denied", reason);
                         let decision = denied_tool_decision(descriptor.name, &failure);
-                        return Ok(ToolPreflightOutcome::Denied { failure, decision });
+                        return Ok(LegacyToolPreflightOutcome::Denied { failure, decision });
                     }
 
                     let has_approval_grant =
@@ -785,12 +763,14 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
                         let requirement = self.persist_approval_request(
                             session_context,
                             intent,
+                            execution_request,
+                            trusted_internal_context,
                             descriptor,
+                            dispatch_kind,
                             approval_key.as_str(),
                             reason.as_str(),
                             rule_id,
                             governance_snapshot_json,
-                            binding,
                         )?;
                         let decision = Self::autonomy_policy_approval_required_decision(
                             descriptor.name,
@@ -800,7 +780,7 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
                             reason_code,
                             reason,
                         );
-                        return Ok(ToolPreflightOutcome::NeedsApproval {
+                        return Ok(LegacyToolPreflightOutcome::NeedsApproval {
                             requirement,
                             decision,
                         });
@@ -834,8 +814,7 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
                 rule_id,
                 reason_code,
             } => {
-                let reason =
-                    render_reason(&policy_snapshot, action_class, descriptor.name, reason_code);
+                let reason = render_reason(&policy_snapshot, descriptor.name, reason_code);
                 let failure = TurnFailure::policy_denied(reason_code, reason.clone());
                 let decision = Self::autonomy_policy_denied_decision(
                     descriptor.name,
@@ -845,17 +824,24 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
                     reason_code,
                     reason,
                 );
-                return Ok(ToolPreflightOutcome::Denied { failure, decision });
+                return Ok(LegacyToolPreflightOutcome::Denied { failure, decision });
             }
         }
 
         match self
-            .maybe_require_approval_with_binding(session_context, intent, descriptor, binding)
+            .maybe_require_approval(
+                session_context,
+                intent,
+                execution_request,
+                trusted_internal_context,
+                descriptor,
+                dispatch_kind,
+            )
             .await
         {
             Ok(Some(requirement)) => {
                 let decision = approval_required_tool_decision(descriptor.name, &requirement);
-                Ok(ToolPreflightOutcome::NeedsApproval {
+                Ok(LegacyToolPreflightOutcome::NeedsApproval {
                     requirement,
                     decision,
                 })
@@ -863,31 +849,39 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
             Ok(None) => {
                 let decision = autonomy_allow_decision
                     .unwrap_or_else(|| generic_allow_tool_decision(descriptor.name));
-                Ok(ToolPreflightOutcome::Allow(decision))
+                Ok(LegacyToolPreflightOutcome::Allow(decision))
             }
             Err(reason) => Err(reason),
         }
     }
 
-    async fn maybe_require_approval_with_binding(
+    async fn maybe_require_approval(
         &self,
-        session_context: &SessionContext,
+        session_context: &Context<'_>,
         intent: &ToolIntent,
+        execution_request: &ToolCoreRequest,
+        trusted_internal_context: bool,
         descriptor: &crate::tools::ToolDescriptor,
-        binding: ConversationRuntimeBinding<'_>,
+        dispatch_kind: LegacyToolDispatchKind,
     ) -> Result<Option<ApprovalRequirement>, String> {
         #[cfg(not(feature = "memory-sqlite"))]
         {
-            let _ = (session_context, intent, descriptor, binding);
+            let _ = (
+                session_context,
+                intent,
+                execution_request,
+                trusted_internal_context,
+                descriptor,
+                dispatch_kind,
+            );
             Ok(None)
         }
 
         #[cfg(feature = "memory-sqlite")]
         {
-            let _ = binding;
             let governance = governance_profile_for_descriptor(descriptor);
             let approval_key = Self::approval_key_for_descriptor(descriptor);
-            let governed_approval_eligible = descriptor.execution_kind == ToolExecutionKind::App
+            let governed_approval_eligible = descriptor.owner == ToolOwner::LegacyApp
                 && governance.approval_mode == ToolApprovalMode::PolicyDriven;
             let approval_key_is_denied = governed_approval_eligible
                 && self
@@ -904,15 +898,15 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
             }
 
             let repo = SessionRepository::new(&self.memory_config)?;
-            let kind = if session_context.parent_session_id.is_some() {
+            let kind = if session_context.session().parent_session_id.is_some() {
                 SessionKind::DelegateChild
             } else {
                 SessionKind::Root
             };
             let _ = repo.ensure_session(NewSessionRecord {
-                session_id: session_context.session_id.clone(),
+                session_id: session_context.session().session_id.clone(),
                 kind,
-                parent_session_id: session_context.parent_session_id.clone(),
+                parent_session_id: session_context.session().parent_session_id.clone(),
                 label: None,
                 state: SessionState::Ready,
             })?;
@@ -947,11 +941,13 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
                 }
             };
             let Some((rule_id, reason)) = session_consent_requirement else {
-                return self.maybe_require_governed_tool_approval_with_binding(
+                return self.maybe_require_governed_tool_approval(
                     session_context,
                     intent,
+                    execution_request,
+                    trusted_internal_context,
                     descriptor,
-                    binding,
+                    dispatch_kind,
                 );
             };
 
@@ -966,59 +962,59 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
             let requirement = self.persist_approval_request(
                 session_context,
                 intent,
+                execution_request,
+                trusted_internal_context,
                 descriptor,
+                dispatch_kind,
                 approval_key.as_str(),
                 reason.as_str(),
                 rule_id,
                 governance_snapshot_json,
-                binding,
             )?;
 
             Ok(Some(requirement))
         }
     }
 
-    async fn preflight_tool_execution_with_binding(
+    async fn preflight_tool_execution(
         &self,
-        session_context: &SessionContext,
+        session_context: &Context<'_>,
         intent: &ToolIntent,
         request: ToolCoreRequest,
         descriptor: &crate::tools::ToolDescriptor,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> Result<ToolExecutionPreflight, String> {
+    ) -> Result<LegacyToolExecutionPreflight, String> {
         let repairable_issue = detect_repairable_tool_request_issue(descriptor, &request);
 
         if let Some(repairable_issue) = repairable_issue {
             let repairable_reason = repairable_issue.reason(descriptor.name);
-            let encoded_reason = RepairableToolPreflight::encode(repairable_reason.as_str());
+            let encoded_reason = LegacyRepairablePreflight::encode(repairable_reason.as_str());
             return Err(encoded_reason);
         }
 
         #[cfg(not(feature = "memory-sqlite"))]
         {
-            let _ = (session_context, intent, descriptor, binding);
-            Ok(ToolExecutionPreflight::ready(request))
+            let _ = (session_context, intent, descriptor);
+            Ok(LegacyToolExecutionPreflight::ready(request))
         }
 
         #[cfg(feature = "memory-sqlite")]
         {
             if descriptor.name != crate::tools::SHELL_EXEC_TOOL_NAME {
-                return Ok(ToolExecutionPreflight::ready(request));
+                return Ok(LegacyToolExecutionPreflight::ready(request));
             }
 
-            let preflight = self.governed_tool_preflight(
-                session_context,
-                intent,
-                &request,
-                descriptor,
-                binding,
-            )?;
+            let preflight =
+                self.governed_tool_preflight(session_context, intent, &request, descriptor)?;
             match preflight {
-                GovernedToolPreflight::Allowed => Ok(ToolExecutionPreflight::ready(request)),
-                GovernedToolPreflight::NeedsApproval(requirement) => {
-                    Ok(ToolExecutionPreflight::NeedsApproval(requirement))
+                LegacyGovernedToolPreflight::Allowed => {
+                    Ok(LegacyToolExecutionPreflight::ready(request))
                 }
-                GovernedToolPreflight::AllowedWithTrustedInternalContext(internal_context) => {
+                LegacyGovernedToolPreflight::NeedsApproval(requirement) => {
+                    Ok(LegacyToolExecutionPreflight::NeedsApproval(requirement))
+                }
+                LegacyGovernedToolPreflight::AllowedWithTrustedInternalContext(
+                    internal_context,
+                ) => {
                     let mut request = request;
                     let payload = request.payload.as_object_mut().ok_or_else(|| {
                         format!(
@@ -1030,7 +1026,7 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
                         payload,
                         &internal_context,
                     )?;
-                    Ok(ToolExecutionPreflight::Ready {
+                    Ok(LegacyToolExecutionPreflight::Ready {
                         request,
                         trusted_internal_context: true,
                     })
@@ -1039,21 +1035,103 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
         }
     }
 
+    async fn execute_core_tool(
+        &self,
+        session_context: &Context<'_>,
+        request: ToolCoreRequest,
+        trusted_internal_context: bool,
+    ) -> Result<ToolCoreOutcome, crate::tools::LegacyToolRequestError> {
+        if self.execution_runtime.id() != session_context.runtime().id() {
+            return Err(crate::tools::LegacyToolRequestError::RuntimeMismatch);
+        }
+        let request = ToolCoreRequest {
+            tool_name: crate::tools::canonical_tool_name(request.tool_name.as_str()).to_owned(),
+            payload: request.payload,
+        };
+        let execute = async {
+            if request.tool_name == "tool.invoke" {
+                return Err(crate::tools::LegacyToolRequestError::Input(
+                    "legacy kernel replay requires a normalized concrete request".to_owned(),
+                ));
+            }
+            // Session construction has already normalized roots and runtime narrowing.
+            // Trusted legacy fields may reach the adapter payload, but never reshape
+            // the typed policy context used to authorize this fallback.
+            crate::tools::ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
+                request.tool_name.as_str(),
+                &request.payload,
+                "payload",
+            )
+            .map_err(crate::tools::LegacyToolRequestError::ReservedContext)?;
+            let capabilities = crate::tools::legacy_required_capabilities_for_request(&request);
+            let observability = self
+                .app_config
+                .as_ref()
+                .map(|config| config.observability.clone())
+                .unwrap_or_else(crate::config::ObservabilityConfig::runtime_default);
+            let kernel = session_context.runtime().legacy_kernel();
+            if let Some(adapter_name) = kernel.default_legacy_core_tool_adapter_name() {
+                return kernel
+                    .execute_tool_core(
+                        self.legacy_token.pack_id.as_str(),
+                        &self.legacy_token,
+                        &capabilities,
+                        Some(adapter_name),
+                        request,
+                        session_context,
+                    )
+                    .await
+                    .map_err(crate::tools::LegacyToolRequestError::Legacy);
+            }
+
+            // The shipped app has no registered legacy adapter: its final
+            // typed-miss boundary owns the remaining context-aware legacy tools.
+            // Explicit adapters above remain distinct owners and are never
+            // shadowed by this fallback.
+            kernel
+                .execute_legacy_tool_core_with(
+                    self.legacy_token.pack_id.as_str(),
+                    &self.legacy_token,
+                    &capabilities,
+                    "mvp-tools",
+                    request,
+                    session_context,
+                    |request| async {
+                        crate::tools::tool_dispatch::execute_tool_core_with_config_and_observability(
+                            Some(session_context.runtime()),
+                            request,
+                            session_context.tool_runtime_config(),
+                            &observability,
+                        )
+                        .map_err(loong_kernel::ToolPlaneError::Execution)
+                    },
+                )
+                .await
+                .map_err(crate::tools::LegacyToolRequestError::Legacy)
+        };
+        if trusted_internal_context {
+            return crate::tools::with_trusted_internal_tool_payload_async(execute).await;
+        }
+        execute.await
+    }
+
     async fn execute_app_tool(
         &self,
-        session_context: &SessionContext,
+        session_context: &Context<'_>,
         request: ToolCoreRequest,
-        binding: ConversationRuntimeBinding<'_>,
     ) -> Result<ToolCoreOutcome, String> {
-        let canonical_tool_name = crate::tools::canonical_tool_name(request.tool_name.as_str());
-        let effective_tool_view = self.effective_tool_view_for_session(session_context)?;
-        let descriptor = tool_catalog().descriptor(canonical_tool_name);
-        let has_kernel_context = binding.kernel_context().is_some();
-
+        if self.execution_runtime.id() != session_context.runtime().id() {
+            return Err("legacy dispatcher belongs to another Runtime".to_owned());
+        }
+        let canonical_tool_name =
+            crate::tools::canonical_tool_name(request.tool_name.as_str()).to_owned();
+        let descriptor = tool_catalog().descriptor(canonical_tool_name.as_str());
         if let Some(descriptor) = descriptor
-            && descriptor.execution_kind == ToolExecutionKind::App
-            && (!session_context.tool_view.contains(descriptor.name)
-                || !effective_tool_view.contains(descriptor.name))
+            && descriptor.owner == ToolOwner::LegacyApp
+            && !session_context
+                .session()
+                .tool_view
+                .contains(descriptor.name)
         {
             return Err(format!("tool_not_visible: {}", descriptor.name));
         }
@@ -1061,35 +1139,43 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
         let requires_kernel_binding = descriptor
             .map(crate::tools::ToolDescriptor::requires_kernel_binding)
             .unwrap_or(false);
+        let context_allows_legacy_execution = session_context.session().session_mode
+            == GovernedSessionMode::MutatingCapable
+            && session_context
+                .allowed_capabilities()
+                .contains(Capability::InvokeTool);
+        if requires_kernel_binding && !context_allows_legacy_execution {
+            return Err(
+                "app_tool_denied: legacy_tool_authority_denied: session lacks mutating legacy tool authority"
+                    .to_owned(),
+            );
+        }
+
         let effective_tool_config = self.effective_tool_config_for_session(session_context);
 
         #[cfg(feature = "memory-sqlite")]
-        if canonical_tool_name == "session_continue" {
+        if matches!(
+            canonical_tool_name.as_str(),
+            "session_tool_policy_status" | "session_tool_policy_set" | "session_tool_policy_clear"
+        ) {
             let app_config = self
                 .app_config
-                .as_ref()
-                .ok_or_else(|| "session_continue_not_configured".to_owned())?;
-            let runtime = load_default_conversation_runtime(app_config.as_ref())?;
-            return crate::tools::continue_session_with_runtime(
-                request.payload,
-                &session_context.session_id,
-                &self.memory_config,
-                &effective_tool_config,
-                app_config.as_ref(),
-                &runtime,
-                binding,
-            )
-            .await;
-        }
-
-        if requires_kernel_binding && !has_kernel_context {
-            return Err("app_tool_denied: no_kernel_context".to_owned());
+                .as_deref()
+                .ok_or_else(|| "session policy tools require app runtime config".to_owned())?;
+            return crate::tools::session::execute_session_policy_tool(
+                ToolCoreRequest {
+                    tool_name: canonical_tool_name,
+                    payload: request.payload,
+                },
+                session_context,
+                app_config,
+            );
         }
 
         if canonical_tool_name == "session_wait" {
             return crate::tools::wait_for_session_with_config(
                 request.payload,
-                &session_context.session_id,
+                session_context,
                 &self.memory_config,
                 &effective_tool_config,
             )
@@ -1098,7 +1184,7 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
         if canonical_tool_name == "task_wait" {
             return crate::tools::wait_for_task_with_config(
                 request.payload,
-                &session_context.session_id,
+                session_context,
                 &self.memory_config,
                 &effective_tool_config,
             )
@@ -1110,11 +1196,16 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
                 .execute_sessions_send(session_context, request.payload)
                 .await;
         }
-        crate::tools::execute_app_tool_with_visibility_checked_config(
+        crate::tools::execute_legacy_app_tool_in_view(
             request,
-            &session_context.session_id,
+            &session_context.session().session_id,
             &self.memory_config,
             &effective_tool_config,
+            &session_context.session().tool_view,
         )
     }
 }
+
+#[cfg(test)]
+#[path = "turn_engine_dispatch_default/tests.rs"]
+mod tests;

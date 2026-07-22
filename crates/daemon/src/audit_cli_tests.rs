@@ -1495,7 +1495,6 @@ fn audit_summary_filters_by_agent_id() {
                 1_700_010_046,
                 Some("agent-b"),
                 AuditEventKind::ProviderFailover {
-                    pack_id: "sales-intel".to_owned(),
                     provider_id: "openai".to_owned(),
                     reason: "rate_limited".to_owned(),
                     stage: "response".to_owned(),
@@ -2586,7 +2585,6 @@ fn audit_summary_rolls_up_event_kinds_and_last_seen_fields() {
                 1_700_010_102,
                 Some("agent-c"),
                 AuditEventKind::ProviderFailover {
-                    pack_id: "sales-intel".to_owned(),
                     provider_id: "openai".to_owned(),
                     reason: "rate_limited".to_owned(),
                     stage: "response".to_owned(),

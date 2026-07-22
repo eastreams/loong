@@ -25,22 +25,32 @@ async fn pending_approval_control_turn_bootstraps_once_and_emits_terminal_phases
         state: SessionState::Ready,
     })
     .expect("ensure root session");
-    seed_pending_approval_request(&repo, "root-session", "apr-deny-1", "delegate_async", "app");
+    seed_pending_approval_request(
+        &repo,
+        "root-session",
+        "apr-deny-1",
+        "delegate_async",
+        "legacy_app",
+    );
 
     let acp_options = AcpConversationTurnOptions::automatic();
     let address = ConversationSessionAddress::from_session_id("root-session");
-    let kernel_ctx = crate::context::bootstrap_test_kernel_context("approval-control-observer", 60)
-        .expect("kernel context");
+    let owner = crate::test_support::runtime_session_for_test(
+        "root-session",
+        crate::tools::runtime_tool_view_from_loong_config(&config),
+    );
+    let ctx = owner.context();
 
     let reply = coordinator
         .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             &config,
+            &ctx,
             &address,
             "esc",
             ProviderErrorMode::Propagate,
             &runtime,
             &acp_options,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
+            &owner.legacy_tools,
             None,
             Some(observer_handle),
             None,
@@ -92,6 +102,11 @@ async fn pending_approval_control_turn_does_not_persist_session_mode_when_resolu
         .display()
         .to_string();
     config.memory.sqlite_path = sqlite_path;
+    let owner = crate::test_support::runtime_session_for_test(
+        "root-session",
+        crate::tools::runtime_tool_view_from_loong_config(&config),
+    );
+    let ctx = owner.context();
     let repo = SessionRepository::new(&memory_config).expect("repository");
     repo.ensure_session(NewSessionRecord {
         session_id: "root-session".to_owned(),
@@ -106,7 +121,7 @@ async fn pending_approval_control_turn_does_not_persist_session_mode_when_resolu
         "root-session",
         "apr-auto-failure",
         "delegate_async",
-        "app",
+        "legacy_app",
     );
 
     let db_path = memory_config
@@ -131,12 +146,13 @@ async fn pending_approval_control_turn_does_not_persist_session_mode_when_resolu
     let result = coordinator
         .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             &config,
+            &ctx,
             &address,
             "auto",
             ProviderErrorMode::Propagate,
             &runtime,
             &acp_options,
-            ConversationRuntimeBinding::direct(),
+            &owner.legacy_tools,
             None,
             None,
             None,
@@ -177,6 +193,11 @@ async fn pending_approval_control_turn_resolves_delegate_request_after_yes_confi
         .display()
         .to_string();
     config.memory.sqlite_path = sqlite_path;
+    let owner = crate::test_support::runtime_session_for_test(
+        "root-session",
+        crate::tools::runtime_tool_view_from_loong_config(&config),
+    );
+    let ctx = owner.context();
     let repo = SessionRepository::new(&memory_config).expect("repository");
     repo.ensure_session(NewSessionRecord {
         session_id: "root-session".to_owned(),
@@ -186,19 +207,26 @@ async fn pending_approval_control_turn_resolves_delegate_request_after_yes_confi
         state: SessionState::Ready,
     })
     .expect("ensure root session");
-    seed_pending_approval_request(&repo, "root-session", "apr-delegate-yes", "delegate", "app");
+    seed_pending_approval_request(
+        &repo,
+        "root-session",
+        "apr-delegate-yes",
+        "delegate",
+        "legacy_app",
+    );
 
     let acp_options = AcpConversationTurnOptions::automatic();
     let address = ConversationSessionAddress::from_session_id("root-session");
     let reply = coordinator
         .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
             &config,
+            &ctx,
             &address,
             "yes",
             ProviderErrorMode::Propagate,
             &runtime,
             &acp_options,
-            ConversationRuntimeBinding::direct(),
+            &owner.legacy_tools,
             None,
             None,
             None,
@@ -212,7 +240,7 @@ async fn pending_approval_control_turn_resolves_delegate_request_after_yes_confi
         .load_approval_request("apr-delegate-yes")
         .expect("load approval request")
         .expect("approval request row");
-    assert_eq!(approval_request.status, ApprovalRequestStatus::Approved);
+    assert_eq!(approval_request.status, ApprovalRequestStatus::Executed);
     assert_eq!(
         approval_request.decision,
         Some(ApprovalDecision::ApproveOnce)
@@ -240,6 +268,11 @@ async fn approval_request_resolve_persists_session_mode_on_success() {
         .display()
         .to_string();
     config.memory.sqlite_path = sqlite_path;
+    let owner = crate::test_support::runtime_session_for_test(
+        "root-session",
+        crate::tools::runtime_tool_view_from_loong_config(&config),
+    );
+    let ctx = owner.context();
     let repo = SessionRepository::new(&memory_config).expect("repository");
     repo.ensure_session(NewSessionRecord {
         session_id: "root-session".to_owned(),
@@ -254,15 +287,17 @@ async fn approval_request_resolve_persists_session_mode_on_success() {
         "root-session",
         "apr-auto-success",
         "sessions_list",
-        "app",
+        "legacy_app",
     );
-    let fallback = DefaultAppToolDispatcher::new(memory_config.clone(), ToolConfig::default());
-    let approval_runtime = CoordinatorApprovalResolutionRuntime::new(
-        &config,
-        &runtime,
-        &fallback,
-        ConversationRuntimeBinding::direct(),
-    );
+    let fallback = DefaultLegacyToolDispatcher::new(
+        Arc::clone(&owner.runtime),
+        &owner.session,
+        memory_config.clone(),
+        ToolConfig::default(),
+    )
+    .expect("legacy app tool dispatcher");
+    let approval_runtime =
+        CoordinatorApprovalResolutionRuntime::new(&config, &ctx, &runtime, &fallback);
     let outcome = crate::tools::approval::execute_approval_tool_with_runtime_support(
         loong_contracts::ToolCoreRequest {
             tool_name: "approval_request_resolve".to_owned(),
@@ -279,7 +314,7 @@ async fn approval_request_resolve_persists_session_mode_on_success() {
     )
     .await
     .expect("approval request resolve should succeed");
-    assert_eq!(outcome.payload["approval_request"]["status"], "approved");
+    assert_eq!(outcome.payload["approval_request"]["status"], "executed");
 
     let stored = repo
         .load_session_tool_consent("root-session")
@@ -299,7 +334,7 @@ async fn approval_request_resolve_persists_session_mode_on_success() {
         approval_request.decision,
         Some(ApprovalDecision::ApproveOnce)
     );
-    assert_eq!(approval_request.status, ApprovalRequestStatus::Approved);
+    assert_eq!(approval_request.status, ApprovalRequestStatus::Executed);
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -315,6 +350,11 @@ async fn approval_request_resolve_retries_missing_session_mode_after_approval() 
         .display()
         .to_string();
     config.memory.sqlite_path = sqlite_path;
+    let owner = crate::test_support::runtime_session_for_test(
+        "root-session",
+        crate::tools::runtime_tool_view_from_loong_config(&config),
+    );
+    let ctx = owner.context();
     let repo = SessionRepository::new(&memory_config).expect("repository");
     repo.ensure_session(NewSessionRecord {
         session_id: "root-session".to_owned(),
@@ -329,7 +369,7 @@ async fn approval_request_resolve_retries_missing_session_mode_after_approval() 
         "root-session",
         "apr-auto-retry",
         "sessions_list",
-        "app",
+        "legacy_app",
     );
     repo.transition_approval_request_if_current(
         "apr-auto-retry",
@@ -345,13 +385,15 @@ async fn approval_request_resolve_retries_missing_session_mode_after_approval() 
     .expect("transition approval request")
     .expect("approval request should be pending");
 
-    let fallback = DefaultAppToolDispatcher::new(memory_config.clone(), ToolConfig::default());
-    let approval_runtime = CoordinatorApprovalResolutionRuntime::new(
-        &config,
-        &runtime,
-        &fallback,
-        ConversationRuntimeBinding::direct(),
-    );
+    let fallback = DefaultLegacyToolDispatcher::new(
+        Arc::clone(&owner.runtime),
+        &owner.session,
+        memory_config.clone(),
+        ToolConfig::default(),
+    )
+    .expect("legacy app tool dispatcher");
+    let approval_runtime =
+        CoordinatorApprovalResolutionRuntime::new(&config, &ctx, &runtime, &fallback);
     let outcome = crate::tools::approval::execute_approval_tool_with_runtime_support(
         loong_contracts::ToolCoreRequest {
             tool_name: "approval_request_resolve".to_owned(),
@@ -369,7 +411,7 @@ async fn approval_request_resolve_retries_missing_session_mode_after_approval() 
     .await
     .expect("approval request retry should succeed");
 
-    assert_eq!(outcome.payload["approval_request"]["status"], "approved");
+    assert_eq!(outcome.payload["approval_request"]["status"], "executed");
 
     let stored = repo
         .load_session_tool_consent("root-session")
@@ -420,7 +462,8 @@ async fn core_approval_replay_skips_app_session_context_loading() {
                 "selector": "openai"
             },
             "source": "test",
-            "execution_kind": "core",
+            "dispatch_kind": "legacy_core",
+            "trusted_internal_context": false,
         }),
         governance_snapshot_json: json!({
             "rule_id": "session_tool_consent_auto_blocked",
@@ -431,15 +474,20 @@ async fn core_approval_replay_skips_app_session_context_loading() {
         .load_approval_request("apr-core-replay")
         .expect("load approval request")
         .expect("approval request row");
-    let kernel_ctx =
-        bootstrap_test_kernel_context("approval-core-replay", 60).expect("kernel context");
-    let fallback = DefaultAppToolDispatcher::new(memory_config.clone(), ToolConfig::default());
-    let approval_runtime = CoordinatorApprovalResolutionRuntime::new(
-        &config,
-        &runtime,
-        &fallback,
-        ConversationRuntimeBinding::kernel(&kernel_ctx),
+    let owner = crate::test_support::runtime_session_for_test(
+        "root-session",
+        crate::tools::runtime_tool_view_from_loong_config(&config),
     );
+    let ctx = owner.context();
+    let fallback = DefaultLegacyToolDispatcher::new(
+        Arc::clone(&owner.runtime),
+        &owner.session,
+        memory_config.clone(),
+        ToolConfig::default(),
+    )
+    .expect("legacy app tool dispatcher");
+    let approval_runtime =
+        CoordinatorApprovalResolutionRuntime::new(&config, &ctx, &runtime, &fallback);
 
     let error = approval_runtime
         .replay_approved_request(&approval_request)

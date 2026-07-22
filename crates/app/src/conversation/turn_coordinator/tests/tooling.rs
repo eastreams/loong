@@ -6,18 +6,16 @@ fn build_provider_turn_tool_terminal_events_prefers_trace_outcomes_over_generic_
         assistant_text: String::new(),
         tool_intents: vec![
             ToolIntent {
-                tool_name: "sessions_list".to_owned(),
+                tool_name: "sessions_list".into(),
                 args_json: json!({}),
                 source: "provider_tool_call".to_owned(),
-                session_id: "session-a".to_owned(),
                 turn_id: "turn-a".to_owned(),
                 tool_call_id: "call-1".to_owned(),
             },
             ToolIntent {
-                tool_name: "session_status".to_owned(),
+                tool_name: "session_status".into(),
                 args_json: json!({"session_id": "session-a"}),
                 source: "provider_tool_call".to_owned(),
-                session_id: "session-a".to_owned(),
                 turn_id: "turn-a".to_owned(),
                 tool_call_id: "call-2".to_owned(),
             },
@@ -68,10 +66,9 @@ fn build_provider_turn_tool_terminal_events_attach_visible_shell_request_summary
     let turn = ProviderTurn {
         assistant_text: String::new(),
         tool_intents: vec![ToolIntent {
-            tool_name: "shell.exec".to_owned(),
+            tool_name: "shell.exec".into(),
             args_json: json!({"command": "ls /root"}),
             source: "provider_tool_call".to_owned(),
-            session_id: "session-a".to_owned(),
             turn_id: "turn-a".to_owned(),
             tool_call_id: "call-shell".to_owned(),
         }],
@@ -106,18 +103,19 @@ fn summarize_failed_provider_lane_tool_request_preserves_multi_intent_context_wi
         assistant_text: String::new(),
         tool_intents: vec![
             ToolIntent {
-                tool_name: "file.read".to_owned(),
+                tool_name: crate::conversation::turn_engine::ToolIntentTarget::registered(
+                    loong_contracts::ToolPath::new(["read"]).expect("test tool path must be valid"),
+                    "read",
+                ),
                 args_json: json!({"path": "Cargo.toml"}),
                 source: "provider_tool_call".to_owned(),
-                session_id: "session-a".to_owned(),
                 turn_id: "turn-a".to_owned(),
                 tool_call_id: "call-1".to_owned(),
             },
             ToolIntent {
-                tool_name: "shell.exec".to_owned(),
+                tool_name: "shell.exec".into(),
                 args_json: json!({"command": "ls /root"}),
                 source: "provider_tool_call".to_owned(),
-                session_id: "session-a".to_owned(),
                 turn_id: "turn-a".to_owned(),
                 tool_call_id: "call-2".to_owned(),
             },

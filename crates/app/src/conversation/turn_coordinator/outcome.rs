@@ -7,26 +7,26 @@ impl ConversationTurnCoordinator {
     >(
         &self,
         config: &LoongConfig,
-        address: &ConversationSessionAddress,
+        ctx: &Context<'_>,
         user_input: &str,
         error_mode: ProviderErrorMode,
         runtime: &R,
-        binding: ConversationRuntimeBinding<'_>,
+        legacy_tools: &DefaultLegacyToolDispatcher,
         ingress: Option<&ConversationIngressContext>,
         observer: Option<ConversationTurnObserverHandle>,
         retry_progress: crate::provider::ProviderRetryProgressCallback,
     ) -> CliResult<ConversationTurnOutcome> {
+        let session_id = ctx.session().session_id();
         let turn_result: CliResult<(ConversationTurnOutcome, bool)> = async {
-            let session_id = address.session_id.as_str();
             #[cfg(feature = "memory-sqlite")]
             if let Some(reply) = self
                 .maybe_handle_pending_approval_control_turn(
                     config,
+                    ctx,
                     runtime,
-                    session_id,
                     user_input,
                     error_mode,
-                    binding,
+                    legacy_tools,
                     observer.as_ref(),
                 )
                 .await?
@@ -36,11 +36,11 @@ impl ConversationTurnCoordinator {
             if let Some(reply) = self
                 .maybe_handle_explicit_skill_activation_control_turn(
                     config,
+                    ctx,
                     runtime,
-                    session_id,
                     user_input,
                     error_mode,
-                    binding,
+                    legacy_tools,
                     observer.as_ref(),
                 )
                 .await?
@@ -57,19 +57,13 @@ impl ConversationTurnCoordinator {
             let preparing_event = ConversationTurnPhaseEvent::preparing();
             observe_turn_phase(observer.as_ref(), preparing_event);
 
-            if let Some(kernel_ctx) = binding.kernel_context() {
-                runtime.bootstrap(config, session_id, kernel_ctx).await?;
-            }
+            runtime.bootstrap(config, ctx).await?;
 
-            let session_context = runtime.session_context(config, session_id, binding)?;
-            let tool_view = session_context.tool_view.clone();
             let visible_ingress = ingress.filter(|value| value.has_contextual_hints());
-            emit_turn_ingress_event(runtime, session_id, visible_ingress, binding).await;
+            emit_turn_ingress_event(runtime, visible_ingress, ctx).await;
 
             let turn_id = next_conversation_turn_id();
-            let assembled_context = runtime
-                .build_context(config, session_id, true, binding)
-                .await?;
+            let assembled_context = runtime.build_context(config, ctx, true).await?;
             let preparation = ProviderTurnPreparation::from_assembled_context_with_turn_id(
                 config,
                 assembled_context,
@@ -94,22 +88,19 @@ impl ConversationTurnCoordinator {
             observe_turn_phase(observer.as_ref(), initial_request_event);
             emit_prompt_frame_event(
                 runtime,
-                session_id,
                 1,
                 "initial",
                 preparation.session.prompt_frame_summary(),
-                binding,
+                ctx,
             )
             .await;
 
             let provider_turn_result = request_provider_turn_with_observer(
                 config,
                 runtime,
-                session_id,
                 preparation.turn_id.as_str(),
                 &preparation.session.messages,
-                &tool_view,
-                binding,
+                ctx,
                 observer.as_ref(),
                 retry_progress.clone(),
             )
@@ -117,12 +108,12 @@ impl ConversationTurnCoordinator {
             let resolved_turn = resolve_provider_turn(
                 config,
                 runtime,
-                session_id,
+                ctx,
                 user_input,
                 &preparation,
                 provider_turn_result,
                 error_mode,
-                binding,
+                legacy_tools,
                 ingress,
                 observer.as_ref(),
                 retry_progress,
@@ -132,11 +123,10 @@ impl ConversationTurnCoordinator {
             apply_resolved_provider_turn(
                 config,
                 runtime,
-                session_id,
+                ctx,
                 user_input,
                 &preparation,
                 &resolved_turn,
-                binding,
                 observer.as_ref(),
             )
             .await
@@ -156,9 +146,9 @@ impl ConversationTurnCoordinator {
                 #[cfg(feature = "memory-sqlite")]
                 persist_task_progress_event_best_effort(
                     config,
-                    address.session_id.as_str(),
+                    session_id,
                     "turn_failed",
-                    failed_task_progress_record(config, address.session_id.as_str(), user_input),
+                    failed_task_progress_record(config, session_id, user_input),
                 );
                 Err(error)
             }

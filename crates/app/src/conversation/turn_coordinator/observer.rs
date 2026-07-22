@@ -208,11 +208,9 @@ pub(super) fn provider_turn_observer_supports_streaming(
 pub(super) async fn request_provider_turn_with_observer<R: ConversationRuntime + ?Sized>(
     config: &LoongConfig,
     runtime: &R,
-    session_id: &str,
     turn_id: &str,
     messages: &[Value],
-    tool_view: &crate::tools::ToolView,
-    binding: ConversationRuntimeBinding<'_>,
+    ctx: &Context<'_>,
     observer: Option<&ConversationTurnObserverHandle>,
     retry_progress: crate::provider::ProviderRetryProgressCallback,
 ) -> CliResult<ProviderTurn> {
@@ -224,11 +222,9 @@ pub(super) async fn request_provider_turn_with_observer<R: ConversationRuntime +
         return runtime
             .request_turn_streaming_with_retry_progress(
                 config,
-                session_id,
                 turn_id,
                 messages,
-                tool_view,
-                binding,
+                ctx,
                 on_token,
                 retry_progress,
             )
@@ -236,14 +232,6 @@ pub(super) async fn request_provider_turn_with_observer<R: ConversationRuntime +
     }
 
     runtime
-        .request_turn_with_retry_progress(
-            config,
-            session_id,
-            turn_id,
-            messages,
-            tool_view,
-            binding,
-            retry_progress,
-        )
+        .request_turn_with_retry_progress(config, turn_id, messages, ctx, retry_progress)
         .await
 }

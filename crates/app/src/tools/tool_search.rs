@@ -2,14 +2,17 @@ use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use loong_contracts::{Capability, ToolCoreOutcome, ToolCoreRequest};
+use loong_runtime::runtime::Runtime;
 use serde_json::Value;
 use serde_json::json;
 
-use super::catalog::{ToolDescriptor, ToolView};
+use super::catalog::ToolView;
+#[cfg(feature = "tool-file")]
+use super::memory_tools;
 use super::runtime_config;
 use super::{
     LOONG_INTERNAL_TOOL_SEARCH_KEY, LOONG_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY,
-    TOOL_SEARCH_GRANTED_CAPABILITIES_FIELD, canonical_tool_name, issue_tool_lease, memory_tools,
+    TOOL_SEARCH_GRANTED_CAPABILITIES_FIELD, canonical_tool_name, issue_tool_lease,
 };
 
 #[path = "tool_search_entry.rs"]
@@ -35,10 +38,6 @@ use result::{tool_search_diagnostics_json, tool_search_result_entry_json};
 #[cfg(test)]
 pub(crate) use view::runtime_discoverable_tool_entries;
 pub(crate) use view::runtime_tool_search_entries;
-use view::searchable_entry_from_descriptor_for_view;
-#[cfg(test)]
-pub(crate) use view::tool_id_visible_in_view;
-
 #[derive(Debug, Clone)]
 pub(super) struct RankedSearchableToolEntry {
     pub(super) entry: SearchableToolEntry,
@@ -52,6 +51,7 @@ pub(super) struct ToolSearchRanking {
 }
 
 pub(super) fn execute_tool_search_tool_with_config(
+    runtime: Option<&Runtime<crate::context::RuntimeContextFactory>>,
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
@@ -72,11 +72,11 @@ pub(super) fn execute_tool_search_tool_with_config(
         .map(str::to_owned);
     let visible_requested_exact_tool_id = exact_tool_id
         .as_deref()
-        .map(super::user_visible_tool_name)
+        .map(super::legacy_display_tool_name)
         .or_else(|| {
             requested_exact_tool_id
                 .as_deref()
-                .map(super::user_visible_tool_name)
+                .map(super::legacy_display_tool_name)
         });
 
     let limit = payload
@@ -88,16 +88,18 @@ pub(super) fn execute_tool_search_tool_with_config(
         .get(TOOL_SEARCH_GRANTED_CAPABILITIES_FIELD)
         .cloned()
         .and_then(|value| serde_json::from_value::<BTreeSet<Capability>>(value).ok());
-    let visible_tool_view = search_tool_view_from_payload(payload, config);
-    let searchable_entries = runtime_tool_search_entries(config, Some(&visible_tool_view), false)
-        .into_iter()
-        .filter(|entry| {
-            tool_search_entry_is_capability_usable(
-                entry.canonical_name.as_str(),
-                granted_capabilities.as_ref(),
-            )
-        })
-        .collect::<Vec<_>>();
+    let visible_tool_view = search_tool_view_from_payload(runtime, payload, config);
+    let searchable_entries =
+        runtime_tool_search_entries(runtime, config, Some(&visible_tool_view), false)
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .filter(|entry| {
+                tool_search_entry_is_capability_usable(
+                    entry.canonical_name.as_str(),
+                    granted_capabilities.as_ref(),
+                )
+            })
+            .collect::<Vec<_>>();
     let exact_match_entry = exact_tool_id.as_ref().and_then(|exact_tool_id| {
         let direct_tool_id = super::direct_tool_name_for_hidden_tool(exact_tool_id);
         let direct_tool_id = direct_tool_id.map(str::to_owned);
@@ -258,13 +260,15 @@ pub(super) fn tool_search_entry_is_capability_usable(
     let Some(granted_capabilities) = granted_capabilities else {
         return true;
     };
-    let required = super::required_capabilities_for_tool_name_and_payload(tool_name, &json!({}));
+    let required =
+        super::legacy_required_capabilities_for_tool_name_and_payload(tool_name, &json!({}));
     required
         .iter()
         .all(|capability| granted_capabilities.contains(capability))
 }
 
 pub(super) fn search_tool_view_from_payload(
+    runtime: Option<&Runtime<crate::context::RuntimeContextFactory>>,
     payload: &serde_json::Map<String, Value>,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> ToolView {
@@ -279,7 +283,7 @@ pub(super) fn search_tool_view_from_payload(
 
                 for tool_name in tool_names.iter().filter_map(Value::as_str) {
                     let canonical_tool_name = canonical_tool_name(tool_name);
-                    let visible_tool_name = super::user_visible_tool_name(canonical_tool_name);
+                    let visible_tool_name = super::legacy_display_tool_name(canonical_tool_name);
 
                     if !normalized_tool_names.contains(&canonical_tool_name.to_owned()) {
                         normalized_tool_names.push(canonical_tool_name.to_owned());
@@ -295,15 +299,21 @@ pub(super) fn search_tool_view_from_payload(
         None
     };
 
-    match visible_tool_names {
-        Some(visible_tool_names) => ToolView::from_tool_names(visible_tool_names),
-        None => super::full_runtime_tool_view_for_runtime_config(config),
-    }
+    let runtime_view = runtime.map_or_else(
+        || super::runtime_tool_view_for_runtime_config(config),
+        |runtime| super::runtime_visible_tool_view(runtime, config, None),
+    );
+    let Some(visible_tool_names) = visible_tool_names else {
+        return runtime_view;
+    };
+    runtime_view.filter(|path, provider_name| {
+        let path = path.to_string();
+        visible_tool_names
+            .iter()
+            .any(|visible| visible == provider_name || visible == &path)
+    })
 }
 
-pub(super) fn searchable_entry_from_descriptor(descriptor: &ToolDescriptor) -> SearchableToolEntry {
-    searchable_entry_from_descriptor_for_view(descriptor, None)
-}
 #[cfg(test)]
 mod tests {
     use super::*;

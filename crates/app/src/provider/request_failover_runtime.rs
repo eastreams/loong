@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use crate::{CliResult, config::ProviderConfig};
+use crate::{CliResult, Context, config::ProviderConfig};
 
 use super::auth_profile_runtime::ProviderAuthProfile;
 use super::failover::ModelRequestError;
@@ -12,11 +12,9 @@ use super::profile_health_runtime::{
     ProviderProfileStatePolicy, mark_provider_profile_failure, mark_provider_profile_success,
     prioritize_provider_auth_profiles_by_health,
 };
-use super::runtime_binding::ProviderRuntimeBinding;
-
 pub(super) async fn request_across_model_candidates<T, F, Fut>(
     provider: &ProviderConfig,
-    binding: ProviderRuntimeBinding<'_>,
+    ctx: &Context<'_>,
     auth_profiles: &[ProviderAuthProfile],
     profile_state_policy: Option<&ProviderProfileStatePolicy>,
     model_candidates: &[String],
@@ -37,7 +35,7 @@ where
     tracing::debug!(
         target: "loong.provider",
         provider_id = %provider.kind.profile().id,
-        binding = %binding.as_str(),
+        session_mode = %ctx.session().session_mode,
         model_candidate_count = model_candidates.len(),
         auth_profile_count = ordered_profiles.len(),
         auto_model_mode,
@@ -58,7 +56,7 @@ where
                     tracing::debug!(
                         target: "loong.provider",
                         provider_id = %provider.kind.profile().id,
-                        binding = %binding.as_str(),
+                        session_mode = %ctx.session().session_mode,
                         model = %model,
                         auth_profile_id = %profile.id,
                         candidate_index = model_index + 1,
@@ -81,7 +79,7 @@ where
                     let exhausted = profile_index + 1 >= ordered_profiles.len()
                         && model_index + 1 >= model_candidates.len();
                     record_provider_failover_audit_event(
-                        binding,
+                        ctx,
                         provider,
                         &snapshot,
                         try_next_model,
@@ -96,7 +94,7 @@ where
                     tracing::warn!(
                         target: "loong.provider",
                         provider_id = %provider.kind.profile().id,
-                        binding = %binding.as_str(),
+                        session_mode = %ctx.session().session_mode,
                         model = %snapshot.model,
                         auth_profile_id = %profile.id,
                         reason = %snapshot.reason.as_str(),

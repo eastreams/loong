@@ -81,7 +81,7 @@ optional `scripts/pre-commit` hook mirrors these cargo gates locally.
 
 ## Kernel Invariants
 
-1. **Token authorization is fail-closed** — if the policy engine cannot determine authorization (e.g., mutex poisoned), the operation is denied.
+1. **Authorization is fail-closed** — typed Tool and Access actions execute only after `PolicyEngine::grant` returns `Granted<Action>`; indeterminate policy, missing capability, permission failure, and audit failure all deny execution. Bearer-token validation remains fail-closed inside explicit legacy ingress.
 2. **Audit events are never silently dropped** — kernel sinks fail closed on write errors instead of silently downgrading. Production app bootstraps default to `FanoutAuditSink` backed by `~/.loong/audit/events.jsonl`, `Kernel::new()` defaults to `InMemoryAuditSink`, and spec/test/demo helpers may intentionally use explicit in-memory audit seams for side-effect-free reporting. `NoopAuditSink` remains reserved for callers that explicitly opt into `new_without_audit(...)` or wire a noop sink themselves.
 3. **Pack registration is idempotent-safe** — duplicate pack IDs return `DuplicatePack` error, never silently overwrite.
 4. **Generation-based revocation is monotonic** — the revocation threshold only increases, never decreases.
@@ -89,7 +89,7 @@ optional `scripts/pre-commit` hook mirrors these cargo gates locally.
 
 ## MVP Channel Invariants
 
-1. **Kernel context is bootstrapped at startup** — the base CLI loop and shipped service-channel runtimes create `KernelContext` before processing messages.
+1. **Runtime and Session own execution state** — CLI and service-channel hosts retain one Runtime plus owned Sessions. Each structured operation borrows them into `Context<'_>` after any required Session rematerialization; no host retains an owned/root Context.
 2. **Memory persistence failures are surfaced** — `persist_turn` errors propagate to the caller, never silently swallowed.
 3. **Provider errors have two modes** — `Propagate` (return error) or `InlineMessage` (synthetic reply). Behavior is explicit per operator or channel surface.
 

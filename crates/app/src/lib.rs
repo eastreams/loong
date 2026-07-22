@@ -9,6 +9,7 @@ pub mod context;
 pub mod control_plane;
 pub mod conversation;
 pub mod crypto;
+mod legacy_kernel;
 pub mod mcp;
 pub mod memory;
 pub mod migration;
@@ -18,7 +19,7 @@ pub(crate) mod otel;
 pub mod presentation;
 pub mod prompt;
 pub mod provider;
-pub mod runtime_bridge;
+pub mod runtime;
 pub mod runtime_env;
 mod runtime_identity;
 mod runtime_self;
@@ -48,7 +49,7 @@ pub mod test_utils;
 
 #[cfg(feature = "feishu-integration")]
 pub use channel::feishu::api as feishu;
-pub use context::KernelContext;
+pub use context::{Context, RuntimeContextFactory, Session};
 /// Result type for app runtime and CLI operations.
 pub type CliResult<T> = Result<T, String>;
 

@@ -18,7 +18,6 @@ pub mod pack;
 pub mod plugin;
 pub mod plugin_ir;
 pub mod policy;
-pub mod policy_ext;
 pub mod runtime;
 pub mod task_supervisor;
 pub mod tool;
@@ -31,8 +30,8 @@ pub use architecture::{
 pub use audit::{
     AuditEvent, AuditEventKind, AuditRepairOutcome, AuditRepairReport, AuditSink,
     AuditVerificationReport, ExecutionPlane, FanoutAuditSink, InMemoryAuditSink, JsonlAuditSink,
-    NoopAuditSink, PlaneTier, ToolInvocationOutcome, probe_jsonl_audit_journal_runtime_ready,
-    repair_jsonl_audit_journal, verify_jsonl_audit_journal,
+    PlaneTier, probe_jsonl_audit_journal_runtime_ready, repair_jsonl_audit_journal,
+    verify_jsonl_audit_journal,
 };
 pub use awareness::{CodebaseAwarenessConfig, CodebaseAwarenessEngine, CodebaseAwarenessSnapshot};
 pub use bootstrap::{
@@ -79,8 +78,7 @@ pub use plugin_ir::{
     PluginTranslationReport, PluginTranslator, canonical_channel_bridge_contract,
     evaluate_plugin_setup_requirements, plugin_runtime_scaffold_defaults,
 };
-pub use policy::{AllowPolicy, KernelInvocationContext, LegacyKernelAction, PolicyPipeline};
-pub use policy_ext::{PolicyExtension, PolicyExtensionChain, PolicyExtensionContext};
+pub use policy::AllowPolicy;
 pub use runtime::{
     CoreRuntimeAdapter, RuntimeCoreOutcome, RuntimeCoreRequest, RuntimeExtensionAdapter,
     RuntimeExtensionOutcome, RuntimeExtensionRequest, RuntimePlane, RuntimeTier,

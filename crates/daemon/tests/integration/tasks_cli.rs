@@ -237,7 +237,6 @@ fn seed_background_task_record(
                 "allow_shell_in_child": false,
                 "child_tool_allowlist": ["read"],
                 "workspace_root": workspace_root,
-                "kernel_bound": false,
                 "runtime_narrowing": {}
             }
         }),
@@ -264,7 +263,7 @@ fn seed_background_task_record(
     .expect("create approval request");
     repo.upsert_session_tool_policy(mvp::session::repository::NewSessionToolPolicyRecord {
         session_id: task_id.to_owned(),
-        requested_tool_ids: vec!["read".to_owned()],
+        requested_tool_ids: vec!["/read".to_owned()],
         runtime_narrowing: mvp::tools::runtime_config::ToolRuntimeNarrowing::default(),
     })
     .expect("upsert session tool policy");
@@ -544,7 +543,7 @@ async fn execute_tasks_command_list_returns_visible_background_tasks() {
     );
     assert_eq!(
         execution.payload["tasks"][0]["workflow"]["binding"]["mode"],
-        "advisory_only"
+        "mutating_capable"
     );
     assert_eq!(
         execution.payload["tasks"][0]["task_status"]["kind"],
@@ -844,29 +843,9 @@ async fn execute_tasks_command_status_surfaces_approval_and_tool_policy() {
         execution.payload["task"]["turn_checkpoint"]["summary"]["requires_recovery"],
         true
     );
-    assert_eq!(
-        execution.payload["task"]["spine"]["session_id"],
-        "delegate:task-1"
-    );
-    assert_eq!(
-        execution.payload["task"]["spine"]["task_id"],
-        "delegate:task-1"
-    );
-    assert_eq!(
-        execution.payload["task"]["spine"]["objective"],
-        "Release Check"
-    );
-    assert_eq!(
-        execution.payload["task"]["spine"]["lifecycle"],
-        "waiting_for_approval"
-    );
-    assert_eq!(
-        execution.payload["task"]["spine"]["execution_mode"],
-        "detached_background"
-    );
-    assert_eq!(
-        execution.payload["task"]["spine"]["workspace"]["workspace_root"],
-        "/tmp/loong/tasks-cli/delegate:task-1"
+    assert!(
+        execution.payload["task"].get("spine").is_none(),
+        "task status must not fabricate a second runtime Session/Task projection"
     );
 
     let rendered =
@@ -888,7 +867,7 @@ async fn execute_tasks_command_status_surfaces_approval_and_tool_policy() {
         "status render should surface workflow phase: {rendered}"
     );
     assert!(
-        rendered.contains("workflow_binding_mode: advisory_only"),
+        rendered.contains("workflow_binding_mode: mutating_capable"),
         "status render should surface workflow binding mode: {rendered}"
     );
     assert!(

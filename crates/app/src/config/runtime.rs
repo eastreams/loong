@@ -1027,7 +1027,7 @@ pub fn load(path: Option<&str>) -> CliResult<(PathBuf, LoongConfig)> {
             crate::config::active_cli_command_name(),
         )
     })?;
-    parse_toml_config(&raw).map(|config| (config_path, config))
+    parse(&raw).map(|config| (config_path, config))
 }
 
 pub fn validate_file(path: Option<&str>) -> CliResult<(PathBuf, Vec<ConfigValidationDiagnostic>)> {
@@ -1131,6 +1131,15 @@ pub fn write(path: Option<&str>, config: &LoongConfig, force: bool) -> CliResult
 
 pub fn render(config: &LoongConfig) -> CliResult<String> {
     encode_toml_config(config)
+}
+
+/// Parse config text without performing filesystem I/O.
+///
+/// Access-backed loaders should call this after obtaining bytes through
+/// governed fs access instead of reusing `load`, which owns the legacy direct
+/// file read.
+pub fn parse(raw: &str) -> CliResult<LoongConfig> {
+    parse_toml_config(raw)
 }
 
 pub fn default_config_path() -> PathBuf {

@@ -1,207 +1,109 @@
-use std::collections::BTreeSet;
+use std::{borrow::Cow, collections::BTreeSet};
 
 use loong_contracts::{
-    AuditEventKind, Capability, ExecutionRoute, HarnessKind, ToolInvocationOutcome, ToolPath,
-    VerticalPackManifest,
+    AuditEventKind, AuthorizationActionSnapshot, AuthorizationAttempt, AuthorizationEvidence,
+    AuthorizationScope, AuthorizationSubject, Capabilities, Capability, ExecutionRoute,
+    HarnessKind, VerticalPackManifest,
 };
-use loong_core::tool::ToolInvocationAction;
-use serde_json::json;
+use loong_core::policy::context::{ContextFactory, PolicyContext};
 
 use super::Kernel;
-use crate::test_support::{TestContextFactory, TestPolicyContext};
 
-#[tokio::test]
-async fn grant_tool_invocation_grants_without_recording_tool_outcome() {
-    let (mut kernel, audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
-    register_tool_pack(&mut kernel, "typed-auth");
-    let token = kernel
-        .issue_token("typed-auth", "agent-typed", 120)
-        .expect("token should issue");
-    let path = ToolPath::from("read");
+struct MinimalContextFactory;
 
-    let _authorized = kernel
-        .grant_tool_invocation(
-            "typed-auth",
-            &token,
-            tool_invocation_action(path, BTreeSet::from([Capability::InvokeTool])),
-            &TestPolicyContext::from_token(&token, kernel.now_epoch_s()),
-        )
-        .await
-        .expect("tool invocation should authorize");
+struct MinimalContext;
 
-    assert!(
-        !audit
-            .snapshot()
-            .iter()
-            .any(|event| { matches!(event.kind, AuditEventKind::ToolInvocation { .. }) })
-    );
-}
+impl PolicyContext for MinimalContext {
+    fn allowed_capabilities(&self) -> Cow<'_, Capabilities> {
+        static EMPTY: Capabilities = Capabilities::new();
+        Cow::Borrowed(&EMPTY)
+    }
 
-#[tokio::test]
-async fn record_tool_invocation_records_typed_completed_event() {
-    let (mut kernel, audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
-    register_tool_pack(&mut kernel, "typed-completed");
-    let token = kernel
-        .issue_token("typed-completed", "agent-typed", 120)
-        .expect("token should issue");
-    let path = ToolPath::from("read");
-    let ctx = TestPolicyContext::from_token(&token, kernel.now_epoch_s());
-    let grant = kernel
-        .grant_tool_invocation(
-            "typed-completed",
-            &token,
-            tool_invocation_action(path.clone(), BTreeSet::from([Capability::InvokeTool])),
-            &ctx,
-        )
-        .await
-        .expect("tool invocation should authorize");
-    let audit_caps = grant
-        .granted
-        .as_ref()
-        .required_capabilities()
-        .iter()
-        .copied()
-        .collect::<BTreeSet<_>>();
-
-    kernel
-        .record_tool_invocation(
-            &ctx,
-            path.clone(),
-            &audit_caps,
-            ToolInvocationOutcome::Completed,
-        )
-        .expect("tool invocation audit should record");
-
-    assert!(audit.snapshot().iter().any(|event| {
-        matches!(
-            &event.kind,
-            AuditEventKind::ToolInvocation {
-                path_display,
-                outcome: ToolInvocationOutcome::Completed,
-                ..
-            } if path_display == path.as_str()
-        )
-    }));
-}
-
-#[tokio::test]
-async fn record_tool_invocation_records_typed_failed_event() {
-    let (mut kernel, audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
-    register_tool_pack(&mut kernel, "typed-failed");
-    let token = kernel
-        .issue_token("typed-failed", "agent-typed", 120)
-        .expect("token should issue");
-    let path = ToolPath::from("read");
-    let policy_context = TestPolicyContext::from_token(&token, kernel.now_epoch_s());
-    let grant = kernel
-        .grant_tool_invocation(
-            "typed-failed",
-            &token,
-            tool_invocation_action(path.clone(), BTreeSet::from([Capability::InvokeTool])),
-            &policy_context,
-        )
-        .await
-        .expect("tool invocation should authorize");
-    let audit_caps = grant
-        .granted
-        .as_ref()
-        .required_capabilities()
-        .iter()
-        .copied()
-        .collect::<BTreeSet<_>>();
-
-    kernel
-        .record_tool_invocation(
-            &policy_context,
-            path,
-            &audit_caps,
-            ToolInvocationOutcome::Failed {
-                error_kind: "input".to_owned(),
-                reason: "read requires payload.path".to_owned(),
+    fn authorization_subject(&self) -> AuthorizationSubject {
+        AuthorizationSubject {
+            actor_id: "test:kernel:minimal:actor".to_owned(),
+            scope: AuthorizationScope::Session {
+                session_id: "test:kernel:minimal:session".to_owned(),
             },
-        )
-        .expect("tool invocation audit should record");
-
-    assert!(audit.snapshot().iter().any(|event| {
-        matches!(
-            &event.kind,
-            AuditEventKind::ToolInvocation {
-                outcome: ToolInvocationOutcome::Failed { error_kind, reason },
-                ..
-            } if error_kind == "input" && reason.contains("payload.path")
-        )
-    }));
+        }
+    }
 }
 
-#[tokio::test]
-async fn record_tool_invocation_records_typed_denied_event() {
-    let (mut kernel, audit) = Kernel::<TestContextFactory>::new_with_in_memory_audit();
-    register_tool_pack(&mut kernel, "typed-denied");
-    let token = kernel
-        .issue_token("typed-denied", "agent-typed", 120)
-        .expect("token should issue");
-    let path = ToolPath::from("read");
-    let policy_context = TestPolicyContext::from_token(&token, kernel.now_epoch_s());
-    let grant = kernel
-        .grant_tool_invocation(
-            "typed-denied",
-            &token,
-            tool_invocation_action(path.clone(), BTreeSet::from([Capability::InvokeTool])),
-            &policy_context,
-        )
-        .await
-        .expect("tool invocation should authorize");
-    let audit_caps = grant
-        .granted
-        .as_ref()
-        .required_capabilities()
-        .iter()
-        .copied()
-        .collect::<BTreeSet<_>>();
-
-    kernel
-        .record_tool_invocation(
-            &policy_context,
-            path,
-            &audit_caps,
-            ToolInvocationOutcome::Denied {
-                reason: "blocked by typed policy".to_owned(),
-                report: None,
-            },
-        )
-        .expect("tool invocation audit should record");
-
-    assert!(audit.snapshot().iter().any(|event| {
-        matches!(
-            &event.kind,
-            AuditEventKind::ToolInvocation {
-                outcome: ToolInvocationOutcome::Denied { reason, report },
-                ..
-            } if reason == "blocked by typed policy" && report.is_none()
-        )
-    }));
+impl ContextFactory for MinimalContextFactory {
+    type Cx<'a> = MinimalContext;
 }
 
-fn tool_invocation_action(
-    path: ToolPath,
-    required_capabilities: BTreeSet<Capability>,
-) -> ToolInvocationAction {
-    ToolInvocationAction::new(path, required_capabilities, json!({ "path": "notes.txt" }))
-}
+#[test]
+fn kernel_context_free_api_does_not_require_legacy_invocation_context() {
+    let mut kernel = Kernel::<MinimalContextFactory>::new();
+    let pack_id = "context-free";
 
-fn register_tool_pack(kernel: &mut Kernel<TestContextFactory>, pack_id: &str) {
     kernel
         .register_pack(VerticalPackManifest {
             pack_id: pack_id.to_owned(),
-            domain: "tools".to_owned(),
+            domain: "kernel".to_owned(),
             version: "0.1.0".to_owned(),
             default_route: ExecutionRoute {
                 harness_kind: HarnessKind::EmbeddedPi,
                 adapter: None,
             },
             allowed_connectors: BTreeSet::new(),
-            granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
+            granted_capabilities: BTreeSet::from([Capability::ObserveTelemetry]),
             metadata: Default::default(),
         })
-        .expect("pack should register");
+        .expect("pack should register without an invocation context");
+    assert_eq!(
+        kernel
+            .get_namespace(pack_id)
+            .map(|namespace| namespace.pack_id.as_str()),
+        Some(pack_id)
+    );
+
+    let token = kernel
+        .issue_token(pack_id, "context-free-agent", 120)
+        .expect("token should issue without an invocation context");
+    kernel
+        .revoke_token(&token.token_id, Some(&token.agent_id))
+        .expect("token should revoke without an invocation context");
+    kernel
+        .record_audit_event(
+            None,
+            AuditEventKind::TokenRevoked {
+                token_id: "external-token".to_owned(),
+            },
+        )
+        .expect("audit event should record without an invocation context");
+}
+
+#[test]
+fn generic_recorder_rejects_engine_owned_authorization_evidence() {
+    let (kernel, audit) = Kernel::<MinimalContextFactory>::new_with_in_memory_audit();
+    let error = kernel
+        .record_audit_event(
+            Some("forged-actor"),
+            AuditEventKind::Authorization {
+                evidence: AuthorizationEvidence {
+                    attempt: AuthorizationAttempt::StartFailed,
+                    subject: AuthorizationSubject {
+                        actor_id: "different-actor".to_owned(),
+                        scope: AuthorizationScope::Session {
+                            session_id: "forged-session".to_owned(),
+                        },
+                    },
+                    action: AuthorizationActionSnapshot {
+                        kind: "forged.action".to_owned(),
+                        operation: "forge".to_owned(),
+                        resource: None,
+                        required_capabilities: Vec::new(),
+                    },
+                },
+            },
+        )
+        .expect_err("generic recorder must not accept authorization evidence");
+
+    assert!(matches!(
+        error,
+        crate::AuditError::AuthorizationEvidenceOwnedByPolicyEngine
+    ));
+    assert!(audit.snapshot().is_empty());
 }

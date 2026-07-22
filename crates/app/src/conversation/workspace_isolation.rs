@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
+use loong_kernel::access::fs::normalize_path_lexically;
+
 use crate::config::LoongConfig;
 
 #[cfg(test)]
@@ -54,12 +56,7 @@ pub(super) fn prepare_delegate_workspace_root(
     let worktree_root = worktrees_root.join(worktree_name);
     remove_stale_delegate_worktree(worktree_root.as_path())?;
     add_detached_worktree(repo_root.as_path(), worktree_root.as_path())?;
-
-    let canonical_root = std::fs::canonicalize(worktree_root.as_path()).map_err(|error| {
-        let display_path = worktree_root.display();
-        format!("canonicalize delegate worktree `{display_path}` failed: {error}")
-    })?;
-    Ok(Some(canonical_root))
+    Ok(Some(worktree_root))
 }
 
 pub(super) fn cleanup_prepared_delegate_workspace_root(
@@ -112,7 +109,7 @@ fn resolve_git_repo_root(base_root: &Path) -> Result<PathBuf, String> {
         OsStr::new("-C"),
         base_root.as_os_str(),
         OsStr::new("rev-parse"),
-        OsStr::new("--show-toplevel"),
+        OsStr::new("--show-cdup"),
     ];
     let output = run_git_command(&args)?;
     if !output.status.success() {
@@ -123,16 +120,20 @@ fn resolve_git_repo_root(base_root: &Path) -> Result<PathBuf, String> {
         ));
     }
 
-    let raw_stdout = String::from_utf8_lossy(&output.stdout);
-    let trimmed_stdout = raw_stdout.trim();
-    if trimmed_stdout.is_empty() {
-        let display_path = base_root.display();
-        return Err(format!(
-            "resolve git repo root from `{display_path}` returned empty output"
-        ));
-    }
-
-    Ok(PathBuf::from(trimmed_stdout))
+    let absolute_base = if base_root.is_absolute() {
+        base_root.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| format!("resolve current directory for delegate worktree: {error}"))?
+            .join(base_root)
+    };
+    // `--show-toplevel` canonicalizes platform aliases such as `/var` into
+    // `/private/var`. Applying Git's relative prefix to the caller's lexical
+    // base keeps the provisioned child inside Session's authority namespace.
+    let relative_to_root = String::from_utf8_lossy(&output.stdout);
+    Ok(normalize_path_lexically(
+        &absolute_base.join(relative_to_root.trim()),
+    ))
 }
 
 fn sanitized_delegate_worktree_name(child_session_id: &str) -> String {
@@ -469,9 +470,9 @@ mod tests {
             timeout_seconds: 60,
             allow_shell_in_child: false,
             child_tool_allowlist: vec!["read".to_owned()],
+            capability_ceiling: loong_contracts::Capabilities::new(),
             workspace_root: Some(clean_root.clone()),
             runtime_narrowing: ToolRuntimeNarrowing::default(),
-            kernel_bound: false,
             identity: None,
             profile: None,
         };
@@ -500,9 +501,9 @@ mod tests {
             timeout_seconds: 60,
             allow_shell_in_child: false,
             child_tool_allowlist: vec!["read".to_owned()],
+            capability_ceiling: loong_contracts::Capabilities::new(),
             workspace_root: Some(dirty_root.clone()),
             runtime_narrowing: ToolRuntimeNarrowing::default(),
-            kernel_bound: false,
             identity: None,
             profile: None,
         };

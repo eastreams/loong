@@ -97,7 +97,6 @@ impl ToolRuntimeNarrowing {
         let mut enforce_allowed_domains = false;
 
         if left_enforces_allowed_domains && right_enforces_allowed_domains {
-            enforce_allowed_domains = true;
             let left_is_deny_all = self.web_fetch.allowed_domains.is_empty();
             let right_is_deny_all = other.web_fetch.allowed_domains.is_empty();
             if !left_is_deny_all && !right_is_deny_all {
@@ -108,12 +107,18 @@ impl ToolRuntimeNarrowing {
                     .cloned()
                     .collect();
             }
+            // A non-empty allowlist already implies enforcement. Preserve the
+            // explicit bit unless an empty intersection must encode deny-all;
+            // this keeps intersection idempotent for Session authority checks.
+            enforce_allowed_domains = self.web_fetch.enforce_allowed_domains
+                || other.web_fetch.enforce_allowed_domains
+                || allowed_domains.is_empty();
         } else if left_enforces_allowed_domains {
-            enforce_allowed_domains = true;
             allowed_domains = self.web_fetch.allowed_domains.clone();
+            enforce_allowed_domains = self.web_fetch.enforce_allowed_domains;
         } else if right_enforces_allowed_domains {
-            enforce_allowed_domains = true;
             allowed_domains = other.web_fetch.allowed_domains.clone();
+            enforce_allowed_domains = other.web_fetch.enforce_allowed_domains;
         }
 
         let allow_private_hosts = intersect_private_host_setting(
@@ -146,6 +151,15 @@ impl ToolRuntimeNarrowing {
 
         Self { browser, web_fetch }
     }
+
+    /// Whether this contract is at least as restrictive as `ceiling`.
+    ///
+    /// `intersect` is the meet operation for runtime authority, so deriving the
+    /// same value proves that applying the ceiling cannot remove more authority.
+    #[must_use]
+    pub fn is_no_wider_than(&self, ceiling: &Self) -> bool {
+        self.intersect(ceiling) == *self
+    }
 }
 
 fn min_optional_limit<T>(left: Option<T>, right: Option<T>) -> Option<T>
@@ -161,10 +175,11 @@ where
 }
 
 fn intersect_private_host_setting(left: Option<bool>, right: Option<bool>) -> Option<bool> {
-    if left == Some(false) || right == Some(false) {
-        return Some(false);
+    match (left, right) {
+        (Some(false), _) | (_, Some(false)) => Some(false),
+        (Some(true), _) | (_, Some(true)) => Some(true),
+        (None, None) => None,
     }
-    None
 }
 
 pub(crate) fn merge_runtime_narrowing_sources(

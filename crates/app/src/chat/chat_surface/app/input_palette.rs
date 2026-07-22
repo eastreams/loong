@@ -591,7 +591,7 @@ pub(super) async fn run_surface_command<B: Backend>(
             let markdown = app.message_list.export_markdown();
             let result = write_transcript_export(
                 cwd.as_path(),
-                runtime.session_id.as_str(),
+                runtime.session.session_id(),
                 command.trim_start_matches('/'),
                 markdown.as_str(),
             );
@@ -682,7 +682,7 @@ pub(super) async fn run_surface_command<B: Backend>(
                     #[cfg(feature = "memory-sqlite")]
                     {
                         let candidates = resume_candidates::load_resume_candidates(
-                            router.active_runtime().session_id.as_str(),
+                            router.active_runtime().session.session_id(),
                             &router.active_runtime().memory_config,
                         )?;
                         let entries = candidates

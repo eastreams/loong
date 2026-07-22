@@ -1,210 +1,230 @@
 # plan: ToolPlane 与 Tool Invocation
 
-本文件定义 ToolPlane、plane-local path、tool invocation action 和 registry 形状。它不定义
-具体 builtin tool 的实现细节。
+本文件记录已经确定的 typed ToolPlane 目标 contract 和尚未删除的 legacy ingress；当前未满足项只在
+`07-kernel-audit-and-deviations.md` 与 `08-next-steps.md` 列出。
 
-## Tool Path
+## Plane Ownership
 
-`path` 概念保留，但 path 类型归属从 contracts/core 移到具体 plane。
+- `loong-contracts` 拥有唯一 `ToolPath` identity；`loong-runtime::tool_plane` 拥有
+  `ToolInvocationAction`、`ToolPlaneRegistry` 以及
+  `error::{RegistrationError, LookupError, CapabilityOverrideError, ToolInvocationError}`。
+- runtime `ToolInvocation` 与 concrete `Context<'a>` 都归属 `loong-runtime`。generic ToolInvocation
+  通过窄 `ToolInvocationContext` requirement 派生 child；该 trait 不构造 root Context，也不增加
+  app-owned invocation wrapper。
+- `ToolPlaneRegistry` 不是外部 dispatch 扩展点。`Runtime` 直接持有构造完成的 concrete registry；
+  `BTreeMap` 或未来其它 storage strategy 只在 registry 内部替换，不为此预造 forwarding trait。
+  path identity、比较和序列化不随 BTreeMap/Trie 实现变化。Runtime 不接受可替换 plane trait
+  object，也不向 crate 外暴露能消费 invocation grant 的对象。
+- `RegisteredTool`、registered descriptor owner、`ErasedTool` 和 raw erased invoke 都属于
+  `loong-runtime`。`loong-core` 只暴露 `ToolImpl`；app bootstrap 通过 registry registration API 交入
+  concrete tool，但任何 crate 外 caller 都不能构造 registered entry 或直接 dispatch。
+- app bootstrap 注册 concrete builtin tools 和 app-owned policy/success observer；kernel 不持有
+  typed registry，concrete tool crate 不持有 registry。
+- concrete `Runtime` 持有 `ToolPlaneRegistry<RuntimeContextFactory>`。registration 是 fallible
+  bootstrap，duplicate path 不能变成 lazy global panic。
 
-禁止形状：
+`ToolPath` 是有序、非空的 opaque segments；每个 segment 非空且不含 `/` 或控制字符。canonical
+text/serde 固定为 `/a/b/c/tool`，大小写敏感且不做 Unicode normalization。`.`、`..` 只是逻辑
+segment，没有 filesystem navigation 语义。当前 dotted tool name 是一个完整 segment，例如
+`glob.search -> /glob.search`，不能隐式拆成 `/glob/search`；真正的层级 namespace 必须在注册时显式
+传入多个 segments。contracts 不提供 `From<&str>`、`From<String>` 或 dotted split conversion。
 
-```rust
-// contracts/core globally decide every plane's path model.
-pub struct ToolPath(String);
+## Registry Storage
 
-pub struct ToolSpec {
-    pub path: ToolPath,
-    // ...
-}
-```
-
-目标形状示意。示例中的 `ToolPath` 是 plane-local 类型，不是 contracts/core 全局类型：
-
-```rust
-slotmap::new_key_type! {
-    struct ToolSlot;
-}
-
-trait ToolPlane<C: ContextFactory> {
-    type Path: Clone + Ord;
-}
-
-struct ToolRegistry<C> {
-    entries: slotmap::SlotMap<ToolSlot, ToolEntry<C>>,
-    paths: BTreeMap<ToolPath, ToolSlot>,
-}
-
-struct ToolEntry<C> {
-    tool: RegisteredTool<C>,
-    registration: ToolRegistration,
-}
-
-struct ToolRegistration {
-    provenance: ToolProvenance,
-}
-```
-
-示例中的 `ToolPath` 是 `loong-app::tools::plane` 内的 plane-local path，可以是
-`Vec<String>`、smallvec、interned path、trie key，或后续其它形状。层级由模块路径表达，
-不靠类型名前缀表达；也不是 contracts/core 的决定。
-
-`ToolSlot` 只是 `ToolPlane` 内部注册句柄。外部调用、audit payload、kernel grant、
-contracts/core 都不暴露 slot；它们只看 plane 提供的 path display / action payload。
-`paths` 负责把 registry path resolve 到 slot，`entries` 承载 `RegisteredTool` 本体、
-provenance 和注册元数据。未来如果 path index 换成 trie，只替换 `paths` 这一层，
-不用改 entry storage 或 concrete tool。
-`ToolEntry` 不保存 path，避免和 `paths` index 形成可 drift 的重复状态。本迁移阶段不设计
-slot-based unregister；如果后续需要，再补 reverse index 或明确 owner invariant。
-
-tool 自身返回无 path descriptor：
-
-```rust
-pub struct ToolDescriptor {
-    pub description: String,
-    pub required_capabilities: BTreeSet<Capability>,
-}
-```
-
-如果 catalog / agent prompt 需要“path + descriptor”的视图，由 plane 在列举时从
-`paths` index 和 entry descriptor 按需投影出来；不要先固定一个 core-level
-`RegisteredToolSpec<P>`。
-
-因此新增 tool 的 path 只出现在注册点：
-
-```rust
-tool_plane.register(tool_path(["read"]), ReadTool);
-```
-
-具体 `Path` 需要能给 policy/audit 提供稳定显示值，但这是通过 `ActionMeta` /
-plane-provided formatting 暴露，不是通过全局 `ToolPath` 类型泄漏。
-
-
-## Tool Invocation Action
-
-Tool dispatch 也是 action，但它不是 `FsReadAction` 这种 domain side-effect action。
-它只授权 app orchestration 进入一个 `ToolImpl`：
+default registry 直接使用 ordered path map。唯一 lookup chain 是：
 
 ```text
-App execute_kernel_tool_request
-  -> canonicalize request
-  -> ctx.tool(path)?
-  -> ToolInvocation::invoke(payload)
-  -> compute child caps and invocation overlay
-  -> loong-app::tools::plane::ToolInvocationAction(path, required_caps, payload)
-  -> Kernel::grant(action)
-  -> Granted<ToolInvocationAction>
-  -> ToolPlane.invoke(Granted<ToolInvocationAction>, &child_ctx)
-  -> ToolImpl::execute(&child_ctx, input)
-  -> ctx.access().fs().read_file(...)
-  -> FsResolvePathAction
-  -> PolicyPipeline::grant(ctx, FsResolvePathAction)
-  -> Granted<FsResolvePathAction>::run(ctx)
-  -> GrantedPath
-  -> FsReadAction
-  -> PolicyPipeline::grant(ctx, FsReadAction)
-  -> Granted<FsReadAction>::run(ctx)
-  -> filesystem side effect
+ToolPath -> &RegisteredTool<C>
+                |
+                +-> borrowed ToolInvocation handle
 ```
 
-这意味着 tool invocation policy 和 fs read policy 是两层不同授权：
+- 当前没有 unregister、replacement 或 stable slot caller，因此第二套 storage identity 没有语义价值。
+  真正出现该需求前不引入 slot arena、generation 或 path-to-slot index。
+- entry 不重复保存 path，避免 index 与 entry drift。
+- registration 使用 `Direct { provider_name } | Discoverable { discovery_name }` 和类型分支表达
+  exposure；这些字符串只负责 presentation/invocation projection，不是 plane identity。request-scoped
+  provider surface 只为 Direct 分支建立 wire name -> exact path 投影。
+- runtime-private `RegisteredTool` 直接保存 descriptor 与 private `ErasedTool`。不为尚无消费者的
+  registration time/provenance 预造 wrapper；未来若 audit 或 replacement 确实需要 registration metadata，
+  只能在该 registration owner 处加入。crate 外 metadata query 返回不带 raw invoke 的 view，不能返回
+  entry 本身。
+- `Context::tool` 使用 runtime-private tool service 在 grant 前完成这次 lookup，并把
+  `&RegisteredTool<RuntimeContextFactory>` 绑定进
+  `ToolInvocation`。handle 另外保存 contracts-owned path 供 Action/audit 使用；path 不能在 grant 后重新
+  充当 storage lookup key。
+- runtime 持有构造完成后不再 mutation 的 registry，因此一个活着的 entry borrow 已经证明 storage
+  entry 存在。registry 不提供 async invoke；runtime wrapper 消费 grant 后直接调用 bound
+  `RegisteredTool`。
+- 单表 lookup 只有 `LookupError::NotRegistered`；不存在由双表漂移制造的 registry invariant error。
+- path alias、unregister、Trie 或 plugin replacement 不是当前 contract。出现真实需求时单独设计，
+  不用 legacy alias helper 偷渡。
+- Session 的 `ToolView` 以 concrete runtime `ToolPath` 为 authority index，只额外保存 provider/catalog
+  字符串投影。typed visibility policy 直接查询 path；不能把 path 降成字符串后在授权时重新 split。
 
-- `ToolInvocationAction`：允许调用 app plane 上某个 path 的 tool。
-- `FsResolvePathAction`：允许把 raw path 解析成 `GrantedPath`。
-- `FsReadAction`：允许读取某个 `GrantedPath`。
+## Typed Error Boundary
 
-不能用 `AuthorizedToolInvocation` 这样的 receipt workaround 表达 tool invocation grant
-与 concrete tool dispatch 的关系；应该返回
-`ActionGrant<ToolInvocationAction>` / `Granted<ToolInvocationAction>`。
+typed tool primitive 必须固定以下错误边界：
 
-`ToolInvocationAction` 在本迁移阶段不放进 core。它放在
-`crates/app/src/tools/plane.rs` 附近，使用 app plane 自己的 path 类型和 stable display。
-如果后续需要在 core 提供公共 helper，只能是泛型：
+- `ToolImpl<C>` 有 associated `Error: Error + Send + Sync + 'static`，concrete tool error 不再先
+  压成字符串；
+- runtime-private erasure 使用 `RegisteredToolError::{Input, Denied, Execution}`：`Denied` 在唯一 erasure
+  boundary 保留 nested typed authorization source，`Execution` 保留其它 concrete tool error source；
+- runtime plane 分开拥有 `RegistrationError` 与 `LookupError`；lookup invariant 与 concrete tool
+  input/execution error 不混成同一个 fallback signal；
+- 只有 `LookupError::NotRegistered` 可以由 legacy ingress 选择 fallback；
+  任何 `RegisteredToolError` 都不得 fallback；
+- 首次 lookup 绑定 entry 后，`RegisteredToolError` 直接成为 `ToolInvocationError` 的 dispatch source。
+  不保留只包一层 tool error 的 `DispatchError`，post-grant persisted schema 也不保存 registry
+  invariant。
+- concrete tool 内部的 Access authorization denial 必须在 type erasure 后仍可被 orchestration 识别为
+  policy denial。拥有 concrete error conversion/erasure 的边界可以沿 `Error::source()` 检查一次 nested
+  typed authorization error，并立刻固化成 `RegisteredToolError::Denied`；turn engine 只 match 该 variant，
+  不能枚举每个 Access error、再次扫描 source chain 或判断 display string。
+- typed runtime 使用 `#[non_exhaustive] ActionExecutionEvent` 表达 Started、Completed、InputRejected、
+  Failed 与 OutcomeUnknown，并只携带关联真实 grant 的 `GrantId`。旧 `AuditEventKind::ToolInvocation`
+  只用于解码 pre-grant-linked 历史日志；未来 cancellation 等真实状态扩展前者，不预造同构 enum。
 
-```rust
-pub struct ToolInvocationAction<P> {
-    path: P,
-    required_capabilities: Vec<Capability>,
-    payload: Value,
-}
+typed 调用保留两个 fallible API 阶段：
+
+- `Context::tool(path)` 返回 concrete `LookupError`；
+- `ToolInvocation::with_capabilities_override(...)` 只保存 requested value 并返回 handle；
+- `ToolInvocation::invoke(payload)` 返回 `ToolInvocationError`，其 variants 覆盖 governed override
+  rejection、override rejection + audit failure、child narrowing、authorization、start-audit、dispatch、
+  completed + terminal-audit，以及 dispatch + terminal-audit。
+
+`ToolInvocationError` 的每个 variant 保留 typed source 和必要的 `GrantId`/completed fact。临时 app
+ingress 用 `ToolRequestError` 组合 input/context、lookup、invocation 与 explicit legacy
+failure；这是 typed/legacy 共存期的 owner，不是新的 runtime error。turn boundary 可以据此分类 deny、
+retryable input 与 non-retryable execution/infrastructure failure，但不能先压成 `KernelError` 或字符串。
+metadata lookup 也只有 `LookupError::NotRegistered` 能选择 legacy/static metadata。
+
+## Invocation Contract
+
+当前 typed invocation contract 是：
+
+```text
+ctx.tool(path)?
+  -> runtime tool service resolves path once and binds &RegisteredTool into ToolInvocation
+  -> optional with_capabilities_override(...)
+  -> invoke(payload)
+  -> validate requested override and audit rejection without dispatch
+  -> required caps = InvokeTool + selected tool caps
+  -> derive child with parent caps intersected with required caps
+  -> ToolInvocationAction(path, full required caps, payload)
+  -> PolicyEngine::grant (mandatory authorization audit)
+  -> ActionGrant<ToolInvocationAction>
+  -> ActionGrant::into_granted
+  -> Granted<ToolInvocationAction>::run(runtime-private execution context)
+  -> ToolInvocationAction::run reads the same proof's id/info and records Started
+  -> bound RegisteredTool parses typed input
+  -> concrete ToolImpl::execute
+  -> ToolInvocationAction::run records terminal evidence through the same grant-bound recorder
+  -> Value or ToolInvocationError
 ```
 
-Core generic helper 不属于该步骤。该步骤的目标是 app/plane 定义 concrete action。这样 policy 可以
-通过 `ActionMeta` 观察它，kernel 可以 grant 它，core 不需要知道 path 类型。
+- `Context::tool(path)` 是 runtime concrete Context 上的薄入口，只使用 Session runner 安装的窄 tool
+  service 创建 handle；它不取得 `runtime::Handle`，也不让 app 复制 lookup、narrowing、grant、
+  dispatch 或 audit orchestration。
+- `ToolInvocation::invoke(payload)` 是普通 caller 唯一入口。它绑定 capability narrowing、generic
+  action grant、granted dispatch 和 execution audit。
+- grant consumption + registered entry dispatch 只存在于 `loong-runtime::ToolInvocation` 内部，不知道
+  legacy token/pack，也不能作为 public/普通 caller API。registry 不消费 grant；
+  `Runtime::new` 只接收 concrete registry，catalog/spec 查询通过不暴露 entry dispatch capability 的
+  Runtime API 提供。
+- `Granted<ToolInvocationAction>` 携带同一次 mint 的 UUID id、authorization info 和 action；
+  `ToolInvocationAction::run` 在消费该 proof 的生命周期内完成 Started/terminal correlation。不存在
+  outer id copy、receipt、active-state map 或第二套 metadata path；persisted execution event 仍只写
+  grant id，不重复 authorization report。
+- lookup 单独返回 `LookupError`；requested override 只在 `invoke` 内校验并由
+  `ToolInvocationError::CapabilityOverride` 保留 source/evidence。child narrowing、
+  `PolicyEngine::grant`、bound entry execution 与 execution audit 同样由 `ToolInvocationError` 保留
+  source。`PolicyGrantError` / `RegisteredToolError` / `AuditError` 不转换成 `KernelError` 或字符串。
+- child Context 只获得 `parent ∩ required`，但 Action 仍声明完整 required caps。缺失 capability 必须
+  在 `PolicyEngine::grant` 中拒绝并自动留下 authorization evidence，不能被提前 narrowing 短路。
+- concrete Context 的 private child derivation 自身拒绝扩权；runtime 仍验证派生结果不超出 selected
+  subset，防止实现错误把 tool 未声明的 parent capability 带进 child。
+- runtime wrapper 不读取 kernel-private sink/clock/id state。generic operational recorder 拒绝
+  `Authorization`、grant-bound `ActionExecution` 与只读历史 `ToolInvocation`；runtime 通过绑定真实
+  invocation `Granted` 的窄 recorder 提交 Started/terminal `ActionExecution` evidence。Kernel 负责
+  clock、event id 与 sink write，error 保持 typed `AuditError`。
+- `ToolInvocationAction` 只授权进入 concrete tool。tool 内部 side effect 仍通过 Access 构造新的
+  domain action。action type 可以 public 供 typed policy 匹配，但 constructor 保持 runtime-private；
+  普通 caller 不能自行构造 action 再取得一个可用于 tool execution evidence 的 grant。
+- policy 必须看到原始 agent payload，因此 payload 在 grant 前进入 `ToolInvocationAction`，在
+  grant 被消费后取回并 parse。
+- parse/input error 是 typed invocation failure，不 fallback。
+- `tool.invoke` 的 `capabilities_override` 是 outer ingress authority input。任何提前解包 outer envelope
+  的 prepare 层都必须把它作为 typed field 保留到 runtime invocation；不能只搬 inner
+  `ToolCoreRequest`，否则 typed target 会恢复 default caps，legacy target 也会绕过 fail-closed。
+- legacy `tool.invoke` envelope 只解析一次：lease validation、catalog resolution、payload
+  normalization 得到已有的 `ResolvedToolExecution + ToolCoreRequest`，typed lookup 与 legacy fallback
+  都复用这份结果。typed miss 后必须按首次解析出的 `execution_kind` 进入正确 legacy owner，不能把
+  原始 `tool.invoke` envelope 再交给旧 plane 重跑上述步骤。若 target 未注册且请求携带 capability
+  override，必须 fail closed；legacy plane 不支持该 narrowing，不能静默丢弃 override 后执行。
+- tool 调 tool 仍经过 `ctx.tool(...).invoke(...)`，child caps 只缩窄，cancellation/mode/goal 等
+  Invocation-scoped identity 继承父 Context。nested tool 只能编排，最终物理 side effect 仍必须进入
+  `Granted` Access action。
 
+## Context Requirement
 
-## ToolPlane
+`ToolInvocationContext` 是 generic `ToolInvocation<C>` 对 `C::Cx<'a>` 的窄 requirement：
 
-`ToolPlane` 属于 `loong-app::tools::plane` runtime，不属于 kernel。
+- concrete runtime Context 实现该 trait；
+- 唯一 operation 按给定 `Capabilities` 从 parent 派生 authority 不扩大的同类型 child，返回 typed
+  `CapabilityNarrowingError`；
+- trait 没有 factory method，不暴露 kernel、audit、Runtime 或 root construction，也不进入
+  `ContextFactory`；
+- ToolInvocation 在 child 建立后调用 `PolicyEngine::grant`、bound entry dispatch 和 execution audit；
+- Action/Access/Policy 仍使用其 owner 定义的小 requirement trait，不增加一个大 Context deps trait。
 
-目标 plane 形状：
+## Tool Contract
 
-```rust
-trait ToolPlane<C: ContextFactory> {
-    type InvocationAction: ActionMeta;
+- `ToolImpl<C>` 提供 typed `Input`、typed `Output: Into<Value>`、associated `Error`、descriptor、
+  parse 和 execute。
+- `RegisteredTool` 与 `ErasedTool` 都保持 runtime-private；raw invoke 只能由同 crate 的
+  `ToolInvocation` 调用。这同时防止 concrete implementer 注入绕过 input parsing 的 erasure，也防止
+  普通 caller 绕过 grant/audit。只把 trait 设为 private、却公开 registered constructor/invoke，不算
+  sealed boundary。
+- tool 不拥有 path。provider/catalog 需要 path + descriptor 时由 plane 投影。
+- 不存在 `ToolPayloadMatch` / `match_payload`。aggregate `ReadTool` 自己 parse file/query/glob，并
+  调用不同 fs operation/action。
+- app-owned output observer 可以在 typed output erase 前处理 preview 等 app side channel；observer
+  不属于 concrete tool crate，也不能做未经 Access 治理的副作用。observer 保留 `()` 返回值，
+  没有 recoverable `Err` channel；callback 不得 panic，registrar 必须在 callback 内吸收或处理可
+  恢复的 delivery failure，不能在 tool side effect 已完成后改写 typed success。
 
-    async fn invoke(
-        &self,
-        grant: Granted<Self::InvocationAction>,
-        ctx: &C::Cx<'_>,
-    ) -> Result<serde_json::Value, ToolPlaneError>;
-}
-```
+## Legacy 删除目标
 
-不再使用 `ToolPayloadMatch` / `match_payload` 这种 payload-claim 机制。一个 path
-命中后就由对应 tool 自己 parse 和内部流转；如果 `read` 同时支持 file/query/glob，
-那它就是一个 aggregate `ReadTool`，内部解析并分流，而不是靠 plane 先看 payload 决定
-是否 fallback。
+当前仍存在大量 `ToolCoreRequest` / `ToolCoreOutcome`、`Kernel::execute_tool_core`、legacy adapter
+和 static catalog 调用面。剩余迁移必须满足：
 
-`invoke` 消费 `Granted<Self::InvocationAction>`，所以 typed tool 不能绕过 policy grant
-执行。它返回的是 success payload，不是 legacy envelope；旧 `ToolCoreOutcome` 兼容只发生
-在 legacy bridge。`ErasedTool` 保持 private/sealed，避免 concrete tool implementer 绕过
-plane 的 grant wrapper。`ToolPlane::invoke` 是 granted primitive；普通调用点应使用
-`ctx.tool(path)?.invoke(payload).await`，让 app context 派生的 invocation handle 负责
-build action、kernel grant 和 audit。
+- 持有 unified Context 的 caller 直接调用 `ctx.tool(path)?.invoke(payload).await`，不先包装 legacy
+  envelope。
+- 尚未迁移的 legacy tool 只在 typed lookup 明确返回“path 未注册”时从旧 ingress 最末端
+  fallback；caps override、narrowing、grant、parse/input 和 execution error 一律不 fallback。
+  legacy tool 不能注册进 typed plane 冒充迁移。
+- 已注册 tool 在 validation 与 legacy direct payload router 之前完成 typed ownership 判断；其 payload 只由 concrete
+  `ToolImpl::parse_input` 解释，invalid input 经 granted runtime path 记录 `InputRejected`。手工
+  `route_direct_tool_name` 只服务 `LookupError::NotRegistered` 后的 legacy request，不能成为 typed
+  parser 的前置分支。
+- fallback decision 只能由 app ingress 做一次。进入 legacy plane 后不得再次调用
+  `ctx.tool(...)`，也不得恢复 context-aware legacy re-entry；否则同一请求会重复
+  authorization/audit。
+- typed miss 后，app target 交给真实 app legacy dispatcher，core target 交给 runtime 内明确隔离的 legacy
+  ingress owner；ordinary Runtime/Context API 不暴露 raw Kernel。
+  尚未 dispatch 任何 legacy plane 时不能手工构造 `Legacy(KernelError::ToolPlane)` 冒充 kernel
+  execution failure；routing failure 由实际 ingress owner 类型化表达。
+- concrete descriptor 迁入 tool/registration owner 后，删除 app static catalog 重复 metadata。
+  当前已注册的 `read`、`write`、`edit`、`glob.search`、`content.search` 都必须只从 runtime registration
+  投影 provider/search/prompt metadata。不能维护另一个 hard-coded “typed-only names” helper；缺失
+  registration 时不得由 static catalog 静默复活 schema。
+- identity display 来自 contracts-owned canonical `ToolPath` formatter；provider/discovery presentation
+  来自 registration metadata，不从 path 文本反推。删除 `file.read -> read` 等 display alias helper。
+- 所有 concrete tools 迁完后删除 `ToolCoreRequest` / `ToolCoreOutcome`、`LegacyToolPlane`、
+  `CoreToolAdapter` / `ToolExtensionAdapter` 和 `Kernel::execute_tool_core`。
 
-自动 grant 的 shortcut 不放在 `ToolPlane` trait 上。它挂在 app-defined context 派生出的
-`ToolInvocation<'_>` handle 上：`ctx.tool(path)` 先做 plane-local path 解析/entry lookup，
-因此返回 `Result<ToolInvocation<'_>, ToolLookupError>`；`invoke(payload)` 才读取 descriptor、
-计算 child caps、构造 invocation action、调用 kernel grant、再把 grant 交给 plane。
-`ToolPlane` trait 只表达“已授权 invocation 如何 dispatch”，不知道 kernel、token、pack、
-audit sink 或 event id。这样 concrete tool 可以通过 ctx 做受治理的 tool->tool 调用，但
-仍然拿不到裸 audit API。
+完成后的新增 builtin tool 只改两处：
 
-`ToolInvocation<'_>` 是调用 handle，不是 authorization receipt。它可以携带 optional caps
-override 和 trusted overlay，但不能预先持有 grant；grant 必须在拿到 payload 后构造
-`ToolInvocationAction` 时发生，因为 policy 可能需要观察 action payload。
-
-新增 concrete tool 的目标改动面：
-
-1. 增加一个 concrete type 并 `impl ToolImpl<C>`。
-2. 在 app/bootstrap/builtin 注册点添加一条 `register(path, Tool)`。
-
-不要为了新增工具去改 dispatcher match、catalog 拼装分支或 policy preflight 分支。
-
-内部 registry 使用 slot storage + path index：
-
-```rust
-slotmap::new_key_type! {
-    struct ToolSlot;
-}
-
-struct ToolPlaneRegistry<C> {
-    entries: slotmap::SlotMap<ToolSlot, ToolEntry<C>>,
-    paths: BTreeMap<ToolPath, ToolSlot>,
-}
-
-struct ToolEntry<C> {
-    tool: RegisteredTool<C>,
-    registration: ToolRegistration,
-}
-
-struct ToolRegistration {
-    provenance: ToolProvenance,
-}
-```
-
-`ToolSlot` 不跨过 `loong-app::tools::plane` 模块边界，不出现在 audit event、
-`ToolInvocationAction`、contracts/core 或 concrete tool API 里。不要先做 alias：
-一个 path 对应一个 slot；如果后续需要多个 path 指向同一个 tool，必须单独设计 alias
-语义，不能把它当成兼容 shim 偷偷塞进 registry。
+1. concrete type + `impl ToolImpl<C>`；
+2. app bootstrap 中一条 `register(path, tool)`。

@@ -3,7 +3,8 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::atomic::AtomicU64;
 
 use kernel::{
-    CapabilityToken, ExecutionPlane, InMemoryAuditSink, Kernel, PlaneTier, VerticalPackManifest,
+    CapabilityToken, ExecutionPlane, InMemoryAuditSink, Kernel, PlaneTier, SystemClock,
+    VerticalPackManifest,
 };
 use loong_spec::{SpecContextFactory, SpecExecutionContext};
 
@@ -28,7 +29,6 @@ pub(super) fn default_loopback_exposure_policy() -> ControlPlaneExposurePolicy {
 
 pub(super) struct ControlPlaneKernelAuthority {
     kernel: Kernel<SpecContextFactory>,
-    pack: VerticalPackManifest,
     _audit: Arc<InMemoryAuditSink>,
     token_bindings: std::sync::RwLock<std::collections::BTreeMap<String, CapabilityToken>>,
 }
@@ -74,6 +74,7 @@ pub(super) struct ControlPlaneTurnStreamState {
 /// keeps just enough config, ACP ownership, and per-turn event registry state
 /// to materialize `AgentRuntime` turns on demand.
 pub(super) struct ControlPlaneTurnRuntime {
+    pub(super) runtime: Arc<loong_runtime::runtime::Runtime<mvp::RuntimeContextFactory>>,
     pub(super) resolved_path: std::path::PathBuf,
     pub(super) config: mvp::config::LoongConfig,
     pub(super) acp_manager: Arc<mvp::acp::AcpSessionManager>,
@@ -88,16 +89,16 @@ pub(super) struct ControlPlaneTurnEventForwarder {
 
 impl ControlPlaneKernelAuthority {
     pub(super) fn new() -> Result<Self, String> {
-        let kernel_with_audit = Kernel::new_with_in_memory_audit();
-        let mut kernel = kernel_with_audit.0;
-        let audit = kernel_with_audit.1;
+        let audit = Arc::new(InMemoryAuditSink::default());
+        // TODO(control-plane-action): replace `authorize_operation` with a typed
+        // control-plane action, then remove this explicit legacy policy opt-in.
+        let mut kernel = Kernel::with_legacy_allow_runtime(Arc::new(SystemClock), audit.clone());
         let pack = control_plane_pack();
-        let register_result = kernel.register_pack(pack.clone());
+        let register_result = kernel.register_pack(pack);
         register_result
             .map_err(|error| format!("control-plane pack registration failed: {error}"))?;
         Ok(Self {
             kernel,
-            pack,
             _audit: audit,
             token_bindings: std::sync::RwLock::new(std::collections::BTreeMap::new()),
         })
@@ -137,8 +138,7 @@ impl ControlPlaneKernelAuthority {
                 .cloned()
                 .ok_or_else(|| "missing control-plane kernel token binding".to_owned())?
         };
-        let policy_context =
-            SpecExecutionContext::new(&self.pack, &token, self.kernel.now_epoch_s(), None);
+        let policy_context = SpecExecutionContext::from_legacy_token(&token);
         self.kernel
             .authorize_operation(
                 CONTROL_PLANE_PACK_ID,
@@ -280,7 +280,7 @@ impl ControlPlaneTurnRuntime {
         config: mvp::config::LoongConfig,
     ) -> Result<Self, String> {
         let acp_manager = mvp::acp::acquire_shared_acp_session_manager(&config)?;
-        Ok(Self::with_manager(resolved_path, config, acp_manager))
+        Self::with_manager(resolved_path, config, acp_manager)
     }
 
     /// Test/advanced constructor that reuses an already prepared ACP manager
@@ -289,13 +289,15 @@ impl ControlPlaneTurnRuntime {
         resolved_path: std::path::PathBuf,
         config: mvp::config::LoongConfig,
         acp_manager: Arc<mvp::acp::AcpSessionManager>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, String> {
+        let runtime = mvp::runtime::bootstrap_runtime_with_config(&config)?;
+        Ok(Self {
+            runtime,
             resolved_path,
             config,
             acp_manager,
             registry: Arc::new(mvp::control_plane::ControlPlaneTurnRegistry::new()),
-        }
+        })
     }
 }
 

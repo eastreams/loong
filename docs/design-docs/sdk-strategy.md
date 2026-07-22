@@ -54,7 +54,7 @@ inspectably, and durably."
 
 1. Keep `product mode` as the operator-facing vocabulary for capability
    acquisition.
-2. Keep autonomy-policy and kernel binding as hard runtime boundaries.
+2. Keep autonomy-policy and context-bound governance as hard runtime boundaries.
 3. Make internal integration work more repeatable for maintainers.
 4. Give external authors stable artifact contracts without freezing internal
    crate structure.

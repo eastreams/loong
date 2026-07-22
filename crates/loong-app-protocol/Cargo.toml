@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "App-facing runtime protocol for the additive Loong SDK spine"
+description = "Application command and response contracts for Loong hosts"
 repository.workspace = true
 homepage.workspace = true
 
@@ -12,14 +12,8 @@ homepage.workspace = true
 name = "loong_app_protocol"
 
 [dependencies]
-loong-runtime = { path = "../loong-runtime" }
+loong-core.workspace = true
 serde.workspace = true
-async-trait.workspace = true
-serde_json.workspace = true
-dunce = "1"
-
-[dev-dependencies]
-tokio.workspace = true
 
 [lints]
 workspace = true

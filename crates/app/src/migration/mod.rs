@@ -24,7 +24,6 @@ pub use orchestrator::{
     PrimarySourceRecommendation, apply_import_selection, discover_import_sources,
     merge_profile_sources, plan_import_sources, recommend_primary_source, rollback_last_migration,
 };
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LegacyClawSource {
     Nanobot,
@@ -153,6 +152,20 @@ pub fn plan_import_from_path(
     hint: Option<LegacyClawSource>,
 ) -> CliResult<ImportPlan> {
     let files = collect_import_files(input_path)?;
+    plan_import_from_loaded_files(
+        input_path,
+        hint,
+        files,
+        build_external_skill_warnings(input_path),
+    )
+}
+
+fn plan_import_from_loaded_files(
+    input_path: &Path,
+    hint: Option<LegacyClawSource>,
+    files: Vec<ImportFile>,
+    external_skill_warnings: Vec<String>,
+) -> CliResult<ImportPlan> {
     let source = hint.unwrap_or_else(|| detect_source(input_path, &files));
     let mut prompt_blocks = Vec::new();
     let mut profile_blocks = Vec::new();
@@ -196,9 +209,7 @@ pub fn plan_import_from_path(
         }
     }
 
-    for warning in build_external_skill_warnings(input_path) {
-        warnings.push(warning);
-    }
+    warnings.extend(external_skill_warnings);
 
     if prompt_blocks.is_empty()
         && profile_blocks.is_empty()
@@ -242,6 +253,15 @@ pub(crate) fn inspect_import_path(
 ) -> CliResult<Option<ImportPathInspection>> {
     let external_skill_artifacts = detect_external_skill_artifacts(input_path);
     let files = collect_import_files(input_path)?;
+    inspect_loaded_import_path(input_path, hint, files, external_skill_artifacts)
+}
+
+fn inspect_loaded_import_path(
+    input_path: &Path,
+    hint: Option<LegacyClawSource>,
+    files: Vec<ImportFile>,
+    external_skill_artifacts: Vec<ExternalSkillArtifact>,
+) -> CliResult<Option<ImportPathInspection>> {
     if files.is_empty() && external_skill_artifacts.is_empty() {
         return Ok(None);
     }
@@ -320,6 +340,22 @@ struct ImportFile {
     content: String,
 }
 
+const IMPORT_RELATIVE_PATHS: &[&str] = &[
+    "AGENTS.md",
+    "SOUL.md",
+    "TOOLS.md",
+    "IDENTITY.md",
+    "USER.md",
+    "BOOTSTRAP.md",
+    "HEARTBEAT.md",
+    "MEMORY.md",
+    "memory/MEMORY.md",
+    "identity.json",
+    "CLAUDE.md",
+    "groups/main/CLAUDE.md",
+    "groups/global/CLAUDE.md",
+];
+
 fn collect_import_files(input_path: &Path) -> CliResult<Vec<ImportFile>> {
     if input_path.is_file() {
         return read_single_import_file(input_path)
@@ -348,21 +384,7 @@ fn collect_import_files(input_path: &Path) -> CliResult<Vec<ImportFile>> {
     let mut seen = BTreeSet::new();
     let mut files = Vec::new();
     for root in roots {
-        for relative in [
-            "AGENTS.md",
-            "SOUL.md",
-            "TOOLS.md",
-            "IDENTITY.md",
-            "USER.md",
-            "BOOTSTRAP.md",
-            "HEARTBEAT.md",
-            "MEMORY.md",
-            "memory/MEMORY.md",
-            "identity.json",
-            "CLAUDE.md",
-            "groups/main/CLAUDE.md",
-            "groups/global/CLAUDE.md",
-        ] {
+        for relative in IMPORT_RELATIVE_PATHS {
             let path = root.join(relative);
             if !path.is_file() {
                 continue;

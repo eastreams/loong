@@ -1,97 +1,69 @@
-#[cfg(feature = "memory-sqlite")]
-use std::collections::BTreeSet;
+use serde_json::Value;
 
 #[cfg(feature = "memory-sqlite")]
-use loong_contracts::{Capability, MemoryCoreRequest};
-#[cfg(feature = "memory-sqlite")]
-use serde_json::{Value, json};
-
-use crate::CliResult;
-use crate::KernelContext;
-#[cfg(feature = "memory-sqlite")]
-use crate::memory;
-#[cfg(feature = "memory-sqlite")]
-use crate::session::store::{self, SessionStoreConfig};
-
 use super::analytics::{
     DiscoveryFirstEventSummary, FastLaneToolBatchEventSummary, PromptFrameEventSummary,
     SafeLaneEventSummary, TurnCheckpointEventSummary, summarize_discovery_first_events,
     summarize_fast_lane_tool_batch_events, summarize_prompt_frame_events,
     summarize_safe_lane_events, summarize_turn_checkpoint_history,
 };
-use super::runtime_binding::ConversationRuntimeBinding;
+#[cfg(feature = "memory-sqlite")]
+use super::runtime::ConversationRuntime;
+use crate::{CliResult, Context};
+
+/// Stable failure class for the typed session-window read boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AssistantHistoryLoadErrorCode {
-    DirectReadFailed,
-    KernelRequestFailed,
-    KernelNonOkStatus,
-    KernelMalformedPayload,
+pub enum AssistantHistoryLoadErrorCode {
+    Unavailable,
+    PolicyDenied,
+    BackendFailed,
+    MalformedOutput,
 }
 
 impl AssistantHistoryLoadErrorCode {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
-            Self::DirectReadFailed => "direct_read_failed",
-            Self::KernelRequestFailed => "kernel_request_failed",
-            Self::KernelNonOkStatus => "kernel_non_ok_status",
-            Self::KernelMalformedPayload => "kernel_malformed_payload",
+            Self::Unavailable => "unavailable",
+            Self::PolicyDenied => "policy_denied",
+            Self::BackendFailed => "backend_failed",
+            Self::MalformedOutput => "malformed_output",
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct AssistantHistoryLoadError {
-    code: AssistantHistoryLoadErrorCode,
-    message: String,
+/// A session-window read failure with a machine-readable classification.
+///
+/// The message retains the concrete kernel failure for operators while callers
+/// such as the safe-lane governor branch only on [`Self::code`].
+#[derive(Debug, thiserror::Error)]
+pub enum AssistantHistoryLoadError {
+    #[error("{message}")]
+    Unavailable { message: String },
+    #[error(transparent)]
+    Memory(#[from] loong_kernel::access::memory::MemoryAccessError),
 }
 
 impl AssistantHistoryLoadError {
     #[cfg(feature = "memory-sqlite")]
-    fn direct_read_failed(error: impl std::fmt::Display) -> Self {
-        Self {
-            code: AssistantHistoryLoadErrorCode::DirectReadFailed,
-            message: format!("direct read failed: {error}"),
+    pub(crate) fn unavailable(error: impl std::fmt::Display) -> Self {
+        Self::Unavailable {
+            message: format!("read session window failed: {error}"),
         }
     }
 
-    #[cfg(feature = "memory-sqlite")]
-    fn kernel_request_failed(error: impl std::fmt::Display) -> Self {
-        Self {
-            code: AssistantHistoryLoadErrorCode::KernelRequestFailed,
-            message: format!("load assistant history via kernel failed: {error}"),
+    pub fn code(&self) -> AssistantHistoryLoadErrorCode {
+        match self {
+            Self::Unavailable { .. } => AssistantHistoryLoadErrorCode::Unavailable,
+            Self::Memory(loong_kernel::access::memory::MemoryAccessError::Authorization(_)) => {
+                AssistantHistoryLoadErrorCode::PolicyDenied
+            }
+            Self::Memory(loong_kernel::access::memory::MemoryAccessError::Backend(
+                loong_kernel::access::memory::MemoryBackendError::Execution { .. },
+            )) => AssistantHistoryLoadErrorCode::BackendFailed,
+            Self::Memory(loong_kernel::access::memory::MemoryAccessError::Backend(
+                loong_kernel::access::memory::MemoryBackendError::MalformedOutput { .. },
+            )) => AssistantHistoryLoadErrorCode::MalformedOutput,
         }
-    }
-
-    #[cfg(feature = "memory-sqlite")]
-    fn kernel_non_ok_status(status: impl AsRef<str>) -> Self {
-        Self {
-            code: AssistantHistoryLoadErrorCode::KernelNonOkStatus,
-            message: format!(
-                "load assistant history via kernel returned non-ok status: {}",
-                status.as_ref()
-            ),
-        }
-    }
-
-    #[cfg(feature = "memory-sqlite")]
-    fn kernel_malformed_payload(reason: impl AsRef<str>) -> Self {
-        Self {
-            code: AssistantHistoryLoadErrorCode::KernelMalformedPayload,
-            message: format!(
-                "load assistant history via kernel returned malformed payload: {}",
-                reason.as_ref()
-            ),
-        }
-    }
-
-    pub(crate) fn code(&self) -> AssistantHistoryLoadErrorCode {
-        self.code
-    }
-}
-
-impl std::fmt::Display for AssistantHistoryLoadError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.message)
     }
 }
 
@@ -137,37 +109,33 @@ impl TurnCheckpointHistorySnapshot {
     }
 }
 
-pub async fn load_turn_checkpoint_event_summary(
-    session_id: &str,
+pub async fn load_turn_checkpoint_event_summary<R: ConversationRuntime + ?Sized>(
     limit: usize,
-    binding: ConversationRuntimeBinding<'_>,
-    #[cfg(feature = "memory-sqlite")] memory_config: &SessionStoreConfig,
+    ctx: &Context<'_>,
+    runtime: &R,
 ) -> CliResult<TurnCheckpointEventSummary> {
     #[cfg(feature = "memory-sqlite")]
     {
-        Ok(
-            load_turn_checkpoint_history_snapshot(session_id, limit, binding, memory_config)
-                .await?
-                .into_summary(),
-        )
+        Ok(load_turn_checkpoint_history_snapshot(limit, ctx, runtime)
+            .await?
+            .into_summary())
     }
 
     #[cfg(not(feature = "memory-sqlite"))]
     {
-        let _ = (session_id, limit, binding);
+        let _ = (limit, ctx, runtime);
         Err("turn checkpoint summary unavailable: memory-sqlite feature disabled".to_owned())
     }
 }
 
-pub async fn load_safe_lane_event_summary(
-    session_id: &str,
+pub async fn load_safe_lane_event_summary<R: ConversationRuntime + ?Sized>(
     limit: usize,
-    binding: ConversationRuntimeBinding<'_>,
-    #[cfg(feature = "memory-sqlite")] memory_config: &SessionStoreConfig,
+    ctx: &Context<'_>,
+    runtime: &R,
 ) -> CliResult<SafeLaneEventSummary> {
     #[cfg(feature = "memory-sqlite")]
     {
-        load_assistant_history_summary(session_id, limit, binding, memory_config, |contents| {
+        load_assistant_history_summary(limit, ctx, runtime, |contents| {
             summarize_safe_lane_events(contents.iter().map(String::as_str))
         })
         .await
@@ -175,20 +143,19 @@ pub async fn load_safe_lane_event_summary(
 
     #[cfg(not(feature = "memory-sqlite"))]
     {
-        let _ = (session_id, limit, binding);
+        let _ = (limit, ctx, runtime);
         Err("safe-lane summary unavailable: memory-sqlite feature disabled".to_owned())
     }
 }
 
-pub async fn load_fast_lane_tool_batch_event_summary(
-    session_id: &str,
+pub async fn load_fast_lane_tool_batch_event_summary<R: ConversationRuntime + ?Sized>(
     limit: usize,
-    binding: ConversationRuntimeBinding<'_>,
-    #[cfg(feature = "memory-sqlite")] memory_config: &SessionStoreConfig,
+    ctx: &Context<'_>,
+    runtime: &R,
 ) -> CliResult<FastLaneToolBatchEventSummary> {
     #[cfg(feature = "memory-sqlite")]
     {
-        load_assistant_history_summary(session_id, limit, binding, memory_config, |contents| {
+        load_assistant_history_summary(limit, ctx, runtime, |contents| {
             summarize_fast_lane_tool_batch_events(contents.iter().map(String::as_str))
         })
         .await
@@ -196,20 +163,19 @@ pub async fn load_fast_lane_tool_batch_event_summary(
 
     #[cfg(not(feature = "memory-sqlite"))]
     {
-        let _ = (session_id, limit, binding);
+        let _ = (limit, ctx, runtime);
         Err("fast-lane summary unavailable: memory-sqlite feature disabled".to_owned())
     }
 }
 
-pub async fn load_prompt_frame_event_summary(
-    session_id: &str,
+pub async fn load_prompt_frame_event_summary<R: ConversationRuntime + ?Sized>(
     limit: usize,
-    binding: ConversationRuntimeBinding<'_>,
-    #[cfg(feature = "memory-sqlite")] memory_config: &SessionStoreConfig,
+    ctx: &Context<'_>,
+    runtime: &R,
 ) -> CliResult<PromptFrameEventSummary> {
     #[cfg(feature = "memory-sqlite")]
     {
-        load_assistant_history_summary(session_id, limit, binding, memory_config, |contents| {
+        load_assistant_history_summary(limit, ctx, runtime, |contents| {
             summarize_prompt_frame_events(contents.iter().map(String::as_str))
         })
         .await
@@ -217,56 +183,19 @@ pub async fn load_prompt_frame_event_summary(
 
     #[cfg(not(feature = "memory-sqlite"))]
     {
-        let _ = (session_id, limit, binding);
+        let _ = (limit, ctx, runtime);
         Err("prompt-frame summary unavailable: memory-sqlite feature disabled".to_owned())
     }
 }
 
-pub async fn load_discovery_first_event_summary(
-    session_id: &str,
+pub async fn load_discovery_first_event_summary<R: ConversationRuntime + ?Sized>(
     limit: usize,
-    binding: ConversationRuntimeBinding<'_>,
-    #[cfg(feature = "memory-sqlite")] memory_config: &SessionStoreConfig,
-) -> CliResult<DiscoveryFirstEventSummary> {
-    load_discovery_first_event_summary_with_binding(
-        session_id,
-        limit,
-        binding,
-        #[cfg(feature = "memory-sqlite")]
-        memory_config,
-    )
-    .await
-}
-
-pub async fn load_discovery_first_event_summary_with_kernel_context(
-    session_id: &str,
-    limit: usize,
-    kernel_ctx: Option<&KernelContext>,
-    #[cfg(feature = "memory-sqlite")] memory_config: &SessionStoreConfig,
-) -> CliResult<DiscoveryFirstEventSummary> {
-    let binding = kernel_ctx.map_or_else(
-        ConversationRuntimeBinding::direct,
-        ConversationRuntimeBinding::kernel,
-    );
-    load_discovery_first_event_summary(
-        session_id,
-        limit,
-        binding,
-        #[cfg(feature = "memory-sqlite")]
-        memory_config,
-    )
-    .await
-}
-
-pub(crate) async fn load_discovery_first_event_summary_with_binding(
-    session_id: &str,
-    limit: usize,
-    binding: ConversationRuntimeBinding<'_>,
-    #[cfg(feature = "memory-sqlite")] memory_config: &SessionStoreConfig,
+    ctx: &Context<'_>,
+    runtime: &R,
 ) -> CliResult<DiscoveryFirstEventSummary> {
     #[cfg(feature = "memory-sqlite")]
     {
-        load_assistant_history_summary(session_id, limit, binding, memory_config, |contents| {
+        load_assistant_history_summary(limit, ctx, runtime, |contents| {
             summarize_discovery_first_events(contents.iter().map(String::as_str))
         })
         .await
@@ -274,122 +203,82 @@ pub(crate) async fn load_discovery_first_event_summary_with_binding(
 
     #[cfg(not(feature = "memory-sqlite"))]
     {
-        let _ = (session_id, limit, binding);
+        let _ = (limit, ctx, runtime);
         Err("discovery-first summary unavailable: memory-sqlite feature disabled".to_owned())
     }
 }
 
-pub(crate) async fn load_latest_turn_checkpoint_entry(
-    session_id: &str,
+pub(crate) async fn load_latest_turn_checkpoint_entry<R: ConversationRuntime + ?Sized>(
     limit: usize,
-    binding: ConversationRuntimeBinding<'_>,
-    #[cfg(feature = "memory-sqlite")] memory_config: &SessionStoreConfig,
+    ctx: &Context<'_>,
+    runtime: &R,
 ) -> CliResult<Option<TurnCheckpointLatestEntry>> {
     #[cfg(feature = "memory-sqlite")]
     {
-        Ok(
-            load_turn_checkpoint_history_snapshot(session_id, limit, binding, memory_config)
-                .await?
-                .into_latest_entry(),
-        )
+        Ok(load_turn_checkpoint_history_snapshot(limit, ctx, runtime)
+            .await?
+            .into_latest_entry())
     }
 
     #[cfg(not(feature = "memory-sqlite"))]
     {
-        let _ = (session_id, limit, binding);
+        let _ = (limit, ctx, runtime);
         Err("turn checkpoint entry unavailable: memory-sqlite feature disabled".to_owned())
     }
 }
 
 #[cfg(feature = "memory-sqlite")]
-pub(crate) async fn load_turn_checkpoint_history_snapshot(
-    session_id: &str,
+pub(crate) async fn load_turn_checkpoint_history_snapshot<R: ConversationRuntime + ?Sized>(
     limit: usize,
-    binding: ConversationRuntimeBinding<'_>,
-    memory_config: &SessionStoreConfig,
+    ctx: &Context<'_>,
+    runtime: &R,
 ) -> CliResult<TurnCheckpointHistorySnapshot> {
     let assistant_contents =
-        load_assistant_contents_from_session_window(session_id, limit, binding, memory_config)
-            .await?;
+        load_assistant_contents_from_session_window(limit, ctx, runtime).await?;
     Ok(build_turn_checkpoint_history_snapshot(&assistant_contents))
 }
 
 #[cfg(feature = "memory-sqlite")]
-pub(crate) async fn load_assistant_contents_from_session_window(
-    session_id: &str,
+pub(crate) async fn load_assistant_contents_from_session_window<R: ConversationRuntime + ?Sized>(
     limit: usize,
-    binding: ConversationRuntimeBinding<'_>,
-    memory_config: &SessionStoreConfig,
+    ctx: &Context<'_>,
+    runtime: &R,
 ) -> CliResult<Vec<String>> {
-    load_assistant_contents_from_session_window_detailed(session_id, limit, binding, memory_config)
+    load_assistant_contents_from_session_window_detailed(limit, ctx, runtime)
         .await
         .map_err(|error| error.to_string())
 }
 
 #[cfg(feature = "memory-sqlite")]
-async fn load_assistant_history_summary<T, F>(
-    session_id: &str,
+async fn load_assistant_history_summary<R, T, F>(
     limit: usize,
-    binding: ConversationRuntimeBinding<'_>,
-    memory_config: &SessionStoreConfig,
+    ctx: &Context<'_>,
+    runtime: &R,
     summarize: F,
 ) -> CliResult<T>
 where
+    R: ConversationRuntime + ?Sized,
     F: FnOnce(&[String]) -> T,
 {
     let assistant_contents =
-        load_assistant_contents_from_session_window(session_id, limit, binding, memory_config)
-            .await?;
+        load_assistant_contents_from_session_window(limit, ctx, runtime).await?;
     Ok(summarize(&assistant_contents))
 }
 
 #[cfg(feature = "memory-sqlite")]
-pub(crate) async fn load_assistant_contents_from_session_window_detailed(
-    session_id: &str,
+pub(crate) async fn load_assistant_contents_from_session_window_detailed<
+    R: ConversationRuntime + ?Sized,
+>(
     limit: usize,
-    binding: ConversationRuntimeBinding<'_>,
-    memory_config: &SessionStoreConfig,
+    ctx: &Context<'_>,
+    runtime: &R,
 ) -> Result<Vec<String>, AssistantHistoryLoadError> {
-    if let Some(ctx) = binding.kernel_context() {
-        let request = MemoryCoreRequest {
-            operation: memory::MEMORY_OP_WINDOW.to_owned(),
-            payload: json!({
-                "session_id": session_id,
-                "limit": limit,
-                "allow_extended_limit": true,
-            }),
-        };
-        let caps = BTreeSet::from([Capability::MemoryRead]);
-        let execution_context = ctx
-            .memory_core_execution_context()
-            .map_err(AssistantHistoryLoadError::kernel_request_failed)?;
-        let outcome = ctx
-            .kernel
-            .execute_memory_core(
-                ctx.pack_id(),
-                &ctx.token,
-                &caps,
-                None,
-                request,
-                &execution_context,
-            )
-            .await
-            .map_err(AssistantHistoryLoadError::kernel_request_failed)?;
-
-        if outcome.status != "ok" {
-            return Err(AssistantHistoryLoadError::kernel_non_ok_status(
-                &outcome.status,
-            ));
-        }
-
-        return collect_assistant_contents_from_memory_window_payload(outcome.payload.get("turns"));
-    }
-
-    let turns = store::window_session_turns(session_id, limit, memory_config)
-        .map_err(AssistantHistoryLoadError::direct_read_failed)?;
-    Ok(turns
-        .iter()
-        .filter_map(|turn| (turn.role == "assistant").then_some(turn.content.clone()))
+    Ok(runtime
+        .read_session_window(limit, ctx)
+        .await?
+        .into_iter()
+        .filter(|turn| turn.role == "assistant")
+        .map(|turn| turn.content)
         .collect())
 }
 
@@ -403,28 +292,4 @@ fn build_turn_checkpoint_history_snapshot(
         summary: projection.summary,
         latest_checkpoint: projection.latest_checkpoint,
     }
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn collect_assistant_contents_from_memory_window_payload(
-    turns_payload: Option<&Value>,
-) -> Result<Vec<String>, AssistantHistoryLoadError> {
-    let turns = turns_payload.and_then(Value::as_array).ok_or_else(|| {
-        AssistantHistoryLoadError::kernel_malformed_payload("missing or non-array turns")
-    })?;
-    let mut assistant_contents = Vec::new();
-    for (index, turn) in turns.iter().enumerate() {
-        if turn.get("role").and_then(Value::as_str) != Some("assistant") {
-            continue;
-        }
-
-        let content = turn.get("content").and_then(Value::as_str).ok_or_else(|| {
-            AssistantHistoryLoadError::kernel_malformed_payload(format!(
-                "assistant turn at index {index} missing or non-string content"
-            ))
-        })?;
-        assistant_contents.push(content.to_owned());
-    }
-
-    Ok(assistant_contents)
 }

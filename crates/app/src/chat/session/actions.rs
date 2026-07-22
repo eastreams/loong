@@ -908,7 +908,7 @@ impl ChatSessionSurface {
                 let initial = state
                     .session_title_override
                     .clone()
-                    .unwrap_or_else(|| self.runtime.session_id.clone());
+                    .unwrap_or_else(|| self.runtime.session.session_id().to_owned());
                 state.overlay = Some(SurfaceOverlay::InputPrompt {
                     kind: OverlayInputKind::RenameSession,
                     cursor: initial.chars().count(),
@@ -917,7 +917,7 @@ impl ChatSessionSurface {
                 state.focus = SurfaceFocus::Composer;
             }
             CommandPaletteAction::ExportTranscript => {
-                let initial = default_export_path(self.runtime.session_id.as_str());
+                let initial = default_export_path(self.runtime.session.session_id());
                 state.overlay = Some(SurfaceOverlay::InputPrompt {
                     kind: OverlayInputKind::ExportTranscript,
                     cursor: initial.chars().count(),
@@ -1149,17 +1149,18 @@ impl ChatSessionSurface {
                     ChatCommandMatchResult::Matched => {
                         #[cfg(feature = "memory-sqlite")]
                         {
-                            let binding =
-                                self.runtime.conversation_binding();
+                            let context = self
+                                .runtime
+                                .context()
+                                .map_err(|error| error.to_string())?;
                             let result = ops::load_manual_compaction_result(
                                 &self.runtime.config,
-                                &self.runtime.session_id,
+                                &context,
                                 &self.runtime.turn_coordinator,
-                                binding,
                             )
                             .await?;
                             ops::render_manual_compaction_lines_with_width(
-                                &self.runtime.session_id,
+                                context.session().session_id(),
                                 &result,
                                 width,
                             )
@@ -1180,15 +1181,17 @@ impl ChatSessionSurface {
                         ChatCommandMatchResult::Matched => {
                             #[cfg(feature = "memory-sqlite")]
                             {
+                                let context = self
+                                    .runtime
+                                    .context()
+                                    .map_err(|error| error.to_string())?;
                                 let history_lines = ops::load_history_lines(
-                                    &self.runtime.session_id,
                                     self.runtime.config.memory.sliding_window,
-                                    self.runtime.conversation_binding(),
-                                    &self.runtime.memory_config,
+                                    &context,
                                 )
                                 .await?;
                                 ops::render_cli_chat_history_lines_with_width(
-                                    &self.runtime.session_id,
+                                    context.session().session_id(),
                                     self.runtime.config.memory.sliding_window,
                                     &history_lines,
                                     width,
@@ -1364,17 +1367,20 @@ impl ChatSessionSurface {
                                 ChatCommandMatchResult::NotMatched => {
                                     match turn_checkpoint_repair_match {
                                         ChatCommandMatchResult::Matched => {
+                                            let context = self
+                                                .runtime
+                                                .context()
+                                                .map_err(|error| error.to_string())?;
                                             let outcome = self
                                                 .runtime
                                                 .turn_coordinator
                                                 .repair_production_turn_checkpoint_tail(
                                                     &self.runtime.config,
-                                                    &self.runtime.session_id,
-                                                    self.runtime.conversation_binding(),
+                                                    &context,
                                                 )
-                                                .await?;
+                                            .await?;
                                             render_turn_checkpoint_repair_lines_with_width(
-                                                &self.runtime.session_id,
+                                                context.session().session_id(),
                                                 &outcome,
                                                 width,
                                             )

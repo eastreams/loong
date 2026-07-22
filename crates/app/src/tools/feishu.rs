@@ -2049,7 +2049,8 @@ fn execute_feishu_messages_resource_get_tool_with_config(
                 .map_err(|error| {
                     format!("feishu.messages.resource.get invalid payload.type: {error}")
                 })?;
-        let save_path = super::file::resolve_safe_file_path_with_config(save_as.as_str(), config)?;
+        let save_path =
+            super::file_path::resolve_safe_file_path_with_config(save_as.as_str(), config)?;
         let tool_name = request.tool_name;
 
         run_feishu_future(async move {

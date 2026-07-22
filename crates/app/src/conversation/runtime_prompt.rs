@@ -1,46 +1,31 @@
 use std::collections::BTreeSet;
 
+use crate::Context;
 use crate::tools::runtime_config::ToolRuntimeConfig;
 
 use super::super::super::config::LoongConfig;
 use super::super::context_engine::ContextArtifactKind;
-use super::super::runtime_binding::ConversationRuntimeBinding;
 use super::super::subagent::DelegateBuiltinProfile;
 #[cfg(feature = "memory-sqlite")]
 use super::active_skills;
-use super::session_runtime::open_session_repository;
-use super::{
-    AssembledConversationContext, PromptFragment, PromptFrameAuthority, PromptLane, SessionContext,
-    provider,
-};
-
-pub(super) fn provider_runtime_binding(
-    binding: ConversationRuntimeBinding<'_>,
-) -> provider::ProviderRuntimeBinding<'_> {
-    match binding {
-        ConversationRuntimeBinding::Kernel(kernel_ctx) => {
-            provider::ProviderRuntimeBinding::kernel(kernel_ctx)
-        }
-        ConversationRuntimeBinding::Direct => provider::ProviderRuntimeBinding::advisory_only(),
-    }
-}
+use super::{AssembledConversationContext, PromptFragment, PromptFrameAuthority, PromptLane};
 
 pub(super) fn delegate_child_runtime_contract_prompt_summary(
     config: &LoongConfig,
-    session_context: &SessionContext,
+    session_context: &Context<'_>,
 ) -> Option<String> {
-    session_context.parent_session_id.as_ref()?;
-    session_context.subagent_runtime_narrowing()?;
-    let subagent_contract = session_context.resolved_subagent_contract();
+    session_context.session().parent_session_id.as_ref()?;
+    session_context.session().resolved_runtime_narrowing()?;
+    let subagent_contract = session_context.session().resolved_subagent_contract();
     ToolRuntimeConfig::from_loong_config(config, None)
         .delegate_child_prompt_summary(subagent_contract.as_ref())
 }
 
 pub(super) fn delegate_child_profile_prompt_summary(
-    session_context: &SessionContext,
+    session_context: &Context<'_>,
 ) -> Option<String> {
-    let _parent_session_id = session_context.parent_session_id.as_ref()?;
-    let profile = session_context.profile?;
+    let _parent_session_id = session_context.session().parent_session_id.as_ref()?;
+    let profile = session_context.session().profile?;
     let summary = match profile {
         DelegateBuiltinProfile::Research => concat!(
             "[delegate_child_profile]\n",
@@ -68,17 +53,15 @@ pub(super) fn delegate_child_profile_prompt_summary(
 }
 
 pub(super) fn runtime_self_continuity_prompt_summary(
-    config: &LoongConfig,
-    session_context: &SessionContext,
+    session_context: &Context<'_>,
+    live_continuity: Option<&crate::runtime_self_continuity::RuntimeSelfContinuity>,
 ) -> Option<String> {
-    let stored_continuity = session_context.runtime_self_continuity.as_ref()?;
-    let live_continuity =
-        crate::runtime_self_continuity::resolve_runtime_self_continuity_for_config(config);
+    let stored_continuity = session_context.session().runtime_self_continuity.as_ref()?;
     let missing_continuity = crate::runtime_self_continuity::missing_runtime_self_continuity(
         stored_continuity,
-        live_continuity.as_ref(),
+        live_continuity,
     )?;
-    let inherited = session_context.parent_session_id.is_some();
+    let inherited = session_context.session().parent_session_id.is_some();
     crate::runtime_self_continuity::render_runtime_self_continuity_section(
         &missing_continuity,
         inherited,
@@ -90,7 +73,11 @@ pub(super) fn active_skills_prompt_summary(
     config: &LoongConfig,
     session_id: &str,
 ) -> Option<String> {
-    let repo = open_session_repository(config).ok()?;
+    let repo =
+        crate::session::repository::SessionRepository::from_memory_config_without_env_overrides(
+            &config.memory,
+        )
+        .ok()?;
     let active_skills = active_skills::load_persisted_active_skills(&repo, session_id)
         .ok()
         .flatten()?;

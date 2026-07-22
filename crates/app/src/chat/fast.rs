@@ -1,6 +1,4 @@
 use super::*;
-#[cfg(test)]
-use crate::conversation::load_fast_lane_tool_batch_event_summary;
 
 #[cfg(any(test, feature = "memory-sqlite"))]
 pub(super) fn render_fast_lane_summary_lines_with_width(
@@ -227,19 +225,6 @@ fn build_fast_lane_segment_lines(segments: &[FastLaneToolBatchSegmentSnapshot]) 
     }
 
     lines
-}
-
-#[cfg(test)]
-pub(super) async fn load_fast_lane_summary_output(
-    session_id: &str,
-    limit: usize,
-    binding: ConversationRuntimeBinding<'_>,
-    memory_config: &SessionStoreConfig,
-) -> CliResult<String> {
-    let summary =
-        load_fast_lane_tool_batch_event_summary(session_id, limit, binding, memory_config).await?;
-
-    Ok(format_fast_lane_summary(session_id, limit, &summary))
 }
 
 #[cfg(test)]

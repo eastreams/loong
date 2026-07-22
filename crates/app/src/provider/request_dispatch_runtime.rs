@@ -12,6 +12,7 @@ use super::contracts::{
 use super::failover::{
     ModelRequestError, ProviderFailoverReason, ProviderFailoverStage, build_model_request_error,
 };
+use super::native_tool_surface::ProviderToolRequestSurface;
 use super::policy;
 use super::request_executor::{
     ModelRequestRuntime, StreamingModelRequestRuntime, execute_model_request,
@@ -59,7 +60,7 @@ pub(super) async fn request_turn_with_model(
     messages: &[Value],
     model: String,
     auto_model_mode: bool,
-    tool_definitions: &[Value],
+    tool_surface: &ProviderToolRequestSurface,
     auth_profile: ProviderAuthProfile,
     request_policy: &policy::ProviderRequestPolicy,
     client: &reqwest::Client,
@@ -74,7 +75,7 @@ pub(super) async fn request_turn_with_model(
         messages,
         model.as_str(),
         auto_model_mode,
-        tool_definitions,
+        tool_surface,
         &auth_profile,
         auth_context,
         request_policy,
@@ -246,7 +247,7 @@ async fn request_turn_with_provider(
     messages: &[Value],
     model: &str,
     auto_model_mode: bool,
-    tool_definitions: &[Value],
+    tool_surface: &ProviderToolRequestSurface,
     auth_profile: &ProviderAuthProfile,
     auth_context: &super::transport::RequestAuthContext,
     request_policy: &policy::ProviderRequestPolicy,
@@ -262,7 +263,7 @@ async fn request_turn_with_provider(
         messages,
         model,
         auto_model_mode,
-        tool_definitions,
+        tool_surface,
         auth_profile,
         auth_context,
         request_policy,
@@ -281,13 +282,14 @@ pub(super) async fn request_turn_with_provider_transport(
     messages: &[Value],
     model: &str,
     auto_model_mode: bool,
-    tool_definitions: &[Value],
+    tool_surface: &ProviderToolRequestSurface,
     auth_profile: &ProviderAuthProfile,
     auth_context: &super::transport::RequestAuthContext,
     request_policy: &policy::ProviderRequestPolicy,
     transport: &dyn ProviderTransport,
     retry_progress: super::request_executor::ProviderRetryProgressCallback,
 ) -> Result<crate::conversation::turn_engine::ProviderTurn, ModelRequestError> {
+    let tool_definitions = tool_surface.definitions();
     let mut current_provider = request_provider.clone();
     loop {
         let transport_profile = resolve_request_transport_profile(&current_provider, model)
@@ -385,14 +387,7 @@ pub(super) async fn request_turn_with_provider_transport(
                     false,
                 )
             },
-            |body| {
-                shape::extract_provider_turn_with_scope_and_messages(
-                    body,
-                    Some(session_id),
-                    Some(turn_id),
-                    messages,
-                )
-            },
+            |body| shape::extract_provider_turn_for_request(body, Some(turn_id), tool_surface),
             "choices[0].message",
             |api_error| {
                 if include_tool_schema.load(Ordering::Relaxed)
@@ -434,7 +429,7 @@ pub(super) async fn request_turn_streaming(
     messages: &[Value],
     model: &str,
     auto_model_mode: bool,
-    tool_definitions: &[Value],
+    tool_surface: &ProviderToolRequestSurface,
     auth_profile: &ProviderAuthProfile,
     auth_context: &super::transport::RequestAuthContext,
     request_policy: &policy::ProviderRequestPolicy,
@@ -451,7 +446,7 @@ pub(super) async fn request_turn_streaming(
         messages,
         model,
         auto_model_mode,
-        tool_definitions,
+        tool_surface,
         auth_profile,
         auth_context,
         request_policy,
@@ -471,7 +466,7 @@ pub(super) async fn request_turn_streaming_with_transport(
     messages: &[Value],
     model: &str,
     auto_model_mode: bool,
-    tool_definitions: &[Value],
+    tool_surface: &ProviderToolRequestSurface,
     auth_profile: &ProviderAuthProfile,
     auth_context: &super::transport::RequestAuthContext,
     request_policy: &policy::ProviderRequestPolicy,
@@ -479,6 +474,7 @@ pub(super) async fn request_turn_streaming_with_transport(
     on_token: super::request_executor::StreamingTokenCallback,
     retry_progress: super::request_executor::ProviderRetryProgressCallback,
 ) -> Result<crate::conversation::turn_engine::ProviderTurn, ModelRequestError> {
+    let tool_definitions = tool_surface.definitions();
     let mut current_provider = request_provider.clone();
     loop {
         let transport_profile = resolve_request_transport_profile(&current_provider, model)
@@ -579,6 +575,7 @@ pub(super) async fn request_turn_streaming_with_transport(
             },
             Some(session_id),
             Some(turn_id),
+            tool_surface,
             messages,
             on_token.clone(),
             |api_error| {
@@ -620,7 +617,7 @@ pub(super) async fn request_turn_streaming_with_model(
     messages: &[Value],
     model: String,
     auto_model_mode: bool,
-    tool_definitions: &[Value],
+    tool_surface: &ProviderToolRequestSurface,
     auth_profile: ProviderAuthProfile,
     request_policy: &policy::ProviderRequestPolicy,
     client: &reqwest::Client,
@@ -636,7 +633,7 @@ pub(super) async fn request_turn_streaming_with_model(
         messages,
         model.as_str(),
         auto_model_mode,
-        tool_definitions,
+        tool_surface,
         &auth_profile,
         auth_context,
         request_policy,
@@ -784,6 +781,8 @@ fn should_fallback_responses_to_chat_completions(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
     use crate::config::ProviderConfig;
     use crate::provider::auth_profile_runtime::resolve_provider_auth_profiles;
@@ -875,6 +874,8 @@ mod tests {
             TransportErrorKind::Timeout,
             "operation timed out",
         ))])]);
+        let tool_surface = ProviderToolRequestSurface::new(Vec::new(), BTreeMap::new())
+            .expect("empty request surface");
 
         let error = request_turn_streaming_with_transport(
             &config,
@@ -887,7 +888,7 @@ mod tests {
             })],
             "gpt-5.4",
             false,
-            &[],
+            &tool_surface,
             auth_profile,
             &auth_context,
             &request_policy,

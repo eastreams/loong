@@ -19,7 +19,7 @@ context lives in `docs/`, while the public reader-facing docs surface lives in
 
 ## 2. Architecture Contract
 
-The workspace currently has 13 crates across two connected families:
+The workspace currently has 15 crates across two connected families:
 
 ```text
 core foundation
@@ -28,19 +28,21 @@ loong-core → contracts
 additive spine
 loong-core
 ├── loong-plugin-sdk → loong-core
-├── loong-runtime → loong-core
-├── loong-app-protocol → loong-runtime
+├── loong-runtime → contracts, loong-core, kernel
+├── loong-app-protocol → loong-core
 └── loong-cli → loong-app-protocol
 
 governed runtime
 contracts (leaf)
-├── kernel → contracts, loong-core, loong-plugin-sdk
+├── loong-access → contracts, loong-core
+├── kernel → contracts, loong-access, loong-core, loong-plugin-sdk
+├── loong-tools → contracts, loong-core, kernel
 ├── protocol (independent leaf)
 ├── bridge-runtime → contracts, kernel, protocol
-├── app → contracts, loong-core, kernel
+├── app → contracts, loong-core, kernel, loong-runtime, loong-tools
 ├── spec → contracts, loong-core, kernel, protocol, bridge-runtime
 ├── bench → kernel, spec
-└── daemon (`loong`) → app, loong-app-protocol, bench, bridge-runtime, contracts, loong-core, kernel, protocol, spec
+└── daemon (`loong`) → app, bench, bridge-runtime, contracts, loong-core, kernel, protocol, spec
 ```
 
 Non-negotiable: no dependency cycles. See [Core Beliefs](docs/design-docs/core-beliefs.md).

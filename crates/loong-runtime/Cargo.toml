@@ -12,10 +12,13 @@ homepage.workspace = true
 name = "loong_runtime"
 
 [dependencies]
-loong-core = { path = "../loong-core" }
-serde.workspace = true
+loong-contracts.workspace = true
+loong-core.workspace = true
+loong-kernel.workspace = true
 async-trait.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true

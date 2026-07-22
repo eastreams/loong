@@ -9,7 +9,6 @@ pub(super) async fn persist_tool_discovery_refresh_event_if_needed<
     _intent_sequence: usize,
     _tool_name: &str,
     _outcome: &loong_contracts::ToolCoreOutcome,
-    _binding: ConversationRuntimeBinding<'_>,
 ) {
     // Discovery-first tool refresh is no longer part of the provider followup contract.
 }

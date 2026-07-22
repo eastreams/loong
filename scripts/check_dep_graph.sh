@@ -2,28 +2,27 @@
 set -euo pipefail
 
 # Validate that the crate dependency graph matches the documented architecture
-# contract and the additive local-only Phase 2 spine.
+# contract across every workspace crate.
 #
 # Repository-visible contract:
 #   contracts (leaf — zero internal deps)
 #   ├── loong-core → contracts
-#   ├── kernel → contracts, loong-core
+#   ├── loong-access → contracts, loong-core
+#   ├── kernel → contracts, loong-access, loong-core, loong-plugin-sdk
+#   ├── loong-tools → contracts, loong-core, kernel
 #   ├── protocol (independent leaf)
 #   ├── bridge-runtime → contracts, kernel, protocol
-#   ├── app → contracts, loong-core, kernel
+#   ├── app → contracts, loong-core, kernel, loong-runtime, loong-tools
 #   ├── spec → contracts, loong-core, kernel, protocol, bridge-runtime
 #   ├── bench → kernel, spec
-#   └── daemon (binary) → app, app-protocol, bench, contracts, loong-core, kernel, protocol, spec, bridge-runtime
+#   └── daemon (binary) → app, bench, contracts, loong-core, kernel, protocol, spec, bridge-runtime
 #
-# Additive local-only Phase 2 spine:
+# Additive spine:
 #   loong-core
-#   ├── loong-runtime → loong-core
-#   ├── loong-app-protocol → loong-runtime
+#   ├── loong-runtime → contracts, loong-core, kernel
+#   ├── loong-app-protocol → loong-core
 #   ├── loong-cli → loong-app-protocol
 #   └── loong-plugin-sdk → loong-core
-#
-# Narrow Phase 3 migration allowance:
-#   daemon -> loong-app-protocol for the single migrated `turn run` path
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
@@ -38,7 +37,6 @@ edges="$(cargo metadata --format-version 1 --no-deps \
   | python3 -c '
 import json, sys
 meta = json.load(sys.stdin)
-workspace_root = meta["workspace_root"].rstrip("/")
 ALIASES = {
     "loong-contracts": "contracts",
     "loong-kernel": "kernel",
@@ -53,13 +51,24 @@ ALIASES = {
     "loong-app-protocol": "app-protocol",
     "loong-cli": "cli",
     "loong-plugin-sdk": "plugin-sdk",
+    "loong-access": "access",
+    "loong-tools": "tools",
 }
-ws_packages = {
+workspace_member_ids = set(meta["workspace_members"])
+workspace_packages = {
     p["name"]: p
     for p in meta["packages"]
-    if p["manifest_path"].startswith(workspace_root + "/")
-    and p["name"] in ALIASES
+    if p["id"] in workspace_member_ids
 }
+unknown_packages = sorted(set(workspace_packages) - set(ALIASES))
+if unknown_packages:
+    print(
+        "[dep-graph] missing aliases for workspace package(s): "
+        + ", ".join(unknown_packages),
+        file=sys.stderr,
+    )
+    sys.exit(2)
+ws_packages = workspace_packages
 for package_name, package in ws_packages.items():
     src = ALIASES[package_name]
     for dep in package["dependencies"]:
@@ -70,6 +79,9 @@ for package_name, package in ws_packages.items():
 
 # Allowed edges (from architecture contract).
 allowed=(
+  "access -> contracts"
+  "access -> core"
+  "kernel -> access"
   "kernel -> plugin-sdk"
   "kernel -> core"
   "kernel -> contracts"
@@ -79,6 +91,8 @@ allowed=(
   "app -> contracts"
   "app -> core"
   "app -> kernel"
+  "app -> runtime"
+  "app -> tools"
   "spec -> bridge-runtime"
   "spec -> contracts"
   "spec -> core"
@@ -94,12 +108,16 @@ allowed=(
   "daemon -> bridge-runtime"
   "daemon -> spec"
   "daemon -> bench"
-  "daemon -> app-protocol"
   "core -> contracts"
+  "runtime -> contracts"
   "runtime -> core"
-  "app-protocol -> runtime"
+  "runtime -> kernel"
+  "app-protocol -> core"
   "cli -> app-protocol"
   "plugin-sdk -> core"
+  "tools -> contracts"
+  "tools -> core"
+  "tools -> kernel"
 )
 
 is_allowed() {

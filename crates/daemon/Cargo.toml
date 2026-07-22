@@ -67,11 +67,11 @@ dialoguer.workspace = true
 kernel = { package = "loong-kernel", version = "0.1.2-alpha.1", path = "../kernel" }
 loong-bench = { package = "loong-bench", version = "0.1.2-alpha.1", path = "../bench" }
 loong-app = { package = "loong-app", version = "0.1.2-alpha.1", path = "../app", default-features = false }
-loong-app-protocol = { package = "loong-app-protocol", version = "0.1.2-alpha.1", path = "../loong-app-protocol" }
 loong-bridge-runtime = { version = "0.1.2-alpha.1", path = "../bridge-runtime" }
 loong-contracts = { package = "loong-contracts", version = "0.1.2-alpha.1", path = "../contracts" }
 loong-core = { package = "loong-core", version = "0.1.2-alpha.1", path = "../loong-core" }
 loong-protocol = { package = "loong-protocol", version = "0.1.2-alpha.1", path = "../protocol" }
+loong-runtime.workspace = true
 loong-spec = { package = "loong-spec", version = "0.1.2-alpha.1", path = "../spec" }
 serde.workspace = true
 serde_json.workspace = true
@@ -89,7 +89,7 @@ chrono.workspace = true
 sha2.workspace = true
 semver.workspace = true
 ed25519-dalek.workspace = true
-dunce = "1"
+dunce.workspace = true
 tracing.workspace = true
 tracing-log.workspace = true
 tracing-subscriber.workspace = true
@@ -100,7 +100,7 @@ wait-timeout = "0.2"
 qrcode = { version = "0.14", default-features = false }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true
 loong-spec = { package = "loong-spec", version = "0.1.2-alpha.1", path = "../spec", features = ["test-hooks"] }
 syn = { version = "2", features = ["full", "visit"] }
 tower = { version = "0.5", features = ["util"] }

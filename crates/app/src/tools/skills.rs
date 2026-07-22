@@ -807,7 +807,8 @@ pub(super) fn execute_skills_install_tool_with_config(
                         .to_owned(),
                 );
             };
-            let source_path = super::file::resolve_safe_file_path_with_config(raw_path, config)?;
+            let source_path =
+                super::file_path::resolve_safe_file_path_with_config(raw_path, config)?;
             let source_metadata = fs::symlink_metadata(&source_path).map_err(|error| {
                 format!(
                     "failed to inspect skill source {}: {error}",

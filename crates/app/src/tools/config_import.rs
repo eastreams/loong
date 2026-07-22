@@ -48,6 +48,10 @@ pub(super) fn execute_config_import_tool_with_config(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
+    // TODO(config-import-access): keep this legacy path out of the typed
+    // ToolPlane until migration filesystem I/O is supplied by ctx.access().
+    // Registering this whole function as a typed tool would only hide the
+    // remaining direct apply_selected I/O behind a new name.
     let payload = request
         .payload
         .as_object()
@@ -67,6 +71,18 @@ pub(super) fn execute_config_import_tool_with_config(
     ) {
         return Err(format!(
             "{CONFIG_IMPORT_TOOL_NAME} payload.mode must be `plan`, `apply`, `apply_selected`, `discover`, `plan_many`, `recommend_primary`, `merge_profiles`, `map_skills`, or `rollback_last_apply`, got `{mode}`"
+        ));
+    }
+    let apply_skills_plan = payload
+        .get(APPLY_SKILLS_PLAN_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if mode == "apply_selected" && apply_skills_plan {
+        // TODO(config-import-access): This mode writes skill installs and
+        // manifests outside Access. Keep the legacy tool entry fail-closed
+        // until every one of those side effects has a typed Access action.
+        return Err(format!(
+            "{CONFIG_IMPORT_TOOL_NAME} apply_selected with apply_skills_plan is not access-backed yet; migrate skills.install/skills.remove first"
         ));
     }
 
@@ -215,10 +231,6 @@ pub(super) fn execute_config_import_tool_with_config(
             migration::discover_import_sources(input_path, migration::DiscoveryOptions::default())?;
         let summary = migration::plan_import_sources(&report)?;
         let selection = parse_apply_selection_mode(payload, &summary)?;
-        let apply_skills_plan = payload
-            .get(APPLY_SKILLS_PLAN_KEY)
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
         let selected_output_path = output_path.ok_or_else(|| {
             format!("{CONFIG_IMPORT_TOOL_NAME} apply_selected mode requires payload.output_path")
         })?;
@@ -539,7 +551,7 @@ fn resolve_safe_path_with_config(
     } else {
         root.join(candidate)
     };
-    let normalized = super::normalize_without_fs(&combined);
+    let normalized = loong_kernel::access::fs::normalize_path_lexically(&combined);
     resolve_path_within_root(&root, &normalized)
 }
 
@@ -550,7 +562,7 @@ fn canonicalize_or_fallback(path: PathBuf) -> Result<PathBuf, String> {
         let canonical = canonical.map(|resolved| dunce::simplified(&resolved).to_path_buf())?;
         return Ok(canonical);
     }
-    Ok(super::normalize_without_fs(&path))
+    Ok(loong_kernel::access::fs::normalize_path_lexically(&path))
 }
 
 fn resolve_path_within_root(root: &Path, normalized: &Path) -> Result<PathBuf, String> {
@@ -658,5 +670,24 @@ mod tests {
         assert!(error.starts_with("policy_denied: "));
         assert!(error.contains("escapes configured file root"));
         let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn legacy_tool_rejects_unmigrated_skill_writes_before_touching_paths() {
+        let error = execute_config_import_tool_with_config(
+            ToolCoreRequest {
+                tool_name: CONFIG_IMPORT_TOOL_NAME.to_owned(),
+                payload: json!({
+                    "mode": "apply_selected",
+                    "input_path": "missing-input",
+                    "output_path": "missing-output.toml",
+                    APPLY_SKILLS_PLAN_KEY: true,
+                }),
+            },
+            &ToolRuntimeConfig::default(),
+        )
+        .expect_err("unmigrated skill writes must fail closed");
+
+        assert!(error.contains("apply_selected with apply_skills_plan is not access-backed yet"));
     }
 }

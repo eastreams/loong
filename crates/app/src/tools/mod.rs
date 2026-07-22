@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use loong_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolInvocationOutcome};
-use loong_core::tool::ToolInvocationAction;
+use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loong_core::policy::context::PolicyContext;
 use serde_json::{Value, json};
 pub(crate) use tool_internal_context::{
     ensure_untrusted_payload_does_not_use_reserved_internal_tool_context,
@@ -21,8 +21,8 @@ use tool_search::searchable_entry_from_provider_definition;
 #[cfg(test)]
 use tool_search::{runtime_discoverable_tool_entries, runtime_tool_search_entries};
 
-use crate::KernelContext;
-use provider_schema::provider_definition_for_view;
+use crate::Context;
+use provider_schema::legacy_tool_metadata_definition_for_view;
 #[cfg(test)]
 use routing::{
     route_direct_browser_tool_name, route_direct_web_tool_name, route_direct_web_tool_name_for_view,
@@ -39,18 +39,20 @@ mod config_import;
 pub(crate) mod delegate;
 mod direct_policy_preflight;
 pub(crate) mod download_guard;
+mod error;
 #[cfg(feature = "feishu-integration")]
 mod feishu;
+#[cfg(feature = "tool-file")]
 mod file;
-pub mod file_policy_ext;
+mod file_path;
+mod file_policy_ext;
 #[cfg(feature = "tool-http")]
 mod http_request;
-mod kernel_adapter;
 #[cfg(feature = "tool-file")]
 mod memory_tools;
 pub(crate) mod messaging;
 mod payload;
-mod plane;
+pub(crate) mod plane;
 mod process_exec;
 mod provider_schema;
 mod provider_switch;
@@ -66,16 +68,15 @@ mod session_search;
 mod shell;
 pub mod shell_policy_ext;
 mod shell_request_prep;
-mod skills;
+pub(crate) mod skills;
 mod skills_scan;
 mod skills_sources;
 mod tool_app_runtime;
-mod tool_dispatch;
+pub(crate) mod tool_dispatch;
 mod tool_identity;
 mod tool_internal_context;
 mod tool_lease;
 mod tool_lease_authority;
-mod tool_path;
 mod tool_runtime_view;
 mod tool_search;
 mod tool_snapshot;
@@ -96,20 +97,18 @@ mod workspace_root_tests;
 
 pub use catalog::{
     CapabilityActionClass, ToolApprovalMode, ToolAvailability, ToolCatalog, ToolDescriptor,
-    ToolExecutionKind, ToolGovernanceProfile, ToolGovernanceScope, ToolRiskClass,
-    ToolSchedulingClass, ToolView, capability_action_class_for_descriptor,
-    capability_action_class_for_tool_name, delegate_child_tool_view_for_config,
-    delegate_child_tool_view_for_config_with_delegate, delegate_child_tool_view_for_contract,
-    delegate_child_tool_view_with_constraints, governance_profile_for_descriptor,
-    governance_profile_for_tool_name, planned_delegate_child_tool_view, planned_root_tool_view,
-    runtime_tool_view, runtime_tool_view_for_config, runtime_tool_view_for_config_with_skills,
+    ToolGovernanceProfile, ToolGovernanceScope, ToolOwner, ToolRiskClass, ToolView,
+    capability_action_class_for_descriptor, capability_action_class_for_tool_name,
+    delegate_child_tool_view_for_config, delegate_child_tool_view_for_config_with_delegate,
+    delegate_child_tool_view_for_contract, delegate_child_tool_view_with_constraints,
+    governance_profile_for_descriptor, governance_profile_for_tool_name,
+    planned_delegate_child_tool_view, planned_root_tool_view, runtime_tool_view,
+    runtime_tool_view_for_config, runtime_tool_view_for_config_with_skills,
     runtime_tool_view_for_runtime_config, tool_catalog,
 };
+pub(crate) use error::LegacyToolRequestError;
 #[cfg(feature = "feishu-integration")]
 pub(crate) use feishu::{DeferredFeishuCardUpdate, drain_deferred_feishu_card_updates};
-pub(crate) use kernel_adapter::register_kernel_tools;
-pub use kernel_adapter::{KernelToolAdapter, MvpToolAdapter};
-pub(crate) use plane::app_tool_plane;
 pub use security_posture::{
     BrowserSurfaceSecurityPosture, ShellExecutionSecurityPosture, SkillsSecurityPosture,
     SkillsSecurityPostureProbeFailure, ToolFileRootSecurityPosture, WebFetchSecurityPosture,
@@ -125,34 +124,28 @@ pub(crate) use shell_request_prep::{
     prepare_kernel_tool_request,
 };
 pub(crate) use tool_dispatch::execute_discoverable_tool_core_with_config;
-pub use tool_dispatch::execute_tool_core_with_config;
+pub(crate) use tool_dispatch::execute_tool_core_with_config;
 #[cfg(test)]
 pub(crate) use tool_dispatch::{
     is_expected_tool_request_error, run_blocking_with_timeout, tool_uses_dedicated_timeout,
 };
 pub(crate) use tool_identity::{
-    ResolvedToolExecution, direct_tool_name_for_hidden_tool, is_provider_exposed_tool_name,
-    model_visible_tool_name, required_capabilities_for_request,
-    required_capabilities_for_tool_name_and_payload, resolve_tool_execution,
+    ResolvedLegacyToolExecution, direct_tool_name_for_hidden_tool, is_provider_exposed_tool_name,
+    legacy_required_capabilities_for_request,
+    legacy_required_capabilities_for_tool_name_and_payload, model_visible_tool_name,
+    resolve_legacy_tool_execution,
 };
-pub use tool_identity::{
-    canonical_tool_name, is_known_tool_name, is_known_tool_name_in_view, user_visible_tool_name,
-};
+
+pub use tool_identity::{canonical_tool_name, legacy_display_tool_name};
 pub(crate) use tool_lease::{bridge_provider_tool_call_with_scope, issue_tool_lease};
-pub(crate) use tool_lease::{peek_tool_invoke_request, resolve_tool_invoke_request};
+pub(crate) use tool_lease::{parse_tool_invoke_request, peek_tool_invoke_request};
 #[cfg(test)]
 pub(crate) use tool_lease::{
     synthesize_test_provider_tool_call, synthesize_test_provider_tool_call_with_scope,
 };
-pub(crate) use tool_path::normalize_without_fs;
 pub use tool_runtime_view::runtime_tool_view_from_loong_config;
-pub(crate) use tool_runtime_view::{
-    effective_runtime_visible_tool_view, full_runtime_tool_view_for_runtime_config,
-    model_visible_skill_context_payload_for_path, model_visible_skill_context_payload_for_skill_id,
-    model_visible_skill_roots_for_runtime_config, runtime_tool_view_with_runtime_config,
-};
+pub(crate) use tool_runtime_view::{runtime_delegate_child_tool_view, runtime_visible_tool_view};
 pub(crate) use tool_snapshot::capability_snapshot_for_direct_states_with_config;
-pub(crate) use tool_snapshot::capability_snapshot_for_view_with_config;
 pub use tool_snapshot::{
     DiscoverableToolSurfaceSummary, ToolRegistryEntry,
     runtime_discoverable_tool_surface_summary_with_config, tool_registry_with_config,
@@ -165,16 +158,13 @@ pub use tool_snapshot::{
 pub use web_http::build_ssrf_safe_client;
 
 pub(crate) const BROWSER_SESSION_SCOPE_FIELD: &str = "__loong_browser_scope";
-pub(crate) const LEGACY_BROWSER_SESSION_SCOPE_FIELD: &str = "__loong_browser_scope";
 pub use bundled_skills::{
     BundledPreinstallTarget, BundledPreinstallTargetKind, BundledSkillPack,
     bundled_preinstall_targets, bundled_skill_pack, bundled_skill_pack_memberships,
     bundled_skill_packs,
 };
 pub(crate) use provider_schema::provider_tool_definitions_with_config;
-pub use provider_schema::{
-    provider_tool_definitions, tool_parameter_schema_types, try_provider_tool_definitions_for_view,
-};
+pub use provider_schema::{provider_tool_definitions, provider_tool_definitions_for_view};
 pub(crate) use routing::route_direct_tool_name;
 pub use tool_snapshot::{
     capability_snapshot, capability_snapshot_for_view, capability_snapshot_with_config,
@@ -182,11 +172,6 @@ pub use tool_snapshot::{
 };
 pub use tool_surface::ToolSurfaceState;
 pub(crate) use tool_surface::visible_direct_tool_states_for_view;
-
-#[cfg(test)]
-pub(crate) fn tool_id_visible_in_view(tool_id: &str, view: &ToolView) -> bool {
-    tool_search::tool_id_visible_in_view(tool_id, view)
-}
 
 const DELEGATE_ASYNC_TOOL_NAME: &str = "delegate_async";
 const DELEGATE_TOOL_NAME: &str = "delegate";
@@ -202,12 +187,8 @@ pub(crate) const LOONG_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY: &str = "visibl
 pub(crate) const LOONG_INTERNAL_RUNTIME_NARROWING_KEY: &str = "runtime_narrowing";
 pub(crate) const LOONG_INTERNAL_WORKSPACE_ROOT_KEY: &str = "workspace_root";
 
-pub fn normalize_skills_domain_rule(raw: &str) -> Result<String, String> {
-    skills::normalize_domain_rule(raw)
-}
-
 pub fn normalize_skill_domain_rule(raw: &str) -> Result<String, String> {
-    normalize_skills_domain_rule(raw)
+    skills::normalize_domain_rule(raw)
 }
 
 pub fn skills_list_with_config(
@@ -358,211 +339,52 @@ pub(crate) fn resolve_installable_skill_id(root: &Path) -> Result<String, String
     skills::resolve_installable_skill_id(root)
 }
 
-/// Execute a tool request, routing through the kernel for
-/// policy enforcement and audit recording.
+/// Execute the sole daemon migration command that still owns a legacy core tool.
 ///
-/// All requests are dispatched via `kernel.execute_tool_core` which
-/// enforces the derived capability set for the effective tool request, runs
-/// policy extensions, and records audit events.
-// TODO: remove this
-pub async fn execute_tool(
-    request: ToolCoreRequest,
-    kernel_ctx: &KernelContext,
+/// The concrete name is fixed here so this compatibility boundary cannot revive
+/// migrated tools through the old adapter. Delete it when `config.import` moves
+/// to the typed plane.
+pub async fn execute_legacy_config_import(
+    payload: Value,
+    ctx: &Context<'_>,
+    fallback: &crate::conversation::DefaultLegacyToolDispatcher,
 ) -> Result<ToolCoreOutcome, String> {
+    let allowed_capabilities = ctx.allowed_capabilities();
+    let allowed_capabilities = allowed_capabilities.iter().collect();
     let request = prepare_kernel_tool_request(
-        request,
-        &kernel_ctx.token.allowed_capabilities,
-        Some(kernel_ctx.token.token_id.as_str()),
+        ToolCoreRequest {
+            tool_name: "config.import".to_owned(),
+            payload,
+        },
+        &allowed_capabilities,
+        None,
         None,
         None,
     );
-    execute_kernel_tool_request(kernel_ctx, request, false)
-        .await
-        .map_err(|e| format!("{e}"))
+    crate::conversation::turn_engine::LegacyToolDispatcher::execute_core_tool(
+        fallback, ctx, request, false,
+    )
+    .await
+    .map_err(|e| format!("{e}"))
 }
 
-// TODO: remove this
-pub(crate) async fn execute_kernel_tool_request(
-    ctx: &KernelContext,
-    request: ToolCoreRequest,
-    trusted_internal_payload: bool,
-) -> Result<ToolCoreOutcome, loong_kernel::KernelError> {
-    let request = ToolCoreRequest {
-        tool_name: canonical_tool_name(request.tool_name.as_str()).to_owned(),
-        payload: request.payload,
-    };
-    let execute = async {
-        let effective_config = tool_dispatch::effective_tool_runtime_config_for_payload(
-            &request.payload,
-            &ctx.tool_runtime_config,
-        )
-        .map_err(|error| {
-            loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(error))
-        })?;
-        let mut request = request;
-        if request.tool_name == "read" {
-            // Temporary read bridge: query/glob modes still route to legacy
-            // tools, while path reads continue into the typed plane below.
-            // Delete this once read becomes a single aggregate typed tool.
-            let routed_request = routing::route_direct_read_tool_request_for_legacy(
-                request.clone(),
-                &effective_config,
-            )
-            .map_err(|error| {
-                loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(error))
-            })?;
-            if routed_request.tool_name != "read" {
-                request = routed_request;
-            }
-        }
-
-        let typed_path = loong_contracts::ToolPath::from(request.tool_name.clone());
-        if app_tool_plane().contains(&typed_path) {
-            // Typed migration path: app resolves the tool, kernel grants the
-            // invocation action, the plane consumes the grant, then app records
-            // the typed audit outcome. Unmigrated tools fall through to the
-            // legacy kernel adapter path below.
-            let caps = required_capabilities_for_request(&request);
-            let tool_policy_params = json!({
-                "tool_name": &request.tool_name,
-                "payload": &request.payload,
-            });
-            let execution_context = ctx
-                .execution_context(
-                    loong_contracts::ExecutionPlane::Tool,
-                    loong_contracts::PlaneTier::Core,
-                    Some(&tool_policy_params),
-                    &effective_config,
-                )
-                .map_err(|error| {
-                    loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(
-                        error,
-                    ))
-                })?;
-            let action =
-                ToolInvocationAction::new(typed_path.clone(), caps.clone(), request.payload);
-            let grant = ctx
-                .kernel
-                .grant_tool_invocation(ctx.pack_id(), &ctx.token, action, &execution_context)
-                .await?;
-            let audit_path = grant.granted.as_ref().path().clone();
-            let audit_caps = grant
-                .granted
-                .as_ref()
-                .required_capabilities()
-                .iter()
-                .copied()
-                .collect::<BTreeSet<_>>();
-
-            match app_tool_plane()
-                .invoke(grant.granted, &execution_context)
-                .await
-            {
-                Ok(outcome) => {
-                    ctx.kernel.record_tool_invocation(
-                        &execution_context,
-                        audit_path,
-                        &audit_caps,
-                        ToolInvocationOutcome::Completed,
-                    )?;
-                    return Ok(ToolCoreOutcome {
-                        status: outcome.status,
-                        payload: outcome.payload,
-                    });
-                }
-                Err(error) => {
-                    let error_kind = tool_plane_error_kind(&error).to_owned();
-                    let reason = tool_plane_error_reason(&error);
-                    ctx.kernel.record_tool_invocation(
-                        &execution_context,
-                        audit_path,
-                        &audit_caps,
-                        ToolInvocationOutcome::Failed { error_kind, reason },
-                    )?;
-                    return Err(loong_kernel::KernelError::ToolPlane(error));
-                }
-            }
-        }
-
-        let request = if request.tool_name == "read" {
-            routing::route_direct_read_tool_request_for_legacy(request, &effective_config).map_err(
-                |error| {
-                    loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(
-                        error,
-                    ))
-                },
-            )?
-        } else {
-            request
-        };
-        let caps = required_capabilities_for_request(&request);
-        let tool_policy_params = json!({
-            "tool_name": &request.tool_name,
-            "payload": &request.payload,
-        });
-        let execution_context = ctx
-            .execution_context(
-                loong_contracts::ExecutionPlane::Tool,
-                loong_contracts::PlaneTier::Core,
-                Some(&tool_policy_params),
-                &effective_config,
-            )
-            .map_err(|error| {
-                loong_kernel::KernelError::ToolPlane(loong_kernel::ToolPlaneError::Execution(error))
-            })?;
-        let outcome = ctx
-            .kernel
-            .execute_tool_core(
-                ctx.pack_id(),
-                &ctx.token,
-                &caps,
-                None,
-                request,
-                execution_context,
-            )
-            .await?;
-        Ok(outcome)
-    };
-    if trusted_internal_payload {
-        return with_trusted_internal_tool_payload_async(execute).await;
-    }
-
-    execute.await
+/// Execute `config.import` for the context-free legacy spec adapter.
+///
+/// The fixed tool name is the boundary: callers cannot use this API to revive
+/// any migrated or otherwise arbitrary legacy tool implementation.
+pub fn execute_legacy_config_import_for_spec(payload: Value) -> Result<ToolCoreOutcome, String> {
+    execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "config.import".to_owned(),
+            payload,
+        },
+        &runtime_config::ToolRuntimeConfig::default(),
+    )
 }
 
-fn tool_plane_error_kind(error: &loong_kernel::ToolPlaneError) -> &'static str {
-    match error {
-        loong_kernel::ToolPlaneError::ToolNotFound(_) => "not_found",
-        loong_kernel::ToolPlaneError::DuplicateTool(_) => "duplicate_tool",
-        loong_kernel::ToolPlaneError::CoreAdapterNotFound(_) => "core_adapter_not_found",
-        loong_kernel::ToolPlaneError::ExtensionNotFound(_) => "extension_not_found",
-        loong_kernel::ToolPlaneError::NoDefaultCoreAdapter => "no_default_core_adapter",
-        loong_kernel::ToolPlaneError::Execution(_) => "execution",
-        _ => "tool_plane",
-    }
-}
-
-fn tool_plane_error_reason(error: &loong_kernel::ToolPlaneError) -> String {
-    match error {
-        loong_kernel::ToolPlaneError::ToolNotFound(reason)
-        | loong_kernel::ToolPlaneError::DuplicateTool(reason)
-        | loong_kernel::ToolPlaneError::CoreAdapterNotFound(reason)
-        | loong_kernel::ToolPlaneError::ExtensionNotFound(reason)
-        | loong_kernel::ToolPlaneError::Execution(reason) => reason.clone(),
-        loong_kernel::ToolPlaneError::NoDefaultCoreAdapter => error.to_string(),
-        _ => error.to_string(),
-    }
-}
-
-pub fn execute_tool_core(request: ToolCoreRequest) -> Result<ToolCoreOutcome, String> {
-    execute_tool_core_with_config(request, runtime_config::get_tool_runtime_config())
-}
-
-pub(crate) use tool_app_runtime::{
-    continue_session_with_runtime, execute_app_tool_with_visibility_checked_config,
-};
+pub(crate) use tool_app_runtime::execute_legacy_app_tool_in_view;
 pub use tool_app_runtime::{
-    execute_app_tool_with_config, wait_for_session_with_config, wait_for_task_with_config,
+    execute_legacy_app_tool_with_config, wait_for_session_with_config, wait_for_task_with_config,
 };
 
 /// Tool registry entry for capability snapshot disclosure.
@@ -596,6 +418,7 @@ fn feishu_searchable_entries() -> Vec<SearchableToolEntry> {
                 search_hint,
                 &parameters,
                 preferred_parameter_order,
+                None,
                 tags,
                 None,
                 None,
@@ -610,3 +433,4 @@ mod test_utils;
 
 #[cfg(test)]
 mod tests;
+pub use error::ToolMetadataError;

@@ -1,6 +1,7 @@
 use thiserror::Error;
 
 use crate::contracts::{Capability, HarnessKind};
+use crate::tool_types::ToolInputError;
 
 #[non_exhaustive]
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -99,6 +100,8 @@ pub enum ToolPlaneError {
     ExtensionNotFound(String),
     #[error("no default core tool adapter is configured")]
     NoDefaultCoreAdapter,
+    #[error(transparent)]
+    Input(#[from] ToolInputError),
     #[error("tool execution failed: {0}")]
     Execution(String),
 }
@@ -154,6 +157,16 @@ pub enum IntegrationError {
 pub enum AuditError {
     #[error("audit sink failure: {0}")]
     Sink(String),
+    #[error("typed authorization evidence can only be recorded by PolicyEngine::grant")]
+    AuthorizationEvidenceOwnedByPolicyEngine,
+    #[error("typed action execution evidence requires a real Granted<Action>")]
+    ActionExecutionEvidenceRequiresGrant,
+    #[error("historical tool invocation evidence is read-only")]
+    HistoricalToolInvocationEvidenceReadOnly,
+    #[error("authorization attempt identity sequence exhausted")]
+    AuthorizationAttemptIdExhausted,
+    #[error("audit event identity sequence exhausted")]
+    EventIdExhausted,
 }
 
 #[non_exhaustive]

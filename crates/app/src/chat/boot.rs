@@ -32,7 +32,7 @@ pub(super) fn ensure_cli_channel_enabled_for_entrypoint(
 ///
 /// This is the highest-level bootstrap used by `chat`/`ask`: it loads the
 /// config, resolves startup session selection, exports runtime
-/// environment variables, bootstraps a fresh kernel context, and delegates the
+/// environment variables, bootstraps the shared runtime, and delegates the
 /// final session/memory assembly to the lower-level helpers below.
 pub(crate) fn initialize_cli_turn_runtime(
     config_path: Option<&str>,
@@ -56,13 +56,8 @@ pub(crate) fn initialize_cli_turn_runtime(
 ///
 /// Compared with `initialize_cli_turn_runtime`, this skips config loading but
 /// still normalizes the runtime workspace root, optionally exports runtime
-/// environment variables, bootstraps a fresh kernel context, and then delegates
-/// the final session/memory assembly to
-/// `initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx`.
-///
-/// Use the `_and_kernel_ctx` variant when the caller must reuse an existing
-/// kernel authority—such as channel-triggered turns—rather than minting a new
-/// token for the same logical operation.
+/// environment variables, bootstraps the shared runtime, and materializes the
+/// owned Session only after final session selection.
 pub(crate) fn initialize_cli_turn_runtime_with_loaded_config(
     resolved_path: PathBuf,
     config: LoongConfig,
@@ -87,16 +82,23 @@ pub(crate) fn initialize_cli_turn_runtime_with_loaded_config(
     if initialize_runtime_environment {
         crate::runtime_env::initialize_runtime_environment(&config, Some(&resolved_path));
     }
-    let runtime_kernel =
-        crate::runtime_bridge::RuntimeKernelOwner::bootstrap(kernel_scope, &config)?;
-    let kernel_ctx = runtime_kernel.cloned_kernel_context();
-    initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
+    let runtime = crate::runtime::bootstrap_runtime_with_config(&config)?;
+    assemble_cli_turn_runtime(
         resolved_path,
         config,
         session_hint,
         options,
-        kernel_ctx,
         session_requirement,
+        move |config, session_id| {
+            let session = crate::Session::from_config(
+                runtime.as_ref(),
+                config,
+                session_id,
+                kernel_scope,
+                loong_contracts::GovernedSessionMode::MutatingCapable,
+            )?;
+            Ok((runtime, session))
+        },
     )
 }
 
@@ -106,16 +108,57 @@ pub(crate) fn initialize_cli_turn_runtime_with_loaded_config(
 /// This helper resolves ACP defaults, prepares memory/sqlite state, derives the
 /// effective session id/address, and constructs the `CliTurnRuntime`. It
 /// deliberately does not mutate process environment variables or bootstrap a
-/// new kernel context; callers use it when those concerns were already handled
-/// by an outer runtime surface.
-pub(crate) fn initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
+/// second Runtime; callers use it when those concerns were already handled by
+/// an outer runtime surface.
+pub(crate) fn initialize_cli_turn_runtime_with_loaded_config_and_runtime(
     resolved_path: PathBuf,
     config: LoongConfig,
     session_hint: Option<&str>,
     options: &CliChatOptions,
-    kernel_ctx: crate::KernelContext,
+    runtime: Arc<loong_runtime::runtime::Runtime<crate::RuntimeContextFactory>>,
+    agent_id: impl Into<String>,
     session_requirement: CliSessionRequirement,
 ) -> CliResult<CliTurnRuntime> {
+    let agent_id = agent_id.into();
+    assemble_cli_turn_runtime(
+        resolved_path,
+        config,
+        session_hint,
+        options,
+        session_requirement,
+        move |config, session_id| {
+            let session = crate::Session::from_config(
+                runtime.as_ref(),
+                config,
+                session_id,
+                agent_id,
+                loong_contracts::GovernedSessionMode::MutatingCapable,
+            )?;
+            Ok((runtime, session))
+        },
+    )
+}
+
+/// Shares CLI assembly while preserving the required ownership order:
+/// session selection completes before either runtime-issued or inherited
+/// authority is attached to the resulting `CliTurnRuntime`.
+fn assemble_cli_turn_runtime<F>(
+    resolved_path: PathBuf,
+    config: LoongConfig,
+    session_hint: Option<&str>,
+    options: &CliChatOptions,
+    session_requirement: CliSessionRequirement,
+    build_runtime_session: F,
+) -> CliResult<CliTurnRuntime>
+where
+    F: FnOnce(
+        &LoongConfig,
+        &str,
+    ) -> CliResult<(
+        Arc<loong_runtime::runtime::Runtime<crate::RuntimeContextFactory>>,
+        crate::Session,
+    )>,
+{
     let effective_bootstrap_mcp_servers = config
         .acp
         .dispatch
@@ -150,18 +193,24 @@ pub(crate) fn initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
     let (session_id, session_origin) =
         resolve_or_create_cli_runtime_session_id(session_hint, session_requirement, ())?;
 
-    let session_address = ConversationSessionAddress::from_session_id(session_id.clone());
-    let runtime_kernel = crate::runtime_bridge::RuntimeKernelOwner::new(kernel_ctx);
-
+    let (runtime, session) = build_runtime_session(&config, session_id.as_str())?;
+    let legacy_tools = crate::conversation::DefaultLegacyToolDispatcher::with_config(
+        Arc::clone(&runtime),
+        &session,
+        crate::session::store::session_store_config_from_memory_config(&config.memory),
+        config.clone(),
+    )?;
+    let session_address = ConversationSessionAddress::from_session_id(session.session_id());
     Ok(CliTurnRuntime {
         resolved_path,
         config_present: true,
         config,
-        session_id,
         session_origin,
         session_address,
         turn_coordinator: ConversationTurnCoordinator::new(),
-        runtime_kernel,
+        runtime,
+        session,
+        legacy_tools,
         effective_bootstrap_mcp_servers,
         effective_working_directory,
         memory_label,
@@ -199,7 +248,6 @@ fn resolve_or_create_cli_runtime_session_id(
 #[cfg(all(test, not(feature = "memory-sqlite")))]
 mod tests {
     use super::*;
-    use crate::context::bootstrap_test_kernel_context;
     use std::path::PathBuf;
 
     #[test]
@@ -252,14 +300,16 @@ mod tests {
 
     #[test]
     fn cli_runtime_bootstrap_rejects_implicit_startup_without_sqlite() {
-        let kernel_ctx =
-            bootstrap_test_kernel_context("cli-runtime-no-sqlite", 60).expect("kernel context");
-        let result = initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
+        let config = LoongConfig::default();
+        let runtime =
+            crate::runtime::bootstrap_runtime_with_config(&config).expect("bootstrap test runtime");
+        let result = initialize_cli_turn_runtime_with_loaded_config_and_runtime(
             PathBuf::from("/tmp/loong.toml"),
-            LoongConfig::default(),
+            config,
             None,
             &CliChatOptions::default(),
-            kernel_ctx,
+            runtime,
+            "cli-runtime-no-sqlite",
             CliSessionRequirement::AllowImplicitDefault,
         );
 

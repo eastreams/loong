@@ -100,7 +100,7 @@ pub(super) fn map_approval_summary(
         .get("rule_id")
         .and_then(serde_json::Value::as_str)
         .map(ToOwned::to_owned);
-    let visible_tool_name = Some(mvp::tools::user_visible_tool_name(
+    let visible_tool_name = Some(mvp::tools::legacy_display_tool_name(
         approval.tool_name.as_str(),
     ));
     let raw_request = approval

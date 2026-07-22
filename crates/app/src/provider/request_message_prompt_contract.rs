@@ -1,8 +1,10 @@
+use loong_core::policy::context::PolicyContext;
+
+use crate::Context;
 use crate::config::LoongConfig;
 use crate::conversation::{ContextArtifactKind, PromptFragment, PromptLane};
 
 use super::super::native_tool_surface::ProviderNativePromptSection;
-use super::ProviderRuntimeBinding;
 
 pub(super) fn build_prompt_fragments_from_prompt_sources(
     config: &LoongConfig,
@@ -97,16 +99,16 @@ pub(super) fn build_prompt_fragments_from_prompt_sources(
     prompt_fragments.push(execution_discipline_fragment);
 
     if let Some(section) = extra_section {
-        let binding_fragment = PromptFragment::new(
-            "governed-runtime-binding",
+        let context_fragment = PromptFragment::new(
+            "governed-runtime-context",
             PromptLane::CapabilitySnapshot,
-            "governed-runtime-binding",
+            "governed-runtime-context",
             section,
             ContextArtifactKind::RuntimeContract,
         )
         .with_cacheable(true);
 
-        prompt_fragments.push(binding_fragment);
+        prompt_fragments.push(context_fragment);
     }
 
     let capability_fragment = PromptFragment::new(
@@ -265,17 +267,20 @@ fn render_deferred_tool_text_workflow_section() -> String {
     lines.join("\n")
 }
 
-pub(super) fn render_governed_runtime_binding_section(
-    binding: ProviderRuntimeBinding<'_>,
-) -> String {
-    let kernel_binding = if binding.is_kernel_bound() {
-        "present"
+pub(super) fn render_governed_runtime_context_section(ctx: &Context<'_>) -> String {
+    let allowed_capabilities = ctx.allowed_capabilities();
+    let allowed_capabilities = if allowed_capabilities.iter().next().is_none() {
+        "none".to_owned()
     } else {
-        "absent"
+        allowed_capabilities
+            .iter()
+            .map(|capability| capability.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
     };
     format!(
-        "## Governed Runtime Binding\n- session_mode: {}\n- kernel_binding: {kernel_binding}",
-        binding.session_mode().as_str()
+        "## Governed Runtime Context\n- session_mode: {}\n- allowed_capabilities: {allowed_capabilities}",
+        ctx.session().session_mode
     )
 }
 

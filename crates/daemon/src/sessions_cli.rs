@@ -219,6 +219,7 @@ pub async fn execute_sessions_command(
         SessionsCommands::Status { session_id } => {
             execute_status_command(
                 &resolved_config_path,
+                &config,
                 &current_session_id,
                 &memory_config,
                 tool_config,
@@ -246,6 +247,7 @@ pub async fn execute_sessions_command(
         } => {
             execute_wait_command(
                 &resolved_config_path,
+                &config,
                 &current_session_id,
                 &memory_config,
                 tool_config,
@@ -521,16 +523,30 @@ fn execute_list_command(
 
 async fn execute_status_command(
     resolved_config_path: &str,
+    config: &mvp::config::LoongConfig,
     current_session_id: &str,
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
     tool_config: &mvp::config::ToolConfig,
     session_id: &str,
 ) -> CliResult<Value> {
+    let execution_runtime = mvp::runtime::bootstrap_runtime_with_config(config)?;
+    let session = mvp::Session::from_config(
+        execution_runtime.as_ref(),
+        config,
+        current_session_id,
+        "cli-sessions-status",
+        loong_contracts::GovernedSessionMode::AdvisoryOnly,
+    )?;
+    let conversation_runtime = mvp::conversation::load_default_conversation_runtime(config)?;
+    let context =
+        mvp::Context::new(&execution_runtime, &session).map_err(|error| error.to_string())?;
     let detail = load_session_status_payload_with_runtime_summaries(
         memory_config,
         tool_config,
         current_session_id,
         session_id,
+        &context,
+        &conversation_runtime,
     )
     .await?;
     let recipes = build_session_recipes(resolved_config_path, current_session_id, session_id);
@@ -547,25 +563,34 @@ async fn execute_status_command(
     }))
 }
 
-async fn load_session_status_payload_with_runtime_summaries(
+async fn load_session_status_payload_with_runtime_summaries<
+    R: mvp::conversation::ConversationRuntime + ?Sized,
+>(
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
     tool_config: &mvp::config::ToolConfig,
     current_session_id: &str,
     session_id: &str,
+    context: &mvp::Context<'_>,
+    runtime: &R,
 ) -> CliResult<Value> {
     let mut detail =
         load_session_status_payload(memory_config, tool_config, current_session_id, session_id)?;
     let prompt_frame = crate::session_prompt_frame_cli::load_session_prompt_frame_payload(
         memory_config,
-        session_id,
+        context,
+        runtime,
     )
     .await;
-    let safe_lane =
-        crate::session_runtime_truth_cli::load_session_safe_lane_payload(memory_config, session_id)
-            .await;
+    let safe_lane = crate::session_runtime_truth_cli::load_session_safe_lane_payload(
+        memory_config,
+        context,
+        runtime,
+    )
+    .await;
     let turn_checkpoint = crate::session_runtime_truth_cli::load_session_turn_checkpoint_payload(
         memory_config,
-        session_id,
+        context,
+        runtime,
     )
     .await;
 
@@ -627,6 +652,7 @@ fn execute_events_command(
 
 async fn execute_wait_command(
     resolved_config_path: &str,
+    config: &mvp::config::LoongConfig,
     current_session_id: &str,
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
     tool_config: &mvp::config::ToolConfig,
@@ -643,9 +669,19 @@ async fn execute_wait_command(
         "timeout_ms": bounded_timeout_ms,
     });
     let session_store_config = mvp::session::store::SessionStoreConfig::from(memory_config);
+    let execution_runtime = mvp::runtime::bootstrap_runtime_with_config(config)?;
+    let session = mvp::Session::from_config(
+        execution_runtime.as_ref(),
+        config,
+        current_session_id,
+        "cli-sessions-wait",
+        loong_contracts::GovernedSessionMode::AdvisoryOnly,
+    )?;
+    let context =
+        mvp::Context::new(&execution_runtime, &session).map_err(|error| error.to_string())?;
     let outcome = mvp::tools::wait_for_session_with_config(
         payload,
-        current_session_id,
+        &context,
         &session_store_config,
         tool_config,
     )
@@ -708,11 +744,29 @@ async fn execute_heal_command(
     session_id: &str,
     apply: bool,
 ) -> CliResult<Value> {
+    let session_mode = if apply {
+        loong_contracts::GovernedSessionMode::MutatingCapable
+    } else {
+        loong_contracts::GovernedSessionMode::AdvisoryOnly
+    };
+    let execution_runtime = mvp::runtime::bootstrap_runtime_with_config(config)?;
+    let session = mvp::Session::from_config(
+        execution_runtime.as_ref(),
+        config,
+        current_session_id,
+        "cli-sessions-heal",
+        session_mode,
+    )?;
+    let conversation_runtime = mvp::conversation::load_default_conversation_runtime(config)?;
+    let context =
+        mvp::Context::new(&execution_runtime, &session).map_err(|error| error.to_string())?;
     let detail_before = load_session_status_payload_with_runtime_summaries(
         memory_config,
         tool_config,
         current_session_id,
         session_id,
+        &context,
+        &conversation_runtime,
     )
     .await?;
     let plan = build_session_heal_plan(
@@ -730,6 +784,7 @@ async fn execute_heal_command(
             tool_config,
             session_id,
             &plan,
+            &context,
         )
         .await?
     } else {
@@ -741,6 +796,8 @@ async fn execute_heal_command(
             tool_config,
             current_session_id,
             session_id,
+            &context,
+            &conversation_runtime,
         )
         .await?
     } else {
@@ -780,6 +837,7 @@ async fn execute_session_heal_plan(
     tool_config: &mvp::config::ToolConfig,
     session_id: &str,
     plan: &SessionHealPlan,
+    context: &mvp::Context<'_>,
 ) -> CliResult<Vec<Value>> {
     let mut applied_actions = Vec::new();
 
@@ -810,7 +868,7 @@ async fn execute_session_heal_plan(
                 })
             }
             SessionHealApplyStrategy::TurnCheckpointRepair => {
-                let payload = execute_turn_checkpoint_heal_action(config, session_id).await?;
+                let payload = execute_turn_checkpoint_heal_action(config, context).await?;
                 let status = payload
                     .get("status")
                     .and_then(Value::as_str)
@@ -836,13 +894,11 @@ async fn execute_session_heal_plan(
 
 async fn execute_turn_checkpoint_heal_action(
     config: &mvp::config::LoongConfig,
-    session_id: &str,
+    context: &mvp::Context<'_>,
 ) -> CliResult<Value> {
-    let runtime_kernel = bootstrap_sessions_runtime_kernel(config)?;
-    let binding = runtime_kernel.conversation_binding();
     let coordinator = mvp::conversation::ConversationTurnCoordinator::new();
     let outcome = coordinator
-        .repair_production_turn_checkpoint_tail(config, session_id, binding)
+        .repair_production_turn_checkpoint_tail(config, context)
         .await?;
     let source = outcome.source().map(|value| value.as_str()).unwrap_or("-");
     let after_turn_status = outcome.after_turn_status().unwrap_or("-");
@@ -858,14 +914,6 @@ async fn execute_turn_checkpoint_heal_action(
         "after_turn_status": after_turn_status,
         "compaction_status": compaction_status,
     }))
-}
-
-fn bootstrap_sessions_runtime_kernel(
-    config: &mvp::config::LoongConfig,
-) -> CliResult<mvp::runtime_bridge::RuntimeKernelOwner> {
-    let agent_id = "cli-sessions-heal";
-    let runtime_kernel = mvp::runtime_bridge::RuntimeKernelOwner::bootstrap(agent_id, config)?;
-    Ok(runtime_kernel)
 }
 
 fn build_session_heal_plan(
@@ -1444,7 +1492,7 @@ fn execute_app_tool_request(
         payload,
     };
     let session_store_config = mvp::session::store::SessionStoreConfig::from(memory_config);
-    let outcome = mvp::tools::execute_app_tool_with_config(
+    let outcome = mvp::tools::execute_legacy_app_tool_with_config(
         request,
         current_session_id,
         &session_store_config,

@@ -78,6 +78,19 @@ fn safe_lane_route_discovery_recovery_tool_not_found_replans() {
 }
 
 #[test]
+fn safe_lane_route_discovery_recovery_invalid_lease_replans() {
+    let failure = TurnFailure::policy_denied_with_discovery_recovery(
+        "invalid_tool_lease",
+        "invalid_tool_lease: signature mismatch",
+    );
+    let route = SafeLaneFailureRoute::from_failure(&failure, SafeLaneReplanBudget::new(2));
+
+    assert_eq!(route.decision, SafeLaneFailureRouteDecision::Replan);
+    assert_eq!(route.reason, SafeLaneFailureRouteReason::RetryableFailure);
+    assert_eq!(route.source, SafeLaneFailureRouteSource::BaseRouting);
+}
+
+#[test]
 fn safe_lane_route_non_retryable_failure_is_terminal() {
     let failure = TurnFailure::non_retryable("safe_lane_plan_node_non_retryable_error", "bad");
     let route = SafeLaneFailureRoute::from_failure(&failure, SafeLaneReplanBudget::new(3));
@@ -94,37 +107,37 @@ fn safe_lane_route_non_retryable_failure_is_terminal() {
 fn turn_failure_from_plan_failure_node_error_mapping_is_stable() {
     let cases = [
         (
-            PlanNodeErrorKind::ApprovalRequired,
+            PlanNodeError::approval_required("boom"),
             TurnFailureKind::PolicyDenied,
             "safe_lane_plan_node_policy_denied",
             false,
         ),
         (
-            PlanNodeErrorKind::PolicyDenied,
+            PlanNodeError::policy_denied("boom"),
             TurnFailureKind::PolicyDenied,
             "safe_lane_plan_node_policy_denied",
             false,
         ),
         (
-            PlanNodeErrorKind::Retryable,
+            PlanNodeError::retryable("boom"),
             TurnFailureKind::Retryable,
             "safe_lane_plan_node_retryable_error",
             true,
         ),
         (
-            PlanNodeErrorKind::NonRetryable,
+            PlanNodeError::non_retryable("boom"),
             TurnFailureKind::NonRetryable,
             "safe_lane_plan_node_non_retryable_error",
             false,
         ),
     ];
 
-    for (node_kind, expected_kind, expected_code, expected_retryable) in cases {
+    for (last_error, expected_kind, expected_code, expected_retryable) in cases {
+        let node_kind = last_error.kind;
         let failure = PlanRunFailure::NodeFailed {
             node_id: "tool-1".to_owned(),
             attempts_used: 1,
-            last_error_kind: node_kind,
-            last_error: "boom".to_owned(),
+            last_error,
         };
         let mapped = turn_failure_from_plan_failure(&failure);
         assert_eq!(mapped.kind, expected_kind, "node_kind={node_kind:?}");
@@ -684,8 +697,7 @@ fn terminal_plan_failure_uses_session_governor_error_code() {
     let failure = PlanRunFailure::NodeFailed {
         node_id: "tool-1".to_owned(),
         attempts_used: 1,
-        last_error_kind: PlanNodeErrorKind::Retryable,
-        last_error: "transient".to_owned(),
+        last_error: PlanNodeError::retryable("transient"),
     };
     let route = SafeLaneFailureRoute {
         decision: SafeLaneFailureRouteDecision::Terminal,
@@ -760,8 +772,7 @@ fn decide_safe_lane_plan_failure_action_replans_with_failed_subgraph_cursor() {
         PlanRunFailure::NodeFailed {
             node_id: "tool-2".to_owned(),
             attempts_used: 1,
-            last_error_kind: PlanNodeErrorKind::Retryable,
-            last_error: "transient".to_owned(),
+            last_error: PlanNodeError::retryable("transient"),
         },
         SafeLaneFailureRoute {
             decision: SafeLaneFailureRouteDecision::Replan,
@@ -796,8 +807,7 @@ fn decide_safe_lane_plan_failure_action_terminalizes_with_backpressure_code() {
         PlanRunFailure::NodeFailed {
             node_id: "tool-1".to_owned(),
             attempts_used: 2,
-            last_error_kind: PlanNodeErrorKind::Retryable,
-            last_error: "transient".to_owned(),
+            last_error: PlanNodeError::retryable("transient"),
         },
         SafeLaneFailureRoute {
             decision: SafeLaneFailureRouteDecision::Terminal,

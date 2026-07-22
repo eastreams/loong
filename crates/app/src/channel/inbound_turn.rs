@@ -1,14 +1,14 @@
-use std::{collections::BTreeMap, path::Path};
+use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 use crate::{
-    CliResult, KernelContext,
+    CliResult, Context,
     acp::AcpConversationTurnOptions,
     config::LoongConfig,
     conversation::{
         ConversationIngressChannel, ConversationIngressContext, ConversationIngressDelivery,
         ConversationIngressDeliveryResource, ConversationIngressFeishuCallbackContext,
-        ConversationIngressPrivateContext, ConversationRuntime, ConversationRuntimeBinding,
-        ConversationSessionAddress, ConversationTurnCoordinator, ProviderErrorMode,
+        ConversationIngressPrivateContext, ConversationRuntime, ConversationSessionAddress,
+        ConversationTurnCoordinator, ProviderErrorMode,
     },
     session::repository::{NewSessionRecord, SessionKind, SessionRepository, SessionState},
     session::store::SessionStoreConfig,
@@ -116,16 +116,18 @@ fn unix_time_ms_now() -> i64 {
 #[cfg(test)]
 pub(super) async fn process_inbound_with_runtime_and_feedback<R: ConversationRuntime + ?Sized>(
     config: &LoongConfig,
+    ctx: &Context<'_>,
     runtime: &R,
     message: &ChannelInboundMessage,
-    binding: ConversationRuntimeBinding<'_>,
+    legacy_tools: &crate::conversation::DefaultLegacyToolDispatcher,
     feedback_policy: ChannelTurnFeedbackPolicy,
 ) -> CliResult<String> {
     process_inbound_with_runtime_and_feedback_and_error_mode(
         config,
+        ctx,
         runtime,
         message,
-        binding,
+        legacy_tools,
         feedback_policy,
         ProviderErrorMode::Propagate,
         None,
@@ -149,9 +151,10 @@ pub async fn process_inbound_with_runtime_and_feedback_and_error_mode<
     R: ConversationRuntime + ?Sized,
 >(
     config: &LoongConfig,
+    ctx: &Context<'_>,
     runtime: &R,
     message: &ChannelInboundMessage,
-    binding: ConversationRuntimeBinding<'_>,
+    legacy_tools: &crate::conversation::DefaultLegacyToolDispatcher,
     feedback_policy: ChannelTurnFeedbackPolicy,
     error_mode: ProviderErrorMode,
     retry_progress: crate::provider::ProviderRetryProgressCallback,
@@ -166,12 +169,13 @@ pub async fn process_inbound_with_runtime_and_feedback_and_error_mode<
     let reply = ConversationTurnCoordinator::new()
         .handle_production_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
+            ctx,
             &prepared.address,
             &message.text,
             error_mode,
             runtime,
             &acp_options,
-            binding,
+            legacy_tools,
             prepared.ingress.as_ref(),
             observer,
             retry_progress,
@@ -196,14 +200,16 @@ pub async fn process_inbound_with_provider(
     config: &LoongConfig,
     resolved_path: Option<&Path>,
     message: &ChannelInboundMessage,
-    kernel_ctx: &KernelContext,
+    execution_runtime: &Arc<loong_runtime::runtime::Runtime<crate::RuntimeContextFactory>>,
+    agent_id: &str,
     feedback_policy: ChannelTurnFeedbackPolicy,
 ) -> CliResult<String> {
     process_inbound_with_provider_and_error_mode_and_retry_progress(
         config,
         resolved_path,
         message,
-        kernel_ctx,
+        execution_runtime,
+        agent_id,
         feedback_policy,
         ProviderErrorMode::Propagate,
         None,
@@ -226,7 +232,8 @@ pub async fn process_inbound_with_provider_and_error_mode_and_retry_progress(
     config: &LoongConfig,
     resolved_path: Option<&Path>,
     message: &ChannelInboundMessage,
-    kernel_ctx: &KernelContext,
+    execution_runtime: &Arc<loong_runtime::runtime::Runtime<crate::RuntimeContextFactory>>,
+    agent_id: &str,
     feedback_policy: ChannelTurnFeedbackPolicy,
     error_mode: ProviderErrorMode,
     retry_progress: crate::provider::ProviderRetryProgressCallback,
@@ -235,7 +242,8 @@ pub async fn process_inbound_with_provider_and_error_mode_and_retry_progress(
         config,
         resolved_path,
         message,
-        kernel_ctx,
+        execution_runtime,
+        agent_id,
         feedback_policy,
         error_mode,
         retry_progress,
@@ -258,7 +266,8 @@ pub async fn process_inbound_with_provider_and_error_mode(
     config: &LoongConfig,
     resolved_path: Option<&Path>,
     message: &ChannelInboundMessage,
-    kernel_ctx: &KernelContext,
+    execution_runtime: &Arc<loong_runtime::runtime::Runtime<crate::RuntimeContextFactory>>,
+    agent_id: &str,
     feedback_policy: ChannelTurnFeedbackPolicy,
     error_mode: ProviderErrorMode,
     retry_progress: crate::provider::ProviderRetryProgressCallback,
@@ -294,7 +303,8 @@ pub async fn process_inbound_with_provider_and_error_mode(
             let execution = crate::turn_gateway::TurnGatewayExecution {
                 resolved_path: resolved_path.map(Path::to_path_buf).unwrap_or_default(),
                 config: turn_config,
-                kernel_ctx: Some(kernel_ctx.clone()),
+                runtime: execution_runtime.clone(),
+                agent_id: agent_id.to_owned(),
                 acp_manager: None,
                 event_sink: None,
                 initialize_runtime_environment: true,
@@ -706,7 +716,7 @@ mod tests {
             false,
         )
         .expect("reopen rotated IM local session");
-        assert_eq!(resumed.session_id, after.session_id);
+        assert_eq!(resumed.session.session_id(), after.session_id);
 
         let prior_resumed = crate::chat::initialize_cli_turn_runtime_with_loaded_config(
             std::path::PathBuf::from("/tmp/loong.toml"),
@@ -718,7 +728,7 @@ mod tests {
             false,
         )
         .expect("reopen prior IM local session");
-        assert_eq!(prior_resumed.session_id, before.session_id);
+        assert_eq!(prior_resumed.session.session_id(), before.session_id);
     }
 
     #[test]

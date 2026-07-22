@@ -1,10 +1,10 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
+use loong_contracts::ToolSchedulingClass;
 use serde_json::json;
 
 use super::{ToolDecisionTelemetry, ToolOutcomeTelemetry};
-use crate::tools::ToolSchedulingClass;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ToolBatchExecutionMode {

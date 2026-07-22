@@ -92,10 +92,7 @@ pub(crate) fn trusted_internal_tool_context_from_payload(
 pub(crate) fn take_trusted_internal_tool_context(
     body: &mut serde_json::Map<String, Value>,
 ) -> serde_json::Map<String, Value> {
-    for key in [
-        LOONG_INTERNAL_TOOL_CONTEXT_KEY,
-        LOONG_INTERNAL_TOOL_CONTEXT_KEY,
-    ] {
+    for key in [LOONG_INTERNAL_TOOL_CONTEXT_KEY] {
         let Some(value) = body.remove(key) else {
             continue;
         };

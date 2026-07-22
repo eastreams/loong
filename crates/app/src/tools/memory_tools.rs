@@ -451,7 +451,7 @@ pub(super) fn execute_memory_get_tool_with_config(
 
     let workspace_root = workspace_root_from_config(config)?;
     let locations = collect_workspace_memory_document_locations(workspace_root)?;
-    let resolved_path = super::file::resolve_safe_file_path_with_config(raw_path, config)?;
+    let resolved_path = super::file_path::resolve_safe_file_path_with_config(raw_path, config)?;
     let matched_location = find_memory_location_for_path(&locations, resolved_path.as_path())?
         .ok_or_else(|| {
             format!(
@@ -808,7 +808,7 @@ fn find_memory_location_for_path<'a>(
 }
 
 fn normalized_requested_path_key(path: &Path) -> String {
-    let normalized_path = super::normalize_without_fs(path);
+    let normalized_path = loong_kernel::access::fs::normalize_path_lexically(path);
     normalized_path.display().to_string()
 }
 

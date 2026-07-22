@@ -10,12 +10,12 @@ use crate::CliResult;
 use crate::acp::{AcpTurnEventSink, AcpTurnProvenance, JsonlAcpTurnEventSink};
 use crate::chat::{
     CliChatOptions, initialize_cli_turn_runtime, initialize_cli_turn_runtime_with_loaded_config,
-    initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx,
+    initialize_cli_turn_runtime_with_loaded_config_and_runtime,
 };
 use crate::config::load as load_config;
 use crate::conversation::{
-    ConversationIngressContext, ConversationSessionAddress, PromptFrameEventSummary,
-    load_prompt_frame_event_summary,
+    ConversationIngressContext, ConversationSessionAddress, DefaultConversationRuntime,
+    PromptFrameEventSummary, load_prompt_frame_event_summary,
 };
 use crate::tools;
 use loong_contracts::ToolCoreRequest;
@@ -101,7 +101,12 @@ pub struct AgentRuntime;
 pub struct TurnExecutionService {
     resolved_path: PathBuf,
     config: crate::config::LoongConfig,
-    kernel_ctx: Option<crate::KernelContext>,
+    // `None` is reserved for standalone entrypoints that intentionally own a
+    // fresh Runtime. Long-lived hosts must install their shared Runtime here.
+    runtime: Option<(
+        Arc<loong_runtime::runtime::Runtime<crate::RuntimeContextFactory>>,
+        String,
+    )>,
     acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
     initialize_runtime_environment: bool,
 }
@@ -207,7 +212,7 @@ impl<'a> RuntimeTurnExecutionService<'a> {
                 let prompt_frame_summary = load_runtime_prompt_frame_summary(runtime).await;
                 let (prompt_assembly, prompt_cache) = build_prompt_plans(&prompt_frame_summary);
 
-                let governed_session_mode = runtime.conversation_binding().session_mode();
+                let governed_session_mode = runtime.session.session_mode;
 
                 return crate::acp::consume_finalized_acp_conversation_turn(
                     execution,
@@ -223,7 +228,7 @@ impl<'a> RuntimeTurnExecutionService<'a> {
                         let event_count = success.runtime_events.len();
 
                         Ok(AgentTurnResult {
-                            session_id: runtime.session_id.clone(),
+                            session_id: runtime.session.session_id().to_owned(),
                             output_text,
                             turn_mode: request.turn_mode,
                             governed_session_mode,
@@ -243,31 +248,26 @@ impl<'a> RuntimeTurnExecutionService<'a> {
             let (effective_ingress, _effective_provenance) =
                 effective_turn_context(ingress, provenance);
             let turn_config = load_runtime_turn_config(runtime)?;
+            let turn_session = runtime
+                .session
+                .rematerialize(runtime.runtime.as_ref(), &turn_config)?;
             #[cfg(feature = "memory-sqlite")]
-            let memory_config =
-                crate::session::store::session_store_config_from_memory_config_without_env_overrides(
-                    &turn_config.memory,
-                );
-            #[cfg(feature = "memory-sqlite")]
-            let hosted_runtime =
-                crate::conversation::HostedConversationRuntime::new_with_memory_config(
-                    crate::conversation::DefaultConversationRuntime::from_config_or_env(
-                        &turn_config,
-                    )?,
-                    memory_config,
-                );
+            let hosted_runtime = crate::conversation::HostedConversationRuntime::new(
+                DefaultConversationRuntime::from_config_or_env(&turn_config)?,
+            );
             #[cfg(not(feature = "memory-sqlite"))]
-            let hosted_runtime =
-                crate::conversation::DefaultConversationRuntime::from_config_or_env(&turn_config)?;
+            let hosted_runtime = DefaultConversationRuntime::from_config_or_env(&turn_config)?;
+            let context = crate::Context::new(&runtime.runtime, &turn_session)
+                .map_err(|error| error.to_string())?;
             let turn_outcome = runtime
                 .turn_coordinator
                 .handle_turn_with_runtime_and_address_and_ingress_and_observer_outcome(
                     &turn_config,
-                    &turn_address,
+                    &context,
                     message,
                     provider_error_mode,
                     &hosted_runtime,
-                    runtime.conversation_binding(),
+                    &runtime.legacy_tools,
                     effective_ingress,
                     observer,
                     retry_progress,
@@ -277,10 +277,10 @@ impl<'a> RuntimeTurnExecutionService<'a> {
             let (prompt_assembly, prompt_cache) = build_prompt_plans(&prompt_frame_summary);
 
             Ok(AgentTurnResult {
-                session_id: runtime.session_id.clone(),
+                session_id: runtime.session.session_id().to_owned(),
                 output_text: turn_outcome.reply,
                 turn_mode: request.turn_mode,
-                governed_session_mode: runtime.conversation_binding().session_mode(),
+                governed_session_mode: runtime.session.session_mode,
                 state: None,
                 stop_reason: None,
                 usage: turn_outcome.usage,
@@ -297,14 +297,18 @@ impl TurnExecutionService {
         Self {
             resolved_path,
             config,
-            kernel_ctx: None,
+            runtime: None,
             acp_manager: None,
             initialize_runtime_environment: true,
         }
     }
 
-    pub fn with_kernel_ctx(mut self, kernel_ctx: crate::KernelContext) -> Self {
-        self.kernel_ctx = Some(kernel_ctx);
+    pub fn with_runtime(
+        mut self,
+        runtime: Arc<loong_runtime::runtime::Runtime<crate::RuntimeContextFactory>>,
+        agent_id: impl Into<String>,
+    ) -> Self {
+        self.runtime = Some((runtime, agent_id.into()));
         self
     }
 
@@ -330,7 +334,7 @@ impl TurnExecutionService {
     ) -> Pin<Box<dyn Future<Output = CliResult<AgentTurnResult>> + Send + 'a>> {
         let resolved_path = self.resolved_path.clone();
         let config = self.config.clone();
-        let kernel_ctx = self.kernel_ctx.clone();
+        let runtime = self.runtime.clone();
         let acp_manager = self.acp_manager.clone();
         let cli_options = cli_chat_options_for_turn_request(request, &options);
         let event_sink = options.event_sink;
@@ -342,15 +346,18 @@ impl TurnExecutionService {
         let initialize_runtime_environment = self.initialize_runtime_environment;
 
         Box::pin(async move {
-            let cli_runtime = match kernel_ctx {
-                Some(kernel_ctx) => initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
-                    resolved_path,
-                    config,
-                    session_hint,
-                    &cli_options,
-                    kernel_ctx,
-                    crate::chat::CliSessionRequirement::AllowImplicitDefault,
-                )?,
+            let cli_runtime = match runtime {
+                Some((runtime, agent_id)) => {
+                    initialize_cli_turn_runtime_with_loaded_config_and_runtime(
+                        resolved_path,
+                        config,
+                        session_hint,
+                        &cli_options,
+                        runtime,
+                        agent_id,
+                        crate::chat::CliSessionRequirement::AllowImplicitDefault,
+                    )?
+                }
                 None => initialize_cli_turn_runtime_with_loaded_config(
                     resolved_path,
                     config,
@@ -685,7 +692,7 @@ impl AgentRuntime {
             &CliChatOptions::default(),
             "agent-runtime-session-events",
         )?;
-        let outcome = tools::execute_app_tool_with_visibility_checked_config(
+        let outcome = tools::execute_legacy_app_tool_in_view(
             ToolCoreRequest {
                 tool_name: "session_events".to_owned(),
                 payload: json!({
@@ -694,9 +701,10 @@ impl AgentRuntime {
                     "after_id": after_id,
                 }),
             },
-            &runtime.session_id,
+            runtime.session.session_id(),
             &runtime.memory_config,
             &runtime.config.tools,
+            &runtime.session.tool_view,
         )?;
         parse_agent_runtime_events(&outcome.payload)
     }
@@ -726,16 +734,17 @@ impl AgentRuntime {
             &CliChatOptions::default(),
             "agent-runtime-cancel-turn",
         )?;
-        let outcome = tools::execute_app_tool_with_visibility_checked_config(
+        let outcome = tools::execute_legacy_app_tool_in_view(
             ToolCoreRequest {
                 tool_name: "session_cancel".to_owned(),
                 payload: json!({
                     "session_id": target_session_id,
                 }),
             },
-            &runtime.session_id,
+            runtime.session.session_id(),
             &runtime.memory_config,
             &runtime.config.tools,
+            &runtime.session.tool_view,
         )?;
         Ok(outcome.payload)
     }
@@ -787,14 +796,15 @@ fn normalized_turn_working_directory(value: Option<&str>) -> Option<std::path::P
 /// Enrich the resolved root session id with any channel/account/thread scope
 /// that the caller supplied for this turn.
 ///
-/// The underlying persisted session remains keyed by `runtime.session_id`; this
+/// The underlying persisted session remains keyed by the owned `Session`; this
 /// helper only projects the structured conversation address used by dispatch
 /// and ACP routing.
 fn resolved_session_address(
     runtime: &crate::chat::CliTurnRuntime,
     request: &AgentTurnRequest,
 ) -> ConversationSessionAddress {
-    let mut address = ConversationSessionAddress::from_session_id(runtime.session_id.clone());
+    let mut address =
+        ConversationSessionAddress::from_session_id(runtime.session.session_id().to_owned());
     if let (Some(channel_id), Some(conversation_id)) = (
         request.channel_id.as_deref(),
         request.conversation_id.as_deref(),
@@ -881,14 +891,16 @@ async fn load_runtime_prompt_frame_summary(
 ) -> PromptFrameEventSummary {
     #[cfg(feature = "memory-sqlite")]
     {
-        return load_prompt_frame_event_summary(
-            &runtime.session_id,
-            32,
-            runtime.conversation_binding(),
-            &runtime.memory_config,
-        )
-        .await
-        .unwrap_or_default();
+        let Ok(context) = runtime.context() else {
+            return PromptFrameEventSummary::default();
+        };
+        let Ok(history_runtime) = DefaultConversationRuntime::from_config_or_env(&runtime.config)
+        else {
+            return PromptFrameEventSummary::default();
+        };
+        return load_prompt_frame_event_summary(32, &context, &history_runtime)
+            .await
+            .unwrap_or_default();
     }
 
     #[cfg(not(feature = "memory-sqlite"))]
@@ -978,7 +990,11 @@ pub async fn load_agent_runtime(
         crate::chat::CliSessionRequirement::AllowImplicitDefault,
         true,
     )?;
-    Ok((resolved_path, config, runtime.session_id))
+    Ok((
+        resolved_path,
+        config,
+        runtime.session.session_id().to_owned(),
+    ))
 }
 
 #[cfg(test)]

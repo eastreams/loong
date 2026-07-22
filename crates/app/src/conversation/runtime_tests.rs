@@ -9,6 +9,7 @@ use crate::session::repository::{
 };
 use crate::test_support::TurnTestHarness;
 use crate::test_utils::unique_temp_dir;
+use crate::tools::ToolView;
 #[cfg(feature = "memory-sqlite")]
 use serde_json::json;
 #[cfg(feature = "memory-sqlite")]
@@ -35,15 +36,6 @@ struct SpawnerAwareRuntime {
 #[cfg(feature = "memory-sqlite")]
 #[async_trait]
 impl ConversationRuntime for SpawnerAwareRuntime {
-    fn tool_view(
-        &self,
-        _config: &LoongConfig,
-        _session_id: &str,
-        _binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<ToolView> {
-        Ok(crate::tools::runtime_tool_view())
-    }
-
     fn async_delegate_spawner(
         &self,
         _config: &LoongConfig,
@@ -61,10 +53,8 @@ impl ConversationRuntime for SpawnerAwareRuntime {
     async fn build_messages(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
+        _ctx: &crate::Context<'_>,
         _include_system_prompt: bool,
-        _tool_view: &ToolView,
-        _binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Vec<Value>> {
         Ok(Vec::new())
     }
@@ -73,7 +63,7 @@ impl ConversationRuntime for SpawnerAwareRuntime {
         &self,
         _config: &LoongConfig,
         _messages: &[Value],
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
     ) -> CliResult<String> {
         Ok(String::new())
     }
@@ -81,11 +71,9 @@ impl ConversationRuntime for SpawnerAwareRuntime {
     async fn request_turn(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
         _turn_id: &str,
         _messages: &[Value],
-        _tool_view: &ToolView,
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
     ) -> CliResult<ProviderTurn> {
         Ok(ProviderTurn::default())
     }
@@ -93,11 +81,9 @@ impl ConversationRuntime for SpawnerAwareRuntime {
     async fn request_turn_streaming(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
         _turn_id: &str,
         _messages: &[Value],
-        _tool_view: &ToolView,
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
         _on_token: crate::provider::StreamingTokenCallback,
     ) -> CliResult<ProviderTurn> {
         Ok(ProviderTurn::default())
@@ -105,32 +91,12 @@ impl ConversationRuntime for SpawnerAwareRuntime {
 
     async fn persist_turn(
         &self,
-        _session_id: &str,
         _role: &str,
         _content: &str,
-        _binding: ConversationRuntimeBinding<'_>,
+        _ctx: &crate::Context<'_>,
     ) -> CliResult<()> {
         Ok(())
     }
-}
-
-#[test]
-fn provider_runtime_binding_maps_direct_conversation_binding_to_advisory_only() {
-    assert!(matches!(
-        provider_runtime_binding(ConversationRuntimeBinding::direct()),
-        provider::ProviderRuntimeBinding::AdvisoryOnly
-    ));
-}
-
-#[test]
-fn provider_runtime_binding_maps_kernel_conversation_binding_to_kernel() {
-    let harness = TurnTestHarness::new();
-
-    assert!(matches!(
-        provider_runtime_binding(ConversationRuntimeBinding::kernel(&harness.kernel_ctx)),
-        provider::ProviderRuntimeBinding::Kernel(kernel_ctx)
-            if std::ptr::eq(kernel_ctx, &harness.kernel_ctx)
-    ));
 }
 
 #[test]
@@ -207,70 +173,6 @@ fn hosted_runtime_overrides_async_delegate_spawner_without_changing_background_t
     ));
 }
 
-#[test]
-fn async_delegate_spawn_request_round_trips_runtime_self_continuity_json() {
-    let execution = super::super::subagent::ConstrainedSubagentExecution {
-        mode: super::super::subagent::ConstrainedSubagentMode::Async,
-        isolation: super::super::subagent::ConstrainedSubagentIsolation::Shared,
-        owner_kind: None,
-        depth: 1,
-        max_depth: 2,
-        active_children: 0,
-        max_active_children: 2,
-        timeout_seconds: 30,
-        allow_shell_in_child: false,
-        child_tool_allowlist: vec!["file.read".to_owned()],
-        workspace_root: None,
-        runtime_narrowing: ToolRuntimeNarrowing::default(),
-        kernel_bound: false,
-        identity: None,
-        profile: Some(super::super::subagent::ConstrainedSubagentProfile::for_child_depth(1, 2)),
-    };
-    let continuity = RuntimeSelfContinuity {
-        workspace_guidance: crate::workspace_guidance::WorkspaceGuidanceModel {
-            entries: vec!["Keep continuity explicit.".to_owned()],
-        },
-        runtime_self: crate::runtime_self::RuntimeSelfModel::default(),
-        resolved_identity: None,
-        session_profile_projection: Some("delegate profile".to_owned()),
-    };
-    let request = AsyncDelegateSpawnRequest {
-        child_session_id: "child-1".to_owned(),
-        parent_session_id: "parent-1".to_owned(),
-        task: "investigate".to_owned(),
-        canonical_task_id: Some("task-1".to_owned()),
-        label: Some("child".to_owned()),
-        profile: Some(DelegateBuiltinProfile::Research),
-        execution: execution.clone(),
-        runtime_self_continuity: Some(continuity.clone()),
-        timeout_seconds: 30,
-        binding: OwnedConversationRuntimeBinding::direct(),
-    };
-
-    let encoded = request
-        .runtime_self_continuity_json()
-        .expect("serialize runtime self continuity");
-    let round_tripped = async_delegate_spawn_request_from_serialized_parts(
-        request.child_session_id.clone(),
-        request.parent_session_id.clone(),
-        request.task.clone(),
-        request.canonical_task_id.clone(),
-        request.label.clone(),
-        request.profile,
-        execution,
-        encoded,
-        request.timeout_seconds,
-        OwnedConversationRuntimeBinding::direct(),
-    )
-    .expect("round-trip async delegate request");
-
-    assert_eq!(
-        round_tripped.runtime_self_continuity,
-        Some(continuity),
-        "runtime self continuity should survive serialization"
-    );
-}
-
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
 async fn hosted_runtime_build_context_delegates_to_inner_runtime() {
@@ -279,21 +181,11 @@ async fn hosted_runtime_build_context_delegates_to_inner_runtime() {
 
     #[async_trait]
     impl ConversationRuntime for BuildContextAwareRuntime {
-        fn tool_view(
-            &self,
-            _config: &LoongConfig,
-            _session_id: &str,
-            _binding: ConversationRuntimeBinding<'_>,
-        ) -> CliResult<ToolView> {
-            Ok(crate::tools::runtime_tool_view())
-        }
-
         async fn build_context(
             &self,
             _config: &LoongConfig,
-            _session_id: &str,
+            _ctx: &crate::Context<'_>,
             _include_system_prompt: bool,
-            _binding: ConversationRuntimeBinding<'_>,
         ) -> CliResult<AssembledConversationContext> {
             let messages = vec![serde_json::json!({
                 "role": "system",
@@ -312,6 +204,7 @@ async fn hosted_runtime_build_context_delegates_to_inner_runtime() {
                 estimated_tokens: Some(7),
                 prompt_fragments: vec![prompt_fragment],
                 system_prompt_addition: Some("addition".to_owned()),
+                runtime_self_continuity: None,
             };
 
             Ok(assembled)
@@ -320,10 +213,8 @@ async fn hosted_runtime_build_context_delegates_to_inner_runtime() {
         async fn build_messages(
             &self,
             _config: &LoongConfig,
-            _session_id: &str,
+            _ctx: &crate::Context<'_>,
             _include_system_prompt: bool,
-            _tool_view: &ToolView,
-            _binding: ConversationRuntimeBinding<'_>,
         ) -> CliResult<Vec<Value>> {
             Err("build_messages should not be used when build_context is delegated".to_owned())
         }
@@ -332,7 +223,7 @@ async fn hosted_runtime_build_context_delegates_to_inner_runtime() {
             &self,
             _config: &LoongConfig,
             _messages: &[Value],
-            _binding: ConversationRuntimeBinding<'_>,
+            _ctx: &crate::Context<'_>,
         ) -> CliResult<String> {
             Ok(String::new())
         }
@@ -340,11 +231,9 @@ async fn hosted_runtime_build_context_delegates_to_inner_runtime() {
         async fn request_turn(
             &self,
             _config: &LoongConfig,
-            _session_id: &str,
             _turn_id: &str,
             _messages: &[Value],
-            _tool_view: &ToolView,
-            _binding: ConversationRuntimeBinding<'_>,
+            _ctx: &crate::Context<'_>,
         ) -> CliResult<ProviderTurn> {
             Err("unused".to_owned())
         }
@@ -352,11 +241,9 @@ async fn hosted_runtime_build_context_delegates_to_inner_runtime() {
         async fn request_turn_streaming(
             &self,
             _config: &LoongConfig,
-            _session_id: &str,
             _turn_id: &str,
             _messages: &[Value],
-            _tool_view: &ToolView,
-            _binding: ConversationRuntimeBinding<'_>,
+            _ctx: &crate::Context<'_>,
             _on_token: crate::provider::StreamingTokenCallback,
         ) -> CliResult<ProviderTurn> {
             Err("unused".to_owned())
@@ -364,10 +251,9 @@ async fn hosted_runtime_build_context_delegates_to_inner_runtime() {
 
         async fn persist_turn(
             &self,
-            _session_id: &str,
             _role: &str,
             _content: &str,
-            _binding: ConversationRuntimeBinding<'_>,
+            _ctx: &crate::Context<'_>,
         ) -> CliResult<()> {
             Ok(())
         }
@@ -375,14 +261,11 @@ async fn hosted_runtime_build_context_delegates_to_inner_runtime() {
 
     let config = LoongConfig::default();
     let hosted_runtime = HostedConversationRuntime::new(BuildContextAwareRuntime);
+    let harness = TurnTestHarness::new();
+    let ctx = harness.context();
 
     let assembled = hosted_runtime
-        .build_context(
-            &config,
-            "session-1",
-            true,
-            ConversationRuntimeBinding::Direct,
-        )
+        .build_context(&config, &ctx, true)
         .await
         .expect("delegated build_context");
 
@@ -409,55 +292,18 @@ fn load_hosted_default_conversation_runtime_keeps_default_async_spawner_only() {
     assert!(background_task_spawner.is_none());
 }
 
-#[cfg(feature = "memory-sqlite")]
-#[tokio::test]
-async fn hosted_runtime_persist_turn_uses_explicit_memory_config_for_direct_binding() {
-    let root = unique_temp_dir("hosted-runtime-explicit-memory");
-    let sqlite_path = root.join("explicit-memory.db");
-    let memory_config =
-        crate::session::store::SessionStoreConfig::for_sqlite_path(sqlite_path.clone());
-    let session_id = "hosted-runtime-explicit-session";
-    let runtime = HostedConversationRuntime::new_with_memory_config(
-        SpawnerAwareRuntime {
-            async_delegate_spawner: None,
-            background_task_spawner: None,
-        },
-        memory_config.clone(),
-    );
-
-    crate::session::store::ensure_session_store_ready(Some(sqlite_path), &memory_config)
-        .expect("initialize explicit session store");
-
-    runtime
-        .persist_turn(
-            session_id,
-            "assistant",
-            "persist via explicit memory config",
-            ConversationRuntimeBinding::Direct,
-        )
-        .await
-        .expect("persist hosted runtime turn");
-
-    let turns = crate::session::store::window_session_turns(session_id, 8, &memory_config)
-        .expect("load persisted turns");
-    let persisted_turn = turns
-        .iter()
-        .find(|turn| {
-            turn.role == "assistant" && turn.content == "persist via explicit memory config"
-        })
-        .expect("persisted assistant turn");
-
-    assert_eq!(persisted_turn.role, "assistant");
-    assert_eq!(persisted_turn.content, "persist via explicit memory config");
-}
-
 #[tokio::test]
 async fn default_runtime_build_context_rehydrates_active_skills() {
-    let runtime = DefaultConversationRuntime::default();
     let session_id = "session-active-external-skills";
-    let root = unique_temp_dir("active-external-skills-runtime");
-    let sqlite_path = root.join("memory.db");
-    let workspace_root = root.join("workspace");
+    let harness = TurnTestHarness::with_capabilities(std::collections::BTreeSet::from([
+        loong_contracts::Capability::InvokeTool,
+        loong_contracts::Capability::FilesystemRead,
+        loong_contracts::Capability::FilesystemWrite,
+        loong_contracts::Capability::MemoryRead,
+    ]));
+    let runtime = crate::conversation::DefaultConversationRuntime::new();
+    let sqlite_path = harness.temp_dir.join("memory.sqlite3");
+    let workspace_root = harness.temp_dir.join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("create workspace root");
 
     let mut config = LoongConfig::default();
@@ -495,13 +341,19 @@ async fn default_runtime_build_context_rehydrates_active_skills() {
         })
         .expect("append active skills event");
 
+    let session = crate::Session::from_config(
+        harness.runtime.as_ref(),
+        &config,
+        session_id,
+        harness.session.agent_id(),
+        harness.session.session_mode,
+    )
+    .expect("load session context");
+    let ctx = crate::Context::new(harness.runtime.as_ref(), &session)
+        .expect("loaded Session must remain bound to the harness Runtime");
+
     let assembled = runtime
-        .build_context(
-            &config,
-            session_id,
-            true,
-            ConversationRuntimeBinding::direct(),
-        )
+        .build_context(&config, &ctx, true)
         .await
         .expect("build context");
     let system_content = assembled.messages[0]["content"]
@@ -535,8 +387,7 @@ async fn default_runtime_build_context_rehydrates_active_skills() {
 }
 
 #[tokio::test]
-async fn default_runtime_tool_view_excludes_active_skill_blocked_tools() {
-    let runtime = DefaultConversationRuntime::default();
+async fn session_rematerialization_excludes_active_skill_blocked_tools() {
     let session_id = "session-active-external-skill-tool-block";
     let root = unique_temp_dir("active-external-skill-tool-block");
     let sqlite_path = root.join("memory.db");
@@ -561,6 +412,18 @@ async fn default_runtime_tool_view_excludes_active_skill_blocked_tools() {
         state: SessionState::Ready,
     })
     .expect("create root session");
+    let runtime = crate::runtime::bootstrap_runtime_with_config(&config)
+        .expect("bootstrap runtime before session materialization");
+    let session = crate::Session::from_config(
+        runtime.as_ref(),
+        &config,
+        session_id,
+        "test-agent",
+        loong_contracts::GovernedSessionMode::MutatingCapable,
+    )
+    .expect("materialize session before policy update");
+    assert!(session.tool_view.contains("web"));
+
     repo.append_event(NewSessionEvent {
             session_id: session_id.to_owned(),
             event_kind: ACTIVE_SKILLS_EVENT_KIND.to_owned(),
@@ -581,9 +444,10 @@ async fn default_runtime_tool_view_excludes_active_skill_blocked_tools() {
         })
         .expect("append active skills event");
 
-    let tool_view = runtime
-        .tool_view(&config, session_id, ConversationRuntimeBinding::direct())
-        .expect("runtime tool view");
+    let session = session
+        .rematerialize(runtime.as_ref(), &config)
+        .expect("rematerialize updated session projection");
+    let tool_view = &session.tool_view;
 
     assert!(
         !tool_view.contains("web"),
@@ -593,4 +457,38 @@ async fn default_runtime_tool_view_excludes_active_skill_blocked_tools() {
         tool_view.contains("read"),
         "unrelated direct tools should remain visible"
     );
+}
+
+#[test]
+fn session_rematerialization_cannot_expand_tool_authority() {
+    let root = unique_temp_dir("session-rematerialization-tool-ceiling");
+    let mut config = LoongConfig::default();
+    config.memory.sqlite_path = root.join("memory.db").display().to_string();
+    let tool_runtime_config =
+        crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(&config, None);
+    let runtime = crate::runtime::bootstrap_runtime_with_config(&config)
+        .expect("bootstrap runtime before session rematerialization");
+    let session = crate::Session::root(
+        runtime.as_ref(),
+        "test-agent",
+        "narrow-session",
+        loong_contracts::GovernedSessionMode::MutatingCapable,
+        loong_contracts::Capabilities::from([
+            loong_contracts::Capability::InvokeTool,
+            loong_contracts::Capability::FilesystemRead,
+        ]),
+        tool_runtime_config,
+        crate::memory::runtime_config::MemoryRuntimeConfig::default(),
+        ToolView::from_legacy_paths(["read"]),
+        None,
+        None,
+    )
+    .expect("narrow session");
+
+    let rematerialized = session
+        .rematerialize(runtime.as_ref(), &config)
+        .expect("rematerialize narrow session");
+
+    assert!(rematerialized.tool_view.contains("read"));
+    assert!(!rematerialized.tool_view.contains("memory_search"));
 }

@@ -1,16 +1,4 @@
-fn direct_metadata_alias(name: &str) -> Option<&'static str> {
-    match name {
-        "file.write" => Some("write"),
-        "file.edit" => Some("edit"),
-        _ => None,
-    }
-}
-
 pub(super) fn tool_argument_hint(name: &str) -> &'static str {
-    if let Some(alias) = direct_metadata_alias(name) {
-        return tool_argument_hint(alias);
-    }
-
     if let Some(argument_hint) = crate::tools::tool_surface::direct_tool_argument_hint(name) {
         return argument_hint;
     }
@@ -121,11 +109,6 @@ pub(super) fn tool_argument_hint(name: &str) -> &'static str {
             "account_id?:string,open_id?:string,receive_id:string,receive_id_type?:string,text?:string,post?:object,image_key?:string,file_key?:string,card?:object,markdown?:string"
         }
         "feishu.whoami" => "account_id?:string,open_id?:string",
-        "read" => {
-            "path?:string,offset?:integer,limit?:integer,max_bytes?:integer,query?:string,pattern?:string,root?:string,glob?:string,max_results?:integer,max_bytes_per_file?:integer,case_sensitive?:boolean,include_directories?:boolean"
-        }
-        "write" => "path:string,content:string,create_dirs?:boolean,overwrite?:boolean",
-        "edit" => "path:string,edits:array",
         "bash" => "command:string,timeout_ms?:integer,cwd?:string",
         "web" => {
             "url?:string,mode?:string,max_bytes?:integer,query?:string,provider?:string,max_results?:integer"
@@ -162,12 +145,6 @@ pub(super) fn tool_argument_hint(name: &str) -> &'static str {
         "browser.companion.wait" => "session_id:string,condition:string,timeout_ms?:integer",
         "http.request" => {
             "url:string,method?:string,headers?:object,body?:string,content_type?:string,max_bytes?:integer"
-        }
-        "glob.search" => {
-            "pattern:string,root?:string,max_results?:integer,include_directories?:boolean"
-        }
-        "content.search" => {
-            "query:string,root?:string,glob?:string,max_results?:integer,max_bytes_per_file?:integer,case_sensitive?:boolean"
         }
         "memory.retrieve" => "session_id:string,query?:string,intent?:string,max_results?:integer",
         "memory_search" => "query:string,max_results?:integer",
@@ -207,10 +184,6 @@ pub(super) fn tool_argument_hint(name: &str) -> &'static str {
 }
 
 pub(super) fn tool_search_hint(name: &str, fallback: &'static str) -> &'static str {
-    if let Some(alias) = direct_metadata_alias(name) {
-        return tool_search_hint(alias, fallback);
-    }
-
     if let Some(search_hint) = crate::tools::tool_surface::direct_tool_search_hint(name) {
         return search_hint;
     }
@@ -218,12 +191,6 @@ pub(super) fn tool_search_hint(name: &str, fallback: &'static str) -> &'static s
     match name {
         "http.request" => {
             "send a bounded http request, inspect status and headers, fetch text or binary responses"
-        }
-        "glob.search" => {
-            "find workspace files by glob pattern, list files in a directory, browse folder contents, search repo paths, match files under a root"
-        }
-        "content.search" => {
-            "search workspace file contents, find text in repo files, grep text in the project"
         }
         "shell.exec" => {
             "run a shell command, execute a terminal command, bash, zsh, powershell, cli"
@@ -243,10 +210,6 @@ pub(super) fn tool_search_hint(name: &str, fallback: &'static str) -> &'static s
 }
 
 pub(super) fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
-    if let Some(alias) = direct_metadata_alias(name) {
-        return tool_parameter_types(alias);
-    }
-
     if let Some(parameter_types) = crate::tools::tool_surface::direct_tool_parameter_types(name) {
         return parameter_types;
     }
@@ -609,20 +572,6 @@ pub(super) fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'sta
             ("allowed_domains", "array"),
             ("blocked_domains", "array"),
         ],
-        "glob.search" => &[
-            ("pattern", "string"),
-            ("root", "string"),
-            ("max_results", "integer"),
-            ("include_directories", "boolean"),
-        ],
-        "content.search" => &[
-            ("query", "string"),
-            ("root", "string"),
-            ("glob", "string"),
-            ("max_results", "integer"),
-            ("max_bytes_per_file", "integer"),
-            ("case_sensitive", "boolean"),
-        ],
         "memory.retrieve" => &[
             ("session_id", "string"),
             ("query", "string"),
@@ -734,10 +683,6 @@ pub(super) fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'sta
 }
 
 pub(super) fn tool_required_fields(name: &str) -> &'static [&'static str] {
-    if let Some(alias) = direct_metadata_alias(name) {
-        return tool_required_fields(alias);
-    }
-
     if let Some(required_fields) = crate::tools::tool_surface::direct_tool_required_fields(name) {
         return required_fields;
     }
@@ -792,8 +737,6 @@ pub(super) fn tool_required_fields(name: &str) -> &'static [&'static str] {
         "browser.companion.type" => &["session_id", "selector", "text"],
         "browser.companion.wait" => &["session_id", "condition"],
         "http.request" => &["url"],
-        "glob.search" => &["pattern"],
-        "content.search" => &["query"],
         "memory.retrieve" => &["session_id"],
         "memory_search" => &["query"],
         "memory_get" => &["path"],
@@ -823,10 +766,6 @@ pub(super) fn tool_required_fields(name: &str) -> &'static [&'static str] {
 }
 
 pub(super) fn tool_tags(name: &str) -> &'static [&'static str] {
-    if let Some(alias) = direct_metadata_alias(name) {
-        return tool_tags(alias);
-    }
-
     if let Some(tags) = crate::tools::tool_surface::direct_tool_tags(name) {
         return tags;
     }
@@ -890,18 +829,6 @@ pub(super) fn tool_tags(name: &str) -> &'static [&'static str] {
         "browser.companion.type" => &["browser", "managed", "type"],
         "browser.companion.wait" => &["browser", "managed", "wait"],
         "http.request" => &["http", "request", "web", "network", "external"],
-        "glob.search" => &[
-            "file",
-            "search",
-            "glob",
-            "filesystem",
-            "repo",
-            "directory",
-            "folder",
-            "list",
-            "browse",
-        ],
-        "content.search" => &["file", "search", "content", "filesystem", "repo"],
         "memory.retrieve" => &["memory", "retrieve", "recall", "durable", "workspace"],
         "memory_search" => &["memory", "search", "recall", "durable", "workspace"],
         "memory_get" => &["memory", "read", "recall", "durable", "workspace"],

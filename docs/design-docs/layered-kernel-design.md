@@ -30,20 +30,25 @@ Rules:
 
 Scope:
 
-- `policy.rs` (core policy engine)
-- `policy_ext.rs` (environment/domain policy overlays)
-- capability token issue/revoke/authorize lifecycle
+- `loong-core::policy` (Action, Policy, ContextFactory, grants)
+- `kernel::policy` (ordered typed/any policy pipeline)
+- permission and authorization audit boundaries
+- legacy capability-token issue/revoke/authorize lifecycle
 
 Rules:
 
 - Every external action must pass L1.
-- Tool plane core/extension execution must route deterministic request-policy approval through the
-  kernel authorization stack before dispatch: token/capability validation in `PolicyEngine::authorize`
-  plus tool-specific tightening in `PolicyExtensionChain` (Rule of Two: model intent plus
-  deterministic policy decision).
-- The deprecated `PolicyEngine::check_tool_call` hook remains compatibility-only and must not be
-  treated as the live request-policy seam.
-- Policy extensions can only tighten behavior, never weaken core policy.
+- Typed Tool and Access actions route through the single sealed algorithm:
+  `PolicyEngine::grant(ctx, action) -> ActionGrant<A> -> Granted<A>`.
+- The grant algorithm performs capability gating, ordered policy evaluation,
+  permission resolution, authorization audit, and private grant minting. No
+  caller may recreate one of these steps with a token or helper wrapper.
+- Broad `PolicyAny` gates run before the typed Action policy. A terminal decision
+  short-circuits the ordered pipeline; continuing decisions hand evaluation to
+  the next policy chain.
+- Pack/token authorization and old extension policy remain compatibility-only
+  inside explicitly named legacy ingress owners. They must not shape Context,
+  ToolInvocation, Access, or typed Action APIs.
 - Denials are auditable and deterministic.
 - Human approval gate should default to medium-balanced mode:
   high-risk tool calls require explicit user authorization, while low-risk calls stay fast.
@@ -65,27 +70,26 @@ Rules:
 - Denylist must have highest precedence over allowlist/full-access grants.
 - One-time full-access grants should support expiry and remaining-use limits to reduce blast radius.
 
-### L2. Execution Plane Layer (Core + Extension Split)
+### L2. Execution Plane Layer
 
 Scope:
 
-- `runtime.rs`
-- `tool.rs`
-- `memory.rs`
-- `connector.rs`
-
-Pattern:
-
-- `Core*Adapter`: minimal trusted substrate.
-- `*ExtensionAdapter`: rich behavior composed over the core adapter.
-- `*Plane`: adapter registry, default-core selection, and dispatch.
+- `loong-runtime::Runtime` and ToolPlane
+- app-owned Session and recursive `Context<'a>`
+- typed Access domains and concrete Actions
+- explicit legacy ingress for unmigrated tool/memory/connector envelopes
 
 Rules:
 
-- Extension path never bypasses core path.
-- Core interfaces remain stable and minimal.
-- New capabilities prefer extension adapters over core contract growth.
-- Each plane supports explicit default-core selection to make orchestration deterministic.
+- Runtime owns Kernel plus ToolPlane; Session owns stable authority and lifecycle;
+  Context borrows both for recursive execution.
+- Registered Tool dispatch is selected by the plane before grant and stays bound
+  to that entry through execution. A typed hit never falls back after policy,
+  input, execution, or audit failure.
+- Physical side effects for migrated domains occur only in Access after a
+  concrete `Granted<Action>` is consumed.
+- Legacy core/extension adapters may remain only behind the final unmatched
+  ingress branch and must be removed with each concrete migration.
 
 ### L3. Orchestration Layer
 

@@ -85,7 +85,7 @@ impl ChatControlPlaneApprovalSummary {
             approval_request_id: record.approval_request_id.clone(),
             status,
             tool_name: record.tool_name.clone(),
-            visible_tool_name: crate::tools::user_visible_tool_name(record.tool_name.as_str()),
+            visible_tool_name: crate::tools::legacy_display_tool_name(record.tool_name.as_str()),
             request_summary,
             turn_id: record.turn_id.clone(),
             requested_at: record.requested_at,

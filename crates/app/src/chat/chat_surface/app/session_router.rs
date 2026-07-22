@@ -61,7 +61,7 @@ impl SessionRouter {
             active_route.route_origin(),
             crate::chat::CliRuntimeSessionOrigin::CreatedThisRun
         ) {
-            created_this_run_session_ids.push(active_route.runtime.session_id.clone());
+            created_this_run_session_ids.push(active_route.runtime.session.session_id().to_owned());
         }
 
         Self {
@@ -88,7 +88,7 @@ impl SessionRouter {
     }
 
     pub(crate) fn active_session_id(&self) -> &str {
-        self.active_runtime().session_id.as_str()
+        self.active_runtime().session.session_id()
     }
 
     pub(crate) fn created_this_run_session_ids(&self) -> Vec<String> {
@@ -123,7 +123,7 @@ impl SessionRouter {
                 crate::chat::CliSessionRequirement::AllowImplicitDefault,
             )
             .await?;
-        let session_id = route.runtime.session_id.clone();
+        let session_id = route.runtime.session.session_id().to_owned();
         self.install_created_route(route);
         self.switch_confirm = None;
         Ok(SessionTransitionOutcome {
@@ -142,7 +142,7 @@ impl SessionRouter {
                 crate::chat::CliSessionRequirement::RequireExplicit,
             )
             .await?;
-        let session_id = route.runtime.session_id.clone();
+        let session_id = route.runtime.session.session_id().to_owned();
         self.install_route(route);
         self.switch_confirm = None;
         Ok(SessionTransitionOutcome {
@@ -171,24 +171,28 @@ impl SessionRouter {
         };
         let route_origin = match session_requirement {
             crate::chat::CliSessionRequirement::AllowImplicitDefault => {
-                crate::chat::RouteOrigin::CreatedThisRun
+                crate::chat::CliRuntimeSessionOrigin::CreatedThisRun
             }
             crate::chat::CliSessionRequirement::RequireExplicit => {
-                crate::chat::RouteOrigin::Existing
+                crate::chat::CliRuntimeSessionOrigin::Existing
             }
         };
         let session_id = match session_hint {
             Some(session_id) => session_id.to_owned(),
             None => {
-                crate::chat::initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
-                    self.active_runtime().resolved_path.clone(),
-                    self.active_runtime().config.clone(),
+                let active_runtime = self.active_runtime();
+                crate::chat::initialize_cli_turn_runtime_with_loaded_config_and_runtime(
+                    active_runtime.resolved_path.clone(),
+                    active_runtime.config.clone(),
                     None,
                     &preserved_options,
-                    self.active_runtime().runtime_kernel.cloned_kernel_context(),
+                    active_runtime.runtime.clone(),
+                    active_runtime.session.agent_id(),
                     session_requirement,
                 )?
-                .session_id
+                .session
+                .session_id()
+                .to_owned()
             }
         };
         let route = crate::chat::rebuild_active_session_route(
@@ -208,10 +212,11 @@ impl SessionRouter {
             crate::chat::CliRuntimeSessionOrigin::CreatedThisRun
         ) && !self
             .created_this_run_session_ids
-            .contains(&active_route.runtime.session_id)
+            .iter()
+            .any(|session_id| session_id == active_route.runtime.session.session_id())
         {
             self.created_this_run_session_ids
-                .push(active_route.runtime.session_id.clone());
+                .push(active_route.runtime.session.session_id().to_owned());
         }
         self.active_route = active_route;
     }

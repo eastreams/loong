@@ -2,14 +2,12 @@ mod message_manager;
 mod token_manager;
 mod websocket_manager;
 use crate::CliResult;
-use crate::KernelContext;
 use crate::channel::commands::ChannelCommandContext;
 use crate::channel::commands::accounts::build_qqbot_command_context;
 use crate::channel::runtime::serve::ChannelServeStopHandle;
 use crate::config::{
     ChannelDefaultAccountSelectionSource, LoongConfig, ResolvedQqbotChannelConfig,
 };
-use crate::context::DEFAULT_TOKEN_TTL_S;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -56,7 +54,8 @@ async fn run_qqbot_channel_inner(
     resolved_path: &std::path::Path,
     selected_by_default: bool,
     default_account_source: ChannelDefaultAccountSelectionSource,
-    kernel_ctx: KernelContext,
+    execution_runtime: Arc<loong_runtime::runtime::Runtime<crate::RuntimeContextFactory>>,
+    agent_id: impl Into<String>,
     stop: ChannelServeStopHandle,
 ) -> CliResult<()> {
     let _ = selected_by_default;
@@ -85,7 +84,8 @@ async fn run_qqbot_channel_inner(
         config.clone(),
         resolved_path.to_path_buf(),
         resolved.clone(),
-        kernel_ctx,
+        execution_runtime,
+        agent_id,
         account_id.clone(),
         outbound_tx,
     )));
@@ -151,18 +151,15 @@ pub(super) async fn run_qqbot_channel_with_context(
             Some(context.resolved_path.as_path()),
         );
     }
-    let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
-        "channel-qqbot",
-        DEFAULT_TOKEN_TTL_S,
-        &context.config,
-    )?;
+    let execution_runtime = crate::runtime::bootstrap_runtime_with_config(&context.config)?;
     run_qqbot_channel_inner(
         &context.config,
         &context.resolved,
         &context.resolved_path,
         context.route.selected_by_default(),
         context.route.default_account_source,
-        kernel_ctx,
+        execution_runtime,
+        "channel-qqbot",
         stop,
     )
     .await

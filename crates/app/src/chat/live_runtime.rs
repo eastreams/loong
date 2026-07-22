@@ -1035,7 +1035,7 @@ fn build_cli_chat_live_tool_snapshots(
             name: tool_state
                 .name
                 .as_deref()
-                .map(crate::tools::user_visible_tool_name),
+                .map(crate::tools::legacy_display_tool_name),
             request_summary: tool_state.request_summary.clone(),
             args: tool_state.args.clone(),
             status: tool_state.status,

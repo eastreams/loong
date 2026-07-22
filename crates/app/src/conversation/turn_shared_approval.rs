@@ -367,7 +367,7 @@ fn approval_prompt_view_from_requirement(
 ) -> ApprovalPromptView {
     let marker = match requirement.kind {
         ApprovalRequirementKind::GovernedTool => ApprovalPromptMarker::ToolApprovalRequired,
-        ApprovalRequirementKind::KernelContextRequired => ApprovalPromptMarker::ApprovalRequired,
+        ApprovalRequirementKind::ContextRequired => ApprovalPromptMarker::ApprovalRequired,
     };
     let locale = approval_prompt_locale_from_text(
         join_non_empty_lines(&[assistant_preface, requirement.reason.as_str()]).as_str(),
@@ -379,7 +379,7 @@ fn approval_prompt_view_from_requirement(
         tool_name: requirement
             .tool_name
             .as_deref()
-            .map(crate::tools::user_visible_tool_name),
+            .map(crate::tools::legacy_display_tool_name),
         request_id: requirement.approval_request_id.clone(),
         rule_id: trimmed_non_empty(requirement.rule_id.as_str()),
         reason: trimmed_non_empty(requirement.reason.as_str()),

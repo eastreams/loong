@@ -6,7 +6,7 @@ use crate::conversation::turn_engine::ToolIntent;
 use crate::tools;
 
 use super::{
-    ProviderToolBridgeContext, attach_provider_parse_telemetry, build_provider_tool_intent,
+    ProviderToolSchemaView, attach_provider_parse_telemetry, build_provider_tool_intent,
     decode_inline_xml_text, is_inside_markdown_fence, is_inside_markdown_indented_code_block,
     is_standalone_block_end, is_standalone_block_start, normalize_text,
 };
@@ -89,9 +89,8 @@ pub(super) fn attach_invoke_block_parse_telemetry(
 
 pub(super) fn extract_invoke_block_turn(
     text: &str,
-    session_id: Option<&str>,
     turn_id: Option<&str>,
-    bridge_context: &ProviderToolBridgeContext,
+    schema: &ProviderToolSchemaView,
 ) -> InvokeBlockParseResult {
     const FUNCTION_CALLS_OPEN: &str = "<function_calls>";
     const FUNCTION_CALLS_CLOSE: &str = "</function_calls>";
@@ -131,20 +130,18 @@ pub(super) fn extract_invoke_block_turn(
         }
 
         let block_body = &text[body_start..body_start + body_end];
-        let parsed_tool_intents = match parse_invoke_block_sequence(
-            block_body,
-            session_id,
-            turn_id,
-            bridge_context,
-            tool_intents.len(),
-        ) {
-            Ok(parsed_tool_intents) => parsed_tool_intents,
-            Err(error_code) => {
-                return InvokeBlockParseResult::Malformed {
-                    telemetry: InvokeBlockParseTelemetry::malformed(tool_intents.len(), error_code),
-                };
-            }
-        };
+        let parsed_tool_intents =
+            match parse_invoke_block_sequence(block_body, turn_id, schema, tool_intents.len()) {
+                Ok(parsed_tool_intents) => parsed_tool_intents,
+                Err(error_code) => {
+                    return InvokeBlockParseResult::Malformed {
+                        telemetry: InvokeBlockParseTelemetry::malformed(
+                            tool_intents.len(),
+                            error_code,
+                        ),
+                    };
+                }
+            };
 
         if parsed_tool_intents.is_empty() {
             cleaned.push_str(&text[cursor..block_end]);
@@ -173,9 +170,8 @@ pub(super) fn extract_invoke_block_turn(
 
 fn parse_invoke_block_sequence(
     body: &str,
-    session_id: Option<&str>,
     turn_id: Option<&str>,
-    bridge_context: &ProviderToolBridgeContext,
+    schema: &ProviderToolSchemaView,
     tool_call_offset: usize,
 ) -> Result<Vec<ToolIntent>, InvokeBlockParseError> {
     const INVOKE_OPEN: &str = "<invoke";
@@ -236,10 +232,9 @@ fn parse_invoke_block_sequence(
             canonical_tool_name.as_str(),
             args_json,
             "provider_invoke_block_call",
-            session_id,
             turn_id,
             tool_call_id,
-            bridge_context,
+            schema,
         );
         if let Some(tool_intent) = tool_intent {
             tool_intents.push(tool_intent);

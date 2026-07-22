@@ -65,7 +65,7 @@ pub(super) fn resolve_provider_switch_config_path(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        return super::file::resolve_safe_file_path_with_config(raw, config);
+        return super::file_path::resolve_safe_file_path_with_config(raw, config);
     }
     config
         .config_path

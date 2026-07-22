@@ -3,61 +3,52 @@ use super::*;
 pub(super) async fn emit_safe_lane_event<R: ConversationRuntime + ?Sized>(
     config: &LoongConfig,
     runtime: &R,
-    session_id: &str,
     event_name: &str,
     payload: Value,
-    binding: ConversationRuntimeBinding<'_>,
+    ctx: &Context<'_>,
 ) {
     if !should_emit_safe_lane_event(config, event_name, &payload) {
         return;
     }
-    let _ = persist_conversation_event(runtime, session_id, event_name, payload, binding).await;
-    if let Some(ctx) = binding.kernel_context() {
-        let _ = ctx.kernel.record_audit_event(
-            Some(ctx.agent_id()),
-            AuditEventKind::PlaneInvoked {
-                pack_id: ctx.pack_id().to_owned(),
-                plane: ExecutionPlane::Runtime,
-                tier: PlaneTier::Core,
-                primary_adapter: "conversation.safe_lane".to_owned(),
-                delegated_core_adapter: None,
-                operation: format!("conversation.safe_lane.{event_name}"),
-                required_capabilities: Vec::new(),
-            },
-        );
-    }
+    let outcome = match persist_conversation_event(runtime, event_name, payload, ctx).await {
+        Ok(()) => RuntimeOperationOutcome::Completed,
+        Err(reason) => RuntimeOperationOutcome::Failed { reason },
+    };
+    let _ = ctx.runtime().record_audit_event(
+        Some(ctx.agent_id()),
+        AuditEventKind::RuntimeOperation {
+            operation: format!("conversation.safe_lane.{event_name}"),
+            outcome,
+        },
+    );
 }
 
 pub(super) async fn emit_fast_lane_tool_batch_event<R: ConversationRuntime + ?Sized>(
     runtime: &R,
-    session_id: &str,
     trace: &ToolBatchExecutionTrace,
-    binding: ConversationRuntimeBinding<'_>,
+    ctx: &Context<'_>,
 ) -> CliResult<()> {
     persist_conversation_event(
         runtime,
-        session_id,
         "fast_lane_tool_batch",
         trace.as_event_payload(),
-        binding,
+        ctx,
     )
     .await
 }
 
 pub(super) async fn persist_fast_lane_tool_trace<R: ConversationRuntime + ?Sized>(
     runtime: &R,
-    session_id: &str,
     trace: &ToolBatchExecutionTrace,
-    binding: ConversationRuntimeBinding<'_>,
+    ctx: &Context<'_>,
 ) -> CliResult<()> {
     for record in &trace.decision_records {
         persist_tool_decision(
             runtime,
-            session_id,
             &record.turn_id,
             &record.tool_call_id,
             &record.decision,
-            binding,
+            ctx,
         )
         .await?;
     }
@@ -65,11 +56,10 @@ pub(super) async fn persist_fast_lane_tool_trace<R: ConversationRuntime + ?Sized
     for record in &trace.outcome_records {
         persist_tool_outcome(
             runtime,
-            session_id,
             &record.turn_id,
             &record.tool_call_id,
             &record.outcome,
-            binding,
+            ctx,
         )
         .await?;
     }
@@ -79,21 +69,14 @@ pub(super) async fn persist_fast_lane_tool_trace<R: ConversationRuntime + ?Sized
 
 pub(super) async fn emit_turn_ingress_event<R: ConversationRuntime + ?Sized>(
     runtime: &R,
-    session_id: &str,
     ingress: Option<&ConversationIngressContext>,
-    binding: ConversationRuntimeBinding<'_>,
+    ctx: &Context<'_>,
 ) {
     let Some(ingress) = ingress else {
         return;
     };
-    let _ = persist_conversation_event(
-        runtime,
-        session_id,
-        "turn_ingress",
-        ingress.as_event_payload(),
-        binding,
-    )
-    .await;
+    let _ =
+        persist_conversation_event(runtime, "turn_ingress", ingress.as_event_payload(), ctx).await;
 }
 
 pub(super) fn should_emit_safe_lane_event(

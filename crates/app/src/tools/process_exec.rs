@@ -147,7 +147,7 @@ fn resolve_process_cwd_override(
     tool_name: &str,
 ) -> Result<PathBuf, String> {
     if config.filesystem_access_root().is_some() {
-        return super::file::resolve_safe_directory_path_with_config(raw_cwd, config);
+        return super::file_path::resolve_safe_directory_path_with_config(raw_cwd, config);
     }
 
     let requested_path = PathBuf::from(raw_cwd);

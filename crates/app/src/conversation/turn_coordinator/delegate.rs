@@ -1,13 +1,41 @@
 use super::*;
 use crate::conversation::delegate_support;
+use loong_kernel::mailbox::AgentMailboxSender;
+
+/// Materialize child authority before execution can leave the parent scope.
+///
+/// Inline and detached delegates share this boundary so persisted session data
+/// can restore authority but can never be the only thing preventing a child
+/// from inheriting its parent's broader tool view or filesystem roots.
+fn derive_delegate_child_session(
+    parent: &Context<'_>,
+    config: &LoongConfig,
+    child_session_id: &str,
+    execution: &ConstrainedSubagentExecution,
+) -> Result<crate::Session, String> {
+    let contract = execution.contract_view();
+    let configured_view = crate::tools::runtime_delegate_child_tool_view(
+        parent.runtime(),
+        &config.tools,
+        Some(&contract),
+    );
+    let tool_view = configured_view.intersect(&parent.session().tool_view);
+    let capabilities = parent.allowed_capabilities();
+    if execution.capability_ceiling != *capabilities {
+        return Err("delegate capability ceiling does not match its parent Context".to_owned());
+    }
+    parent
+        .session()
+        .delegate_child(child_session_id, tool_view, execution.clone(), None)
+}
 
 #[cfg(feature = "memory-sqlite")]
 pub(crate) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
     config: &LoongConfig,
     runtime: &R,
-    session_context: &SessionContext,
+    session_context: &Context<'_>,
     payload: Value,
-    binding: ConversationRuntimeBinding<'_>,
+    legacy_tools: &DefaultLegacyToolDispatcher,
 ) -> Result<loong_contracts::ToolCoreOutcome, String> {
     if !config.tools.delegate.enabled {
         return Err("app_tool_disabled: delegate is disabled by config".to_owned());
@@ -19,13 +47,16 @@ pub(crate) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
         crate::tools::delegate::resolve_delegate_policy(&delegate_request, &config.tools.delegate);
     let child_session_id = crate::tools::delegate::next_delegate_session_id();
     let child_label = delegate_policy.label.clone();
-    let subagent_identity =
-        crate::tools::delegate::subagent_identity_for_delegate_request(&delegate_request);
+    let subagent_identity = crate::tools::delegate::subagent_identity_for_delegate_request(
+        &delegate_request,
+        child_label.as_deref(),
+    );
     let repo = SessionRepository::new(&store::session_store_config_from_memory_config(
         &config.memory,
     ))?;
-    let parent_task_id = resolve_canonical_task_id_for_session(&repo, &session_context.session_id)
-        .unwrap_or_else(|| session_context.session_id.clone());
+    let parent_task_id =
+        resolve_canonical_task_id_for_session(&repo, &session_context.session().session_id)
+            .unwrap_or_else(|| session_context.session().session_id.clone());
     let next_child_depth = next_delegate_child_depth_for_delegate(config, &repo, session_context)?;
     let runtime_self_continuity =
         effective_runtime_self_continuity_for_session(config, session_context);
@@ -35,14 +66,14 @@ pub(crate) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
         std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let workspace_cleanup_owned_by_child_for_work =
         std::sync::Arc::clone(&workspace_cleanup_owned_by_child);
-    delegate_support::with_prepared_subagent_spawn_cleanup_if_kernel_bound(
+    let parent_mailbox = session_context.session().mailbox().sender();
+    delegate_support::with_subagent_lifecycle(
         runtime,
-        &session_context.session_id,
         &child_session_id,
-        binding,
+        session_context,
         || async {
             let (_, execution) = repo.create_delegate_child_session_with_event_if_within_limit(
-                &session_context.session_id,
+                &session_context.session().session_id,
                 config.tools.delegate.max_active_children,
                 |active_children| {
                     let execution_policy = DelegateChildExecutionPolicy {
@@ -52,16 +83,16 @@ pub(crate) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
                         timeout_seconds: delegate_policy.timeout_seconds,
                         allow_shell_in_child: delegate_policy.allow_shell_in_child,
                         child_tool_allowlist: delegate_policy.child_tool_allowlist.clone(),
+                        capability_ceiling: session_context.allowed_capabilities().into_owned(),
                         runtime_narrowing: delegate_policy.runtime_narrowing.clone(),
                         workspace_root: workspace_root.clone(),
                     };
                     let seed = build_delegate_child_lifecycle_seed(
                         config,
-                        binding,
                         ConstrainedSubagentMode::Inline,
                         next_child_depth,
                         active_children,
-                        &session_context.session_id,
+                        &session_context.session().session_id,
                         &child_session_id,
                         child_label.clone(),
                         &delegate_request.task,
@@ -73,17 +104,27 @@ pub(crate) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
                     Ok((seed.request, seed.execution))
                 },
             )?;
+            let child_session = derive_delegate_child_session(
+                session_context,
+                config,
+                &child_session_id,
+                &execution,
+            )?;
+            let child_context = session_context
+                .rebind_session(&child_session)
+                .map_err(|error| error.to_string())?;
+            let child_legacy_tools = legacy_tools.for_session(&child_session)?;
             let outcome = run_started_delegate_child_turn_with_runtime(
                 config,
                 runtime,
-                &child_session_id,
-                &session_context.session_id,
+                &child_context,
+                &parent_mailbox,
+                &child_legacy_tools,
                 child_label,
                 &delegate_request.task,
                 delegate_policy.profile,
                 execution,
                 delegate_policy.timeout_seconds,
-                binding,
             )
             .await?;
             workspace_cleanup_owned_by_child_for_work
@@ -111,9 +152,9 @@ pub(crate) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
 async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
     config: &LoongConfig,
     runtime: &R,
-    session_context: &SessionContext,
+    session_context: &Context<'_>,
     delegate_request: crate::tools::delegate::DelegateRequest,
-    binding: ConversationRuntimeBinding<'_>,
+    legacy_tools: &DefaultLegacyToolDispatcher,
 ) -> Result<loong_contracts::ToolCoreOutcome, String> {
     if !config.tools.delegate.enabled {
         return Err("app_tool_disabled: delegate is disabled by config".to_owned());
@@ -129,7 +170,7 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
         runtime,
         session_context,
         delegate_request,
-        binding,
+        legacy_tools,
         Some(crate::conversation::ConstrainedSubagentOwnerKind::AsyncDelegateSpawner),
     )
     .await?;
@@ -151,9 +192,9 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
 async fn enqueue_background_task_with_runtime<R: ConversationRuntime + ?Sized>(
     config: &LoongConfig,
     runtime: &R,
-    session_context: &SessionContext,
+    session_context: &Context<'_>,
     delegate_request: crate::tools::delegate::DelegateRequest,
-    binding: ConversationRuntimeBinding<'_>,
+    legacy_tools: &DefaultLegacyToolDispatcher,
 ) -> Result<loong_contracts::ToolCoreOutcome, String> {
     if !config.tools.delegate.enabled {
         return Err("app_tool_disabled: delegate is disabled by config".to_owned());
@@ -170,7 +211,7 @@ async fn enqueue_background_task_with_runtime<R: ConversationRuntime + ?Sized>(
         runtime,
         session_context,
         delegate_request,
-        binding,
+        legacy_tools,
         Some(crate::conversation::ConstrainedSubagentOwnerKind::BackgroundTaskHost),
     )
     .await?;
@@ -179,35 +220,38 @@ async fn enqueue_background_task_with_runtime<R: ConversationRuntime + ?Sized>(
     if let Err(error) = spawn_result {
         finalize_async_delegate_spawn_failure_with_recovery(
             &delegate_request.memory_config,
-            &delegate_request.request.child_session_id,
-            &delegate_request.request.parent_session_id,
-            delegate_request.request.label.clone(),
-            delegate_request.request.profile,
-            &delegate_request.request.execution,
+            delegate_request.request.child_session_id(),
+            delegate_request.request.parent_session_id(),
+            delegate_request.request.label().map(str::to_owned),
+            delegate_request.request.profile(),
+            delegate_request.request.execution(),
             config.tools.delegate.max_frozen_bytes,
             error.clone(),
         )?;
         enqueue_delegate_result_announce_with_memory_config(
             delegate_request.memory_config.clone(),
-            delegate_request.request.parent_session_id.clone(),
-            delegate_request.request.child_session_id.clone(),
+            delegate_request.request.parent_session_id().to_owned(),
+            delegate_request.request.child_session_id().to_owned(),
             DelegateAnnounceSettings::from_config(config),
         );
         self::support::emit_async_delegate_child_terminal_event(
             runtime,
-            &delegate_request.request.parent_session_id,
-            &delegate_request.request.child_session_id,
-            delegate_request.request.label.as_deref(),
-            delegate_request.request.profile,
+            delegate_request.request.child_session_id(),
+            delegate_request.request.label(),
+            delegate_request.request.profile(),
             "failed",
-            delegate_request.request.execution.isolation,
+            delegate_request.request.execution().isolation,
             0,
             None,
             Some(error.as_str()),
             None,
-            delegate_request.request.execution.workspace_root.as_deref(),
+            delegate_request
+                .request
+                .execution()
+                .workspace_root
+                .as_deref(),
             None,
-            binding,
+            session_context,
         )
         .await;
         return Err(error);
@@ -227,23 +271,29 @@ struct PreparedAsyncDelegateEnqueue {
 async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
     config: &LoongConfig,
     runtime: &R,
-    session_context: &SessionContext,
+    session_context: &Context<'_>,
     delegate_request: crate::tools::delegate::DelegateRequest,
-    binding: ConversationRuntimeBinding<'_>,
+    legacy_tools: &DefaultLegacyToolDispatcher,
     owner_kind: Option<crate::conversation::ConstrainedSubagentOwnerKind>,
 ) -> Result<PreparedAsyncDelegateEnqueue, String> {
     let delegate_policy =
         crate::tools::delegate::resolve_delegate_policy(&delegate_request, &config.tools.delegate);
     let child_session_id = crate::tools::delegate::next_delegate_session_id();
     let child_label = delegate_policy.label.clone();
-    let subagent_identity =
-        crate::tools::delegate::subagent_identity_for_delegate_request(&delegate_request);
+    let subagent_identity = crate::tools::delegate::subagent_identity_for_delegate_request(
+        &delegate_request,
+        child_label.as_deref(),
+    );
     let memory_config = store::session_store_config_from_memory_config(&config.memory);
     let repo = SessionRepository::new(&memory_config)?;
-    let parent_task_id = resolve_canonical_task_id_for_session(&repo, &session_context.session_id)
-        .unwrap_or_else(|| session_context.session_id.clone());
+    let parent_task_id =
+        resolve_canonical_task_id_for_session(&repo, &session_context.session().session_id)
+            .unwrap_or_else(|| session_context.session().session_id.clone());
 
-    ensure_session_exists_for_runtime_self_continuity(&repo, &session_context.session_id)?;
+    ensure_session_exists_for_runtime_self_continuity(
+        &repo,
+        &session_context.session().session_id,
+    )?;
 
     let next_child_depth = next_delegate_child_depth_for_delegate(config, &repo, session_context)?;
     let runtime_self_continuity =
@@ -252,7 +302,7 @@ async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
         prepare_delegate_workspace_root(config, &child_session_id, delegate_policy.isolation)?;
     let (_, execution) = repo
         .create_delegate_child_session_with_event_if_within_limit(
-            &session_context.session_id,
+            &session_context.session().session_id,
             config.tools.delegate.max_active_children,
             |active_children| {
                 let execution_policy = DelegateChildExecutionPolicy {
@@ -262,16 +312,16 @@ async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
                     timeout_seconds: delegate_policy.timeout_seconds,
                     allow_shell_in_child: delegate_policy.allow_shell_in_child,
                     child_tool_allowlist: delegate_policy.child_tool_allowlist.clone(),
+                    capability_ceiling: session_context.allowed_capabilities().into_owned(),
                     runtime_narrowing: delegate_policy.runtime_narrowing.clone(),
                     workspace_root: workspace_root.clone(),
                 };
                 let seed = build_delegate_child_lifecycle_seed(
                     config,
-                    binding,
                     ConstrainedSubagentMode::Async,
                     next_child_depth,
                     active_children,
-                    &session_context.session_id,
+                    &session_context.session().session_id,
                     &child_session_id,
                     child_label.clone(),
                     &delegate_request.task,
@@ -290,36 +340,37 @@ async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
             );
         })?;
 
-    let queued_execution = execution.clone();
+    let mut child_session =
+        derive_delegate_child_session(session_context, config, &child_session_id, &execution)?;
+    if let Some(profile) = delegate_policy.profile {
+        child_session = child_session.with_profile(profile);
+    }
+    if let Some(runtime_self_continuity) = runtime_self_continuity.clone() {
+        child_session = child_session.with_runtime_self_continuity(runtime_self_continuity);
+    }
     let queued_workspace_root = execution.workspace_root.clone();
     emit_async_delegate_child_queued_event(
         runtime,
-        &session_context.session_id,
         &child_session_id,
         delegate_policy.label.as_deref(),
         delegate_policy.profile,
         delegate_policy.isolation,
         delegate_policy.timeout_seconds,
         queued_workspace_root.as_deref(),
-        binding,
+        session_context,
     )
     .await;
-    let request = AsyncDelegateSpawnRequest {
-        child_session_id: child_session_id.clone(),
-        parent_session_id: session_context.session_id.clone(),
-        task: delegate_request.task,
-        canonical_task_id: Some(parent_task_id),
-        label: child_label,
-        profile: delegate_policy.profile,
-        execution: queued_execution,
-        runtime_self_continuity,
-        timeout_seconds: delegate_policy.timeout_seconds,
-        binding: OwnedConversationRuntimeBinding::from_borrowed(binding),
-    };
+    let request = AsyncDelegateSpawnRequest::new(
+        session_context,
+        legacy_tools,
+        child_session,
+        delegate_request.task,
+        Some(parent_task_id),
+    )?;
 
     let mut outcome = crate::tools::delegate::delegate_async_queued_outcome(
         child_session_id,
-        Some(session_context.session_id.clone()),
+        Some(session_context.session().session_id.clone()),
         delegate_policy.label,
         delegate_policy.profile,
         delegate_policy.timeout_seconds,
@@ -327,9 +378,9 @@ async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
     inject_delegate_workspace_metadata(&mut outcome, &execution, None, None);
     persist_task_progress_event_best_effort(
         config,
-        &request.child_session_id,
+        request.child_session_id(),
         "delegate_async_queued",
-        queued_async_task_progress_record(config, &request.child_session_id, &request.task),
+        queued_async_task_progress_record(config, request.child_session_id(), request.task()),
     );
 
     Ok(PreparedAsyncDelegateEnqueue {
@@ -342,15 +393,14 @@ async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
 #[cfg(feature = "memory-sqlite")]
 pub async fn spawn_background_delegate_with_runtime<R: ConversationRuntime + ?Sized>(
     config: &LoongConfig,
+    context: &Context<'_>,
     runtime: &R,
-    session_id: &str,
     task: &str,
     label: Option<String>,
     specialization: Option<String>,
     timeout_seconds: Option<u64>,
-    binding: ConversationRuntimeBinding<'_>,
+    legacy_tools: &DefaultLegacyToolDispatcher,
 ) -> Result<loong_contracts::ToolCoreOutcome, String> {
-    let session_context = runtime.session_context(config, session_id, binding)?;
     let mut delegate_payload = json!({
         "task": task,
     });
@@ -371,26 +421,20 @@ pub async fn spawn_background_delegate_with_runtime<R: ConversationRuntime + ?Si
     }
     let delegate_request =
         crate::tools::delegate::parse_delegate_request_with_default_timeout(&delegate_payload)?;
-    enqueue_background_task_with_runtime(
-        config,
-        runtime,
-        &session_context,
-        delegate_request,
-        binding,
-    )
-    .await
+    enqueue_background_task_with_runtime(config, runtime, context, delegate_request, legacy_tools)
+        .await
 }
 
 #[cfg(not(feature = "memory-sqlite"))]
 pub async fn spawn_background_delegate_with_runtime<R: ConversationRuntime + ?Sized>(
     _config: &LoongConfig,
+    _context: &Context<'_>,
     _runtime: &R,
-    _session_id: &str,
     _task: &str,
     _label: Option<String>,
     _specialization: Option<String>,
     _timeout_seconds: Option<u64>,
-    _binding: ConversationRuntimeBinding<'_>,
+    _legacy_tools: &DefaultLegacyToolDispatcher,
 ) -> Result<loong_contracts::ToolCoreOutcome, String> {
     Err("delegate_async requires sqlite memory support (enable feature `memory-sqlite`)".to_owned())
 }
@@ -399,27 +443,42 @@ pub async fn spawn_background_delegate_with_runtime<R: ConversationRuntime + ?Si
 pub(crate) async fn execute_delegate_async_tool<R: ConversationRuntime + ?Sized>(
     config: &LoongConfig,
     runtime: &R,
-    session_context: &SessionContext,
+    session_context: &Context<'_>,
     payload: Value,
-    binding: ConversationRuntimeBinding<'_>,
+    legacy_tools: &DefaultLegacyToolDispatcher,
 ) -> Result<loong_contracts::ToolCoreOutcome, String> {
-    if !binding.allows_mutation() {
-        return Err("app_tool_denied: governed_runtime_binding_required".to_owned());
+    if !matches!(
+        session_context.session().session_mode,
+        GovernedSessionMode::MutatingCapable
+    ) || !session_context
+        .allowed_capabilities()
+        .contains(Capability::InvokeTool)
+        || !session_context
+            .allowed_capabilities()
+            .contains(Capability::MemoryWrite)
+    {
+        return Err("app_tool_denied: mutating_session_required".to_owned());
     }
 
     let delegate_request =
         crate::tools::delegate::parse_delegate_request_with_default_timeout(&payload)?;
-    enqueue_delegate_async_with_runtime(config, runtime, session_context, delegate_request, binding)
-        .await
+    enqueue_delegate_async_with_runtime(
+        config,
+        runtime,
+        session_context,
+        delegate_request,
+        legacy_tools,
+    )
+    .await
 }
 
 #[cfg(not(feature = "memory-sqlite"))]
 pub(crate) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
     _config: &LoongConfig,
     _runtime: &R,
-    _session_context: &SessionContext,
+    _session_context: &Context<'_>,
     _payload: Value,
-    _binding: ConversationRuntimeBinding<'_>,
+    _legacy_tools: &DefaultLegacyToolDispatcher,
 ) -> Result<loong_contracts::ToolCoreOutcome, String> {
     Err("delegate requires sqlite memory support (enable feature `memory-sqlite`)".to_owned())
 }
@@ -428,9 +487,9 @@ pub(crate) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
 pub(crate) async fn execute_delegate_async_tool<R: ConversationRuntime + ?Sized>(
     _config: &LoongConfig,
     _runtime: &R,
-    _session_context: &SessionContext,
+    _session_context: &Context<'_>,
     _payload: Value,
-    _binding: ConversationRuntimeBinding<'_>,
+    _legacy_tools: &DefaultLegacyToolDispatcher,
 ) -> Result<loong_contracts::ToolCoreOutcome, String> {
     Err("delegate_async requires sqlite memory support (enable feature `memory-sqlite`)".to_owned())
 }
@@ -441,15 +500,20 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
 >(
     config: &LoongConfig,
     runtime: &R,
-    child_session_id: &str,
-    parent_session_id: &str,
+    ctx: &Context<'_>,
+    parent_mailbox: &AgentMailboxSender,
+    legacy_tools: &DefaultLegacyToolDispatcher,
     child_label: Option<String>,
     user_input: &str,
     profile: Option<crate::conversation::DelegateBuiltinProfile>,
     execution: ConstrainedSubagentExecution,
     timeout_seconds: u64,
-    binding: ConversationRuntimeBinding<'_>,
 ) -> Result<loong_contracts::ToolCoreOutcome, String> {
+    let child_session_id = ctx.session().session_id();
+    let parent_session_id = ctx
+        .session()
+        .parent_session_id()
+        .ok_or_else(|| format!("delegate child Session `{child_session_id}` has no parent"))?;
     let repo = SessionRepository::new(&store::session_store_config_from_memory_config(
         &config.memory,
     ))?;
@@ -457,11 +521,11 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
     let child_coordinator = ConversationTurnCoordinator::new();
     let child_turn_future = child_coordinator.handle_turn_with_runtime(
         config,
-        child_session_id,
+        ctx,
         user_input,
         ProviderErrorMode::Propagate,
         runtime,
-        binding,
+        legacy_tools,
     );
     let child_turn_future = Box::pin(AssertUnwindSafe(child_turn_future).catch_unwind());
     let child_timeout = Duration::from_secs(timeout_seconds);
@@ -515,7 +579,6 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
             if execution.mode == ConstrainedSubagentMode::Async {
                 self::support::emit_async_delegate_child_terminal_event(
                     runtime,
-                    parent_session_id,
                     child_session_id,
                     child_label.as_deref(),
                     profile,
@@ -527,11 +590,11 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                     Some(final_output_preview.as_str()),
                     execution.workspace_root.as_deref(),
                     cleanup_metadata.as_ref().map(|cleanup| cleanup.retained),
-                    binding,
+                    ctx,
                 )
                 .await;
             }
-            notify_parent_delegate_result(parent_session_id, child_session_id, &outcome);
+            notify_parent_delegate_result(parent_mailbox, child_session_id, &outcome);
             Ok(outcome)
         }
         Ok(Ok(Err(error))) => {
@@ -574,7 +637,6 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
             if execution.mode == ConstrainedSubagentMode::Async {
                 self::support::emit_async_delegate_child_terminal_event(
                     runtime,
-                    parent_session_id,
                     child_session_id,
                     child_label.as_deref(),
                     profile,
@@ -586,11 +648,11 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                     None,
                     execution.workspace_root.as_deref(),
                     cleanup_metadata.as_ref().map(|cleanup| cleanup.retained),
-                    binding,
+                    ctx,
                 )
                 .await;
             }
-            notify_parent_delegate_result(parent_session_id, child_session_id, &outcome);
+            notify_parent_delegate_result(parent_mailbox, child_session_id, &outcome);
             Ok(outcome)
         }
         Ok(Err(panic_payload)) => {
@@ -634,7 +696,6 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
             if execution.mode == ConstrainedSubagentMode::Async {
                 self::support::emit_async_delegate_child_terminal_event(
                     runtime,
-                    parent_session_id,
                     child_session_id,
                     child_label.as_deref(),
                     profile,
@@ -646,11 +707,11 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                     None,
                     execution.workspace_root.as_deref(),
                     cleanup_metadata.as_ref().map(|cleanup| cleanup.retained),
-                    binding,
+                    ctx,
                 )
                 .await;
             }
-            notify_parent_delegate_result(parent_session_id, child_session_id, &outcome);
+            notify_parent_delegate_result(parent_mailbox, child_session_id, &outcome);
             Ok(outcome)
         }
         Err(_) => {
@@ -693,7 +754,6 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
             if execution.mode == ConstrainedSubagentMode::Async {
                 self::support::emit_async_delegate_child_terminal_event(
                     runtime,
-                    parent_session_id,
                     child_session_id,
                     child_label.as_deref(),
                     profile,
@@ -705,11 +765,11 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                     None,
                     execution.workspace_root.as_deref(),
                     cleanup_metadata.as_ref().map(|cleanup| cleanup.retained),
-                    binding,
+                    ctx,
                 )
                 .await;
             }
-            notify_parent_delegate_result(parent_session_id, child_session_id, &outcome);
+            notify_parent_delegate_result(parent_mailbox, child_session_id, &outcome);
             Ok(outcome)
         }
     }
@@ -717,11 +777,10 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
 
 #[cfg(feature = "memory-sqlite")]
 fn notify_parent_delegate_result(
-    parent_session_id: &str,
+    parent_mailbox: &AgentMailboxSender,
     child_session_id: &str,
     outcome: &loong_contracts::ToolCoreOutcome,
 ) {
-    let mailbox = mailbox_for_session(parent_session_id);
     let author = AgentPath::root()
         .join(child_session_id)
         .unwrap_or_else(|_| AgentPath::root());
@@ -737,5 +796,5 @@ fn notify_parent_delegate_result(
         },
         trigger_turn: true,
     };
-    let _ = mailbox.send(message);
+    let _ = parent_mailbox.send(message);
 }

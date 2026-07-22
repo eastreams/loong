@@ -1,168 +1,273 @@
-use std::{
-    collections::BTreeSet,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-};
+use std::borrow::Cow;
 
-use async_trait::async_trait;
+use loong_contracts::ToolPath;
 use loong_contracts::{
-    Capability, ToolExecutionError, ToolInputError, ToolOutcome, ToolPath, ToolPlaneError, ToolSpec,
+    AuditEventKind, AuthorizationAttempt, AuthorizationAttemptEvent, AuthorizationPolicyEvent,
+    AuthorizationTerminalOutcome, Capability, PolicyDecision,
 };
-use loong_core::{
-    policy::context::{CapabilityContext, ContextFactory},
-    policy::engine::PolicyEngine,
-    tool::{ToolImpl, ToolInvocationAction},
+use loong_core::policy::{
+    action::{ActionMeta, ActionMetadata},
+    policy::PolicyAny,
 };
-use loong_kernel::PolicyPipeline;
 use serde_json::{Value, json};
 
-use super::{AppToolPlane, ToolPlane};
+use crate::config::ToolConsentMode;
+use crate::context::RuntimeContextFactory;
+use crate::test_support::TurnTestHarness;
+use crate::tools::ToolView;
 
-struct TestContextFactory;
-
-impl ContextFactory for TestContextFactory {
-    type Cx<'a> = TestContext;
+// Contracts tests path validation; plane fixtures use valid one-segment
+// identities and focus on visibility and dispatch.
+#[allow(clippy::expect_used)]
+fn tool_path(segment: &str) -> ToolPath {
+    ToolPath::new([segment]).expect("test tool path must be valid")
 }
 
-struct TestContext;
+/// An arbitrary action may copy tool metadata, but that metadata is not proof
+/// that it came through the runtime-owned tool invocation boundary.
+struct SpoofedToolInvocation;
 
-impl CapabilityContext for TestContext {
-    fn allowed_capabilities(&self) -> BTreeSet<Capability> {
-        BTreeSet::new()
-    }
-}
-
-struct EchoTool {
-    executions: Arc<AtomicUsize>,
-}
-
-#[async_trait]
-impl ToolImpl<TestContextFactory> for EchoTool {
-    type Input = String;
-    type Output = ToolOutcome;
-
-    fn spec(&self) -> ToolSpec {
-        ToolSpec {
-            path: ToolPath::from("test.echo"),
-            description: "Echo the provided message.".to_owned(),
-            required_capabilities: BTreeSet::new(),
+impl ActionMeta for SpoofedToolInvocation {
+    fn metadata(&self) -> ActionMetadata<'_> {
+        ActionMetadata {
+            kind: "tool.invoke",
+            operation: Cow::Borrowed("write"),
+            required_capabilities: Cow::Borrowed(&[Capability::InvokeTool]),
         }
     }
 
-    fn parse_input(&self, payload: Value) -> Result<Self::Input, ToolInputError> {
-        payload
-            .get("message")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-            .ok_or_else(|| ToolInputError::missing_field("message"))
-    }
-
-    async fn execute(
-        &self,
-        _ctx: &<TestContextFactory as ContextFactory>::Cx<'_>,
-        input: Self::Input,
-    ) -> Result<Self::Output, ToolExecutionError> {
-        self.executions.fetch_add(1, Ordering::Relaxed);
-        Ok(ToolOutcome {
-            status: "ok".to_owned(),
-            payload: json!({ "message": input }),
-        })
+    fn payload(&self) -> Cow<'_, Value> {
+        Cow::Owned(json!({"path": "blocked.txt"}))
     }
 }
 
-#[tokio::test]
-async fn app_tool_plane_invokes_registered_tool() {
-    let executions = Arc::new(AtomicUsize::new(0));
-    let mut plane = AppToolPlane::<TestContextFactory>::new();
-    let path = ToolPath::from("test.echo");
-
-    plane
-        .register(
-            path.clone(),
-            EchoTool {
-                executions: executions.clone(),
-            },
-        )
-        .expect("tool should register");
-    let outcome = plane
-        .invoke(
-            tool_invocation_grant(path.clone(), json!({ "message": "hello" })).await,
-            &TestContext,
-        )
-        .await
-        .expect("tool should execute");
-
-    assert!(plane.contains(&path));
-    assert_eq!(plane.len(), 1);
-    assert_eq!(outcome.status, "ok");
-    assert_eq!(outcome.payload, json!({ "message": "hello" }));
-    assert_eq!(executions.load(Ordering::Relaxed), 1);
-}
-
+#[cfg(feature = "tool-file")]
 #[test]
-fn app_tool_plane_rejects_duplicate_paths() {
-    let mut plane = AppToolPlane::<TestContextFactory>::new();
-    let path = ToolPath::from("test.echo");
+fn builtin_tool_plane_exposes_registered_file_paths() {
+    let plane = super::test_builtin_tool_plane();
+    let paths = plane.registered_paths();
 
-    plane
-        .register(
-            path.clone(),
-            EchoTool {
-                executions: Arc::new(AtomicUsize::new(0)),
-            },
-        )
-        .expect("first registration should pass");
-    let error = plane
-        .register(
-            path,
-            EchoTool {
-                executions: Arc::new(AtomicUsize::new(0)),
-            },
-        )
-        .expect_err("duplicate registration should fail");
+    assert!(paths.contains(&tool_path("read")));
+    assert!(paths.contains(&tool_path("write")));
+    assert!(paths.contains(&tool_path("edit")));
+    assert!(paths.contains(&tool_path("glob.search")));
+    assert!(paths.contains(&tool_path("content.search")));
+}
 
-    assert_eq!(error, ToolPlaneError::DuplicateTool("test.echo".to_owned()));
+#[cfg(feature = "tool-file")]
+#[test]
+fn registered_file_specs_keep_write_and_edit_inputs_distinct() {
+    let owner = crate::test_support::runtime_session_for_test(
+        "file-specs",
+        ToolView::from_legacy_paths(["write", "edit"]),
+    );
+    let (_, write) = owner
+        .runtime
+        .tool_metadata(&tool_path("write"))
+        .expect("write registration");
+    let (_, edit) = owner
+        .runtime
+        .tool_metadata(&tool_path("edit"))
+        .expect("edit registration");
+
+    let write_properties = write.input_schema["properties"]
+        .as_object()
+        .expect("write properties");
+    assert!(write_properties.contains_key("content"));
+    assert!(write_properties.contains_key("overwrite"));
+    assert!(!write_properties.contains_key("edits"));
+    assert_eq!(write.input_schema["required"], json!(["path", "content"]));
+    assert!(
+        write
+            .argument_hint
+            .as_deref()
+            .is_some_and(|hint| hint.contains("overwrite?:boolean"))
+    );
+
+    let edit_properties = edit.input_schema["properties"]
+        .as_object()
+        .expect("edit properties");
+    assert!(edit_properties.contains_key("edits"));
+    assert!(!edit_properties.contains_key("content"));
+    assert_eq!(edit.input_schema["required"], json!(["path", "edits"]));
+    assert!(
+        edit.argument_hint
+            .as_deref()
+            .is_some_and(|hint| hint.contains("edits:["))
+    );
 }
 
 #[tokio::test]
-async fn app_tool_plane_registered_path_reports_tool_input_error() {
-    let executions = Arc::new(AtomicUsize::new(0));
-    let mut plane = AppToolPlane::<TestContextFactory>::new();
-    let path = ToolPath::from("test.echo");
-    plane
-        .register(
-            path.clone(),
-            EchoTool {
-                executions: executions.clone(),
-            },
-        )
-        .expect("tool should register");
+async fn visibility_policy_does_not_trust_copied_tool_metadata() {
+    let owner = crate::test_support::runtime_session_for_test(
+        "spoofed-tool-action",
+        ToolView::from_legacy_paths(["write"]),
+    );
+    let ctx = owner.context();
 
-    assert!(plane.contains(&path));
-    let error = plane
-        .invoke(
-            tool_invocation_grant(path.clone(), json!({})).await,
-            &TestContext,
-        )
-        .await
-        .expect_err("invalid registered tool input must fail");
+    let grant = <super::ToolVisibilityPolicy as PolicyAny<RuntimeContextFactory>>::grant(
+        &super::ToolVisibilityPolicy,
+        &ctx,
+        &SpoofedToolInvocation,
+    )
+    .await;
 
-    assert!(matches!(error, ToolPlaneError::Execution(reason) if reason.contains("message")));
-    assert_eq!(executions.load(Ordering::Relaxed), 0);
+    assert_eq!(grant.decision, PolicyDecision::Continue);
 }
 
-async fn tool_invocation_grant(
-    path: ToolPath,
-    payload: Value,
-) -> loong_core::policy::grant::Granted<ToolInvocationAction> {
-    PolicyPipeline::<TestContextFactory>::default()
-        .grant(
-            &TestContext,
-            ToolInvocationAction::new(path, BTreeSet::new(), payload),
-        )
+#[cfg(feature = "tool-file")]
+#[tokio::test]
+async fn registered_tool_outside_session_view_is_denied_by_policy() {
+    let mut harness = TurnTestHarness::new();
+    harness.session.tool_view = ToolView::from_legacy_paths(["read"]);
+    let ctx = harness.context();
+    let invocation = ctx
+        .tool(tool_path("write"))
+        .expect("write remains registered globally");
+
+    let error = invocation
+        .invoke(json!({"path": "blocked.txt", "content": "blocked"}))
         .await
-        .expect("default policy should grant test tool invocation")
-        .granted
+        .expect_err("Session tool authority must be enforced at the final grant boundary");
+
+    assert!(matches!(
+        error,
+        loong_runtime::tool_plane::error::ToolInvocationError::Authorization(
+            loong_core::PolicyGrantError::Denied { .. }
+        )
+    ));
+
+    let events = harness.audit.snapshot();
+    assert!(events.iter().any(|event| {
+        let AuditEventKind::Authorization { evidence } = &event.kind else {
+            return false;
+        };
+        let AuthorizationAttempt::Started {
+            event: AuthorizationAttemptEvent::Policy { report, event },
+            ..
+        } = &evidence.attempt
+        else {
+            return false;
+        };
+
+        matches!(
+            event,
+            AuthorizationPolicyEvent::Terminal(AuthorizationTerminalOutcome::Deny { .. })
+        ) && report.evaluations.iter().any(|evaluation| {
+            evaluation.source.policy_name == "tool-visibility"
+                && evaluation.grant.decision == PolicyDecision::Deny
+        })
+    }));
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(&event.kind, AuditEventKind::ActionExecution { .. }))
+    );
+}
+
+#[cfg(feature = "tool-file")]
+#[tokio::test]
+async fn hidden_mutation_is_denied_before_consent_can_request_permission() {
+    let root = tempfile::tempdir().expect("temporary file root");
+    let path = root.path().join("blocked.txt");
+    let mut config = crate::config::LoongConfig::default();
+    config.tools.file_root = Some(root.path().display().to_string());
+    config.tools.consent.default_mode = ToolConsentMode::Prompt;
+    let mut owner = crate::test_support::TestRuntimeSession::from_config(
+        &config,
+        "hidden-prompt-write",
+        "test-agent",
+        loong_contracts::GovernedSessionMode::MutatingCapable,
+    )
+    .expect("prompt-consent runtime session");
+    owner.session.tool_view = ToolView::from_legacy_paths(["read"]);
+    let ctx = owner.context();
+
+    let error = ctx
+        .tool(tool_path("write"))
+        .expect("write remains registered globally")
+        .invoke(json!({"path": path, "content": "blocked"}))
+        .await
+        .expect_err("consent must not override the session tool view");
+
+    assert!(matches!(
+        error,
+        loong_runtime::tool_plane::error::ToolInvocationError::Authorization(
+            loong_core::PolicyGrantError::Denied { .. }
+        )
+    ));
+    assert!(
+        !path.exists(),
+        "visibility denial must precede file creation"
+    );
+}
+
+#[cfg(feature = "tool-file")]
+#[tokio::test]
+async fn prompt_consent_blocks_typed_write_before_the_file_side_effect() {
+    let root = tempfile::tempdir().expect("temporary file root");
+    let path = root.path().join("blocked.txt");
+    let mut config = crate::config::LoongConfig::default();
+    config.tools.file_root = Some(root.path().display().to_string());
+    config.tools.consent.default_mode = ToolConsentMode::Prompt;
+    let owner = crate::test_support::TestRuntimeSession::from_config(
+        &config,
+        "prompt-write",
+        "test-agent",
+        loong_contracts::GovernedSessionMode::MutatingCapable,
+    )
+    .expect("prompt-consent runtime session");
+    let ctx = owner.context();
+
+    let error = ctx
+        .tool(tool_path("write"))
+        .expect("write should be registered")
+        .invoke(json!({"path": path, "content": "blocked"}))
+        .await
+        .expect_err("missing user interaction must fail closed");
+
+    assert!(matches!(
+        error,
+        loong_runtime::tool_plane::error::ToolInvocationError::Authorization(
+            loong_core::PolicyGrantError::PermissionRequest {
+                source: loong_core::PermissionRequestError::Unavailable { .. },
+                ..
+            }
+        )
+    ));
+    assert!(!path.exists(), "policy denial must precede file creation");
+}
+
+#[cfg(feature = "tool-file")]
+#[tokio::test]
+async fn configured_preapproval_allows_typed_write_under_prompt_consent() {
+    let root = tempfile::tempdir().expect("temporary file root");
+    let path = root.path().join("allowed.txt");
+    let mut config = crate::config::LoongConfig::default();
+    config.tools.file_root = Some(root.path().display().to_string());
+    config.tools.consent.default_mode = ToolConsentMode::Prompt;
+    config
+        .tools
+        .approval
+        .approved_calls
+        .push("tool:/write".to_owned());
+    let owner = crate::test_support::TestRuntimeSession::from_config(
+        &config,
+        "preapproved-write",
+        "test-agent",
+        loong_contracts::GovernedSessionMode::MutatingCapable,
+    )
+    .expect("preapproved runtime session");
+    let ctx = owner.context();
+
+    ctx.tool(tool_path("write"))
+        .expect("write should be registered")
+        .invoke(json!({"path": path, "content": "allowed"}))
+        .await
+        .expect("configured preapproval should continue to typed access policy");
+
+    assert_eq!(
+        std::fs::read_to_string(path).expect("read written file"),
+        "allowed"
+    );
 }

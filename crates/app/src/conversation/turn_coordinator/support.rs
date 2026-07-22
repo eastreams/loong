@@ -7,6 +7,8 @@ pub(super) struct ProviderTurnSessionState {
     pub(super) messages: Vec<Value>,
     pub(super) estimated_tokens: Option<usize>,
     pub(super) prompt_frame: PromptFrame,
+    pub(super) runtime_self_continuity:
+        Option<crate::runtime_self_continuity::RuntimeSelfContinuity>,
 }
 
 impl ProviderTurnSessionState {
@@ -20,7 +22,8 @@ impl ProviderTurnSessionState {
             artifacts,
             estimated_tokens,
             prompt_fragments,
-            system_prompt_addition,
+            system_prompt_addition: _,
+            runtime_self_continuity,
         } = assembled_context;
         let mut messages = messages;
         let turn_ephemeral_start_index = messages.len();
@@ -38,17 +41,11 @@ impl ProviderTurnSessionState {
             estimated_tokens,
             Some(turn_ephemeral_start_index),
         );
-        let assembled_context = AssembledConversationContext {
-            messages,
-            artifacts,
-            estimated_tokens,
-            prompt_fragments,
-            system_prompt_addition,
-        };
         Self {
-            messages: assembled_context.messages,
+            messages,
             estimated_tokens,
             prompt_frame,
+            runtime_self_continuity,
         }
     }
 
@@ -71,6 +68,7 @@ pub(super) struct ProviderTurnReplyTailPhase {
     reply: String,
     after_turn_messages: Vec<Value>,
     estimated_tokens: Option<usize>,
+    runtime_self_continuity: Option<crate::runtime_self_continuity::RuntimeSelfContinuity>,
 }
 
 impl ProviderTurnReplyTailPhase {
@@ -81,6 +79,7 @@ impl ProviderTurnReplyTailPhase {
             reply: normalized_reply.clone(),
             after_turn_messages: session.after_turn_messages(normalized_reply.as_str()),
             estimated_tokens: session.estimated_tokens,
+            runtime_self_continuity: session.runtime_self_continuity.clone(),
         }
     }
 
@@ -94,6 +93,12 @@ impl ProviderTurnReplyTailPhase {
 
     pub(super) fn estimated_tokens(&self) -> Option<usize> {
         self.estimated_tokens
+    }
+
+    pub(super) fn runtime_self_continuity(
+        &self,
+    ) -> Option<&crate::runtime_self_continuity::RuntimeSelfContinuity> {
+        self.runtime_self_continuity.as_ref()
     }
 }
 
@@ -160,6 +165,7 @@ impl ProviderTurnPreparation {
                 messages,
                 estimated_tokens: None,
                 prompt_frame,
+                runtime_self_continuity: self.session.runtime_self_continuity.clone(),
             },
             lane_plan: self.lane_plan.clone(),
             raw_tool_output_requested: self.raw_tool_output_requested,
@@ -201,13 +207,10 @@ pub(super) fn summarize_followup_turn(turn: &ProviderTurn) -> FollowupTurnSummar
     let intent = turn
         .tool_intents
         .iter()
-        .find(|intent| {
-            crate::tools::canonical_tool_name(intent.tool_name.as_str()) == "tool.invoke"
-        })
+        .find(|intent| crate::tools::canonical_tool_name(intent.tool_name()) == "tool.invoke")
         .unwrap_or(first);
-    let canonical_tool_name =
-        crate::tools::canonical_tool_name(intent.tool_name.as_str()).to_owned();
-    let visible_tool_name = crate::tools::user_visible_tool_name(canonical_tool_name.as_str());
+    let canonical_tool_name = crate::tools::canonical_tool_name(intent.tool_name()).to_owned();
+    let visible_tool_name = crate::tools::legacy_display_tool_name(canonical_tool_name.as_str());
     let used_legacy_hidden_tool_wrapper = canonical_tool_name == "tool.invoke";
     let followup_target_tool_id = used_legacy_hidden_tool_wrapper
         .then(|| {
@@ -215,7 +218,7 @@ pub(super) fn summarize_followup_turn(turn: &ProviderTurn) -> FollowupTurnSummar
                 .args_json
                 .get("tool_id")
                 .and_then(Value::as_str)
-                .map(crate::tools::user_visible_tool_name)
+                .map(crate::tools::legacy_display_tool_name)
         })
         .flatten();
 
@@ -480,66 +483,52 @@ const DELEGATE_CHILD_OUTPUT_PREVIEW_CHARS: usize = 200;
 
 pub(super) async fn emit_discovery_first_event<R: ConversationRuntime + ?Sized>(
     runtime: &R,
-    session_id: &str,
     event_name: &str,
     payload: Value,
-    binding: ConversationRuntimeBinding<'_>,
+    ctx: &Context<'_>,
 ) {
-    let _ = persist_conversation_event(runtime, session_id, event_name, payload, binding).await;
-    if let Some(ctx) = binding.kernel_context() {
-        let _ = ctx.kernel.record_audit_event(
-            Some(ctx.agent_id()),
-            AuditEventKind::PlaneInvoked {
-                pack_id: ctx.pack_id().to_owned(),
-                plane: ExecutionPlane::Runtime,
-                tier: PlaneTier::Core,
-                primary_adapter: "conversation.discovery_first".to_owned(),
-                delegated_core_adapter: None,
-                operation: format!("conversation.discovery_first.{event_name}"),
-                required_capabilities: Vec::new(),
-            },
-        );
-    }
+    let outcome = match persist_conversation_event(runtime, event_name, payload, ctx).await {
+        Ok(()) => RuntimeOperationOutcome::Completed,
+        Err(reason) => RuntimeOperationOutcome::Failed { reason },
+    };
+    let _ = ctx.runtime().record_audit_event(
+        Some(ctx.agent_id()),
+        AuditEventKind::RuntimeOperation {
+            operation: format!("conversation.discovery_first.{event_name}"),
+            outcome,
+        },
+    );
 }
 
 pub(super) async fn emit_prompt_frame_event<R: ConversationRuntime + ?Sized>(
     runtime: &R,
-    session_id: &str,
     provider_round: usize,
     phase: &str,
     summary: &PromptFrameSummary,
-    binding: ConversationRuntimeBinding<'_>,
+    ctx: &Context<'_>,
 ) {
     let payload = json!({
         "provider_round": provider_round,
         "phase": phase,
         "prompt_frame": summary.to_event_payload(),
     });
-    let _ = persist_conversation_event(
-        runtime,
-        session_id,
-        "provider_prompt_frame_snapshot",
-        payload,
-        binding,
-    )
-    .await;
+    let _ =
+        persist_conversation_event(runtime, "provider_prompt_frame_snapshot", payload, ctx).await;
 }
 
 #[cfg(feature = "memory-sqlite")]
 pub(super) async fn emit_async_delegate_child_queued_event<R: ConversationRuntime + ?Sized>(
     runtime: &R,
-    parent_session_id: &str,
     child_session_id: &str,
     child_label: Option<&str>,
     profile: Option<crate::conversation::DelegateBuiltinProfile>,
     isolation: crate::conversation::ConstrainedSubagentIsolation,
     timeout_seconds: u64,
     workspace_root: Option<&std::path::Path>,
-    binding: ConversationRuntimeBinding<'_>,
+    ctx: &Context<'_>,
 ) {
     emit_delegate_child_projection_event(
         runtime,
-        parent_session_id,
         "delegate_child_queued",
         json!({
             "child_session_id": child_session_id,
@@ -551,7 +540,7 @@ pub(super) async fn emit_async_delegate_child_queued_event<R: ConversationRuntim
             "timeout_seconds": timeout_seconds,
             "workspace_root": workspace_root.map(|workspace_root| workspace_root.display().to_string()),
         }),
-        binding,
+        ctx,
     )
     .await;
 }
@@ -559,7 +548,6 @@ pub(super) async fn emit_async_delegate_child_queued_event<R: ConversationRuntim
 #[cfg(feature = "memory-sqlite")]
 pub(crate) async fn emit_async_delegate_child_terminal_event<R: ConversationRuntime + ?Sized>(
     runtime: &R,
-    parent_session_id: &str,
     child_session_id: &str,
     child_label: Option<&str>,
     profile: Option<crate::conversation::DelegateBuiltinProfile>,
@@ -571,11 +559,10 @@ pub(crate) async fn emit_async_delegate_child_terminal_event<R: ConversationRunt
     final_output: Option<&str>,
     workspace_root: Option<&std::path::Path>,
     workspace_retained: Option<bool>,
-    binding: ConversationRuntimeBinding<'_>,
+    ctx: &Context<'_>,
 ) {
     emit_delegate_child_projection_event(
         runtime,
-        parent_session_id,
         "delegate_child_terminal",
         json!({
             "child_session_id": child_session_id,
@@ -591,7 +578,7 @@ pub(crate) async fn emit_async_delegate_child_terminal_event<R: ConversationRunt
             "workspace_root": workspace_root.map(|workspace_root| workspace_root.display().to_string()),
             "workspace_retained": workspace_retained,
         }),
-        binding,
+        ctx,
     )
     .await;
 }
@@ -634,27 +621,21 @@ pub(super) fn split_delegate_workspace_cleanup(
 #[cfg(feature = "memory-sqlite")]
 async fn emit_delegate_child_projection_event<R: ConversationRuntime + ?Sized>(
     runtime: &R,
-    parent_session_id: &str,
     event_name: &str,
     payload: Value,
-    binding: ConversationRuntimeBinding<'_>,
+    ctx: &Context<'_>,
 ) {
-    let _ =
-        persist_conversation_event(runtime, parent_session_id, event_name, payload, binding).await;
-    if let Some(ctx) = binding.kernel_context() {
-        let _ = ctx.kernel.record_audit_event(
-            Some(ctx.agent_id()),
-            AuditEventKind::PlaneInvoked {
-                pack_id: ctx.pack_id().to_owned(),
-                plane: ExecutionPlane::Runtime,
-                tier: PlaneTier::Core,
-                primary_adapter: "conversation.delegate_child".to_owned(),
-                delegated_core_adapter: None,
-                operation: format!("conversation.delegate_child.{event_name}"),
-                required_capabilities: Vec::new(),
-            },
-        );
-    }
+    let outcome = match persist_conversation_event(runtime, event_name, payload, ctx).await {
+        Ok(()) => RuntimeOperationOutcome::Completed,
+        Err(reason) => RuntimeOperationOutcome::Failed { reason },
+    };
+    let _ = ctx.runtime().record_audit_event(
+        Some(ctx.agent_id()),
+        AuditEventKind::RuntimeOperation {
+            operation: format!("conversation.delegate_child.{event_name}"),
+            outcome,
+        },
+    );
 }
 
 #[cfg(feature = "memory-sqlite")]

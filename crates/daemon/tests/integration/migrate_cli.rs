@@ -217,7 +217,7 @@ fn run_migrate_cli_apply_selected_mode_writes_manifest_and_config() {
 }
 
 #[test]
-fn run_migrate_cli_apply_selected_mode_can_apply_external_skill_plan() {
+fn run_migrate_cli_apply_selected_mode_rejects_external_skill_plan_until_access_backed() {
     let discovery_root = unique_temp_dir("loong-import-cli-external-skills-discovery");
     let output_root = unique_temp_dir("loong-import-cli-external-skills-output");
     let (home_root, _env_guard) = isolated_home_guard("loong-import-cli-external-skills-home");
@@ -248,42 +248,45 @@ fn run_migrate_cli_apply_selected_mode_can_apply_external_skill_plan() {
     );
 
     let output_path = output_root.join("selected-external.toml");
-    loong_daemon::migrate_cli::run_migrate_cli(loong_daemon::migrate_cli::MigrateCommandOptions {
-        input: Some(discovery_root.display().to_string()),
-        output: Some(output_path.display().to_string()),
-        source: None,
-        mode: loong_daemon::migrate_cli::MigrateMode::ApplySelected,
-        json: false,
-        source_id: Some("openclaw".to_owned()),
-        safe_profile_merge: false,
-        primary_source_id: None,
-        apply_skills_plan: true,
-        force: true,
-    })
-    .expect("apply_selected mode with skills should succeed");
+    let error = loong_daemon::migrate_cli::run_migrate_cli(
+        loong_daemon::migrate_cli::MigrateCommandOptions {
+            input: Some(discovery_root.display().to_string()),
+            output: Some(output_path.display().to_string()),
+            source: None,
+            mode: loong_daemon::migrate_cli::MigrateMode::ApplySelected,
+            json: false,
+            source_id: Some("openclaw".to_owned()),
+            safe_profile_merge: false,
+            primary_source_id: None,
+            apply_skills_plan: true,
+            force: true,
+        },
+    )
+    .expect_err("skills migration must fail closed until its writes are access-backed");
 
-    let raw = fs::read_to_string(&output_path).expect("read generated config");
-    assert!(raw.contains("Imported External Skills Artifacts"));
-    assert!(raw.contains("kind=skills_catalog"));
     assert!(
-        raw.contains("enabled = true"),
-        "bridged installs should enable skills in the written config"
+        error.contains("apply_selected with apply_skills_plan is not access-backed yet"),
+        "expected access migration denial, got: {error}"
+    );
+    assert!(
+        !output_path.exists(),
+        "a rejected skills migration must not write config"
     );
     let skills_manifest_path = output_root
         .join(".loong-migration")
         .join("selected-external.toml.external-skills.json");
     assert!(
-        skills_manifest_path.exists(),
-        "apply_selected mode should write skills manifest"
+        !skills_manifest_path.exists(),
+        "a rejected skills migration must not write its manifest"
     );
     assert!(
-        output_root
+        !output_root
             .join(mvp::config::HOME_DIR_NAME)
             .join("skills")
             .join("release-guard")
             .join("SKILL.md")
             .exists(),
-        "apply_selected mode should bridge installable local skills into the managed runtime"
+        "a rejected skills migration must not install managed skills"
     );
 
     fs::remove_dir_all(&discovery_root).ok();
@@ -328,8 +331,12 @@ fn run_migrate_cli_apply_mode_rejects_output_path_outside_configured_file_root()
     .expect_err("policy root should deny writing outside configured file root");
 
     assert!(
-        error.starts_with("policy_denied: "),
-        "expected normalized policy denial prefix, got: {error}"
+        error.starts_with("policy_denied: ") && error.contains("escapes file root"),
+        "expected legacy filesystem policy denial, got: {error}"
+    );
+    assert!(
+        !escape_output.exists(),
+        "a denied legacy config import must not write outside the file root"
     );
 
     fs::remove_dir_all(&policy_root).ok();

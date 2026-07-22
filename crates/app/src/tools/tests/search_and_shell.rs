@@ -14,7 +14,7 @@ fn tool_search_hides_filesystem_tools_without_filesystem_capabilities() {
     std::fs::create_dir_all(&root).expect("create fixture root");
 
     let config = test_tool_runtime_config(root.clone());
-    let outcome = execute_tool_core_with_config(
+    let outcome = execute_tool_search_with_builtin_registry(
         ToolCoreRequest {
             tool_name: "tool.search".to_owned(),
             payload: json!({
@@ -288,12 +288,12 @@ fn tool_execution_config_timeout_for_tool_prefers_per_tool() {
         per_tool_timeout: per_tool,
     };
 
-    assert_eq!(config.timeout_for_tool("file.read"), Some(30));
     assert_eq!(config.timeout_for_tool("read"), Some(30));
-    assert_eq!(config.timeout_for_tool("file.write"), Some(45));
     assert_eq!(config.timeout_for_tool("write"), Some(45));
     assert_eq!(config.timeout_for_tool("edit"), Some(15));
-    assert_eq!(config.timeout_for_tool("file.edit"), Some(15));
+    assert_eq!(config.timeout_for_tool("file.read"), Some(60));
+    assert_eq!(config.timeout_for_tool("file.write"), Some(60));
+    assert_eq!(config.timeout_for_tool("file.edit"), Some(60));
     assert_eq!(config.timeout_for_tool("unknown"), Some(60));
 }
 
@@ -340,12 +340,8 @@ fn tool_without_timeout_config_completes_normally() {
     let config = test_tool_runtime_config(root);
 
     let request = ToolCoreRequest {
-        tool_name: "glob.search".to_owned(),
-        payload: json!({
-            "pattern": "README.md",
-            "root": ".",
-            "max_results": 10
-        }),
+        tool_name: "tool.search".to_owned(),
+        payload: json!({"query": "shell"}),
     };
 
     let result = execute_tool_core_with_test_context(request, &config);
@@ -392,17 +388,27 @@ async fn framework_timeout_supports_async_core_tool_calls() {
     let mut config = test_tool_runtime_config(root);
     config.tool_execution.default_timeout_seconds = Some(1);
 
-    let adapter = KernelToolAdapter::with_config(config.into_inner());
+    let harness = crate::test_support::TurnTestHarness::with_tool_config(
+        BTreeSet::from([
+            Capability::InvokeTool,
+            Capability::FilesystemRead,
+            Capability::FilesystemWrite,
+        ]),
+        config.into_inner(),
+    );
     let request = ToolCoreRequest {
-        tool_name: "glob.search".to_owned(),
-        payload: json!({
-            "pattern": "README.md",
-            "root": ".",
-            "max_results": 10
-        }),
+        tool_name: "tool.search".to_owned(),
+        payload: json!({"query": "shell"}),
     };
+    let context = harness.context();
 
-    let result = loong_kernel::CoreToolAdapter::execute_core_tool(&adapter, request).await;
+    let result = crate::conversation::turn_engine::LegacyToolDispatcher::execute_core_tool(
+        &harness.legacy_tools,
+        &context,
+        request,
+        false,
+    )
+    .await;
 
     assert!(
         result.is_ok(),
@@ -463,9 +469,11 @@ fn tool_invoke_shell_exec_normalizes_embedded_whitespace_into_args_when_args_mis
     let command = "echo hello from invoke";
     #[cfg(windows)]
     let command = "cmd /C echo hello from invoke";
-    let lease =
-        crate::tools::tool_lease_authority::issue_tool_lease("shell.exec", &serde_json::Map::new())
-            .expect("tool lease");
+    let lease = crate::tools::issue_tool_lease(
+        &loong_contracts::ToolPath::new(["shell.exec"]).expect("test tool path must be valid"),
+        &serde_json::Map::new(),
+    )
+    .expect("tool lease");
     let outcome = execute_tool_core_with_config(
         ToolCoreRequest {
             tool_name: "tool.invoke".to_owned(),
@@ -892,11 +900,11 @@ fn tool_search_exact_tool_id_refresh_returns_one_current_card_with_lease() {
     std::fs::create_dir_all(&root).expect("create fixture root");
 
     let config = test_tool_runtime_config(root.clone());
-    let outcome = execute_tool_core_with_config(
+    let outcome = execute_tool_search_with_builtin_registry(
         ToolCoreRequest {
             tool_name: "tool.search".to_owned(),
             payload: json!({
-                "exact_tool_id": "file.read"
+                "exact_tool_id": "read"
             }),
         },
         &config,
@@ -949,9 +957,9 @@ fn tool_search_exact_tool_id_not_visible_preserves_raw_request_and_diagnostics_w
 
     assert!(!results.is_empty());
     assert_eq!(results[0]["tool_id"], "bash");
-    assert_eq!(outcome.payload["exact_tool_id"], "read");
+    assert_eq!(outcome.payload["exact_tool_id"], "file_read");
     assert_eq!(diagnostics["reason"], "exact_tool_id_not_visible");
-    assert_eq!(diagnostics["requested_tool_id"], "read");
+    assert_eq!(diagnostics["requested_tool_id"], "file_read");
 
     std::fs::remove_dir_all(&root).ok();
 }

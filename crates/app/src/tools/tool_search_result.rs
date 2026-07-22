@@ -1,3 +1,4 @@
+use loong_contracts::ToolPath;
 use serde_json::{Value, json};
 
 use super::SearchableToolEntry;
@@ -23,7 +24,9 @@ pub(super) fn tool_search_result_entry_json(
         ("why".to_owned(), json!(why)),
     ]);
     if entry.requires_lease {
-        let lease = issue_tool_lease(entry.canonical_name.as_str(), payload)?;
+        let path = ToolPath::new([entry.canonical_name.as_str()])
+            .map_err(|error| format!("cannot lease invalid tool identity: {error}"))?;
+        let lease = issue_tool_lease(&path, payload)?;
         result.insert("lease".to_owned(), json!(lease));
     }
     if let Some(surface_id) = entry.surface_id.as_deref() {

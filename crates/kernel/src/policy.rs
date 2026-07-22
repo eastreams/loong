@@ -2,57 +2,55 @@ use std::{
     borrow::Cow,
     collections::BTreeSet,
     marker::PhantomData,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
+use crate::{audit::SharedAuditState, errors::AuditError};
 use async_trait::async_trait;
-use loong_access::fs::{FsReadAction, FsResolvePathAction};
 use loong_contracts::{
-    Capability, CapabilityToken, GrantId, PolicyDecision, PolicyEntry, PolicyEvaluation,
-    PolicyGrant, PolicyId, PolicyOutcome, PolicyReport, VerticalPackManifest,
+    AuthorizationAttemptId, AuthorizationEvidence, Capability, GrantId, PolicyDecision,
+    PolicyEntry, PolicyEvaluation, PolicyGrant, PolicyId, PolicyOutcome, PolicyRegistration,
+    PolicyRegistrationSource, PolicyReport,
 };
 use loong_core::{
-    error::AuthorizationError,
     policy::action::{ActionMeta, ActionMetadata},
     policy::{
-        context::{CapabilityContext, ContextFactory},
-        engine::PolicyEngine,
+        context::ContextFactory,
+        engine::PolicyEngineBackend,
         policy::{Policy, PolicyAny},
     },
 };
 
-use crate::{
-    errors::PolicyError,
-    policy_ext::{PolicyExtension, PolicyExtensionChain, PolicyExtensionContext},
-};
-
 const DEFAULT_DENY_REASON: &str = "No matching policy.";
 
-pub trait KernelInvocationContext: CapabilityContext {
-    fn pack(&self) -> &VerticalPackManifest;
-
-    fn token(&self) -> &CapabilityToken;
-
-    fn now_epoch_s(&self) -> u64;
-
-    fn request_parameters(&self) -> Option<&serde_json::Value>;
-}
-
+/// Typed policy adapter for the remaining legacy kernel envelopes.
+///
+/// This type is crate-private so new callers cannot use a generic envelope in
+/// place of a concrete Action. Delete it with pack/token authorization.
 #[derive(Debug)]
-pub struct LegacyKernelAction {
+pub(crate) struct LegacyKernelAction {
     operation: String,
     required_capabilities: Vec<Capability>,
+    payload: serde_json::Value,
 }
 
 impl LegacyKernelAction {
-    pub fn new(operation: impl Into<String>, required_capabilities: BTreeSet<Capability>) -> Self {
+    pub(crate) fn new(
+        operation: impl Into<String>,
+        required_capabilities: BTreeSet<Capability>,
+        payload: serde_json::Value,
+    ) -> Self {
         Self {
             operation: operation.into(),
             required_capabilities: required_capabilities.into_iter().collect(),
+            payload,
         }
+    }
+
+    /// Consume the granted legacy action and recover its sole owned request body.
+    pub(crate) fn into_payload(self) -> serde_json::Value {
+        self.payload
     }
 }
 
@@ -66,9 +64,7 @@ impl ActionMeta for LegacyKernelAction {
     }
 
     fn payload(&self) -> Cow<'_, serde_json::Value> {
-        Cow::Owned(serde_json::json!({
-            "operation": self.operation.as_str(),
-        }))
+        Cow::Borrowed(&self.payload)
     }
 }
 
@@ -80,42 +76,56 @@ impl ActionMeta for LegacyKernelAction {
 /// 2. `action`: policies registered for the concrete action type.
 /// 3. `fallback`: broad [`PolicyAny`] policy used after typed policy.
 ///
-/// [`PolicyDecision::Allow`] and [`PolicyDecision::Deny`] stop the whole
-/// pipeline. [`PolicyDecision::Continue`] evaluates the next policy in the
-/// current subchain. [`PolicyDecision::Advance`] skips the rest of the current
-/// subchain and moves to the next one. If no terminal decision is produced,
-/// the pipeline returns default deny. The returned [`PolicyReport`] records the
-/// evaluated policy chain.
-pub struct PolicyPipeline<C: ContextFactory> {
+/// [`PolicyDecision::Allow`], [`PolicyDecision::Deny`], and both permission
+/// decisions stop the whole pipeline. [`PolicyDecision::Continue`] evaluates
+/// the next policy in the current subchain. [`PolicyDecision::Advance`] skips
+/// the rest of the current subchain and moves to the next one. If no terminal
+/// decision is produced, the pipeline returns default deny. The returned
+/// [`PolicyReport`] records the evaluated policy chain.
+pub(crate) struct PolicyPipeline<C: ContextFactory> {
+    registry: PolicyRegistry<C>,
+    audit_state: Arc<SharedAuditState>,
+}
+
+/// Registration-only policy pipeline input.
+///
+/// This type deliberately does not implement
+/// [`loong_core::policy::engine::PolicyEngine`]: only Kernel can install it
+/// with the shared audit owner and produce a runnable [`PolicyPipeline`].
+pub struct PolicyPipelineBuilder<C: ContextFactory> {
+    registry: PolicyRegistry<C>,
+}
+
+struct PolicyRegistry<C: ContextFactory> {
     pre_policies: Vec<RegisteredAnyPolicy<C>>,
     typed_policies: anymap::Map<dyn anymap::any::Any + Send + Sync>,
     fallback_policies: Vec<RegisteredAnyPolicy<C>>,
-    policy_extensions: PolicyExtensionChain,
-    next_policy_id: PolicyId,
-    grant_seq: AtomicU64,
+    next_policy_order: u64,
     _context: PhantomData<fn() -> C>,
 }
 
-impl<C: ContextFactory> Default for PolicyPipeline<C> {
-    fn default() -> Self {
-        Self::new()
-            .with_policy::<FsResolvePathAction, _>(FsResolvePathAllowedRootsPolicy)
-            .with_fallback_policy(AllowPolicy)
-    }
-}
-
-impl<C: ContextFactory> PolicyPipeline<C> {
+impl<C: ContextFactory> PolicyPipelineBuilder<C> {
+    /// Construct a default-deny pipeline.
+    ///
+    /// Without a terminal allow policy, unmatched actions produce a deny report.
+    /// Runtime bootstraps that still need legacy compatibility must opt into
+    /// `new_legacy_allow_fallback`.
     #[must_use]
     pub fn new() -> Self {
         Self {
-            pre_policies: Vec::new(),
-            typed_policies: anymap::Map::new(),
-            fallback_policies: Vec::new(),
-            policy_extensions: PolicyExtensionChain::new(),
-            next_policy_id: 0,
-            grant_seq: AtomicU64::new(0),
-            _context: PhantomData,
+            registry: PolicyRegistry {
+                pre_policies: Vec::new(),
+                typed_policies: anymap::Map::new(),
+                fallback_policies: Vec::new(),
+                next_policy_order: 0,
+                _context: PhantomData,
+            },
         }
+    }
+
+    #[must_use]
+    pub fn new_legacy_allow_fallback() -> Self {
+        Self::new().with_policy(LegacyAllowPolicy)
     }
 
     /// Register a policy for exactly one action type.
@@ -123,6 +133,7 @@ impl<C: ContextFactory> PolicyPipeline<C> {
     /// Use this when the policy needs typed action data, such as a canonical fs
     /// path. Policies registered here will not see other action types.
     #[must_use]
+    #[track_caller]
     pub fn with_policy<A, P>(mut self, policy: P) -> Self
     where
         A: ActionMeta + 'static,
@@ -133,28 +144,23 @@ impl<C: ContextFactory> PolicyPipeline<C> {
     }
 
     /// Add a typed policy to an existing pipeline.
+    #[track_caller]
     pub fn push_policy<A, P>(&mut self, policy: P)
     where
         A: ActionMeta + 'static,
         P: Policy<C, A> + 'static,
     {
-        let id = self.allocate_policy_id();
+        let (id, registration) = self.allocate_registration();
         let entries = self
+            .registry
             .typed_policies
             .entry::<TypedPolicyEntries<C, A>>()
             .or_insert_with(TypedPolicyEntries::default);
         entries.policies.push(RegisteredPolicy {
             id,
+            registration,
             policy: Arc::new(policy),
         });
-    }
-
-    pub fn push_fs_read_filename_deny_policy(&mut self, denied_filenames: BTreeSet<String>) {
-        if denied_filenames.is_empty() {
-            return;
-        }
-
-        self.push_policy::<FsReadAction, _>(FsReadFilenameDenyPolicy::new(denied_filenames));
     }
 
     /// Register a broad gate before typed action policy.
@@ -163,6 +169,7 @@ impl<C: ContextFactory> PolicyPipeline<C> {
     /// policy runs. Keep action-specific checks in `with_policy` so unrelated
     /// actions do not share unnecessary context requirements.
     #[must_use]
+    #[track_caller]
     pub fn with_pre_policy<P>(mut self, policy: P) -> Self
     where
         P: PolicyAny<C> + 'static,
@@ -172,13 +179,15 @@ impl<C: ContextFactory> PolicyPipeline<C> {
     }
 
     /// Add a broad gate before typed action policy.
+    #[track_caller]
     pub fn push_pre_policy<P>(&mut self, policy: P)
     where
         P: PolicyAny<C> + 'static,
     {
-        let id = self.allocate_policy_id();
-        self.pre_policies.push(RegisteredAnyPolicy {
+        let (id, registration) = self.allocate_registration();
+        self.registry.pre_policies.push(RegisteredAnyPolicy {
             id,
+            registration,
             policy: Arc::new(policy),
         });
     }
@@ -188,6 +197,7 @@ impl<C: ContextFactory> PolicyPipeline<C> {
     /// The default allow policy belongs here: typed policies must get a chance
     /// to deny before the compatibility fallback grants legacy actions.
     #[must_use]
+    #[track_caller]
     pub fn with_fallback_policy<P>(mut self, policy: P) -> Self
     where
         P: PolicyAny<C> + 'static,
@@ -197,80 +207,148 @@ impl<C: ContextFactory> PolicyPipeline<C> {
     }
 
     /// Add broad policy after typed action policy.
+    #[track_caller]
     pub fn push_fallback_policy<P>(&mut self, policy: P)
     where
         P: PolicyAny<C> + 'static,
     {
-        let id = self.allocate_policy_id();
-        self.fallback_policies.push(RegisteredAnyPolicy {
+        let (id, registration) = self.allocate_registration();
+        self.registry.fallback_policies.push(RegisteredAnyPolicy {
             id,
+            registration,
             policy: Arc::new(policy),
         });
     }
 
-    pub fn register_policy_extension<E: PolicyExtension + 'static>(&mut self, extension: E) {
-        self.policy_extensions.register(extension);
+    #[track_caller]
+    fn allocate_registration(&mut self) -> (PolicyId, PolicyRegistration) {
+        let order = self.registry.next_policy_order;
+        self.registry.next_policy_order = self.registry.next_policy_order.saturating_add(1);
+        let id = PolicyId::new(order);
+        let caller = std::panic::Location::caller();
+        let registered_at_unix_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| {
+                u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+            });
+        let registration = PolicyRegistration {
+            order,
+            registered_at_unix_ms,
+            source: PolicyRegistrationSource {
+                file: caller.file().to_owned(),
+                line: caller.line(),
+                column: caller.column(),
+            },
+        };
+        (id, registration)
     }
+}
 
-    /// Authorize legacy kernel operations that still use policy extensions.
-    ///
-    /// New access-backed side effects should prefer `PolicyEngine::grant` on a
-    /// typed action and consume the resulting grant inside the access module.
-    pub async fn authorize_kernel_action<A: ActionMeta>(
-        &self,
-        ctx: &C::Cx<'_>,
-        action: A,
-    ) -> Result<(), PolicyError>
-    where
-        for<'a> C::Cx<'a>: KernelInvocationContext,
-    {
-        let required_capabilities = action
-            .metadata()
-            .required_capabilities
-            .iter()
-            .copied()
-            .collect::<BTreeSet<_>>();
-        self.grant(ctx, action).await.map_err(policy_engine_error)?;
-
-        self.policy_extensions.authorize(&PolicyExtensionContext {
-            pack: ctx.pack(),
-            token: ctx.token(),
-            now_epoch_s: ctx.now_epoch_s(),
-            required_capabilities: &required_capabilities,
-            request_parameters: ctx.request_parameters(),
-        })
-    }
-
-    fn allocate_policy_id(&mut self) -> PolicyId {
-        let id = self.next_policy_id;
-        self.next_policy_id = self.next_policy_id.saturating_add(1);
-        id
-    }
-
-    fn next_grant_id_sync(&self) -> GrantId {
-        let seq = self.grant_seq.fetch_add(1, Ordering::Relaxed) + 1;
-        GrantId(seq)
+impl<C: ContextFactory> PolicyPipeline<C> {
+    pub(crate) fn install(
+        builder: PolicyPipelineBuilder<C>,
+        audit_state: Arc<SharedAuditState>,
+    ) -> Self {
+        Self {
+            registry: builder.registry,
+            audit_state,
+        }
     }
 }
 
 struct RegisteredAnyPolicy<C: ContextFactory> {
     id: PolicyId,
-    // TODO(policy-registration-metadata): Carry registration metadata here,
-    // such as registered_at, registration_order, and source. Keep this in sync
-    // with typed entries so PolicyReport can explain how each policy entered
-    // the pipeline, not only what it decided.
+    registration: PolicyRegistration,
     policy: Arc<dyn PolicyAny<C>>,
 }
 
 struct RegisteredPolicy<C: ContextFactory, A: ActionMeta> {
     id: PolicyId,
-    // TODO(policy-registration-metadata): Mirror RegisteredAnyPolicy metadata
-    // when typed policy registration records registered_at/source data.
+    registration: PolicyRegistration,
     policy: Arc<dyn Policy<C, A>>,
 }
 
 struct TypedPolicyEntries<C: ContextFactory, A: ActionMeta> {
     policies: Vec<RegisteredPolicy<C, A>>,
+}
+
+enum PolicyStageControl {
+    Continue,
+    Advance,
+    Terminal(PolicyOutcome),
+}
+
+/// Accumulates one ordered report while policy stages advance or terminate.
+///
+/// Keeping this transition state explicit ensures broad and typed stages cannot
+/// drift in how they convert a decision into report evidence.
+#[derive(Default)]
+struct PolicyEvaluationTrace {
+    evaluations: Vec<PolicyEvaluation>,
+}
+
+impl PolicyEvaluationTrace {
+    fn record(
+        &mut self,
+        stage: &'static str,
+        policy_name: Cow<'static, str>,
+        policy_id: PolicyId,
+        registration: &PolicyRegistration,
+        grant: PolicyGrant,
+    ) -> PolicyStageControl {
+        let source = PolicyEntry {
+            policy_name,
+            policy_id,
+            registration: registration.clone(),
+        };
+        let outcome_source = source.clone();
+        let decision = grant.decision;
+        let reason = grant.reason.clone();
+        self.evaluations.push(PolicyEvaluation {
+            source,
+            policy_stage: Cow::Borrowed(stage),
+            grant,
+        });
+
+        match decision {
+            PolicyDecision::Allow => PolicyStageControl::Terminal(PolicyOutcome::Allow {
+                source: outcome_source,
+                reason,
+            }),
+            PolicyDecision::Deny => PolicyStageControl::Terminal(PolicyOutcome::Deny {
+                grant_source: Some(outcome_source),
+                reason,
+            }),
+            PolicyDecision::RequireParentPermission => {
+                PolicyStageControl::Terminal(PolicyOutcome::RequireParentPermission {
+                    source: outcome_source,
+                    reason,
+                })
+            }
+            PolicyDecision::RequireUserPermission => {
+                PolicyStageControl::Terminal(PolicyOutcome::RequireUserPermission {
+                    source: outcome_source,
+                    reason,
+                })
+            }
+            PolicyDecision::Continue => PolicyStageControl::Continue,
+            PolicyDecision::Advance => PolicyStageControl::Advance,
+        }
+    }
+
+    fn finish(self, outcome: PolicyOutcome) -> PolicyReport {
+        PolicyReport {
+            evaluations: self.evaluations,
+            outcome,
+        }
+    }
+
+    fn deny_without_match(self) -> PolicyReport {
+        self.finish(PolicyOutcome::Deny {
+            grant_source: None,
+            reason: DEFAULT_DENY_REASON.into(),
+        })
+    }
 }
 
 impl<C: ContextFactory, A: ActionMeta> Default for TypedPolicyEntries<C, A> {
@@ -281,163 +359,115 @@ impl<C: ContextFactory, A: ActionMeta> Default for TypedPolicyEntries<C, A> {
     }
 }
 
-// Legacy bridge for `authorize_kernel_action`, whose caller still expects the
-// old extension-oriented `PolicyError` surface. New access-backed side effects
-// should keep typed grant errors and convert them at the caller boundary.
-pub(crate) fn policy_engine_error(error: impl Into<AuthorizationError>) -> PolicyError {
-    let error = error.into();
-    PolicyError::ExtensionDenied {
-        extension: "policy-engine".to_owned(),
-        reason: error.to_string(),
+impl<C, A> TypedPolicyEntries<C, A>
+where
+    C: ContextFactory,
+    A: ActionMeta,
+{
+    async fn evaluate(
+        &self,
+        ctx: &C::Cx<'_>,
+        action: &A,
+        trace: &mut PolicyEvaluationTrace,
+    ) -> Option<PolicyOutcome> {
+        for registered in &self.policies {
+            let grant = registered.policy.grant(ctx, action).await;
+            match trace.record(
+                "action",
+                registered.policy.name(),
+                registered.id,
+                &registered.registration,
+                grant,
+            ) {
+                PolicyStageControl::Continue => {}
+                PolicyStageControl::Advance => return None,
+                PolicyStageControl::Terminal(outcome) => return Some(outcome),
+            }
+        }
+        None
+    }
+}
+
+impl<C> PolicyRegistry<C>
+where
+    C: ContextFactory,
+{
+    async fn decide<A: ActionMeta + 'static>(&self, ctx: &C::Cx<'_>, action: &A) -> PolicyReport {
+        let mut trace = PolicyEvaluationTrace::default();
+
+        if let Some(outcome) = self
+            .evaluate_any_stage("pre", &self.pre_policies, ctx, action, &mut trace)
+            .await
+        {
+            return trace.finish(outcome);
+        }
+        if let Some(entries) = self.typed_policies.get::<TypedPolicyEntries<C, A>>()
+            && let Some(outcome) = entries.evaluate(ctx, action, &mut trace).await
+        {
+            return trace.finish(outcome);
+        }
+        if let Some(outcome) = self
+            .evaluate_any_stage("fallback", &self.fallback_policies, ctx, action, &mut trace)
+            .await
+        {
+            return trace.finish(outcome);
+        }
+
+        trace.deny_without_match()
+    }
+
+    /// Pre and fallback contain the same broad policy shape; only their stage
+    /// identity and registration slice differ.
+    async fn evaluate_any_stage<A: ActionMeta>(
+        &self,
+        stage: &'static str,
+        policies: &[RegisteredAnyPolicy<C>],
+        ctx: &C::Cx<'_>,
+        action: &A,
+        trace: &mut PolicyEvaluationTrace,
+    ) -> Option<PolicyOutcome> {
+        for registered in policies {
+            let grant = registered.policy.grant(ctx, action).await;
+            match trace.record(
+                stage,
+                registered.policy.name(),
+                registered.id,
+                &registered.registration,
+                grant,
+            ) {
+                PolicyStageControl::Continue => {}
+                PolicyStageControl::Advance => return None,
+                PolicyStageControl::Terminal(outcome) => return Some(outcome),
+            }
+        }
+        None
     }
 }
 
 #[async_trait]
-impl<C> PolicyEngine<C> for PolicyPipeline<C>
+impl<C> PolicyEngineBackend<C> for PolicyPipeline<C>
 where
     C: ContextFactory + Send + Sync,
 {
-    async fn decide<A: ActionMeta>(&self, ctx: &C::Cx<'_>, action: &A) -> PolicyReport {
-        let mut evaluations = Vec::new();
+    type AuditError = AuditError;
 
-        for registered in &self.pre_policies {
-            let grant = registered.policy.grant(ctx, action).await;
-            let source = PolicyEntry {
-                policy_name: registered.policy.name(),
-                policy_id: registered.id,
-            };
-            let decision = grant.decision;
-            let reason = grant.reason.clone();
-            let outcome_source = source.clone();
-            evaluations.push(PolicyEvaluation {
-                source,
-                policy_stage: Cow::Borrowed("pre"),
-                grant,
-            });
-
-            match decision {
-                PolicyDecision::Allow => {
-                    let outcome = PolicyOutcome::Allow {
-                        source: outcome_source,
-                        reason,
-                    };
-                    return PolicyReport {
-                        evaluations,
-                        outcome,
-                    };
-                }
-                PolicyDecision::Deny => {
-                    let outcome = PolicyOutcome::Deny {
-                        grant_source: Some(outcome_source),
-                        reason,
-                    };
-                    return PolicyReport {
-                        evaluations,
-                        outcome,
-                    };
-                }
-                PolicyDecision::Continue => {}
-                PolicyDecision::Advance => break,
-            }
-        }
-
-        if let Some(entries) = self.typed_policies.get::<TypedPolicyEntries<C, A>>() {
-            for registered in &entries.policies {
-                let grant = registered.policy.grant(ctx, action).await;
-                let source = PolicyEntry {
-                    policy_name: registered.policy.name(),
-                    policy_id: registered.id,
-                };
-                let decision = grant.decision;
-                let reason = grant.reason.clone();
-                let outcome_source = source.clone();
-                evaluations.push(PolicyEvaluation {
-                    source,
-                    policy_stage: Cow::Borrowed("action"),
-                    grant,
-                });
-
-                match decision {
-                    PolicyDecision::Allow => {
-                        let outcome = PolicyOutcome::Allow {
-                            source: outcome_source,
-                            reason,
-                        };
-                        return PolicyReport {
-                            evaluations,
-                            outcome,
-                        };
-                    }
-                    PolicyDecision::Deny => {
-                        let outcome = PolicyOutcome::Deny {
-                            grant_source: Some(outcome_source),
-                            reason,
-                        };
-                        return PolicyReport {
-                            evaluations,
-                            outcome,
-                        };
-                    }
-                    PolicyDecision::Continue => {}
-                    PolicyDecision::Advance => break,
-                }
-            }
-        }
-
-        for registered in &self.fallback_policies {
-            let grant = registered.policy.grant(ctx, action).await;
-            let source = PolicyEntry {
-                policy_name: registered.policy.name(),
-                policy_id: registered.id,
-            };
-            let decision = grant.decision;
-            let reason = grant.reason.clone();
-            let outcome_source = source.clone();
-            evaluations.push(PolicyEvaluation {
-                source,
-                policy_stage: Cow::Borrowed("fallback"),
-                grant,
-            });
-
-            match decision {
-                PolicyDecision::Allow => {
-                    let outcome = PolicyOutcome::Allow {
-                        source: outcome_source,
-                        reason,
-                    };
-                    return PolicyReport {
-                        evaluations,
-                        outcome,
-                    };
-                }
-                PolicyDecision::Deny => {
-                    let outcome = PolicyOutcome::Deny {
-                        grant_source: Some(outcome_source),
-                        reason,
-                    };
-                    return PolicyReport {
-                        evaluations,
-                        outcome,
-                    };
-                }
-                PolicyDecision::Continue => {}
-                PolicyDecision::Advance => break,
-            }
-        }
-
-        let outcome = PolicyOutcome::Deny {
-            grant_source: None,
-            reason: DEFAULT_DENY_REASON.into(),
-        };
-
-        PolicyReport {
-            evaluations,
-            outcome,
-        }
+    async fn decide<A: ActionMeta + 'static>(&self, ctx: &C::Cx<'_>, action: &A) -> PolicyReport {
+        self.registry.decide(ctx, action).await
     }
 
-    async fn next_grant_id(&self) -> GrantId {
-        self.next_grant_id_sync()
+    fn reserve_authorization_attempt_id(&self) -> Result<AuthorizationAttemptId, Self::AuditError> {
+        self.audit_state.reserve_authorization_attempt_id()
+    }
+
+    fn reserve_grant_id(&self) -> Result<GrantId, Self::AuditError> {
+        self.audit_state.reserve_grant_id()
+    }
+
+    fn write_authorization_evidence(
+        &self,
+        evidence: &AuthorizationEvidence,
+    ) -> Result<(), Self::AuditError> {
+        self.audit_state.record_authorization(evidence)
     }
 }
 
@@ -462,112 +492,27 @@ where
     }
 }
 
-#[derive(Debug, Clone)]
-struct FsReadFilenameDenyPolicy {
-    denied_filenames: BTreeSet<String>,
-}
-
 #[derive(Debug, Default, Clone, Copy)]
-struct FsResolvePathAllowedRootsPolicy;
+struct LegacyAllowPolicy;
 
-/// Default fs path containment policy.
-///
-/// `loong-access` prepares resolved path facts, but containment is a policy
-/// decision owned by the kernel pipeline so denials produce `PolicyReport`
-/// evidence instead of domain action errors.
+// Bind migration fallback to the concrete envelope type. Action metadata is
+// caller-defined policy input and must never be treated as proof of legacy origin.
 #[async_trait]
-impl<C> Policy<C, FsResolvePathAction> for FsResolvePathAllowedRootsPolicy
+impl<C> Policy<C, LegacyKernelAction> for LegacyAllowPolicy
 where
     C: ContextFactory + Send + Sync,
 {
     fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("fs-resolve-path-allowed-roots")
+        Cow::Borrowed("legacy-allow")
     }
 
-    async fn grant(&self, _ctx: &C::Cx<'_>, action: &FsResolvePathAction) -> PolicyGrant {
-        if resolved_path_starts_with_allowed_root(action) {
-            return PolicyGrant {
-                decision: PolicyDecision::Continue,
-                predicate: Some("resolved fs path starts with an allowed root".into()),
-                reason: "resolved fs path is within allowed roots".into(),
-            };
-        }
-
+    async fn grant(&self, _ctx: &C::Cx<'_>, _action: &LegacyKernelAction) -> PolicyGrant {
         PolicyGrant {
-            decision: PolicyDecision::Deny,
-            predicate: Some("resolved fs path must start with an allowed root".into()),
-            reason: format!(
-                "filesystem path {} escapes allowed filesystem roots [{}]",
-                action.resolved_path().display(),
-                display_path_list(action.allowed_roots())
-            )
-            .into(),
+            decision: PolicyDecision::Allow,
+            predicate: Some("action has concrete LegacyKernelAction type".into()),
+            reason: "legacy kernel operation allowed by migration fallback".into(),
         }
     }
-}
-
-fn resolved_path_starts_with_allowed_root(action: &FsResolvePathAction) -> bool {
-    action
-        .allowed_roots()
-        .iter()
-        .any(|allowed_root| action.resolved_path().starts_with(allowed_root))
-}
-
-impl FsReadFilenameDenyPolicy {
-    fn new(denied_filenames: BTreeSet<String>) -> Self {
-        let denied_filenames = denied_filenames
-            .into_iter()
-            .filter_map(|filename| normalize_policy_filename(filename.as_str()))
-            .collect();
-        Self { denied_filenames }
-    }
-}
-
-#[async_trait]
-impl<C> Policy<C, FsReadAction> for FsReadFilenameDenyPolicy
-where
-    C: ContextFactory + Send + Sync,
-{
-    fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("fs-read-filename-deny")
-    }
-
-    async fn grant(&self, _ctx: &C::Cx<'_>, action: &FsReadAction) -> PolicyGrant {
-        let denied_filename = action
-            .path()
-            .file_name()
-            .and_then(|filename| filename.to_str())
-            .and_then(normalize_policy_filename)
-            .filter(|filename| self.denied_filenames.contains(filename));
-
-        if let Some(filename) = denied_filename {
-            return PolicyGrant {
-                decision: PolicyDecision::Deny,
-                predicate: Some(format!("fs.read filename == {filename:?}").into()),
-                reason: format!("file read denied by configured filename policy: {filename}")
-                    .into(),
-            };
-        }
-
-        PolicyGrant {
-            decision: PolicyDecision::Continue,
-            predicate: None,
-            reason: "filename did not match configured read deny policy".into(),
-        }
-    }
-}
-
-fn normalize_policy_filename(filename: &str) -> Option<String> {
-    let normalized = filename.trim().to_ascii_lowercase();
-    (!normalized.is_empty()).then_some(normalized)
-}
-
-fn display_path_list(paths: &[std::path::PathBuf]) -> String {
-    paths
-        .iter()
-        .map(|path| path.display().to_string())
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 #[cfg(test)]

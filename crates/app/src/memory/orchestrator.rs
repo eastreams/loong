@@ -7,7 +7,7 @@ use super::{
     MemoryStageFamily, MemorySystem, MemorySystemMetadata, StageDiagnostics, StageEnvelope,
     StageOutcome, WindowTurn, load_prompt_context, memory_injection_reason_for_intent,
     memory_retrieval_provenance_summary, memory_retrieval_reason_for_request,
-    resolve_memory_system_runtime, runtime_config::MemoryRuntimeConfig,
+    resolve_memory_system, runtime_config::MemoryRuntimeConfig,
 };
 use crate::memory::stage::MemoryRetrievalPlanResult;
 
@@ -471,14 +471,48 @@ pub(crate) fn skip_compact_stage_without_execution_adapter(
     skipped_stage_diagnostics(family, message)
 }
 
+/// Resolve the selected system for the explicit pre-Access legacy API.
+///
+/// Both remaining legacy stage entry points must preserve the same fallback to
+/// the built-in system; typed Session construction uses `resolve_memory_system_runtime`.
+fn resolve_legacy_orchestration_memory_system(
+    config: &MemoryRuntimeConfig,
+) -> Result<Box<dyn MemorySystem>, String> {
+    let system_id = super::registered_memory_system_id(Some(config.selected_system_id()))
+        .unwrap_or_else(|| super::DEFAULT_MEMORY_SYSTEM_ID.to_owned());
+    resolve_memory_system(Some(&system_id))
+}
+
+#[cfg(test)]
 pub async fn run_compact_stage(
     session_id: &str,
     workspace_root: Option<&Path>,
     config: &MemoryRuntimeConfig,
 ) -> Result<StageDiagnostics, String> {
-    let runtime = resolve_memory_system_runtime(config)?;
+    let system = resolve_legacy_orchestration_memory_system(config)?;
+    let metadata = system.metadata();
+    let family = MemoryStageFamily::Compact;
+    if !metadata.supports_stage_family(family) {
+        return Ok(skipped_stage_diagnostics(family, None));
+    }
+    if metadata.id == super::DEFAULT_MEMORY_SYSTEM_ID {
+        return run_builtin_compact_stage(session_id, workspace_root, config).await;
+    }
 
-    runtime.run_compact_stage(session_id, workspace_root).await
+    match system.run_compact_stage(session_id, workspace_root, config) {
+        Ok(Some(diagnostics)) => Ok(diagnostics),
+        Ok(None) => Ok(skip_compact_stage_without_execution_adapter(family)),
+        Err(error) if config.effective_fail_open() => Ok(StageDiagnostics {
+            family,
+            outcome: StageOutcome::Fallback,
+            budget_ms: None,
+            elapsed_ms: None,
+            fallback_activated: true,
+            message: Some(error),
+            planner_snapshot: None,
+        }),
+        Err(error) => Err(format!("memory compact stage failed: {error}")),
+    }
 }
 
 #[cfg(not(feature = "memory-sqlite"))]
@@ -708,9 +742,19 @@ pub(crate) fn hydrate_stage_envelope_with_workspace_root(
     workspace_root: Option<&Path>,
     config: &MemoryRuntimeConfig,
 ) -> Result<StageEnvelope, String> {
-    let runtime = resolve_memory_system_runtime(config)?;
+    let system = resolve_legacy_orchestration_memory_system(config)?;
+    let metadata = system.metadata();
+    if metadata.supported_stage_families.is_empty() {
+        return hydrate_stage_envelope_without_execution_adapter(session_id, config, &metadata);
+    }
 
-    runtime.hydrate_stage_envelope(session_id, workspace_root)
+    BuiltinMemoryOrchestrator.hydrate_stage_envelope(
+        session_id,
+        workspace_root,
+        config,
+        system.as_ref(),
+        &metadata,
+    )
 }
 
 pub(crate) fn hydrate_stage_envelope_without_execution_adapter(

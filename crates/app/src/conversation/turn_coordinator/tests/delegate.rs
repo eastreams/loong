@@ -136,9 +136,9 @@ fn finalize_async_delegate_spawn_failure_does_not_overwrite_recovered_failure() 
             "file.write".to_owned(),
             "file.edit".to_owned(),
         ],
+        capability_ceiling: loong_contracts::Capabilities::new(),
         workspace_root: None,
         runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
-        kernel_bound: false,
         identity: None,
         profile: Some(crate::conversation::ConstrainedSubagentProfile::for_child_depth(1, 1)),
     };
@@ -269,9 +269,9 @@ fn finalize_async_delegate_spawn_failure_with_recovery_errors_when_child_session
             "file.write".to_owned(),
             "file.edit".to_owned(),
         ],
+        capability_ceiling: loong_contracts::Capabilities::new(),
         workspace_root: None,
         runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
-        kernel_bound: false,
         identity: None,
         profile: Some(crate::conversation::ConstrainedSubagentProfile::for_child_depth(1, 1)),
     };

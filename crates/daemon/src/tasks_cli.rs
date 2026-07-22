@@ -5,15 +5,9 @@ use async_trait::async_trait;
 use clap::Subcommand;
 use kernel::ToolCoreRequest;
 use loong_app as mvp;
-use loong_app_protocol::{
-    AppProtocolRuntimeTaskStatusExecutorResult, AppProtocolRuntimeTaskStatusRequest,
-    AppProtocolTaskStatusExecutor, AppProtocolWorkspaceContext, TaskStatusRequest,
-    execute_task_status,
-};
 use loong_contracts::ToolCoreOutcome;
 use loong_spec::CliResult;
 use serde_json::{Value, json};
-use std::path::PathBuf;
 
 #[path = "tasks_cli_render.rs"]
 mod render_support;
@@ -171,6 +165,7 @@ pub async fn execute_tasks_command(
         } => {
             execute_list_command(
                 &resolved_path.display().to_string(),
+                &config,
                 &current_session_id,
                 &memory_config,
                 tool_config,
@@ -184,6 +179,7 @@ pub async fn execute_tasks_command(
         TasksCommands::Status { task_id } => {
             execute_status_command(
                 &resolved_path.display().to_string(),
+                &config,
                 &current_session_id,
                 &memory_config,
                 tool_config,
@@ -214,6 +210,7 @@ pub async fn execute_tasks_command(
         } => {
             execute_wait_command(
                 &resolved_path.display().to_string(),
+                &config,
                 &current_session_id,
                 &memory_config,
                 tool_config,
@@ -226,6 +223,7 @@ pub async fn execute_tasks_command(
         TasksCommands::Cancel { task_id, dry_run } => {
             execute_cancel_command(
                 &resolved_path.display().to_string(),
+                &config,
                 &current_session_id,
                 &memory_config,
                 tool_config,
@@ -237,6 +235,7 @@ pub async fn execute_tasks_command(
         TasksCommands::Recover { task_id, dry_run } => {
             execute_recover_command(
                 &resolved_path.display().to_string(),
+                &config,
                 &current_session_id,
                 &memory_config,
                 tool_config,
@@ -264,18 +263,38 @@ async fn execute_create_command(
     label: Option<String>,
     timeout_seconds: Option<u64>,
 ) -> CliResult<Value> {
-    let runtime = build_tasks_create_runtime(config)?;
-    let runtime_kernel = bootstrap_tasks_runtime_kernel(config)?;
-    let binding = runtime_kernel.conversation_binding();
+    let execution_runtime = mvp::runtime::bootstrap_runtime_with_config(config)?;
+    let session = mvp::Session::from_config(
+        execution_runtime.as_ref(),
+        config,
+        current_session_id,
+        "cli-tasks",
+        loong_contracts::GovernedSessionMode::MutatingCapable,
+    )?;
+    // Background task creation prefers the detached sqlite-backed runtime when
+    // available so delegated sessions can outlive the foreground CLI process.
+    #[cfg(feature = "memory-sqlite")]
+    let conversation_runtime = mvp::conversation::load_hosted_default_conversation_runtime(config)?
+        .with_background_task_spawner(Arc::new(DetachedTasksSpawner));
+    #[cfg(not(feature = "memory-sqlite"))]
+    let conversation_runtime = mvp::conversation::load_default_conversation_runtime(config)?;
+    let legacy_tools = mvp::conversation::DefaultLegacyToolDispatcher::with_config(
+        execution_runtime.clone(),
+        &session,
+        mvp::session::store::SessionStoreConfig::from_memory_config(&config.memory),
+        config.clone(),
+    )?;
+    let context =
+        mvp::Context::new(&execution_runtime, &session).map_err(|error| error.to_string())?;
     let queued = mvp::conversation::spawn_background_delegate_with_runtime(
         config,
-        &runtime,
-        current_session_id,
+        &context,
+        &conversation_runtime,
         task,
         label,
         None,
         timeout_seconds,
-        binding,
+        &legacy_tools,
     )
     .await?;
     let task_session_id =
@@ -285,6 +304,8 @@ async fn execute_create_command(
         tool_config,
         current_session_id,
         &task_session_id,
+        &context,
+        &conversation_runtime,
     )
     .await;
     let task_id = task_detail
@@ -307,38 +328,9 @@ async fn execute_create_command(
     Ok(payload)
 }
 
-fn bootstrap_tasks_runtime_kernel(
-    config: &mvp::config::LoongConfig,
-) -> CliResult<mvp::runtime_bridge::RuntimeKernelOwner> {
-    let agent_id = "cli-tasks";
-    let runtime_kernel = mvp::runtime_bridge::RuntimeKernelOwner::bootstrap(agent_id, config)?;
-    Ok(runtime_kernel)
-}
-
-fn build_tasks_create_runtime(
-    config: &mvp::config::LoongConfig,
-) -> CliResult<impl mvp::conversation::ConversationRuntime> {
-    // Background task creation prefers the detached sqlite-backed runtime when
-    // available so delegated child sessions can survive outside the foreground
-    // CLI process. Non-sqlite builds fall back to the default in-process
-    // conversation runtime.
-    #[cfg(feature = "memory-sqlite")]
-    {
-        let background_task_spawner = Arc::new(DetachedTasksSpawner);
-        let runtime = mvp::conversation::load_hosted_default_conversation_runtime(config)?
-            .with_background_task_spawner(background_task_spawner);
-        Ok(runtime)
-    }
-
-    #[cfg(not(feature = "memory-sqlite"))]
-    {
-        let runtime = mvp::conversation::load_default_conversation_runtime(config)?;
-        Ok(runtime)
-    }
-}
-
 async fn execute_list_command(
     resolved_config_path: &str,
+    config: &mvp::config::LoongConfig,
     current_session_id: &str,
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
     tool_config: &mvp::config::ToolConfig,
@@ -347,6 +339,17 @@ async fn execute_list_command(
     overdue_only: bool,
     include_archived: bool,
 ) -> CliResult<Value> {
+    let execution_runtime = mvp::runtime::bootstrap_runtime_with_config(config)?;
+    let session = mvp::Session::from_config(
+        execution_runtime.as_ref(),
+        config,
+        current_session_id,
+        "cli-tasks-list",
+        loong_contracts::GovernedSessionMode::AdvisoryOnly,
+    )?;
+    let conversation_runtime = mvp::conversation::load_default_conversation_runtime(config)?;
+    let context =
+        mvp::Context::new(&execution_runtime, &session).map_err(|error| error.to_string())?;
     let raw_limit = limit.clamp(1, 200);
     let session_ids = load_visible_background_task_ids(
         memory_config,
@@ -363,8 +366,15 @@ async fn execute_list_command(
         if tasks.len() >= raw_limit {
             break;
         }
-        let task =
-            build_task_detail(memory_config, tool_config, current_session_id, &session_id).await?;
+        let task = build_task_detail(
+            memory_config,
+            tool_config,
+            current_session_id,
+            &session_id,
+            &context,
+            &conversation_runtime,
+        )
+        .await?;
         tasks.push(task);
     }
 
@@ -388,41 +398,32 @@ async fn execute_list_command(
 
 async fn execute_status_command(
     resolved_config_path: &str,
+    config: &mvp::config::LoongConfig,
     current_session_id: &str,
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
     tool_config: &mvp::config::ToolConfig,
     task_id: &str,
 ) -> CliResult<Value> {
-    let executor = LegacyTaskStatusExecutor::new(
-        memory_config.clone(),
-        tool_config.clone(),
-        current_session_id.to_owned(),
-    );
-    let workspace = task_status_workspace_context(tool_config)?;
-    let execution = execute_task_status(
-        &TaskStatusRequest {
-            current_session_id: current_session_id.to_owned(),
-            task_id: task_id.to_owned(),
-        },
-        workspace,
-        &executor,
+    let execution_runtime = mvp::runtime::bootstrap_runtime_with_config(config)?;
+    let session = mvp::Session::from_config(
+        execution_runtime.as_ref(),
+        config,
+        current_session_id,
+        "cli-tasks-status",
+        loong_contracts::GovernedSessionMode::AdvisoryOnly,
+    )?;
+    let conversation_runtime = mvp::conversation::load_default_conversation_runtime(config)?;
+    let context =
+        mvp::Context::new(&execution_runtime, &session).map_err(|error| error.to_string())?;
+    let task = build_task_detail(
+        memory_config,
+        tool_config,
+        current_session_id,
+        task_id,
+        &context,
+        &conversation_runtime,
     )
     .await?;
-    let mut task = execution.detail;
-    if let Some(task_object) = task.as_object_mut() {
-        task_object.insert(
-            "spine".to_owned(),
-            json!({
-                "session_id": execution.session.session_id,
-                "workspace": execution.session.workspace,
-                "task_id": execution.task.task_id,
-                "objective": execution.task.objective,
-                "lifecycle": execution.task.lifecycle,
-                "execution_mode": execution.task.execution_mode,
-                "current_turn_id": execution.task.current_turn_id,
-            }),
-        );
-    }
     let payload = json!({
         "command": "status",
         "config": resolved_config_path,
@@ -430,109 +431,6 @@ async fn execute_status_command(
         "task": task,
     });
     Ok(payload)
-}
-
-struct LegacyTaskStatusExecutor {
-    memory_config: mvp::memory::runtime_config::MemoryRuntimeConfig,
-    tool_config: mvp::config::ToolConfig,
-    current_session_id: String,
-}
-
-impl LegacyTaskStatusExecutor {
-    fn new(
-        memory_config: mvp::memory::runtime_config::MemoryRuntimeConfig,
-        tool_config: mvp::config::ToolConfig,
-        current_session_id: String,
-    ) -> Self {
-        Self {
-            memory_config,
-            tool_config,
-            current_session_id,
-        }
-    }
-}
-
-#[async_trait]
-impl AppProtocolTaskStatusExecutor for LegacyTaskStatusExecutor {
-    async fn load_task_status(
-        &self,
-        request: AppProtocolRuntimeTaskStatusRequest,
-    ) -> Result<AppProtocolRuntimeTaskStatusExecutorResult, String> {
-        let detail = build_task_detail(
-            &self.memory_config,
-            &self.tool_config,
-            self.current_session_id.as_str(),
-            request.task_id.as_str(),
-        )
-        .await?;
-        Ok(AppProtocolRuntimeTaskStatusExecutorResult { detail })
-    }
-}
-
-fn task_status_workspace_context(
-    tool_config: &mvp::config::ToolConfig,
-) -> CliResult<AppProtocolWorkspaceContext> {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let workspace_root = tool_config
-        .configured_runtime_workspace_root()
-        .or_else(|| tool_config.configured_file_root())
-        .unwrap_or_else(|| cwd.clone());
-    let workspace_root = dunce::canonicalize(&workspace_root).unwrap_or(workspace_root);
-    let repo_root =
-        resolve_git_repo_root(workspace_root.as_path()).unwrap_or_else(|_| workspace_root.clone());
-    let worktree_root = workspace_root.clone();
-    Ok(AppProtocolWorkspaceContext::new(
-        workspace_root.clone(),
-        repo_root,
-        worktree_root,
-        cwd,
-        current_branch_identity(&workspace_root),
-    ))
-}
-
-fn current_branch_identity(workspace_root: &std::path::Path) -> String {
-    std::process::Command::new("git")
-        .args(["-C"])
-        .arg(workspace_root)
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .output()
-        .ok()
-        .and_then(|output| {
-            if output.status.success() {
-                Some(String::from_utf8_lossy(&output.stdout).trim().to_owned())
-            } else {
-                None
-            }
-        })
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "unknown".to_owned())
-}
-
-fn resolve_git_repo_root(base_root: &std::path::Path) -> Result<PathBuf, String> {
-    let output = std::process::Command::new("git")
-        .args(["-C"])
-        .arg(base_root)
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
-        .map_err(|error| format!("spawn git command failed: {error}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let display_path = base_root.display();
-        return Err(format!(
-            "resolve git repo root from `{display_path}` failed: {stderr}"
-        ));
-    }
-
-    let raw_stdout = String::from_utf8_lossy(&output.stdout);
-    let trimmed_stdout = raw_stdout.trim();
-    if trimmed_stdout.is_empty() {
-        let display_path = base_root.display();
-        return Err(format!(
-            "resolve git repo root from `{display_path}` returned empty output"
-        ));
-    }
-
-    Ok(PathBuf::from(trimmed_stdout))
 }
 
 async fn execute_events_command(
@@ -582,6 +480,7 @@ async fn execute_events_command(
 
 async fn execute_wait_command(
     resolved_config_path: &str,
+    config: &mvp::config::LoongConfig,
     current_session_id: &str,
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
     tool_config: &mvp::config::ToolConfig,
@@ -596,14 +495,33 @@ async fn execute_wait_command(
         "timeout_ms": timeout_ms.clamp(1, 30_000),
     });
     let session_store_config = mvp::session::store::SessionStoreConfig::from(memory_config);
+    let execution_runtime = mvp::runtime::bootstrap_runtime_with_config(config)?;
+    let session = mvp::Session::from_config(
+        execution_runtime.as_ref(),
+        config,
+        current_session_id,
+        "cli-tasks-wait",
+        loong_contracts::GovernedSessionMode::AdvisoryOnly,
+    )?;
+    let context =
+        mvp::Context::new(&execution_runtime, &session).map_err(|error| error.to_string())?;
     let outcome = mvp::tools::wait_for_task_with_config(
         payload,
-        current_session_id,
+        &context,
         &session_store_config,
         tool_config,
     )
     .await?;
-    let task = build_task_detail(memory_config, tool_config, current_session_id, task_id).await?;
+    let conversation_runtime = mvp::conversation::load_default_conversation_runtime(config)?;
+    let task = build_task_detail(
+        memory_config,
+        tool_config,
+        current_session_id,
+        task_id,
+        &context,
+        &conversation_runtime,
+    )
+    .await?;
     let wait_payload = outcome.payload;
     let next_after_id = wait_payload
         .get("next_after_id")
@@ -630,6 +548,7 @@ async fn execute_wait_command(
 
 async fn execute_cancel_command(
     resolved_config_path: &str,
+    config: &mvp::config::LoongConfig,
     current_session_id: &str,
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
     tool_config: &mvp::config::ToolConfig,
@@ -651,9 +570,26 @@ async fn execute_cancel_command(
         "task_cancel",
         payload,
     )?;
-    let (task, task_lookup_error) =
-        build_best_effort_task_detail(memory_config, tool_config, current_session_id, task_id)
-            .await;
+    let execution_runtime = mvp::runtime::bootstrap_runtime_with_config(config)?;
+    let session = mvp::Session::from_config(
+        execution_runtime.as_ref(),
+        config,
+        current_session_id,
+        "cli-tasks-cancel",
+        loong_contracts::GovernedSessionMode::MutatingCapable,
+    )?;
+    let conversation_runtime = mvp::conversation::load_default_conversation_runtime(config)?;
+    let context =
+        mvp::Context::new(&execution_runtime, &session).map_err(|error| error.to_string())?;
+    let (task, task_lookup_error) = build_best_effort_task_detail(
+        memory_config,
+        tool_config,
+        current_session_id,
+        task_id,
+        &context,
+        &conversation_runtime,
+    )
+    .await;
     let mutation_result = extract_single_mutation_result(&outcome.payload);
     let result = mutation_result
         .as_ref()
@@ -695,6 +631,7 @@ async fn execute_cancel_command(
 
 async fn execute_recover_command(
     resolved_config_path: &str,
+    config: &mvp::config::LoongConfig,
     current_session_id: &str,
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
     tool_config: &mvp::config::ToolConfig,
@@ -716,9 +653,26 @@ async fn execute_recover_command(
         "task_recover",
         payload,
     )?;
-    let (task, task_lookup_error) =
-        build_best_effort_task_detail(memory_config, tool_config, current_session_id, task_id)
-            .await;
+    let execution_runtime = mvp::runtime::bootstrap_runtime_with_config(config)?;
+    let session = mvp::Session::from_config(
+        execution_runtime.as_ref(),
+        config,
+        current_session_id,
+        "cli-tasks-recover",
+        loong_contracts::GovernedSessionMode::MutatingCapable,
+    )?;
+    let conversation_runtime = mvp::conversation::load_default_conversation_runtime(config)?;
+    let context =
+        mvp::Context::new(&execution_runtime, &session).map_err(|error| error.to_string())?;
+    let (task, task_lookup_error) = build_best_effort_task_detail(
+        memory_config,
+        tool_config,
+        current_session_id,
+        task_id,
+        &context,
+        &conversation_runtime,
+    )
+    .await;
     let mutation_result = extract_single_mutation_result(&outcome.payload);
     let result = mutation_result
         .as_ref()
@@ -805,7 +759,7 @@ fn execute_app_tool_request(
         payload,
     };
     let session_store_config = mvp::session::store::SessionStoreConfig::from(memory_config);
-    let outcome = mvp::tools::execute_app_tool_with_config(
+    let outcome = mvp::tools::execute_legacy_app_tool_with_config(
         request,
         current_session_id,
         &session_store_config,
@@ -945,11 +899,13 @@ fn current_unix_timestamp() -> i64 {
     duration.as_secs().min(i64::MAX as u64) as i64
 }
 
-async fn build_task_detail(
+async fn build_task_detail<R: mvp::conversation::ConversationRuntime + ?Sized>(
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
     tool_config: &mvp::config::ToolConfig,
     current_session_id: &str,
     task_id: &str,
+    context: &mvp::Context<'_>,
+    runtime: &R,
 ) -> CliResult<Value> {
     let task_target = resolve_cli_task_target(memory_config, current_session_id, task_id)?;
     let status_payload =
@@ -1050,17 +1006,20 @@ async fn build_task_detail(
     );
     let prompt_frame = crate::session_prompt_frame_cli::load_session_prompt_frame_payload(
         memory_config,
-        task_target.owner_session_id.as_str(),
+        context,
+        runtime,
     )
     .await;
     let safe_lane = crate::session_runtime_truth_cli::load_session_safe_lane_payload(
         memory_config,
-        task_target.owner_session_id.as_str(),
+        context,
+        runtime,
     )
     .await;
     let turn_checkpoint = crate::session_runtime_truth_cli::load_session_turn_checkpoint_payload(
         memory_config,
-        task_target.owner_session_id.as_str(),
+        context,
+        runtime,
     )
     .await;
 
@@ -1100,14 +1059,23 @@ async fn build_task_detail(
     Ok(detail)
 }
 
-async fn build_best_effort_task_detail(
+async fn build_best_effort_task_detail<R: mvp::conversation::ConversationRuntime + ?Sized>(
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
     tool_config: &mvp::config::ToolConfig,
     current_session_id: &str,
     task_id: &str,
+    context: &mvp::Context<'_>,
+    runtime: &R,
 ) -> (Value, Value) {
-    let detail_result =
-        build_task_detail(memory_config, tool_config, current_session_id, task_id).await;
+    let detail_result = build_task_detail(
+        memory_config,
+        tool_config,
+        current_session_id,
+        task_id,
+        context,
+        runtime,
+    )
+    .await;
     match detail_result {
         Ok(task_detail) => (task_detail, Value::Null),
         Err(error) => {

@@ -4,7 +4,10 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::OnceLock;
 
+use loong_contracts::ToolPath;
+use loong_contracts::ToolSchedulingClass;
 use loong_kernel::ToolConcurrencyClass;
+use loong_runtime::tool_plane::ToolRegistration;
 use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::Digest;
@@ -23,9 +26,8 @@ use metadata_support::{
 #[path = "catalog_core_definition_support.rs"]
 mod core_definition_support;
 use core_definition_support::{
-    direct_bash_definition, direct_browser_definition, direct_edit_definition,
-    direct_memory_definition, direct_read_definition, direct_web_definition,
-    direct_write_definition,
+    direct_bash_definition, direct_browser_definition, direct_memory_definition,
+    direct_web_definition,
 };
 #[path = "catalog_browser_definition_support.rs"]
 mod browser_definition_support;
@@ -35,14 +37,19 @@ use browser_definition_support::{
 #[path = "catalog_skills_definition_support.rs"]
 mod skills_definition_support;
 use skills_definition_support::{config_import_definition, provider_switch_definition};
+#[cfg(feature = "tool-file")]
+#[path = "catalog_file_memory_definition_support.rs"]
+mod file_memory_definition_support;
 #[path = "catalog_io_definition_support.rs"]
 mod io_definition_support;
+#[cfg(feature = "tool-file")]
+use file_memory_definition_support::{
+    memory_get_definition, memory_retrieve_definition, memory_search_definition,
+};
 #[cfg(feature = "tool-websearch")]
 use io_definition_support::web_search_definition;
 use io_definition_support::{
-    bash_exec_definition, content_search_definition, glob_search_definition,
-    http_request_definition, memory_get_definition, memory_retrieve_definition,
-    memory_search_definition, shell_exec_definition, web_fetch_definition,
+    bash_exec_definition, http_request_definition, shell_exec_definition, web_fetch_definition,
 };
 #[path = "catalog_session_definition_support.rs"]
 mod session_definition_support;
@@ -64,30 +71,17 @@ use session_definition_support::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub enum ToolExecutionKind {
-    Core,
-    App,
+pub enum ToolOwner {
+    /// Unmigrated request executes through the kernel CoreTool adapter.
+    LegacyCore,
+    /// Unmigrated request executes through the app dispatcher.
+    LegacyApp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ToolAvailability {
     Runtime,
     Planned,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub enum ToolSchedulingClass {
-    SerialOnly,
-    ParallelSafe,
-}
-
-impl ToolSchedulingClass {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::SerialOnly => "serial_only",
-            Self::ParallelSafe => "parallel_safe",
-        }
-    }
 }
 
 /// Semantic action families for the autonomy-policy kernel.
@@ -292,7 +286,7 @@ pub struct ToolDescriptor {
     pub provider_name: &'static str,
     pub aliases: &'static [&'static str],
     pub description: &'static str,
-    pub execution_kind: ToolExecutionKind,
+    pub owner: ToolOwner,
     pub availability: ToolAvailability,
     pub exposure: ToolExposureClass,
     pub visibility_gate: ToolVisibilityGate,
@@ -384,7 +378,7 @@ impl ToolDescriptor {
     }
 
     pub fn is_provider_invokable_discoverable(&self) -> bool {
-        self.is_discoverable() && self.execution_kind == ToolExecutionKind::Core
+        self.is_discoverable() && self.owner != ToolOwner::LegacyApp
     }
 
     pub fn capability_action_class(&self) -> CapabilityActionClass {
@@ -404,8 +398,8 @@ impl ToolDescriptor {
     }
 
     pub fn requires_kernel_binding(&self) -> bool {
-        let execution_kind = self.execution_kind;
-        if execution_kind != ToolExecutionKind::App {
+        let owner = self.owner;
+        if owner != ToolOwner::LegacyApp {
             return false;
         }
 
@@ -428,7 +422,7 @@ pub struct ToolCatalogEntry {
     pub surface_id: Option<&'static str>,
     pub usage_guidance: Option<&'static str>,
     pub exposure: ToolExposureClass,
-    pub execution_kind: ToolExecutionKind,
+    pub owner: ToolOwner,
     pub availability: ToolAvailability,
     pub capability_action_class: CapabilityActionClass,
     pub scheduling_class: ToolSchedulingClass,
@@ -455,40 +449,120 @@ impl ToolCatalogEntry {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ToolView {
-    allowed_names: BTreeSet<String>,
+    // Runtime path is the authority key. The string is retained only as the
+    // provider/catalog projection, so typed policy never reparses presentation.
+    allowed_paths: BTreeMap<ToolPath, String>,
 }
 
 impl ToolView {
-    pub fn from_tool_names<I, S>(names: I) -> Self
+    /// Build the untyped legacy catalog view whose canonical names are its paths.
+    ///
+    /// Registered tools must enter through [`ToolView::insert_registration`]; a
+    /// provider name is not a typed path and must never call this constructor.
+    #[allow(clippy::expect_used)]
+    pub(crate) fn from_legacy_paths<I>(paths: I) -> Self
     where
-        I: IntoIterator<Item = S>,
-        S: AsRef<str>,
+        I: IntoIterator<Item = &'static str>,
     {
         Self {
-            allowed_names: names
+            allowed_paths: paths
                 .into_iter()
-                .map(|name| name.as_ref().to_owned())
+                .map(|path| {
+                    // TODO(legacy-tool-view): remove static legacy identities
+                    // when the final fallback catalog is deleted. Dynamic
+                    // identities must use the fallible typed boundaries.
+                    let identity = ToolPath::new([path])
+                        .expect("static legacy tool path must satisfy ToolPath");
+                    (identity, path.to_owned())
+                })
                 .collect(),
         }
     }
 
     pub fn contains(&self, tool_name: &str) -> bool {
-        self.allowed_names.contains(tool_name)
+        self.resolve_path(tool_name).is_some()
+    }
+
+    #[must_use]
+    pub(crate) fn contains_path(&self, path: &ToolPath) -> bool {
+        self.allowed_paths.contains_key(path)
+    }
+
+    /// Resolve an exact canonical path first, then its provider presentation.
+    ///
+    /// Canonical identity takes precedence so a provider alias cannot redirect
+    /// an already-exact authority request. Ambiguous provider names fail closed.
+    pub(crate) fn resolve_path(&self, tool_id: &str) -> Option<&ToolPath> {
+        if let Ok(path) = tool_id.parse::<ToolPath>()
+            && let Some((path, _)) = self.allowed_paths.get_key_value(&path)
+        {
+            return Some(path);
+        }
+
+        let mut matches = self
+            .allowed_paths
+            .iter()
+            .filter(|(_, provider_name)| provider_name.as_str() == tool_id)
+            .map(|(path, _)| path);
+        let path = matches.next()?;
+        matches.next().is_none().then_some(path)
+    }
+
+    #[must_use]
+    pub(crate) fn provider_name(&self, path: &ToolPath) -> Option<&str> {
+        self.allowed_paths.get(path).map(String::as_str)
+    }
+
+    pub(crate) fn paths(&self) -> impl Iterator<Item = &ToolPath> {
+        self.allowed_paths.keys()
+    }
+
+    /// Add one runtime-owned identity and its provider projection.
+    ///
+    /// Authority checks use the path key. Prompt/provider surfaces use the
+    /// registration-owned value and never derive a display name from the path.
+    pub(crate) fn insert_registration(&mut self, path: ToolPath, registration: &ToolRegistration) {
+        let provider_name = match registration {
+            ToolRegistration::Direct { provider_name } => provider_name.clone(),
+            ToolRegistration::Discoverable { discovery_name } => discovery_name.clone(),
+        };
+        self.allowed_paths.insert(path, provider_name);
     }
 
     pub fn tool_names(&self) -> impl Iterator<Item = &str> {
-        self.allowed_names.iter().map(String::as_str)
+        self.allowed_paths.values().map(String::as_str)
     }
 
     pub fn intersect(&self, other: &ToolView) -> ToolView {
-        let names: BTreeSet<String> = self
-            .allowed_names
-            .intersection(&other.allowed_names)
-            .cloned()
+        let allowed_paths = self
+            .allowed_paths
+            .iter()
+            .filter(|(path, _)| other.allowed_paths.contains_key(*path))
+            .map(|(path, name)| (path.clone(), name.clone()))
             .collect();
-        ToolView {
-            allowed_names: names,
-        }
+        ToolView { allowed_paths }
+    }
+
+    /// Filter an existing authority view without rebuilding paths from names.
+    ///
+    /// Provider names are presentation projections and may differ from the
+    /// `ToolPath` authority key. All policy/config filtering must retain both
+    /// halves of the original registration through this operation.
+    pub(crate) fn filter(&self, mut keep: impl FnMut(&ToolPath, &str) -> bool) -> ToolView {
+        let allowed_paths = self
+            .allowed_paths
+            .iter()
+            .filter(|(path, provider_name)| keep(path, provider_name))
+            .map(|(path, provider_name)| (path.clone(), provider_name.clone()))
+            .collect();
+        ToolView { allowed_paths }
+    }
+
+    #[must_use]
+    pub fn is_subset(&self, other: &ToolView) -> bool {
+        self.allowed_paths
+            .keys()
+            .all(|path| other.allowed_paths.contains_key(path))
     }
 
     pub fn iter<'a>(
@@ -606,8 +680,7 @@ fn feishu_declared_concurrency_class(tool_name: &str) -> Option<ToolConcurrencyC
 
 fn declared_concurrency_class(tool_name: &str) -> ToolConcurrencyClass {
     let explicit_class = match tool_name {
-        "read"
-        | "web"
+        "web"
         | "memory"
         | "approval_request_status"
         | "approval_requests_list"
@@ -630,16 +703,12 @@ fn declared_concurrency_class(tool_name: &str) -> ToolConcurrencyClass {
         | "tasks_search"
         | "sessions_history"
         | "sessions_list"
-        | "glob.search"
-        | "content.search"
         | "memory_search"
         | "memory_get"
         | "browser.extract"
         | "web.fetch"
         | "web.search" => Some(ToolConcurrencyClass::ReadOnly),
-        "write"
-        | "edit"
-        | "bash"
+        "bash"
         | "browse"
         | "config.import"
         | "provider.switch"
@@ -659,8 +728,6 @@ fn declared_concurrency_class(tool_name: &str) -> ToolConcurrencyClass {
         | "session_unpin_head"
         | "sessions_send"
         | "http.request"
-        | "file.write"
-        | "file.edit"
         | "shell.exec"
         | "bash.exec"
         | "browser.click"
@@ -685,58 +752,17 @@ fn annotate_tool_concurrency_classes(descriptors: &mut [ToolDescriptor]) {
     }
 }
 
-// TODO: Split Tool Desc by tool
+// TODO(tool-catalog-owner): split this legacy descriptor table by owning tool
+// domain as each remaining implementation migrates into runtime registration.
 fn build_tool_catalog() -> ToolCatalog {
     let mut descriptors = vec![
-        ToolDescriptor {
-            name: "read",
-            provider_name: "read",
-            aliases: &["file.read", "file_read"],
-            description: "Read accessible files under the current runtime file root, page through large files, search file contents, or list matching paths",
-            execution_kind: ToolExecutionKind::Core,
-            availability: ToolAvailability::Runtime,
-            exposure: ToolExposureClass::Direct,
-            visibility_gate: ToolVisibilityGate::Always,
-            capability_action_class: CapabilityActionClass::ExecuteExisting,
-            policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
-            concurrency_class: ToolConcurrencyClass::Unknown,
-            provider_definition_builder: direct_read_definition,
-        },
-        ToolDescriptor {
-            name: "write",
-            provider_name: "write",
-            aliases: &["file.write", "file_write"],
-            description: "Write files under the current runtime file root or replace full file contents",
-            execution_kind: ToolExecutionKind::Core,
-            availability: ToolAvailability::Runtime,
-            exposure: ToolExposureClass::Direct,
-            visibility_gate: ToolVisibilityGate::Always,
-            capability_action_class: CapabilityActionClass::ExecuteExisting,
-            policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
-            concurrency_class: ToolConcurrencyClass::Unknown,
-            provider_definition_builder: direct_write_definition,
-        },
-        ToolDescriptor {
-            name: "edit",
-            provider_name: "edit",
-            aliases: &["file.edit", "file_edit"],
-            description: "Apply one or more exact text edits to a file",
-            execution_kind: ToolExecutionKind::Core,
-            availability: ToolAvailability::Runtime,
-            exposure: ToolExposureClass::Direct,
-            visibility_gate: ToolVisibilityGate::Always,
-            capability_action_class: CapabilityActionClass::ExecuteExisting,
-            policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
-            concurrency_class: ToolConcurrencyClass::Unknown,
-            provider_definition_builder: direct_edit_definition,
-        },
         #[cfg(feature = "tool-shell")]
         ToolDescriptor {
             name: "bash",
             provider_name: "bash",
             aliases: &[],
             description: "Run a guarded bash command from the current runtime file root. Prefer portable macOS/BSD-safe commands over GNU-only flags.",
-            execution_kind: ToolExecutionKind::Core,
+            owner: ToolOwner::LegacyCore,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Direct,
             visibility_gate: ToolVisibilityGate::Always,
@@ -750,7 +776,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "web",
             aliases: &[],
             description: "Fetch a URL, send HTTP requests, or search the public web",
-            execution_kind: ToolExecutionKind::Core,
+            owner: ToolOwner::LegacyCore,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Direct,
             visibility_gate: ToolVisibilityGate::Always,
@@ -764,7 +790,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "browse",
             aliases: &["browser"],
             description: "Open a page, extract text or links, or follow discovered page links",
-            execution_kind: ToolExecutionKind::Core,
+            owner: ToolOwner::LegacyCore,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Direct,
             visibility_gate: ToolVisibilityGate::Always,
@@ -778,7 +804,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "memory",
             aliases: &[],
             description: "Search or read durable memory notes",
-            execution_kind: ToolExecutionKind::Core,
+            owner: ToolOwner::LegacyCore,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Direct,
             visibility_gate: ToolVisibilityGate::Always,
@@ -792,7 +818,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "config_import",
             aliases: &["claw.migrate", "claw_migrate"],
             description: "Import legacy agent workspace config, profile, and external-skills mapping state into native Loong settings",
-            execution_kind: ToolExecutionKind::Core,
+            owner: ToolOwner::LegacyCore,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Always,
@@ -806,7 +832,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "provider_switch",
             aliases: &[],
             description: "Inspect current provider state or switch the default provider profile for subsequent turns",
-            execution_kind: ToolExecutionKind::Core,
+            owner: ToolOwner::LegacyCore,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Always,
@@ -820,7 +846,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "approval_request_resolve",
             aliases: &[],
             description: "Resolve one visible governed tool approval request",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
@@ -834,7 +860,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "approval_request_status",
             aliases: &[],
             description: "Inspect full detail for a visible governed tool approval request",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
@@ -848,7 +874,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "approval_requests_list",
             aliases: &[],
             description: "List visible governed tool approval requests across the current session scope",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
@@ -862,7 +888,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "delegate",
             aliases: &[],
             description: "Delegate a focused subtask into a child session",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Delegate,
@@ -876,7 +902,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "delegate_async",
             aliases: &[],
             description: "Delegate a focused subtask into a background child session",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Delegate,
@@ -890,7 +916,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "session_archive",
             aliases: &[],
             description: "Archive a visible terminal session from default session listings",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::SessionMutation,
@@ -904,7 +930,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "session_cancel",
             aliases: &[],
             description: "Cancel a visible async delegate child session",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::SessionMutation,
@@ -918,7 +944,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "session_continue",
             aliases: &[],
             description: "Continue a visible delegate child session with a follow-up task",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::SessionMutation,
@@ -932,7 +958,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "session_events",
             aliases: &[],
             description: "Fetch session events for a visible session",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
@@ -946,7 +972,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "session_tool_policy_status",
             aliases: &[],
             description: "Inspect the session-scoped tool policy for a visible session",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
@@ -960,7 +986,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "session_tool_policy_set",
             aliases: &[],
             description: "Update the session-scoped tool policy for a visible session",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::SessionMutation,
@@ -974,7 +1000,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "session_tool_policy_clear",
             aliases: &[],
             description: "Clear the session-scoped tool policy for a visible session",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::SessionMutation,
@@ -988,7 +1014,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "session_search",
             aliases: &[],
             description: "Search visible canonical session history across transcript turns and session events",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
@@ -1002,7 +1028,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "session_heads",
             aliases: &["session-heads"],
             description: "List named branch heads for a visible session tree",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
@@ -1016,7 +1042,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "session_path",
             aliases: &["session-path"],
             description: "Load the node ancestry path for one visible session branch head",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
@@ -1030,7 +1056,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "session_children",
             aliases: &["session-children"],
             description: "List direct child nodes for one visible session tree node",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
@@ -1044,7 +1070,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "session_artifacts",
             aliases: &["session-artifacts"],
             description: "List branch artifacts for a visible session tree",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
@@ -1058,7 +1084,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "session_recover",
             aliases: &[],
             description: "Recover an overdue queued async delegate child session by marking it failed",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::SessionMutation,
@@ -1072,7 +1098,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "session_fork_head",
             aliases: &["session-fork-head"],
             description: "Create or update a named branch head from a visible session node",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::SessionMutation,
@@ -1086,7 +1112,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "session_set_active_head",
             aliases: &["session-set-active-head"],
             description: "Promote a named session branch head to the active prompt path",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::SessionMutation,
@@ -1100,7 +1126,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "session_pin_head",
             aliases: &["session-pin-head"],
             description: "Mark a named visible session branch head as pinned metadata",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::SessionMutation,
@@ -1114,7 +1140,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "session_unpin_head",
             aliases: &["session-unpin-head"],
             description: "Mark a named visible session branch head as live metadata",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::SessionMutation,
@@ -1128,7 +1154,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "session_create_checkpoint",
             aliases: &["session-create-checkpoint"],
             description: "Create a named checkpoint head and artifact for a visible session branch",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::SessionMutation,
@@ -1142,7 +1168,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "session_create_branch_summary",
             aliases: &["session-create-branch-summary"],
             description: "Create a branch summary artifact for a visible named session head",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::SessionMutation,
@@ -1156,7 +1182,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "session_status",
             aliases: &[],
             description: "Inspect the current status of a visible session",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
@@ -1170,7 +1196,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "session_wait",
             aliases: &[],
             description: "Wait for a visible session to reach a terminal state",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
@@ -1184,7 +1210,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "task_status",
             aliases: &[],
             description: "Inspect the current status of a durable task",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
@@ -1198,7 +1224,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "task_wait",
             aliases: &[],
             description: "Wait for a durable task to reach a stable state",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
@@ -1212,7 +1238,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "task_history",
             aliases: &[],
             description: "Fetch transcript history and task-lineage metadata for a durable task across visible owner sessions",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
@@ -1226,7 +1252,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "task_events",
             aliases: &[],
             description: "Fetch lineage-aware task events for a durable task across visible owner sessions",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
@@ -1240,7 +1266,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "task_cancel",
             aliases: &[],
             description: "Cancel a durable task using task-first identity while preserving runtime ownership truth",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
@@ -1254,7 +1280,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "task_recover",
             aliases: &[],
             description: "Recover a durable task using task-first identity while preserving runtime ownership truth",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
@@ -1268,7 +1294,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "tasks_list",
             aliases: &[],
             description: "List visible durable tasks and their high-level task state",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
@@ -1282,7 +1308,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "tasks_search",
             aliases: &[],
             description: "Search visible durable tasks by summary, state, label, or owner metadata",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
@@ -1296,7 +1322,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "sessions_history",
             aliases: &[],
             description: "Fetch transcript history for a visible session",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
@@ -1310,7 +1336,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "sessions_list",
             aliases: &[],
             description: "List visible sessions and their high-level state",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
@@ -1324,7 +1350,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "sessions_send",
             aliases: &[],
             description: "Send an outbound text message to a known channel-backed root session",
-            execution_kind: ToolExecutionKind::App,
+            owner: ToolOwner::LegacyApp,
             availability: runtime_messaging_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Messages,
@@ -1609,39 +1635,11 @@ fn build_tool_catalog() -> ToolCatalog {
     #[cfg(feature = "tool-file")]
     {
         descriptors.push(ToolDescriptor {
-            name: "glob.search",
-            provider_name: "glob_search",
-            aliases: &[],
-            description: "Search the workspace for files matching a glob pattern",
-            execution_kind: ToolExecutionKind::Core,
-            availability: ToolAvailability::Runtime,
-            exposure: ToolExposureClass::Discoverable,
-            visibility_gate: ToolVisibilityGate::Always,
-            capability_action_class: CapabilityActionClass::ExecuteExisting,
-            policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
-            concurrency_class: ToolConcurrencyClass::Unknown,
-            provider_definition_builder: glob_search_definition,
-        });
-        descriptors.push(ToolDescriptor {
-            name: "content.search",
-            provider_name: "content_search",
-            aliases: &[],
-            description: "Search workspace file contents for a text match with bounded results",
-            execution_kind: ToolExecutionKind::Core,
-            availability: ToolAvailability::Runtime,
-            exposure: ToolExposureClass::Discoverable,
-            visibility_gate: ToolVisibilityGate::Always,
-            capability_action_class: CapabilityActionClass::ExecuteExisting,
-            policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
-            concurrency_class: ToolConcurrencyClass::Unknown,
-            provider_definition_builder: content_search_definition,
-        });
-        descriptors.push(ToolDescriptor {
             name: "memory.retrieve",
             provider_name: "memory_retrieve",
             aliases: &["memory_retrieve"],
             description: "Retrieve durable memory with unified provenance, injection reason, and prompt-eligibility truth",
-            execution_kind: ToolExecutionKind::Core,
+            owner: ToolOwner::LegacyCore,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::MemorySearchCorpus,
@@ -1655,7 +1653,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "memory_search",
             aliases: &[],
             description: "Search durable workspace memory files and canonical cross-session recall with bounded snippets",
-            execution_kind: ToolExecutionKind::Core,
+            owner: ToolOwner::LegacyCore,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::MemorySearchCorpus,
@@ -1669,7 +1667,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "memory_get",
             aliases: &[],
             description: "Read a bounded line window from one durable workspace memory file",
-            execution_kind: ToolExecutionKind::Core,
+            owner: ToolOwner::LegacyCore,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::MemoryFileRoot,
@@ -1687,7 +1685,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "shell_exec",
             aliases: &["shell"],
             description: "Execute shell commands. Inline stdout and stderr are capped; details.handoff.recommended_payload and details.handoff.recipes expose read-ready follow-up payloads when full output is saved.",
-            execution_kind: ToolExecutionKind::Core,
+            owner: ToolOwner::LegacyCore,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Always,
@@ -1705,7 +1703,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "bash_exec",
             aliases: &[],
             description: "Execute bash commands. Inline stdout and stderr are capped; details.handoff.recommended_payload and details.handoff.recipes expose read-ready follow-up payloads when full output is saved.",
-            execution_kind: ToolExecutionKind::Core,
+            owner: ToolOwner::LegacyCore,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::BashRuntime,
@@ -1723,7 +1721,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "browser_click",
             aliases: &["browser_click"],
             description: "Follow one previously discovered page link within a bounded browser session",
-            execution_kind: ToolExecutionKind::Core,
+            owner: ToolOwner::LegacyCore,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Browser,
@@ -1737,7 +1735,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "browser_extract",
             aliases: &["browser_extract"],
             description: "Extract structured text or links from the current browser session page",
-            execution_kind: ToolExecutionKind::Core,
+            owner: ToolOwner::LegacyCore,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Browser,
@@ -1752,7 +1750,7 @@ fn build_tool_catalog() -> ToolCatalog {
             aliases: &["browser_open"],
             description:
                 "Open a public web page into a bounded browser session with safe link discovery",
-            execution_kind: ToolExecutionKind::Core,
+            owner: ToolOwner::LegacyCore,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Browser,
@@ -1766,7 +1764,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "browser_companion_snapshot",
             aliases: &["browser_companion_snapshot"],
             description: "Capture a managed browser snapshot for the current browser session",
-            execution_kind: ToolExecutionKind::Core,
+            owner: ToolOwner::LegacyCore,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Browser,
@@ -1780,7 +1778,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "browser_companion_click",
             aliases: &["browser_companion_click"],
             description: "Click a managed browser element within the current browser session",
-            execution_kind: ToolExecutionKind::Core,
+            owner: ToolOwner::LegacyCore,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Browser,
@@ -1794,7 +1792,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "browser_companion_type",
             aliases: &["browser_companion_type"],
             description: "Type into a managed browser element within the current browser session",
-            execution_kind: ToolExecutionKind::Core,
+            owner: ToolOwner::LegacyCore,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Browser,
@@ -1808,7 +1806,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "browser_companion_wait",
             aliases: &["browser_companion_wait"],
             description: "Wait on a managed browser condition within the current browser session",
-            execution_kind: ToolExecutionKind::Core,
+            owner: ToolOwner::LegacyCore,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Browser,
@@ -1827,7 +1825,7 @@ fn build_tool_catalog() -> ToolCatalog {
             aliases: &["http_request"],
             description:
                 "Send a bounded HTTP request with status, headers, and text or binary body output",
-            execution_kind: ToolExecutionKind::Core,
+            owner: ToolOwner::LegacyCore,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::WebFetch,
@@ -1845,7 +1843,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "web_fetch",
             aliases: &["web_fetch"],
             description: "Fetch a public web page with SSRF-safe guards and readable extraction",
-            execution_kind: ToolExecutionKind::Core,
+            owner: ToolOwner::LegacyCore,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::WebFetch,
@@ -1864,7 +1862,7 @@ fn build_tool_catalog() -> ToolCatalog {
             aliases: &[],
             description:
                 "Search the web for APIs, documentation, and error messages using configured web-search providers. This search mode is separate from plain URL fetch/request network access",
-            execution_kind: ToolExecutionKind::Core,
+            owner: ToolOwner::LegacyCore,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::WebSearch,
@@ -1980,7 +1978,7 @@ pub fn runtime_tool_view_for_config_with_skills(
     skills_enabled: bool,
 ) -> ToolView {
     let catalog = tool_catalog();
-    ToolView::from_tool_names(
+    ToolView::from_legacy_paths(
         catalog
             .descriptors()
             .iter()
@@ -1998,7 +1996,7 @@ pub fn runtime_tool_view_for_config_with_skills(
 
 pub fn runtime_tool_view_for_runtime_config(config: &ToolRuntimeConfig) -> ToolView {
     let catalog = tool_catalog();
-    ToolView::from_tool_names(
+    ToolView::from_legacy_paths(
         catalog
             .descriptors()
             .iter()
@@ -2012,7 +2010,7 @@ pub fn runtime_tool_view_for_runtime_config(config: &ToolRuntimeConfig) -> ToolV
 
 pub fn planned_root_tool_view() -> ToolView {
     let catalog = tool_catalog();
-    ToolView::from_tool_names(
+    ToolView::from_legacy_paths(
         catalog
             .descriptors()
             .iter()
@@ -2112,10 +2110,14 @@ fn build_delegate_child_tool_view(
     let mut names = Vec::new();
     let allowlist = BTreeSet::<&str>::from_iter(child_tool_allowlist.iter().map(String::as_str));
 
-    for descriptor in catalog.descriptors().iter().filter(|descriptor| {
-        descriptor.execution_kind == ToolExecutionKind::Core
-            && descriptor.availability == ToolAvailability::Runtime
-    }) {
+    // Child visibility is an authority decision made by the explicit allowlist
+    // and feature gates. Execution ownership only selects typed or legacy
+    // dispatch and must not hide a tool after that tool is migrated.
+    for descriptor in catalog
+        .descriptors()
+        .iter()
+        .filter(|descriptor| descriptor.availability == ToolAvailability::Runtime)
+    {
         match descriptor.name {
             #[cfg(feature = "tool-shell")]
             "shell.exec" if allow_shell_in_child => {
@@ -2152,7 +2154,7 @@ fn build_delegate_child_tool_view(
         names.push("delegate_async");
     }
 
-    ToolView::from_tool_names(names)
+    ToolView::from_legacy_paths(names)
 }
 
 fn tool_visibility_gate_enabled_for_delegate_child(
@@ -2191,6 +2193,7 @@ pub fn provider_exposed_tool_catalog() -> Vec<ToolCatalogEntry> {
         .collect()
 }
 
+#[cfg(test)]
 pub fn all_tool_catalog() -> Vec<ToolCatalogEntry> {
     tool_catalog().all_entries().to_vec()
 }
@@ -2216,7 +2219,7 @@ fn descriptor_to_entry(descriptor: &ToolDescriptor) -> ToolCatalogEntry {
         surface_id: descriptor.surface_id(),
         usage_guidance: descriptor.usage_guidance(),
         exposure: descriptor.exposure,
-        execution_kind: descriptor.execution_kind,
+        owner: descriptor.owner,
         availability: descriptor.availability,
         capability_action_class: descriptor.capability_action_class(),
         scheduling_class: descriptor.scheduling_class(),
@@ -2355,7 +2358,7 @@ fn push_feishu_tool_descriptor(
         provider_name,
         aliases: &[],
         description,
-        execution_kind: ToolExecutionKind::Core,
+        owner: ToolOwner::LegacyCore,
         availability: ToolAvailability::Runtime,
         exposure: ToolExposureClass::Discoverable,
         visibility_gate: ToolVisibilityGate::Feishu,

@@ -12,7 +12,7 @@ use crate::config::{AutonomyProfile, LoongConfig};
 use crate::config::{FeishuChannelConfig, FeishuIntegrationConfig};
 use crate::conversation::{
     ConstrainedSubagentContractView, ConstrainedSubagentControlScope, ConstrainedSubagentMode,
-    ConstrainedSubagentRole, ConstrainedSubagentRuntimeBinding,
+    ConstrainedSubagentRole,
 };
 #[cfg(feature = "feishu-integration")]
 use crate::secrets::has_configured_secret_ref;
@@ -292,7 +292,7 @@ pub struct AutonomyPolicySnapshot {
     pub capability_acquisition_mode: AutonomyOperationMode,
     pub provider_switch_mode: AutonomyOperationMode,
     pub topology_mutation_mode: AutonomyOperationMode,
-    pub requires_kernel_binding: bool,
+    pub requires_tool_invocation: bool,
     pub budget: AutonomyBudgetPolicy,
 }
 
@@ -305,7 +305,7 @@ impl AutonomyPolicySnapshot {
                 capability_acquisition_mode: AutonomyOperationMode::Deny,
                 provider_switch_mode: AutonomyOperationMode::Deny,
                 topology_mutation_mode: AutonomyOperationMode::Deny,
-                requires_kernel_binding: false,
+                requires_tool_invocation: false,
                 budget: AutonomyBudgetPolicy::default(),
             },
             AutonomyProfile::GuidedAcquisition => Self {
@@ -313,7 +313,7 @@ impl AutonomyPolicySnapshot {
                 capability_acquisition_mode: AutonomyOperationMode::ApprovalRequired,
                 provider_switch_mode: AutonomyOperationMode::ApprovalRequired,
                 topology_mutation_mode: AutonomyOperationMode::ApprovalRequired,
-                requires_kernel_binding: true,
+                requires_tool_invocation: true,
                 budget: AutonomyBudgetPolicy {
                     max_capability_acquisitions_per_turn: 1,
                     max_provider_switches_per_turn: 1,
@@ -325,7 +325,7 @@ impl AutonomyPolicySnapshot {
                 capability_acquisition_mode: AutonomyOperationMode::Allow,
                 provider_switch_mode: AutonomyOperationMode::ApprovalRequired,
                 topology_mutation_mode: AutonomyOperationMode::ApprovalRequired,
-                requires_kernel_binding: true,
+                requires_tool_invocation: true,
                 budget: AutonomyBudgetPolicy {
                     max_capability_acquisitions_per_turn: 2,
                     max_provider_switches_per_turn: 1,
@@ -367,7 +367,7 @@ impl Default for WebFetchRuntimePolicy {
 }
 
 #[cfg(feature = "feishu-integration")]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeishuToolRuntimeConfig {
     pub channel: FeishuChannelConfig,
     pub integration: FeishuIntegrationConfig,
@@ -412,7 +412,7 @@ impl ToolExecutionConfig {
 
 fn tool_timeout_lookup_keys(tool_name: &str) -> Vec<String> {
     let canonical_tool_name = super::canonical_tool_name(tool_name);
-    let visible_tool_name = super::user_visible_tool_name(canonical_tool_name);
+    let visible_tool_name = super::legacy_display_tool_name(canonical_tool_name);
     let mut keys = Vec::new();
 
     for candidate in [
@@ -425,28 +425,14 @@ fn tool_timeout_lookup_keys(tool_name: &str) -> Vec<String> {
         }
     }
 
-    match visible_tool_name.as_str() {
-        "read" => push_timeout_lookup_key(&mut keys, "file.read"),
-        "write" => push_timeout_lookup_key(&mut keys, "file.write"),
-        "edit" => push_timeout_lookup_key(&mut keys, "file.edit"),
-        _ => {}
-    }
-
     keys
-}
-
-fn push_timeout_lookup_key(keys: &mut Vec<String>, candidate: &str) {
-    let candidate = candidate.to_owned();
-    if !keys.contains(&candidate) {
-        keys.push(candidate);
-    }
 }
 
 /// Typed runtime configuration for tool executors.
 ///
 /// Replaces per-call `std::env::var` lookups with a single read from a
 /// process-wide singleton that is populated once at startup.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolRuntimeConfig {
     pub file_root: Option<PathBuf>,
     pub workspace_root: Option<PathBuf>,
@@ -969,17 +955,6 @@ impl ToolRuntimeConfig {
                 child_allowlist.join(", ")
             };
             lines.push(format!("- child tool allowlist: {tool_allowlist}"));
-        }
-
-        if let Some(runtime_binding) = subagent_contract.runtime_binding {
-            rendered_any = true;
-            lines.push(format!(
-                "- child runtime binding: {}",
-                match runtime_binding {
-                    ConstrainedSubagentRuntimeBinding::KernelBound => "kernel-bound",
-                    ConstrainedSubagentRuntimeBinding::Direct => "direct",
-                }
-            ));
         }
 
         if let Some(subagent_profile) = subagent_contract.profile {

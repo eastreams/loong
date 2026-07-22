@@ -2,11 +2,9 @@ use std::{collections::BTreeSet, path::Path, sync::Arc};
 
 use axum::Router;
 
-use crate::{
-    CliResult, KernelContext,
-    config::LoongConfig,
-    context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context_with_config},
-};
+use loong_runtime::runtime::Runtime;
+
+use crate::{CliResult, RuntimeContextFactory, config::LoongConfig};
 
 use super::{
     CHANNEL_OPERATION_SERVE_ID, ChannelPlatform, ChannelServeRuntimeSpec,
@@ -49,6 +47,7 @@ impl GatewayIngressMount {
 pub async fn build_gateway_ingress(
     resolved_path: &Path,
     config: &LoongConfig,
+    execution_runtime: Arc<Runtime<RuntimeContextFactory>>,
 ) -> CliResult<GatewayIngressMount> {
     let mut router = Router::new();
     let mut runtime_trackers = Vec::new();
@@ -61,6 +60,7 @@ pub async fn build_gateway_ingress(
             &mut registered_paths,
             resolved_path,
             config,
+            &execution_runtime,
         )
         .await?;
         mount_line_gateway_ingress(
@@ -69,6 +69,7 @@ pub async fn build_gateway_ingress(
             &mut registered_paths,
             resolved_path,
             config,
+            &execution_runtime,
         )
         .await?;
         mount_whatsapp_gateway_ingress(
@@ -77,6 +78,7 @@ pub async fn build_gateway_ingress(
             &mut registered_paths,
             resolved_path,
             config,
+            &execution_runtime,
         )
         .await?;
         mount_webhook_gateway_ingress(
@@ -85,6 +87,7 @@ pub async fn build_gateway_ingress(
             &mut registered_paths,
             resolved_path,
             config,
+            &execution_runtime,
         )
         .await?;
         Ok::<(), String>(())
@@ -127,6 +130,7 @@ async fn mount_feishu_gateway_ingress(
     registered_paths: &mut BTreeSet<String>,
     resolved_path: &Path,
     config: &LoongConfig,
+    execution_runtime: &Arc<Runtime<RuntimeContextFactory>>,
 ) -> CliResult<()> {
     if !super::is_gateway_ingress_channel_enabled("feishu", config, None)? {
         return Ok(());
@@ -156,10 +160,8 @@ async fn mount_feishu_gateway_ingress(
             config,
             &resolved,
             resolved_path,
-            bootstrap_channel_kernel_context(
-                FEISHU_RUNTIME_COMMAND_DESCRIPTOR.serve_bootstrap_agent_id,
-                config,
-            )?,
+            Arc::clone(execution_runtime),
+            FEISHU_RUNTIME_COMMAND_DESCRIPTOR.serve_bootstrap_agent_id,
             runtime.clone(),
         )
         .await?;
@@ -177,6 +179,7 @@ async fn mount_feishu_gateway_ingress(
     _registered_paths: &mut BTreeSet<String>,
     _resolved_path: &Path,
     _config: &LoongConfig,
+    _execution_runtime: &Arc<Runtime<RuntimeContextFactory>>,
 ) -> CliResult<()> {
     Ok(())
 }
@@ -188,6 +191,7 @@ async fn mount_whatsapp_gateway_ingress(
     registered_paths: &mut BTreeSet<String>,
     resolved_path: &Path,
     config: &LoongConfig,
+    execution_runtime: &Arc<Runtime<RuntimeContextFactory>>,
 ) -> CliResult<()> {
     if !super::is_gateway_ingress_channel_enabled("whatsapp", config, None)? {
         return Ok(());
@@ -216,10 +220,8 @@ async fn mount_whatsapp_gateway_ingress(
             config,
             &resolved,
             resolved_path,
-            bootstrap_channel_kernel_context(
-                WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR.serve_bootstrap_agent_id,
-                config,
-            )?,
+            Arc::clone(execution_runtime),
+            WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR.serve_bootstrap_agent_id,
             runtime.clone(),
         )?;
         *router = std::mem::take(router).merge(channel_router);
@@ -236,6 +238,7 @@ async fn mount_whatsapp_gateway_ingress(
     _registered_paths: &mut BTreeSet<String>,
     _resolved_path: &Path,
     _config: &LoongConfig,
+    _execution_runtime: &Arc<Runtime<RuntimeContextFactory>>,
 ) -> CliResult<()> {
     Ok(())
 }
@@ -247,6 +250,7 @@ async fn mount_line_gateway_ingress(
     registered_paths: &mut BTreeSet<String>,
     resolved_path: &Path,
     config: &LoongConfig,
+    execution_runtime: &Arc<Runtime<RuntimeContextFactory>>,
 ) -> CliResult<()> {
     if !super::is_gateway_ingress_channel_enabled("line", config, None)? {
         return Ok(());
@@ -275,10 +279,8 @@ async fn mount_line_gateway_ingress(
             config,
             &resolved,
             resolved_path,
-            bootstrap_channel_kernel_context(
-                LINE_RUNTIME_COMMAND_DESCRIPTOR.serve_bootstrap_agent_id,
-                config,
-            )?,
+            Arc::clone(execution_runtime),
+            LINE_RUNTIME_COMMAND_DESCRIPTOR.serve_bootstrap_agent_id,
             runtime.clone(),
         )?;
         *router = std::mem::take(router).merge(channel_router);
@@ -295,6 +297,7 @@ async fn mount_line_gateway_ingress(
     _registered_paths: &mut BTreeSet<String>,
     _resolved_path: &Path,
     _config: &LoongConfig,
+    _execution_runtime: &Arc<Runtime<RuntimeContextFactory>>,
 ) -> CliResult<()> {
     Ok(())
 }
@@ -306,6 +309,7 @@ async fn mount_webhook_gateway_ingress(
     registered_paths: &mut BTreeSet<String>,
     resolved_path: &Path,
     config: &LoongConfig,
+    execution_runtime: &Arc<Runtime<RuntimeContextFactory>>,
 ) -> CliResult<()> {
     if !super::is_gateway_ingress_channel_enabled("webhook", config, None)? {
         return Ok(());
@@ -334,10 +338,8 @@ async fn mount_webhook_gateway_ingress(
             config,
             &resolved,
             resolved_path,
-            bootstrap_channel_kernel_context(
-                WEBHOOK_RUNTIME_COMMAND_DESCRIPTOR.serve_bootstrap_agent_id,
-                config,
-            )?,
+            Arc::clone(execution_runtime),
+            WEBHOOK_RUNTIME_COMMAND_DESCRIPTOR.serve_bootstrap_agent_id,
             runtime.clone(),
         )?;
         *router = std::mem::take(router).merge(channel_router);
@@ -354,6 +356,7 @@ async fn mount_webhook_gateway_ingress(
     _registered_paths: &mut BTreeSet<String>,
     _resolved_path: &Path,
     _config: &LoongConfig,
+    _execution_runtime: &Arc<Runtime<RuntimeContextFactory>>,
 ) -> CliResult<()> {
     Ok(())
 }
@@ -413,13 +416,6 @@ async fn start_gateway_ingress_runtime(
     )
     .await?;
     Ok(Arc::new(runtime))
-}
-
-fn bootstrap_channel_kernel_context(
-    bootstrap_agent_id: &str,
-    config: &LoongConfig,
-) -> CliResult<KernelContext> {
-    bootstrap_kernel_context_with_config(bootstrap_agent_id, DEFAULT_TOKEN_TTL_S, config)
 }
 
 pub async fn shutdown_gateway_ingress_runtimes(

@@ -5,19 +5,23 @@ use std::time::Duration;
 use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 use serde_json::Value;
 
-use crate::context::AppExecutionContext;
-
 use super::*;
 
-pub fn execute_tool_core_with_config(
+/// Execute the context-free legacy tool implementation used by static callers.
+///
+/// It cannot expose registry-owned metadata. Production fallback enters through
+/// `DefaultLegacyToolDispatcher`, which supplies the current Runtime and Session config.
+// TODO(legacy-tool-core): delete this helper with the remaining direct ToolCore callers.
+pub(crate) fn execute_tool_core_with_config(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
     let observability_config = crate::config::ObservabilityConfig::runtime_default();
-    execute_tool_core_with_config_and_observability(request, config, &observability_config)
+    execute_tool_core_with_config_and_observability(None, request, config, &observability_config)
 }
 
 pub(crate) fn execute_tool_core_with_config_and_observability(
+    runtime: Option<&loong_runtime::runtime::Runtime<crate::RuntimeContextFactory>>,
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
     observability_config: &crate::config::ObservabilityConfig,
@@ -82,9 +86,11 @@ pub(crate) fn execute_tool_core_with_config_and_observability(
         let config = effective_config.as_ref().unwrap_or(config);
 
         match canonical_name.as_str() {
-            "tool.search" => tool_search::execute_tool_search_tool_with_config(request, config),
+            "tool.search" => {
+                tool_search::execute_tool_search_tool_with_config(runtime, request, config)
+            }
             "tool.invoke" => tool_lease::execute_tool_invoke_tool_with_config(request, config),
-            "read" | "write" | "edit" | "bash" | "web" | "browse" | "memory" => {
+            "bash" | "web" | "browse" | "memory" => {
                 super::routing::execute_direct_tool_core_with_config(request, config)
             }
             _ => execute_discoverable_tool_core_with_config(request, config),
@@ -145,170 +151,6 @@ pub(crate) fn execute_tool_core_with_config_and_observability(
     otel_span.end();
 
     result
-}
-
-/// Dispatch a core tool call while preserving the kernel context.
-///
-/// New access-backed direct tools should enter through this function. It keeps
-/// payload normalization and runtime narrowing in app code, then forwards the
-/// context to the concrete helper that will call `ctx.access()`.
-pub(crate) async fn execute_tool_core_with_config_and_context(
-    request: ToolCoreRequest,
-    config: &runtime_config::ToolRuntimeConfig,
-    observability_config: &crate::config::ObservabilityConfig,
-    ctx: &AppExecutionContext<'_>,
-) -> Result<ToolCoreOutcome, String> {
-    let requested_tool_name = request.tool_name.clone();
-    let canonical_name = canonical_tool_name(request.tool_name.as_str()).to_owned();
-    let payload = request.payload;
-    let capture_content = observability_config.capture_content;
-    let captured_payload = if capture_content {
-        serde_json::to_string(&payload)
-            .ok()
-            .map(|payload_string| truncate_tool_payload_for_otel(payload_string.as_str()))
-    } else {
-        None
-    };
-    let workspace_root = trusted_workspace_root_from_payload(&payload)?;
-    let runtime_narrowing = trusted_runtime_narrowing_from_payload(&payload)?;
-    let mut effective_config = config
-        .workspace_root
-        .clone()
-        .map(|workspace_root| config.with_workspace_root_override(workspace_root))
-        .unwrap_or_else(|| config.clone());
-    if let Some(workspace_root) = workspace_root {
-        effective_config = effective_config
-            .with_workspace_root_override(workspace_root.clone())
-            .with_file_root_override(workspace_root);
-    }
-    if let Some(runtime_narrowing) = runtime_narrowing {
-        effective_config = effective_config.narrowed(&runtime_narrowing);
-    }
-    let config = &effective_config;
-    let debug_log_enabled = tracing::enabled!(target: "loong.tools", tracing::Level::DEBUG);
-    let warn_log_enabled = tracing::enabled!(target: "loong.tools", tracing::Level::WARN);
-    let should_log_payload_metadata = debug_log_enabled || warn_log_enabled;
-    let mut payload_kind = "-";
-    let mut payload_keys = Vec::new();
-    if should_log_payload_metadata {
-        payload_kind = crate::observability::json_value_kind(&payload);
-        payload_keys = crate::observability::top_level_json_keys(&payload);
-    }
-    let inner_tool_name =
-        super::routing::resolved_inner_tool_name_for_logs(canonical_name.as_str(), &payload);
-    let started_at = std::time::Instant::now();
-    let result = async {
-        ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
-            requested_tool_name.as_str(),
-            &payload,
-            "payload",
-        )?;
-        let request = ToolCoreRequest {
-            tool_name: canonical_name.clone(),
-            payload,
-        };
-        let request = normalize_shell_request_for_execution(request);
-        let effective_config = trusted_runtime_narrowing_from_payload(&request.payload)?;
-        let effective_config = effective_config.map(|narrowing| config.narrowed(&narrowing));
-        let config = effective_config.as_ref().unwrap_or(config);
-
-        match canonical_name.as_str() {
-            "tool.search" => tool_search::execute_tool_search_tool_with_config(request, config),
-            "tool.invoke" => tool_lease::execute_tool_invoke_tool_with_config(request, config),
-            "read" | "write" | "edit" | "bash" | "web" | "browse" | "memory" => {
-                super::routing::execute_direct_tool_core_with_context(request, config, ctx).await
-            }
-            _ => execute_discoverable_tool_core_with_config(request, config),
-        }
-    }
-    .await;
-    let duration_ms = started_at.elapsed().as_millis();
-    let otel_span = crate::otel::OtelAttachedSpanHandle::start(
-        format!("execute_tool {canonical_name}"),
-        crate::otel::OtelSpanKind::Internal,
-        [
-            crate::otel::attr("gen_ai.operation.name", "execute_tool"),
-            crate::otel::attr("gen_ai.tool.name", canonical_name.clone()),
-        ],
-    );
-    if let Some(payload) = captured_payload {
-        otel_span.set_attribute("tool.payload", payload);
-    }
-    otel_span.set_attribute("tool.duration_ms", duration_ms as i64);
-    match &result {
-        Ok(outcome) => {
-            otel_span.set_attribute("tool.status", outcome.status.clone());
-            if debug_log_enabled {
-                tracing::debug!(
-                    target: "loong.tools",
-                    requested_tool_name = %requested_tool_name,
-                    canonical_tool_name = %canonical_name,
-                    inner_tool_name = %inner_tool_name,
-                    payload_kind,
-                    payload_keys = ?payload_keys,
-                    status = %outcome.status,
-                    duration_ms,
-                    "tool execution completed"
-                );
-            }
-        }
-        Err(error) => {
-            otel_span.set_attribute("tool.status", "error");
-            otel_span.set_attribute("error.type", "tool_execution_error");
-            if is_expected_tool_request_error(error) {
-                if debug_log_enabled {
-                    tracing::debug!(
-                        target: "loong.tools",
-                        requested_tool_name = %requested_tool_name,
-                        canonical_tool_name = %canonical_name,
-                        inner_tool_name = %inner_tool_name,
-                        payload_kind,
-                        payload_keys = ?payload_keys,
-                        duration_ms,
-                        error = %crate::observability::summarize_error(error),
-                        "tool execution rejected"
-                    );
-                }
-            } else if warn_log_enabled {
-                tracing::warn!(
-                    target: "loong.tools",
-                    requested_tool_name = %requested_tool_name,
-                    canonical_tool_name = %canonical_name,
-                    inner_tool_name = %inner_tool_name,
-                    payload_kind,
-                    payload_keys = ?payload_keys,
-                    duration_ms,
-                    error = %crate::observability::summarize_error(error),
-                    "tool execution failed"
-                );
-            }
-        }
-    }
-    otel_span.end();
-
-    result
-}
-
-pub(crate) fn effective_tool_runtime_config_for_payload(
-    payload: &Value,
-    config: &runtime_config::ToolRuntimeConfig,
-) -> Result<runtime_config::ToolRuntimeConfig, String> {
-    let workspace_root = trusted_workspace_root_from_payload(payload)?;
-    let runtime_narrowing = trusted_runtime_narrowing_from_payload(payload)?;
-    let mut effective_config = config
-        .workspace_root
-        .clone()
-        .map(|workspace_root| config.with_workspace_root_override(workspace_root))
-        .unwrap_or_else(|| config.clone());
-    if let Some(workspace_root) = workspace_root {
-        effective_config = effective_config
-            .with_workspace_root_override(workspace_root.clone())
-            .with_file_root_override(workspace_root);
-    }
-    if let Some(runtime_narrowing) = runtime_narrowing {
-        effective_config = effective_config.narrowed(&runtime_narrowing);
-    }
-    Ok(effective_config)
 }
 
 fn truncate_tool_payload_for_otel(payload: &str) -> String {
@@ -502,11 +344,6 @@ fn dispatch_tool_request(
         "shell.exec" => shell::execute_shell_tool_with_config(request, config),
         #[cfg(feature = "tool-shell")]
         "bash.exec" => bash::execute_bash_tool_with_config(request, config),
-        "read" => Err("read requires kernel access context".to_owned()),
-        "write" => file::execute_file_write_tool_with_config(request, config),
-        "edit" => file::execute_file_edit_tool_with_config(request, config),
-        "glob.search" => file::execute_glob_search_tool_with_config(request, config),
-        "content.search" => file::execute_content_search_tool_with_config(request, config),
         #[cfg(feature = "tool-file")]
         "memory.retrieve" => {
             memory_tools::execute_memory_retrieve_tool_with_config(request, config)

@@ -1,4 +1,4 @@
-#[cfg(feature = "memory-sqlite")]
+#[cfg(all(test, feature = "memory-sqlite"))]
 use std::path::Path;
 #[cfg(feature = "memory-sqlite")]
 use std::path::PathBuf;
@@ -17,7 +17,6 @@ mod context;
 #[cfg(feature = "memory-sqlite")]
 mod durable_flush;
 mod durable_recall;
-mod kernel_adapter;
 mod orchestrator;
 mod protocol;
 pub mod runtime_config;
@@ -42,7 +41,7 @@ pub use canonical::{
 pub use context::load_prompt_context;
 #[cfg(feature = "memory-sqlite")]
 pub(crate) use durable_flush::flush_pre_compaction_durable_memory;
-pub use kernel_adapter::{KernelMemoryAdapter, MvpMemoryAdapter};
+#[cfg(test)]
 pub(crate) use orchestrator::run_compact_stage;
 pub use orchestrator::{
     BuiltinMemoryOrchestrator, HydratedMemoryContext, MemoryDiagnostics, hydrate_memory_context,
@@ -92,8 +91,8 @@ pub use system_registry::{
     resolve_memory_system_selection_without_env, supported_memory_system_kind_from_env,
 };
 pub use system_runtime::{
-    BuiltinMemorySystemRuntime, MemorySystemRuntime, MetadataOnlyMemorySystemRuntime,
-    SystemBackedMemorySystemRuntime,
+    BuiltinMemorySystemRuntime, MemorySystemBackend, MemorySystemRuntime,
+    MetadataOnlyMemorySystemRuntime, SystemBackedMemorySystemRuntime,
 };
 pub(crate) use workspace_document::{
     ParsedWorkspaceMemoryDocument, parse_workspace_memory_document,
@@ -145,9 +144,9 @@ pub fn execute_memory_core_with_config(
     #[cfg(test)]
     test_utils::record_core_dispatch();
 
-    let runtime = resolve_memory_system_runtime(config)?;
-
-    runtime.execute_core(request)
+    // This JSON protocol is the explicit legacy memory plane. Typed Context
+    // execution enters operation-specific Access Actions instead.
+    execute_builtin_backend_memory_core(request, config)
 }
 
 pub(crate) fn execute_builtin_backend_memory_core(
@@ -302,74 +301,6 @@ pub(crate) fn search_workspace_memory_documents(
         workspace_root,
         memory_system_id,
         config,
-    )
-}
-
-#[cfg(feature = "memory-sqlite")]
-pub(crate) fn build_read_stage_envelope_request_for_memory_config(
-    session_id: &str,
-    workspace_root: Option<&Path>,
-    config: &crate::config::MemoryConfig,
-) -> MemoryCoreRequest {
-    let base_request =
-        build_read_stage_envelope_request_with_workspace_root(session_id, workspace_root);
-    let mut payload = base_request
-        .payload
-        .as_object()
-        .cloned()
-        .unwrap_or_default();
-
-    payload.insert(
-        "profile".to_owned(),
-        serde_json::json!(config.resolved_profile().as_str()),
-    );
-    payload.insert(
-        "system".to_owned(),
-        serde_json::json!(config.resolved_system().as_str()),
-    );
-    payload.insert(
-        "system_id".to_owned(),
-        serde_json::json!(config.resolved_system_id()),
-    );
-    payload.insert(
-        "sliding_window".to_owned(),
-        serde_json::json!(config.sliding_window),
-    );
-    payload.insert(
-        "summary_max_chars".to_owned(),
-        serde_json::json!(config.summary_char_budget()),
-    );
-
-    let profile_note = config.trimmed_profile_note();
-    if let Some(profile_note) = profile_note {
-        payload.insert("profile_note".to_owned(), serde_json::json!(profile_note));
-    }
-
-    let personalization = config.trimmed_personalization();
-    if let Some(personalization) = personalization {
-        payload.insert(
-            "personalization".to_owned(),
-            serde_json::json!(personalization),
-        );
-    }
-
-    MemoryCoreRequest {
-        operation: base_request.operation,
-        payload: serde_json::Value::Object(payload),
-    }
-}
-
-#[cfg(feature = "memory-sqlite")]
-pub(crate) fn hydrate_stage_envelope_for_memory_config(
-    session_id: &str,
-    workspace_root: Option<&Path>,
-    config: &crate::config::MemoryConfig,
-) -> Result<StageEnvelope, String> {
-    let runtime_config = runtime_config::MemoryRuntimeConfig::from_memory_config(config);
-    orchestrator::hydrate_stage_envelope_with_workspace_root(
-        session_id,
-        workspace_root,
-        &runtime_config,
     )
 }
 

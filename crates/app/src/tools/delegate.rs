@@ -121,9 +121,13 @@ fn parse_delegate_timeout_seconds(payload: &Value) -> Result<Option<u64>, String
 
 pub(crate) fn subagent_identity_for_delegate_request(
     request: &DelegateRequest,
+    resolved_label: Option<&str>,
 ) -> Option<ConstrainedSubagentIdentity> {
     let identity = ConstrainedSubagentIdentity {
-        nickname: request.label.clone(),
+        nickname: request
+            .label
+            .clone()
+            .or_else(|| resolved_label.map(str::to_owned)),
         specialization: request.specialization.clone(),
     };
     (!identity.is_empty()).then_some(identity)
@@ -472,7 +476,7 @@ mod tests {
         .expect("delegate request");
         assert_eq!(request.specialization.as_deref(), Some("reviewer"));
         assert_eq!(
-            subagent_identity_for_delegate_request(&request),
+            subagent_identity_for_delegate_request(&request, None),
             Some(ConstrainedSubagentIdentity {
                 nickname: Some("child".to_owned()),
                 specialization: Some("reviewer".to_owned())

@@ -46,7 +46,6 @@ mod request_payload_runtime;
 mod request_planner;
 mod request_session_runtime;
 mod response_debug_context;
-mod runtime_binding;
 mod shape;
 mod sse;
 mod transport;
@@ -74,11 +73,7 @@ pub use request_executor::{
     StreamingTokenCallback,
 };
 pub use response_debug_context::ProviderResponseDebugContext;
-pub use runtime_binding::ProviderRuntimeBinding;
-pub use shape::{
-    extract_provider_turn, extract_provider_turn_with_scope,
-    extract_provider_turn_with_scope_and_messages,
-};
+pub use shape::{extract_provider_turn, extract_provider_turn_with_scope};
 
 #[cfg(test)]
 use auth_profile_runtime::{ProviderAuthProfile, resolve_provider_auth_profiles};
@@ -175,8 +170,12 @@ const MODEL_CATALOG_CACHE_MAX_ENTRIES: usize = 32;
 #[cfg(test)]
 const MODEL_CANDIDATE_COOLDOWN_CACHE_MAX_ENTRIES: usize = 64;
 
-pub fn build_system_message(config: &LoongConfig, include_system_prompt: bool) -> Option<Value> {
-    request_message_runtime::build_system_message(config, include_system_prompt)
+pub async fn build_system_message(
+    config: &LoongConfig,
+    include_system_prompt: bool,
+    ctx: &crate::Context<'_>,
+) -> CliResult<Option<Value>> {
+    request_message_runtime::build_system_message(config, include_system_prompt, ctx).await
 }
 
 pub fn native_query_search_label(config: &LoongConfig) -> Option<String> {
@@ -187,36 +186,37 @@ pub fn native_query_search_active(config: &LoongConfig) -> bool {
     native_tool_surface::provider_tool_surface(config).native_query_search_active()
 }
 
-pub(crate) use request_message_runtime::build_projected_context_for_session_with_binding;
+#[cfg(test)]
+pub(crate) use request_message_runtime::build_projected_context_for_session;
 #[cfg(feature = "memory-sqlite")]
-pub(crate) use request_message_runtime::project_stage_envelope_for_view_with_binding;
+pub(crate) use request_message_runtime::project_stage_envelope_with_context;
 
-pub fn build_messages_for_session(
+pub async fn build_messages_for_session(
     config: &LoongConfig,
-    session_id: &str,
     include_system_prompt: bool,
+    ctx: &crate::Context<'_>,
 ) -> CliResult<Vec<Value>> {
-    request_message_runtime::build_messages_for_session(config, session_id, include_system_prompt)
+    request_message_runtime::build_messages_for_session(config, include_system_prompt, ctx).await
 }
 
 pub async fn request_completion(
     config: &LoongConfig,
     messages: &[Value],
-    binding: ProviderRuntimeBinding<'_>,
+    ctx: &crate::Context<'_>,
 ) -> CliResult<String> {
-    request_completion_with_retry_progress(config, messages, binding, None).await
+    request_completion_with_retry_progress(config, messages, ctx, None).await
 }
 
 pub async fn request_completion_with_retry_progress(
     config: &LoongConfig,
     messages: &[Value],
-    binding: ProviderRuntimeBinding<'_>,
+    ctx: &crate::Context<'_>,
     retry_progress: ProviderRetryProgressCallback,
 ) -> CliResult<String> {
     let session = prepare_provider_request_session(config).await?;
     request_across_model_candidates(
         &config.provider,
-        binding,
+        ctx,
         &session.auth_profiles,
         session.profile_state_policy.as_ref(),
         &session.model_candidates,
@@ -241,42 +241,31 @@ pub async fn request_completion_with_retry_progress(
 
 pub async fn request_turn(
     config: &LoongConfig,
-    session_id: &str,
     turn_id: &str,
     messages: &[Value],
-    binding: ProviderRuntimeBinding<'_>,
+    ctx: &crate::Context<'_>,
 ) -> CliResult<crate::conversation::turn_engine::ProviderTurn> {
-    request_turn_in_view_with_retry_progress(
-        config,
-        session_id,
-        turn_id,
-        messages,
-        &crate::tools::runtime_tool_view(),
-        binding,
-        None,
-    )
-    .await
+    request_turn_with_retry_progress(config, turn_id, messages, ctx, None).await
 }
 
-pub async fn request_turn_in_view_with_retry_progress(
+pub async fn request_turn_with_retry_progress(
     config: &LoongConfig,
-    session_id: &str,
     turn_id: &str,
     messages: &[Value],
-    tool_view: &crate::tools::ToolView,
-    binding: ProviderRuntimeBinding<'_>,
+    ctx: &crate::Context<'_>,
     retry_progress: ProviderRetryProgressCallback,
 ) -> CliResult<crate::conversation::turn_engine::ProviderTurn> {
+    let session_id = ctx.session().session_id();
+    let tool_view = &ctx.session().tool_view;
     let session = prepare_provider_request_session(config).await?;
-    let tool_runtime_config =
-        crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
     let provider_tool_surface = native_tool_surface::provider_tool_surface(config);
-    let surface_plan =
-        provider_tool_surface.materialize(config, tool_view, &tool_runtime_config)?;
-    let tool_definitions = surface_plan.request.tool_definitions;
+    let surface_plan = provider_tool_surface
+        .materialize(ctx.runtime(), tool_view, ctx.tool_runtime_config())
+        .map_err(|error| error.to_string())?;
+    let tool_surface = surface_plan.request;
     request_across_model_candidates(
         &config.provider,
-        binding,
+        ctx,
         &session.auth_profiles,
         session.profile_state_policy.as_ref(),
         &session.model_candidates,
@@ -290,7 +279,7 @@ pub async fn request_turn_in_view_with_retry_progress(
                 messages,
                 model,
                 auto_model_mode,
-                tool_definitions.as_slice(),
+                &tool_surface,
                 auth_profile,
                 &session.request_policy,
                 &session.client,
@@ -302,48 +291,21 @@ pub async fn request_turn_in_view_with_retry_progress(
     .await
 }
 
-pub async fn request_turn_in_view(
-    config: &LoongConfig,
-    session_id: &str,
-    turn_id: &str,
-    messages: &[Value],
-    tool_view: &crate::tools::ToolView,
-    binding: ProviderRuntimeBinding<'_>,
-) -> CliResult<crate::conversation::turn_engine::ProviderTurn> {
-    request_turn_in_view_with_retry_progress(
-        config, session_id, turn_id, messages, tool_view, binding, None,
-    )
-    .await
-}
-
 pub async fn request_turn_streaming(
     config: &LoongConfig,
-    session_id: &str,
     turn_id: &str,
     messages: &[Value],
-    binding: ProviderRuntimeBinding<'_>,
+    ctx: &crate::Context<'_>,
     on_token: crate::provider::request_executor::StreamingTokenCallback,
 ) -> CliResult<crate::conversation::turn_engine::ProviderTurn> {
-    request_turn_streaming_in_view_with_retry_progress(
-        config,
-        session_id,
-        turn_id,
-        messages,
-        &crate::tools::runtime_tool_view(),
-        binding,
-        on_token,
-        None,
-    )
-    .await
+    request_turn_streaming_with_retry_progress(config, turn_id, messages, ctx, on_token, None).await
 }
 
-pub async fn request_turn_streaming_in_view_with_retry_progress(
+pub async fn request_turn_streaming_with_retry_progress(
     config: &LoongConfig,
-    session_id: &str,
     turn_id: &str,
     messages: &[Value],
-    tool_view: &crate::tools::ToolView,
-    binding: ProviderRuntimeBinding<'_>,
+    ctx: &crate::Context<'_>,
     on_token: crate::provider::request_executor::StreamingTokenCallback,
     retry_progress: ProviderRetryProgressCallback,
 ) -> CliResult<crate::conversation::turn_engine::ProviderTurn> {
@@ -351,16 +313,17 @@ pub async fn request_turn_streaming_in_view_with_retry_progress(
         return Err("provider transport does not support live turn streaming events".to_owned());
     }
 
+    let session_id = ctx.session().session_id();
+    let tool_view = &ctx.session().tool_view;
     let session = prepare_provider_request_session(config).await?;
-    let tool_runtime_config =
-        crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
     let provider_tool_surface = native_tool_surface::provider_tool_surface(config);
-    let surface_plan =
-        provider_tool_surface.materialize(config, tool_view, &tool_runtime_config)?;
-    let tool_definitions = surface_plan.request.tool_definitions;
+    let surface_plan = provider_tool_surface
+        .materialize(ctx.runtime(), tool_view, ctx.tool_runtime_config())
+        .map_err(|error| error.to_string())?;
+    let tool_surface = surface_plan.request;
     request_across_model_candidates(
         &config.provider,
-        binding,
+        ctx,
         &session.auth_profiles,
         session.profile_state_policy.as_ref(),
         &session.model_candidates,
@@ -374,7 +337,7 @@ pub async fn request_turn_streaming_in_view_with_retry_progress(
                 messages,
                 model,
                 auto_model_mode,
-                tool_definitions.as_slice(),
+                &tool_surface,
                 auth_profile,
                 &session.request_policy,
                 &session.client,
@@ -383,21 +346,6 @@ pub async fn request_turn_streaming_in_view_with_retry_progress(
                 retry_progress.clone(),
             )
         },
-    )
-    .await
-}
-
-pub async fn request_turn_streaming_in_view(
-    config: &LoongConfig,
-    session_id: &str,
-    turn_id: &str,
-    messages: &[Value],
-    tool_view: &crate::tools::ToolView,
-    binding: ProviderRuntimeBinding<'_>,
-    on_token: crate::provider::request_executor::StreamingTokenCallback,
-) -> CliResult<crate::conversation::turn_engine::ProviderTurn> {
-    request_turn_streaming_in_view_with_retry_progress(
-        config, session_id, turn_id, messages, tool_view, binding, on_token, None,
     )
     .await
 }

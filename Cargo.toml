@@ -32,17 +32,21 @@ async-trait = "0.1"
 loong-access = { package = "loong-access", version = "0.1.2-alpha.1", path = "crates/access" }
 loong-contracts = { package = "loong-contracts", version = "0.1.2-alpha.1", path = "crates/contracts" }
 loong-core = { package = "loong-core", version = "0.1.2-alpha.1", path = "crates/loong-core" }
+loong-runtime = { package = "loong-runtime", version = "0.1.2-alpha.1", path = "crates/loong-runtime" }
 loong-kernel = { package = "loong-kernel", version = "0.1.2-alpha.1", path = "crates/kernel" }
 loong-plugin-sdk = { package = "loong-plugin-sdk", version = "0.1.2-alpha.1", path = "crates/loong-plugin-sdk" }
 loong-tools = { package = "loong-tools", version = "0.1.2-alpha.1", path = "crates/tools" }
 clap = { version = "4.5", features = ["derive"] }
 dialoguer = { version = "0.12", features = ["fuzzy-select"] }
 console = "0.16.3"
+dunce = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1.1"
 semver = "1"
 thiserror = "2"
+tempfile = "3"
+uuid = { version = "1", features = ["v4"] }
 chrono = "0.4"
 time = { version = "0.3.47", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "net", "io-util", "io-std", "process", "signal"] }
@@ -69,6 +73,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"]
 opentelemetry = { version = "0.29", features = ["trace", "futures"] }
 opentelemetry_sdk = { version = "0.29", features = ["rt-tokio", "trace", "experimental_async_runtime", "experimental_trace_batch_span_processor_with_async_runtime"] }
 opentelemetry-otlp = { version = "0.29", features = ["trace", "http-proto"] }
+percent-encoding = "2"
 zip = { version = "8", default-features = false, features = ["deflate"] }
 
 [profile.release]

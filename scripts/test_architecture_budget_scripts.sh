@@ -72,7 +72,8 @@ copy_boundary_fixture_files() {
     "$fixture/crates/spec" \
     "$fixture/crates/app/src/provider" \
     "$fixture/crates/app/src/memory" \
-    "$fixture/crates/app/src/conversation"
+    "$fixture/crates/app/src/conversation" \
+    "$fixture/crates/loong-runtime/src/tool_plane"
 
   cp "$REPO_ROOT/crates/spec/Cargo.toml" "$fixture/crates/spec/Cargo.toml"
   cp "$REPO_ROOT/crates/app/src/provider/mod.rs" "$fixture/crates/app/src/provider/mod.rs"
@@ -82,6 +83,10 @@ copy_boundary_fixture_files() {
     "$fixture/crates/app/src/conversation/turn_engine.rs"
   cp "$REPO_ROOT/crates/app/src/conversation/turn_coordinator.rs" \
     "$fixture/crates/app/src/conversation/turn_coordinator.rs"
+  cp "$REPO_ROOT/crates/app/src/context.rs" "$fixture/crates/app/src/context.rs"
+  cp "$REPO_ROOT/crates/loong-runtime/src/lib.rs" "$fixture/crates/loong-runtime/src/lib.rs"
+  cp "$REPO_ROOT/crates/loong-runtime/src/tool_plane/invocation.rs" \
+    "$fixture/crates/loong-runtime/src/tool_plane/invocation.rs"
 }
 
 run_hotspot_metadata_helpers_test() {
@@ -145,7 +150,7 @@ run_check_fails_on_missing_boundary_file_test() {
   fixture="$(make_fixture_repo)"
   trap 'rm -rf "$fixture"' RETURN
 
-  rm "$fixture/crates/app/src/conversation/turn_engine.rs"
+  rm "$fixture/crates/app/src/context.rs"
 
   local output_file="$fixture/check-boundary.out"
   if (
@@ -158,36 +163,76 @@ run_check_fails_on_missing_boundary_file_test() {
   fi
 
   assert_contains "$output_file" "missing boundary file"
-  assert_contains "$output_file" "crates/app/src/conversation/turn_engine.rs"
+  assert_contains "$output_file" "crates/app/src/context.rs"
 }
 
-run_boundary_scan_matches_optional_kernel_context_with_whitespace_test() {
+run_boundary_scan_rejects_legacy_typed_execution_types_test() {
   local fixture
   fixture="$(make_fixture_repo)"
   trap 'rm -rf "$fixture"' RETURN
 
-  cat <<'EOF_SIGNATURE' >>"$fixture/crates/app/src/conversation/turn_engine.rs"
-fn fixture_optional_kernel_signature(
-    kernel_ctx: Option< &'a KernelContext >,
-) {
-    let _ = kernel_ctx;
-}
+  cat <<'EOF_SIGNATURE' >>"$fixture/crates/app/src/context.rs"
+pub struct AppContext;
+type ForbiddenLegacyEvidence = CapabilityToken;
 EOF_SIGNATURE
 
   local output_file="$fixture/boundary-hits.out"
   (
     cd "$fixture" &&
-      architecture_conversation_app_dispatcher_optional_kernel_context_hits >"$output_file"
+      architecture_typed_execution_legacy_type_hits >"$output_file"
   )
 
-  assert_contains "$output_file" "turn_engine.rs"
-  assert_contains "$output_file" "kernel_ctx: Option< &'a KernelContext >"
+  assert_contains "$output_file" "context.rs"
+  assert_contains "$output_file" "AppContext"
+  assert_contains "$output_file" "CapabilityToken"
+}
+
+run_boundary_scan_rejects_runtime_protocol_contract_test() {
+  local fixture
+  fixture="$(make_fixture_repo)"
+  trap 'rm -rf "$fixture"' RETURN
+
+  cat <<'EOF_CONTRACT' >>"$fixture/crates/loong-runtime/src/lib.rs"
+pub struct RuntimeOneshotRequest;
+EOF_CONTRACT
+
+  local output_file="$fixture/runtime-boundary-hits.out"
+  (
+    cd "$fixture" &&
+      architecture_runtime_root_transitional_contract_hits >"$output_file"
+  )
+
+  assert_contains "$output_file" "loong-runtime/src/lib.rs"
+  assert_contains "$output_file" "RuntimeOneshotRequest"
+}
+
+run_boundary_scan_rejects_external_action_execution_audit_writer_test() {
+  local fixture
+  fixture="$(make_fixture_repo)"
+  trap 'rm -rf "$fixture"' RETURN
+
+  cat <<'EOF_CALLER' >>"$fixture/crates/app/src/context.rs"
+fn invalid_audit_owner(kernel: &Kernel, grant: &Granted<Action>) {
+    kernel.record_granted_action_execution(grant, ActionExecutionEvent::Started);
+}
+EOF_CALLER
+
+  local output_file="$fixture/action-execution-owner-hits.out"
+  (
+    cd "$fixture" &&
+      architecture_typed_action_execution_audit_owner_hits >"$output_file"
+  )
+
+  assert_contains "$output_file" "context.rs"
+  assert_contains "$output_file" "record_granted_action_execution"
 }
 
 run_hotspot_metadata_helpers_test
 run_hotspot_pressure_helpers_test
 run_check_fails_on_missing_hotspot_test
 run_check_fails_on_missing_boundary_file_test
-run_boundary_scan_matches_optional_kernel_context_with_whitespace_test
+run_boundary_scan_rejects_legacy_typed_execution_types_test
+run_boundary_scan_rejects_runtime_protocol_contract_test
+run_boundary_scan_rejects_external_action_execution_audit_writer_test
 
 echo "architecture budget script checks passed"

@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use tokio::time::{Duration, timeout};
 
 use super::plan_ir::{PlanGraph, PlanNode};
+use super::turn_engine::ToolInputFailure;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanRunStatus {
@@ -27,8 +28,7 @@ pub enum PlanRunFailure {
     NodeFailed {
         node_id: String,
         attempts_used: u8,
-        last_error_kind: PlanNodeErrorKind,
-        last_error: String,
+        last_error: PlanNodeError,
     },
 }
 
@@ -36,6 +36,7 @@ pub enum PlanRunFailure {
 pub enum PlanNodeErrorKind {
     ApprovalRequired,
     Retryable,
+    InputRepairRequired,
     PolicyDenied,
     NonRetryable,
 }
@@ -44,6 +45,7 @@ pub enum PlanNodeErrorKind {
 pub struct PlanNodeError {
     pub kind: PlanNodeErrorKind,
     pub message: String,
+    pub tool_input: Option<Box<ToolInputFailure>>,
 }
 
 impl PlanNodeError {
@@ -51,6 +53,7 @@ impl PlanNodeError {
         Self {
             kind: PlanNodeErrorKind::ApprovalRequired,
             message: message.into(),
+            tool_input: None,
         }
     }
 
@@ -58,6 +61,15 @@ impl PlanNodeError {
         Self {
             kind: PlanNodeErrorKind::Retryable,
             message: message.into(),
+            tool_input: None,
+        }
+    }
+
+    pub fn input_repair_required(message: impl Into<String>, tool_input: ToolInputFailure) -> Self {
+        Self {
+            kind: PlanNodeErrorKind::InputRepairRequired,
+            message: message.into(),
+            tool_input: Some(Box::new(tool_input)),
         }
     }
 
@@ -65,6 +77,7 @@ impl PlanNodeError {
         Self {
             kind: PlanNodeErrorKind::PolicyDenied,
             message: message.into(),
+            tool_input: None,
         }
     }
 
@@ -72,13 +85,8 @@ impl PlanNodeError {
         Self {
             kind: PlanNodeErrorKind::NonRetryable,
             message: message.into(),
+            tool_input: None,
         }
-    }
-}
-
-impl From<String> for PlanNodeError {
-    fn from(value: String) -> Self {
-        Self::non_retryable(value)
     }
 }
 
@@ -214,8 +222,7 @@ impl PlanExecutor {
                                 status: PlanRunStatus::Failed(PlanRunFailure::NodeFailed {
                                     node_id: node.id.clone(),
                                     attempts_used: attempt,
-                                    last_error_kind: timeout_error.kind,
-                                    last_error: timeout_error.message,
+                                    last_error: timeout_error,
                                 }),
                                 ordered_nodes,
                                 attempts_used,
@@ -246,19 +253,15 @@ impl PlanExecutor {
                             });
                             // Approval-required failures are terminal until the caller changes
                             // execution context, so retrying the same node cannot make progress.
-                            if matches!(
-                                normalized.kind,
-                                PlanNodeErrorKind::PolicyDenied
-                                    | PlanNodeErrorKind::ApprovalRequired
-                            ) || attempt == node.max_attempts
+                            if normalized.kind != PlanNodeErrorKind::Retryable
+                                || attempt == node.max_attempts
                             {
                                 let elapsed_ms = started_at.elapsed().as_millis();
                                 return PlanRunReport {
                                     status: PlanRunStatus::Failed(PlanRunFailure::NodeFailed {
                                         node_id: node.id.clone(),
                                         attempts_used: attempt,
-                                        last_error_kind: normalized.kind,
-                                        last_error: normalized.message,
+                                        last_error: normalized,
                                     }),
                                     ordered_nodes,
                                     attempts_used,
@@ -288,11 +291,13 @@ fn normalize_node_error(error: PlanNodeError) -> PlanNodeError {
         return PlanNodeError {
             kind: error.kind,
             message: "node execution failed with empty reason".to_owned(),
+            tool_input: error.tool_input,
         };
     }
     PlanNodeError {
         kind: error.kind,
         message: trimmed.to_owned(),
+        tool_input: error.tool_input,
     }
 }
 
@@ -498,6 +503,36 @@ mod tests {
         calls: Mutex<Vec<String>>,
     }
 
+    struct InputRepairRequiredExecutor {
+        input_node: String,
+        calls: Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl PlanNodeExecutor for InputRepairRequiredExecutor {
+        async fn execute(&self, node: &PlanNode, attempt: u8) -> Result<(), PlanNodeError> {
+            self.calls
+                .lock()
+                .expect("calls lock")
+                .push(format!("{}#{attempt}", node.id));
+            if node.id != self.input_node {
+                return Ok(());
+            }
+            Err(PlanNodeError::input_repair_required(
+                "typed tool input requires repair",
+                ToolInputFailure {
+                    path: loong_contracts::ToolPath::new(["read"])
+                        .expect("test tool path must be valid"),
+                    provider_name: "read".to_owned(),
+                    argument_hint: Some("path|string query|string pattern|string".to_owned()),
+                    error: loong_contracts::ToolInputError::MissingOneOf {
+                        fields: vec!["path".to_owned(), "query".to_owned(), "pattern".to_owned()],
+                    },
+                },
+            ))
+        }
+    }
+
     impl ApprovalRequiredExecutor {
         fn new(node_id: &str) -> Self {
             Self {
@@ -613,7 +648,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn executor_fails_when_node_retries_are_exhausted() {
+    async fn executor_stops_after_non_retryable_node_failure() {
         let graph = sample_graph();
         let executor = RecordingExecutor::always_fail("n2");
         let report = PlanExecutor::execute(&graph, &executor).await;
@@ -623,15 +658,46 @@ mod tests {
             PlanRunStatus::Failed(PlanRunFailure::NodeFailed {
                 node_id,
                 attempts_used,
-                last_error_kind,
+                last_error,
                 ..
             }) => {
                 assert_eq!(node_id, "n2");
-                assert_eq!(attempts_used, 2);
-                assert_eq!(last_error_kind, PlanNodeErrorKind::NonRetryable);
+                assert_eq!(attempts_used, 1);
+                assert_eq!(last_error.kind, PlanNodeErrorKind::NonRetryable);
             }
             other => panic!("expected node failure, got: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn executor_does_not_retry_input_repair_required() {
+        let graph = sample_graph();
+        let executor = InputRepairRequiredExecutor {
+            input_node: "n2".to_owned(),
+            calls: Mutex::new(Vec::new()),
+        };
+
+        let report = PlanExecutor::execute(&graph, &executor).await;
+
+        match report.status {
+            PlanRunStatus::Failed(PlanRunFailure::NodeFailed {
+                node_id,
+                attempts_used,
+                last_error,
+            }) => {
+                assert_eq!(node_id, "n2");
+                assert_eq!(attempts_used, 1);
+                assert_eq!(last_error.kind, PlanNodeErrorKind::InputRepairRequired);
+                assert!(last_error.tool_input.is_some());
+            }
+            PlanRunStatus::Succeeded | PlanRunStatus::Failed(_) => {
+                panic!("expected input-repair node failure")
+            }
+        }
+        assert_eq!(
+            executor.calls.lock().expect("calls lock").as_slice(),
+            ["n1#1", "n2#1"]
+        );
     }
 
     #[tokio::test]
@@ -680,15 +746,15 @@ mod tests {
             PlanRunStatus::Failed(PlanRunFailure::NodeFailed {
                 node_id,
                 attempts_used,
-                last_error_kind,
                 last_error,
             }) => {
                 assert_eq!(node_id, "n2");
                 assert_eq!(attempts_used, 1);
-                assert_eq!(last_error_kind, PlanNodeErrorKind::Retryable);
+                assert_eq!(last_error.kind, PlanNodeErrorKind::Retryable);
                 assert!(
-                    last_error.contains("node_timeout"),
-                    "expected timeout reason, got: {last_error}"
+                    last_error.message.contains("node_timeout"),
+                    "expected timeout reason, got: {:?}",
+                    last_error.message
                 );
             }
             other => panic!("expected timeout node failure, got: {other:?}"),
@@ -706,15 +772,15 @@ mod tests {
             PlanRunStatus::Failed(PlanRunFailure::NodeFailed {
                 node_id,
                 attempts_used,
-                last_error_kind,
                 ref last_error,
             }) => {
                 assert_eq!(node_id, "n2");
                 assert_eq!(attempts_used, 1);
-                assert_eq!(last_error_kind, PlanNodeErrorKind::PolicyDenied);
+                assert_eq!(last_error.kind, PlanNodeErrorKind::PolicyDenied);
                 assert!(
-                    last_error.contains("policy denied"),
-                    "expected policy-denied reason, got: {last_error}"
+                    last_error.message.contains("policy denied"),
+                    "expected policy-denied reason, got: {:?}",
+                    last_error.message
                 );
             }
             other => panic!("expected policy-denied node failure, got: {other:?}"),
@@ -736,15 +802,15 @@ mod tests {
             PlanRunStatus::Failed(PlanRunFailure::NodeFailed {
                 node_id,
                 attempts_used,
-                last_error_kind,
                 ref last_error,
             }) => {
                 assert_eq!(node_id, "n2");
                 assert_eq!(attempts_used, 1);
-                assert_eq!(last_error_kind, PlanNodeErrorKind::ApprovalRequired);
+                assert_eq!(last_error.kind, PlanNodeErrorKind::ApprovalRequired);
                 assert!(
-                    last_error.contains("approval required"),
-                    "expected approval-required reason, got: {last_error}"
+                    last_error.message.contains("approval required"),
+                    "expected approval-required reason, got: {:?}",
+                    last_error.message
                 );
             }
             other => panic!("expected approval-required node failure, got: {other:?}"),

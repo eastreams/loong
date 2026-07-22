@@ -4,7 +4,7 @@ use std::{
     path::PathBuf,
     pin::Pin,
     sync::{Arc, OnceLock},
-    task::{Context, Poll},
+    task::{Context as TaskContext, Poll},
 };
 
 use axum::{
@@ -21,7 +21,6 @@ use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, mpsc, oneshot};
 
 use crate::CliResult;
-use crate::KernelContext;
 use crate::channel::dispatch::process_inbound_with_provider_and_error_mode_and_retry_progress;
 use crate::channel::feishu::api::{FeishuClient, resources::cards};
 use crate::channel::traits::messaging::{MessageContent, MessageEditApi, MessageSendApi};
@@ -56,7 +55,8 @@ pub(in crate::channel) struct FeishuWebhookState {
     bot_id: Arc<OnceLock<String>>,
     seen_events: Arc<Mutex<RecentIdCache>>,
     seen_ack_reactions: Arc<Mutex<RecentIdCache>>,
-    kernel_ctx: Arc<KernelContext>,
+    execution_runtime: Arc<loong_runtime::runtime::Runtime<crate::RuntimeContextFactory>>,
+    agent_id: String,
     runtime: Arc<ChannelOperationRuntimeTracker>,
 }
 
@@ -66,10 +66,19 @@ impl FeishuWebhookState {
         config: LoongConfig,
         resolved: &ResolvedFeishuChannelConfig,
         adapter: FeishuAdapter,
-        kernel_ctx: KernelContext,
+        execution_runtime: Arc<loong_runtime::runtime::Runtime<crate::RuntimeContextFactory>>,
+        agent_id: impl Into<String>,
         runtime: Arc<ChannelOperationRuntimeTracker>,
     ) -> Self {
-        Self::new_with_optional_resolved_path(config, None, resolved, adapter, kernel_ctx, runtime)
+        Self::new_with_optional_resolved_path(
+            config,
+            None,
+            resolved,
+            adapter,
+            execution_runtime,
+            agent_id,
+            runtime,
+        )
     }
 
     pub(super) fn new_with_resolved_path(
@@ -77,7 +86,8 @@ impl FeishuWebhookState {
         resolved_path: PathBuf,
         resolved: &ResolvedFeishuChannelConfig,
         adapter: FeishuAdapter,
-        kernel_ctx: KernelContext,
+        execution_runtime: Arc<loong_runtime::runtime::Runtime<crate::RuntimeContextFactory>>,
+        agent_id: impl Into<String>,
         runtime: Arc<ChannelOperationRuntimeTracker>,
     ) -> Self {
         Self::new_with_optional_resolved_path(
@@ -85,7 +95,8 @@ impl FeishuWebhookState {
             Some(resolved_path),
             resolved,
             adapter,
-            kernel_ctx,
+            execution_runtime,
+            agent_id,
             runtime,
         )
     }
@@ -95,7 +106,8 @@ impl FeishuWebhookState {
         resolved_path: Option<PathBuf>,
         resolved: &ResolvedFeishuChannelConfig,
         adapter: FeishuAdapter,
-        kernel_ctx: KernelContext,
+        execution_runtime: Arc<loong_runtime::runtime::Runtime<crate::RuntimeContextFactory>>,
+        agent_id: impl Into<String>,
         runtime: Arc<ChannelOperationRuntimeTracker>,
     ) -> Self {
         let access_policy = ChannelInboundAccessPolicy::from_string_lists(
@@ -119,7 +131,8 @@ impl FeishuWebhookState {
             adapter: Arc::new(Mutex::new(adapter)),
             seen_events: Arc::new(Mutex::new(RecentIdCache::new(2_048))),
             seen_ack_reactions: Arc::new(Mutex::new(RecentIdCache::new(4_096))),
-            kernel_ctx: Arc::new(kernel_ctx),
+            execution_runtime,
+            agent_id: agent_id.into(),
             runtime,
         }
     }
@@ -525,7 +538,7 @@ impl HttpBody for FeishuPostResponseJsonBody {
 
     fn poll_frame(
         self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
+        _cx: &mut TaskContext<'_>,
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
         let this = self.get_mut();
         if let Some(bytes) = this.bytes.take() {
@@ -816,7 +829,8 @@ async fn handle_feishu_card_callback_event(
         &state.config,
         state.resolved_path.as_deref(),
         &inbound,
-        state.kernel_ctx.as_ref(),
+        &state.execution_runtime,
+        &state.agent_id,
         ChannelTurnFeedbackPolicy::disabled(),
     )
     .await
@@ -878,7 +892,8 @@ async fn handle_feishu_inbound_event(
             &state.config,
             state.resolved_path.as_deref(),
             &channel_message,
-            state.kernel_ctx.as_ref(),
+            &state.execution_runtime,
+            &state.agent_id,
             ChannelTurnFeedbackPolicy::final_trace_significant(),
             crate::conversation::ProviderErrorMode::InlineMessage,
             retry_status.callback(),

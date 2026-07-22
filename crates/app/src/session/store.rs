@@ -11,7 +11,7 @@ use crate::config::MemoryConfig;
 #[cfg(feature = "memory-sqlite")]
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
-use crate::memory::{HydratedMemoryContext, MemoryContextEntry, StageDiagnostics};
+use crate::memory::{HydratedMemoryContext, MemoryContextEntry};
 
 #[cfg(feature = "memory-sqlite")]
 /// Transitional session-store adapter over the existing memory SQLite substrate.
@@ -214,21 +214,6 @@ pub fn hydrate_session_memory_context_with_workspace_root(
         workspace_root,
         &runtime_config,
     )
-}
-
-#[cfg(feature = "memory-sqlite")]
-pub async fn run_session_compact_stage(
-    session_id: &str,
-    workspace_root: Option<&std::path::Path>,
-    config: &SessionStoreConfig,
-) -> Result<StageDiagnostics, String> {
-    let runtime_config = config.as_memory_runtime_config();
-    crate::memory::run_compact_stage(session_id, workspace_root, &runtime_config).await
-}
-
-#[cfg(feature = "memory-sqlite")]
-pub fn session_memory_adapter(config: &SessionStoreConfig) -> crate::memory::KernelMemoryAdapter {
-    crate::memory::KernelMemoryAdapter::with_config(config.as_memory_runtime_config())
 }
 
 #[cfg(feature = "memory-sqlite")]

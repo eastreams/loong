@@ -482,10 +482,11 @@ fn build_gateway_turn_seed(
 }
 
 async fn run_gateway_turn_for_seed(
+    runtime: Arc<loong_runtime::runtime::Runtime<app::RuntimeContextFactory>>,
     seed: &SeededGatewayTurnExecution,
     observer: Option<app::conversation::ConversationTurnObserverHandle>,
 ) -> Result<app::agent_runtime::AgentTurnResult, String> {
-    execute_seeded_gateway_turn(seed, observer).await
+    execute_seeded_gateway_turn(runtime, seed, observer).await
 }
 
 async fn complete_chat_completion(
@@ -501,7 +502,7 @@ async fn complete_chat_completion(
             .or_else(|| Some(std::path::PathBuf::from(app_state.config_path.clone()))),
         ..seed
     };
-    let result = run_gateway_turn_for_seed(&seed, None).await?;
+    let result = run_gateway_turn_for_seed(Arc::clone(&app_state.runtime), &seed, None).await?;
     Ok(json!({
         "id": seed.request_id,
         "object": "chat.completion",
@@ -548,6 +549,7 @@ async fn stream_chat_completion(
     let observer_handle: app::conversation::ConversationTurnObserverHandle = observer.clone();
     let request_id = seed.request_id.clone();
     let model = seed.model.clone();
+    let runtime = Arc::clone(&app_state.runtime);
     let seed = SeededGatewayTurnExecution {
         resolved_path: seed
             .resolved_path
@@ -557,7 +559,7 @@ async fn stream_chat_completion(
     };
 
     tokio::spawn(async move {
-        let result = run_gateway_turn_for_seed(&seed, Some(observer_handle)).await;
+        let result = run_gateway_turn_for_seed(runtime, &seed, Some(observer_handle)).await;
         match result {
             Ok(result) => {
                 if !observer.emitted_text() && !result.output_text.is_empty() {
@@ -642,15 +644,14 @@ pub fn build_openai_compat_test_router_no_backend(
     config: LoongConfig,
     bearer_token: String,
 ) -> Router {
-    let mut app_state = GatewayControlAppState::test_minimal(bearer_token);
     let (runtime_dir, config_path) = prepare_openai_compat_test_runtime(config.clone());
     crate::mvp::runtime_env::initialize_runtime_environment(
         &config,
         Some(std::path::Path::new(config_path.as_str())),
     );
+    let mut app_state = GatewayControlAppState::test_with_config(bearer_token, config);
     app_state.runtime_dir = runtime_dir;
     app_state.config_path = config_path;
-    app_state.config = Some(config);
     build_openai_compat_router(Arc::new(app_state))
 }
 

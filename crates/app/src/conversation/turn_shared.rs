@@ -2,8 +2,6 @@
 use super::super::config::LoongConfig;
 #[cfg(test)]
 use super::runtime::ConversationRuntime;
-#[cfg(test)]
-use super::runtime_binding::ConversationRuntimeBinding;
 use super::turn_engine::{
     ApprovalRequirement, ApprovalRequirementKind, ToolResultPayloadSemantics, TurnResult,
 };
@@ -15,8 +13,6 @@ use serde_json::Value;
 
 #[cfg(test)]
 use crate::CliResult;
-#[cfg(test)]
-use crate::tools::ToolView;
 
 #[path = "turn_shared_approval.rs"]
 mod approval;

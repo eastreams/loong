@@ -1,24 +1,13 @@
-#[cfg(feature = "memory-sqlite")]
-use std::collections::BTreeSet;
-
-#[cfg(feature = "memory-sqlite")]
-use loong_contracts::Capability;
-#[cfg(feature = "memory-sqlite")]
-use serde_json::json;
-
-use crate::CliResult;
 use crate::config::LoongConfig;
 #[cfg(any(test, feature = "memory-sqlite"))]
 use crate::conversation::ContextCompactionReport;
-use crate::conversation::ConversationRuntimeBinding;
 use crate::conversation::ConversationTurnCoordinator;
 #[cfg(any(test, feature = "memory-sqlite"))]
 use crate::memory;
 #[cfg(any(test, feature = "memory-sqlite"))]
 use crate::runtime_self_continuity;
-#[cfg(feature = "memory-sqlite")]
-use crate::session::store::SessionStoreConfig;
 use crate::tui_surface::{TuiCalloutTone, TuiMessageSpec, TuiSectionSpec};
+use crate::{CliResult, Context};
 
 use super::CliTurnRuntime;
 use super::detect_cli_chat_render_width;
@@ -163,17 +152,16 @@ fn manual_compaction_tone(status: ManualCompactionStatus) -> TuiCalloutTone {
 pub(super) async fn print_manual_compaction(runtime: &CliTurnRuntime) -> CliResult<()> {
     #[cfg(feature = "memory-sqlite")]
     {
-        let binding = runtime.conversation_binding();
-        let result = load_manual_compaction_result(
-            &runtime.config,
-            &runtime.session_id,
-            &runtime.turn_coordinator,
-            binding,
-        )
-        .await?;
+        let context = runtime.context().map_err(|error| error.to_string())?;
+        let result =
+            load_manual_compaction_result(&runtime.config, &context, &runtime.turn_coordinator)
+                .await?;
         let render_width = detect_cli_chat_render_width();
-        let rendered_lines =
-            render_manual_compaction_lines_with_width(&runtime.session_id, &result, render_width);
+        let rendered_lines = render_manual_compaction_lines_with_width(
+            context.session().session_id(),
+            &result,
+            render_width,
+        );
         print_rendered_cli_chat_lines(&rendered_lines);
         Ok(())
     }
@@ -193,18 +181,13 @@ pub(super) async fn print_manual_compaction(runtime: &CliTurnRuntime) -> CliResu
 }
 
 #[allow(clippy::print_stdout)]
-pub(super) async fn print_history(
-    session_id: &str,
-    limit: usize,
-    binding: ConversationRuntimeBinding<'_>,
-    #[cfg(feature = "memory-sqlite")] memory_config: &SessionStoreConfig,
-) -> CliResult<()> {
+pub(super) async fn print_history(limit: usize, context: &Context<'_>) -> CliResult<()> {
     #[cfg(feature = "memory-sqlite")]
     {
-        let history_lines = load_history_lines(session_id, limit, binding, memory_config).await?;
+        let history_lines = load_history_lines(limit, context).await?;
         let render_width = detect_cli_chat_render_width();
         let rendered_lines = render_cli_chat_history_lines_with_width(
-            session_id,
+            context.session().session_id(),
             limit,
             &history_lines,
             render_width,
@@ -215,7 +198,7 @@ pub(super) async fn print_history(
 
     #[cfg(not(feature = "memory-sqlite"))]
     {
-        let _ = (session_id, limit, binding);
+        let _ = (limit, context);
         let render_width = detect_cli_chat_render_width();
         let rendered_lines = render_cli_chat_feature_unavailable_lines_with_width(
             "history",
@@ -231,16 +214,15 @@ pub(super) async fn print_history(
 #[cfg(feature = "memory-sqlite")]
 pub(super) async fn load_manual_compaction_result(
     config: &LoongConfig,
-    session_id: &str,
+    context: &Context<'_>,
     turn_coordinator: &ConversationTurnCoordinator,
-    binding: ConversationRuntimeBinding<'_>,
 ) -> CliResult<ManualCompactionResult> {
-    let before_snapshot = load_manual_compaction_window_snapshot(session_id, binding).await?;
+    let before_snapshot = load_manual_compaction_window_snapshot(context).await?;
     let before_turns = resolve_manual_compaction_turn_count(&before_snapshot);
     let report = turn_coordinator
-        .compact_production_session(config, session_id, binding)
+        .compact_production_session(config, context)
         .await?;
-    let after_snapshot = load_manual_compaction_window_snapshot(session_id, binding).await?;
+    let after_snapshot = load_manual_compaction_window_snapshot(context).await?;
     let after_turns = resolve_manual_compaction_turn_count(&after_snapshot);
     let summary_headline = extract_manual_compaction_summary_headline(&after_snapshot);
     let status = manual_compaction_status_from_report(&report)?;
@@ -259,45 +241,26 @@ pub(super) async fn load_manual_compaction_result(
 
 #[cfg(feature = "memory-sqlite")]
 async fn load_manual_compaction_window_snapshot(
-    session_id: &str,
-    binding: ConversationRuntimeBinding<'_>,
+    context: &Context<'_>,
 ) -> CliResult<ManualCompactionWindowSnapshot> {
     const MAX_MANUAL_COMPACTION_WINDOW_TURNS: usize = 512;
 
-    let kernel_ctx = binding
-        .kernel_context()
-        .ok_or_else(|| "manual compaction requires a kernel-bound session".to_owned())?;
-    let caps = BTreeSet::from([Capability::MemoryRead]);
-    let request = loong_contracts::MemoryCoreRequest {
-        operation: memory::MEMORY_OP_WINDOW.to_owned(),
-        payload: json!({
-            "session_id": session_id,
-            "limit": MAX_MANUAL_COMPACTION_WINDOW_TURNS,
-            "allow_extended_limit": true,
-        }),
-    };
-    let execution_context = kernel_ctx.memory_core_execution_context()?;
-    let outcome = kernel_ctx
-        .kernel
-        .execute_memory_core(
-            kernel_ctx.pack_id(),
-            &kernel_ctx.token,
-            &caps,
-            None,
-            request,
-            &execution_context,
-        )
+    let snapshot = context
+        .access()
+        .memory()
+        .window(MAX_MANUAL_COMPACTION_WINDOW_TURNS, true)
         .await
-        .map_err(|error| format!("load compaction window via kernel failed: {error}"))?;
-
-    if outcome.status != "ok" {
-        let status = outcome.status;
-        let message = format!("load compaction window via kernel returned non-ok status: {status}");
-        return Err(message);
-    }
-
-    let turns = memory::decode_window_turns(&outcome.payload);
-    let turn_count = memory::decode_window_turn_count(&outcome.payload);
+        .map_err(|error| format!("load compaction window failed: {error}"))?;
+    let turns = snapshot
+        .turns
+        .into_iter()
+        .map(|turn| memory::WindowTurn {
+            role: turn.role,
+            content: turn.content,
+            ts: turn.ts,
+        })
+        .collect();
+    let turn_count = Some(snapshot.turn_count);
 
     Ok(ManualCompactionWindowSnapshot { turns, turn_count })
 }
@@ -390,73 +353,25 @@ fn format_window_history_lines(turns: &[memory::WindowTurn]) -> Vec<String> {
         .collect()
 }
 
-#[cfg(any(test, feature = "memory-sqlite"))]
-fn format_prompt_context_history_lines(entries: &[memory::MemoryContextEntry]) -> Vec<String> {
-    if entries.is_empty() {
-        return vec!["(no history yet)".to_owned()];
-    }
-
-    let mut lines = Vec::new();
-    for entry in entries {
-        match entry.kind {
-            memory::MemoryContextKind::Profile => {
-                lines.push("[profile]".to_owned());
-                lines.push(entry.content.clone());
-            }
-            memory::MemoryContextKind::Summary => {
-                lines.push("[summary]".to_owned());
-                lines.push(entry.content.clone());
-            }
-            memory::MemoryContextKind::Derived => {
-                lines.push("[derived]".to_owned());
-                lines.push(entry.content.clone());
-            }
-            memory::MemoryContextKind::RetrievedMemory => {
-                lines.push("[retrieved_memory]".to_owned());
-                lines.push(entry.content.clone());
-            }
-            memory::MemoryContextKind::Turn => {
-                lines.push(format!("{}: {}", entry.role, entry.content));
-            }
-        }
-    }
-    lines
-}
-
 #[cfg(feature = "memory-sqlite")]
 pub(super) async fn load_history_lines(
-    session_id: &str,
     limit: usize,
-    binding: ConversationRuntimeBinding<'_>,
-    memory_config: &SessionStoreConfig,
+    context: &Context<'_>,
 ) -> CliResult<Vec<String>> {
-    if let Some(ctx) = binding.kernel_context() {
-        let request = memory::build_window_request(session_id, limit);
-        let caps = BTreeSet::from([Capability::MemoryRead]);
-        let execution_context = ctx.memory_core_execution_context()?;
-        let outcome = ctx
-            .kernel
-            .execute_memory_core(
-                ctx.pack_id(),
-                &ctx.token,
-                &caps,
-                None,
-                request,
-                &execution_context,
-            )
-            .await
-            .map_err(|error| format!("load history via kernel failed: {error}"))?;
-        if outcome.status != "ok" {
-            return Err(format!(
-                "load history via kernel returned non-ok status: {}",
-                outcome.status
-            ));
-        }
-        let turns = memory::decode_window_turns(&outcome.payload);
-        return Ok(format_window_history_lines(&turns));
-    }
-
-    let entries = crate::session::store::load_session_prompt_context(session_id, memory_config)
+    let snapshot = context
+        .access()
+        .memory()
+        .window(limit, false)
+        .await
         .map_err(|error| format!("load history failed: {error}"))?;
-    Ok(format_prompt_context_history_lines(&entries))
+    let turns = snapshot
+        .turns
+        .into_iter()
+        .map(|turn| memory::WindowTurn {
+            role: turn.role,
+            content: turn.content,
+            ts: turn.ts,
+        })
+        .collect::<Vec<_>>();
+    Ok(format_window_history_lines(&turns))
 }

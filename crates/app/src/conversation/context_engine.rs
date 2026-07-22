@@ -1,23 +1,18 @@
+use std::collections::BTreeSet;
+
 use async_trait::async_trait;
 #[cfg(feature = "memory-sqlite")]
-use loong_contracts::{Capability, ExecutionPlane, PlaneTier};
+use loong_kernel::access::memory::{MemoryReplaceTurnsOutcome, MemoryTurn};
 use serde_json::Value;
 
 use crate::config::LoongConfig;
-use crate::{CliResult, KernelContext};
+use crate::{CliResult, Context};
 
 #[cfg(feature = "memory-sqlite")]
 use crate::memory;
-use std::collections::BTreeSet;
-#[cfg(feature = "memory-sqlite")]
-use std::path::Path;
 
 #[cfg(feature = "memory-sqlite")]
 use super::compaction::{compact_window, compaction_policy_from_config};
-#[cfg(feature = "memory-sqlite")]
-use super::load_compaction_session_snapshot;
-use super::runtime_binding::ConversationRuntimeBinding;
-
 pub const CONTEXT_ENGINE_API_VERSION: u16 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -106,6 +101,8 @@ pub struct AssembledConversationContext {
     pub estimated_tokens: Option<usize>,
     pub prompt_fragments: Vec<crate::conversation::PromptFragment>,
     pub system_prompt_addition: Option<String>,
+    pub(crate) runtime_self_continuity:
+        Option<crate::runtime_self_continuity::RuntimeSelfContinuity>,
 }
 
 impl AssembledConversationContext {
@@ -116,6 +113,7 @@ impl AssembledConversationContext {
             estimated_tokens: None,
             prompt_fragments: Vec::new(),
             system_prompt_addition: None,
+            runtime_self_continuity: None,
         }
     }
 
@@ -136,6 +134,10 @@ pub struct ContextEngineIngestResult {
     pub ingested: bool,
 }
 
+/// Builds and maintains conversation context under one bound Session authority.
+///
+/// `Context` is the sole source of the current Session identity. Lifecycle hooks
+/// accept a child id only when that child is the operation's explicit target.
 #[async_trait]
 pub trait ConversationContextEngine: Send + Sync {
     fn id(&self) -> &'static str;
@@ -147,28 +149,25 @@ pub trait ConversationContextEngine: Send + Sync {
     async fn bootstrap(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
-        _kernel_ctx: &KernelContext,
+        _ctx: &Context<'_>,
     ) -> CliResult<ContextEngineBootstrapResult> {
         Ok(ContextEngineBootstrapResult::default())
     }
 
     async fn ingest(
         &self,
-        _session_id: &str,
         _message: &Value,
-        _kernel_ctx: &KernelContext,
+        _ctx: &Context<'_>,
     ) -> CliResult<ContextEngineIngestResult> {
         Ok(ContextEngineIngestResult::default())
     }
 
     async fn after_turn(
         &self,
-        _session_id: &str,
         _user_input: &str,
         _assistant_reply: &str,
         _messages: &[Value],
-        _kernel_ctx: &KernelContext,
+        _ctx: &Context<'_>,
     ) -> CliResult<()> {
         Ok(())
     }
@@ -176,27 +175,24 @@ pub trait ConversationContextEngine: Send + Sync {
     async fn compact_context(
         &self,
         _config: &LoongConfig,
-        _session_id: &str,
         _messages: &[Value],
-        _kernel_ctx: &KernelContext,
+        _ctx: &Context<'_>,
     ) -> CliResult<()> {
         Ok(())
     }
 
     async fn prepare_subagent_spawn(
         &self,
-        _parent_session_id: &str,
         _subagent_session_id: &str,
-        _kernel_ctx: &KernelContext,
+        _ctx: &Context<'_>,
     ) -> CliResult<()> {
         Ok(())
     }
 
     async fn on_subagent_ended(
         &self,
-        _parent_session_id: &str,
         _subagent_session_id: &str,
-        _kernel_ctx: &KernelContext,
+        _ctx: &Context<'_>,
     ) -> CliResult<()> {
         Ok(())
     }
@@ -204,11 +200,10 @@ pub trait ConversationContextEngine: Send + Sync {
     async fn assemble_context(
         &self,
         config: &LoongConfig,
-        session_id: &str,
         include_system_prompt: bool,
-        binding: ConversationRuntimeBinding<'_>,
+        ctx: &Context<'_>,
     ) -> CliResult<AssembledConversationContext> {
-        self.assemble_messages(config, session_id, include_system_prompt, binding)
+        self.assemble_messages(config, include_system_prompt, ctx)
             .await
             .map(AssembledConversationContext::from_messages)
     }
@@ -216,9 +211,8 @@ pub trait ConversationContextEngine: Send + Sync {
     async fn assemble_messages(
         &self,
         config: &LoongConfig,
-        session_id: &str,
         include_system_prompt: bool,
-        binding: ConversationRuntimeBinding<'_>,
+        ctx: &Context<'_>,
     ) -> CliResult<Vec<Value>>;
 }
 
@@ -238,103 +232,140 @@ where
     async fn bootstrap(
         &self,
         config: &LoongConfig,
-        session_id: &str,
-        kernel_ctx: &KernelContext,
+        ctx: &Context<'_>,
     ) -> CliResult<ContextEngineBootstrapResult> {
-        self.as_ref()
-            .bootstrap(config, session_id, kernel_ctx)
-            .await
+        self.as_ref().bootstrap(config, ctx).await
     }
 
     async fn ingest(
         &self,
-        session_id: &str,
         message: &Value,
-        kernel_ctx: &KernelContext,
+        ctx: &Context<'_>,
     ) -> CliResult<ContextEngineIngestResult> {
-        self.as_ref().ingest(session_id, message, kernel_ctx).await
+        self.as_ref().ingest(message, ctx).await
     }
 
     async fn after_turn(
         &self,
-        session_id: &str,
         user_input: &str,
         assistant_reply: &str,
         messages: &[Value],
-        kernel_ctx: &KernelContext,
+        ctx: &Context<'_>,
     ) -> CliResult<()> {
         self.as_ref()
-            .after_turn(
-                session_id,
-                user_input,
-                assistant_reply,
-                messages,
-                kernel_ctx,
-            )
+            .after_turn(user_input, assistant_reply, messages, ctx)
             .await
     }
 
     async fn compact_context(
         &self,
         config: &LoongConfig,
-        session_id: &str,
         messages: &[Value],
-        kernel_ctx: &KernelContext,
+        ctx: &Context<'_>,
     ) -> CliResult<()> {
-        self.as_ref()
-            .compact_context(config, session_id, messages, kernel_ctx)
-            .await
+        self.as_ref().compact_context(config, messages, ctx).await
     }
 
     async fn prepare_subagent_spawn(
         &self,
-        parent_session_id: &str,
         subagent_session_id: &str,
-        kernel_ctx: &KernelContext,
+        ctx: &Context<'_>,
     ) -> CliResult<()> {
         self.as_ref()
-            .prepare_subagent_spawn(parent_session_id, subagent_session_id, kernel_ctx)
+            .prepare_subagent_spawn(subagent_session_id, ctx)
             .await
     }
 
     async fn on_subagent_ended(
         &self,
-        parent_session_id: &str,
         subagent_session_id: &str,
-        kernel_ctx: &KernelContext,
+        ctx: &Context<'_>,
     ) -> CliResult<()> {
         self.as_ref()
-            .on_subagent_ended(parent_session_id, subagent_session_id, kernel_ctx)
+            .on_subagent_ended(subagent_session_id, ctx)
             .await
     }
 
     async fn assemble_context(
         &self,
         config: &LoongConfig,
-        session_id: &str,
         include_system_prompt: bool,
-        binding: ConversationRuntimeBinding<'_>,
+        ctx: &Context<'_>,
     ) -> CliResult<AssembledConversationContext> {
         self.as_ref()
-            .assemble_context(config, session_id, include_system_prompt, binding)
+            .assemble_context(config, include_system_prompt, ctx)
             .await
     }
 
     async fn assemble_messages(
         &self,
         config: &LoongConfig,
-        session_id: &str,
         include_system_prompt: bool,
-        binding: ConversationRuntimeBinding<'_>,
+        ctx: &Context<'_>,
     ) -> CliResult<Vec<Value>> {
         self.as_ref()
-            .assemble_messages(config, session_id, include_system_prompt, binding)
+            .assemble_messages(config, include_system_prompt, ctx)
             .await
     }
 }
 
-#[derive(Default)]
+/// Built-in context engine; memory authority comes exclusively from each call's Context.
 pub struct DefaultContextEngine;
+
+impl DefaultContextEngine {
+    pub(crate) fn engine_metadata() -> ContextEngineMetadata {
+        #[cfg(feature = "memory-sqlite")]
+        let capabilities = [
+            ContextEngineCapability::KernelMemoryWindowRead,
+            ContextEngineCapability::ContextCompaction,
+        ];
+        #[cfg(not(feature = "memory-sqlite"))]
+        let capabilities: [ContextEngineCapability; 0] = [];
+        ContextEngineMetadata::new("default", capabilities)
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    async fn persist_memory_window(
+        &self,
+        turns: &[memory::WindowTurn],
+        expected_turn_count: Option<usize>,
+        context: &Context<'_>,
+    ) -> CliResult<PersistMemoryWindowOutcome> {
+        let turns = turns
+            .iter()
+            .map(|turn| MemoryTurn {
+                role: turn.role.clone(),
+                content: turn.content.clone(),
+                ts: turn.ts,
+            })
+            .collect();
+        let outcome = context
+            .access()
+            .memory()
+            .replace_turns(turns, expected_turn_count)
+            .await
+            .map_err(|error| format!("persist compacted memory window failed: {error}"))?;
+
+        match outcome {
+            MemoryReplaceTurnsOutcome::Replaced => Ok(PersistMemoryWindowOutcome::Persisted),
+            MemoryReplaceTurnsOutcome::Conflict => Ok(PersistMemoryWindowOutcome::Conflict),
+        }
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    async fn load_stage_envelope(
+        &self,
+        _config: &LoongConfig,
+        context: &Context<'_>,
+    ) -> CliResult<memory::StageEnvelope> {
+        context
+            .access()
+            .memory()
+            .read_stage_envelope()
+            .await
+            .map_err(|error| format!("load staged memory envelope failed: {error}"))
+    }
+}
 
 #[derive(Default)]
 pub struct LegacyContextEngine;
@@ -352,29 +383,21 @@ impl ConversationContextEngine for DefaultContextEngine {
     }
 
     fn metadata(&self) -> ContextEngineMetadata {
-        #[cfg(feature = "memory-sqlite")]
-        let capabilities = [
-            ContextEngineCapability::KernelMemoryWindowRead,
-            ContextEngineCapability::ContextCompaction,
-        ];
-        #[cfg(not(feature = "memory-sqlite"))]
-        let capabilities: [ContextEngineCapability; 0] = [];
-        ContextEngineMetadata::new("default", capabilities)
+        Self::engine_metadata()
     }
 
     async fn compact_context(
         &self,
         config: &LoongConfig,
-        session_id: &str,
         _messages: &[Value],
-        kernel_ctx: &KernelContext,
+        ctx: &Context<'_>,
     ) -> CliResult<()> {
         #[cfg(feature = "memory-sqlite")]
         {
             const MAX_COMPACTION_CONFLICT_RETRIES: usize = 3;
 
             for _ in 0..MAX_COMPACTION_CONFLICT_RETRIES {
-                let snapshot = load_compaction_session_snapshot(session_id, kernel_ctx).await?;
+                let snapshot = self.load_compaction_session_snapshot(ctx).await?;
                 if !snapshot.is_complete() {
                     return Ok(());
                 }
@@ -385,13 +408,9 @@ impl ConversationContextEngine for DefaultContextEngine {
                     return Ok(());
                 };
 
-                match persist_memory_window(
-                    session_id,
-                    &compacted,
-                    Some(snapshot.turn_count),
-                    kernel_ctx,
-                )
-                .await?
+                match self
+                    .persist_memory_window(&compacted, Some(snapshot.turn_count), ctx)
+                    .await?
                 {
                     PersistMemoryWindowOutcome::Persisted => return Ok(()),
                     PersistMemoryWindowOutcome::Conflict => continue,
@@ -403,7 +422,7 @@ impl ConversationContextEngine for DefaultContextEngine {
 
         #[cfg(not(feature = "memory-sqlite"))]
         {
-            let _ = (config, session_id, kernel_ctx);
+            let _ = (config, ctx);
             Ok(())
         }
     }
@@ -411,17 +430,17 @@ impl ConversationContextEngine for DefaultContextEngine {
     async fn assemble_context(
         &self,
         config: &LoongConfig,
-        session_id: &str,
         include_system_prompt: bool,
-        binding: ConversationRuntimeBinding<'_>,
+        ctx: &Context<'_>,
     ) -> CliResult<AssembledConversationContext> {
-        if !binding.is_kernel_bound() {
-            let provider_binding = crate::provider::ProviderRuntimeBinding::advisory_only();
-            let projected = crate::provider::build_projected_context_for_session_with_binding(
+        #[cfg(feature = "memory-sqlite")]
+        {
+            let envelope = self.load_stage_envelope(config, ctx).await?;
+            let projected = crate::provider::project_stage_envelope_with_context(
                 config,
-                session_id,
                 include_system_prompt,
-                provider_binding,
+                ctx,
+                &envelope,
             )
             .await?;
             return Ok(AssembledConversationContext {
@@ -430,38 +449,14 @@ impl ConversationContextEngine for DefaultContextEngine {
                 estimated_tokens: None,
                 prompt_fragments: projected.prompt_fragments,
                 system_prompt_addition: None,
-            });
-        }
-
-        #[cfg(feature = "memory-sqlite")]
-        {
-            let kernel_ctx = binding
-                .kernel_context()
-                .ok_or_else(|| "kernel-bound context engine requires kernel context".to_owned())?;
-            let provider_binding = crate::provider::ProviderRuntimeBinding::kernel(kernel_ctx);
-            let envelope = load_stage_envelope(config, session_id, binding).await?;
-            let runtime_tool_view = crate::tools::runtime_tool_view_from_loong_config(config);
-            let projected = crate::provider::project_stage_envelope_for_view_with_binding(
-                config,
-                include_system_prompt,
-                &runtime_tool_view,
-                provider_binding,
-                &envelope,
-            )
-            .await;
-            return Ok(AssembledConversationContext {
-                messages: projected.messages,
-                artifacts: projected.artifacts,
-                estimated_tokens: None,
-                prompt_fragments: projected.prompt_fragments,
-                system_prompt_addition: None,
+                runtime_self_continuity: projected.runtime_self_continuity,
             });
         }
 
         #[cfg(not(feature = "memory-sqlite"))]
         {
-            let _ = binding;
-            crate::provider::build_messages_for_session(config, session_id, include_system_prompt)
+            crate::provider::build_messages_for_session(config, include_system_prompt, ctx)
+                .await
                 .map(AssembledConversationContext::from_messages)
         }
     }
@@ -469,11 +464,10 @@ impl ConversationContextEngine for DefaultContextEngine {
     async fn assemble_messages(
         &self,
         config: &LoongConfig,
-        session_id: &str,
         include_system_prompt: bool,
-        binding: ConversationRuntimeBinding<'_>,
+        ctx: &Context<'_>,
     ) -> CliResult<Vec<Value>> {
-        self.assemble_context(config, session_id, include_system_prompt, binding)
+        self.assemble_context(config, include_system_prompt, ctx)
             .await
             .map(|assembled| assembled.messages)
     }
@@ -492,100 +486,11 @@ impl ConversationContextEngine for LegacyContextEngine {
     async fn assemble_messages(
         &self,
         config: &LoongConfig,
-        session_id: &str,
         include_system_prompt: bool,
-        _binding: ConversationRuntimeBinding<'_>,
+        ctx: &Context<'_>,
     ) -> CliResult<Vec<Value>> {
-        crate::provider::build_messages_for_session(config, session_id, include_system_prompt)
+        crate::provider::build_messages_for_session(config, include_system_prompt, ctx).await
     }
-}
-
-async fn persist_memory_window(
-    session_id: &str,
-    turns: &[memory::WindowTurn],
-    expected_turn_count: Option<usize>,
-    kernel_ctx: &KernelContext,
-) -> CliResult<PersistMemoryWindowOutcome> {
-    let request = memory::build_replace_turns_request_with_expectation(
-        session_id,
-        turns,
-        expected_turn_count,
-    );
-    let caps = BTreeSet::from([Capability::MemoryWrite]);
-    let execution_context = kernel_ctx.memory_core_execution_context()?;
-    let outcome = kernel_ctx
-        .kernel
-        .execute_memory_core(
-            kernel_ctx.pack_id(),
-            &kernel_ctx.token,
-            &caps,
-            None,
-            request,
-            &execution_context,
-        )
-        .await
-        .map_err(|error| format!("persist compacted memory window via kernel failed: {error}"))?;
-
-    match outcome.status.as_str() {
-        "ok" => Ok(PersistMemoryWindowOutcome::Persisted),
-        "conflict" => Ok(PersistMemoryWindowOutcome::Conflict),
-        _ => Err(format!(
-            "persist compacted memory window via kernel returned non-ok status: {}",
-            outcome.status
-        )),
-    }
-}
-
-#[cfg(feature = "memory-sqlite")]
-async fn load_stage_envelope(
-    config: &LoongConfig,
-    session_id: &str,
-    binding: ConversationRuntimeBinding<'_>,
-) -> CliResult<memory::StageEnvelope> {
-    if let Some(ctx) = binding.kernel_context() {
-        let tool_runtime_config =
-            crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
-        let workspace_root = tool_runtime_config
-            .effective_workspace_root()
-            .map(Path::to_path_buf);
-        let request = memory::build_read_stage_envelope_request_for_memory_config(
-            session_id,
-            workspace_root.as_deref(),
-            &config.memory,
-        );
-        let caps = BTreeSet::from([Capability::MemoryRead]);
-        let execution_context = ctx.execution_context(
-            ExecutionPlane::Memory,
-            PlaneTier::Core,
-            None,
-            &tool_runtime_config,
-        )?;
-        let outcome = ctx
-            .kernel
-            .execute_memory_core(
-                ctx.pack_id(),
-                &ctx.token,
-                &caps,
-                None,
-                request,
-                &execution_context,
-            )
-            .await
-            .map_err(|error| format!("load staged memory envelope via kernel failed: {error}"))?;
-
-        if outcome.status != "ok" {
-            return Err(format!(
-                "load staged memory envelope via kernel returned non-ok status: {}",
-                outcome.status
-            ));
-        }
-
-        return memory::decode_stage_envelope(&outcome.payload)
-            .ok_or_else(|| "decode staged memory envelope via kernel failed".to_owned());
-    }
-
-    memory::hydrate_stage_envelope_for_memory_config(session_id, None, &config.memory)
-        .map_err(|error| format!("load staged memory envelope failed: {error}"))
 }
 
 #[cfg(test)]
@@ -595,25 +500,19 @@ mod tests {
     use crate::test_support::TurnTestHarness;
 
     #[cfg(feature = "memory-sqlite")]
-    async fn provider_messages_with_kernel_binding(
+    async fn provider_messages_with_context(
         config: &LoongConfig,
-        session_id: &str,
-        kernel_ctx: &crate::KernelContext,
+        ctx: &crate::Context<'_>,
     ) -> Vec<Value> {
-        crate::provider::build_projected_context_for_session_with_binding(
-            config,
-            session_id,
-            true,
-            crate::provider::ProviderRuntimeBinding::kernel(kernel_ctx),
-        )
-        .await
-        .expect("build provider context")
-        .messages
+        crate::provider::build_projected_context_for_session(config, true, ctx)
+            .await
+            .expect("build provider context")
+            .messages
     }
 
     #[test]
     fn default_engine_metadata_has_stable_identity() {
-        let metadata = DefaultContextEngine.metadata();
+        let metadata = DefaultContextEngine::engine_metadata();
         assert_eq!(metadata.id, "default");
         assert_eq!(metadata.api_version, CONTEXT_ENGINE_API_VERSION);
     }
@@ -670,7 +569,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn default_engine_assembles_runtime_self_through_kernel_audit_path() {
+    async fn default_engine_assembles_runtime_self_through_governed_access_path() {
         let harness = TurnTestHarness::with_capabilities(std::collections::BTreeSet::from([
             loong_contracts::Capability::InvokeTool,
             loong_contracts::Capability::FilesystemRead,
@@ -685,13 +584,9 @@ mod tests {
         let mut config = LoongConfig::default();
         config.tools.file_root = Some(harness.temp_dir.display().to_string());
 
-        let messages = DefaultContextEngine
-            .assemble_messages(
-                &config,
-                "kernel-runtime-self-session",
-                true,
-                ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx)),
-            )
+        let ctx = harness.context();
+        let messages = crate::conversation::DefaultContextEngine
+            .assemble_messages(&config, true, &ctx)
             .await
             .expect("assemble messages");
 
@@ -703,7 +598,7 @@ mod tests {
         let has_typed_tool_event = audit_events.iter().any(|event| {
             matches!(
                 &event.kind,
-                loong_kernel::AuditEventKind::ToolInvocation { .. }
+                loong_kernel::AuditEventKind::ActionExecution { .. }
             )
         });
         let has_legacy_tool_plane_event = audit_events.iter().any(|event| {
@@ -717,8 +612,8 @@ mod tests {
         });
 
         assert!(
-            has_typed_tool_event,
-            "kernel-bound runtime self loading should emit typed tool audit"
+            !has_typed_tool_event,
+            "runtime-source file reads are governed access, not tool invocations"
         );
         assert!(
             !has_legacy_tool_plane_event,
@@ -738,7 +633,7 @@ mod tests {
             loong_contracts::Capability::MemoryRead,
         ]);
         let harness = TurnTestHarness::with_capabilities(capabilities);
-        let session_id = "kernel-summary-session";
+        let session_id = harness.session.session_id().to_owned();
         let sqlite_path = harness.temp_dir.join("memory.sqlite3");
         let sqlite_path_text = sqlite_path.display().to_string();
         let mut config = LoongConfig::default();
@@ -752,53 +647,57 @@ mod tests {
             crate::session::store::session_store_config_from_memory_config_without_env_overrides(
                 &config.memory,
             );
+        crate::test_support::ensure_root_session_for_test(&config, session_id.as_str())
+            .expect("persist summary test Session identity");
 
         crate::session::store::append_session_turn_direct(
-            session_id,
+            session_id.as_str(),
             "user",
             "turn 1",
             &memory_config,
         )
         .expect("append turn 1 should succeed");
         crate::session::store::append_session_turn_direct(
-            session_id,
+            session_id.as_str(),
             "assistant",
             "turn 2",
             &memory_config,
         )
         .expect("append turn 2 should succeed");
         crate::session::store::append_session_turn_direct(
-            session_id,
+            session_id.as_str(),
             "user",
             "turn 3",
             &memory_config,
         )
         .expect("append turn 3 should succeed");
         crate::session::store::append_session_turn_direct(
-            session_id,
+            session_id.as_str(),
             "assistant",
             "turn 4",
             &memory_config,
         )
         .expect("append turn 4 should succeed");
 
-        let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
-            "context-engine-summary-projection",
-            60,
+        let session = crate::Session::from_config(
+            harness.runtime.as_ref(),
             &config,
+            session_id,
+            harness.session.agent_id(),
+            harness.session.session_mode,
         )
-        .expect("bootstrap kernel context with config");
-        let binding = ConversationRuntimeBinding::from_optional_kernel_context(Some(&kernel_ctx));
-        let kernel_messages = DefaultContextEngine
-            .assemble_messages(&config, session_id, true, binding)
+        .expect("materialize summary test Session from its final config");
+        let ctx = crate::Context::new(harness.runtime.as_ref(), &session)
+            .expect("summary test Session belongs to the harness Runtime");
+        let kernel_messages = crate::conversation::DefaultContextEngine
+            .assemble_messages(&config, true, &ctx)
             .await
             .expect("assemble messages");
-        let provider_messages =
-            provider_messages_with_kernel_binding(&config, session_id, &kernel_ctx).await;
+        let provider_messages = provider_messages_with_context(&config, &ctx).await;
 
         assert_eq!(
             kernel_messages, provider_messages,
-            "kernel-bound assembly should preserve summary projection parity"
+            "context-bound assembly should preserve summary projection parity"
         );
         assert!(
             kernel_messages.iter().any(|message| {
@@ -807,7 +706,7 @@ mod tests {
                         .as_str()
                         .is_some_and(|content| content.contains("## Memory Summary"))
             }),
-            "expected kernel-bound assembly to keep the summary block"
+            "expected context-bound assembly to keep the summary block"
         );
     }
 
@@ -823,7 +722,7 @@ mod tests {
             loong_contracts::Capability::MemoryRead,
         ]);
         let harness = TurnTestHarness::with_capabilities(capabilities);
-        let session_id = "kernel-profile-session";
+        let session_id = harness.session.session_id().to_owned();
         let sqlite_path = harness.temp_dir.join("memory.sqlite3");
         let sqlite_path_text = sqlite_path.display().to_string();
         let profile_note = "Imported ZeroClaw preferences";
@@ -839,32 +738,36 @@ mod tests {
             crate::session::store::session_store_config_from_memory_config_without_env_overrides(
                 &config.memory,
             );
+        crate::test_support::ensure_root_session_for_test(&config, session_id.as_str())
+            .expect("persist profile test Session identity");
 
         crate::session::store::append_session_turn_direct(
-            session_id,
+            session_id.as_str(),
             "assistant",
             "turn 1",
             &memory_config,
         )
         .expect("append turn should succeed");
 
-        let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
-            "context-engine-profile-projection",
-            60,
+        let session = crate::Session::from_config(
+            harness.runtime.as_ref(),
             &config,
+            session_id,
+            harness.session.agent_id(),
+            harness.session.session_mode,
         )
-        .expect("bootstrap kernel context with config");
-        let binding = ConversationRuntimeBinding::from_optional_kernel_context(Some(&kernel_ctx));
-        let kernel_messages = DefaultContextEngine
-            .assemble_messages(&config, session_id, true, binding)
+        .expect("materialize profile test Session from its final config");
+        let ctx = crate::Context::new(harness.runtime.as_ref(), &session)
+            .expect("profile test Session belongs to the harness Runtime");
+        let kernel_messages = crate::conversation::DefaultContextEngine
+            .assemble_messages(&config, true, &ctx)
             .await
             .expect("assemble messages");
-        let provider_messages =
-            provider_messages_with_kernel_binding(&config, session_id, &kernel_ctx).await;
+        let provider_messages = provider_messages_with_context(&config, &ctx).await;
 
         assert_eq!(
             kernel_messages, provider_messages,
-            "kernel-bound assembly should preserve profile projection parity"
+            "context-bound assembly should preserve profile projection parity"
         );
         assert!(
             kernel_messages.iter().any(|message| {
@@ -873,7 +776,7 @@ mod tests {
                         .as_str()
                         .is_some_and(|content| content.contains(profile_note))
             }),
-            "expected kernel-bound assembly to keep the profile block"
+            "expected context-bound assembly to keep the profile block"
         );
     }
 
@@ -887,7 +790,7 @@ mod tests {
             loong_contracts::Capability::MemoryRead,
         ]);
         let harness = TurnTestHarness::with_capabilities(capabilities);
-        let session_id = "kernel-durable-recall-session";
+        let ctx = harness.context();
         let sqlite_path = harness.temp_dir.join("memory.sqlite3");
         let sqlite_path_text = sqlite_path.display().to_string();
         let curated_memory_path = harness.temp_dir.join("MEMORY.md");
@@ -902,23 +805,15 @@ mod tests {
         config.tools.file_root = Some(harness.temp_dir.display().to_string());
         config.memory.sqlite_path = sqlite_path_text;
 
-        let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
-            "context-engine-governed-profile-projection",
-            60,
-            &config,
-        )
-        .expect("bootstrap kernel context with config");
-        let binding = ConversationRuntimeBinding::from_optional_kernel_context(Some(&kernel_ctx));
-        let kernel_messages = DefaultContextEngine
-            .assemble_messages(&config, session_id, true, binding)
+        let kernel_messages = crate::conversation::DefaultContextEngine
+            .assemble_messages(&config, true, &ctx)
             .await
             .expect("assemble messages");
-        let provider_messages =
-            provider_messages_with_kernel_binding(&config, session_id, &kernel_ctx).await;
+        let provider_messages = provider_messages_with_context(&config, &ctx).await;
 
         assert_eq!(
             kernel_messages, provider_messages,
-            "kernel-bound assembly should preserve durable recall projection parity"
+            "context-bound assembly should preserve durable recall projection parity"
         );
         assert!(
             kernel_messages.iter().any(|message| {
@@ -928,7 +823,7 @@ mod tests {
                             && content.contains("Remember the deploy freeze window.")
                     })
             }),
-            "expected kernel-bound assembly to keep the durable recall block"
+            "expected context-bound assembly to keep the durable recall block"
         );
     }
 
@@ -942,7 +837,8 @@ mod tests {
             loong_contracts::Capability::MemoryRead,
         ]);
         let harness = TurnTestHarness::with_capabilities(capabilities);
-        let session_id = "kernel-workspace-recall-session";
+        let ctx = harness.context();
+        let session_id = ctx.session().session_id();
         let sqlite_path = harness.temp_dir.join("memory.sqlite3");
         let sqlite_path_text = sqlite_path.display().to_string();
         let curated_memory_path = harness.temp_dir.join("MEMORY.md");
@@ -977,10 +873,8 @@ mod tests {
         )
         .expect("append turn 2 should succeed");
 
-        let binding =
-            ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx));
-        let assembled = DefaultContextEngine
-            .assemble_context(&config, session_id, true, binding)
+        let assembled = crate::conversation::DefaultContextEngine
+            .assemble_context(&config, true, &ctx)
             .await
             .expect("assemble context");
 
@@ -1017,7 +911,9 @@ mod tests {
 
     #[cfg(feature = "memory-sqlite")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::await_holding_lock)] // Both projections reread process env; serialize with env-mutating tests.
     async fn default_engine_kernel_bound_messages_match_provider_governed_profile_projection() {
+        let _env_guard = crate::test_support::lock_process_env_for_tests();
         let durable_flush_lock = crate::test_utils::durable_memory_flush_test_lock();
         let _guard = durable_flush_lock.lock().await;
         let capabilities = std::collections::BTreeSet::from([
@@ -1027,7 +923,8 @@ mod tests {
             loong_contracts::Capability::MemoryRead,
         ]);
         let harness = TurnTestHarness::with_capabilities(capabilities);
-        let session_id = "kernel-governed-profile-session";
+        let ctx = harness.context();
+        let session_id = ctx.session().session_id();
         let sqlite_path = harness.temp_dir.join("memory.sqlite3");
         let sqlite_path_text = sqlite_path.display().to_string();
         let profile_note = "# Identity\n\n- Name: Advisory shadow";
@@ -1050,18 +947,15 @@ mod tests {
         )
         .expect("append turn should succeed");
 
-        let binding =
-            ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx));
-        let kernel_messages = DefaultContextEngine
-            .assemble_messages(&config, session_id, true, binding)
+        let kernel_messages = crate::conversation::DefaultContextEngine
+            .assemble_messages(&config, true, &ctx)
             .await
             .expect("assemble messages");
-        let provider_messages =
-            provider_messages_with_kernel_binding(&config, session_id, &harness.kernel_ctx).await;
+        let provider_messages = provider_messages_with_context(&config, &ctx).await;
 
         assert_eq!(
             kernel_messages, provider_messages,
-            "kernel-bound assembly should preserve governed profile projection parity"
+            "context-bound assembly should preserve governed profile projection parity"
         );
     }
 }

@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 
 use loong_contracts::PolicyError;
-use loong_kernel::{PolicyExtension, PolicyExtensionContext};
 
 pub(crate) const SHELL_EXEC_APPROVAL_RULE_ID: &str = "shell_exec_requires_approval";
 const SHELL_INTERNAL_APPROVAL_CONTEXT_KEY: &str = "shell_approval";
@@ -204,87 +203,10 @@ pub(crate) fn shell_exec_matches_trusted_internal_approval(
     trusted_approval_key == Some(approval_key)
 }
 
-impl PolicyExtension for ToolPolicyExtension {
-    fn name(&self) -> &str {
-        "tool-policy"
-    }
-
-    fn authorize_extension(&self, context: &PolicyExtensionContext<'_>) -> Result<(), PolicyError> {
-        let Some(params) = context.request_parameters else {
-            return Ok(());
-        };
-
-        let (tool_name, payload) = effective_shell_request(params);
-        if tool_name != "shell.exec" {
-            return Ok(());
-        }
-
-        let Some(payload) = payload.and_then(serde_json::Value::as_object) else {
-            return Ok(());
-        };
-
-        self.authorize_shell_payload(tool_name, payload)
-    }
-}
-
-fn effective_shell_request(params: &serde_json::Value) -> (&str, Option<&serde_json::Value>) {
-    let raw_tool_name = params
-        .get("tool_name")
-        .and_then(|value| value.as_str())
-        .unwrap_or("");
-    let tool_name = super::canonical_tool_name(raw_tool_name);
-    (tool_name, params.get("payload"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use loong_contracts::{Capability, CapabilityToken, ExecutionRoute, HarnessKind};
-    use loong_kernel::{PolicyExtensionContext, VerticalPackManifest};
     use serde_json::json;
-    use std::collections::{BTreeMap, BTreeSet};
-
-    fn test_pack() -> VerticalPackManifest {
-        VerticalPackManifest {
-            pack_id: "test-pack".into(),
-            domain: "test".into(),
-            version: "0.1.0".into(),
-            default_route: ExecutionRoute {
-                harness_kind: HarnessKind::EmbeddedPi,
-                adapter: None,
-            },
-            allowed_connectors: BTreeSet::new(),
-            granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
-            metadata: BTreeMap::new(),
-        }
-    }
-
-    fn test_token() -> CapabilityToken {
-        CapabilityToken {
-            token_id: "tok-1".into(),
-            agent_id: "agent-1".into(),
-            pack_id: "test-pack".into(),
-            issued_at_epoch_s: 1000,
-            expires_at_epoch_s: 2000,
-            allowed_capabilities: BTreeSet::from([Capability::InvokeTool]),
-            generation: 1,
-        }
-    }
-
-    fn make_context<'a>(
-        pack: &'a loong_kernel::VerticalPackManifest,
-        token: &'a CapabilityToken,
-        caps: &'a BTreeSet<Capability>,
-        params: Option<&'a serde_json::Value>,
-    ) -> PolicyExtensionContext<'a> {
-        PolicyExtensionContext {
-            pack,
-            token,
-            now_epoch_s: 1500,
-            required_capabilities: caps,
-            request_parameters: params,
-        }
-    }
 
     #[test]
     fn denies_destructive_shell_commands() {
@@ -293,12 +215,9 @@ mod tests {
             BTreeSet::new(),
             ShellPolicyDefault::Deny,
         );
-        let pack = test_pack();
-        let token = test_token();
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({"tool_name": "shell.exec", "payload": {"command": "rm"}});
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        let result = ext.authorize_extension(&ctx);
+        let payload = json!({"command": "rm"});
+        let payload = payload.as_object().expect("object payload");
+        let result = ext.authorize_shell_payload("shell.exec", payload);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -313,51 +232,23 @@ mod tests {
             BTreeSet::from(["echo".to_owned()]),
             ShellPolicyDefault::Deny,
         );
-        let pack = test_pack();
-        let token = test_token();
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({"tool_name": "shell.exec", "payload": {"command": "echo"}});
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        assert!(ext.authorize_extension(&ctx).is_ok());
-    }
-
-    #[test]
-    fn normalizes_underscore_shell_alias() {
-        let ext = ToolPolicyExtension::new(
-            BTreeSet::from(["curl".to_owned()]),
-            BTreeSet::new(),
-            ShellPolicyDefault::Deny,
-        );
-        let pack = test_pack();
-        let token = test_token();
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({"tool_name": "shell_exec", "payload": {"command": "curl"}});
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        let result = ext.authorize_extension(&ctx);
-        assert!(matches!(
-            result.unwrap_err(),
-            PolicyError::ToolCallDenied { .. }
-        ));
+        let payload = json!({"command": "echo"});
+        let payload = payload.as_object().expect("object payload");
+        assert!(ext.authorize_shell_payload("shell.exec", payload).is_ok());
     }
 
     #[test]
     fn allows_trusted_shell_approval_context_when_default_policy_denies() {
         let ext =
             ToolPolicyExtension::new(BTreeSet::new(), BTreeSet::new(), ShellPolicyDefault::Deny);
-        let pack = test_pack();
-        let token = test_token();
-        let caps = BTreeSet::from([Capability::InvokeTool]);
         let approval_key = shell_exec_approval_key("cargo").expect("approval key");
-        let params = json!({
-            "tool_name": "shell.exec",
-            "payload": {
-                "command": "cargo",
-                "_loong": shell_exec_internal_approval_context(approval_key.as_str()),
-            }
+        let payload = json!({
+            "command": "cargo",
+            "_loong": shell_exec_internal_approval_context(approval_key.as_str()),
         });
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
+        let payload = payload.as_object().expect("object payload");
 
-        assert!(ext.authorize_extension(&ctx).is_ok());
+        assert!(ext.authorize_shell_payload("shell.exec", payload).is_ok());
     }
 
     #[test]
@@ -367,46 +258,18 @@ mod tests {
             BTreeSet::new(),
             ShellPolicyDefault::Deny,
         );
-        let pack = test_pack();
-        let token = test_token();
-        let caps = BTreeSet::from([Capability::InvokeTool]);
         let approval_key = shell_exec_approval_key("cargo").expect("approval key");
-        let params = json!({
-            "tool_name": "shell.exec",
-            "payload": {
-                "command": "cargo",
-                "_loong": shell_exec_internal_approval_context(approval_key.as_str()),
-            }
+        let payload = json!({
+            "command": "cargo",
+            "_loong": shell_exec_internal_approval_context(approval_key.as_str()),
         });
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
+        let payload = payload.as_object().expect("object payload");
 
         assert!(matches!(
-            ext.authorize_extension(&ctx).unwrap_err(),
+            ext.authorize_shell_payload("shell.exec", payload)
+                .unwrap_err(),
             PolicyError::ToolCallDenied { .. }
         ));
-    }
-
-    #[test]
-    fn keeps_non_shell_tools_allowed() {
-        let ext =
-            ToolPolicyExtension::new(BTreeSet::new(), BTreeSet::new(), ShellPolicyDefault::Deny);
-        let pack = test_pack();
-        let token = test_token();
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({"tool_name": "file.read", "payload": {"path": "/etc/passwd"}});
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        assert!(ext.authorize_extension(&ctx).is_ok());
-    }
-
-    #[test]
-    fn allows_when_no_request_parameters() {
-        let ext =
-            ToolPolicyExtension::new(BTreeSet::new(), BTreeSet::new(), ShellPolicyDefault::Deny);
-        let pack = test_pack();
-        let token = test_token();
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let ctx = make_context(&pack, &token, &caps, None);
-        assert!(ext.authorize_extension(&ctx).is_ok());
     }
 
     #[test]
@@ -416,25 +279,14 @@ mod tests {
             BTreeSet::new(),
             ShellPolicyDefault::Deny,
         );
-        let pack = test_pack();
-        let token = test_token();
-        let caps = BTreeSet::from([Capability::InvokeTool]);
 
-        // payload is a string instead of an object — no command can be extracted,
-        // so the extension defers to the tool adapter for error handling.
-        let params = json!({"tool_name": "shell.exec", "payload": "not an object"});
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        assert!(ext.authorize_extension(&ctx).is_ok());
+        let payload = json!({"args": ["hello"]});
+        let payload = payload.as_object().expect("object payload");
+        assert!(ext.authorize_shell_payload("shell.exec", payload).is_ok());
 
-        // payload.command is missing entirely
-        let params = json!({"tool_name": "shell.exec", "payload": {"args": ["hello"]}});
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        assert!(ext.authorize_extension(&ctx).is_ok());
-
-        // payload.command is empty after trimming
-        let params = json!({"tool_name": "shell.exec", "payload": {"command": "  "}});
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        assert!(ext.authorize_extension(&ctx).is_ok());
+        let payload = json!({"command": "  "});
+        let payload = payload.as_object().expect("object payload");
+        assert!(ext.authorize_shell_payload("shell.exec", payload).is_ok());
     }
 
     #[test]
@@ -444,12 +296,9 @@ mod tests {
             BTreeSet::new(),
             ShellPolicyDefault::Deny,
         );
-        let pack = test_pack();
-        let token = test_token();
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({"tool_name": "shell.exec", "payload": {"command": "/usr/bin/rm"}});
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        let result = ext.authorize_extension(&ctx);
+        let payload = json!({"command": "/usr/bin/rm"});
+        let payload = payload.as_object().expect("object payload");
+        let result = ext.authorize_shell_payload("shell.exec", payload);
         assert!(matches!(
             result.unwrap_err(),
             PolicyError::ToolCallDenied { .. }
@@ -463,14 +312,12 @@ mod tests {
             BTreeSet::new(),
             ShellPolicyDefault::Deny,
         );
-        let pack = test_pack();
-        let token = test_token();
-        let caps = BTreeSet::from([Capability::InvokeTool]);
         // Trailing slash should still extract "rm" as basename, not "".
-        let params = json!({"tool_name": "shell.exec", "payload": {"command": "/usr/bin/rm/"}});
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
+        let payload = json!({"command": "/usr/bin/rm/"});
+        let payload = payload.as_object().expect("object payload");
         assert!(matches!(
-            ext.authorize_extension(&ctx).unwrap_err(),
+            ext.authorize_shell_payload("shell.exec", payload)
+                .unwrap_err(),
             PolicyError::ToolCallDenied { .. }
         ));
     }
@@ -480,31 +327,11 @@ mod tests {
         // "rm.exe" is not in any list; default-deny mode blocks it.
         let ext =
             ToolPolicyExtension::new(BTreeSet::new(), BTreeSet::new(), ShellPolicyDefault::Deny);
-        let pack = test_pack();
-        let token = test_token();
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({"tool_name": "shell.exec", "payload": {"command": "C:\\Windows\\System32\\rm.exe"}});
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
+        let payload = json!({"command": "C:\\Windows\\System32\\rm.exe"});
+        let payload = payload.as_object().expect("object payload");
         assert!(matches!(
-            ext.authorize_extension(&ctx).unwrap_err(),
-            PolicyError::ToolCallDenied { .. }
-        ));
-    }
-
-    #[test]
-    fn normalizes_bare_shell_alias() {
-        let ext = ToolPolicyExtension::new(
-            BTreeSet::from(["rm".to_owned()]),
-            BTreeSet::new(),
-            ShellPolicyDefault::Deny,
-        );
-        let pack = test_pack();
-        let token = test_token();
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({"tool_name": "shell", "payload": {"command": "rm"}});
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        assert!(matches!(
-            ext.authorize_extension(&ctx).unwrap_err(),
+            ext.authorize_shell_payload("shell.exec", payload)
+                .unwrap_err(),
             PolicyError::ToolCallDenied { .. }
         ));
     }
@@ -516,13 +343,11 @@ mod tests {
             BTreeSet::new(),
             ShellPolicyDefault::Deny,
         );
-        let pack = test_pack();
-        let token = test_token();
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({"tool_name": "shell.exec", "payload": {"command": "RM"}});
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
+        let payload = json!({"command": "RM"});
+        let payload = payload.as_object().expect("object payload");
         assert!(matches!(
-            ext.authorize_extension(&ctx).unwrap_err(),
+            ext.authorize_shell_payload("shell.exec", payload)
+                .unwrap_err(),
             PolicyError::ToolCallDenied { .. }
         ));
     }
@@ -531,13 +356,11 @@ mod tests {
     fn default_deny_blocks_unknown_command() {
         let ext =
             ToolPolicyExtension::new(BTreeSet::new(), BTreeSet::new(), ShellPolicyDefault::Deny);
-        let pack = test_pack();
-        let token = test_token();
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params =
-            json!({"tool_name": "shell.exec", "payload": {"command": "some_unknown_tool"}});
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        let err = ext.authorize_extension(&ctx).unwrap_err();
+        let payload = json!({"command": "some_unknown_tool"});
+        let payload = payload.as_object().expect("object payload");
+        let err = ext
+            .authorize_shell_payload("shell.exec", payload)
+            .unwrap_err();
         assert!(matches!(err, PolicyError::ToolCallDenied { .. }));
     }
 
@@ -548,12 +371,9 @@ mod tests {
             BTreeSet::from(["git".to_owned()]),
             ShellPolicyDefault::Deny,
         );
-        let pack = test_pack();
-        let token = test_token();
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({"tool_name": "shell.exec", "payload": {"command": "git"}});
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        assert!(ext.authorize_extension(&ctx).is_ok());
+        let payload = json!({"command": "git"});
+        let payload = payload.as_object().expect("object payload");
+        assert!(ext.authorize_shell_payload("shell.exec", payload).is_ok());
     }
 
     #[test]
@@ -563,13 +383,10 @@ mod tests {
             BTreeSet::from(["mixedcmd".to_owned()]),
             ShellPolicyDefault::Deny,
         );
-        let pack = test_pack();
-        let token = test_token();
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({"tool_name": "shell.exec", "payload": {"command": "MiXeDCmd"}});
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
+        let payload = json!({"command": "MiXeDCmd"});
+        let payload = payload.as_object().expect("object payload");
         let err = ext
-            .authorize_extension(&ctx)
+            .authorize_shell_payload("shell.exec", payload)
             .expect_err("mixed-case commands should be denied before allowlist lookup");
         let PolicyError::ToolCallDenied { reason, .. } = err else {
             panic!("expected ToolCallDenied for mixed-case command");
@@ -599,12 +416,9 @@ mod tests {
     fn allow_mode_passes_unknown_command() {
         let ext =
             ToolPolicyExtension::new(BTreeSet::new(), BTreeSet::new(), ShellPolicyDefault::Allow);
-        let pack = test_pack();
-        let token = test_token();
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({"tool_name": "shell.exec", "payload": {"command": "anything"}});
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        assert!(ext.authorize_extension(&ctx).is_ok());
+        let payload = json!({"command": "anything"});
+        let payload = payload.as_object().expect("object payload");
+        assert!(ext.authorize_shell_payload("shell.exec", payload).is_ok());
     }
 
     // ── from_config tests ────────────────────────────────────────────────────
@@ -625,8 +439,8 @@ mod tests {
         }
     }
 
-    fn shell_params(command: &str) -> serde_json::Value {
-        json!({"tool_name": "shell.exec", "payload": {"command": command}})
+    fn shell_payload(command: &str) -> serde_json::Value {
+        json!({"command": command})
     }
 
     /// `from_config` with an empty deny list does NOT explicitly deny `rm`;
@@ -635,13 +449,12 @@ mod tests {
     fn from_config_empty_deny_rm_hits_default_deny_not_explicit_deny() {
         let rt = make_rt(&[], &[], ShellPolicyDefault::Deny);
         let ext = ToolPolicyExtension::from_config(&rt);
-        let pack = test_pack();
-        let token = test_token();
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = shell_params("rm");
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
+        let payload = shell_payload("rm");
+        let payload = payload.as_object().expect("object payload");
         // Blocked — but because of default-deny, not an explicit deny entry.
-        let err = ext.authorize_extension(&ctx).unwrap_err();
+        let err = ext
+            .authorize_shell_payload("shell.exec", payload)
+            .unwrap_err();
         match err {
             PolicyError::ToolCallDenied { reason, .. } => {
                 assert!(
@@ -666,13 +479,10 @@ mod tests {
     fn from_config_empty_allow_echo_is_denied() {
         let rt = make_rt(&[], &[], ShellPolicyDefault::Deny);
         let ext = ToolPolicyExtension::from_config(&rt);
-        let pack = test_pack();
-        let token = test_token();
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = shell_params("echo");
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
+        let payload = shell_payload("echo");
+        let payload = payload.as_object().expect("object payload");
         assert!(
-            ext.authorize_extension(&ctx).is_err(),
+            ext.authorize_shell_payload("shell.exec", payload).is_err(),
             "echo must be denied when allow list is empty"
         );
     }
@@ -683,15 +493,14 @@ mod tests {
     fn from_config_user_deny_list_is_exact() {
         let rt = make_rt(&["ls"], &["custom_danger"], ShellPolicyDefault::Deny);
         let ext = ToolPolicyExtension::from_config(&rt);
-        let pack = test_pack();
-        let token = test_token();
-        let caps = BTreeSet::from([Capability::InvokeTool]);
 
         // custom_danger → explicit deny: reason must say "blocked by shell policy",
         // not "not in the allow list" (which would indicate default-deny, not explicit deny).
-        let params = shell_params("custom_danger");
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        let err = ext.authorize_extension(&ctx).unwrap_err();
+        let payload = shell_payload("custom_danger");
+        let payload = payload.as_object().expect("object payload");
+        let err = ext
+            .authorize_shell_payload("shell.exec", payload)
+            .unwrap_err();
         match err {
             PolicyError::ToolCallDenied { reason, .. } => {
                 assert!(
@@ -710,14 +519,16 @@ mod tests {
         }
 
         // ls → allowed
-        let params = shell_params("ls");
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        assert!(ext.authorize_extension(&ctx).is_ok());
+        let payload = shell_payload("ls");
+        let payload = payload.as_object().expect("object payload");
+        assert!(ext.authorize_shell_payload("shell.exec", payload).is_ok());
 
         // unknown_cmd → not in any list, hits default-deny (NOT explicit deny)
-        let params = shell_params("unknown_cmd");
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        let err = ext.authorize_extension(&ctx).unwrap_err();
+        let payload = shell_payload("unknown_cmd");
+        let payload = payload.as_object().expect("object payload");
+        let err = ext
+            .authorize_shell_payload("shell.exec", payload)
+            .unwrap_err();
         match err {
             PolicyError::ToolCallDenied { reason, .. } => {
                 assert!(
@@ -742,11 +553,8 @@ mod tests {
     fn from_config_allow_mode_passes_unknown() {
         let rt = make_rt(&[], &[], ShellPolicyDefault::Allow);
         let ext = ToolPolicyExtension::from_config(&rt);
-        let pack = test_pack();
-        let token = test_token();
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = shell_params("anything_unknown");
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        assert!(ext.authorize_extension(&ctx).is_ok());
+        let payload = shell_payload("anything_unknown");
+        let payload = payload.as_object().expect("object payload");
+        assert!(ext.authorize_shell_payload("shell.exec", payload).is_ok());
     }
 }

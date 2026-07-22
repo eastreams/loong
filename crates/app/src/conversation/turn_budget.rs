@@ -93,6 +93,7 @@ pub enum SafeLaneContinuationBudgetDecision {
 #[serde(rename_all = "snake_case")]
 pub enum SafeLaneFailureRouteReason {
     RetryableFailure,
+    InputRepairRequired,
     RoundBudgetExhausted,
     PolicyDenied,
     NonRetryableFailure,
@@ -107,6 +108,7 @@ impl SafeLaneFailureRouteReason {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::RetryableFailure => "retryable_failure",
+            Self::InputRepairRequired => "input_repair_required",
             Self::RoundBudgetExhausted => "round_budget_exhausted",
             Self::PolicyDenied => "policy_denied",
             Self::NonRetryableFailure => "non_retryable_failure",
@@ -121,6 +123,7 @@ impl SafeLaneFailureRouteReason {
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim() {
             "retryable_failure" => Some(Self::RetryableFailure),
+            "input_repair_required" => Some(Self::InputRepairRequired),
             "round_budget_exhausted" => Some(Self::RoundBudgetExhausted),
             "policy_denied" => Some(Self::PolicyDenied),
             "non_retryable_failure" => Some(Self::NonRetryableFailure),

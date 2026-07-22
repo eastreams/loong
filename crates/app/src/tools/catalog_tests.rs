@@ -2,6 +2,86 @@ use super::*;
 use tempfile::tempdir;
 
 #[test]
+fn tool_view_preserves_runtime_path_segments() {
+    let exact_path = ToolPath::new(["alpha.beta"]).expect("test tool path must be valid");
+    let split_path = ToolPath::new(["alpha", "beta"]).expect("test tool path must be valid");
+    let mut view = ToolView::default();
+    view.insert_registration(
+        exact_path.clone(),
+        &loong_runtime::tool_plane::ToolRegistration::discoverable("alpha.beta"),
+    );
+    view.insert_registration(
+        split_path.clone(),
+        &loong_runtime::tool_plane::ToolRegistration::discoverable("alpha_beta_split"),
+    );
+
+    assert!(view.contains_path(&exact_path));
+    assert!(view.contains_path(&split_path));
+    assert_eq!(view.resolve_path("/alpha.beta"), Some(&exact_path));
+    assert_eq!(view.resolve_path("/alpha/beta"), Some(&split_path));
+}
+
+#[test]
+fn tool_view_filter_preserves_path_and_provider_identity() {
+    let path = ToolPath::new(["fs", "read"]).expect("test tool path must be valid");
+    let mut view = ToolView::default();
+    view.insert_registration(
+        path.clone(),
+        &loong_runtime::tool_plane::ToolRegistration::Direct {
+            provider_name: "read".to_owned(),
+        },
+    );
+
+    let filtered = view.filter(|_, provider_name| provider_name == "read");
+
+    assert!(filtered.contains_path(&path));
+    assert!(filtered.contains("read"));
+    assert!(
+        !filtered.contains_path(&ToolPath::new(["read"]).expect("test tool path must be valid"))
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn session_policy_status_separates_exact_paths_from_provider_names() {
+    let embedded_dot = ToolPath::new(["alpha.beta"]).expect("test tool path must be valid");
+    let split_path = ToolPath::new(["alpha", "beta"]).expect("test tool path must be valid");
+    let mut base = ToolView::default();
+    base.insert_registration(
+        embedded_dot.clone(),
+        &loong_runtime::tool_plane::ToolRegistration::direct("alpha_beta"),
+    );
+    base.insert_registration(
+        split_path,
+        &loong_runtime::tool_plane::ToolRegistration::direct("alpha_beta_split"),
+    );
+    let effective = base.filter(|path, _| path == &embedded_dot);
+    let policy = crate::session::repository::SessionToolPolicyRecord {
+        session_id: "session".to_owned(),
+        requested_tool_ids: vec![embedded_dot.to_string()],
+        runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
+        updated_at: 1,
+    };
+    let projection = crate::context::SessionToolPolicyProjection {
+        base_tool_view: base.clone(),
+        effective_tool_view: effective,
+        session_tool_policy: Some(policy),
+        delegate_runtime_narrowing: None,
+        effective_runtime_narrowing: None,
+    };
+
+    let status = crate::tools::session::build_session_tool_policy_status(&projection, &base)
+        .expect("exact policy status should project");
+
+    assert_eq!(status.requested_tool_ids, ["/alpha.beta"]);
+    assert_eq!(status.visible_requested_tool_ids, ["alpha_beta"]);
+    assert!(status.base_tool_ids.contains(&"/alpha.beta".to_owned()));
+    assert!(status.base_tool_ids.contains(&"/alpha/beta".to_owned()));
+    assert_eq!(status.effective_tool_ids, ["/alpha.beta"]);
+    assert_eq!(status.visible_effective_tool_ids, ["alpha_beta"]);
+}
+
+#[test]
 fn memory_file_root_visibility_gate_requires_safe_root_configuration() {
     let hidden_config = ToolConfig::default();
     assert!(!tool_visibility_gate_enabled_for_runtime_view(
@@ -301,21 +381,6 @@ fn delegate_child_tool_view_exposes_allowlisted_bash_exec_when_runtime_ready() {
 #[test]
 fn scheduling_class_marks_parallel_safe_subset() {
     let catalog = tool_catalog();
-    assert_eq!(
-        catalog
-            .resolve("file.read")
-            .expect("file.read alias")
-            .scheduling_class(),
-        ToolSchedulingClass::ParallelSafe
-    );
-    #[cfg(feature = "tool-file")]
-    assert_eq!(
-        catalog
-            .resolve("file.read")
-            .expect("file.read alias")
-            .scheduling_class(),
-        ToolSchedulingClass::ParallelSafe
-    );
     #[cfg(feature = "tool-file")]
     assert_eq!(
         catalog
@@ -368,16 +433,6 @@ fn tool_catalog_entries_expose_concurrency_class() {
     assert!(find_tool_catalog_entry("tool.search").is_none());
     assert!(find_tool_catalog_entry("tool.invoke").is_none());
 
-    let read = find_tool_catalog_entry("file.read").expect("file.read catalog entry");
-    assert_eq!(read.scheduling_class, ToolSchedulingClass::ParallelSafe);
-    assert_eq!(read.concurrency_class, ToolConcurrencyClass::ReadOnly);
-    assert_eq!(read.surface_id, Some("read"));
-
-    let write = find_tool_catalog_entry("file.write").expect("file.write catalog entry");
-    assert_eq!(write.scheduling_class, ToolSchedulingClass::SerialOnly);
-    assert_eq!(write.concurrency_class, ToolConcurrencyClass::Mutating);
-    assert_eq!(write.surface_id, Some("write"));
-
     let delegate_async =
         find_tool_catalog_entry("delegate_async").expect("delegate_async catalog entry");
     assert_eq!(
@@ -403,20 +458,6 @@ fn tool_catalog_entries_expose_concurrency_class() {
         );
     }
 
-    let write_alias = find_tool_catalog_entry("file.write").expect("file.write catalog entry");
-    assert_eq!(
-        write_alias.scheduling_class,
-        ToolSchedulingClass::SerialOnly
-    );
-    assert_eq!(
-        write_alias.concurrency_class,
-        ToolConcurrencyClass::Mutating
-    );
-    assert_eq!(write_alias.surface_id, Some("write"));
-    assert!(write_alias.usage_guidance.is_some_and(
-        |guidance| guidance.contains("whole-file") || guidance.contains("file creation")
-    ));
-
     let bash_exec = find_tool_catalog_entry("bash.exec").expect("bash.exec catalog entry");
     assert_eq!(bash_exec.scheduling_class, ToolSchedulingClass::SerialOnly);
     assert_eq!(bash_exec.concurrency_class, ToolConcurrencyClass::Mutating);
@@ -427,17 +468,13 @@ fn tool_catalog_entries_expose_concurrency_class() {
 fn tool_catalog_resolve_preserves_canonical_provider_and_alias_lookup() {
     let catalog = tool_catalog();
 
-    let canonical = catalog.resolve("file.read").expect("canonical lookup");
-    let provider_name = catalog.resolve("file_read").expect("provider lookup");
-    let write_alias = catalog.resolve("file_write").expect("write alias");
-    let edit_alias = catalog.resolve("file_edit").expect("edit alias");
     let alias = catalog.resolve("shell").expect("alias lookup");
 
-    assert_eq!(canonical.name, "read");
-    assert_eq!(provider_name.name, "read");
-    assert_eq!(write_alias.name, "write");
-    assert_eq!(edit_alias.name, "edit");
     assert_eq!(alias.name, "shell.exec");
+    assert!(catalog.resolve("file.read").is_none());
+    assert!(catalog.resolve("file_read").is_none());
+    assert!(catalog.resolve("file_write").is_none());
+    assert!(catalog.resolve("file_edit").is_none());
     assert!(catalog.resolve("tool_search").is_none());
     assert!(catalog.resolve("tool_invoke").is_none());
 }
@@ -666,8 +703,6 @@ fn autonomy_capability_action_is_independent_from_governance_profile() {
 #[test]
 fn autonomy_capability_action_classifies_representative_tool_families() {
     let expectations = [
-        ("file.read", CapabilityActionClass::ExecuteExisting),
-        ("file.edit", CapabilityActionClass::ExecuteExisting),
         ("shell.exec", CapabilityActionClass::ExecuteExisting),
         ("config.import", CapabilityActionClass::ExecuteExisting),
         ("provider.switch", CapabilityActionClass::RuntimeSwitch),
@@ -719,8 +754,6 @@ fn autonomy_capability_action_catalog_entries_expose_serializable_metadata() {
         find_tool_catalog_entry("delegate_async").expect("delegate_async catalog entry");
     let delegate_async_value =
         serde_json::to_value(delegate_async).expect("serialize delegate_async catalog entry");
-    let read = find_tool_catalog_entry("file.read").expect("file.read catalog entry");
-    let read_value = serde_json::to_value(read).expect("serialize file.read catalog entry");
     let bash = find_tool_catalog_entry("bash.exec").expect("bash.exec catalog entry");
     let bash_value = serde_json::to_value(bash).expect("serialize bash.exec catalog entry");
 
@@ -733,7 +766,6 @@ fn autonomy_capability_action_catalog_entries_expose_serializable_metadata() {
         "topology_expand"
     );
     assert_eq!(delegate_async_value["concurrency_class"], "mutating");
-    assert_eq!(read_value["concurrency_class"], "read_only");
     assert_eq!(bash_value["concurrency_class"], "mutating");
 }
 
@@ -885,36 +917,17 @@ fn sessions_list_definition_and_hint_surface_offset_pagination() {
     assert!(has_offset_parameter);
 }
 
+#[cfg(feature = "tool-file")]
 #[test]
-fn read_definitions_surface_line_window_fields() {
+fn migrated_file_tools_have_no_legacy_execution_owner() {
     let catalog = tool_catalog();
-    let direct_descriptor = catalog.descriptor("read").expect("read descriptor");
-    let direct_definition = direct_descriptor.provider_definition();
-    let direct_properties = &direct_definition["function"]["parameters"]["properties"];
-    let direct_parameter_types = direct_descriptor.parameter_types();
 
-    assert!(direct_properties.get("offset").is_some());
-    assert!(direct_properties.get("limit").is_some());
-    assert!(
-        direct_descriptor
-            .argument_hint()
-            .contains("offset?:integer")
-    );
-    assert!(direct_descriptor.argument_hint().contains("limit?:integer"));
-    assert!(direct_parameter_types.contains(&("offset", "integer")));
-    assert!(direct_parameter_types.contains(&("limit", "integer")));
-
-    let file_descriptor = catalog.resolve("file.read").expect("file.read alias");
-    let file_definition = file_descriptor.provider_definition();
-    let file_properties = &file_definition["function"]["parameters"]["properties"];
-    let file_parameter_types = file_descriptor.parameter_types();
-
-    assert!(file_properties.get("offset").is_some());
-    assert!(file_properties.get("limit").is_some());
-    assert!(file_descriptor.argument_hint().contains("offset?:integer"));
-    assert!(file_descriptor.argument_hint().contains("limit?:integer"));
-    assert!(file_parameter_types.contains(&("offset", "integer")));
-    assert!(file_parameter_types.contains(&("limit", "integer")));
+    for name in ["read", "write", "edit", "glob.search", "content.search"] {
+        assert!(
+            catalog.descriptor(name).is_none(),
+            "{name} metadata must be owned only by runtime registration"
+        );
+    }
 }
 
 #[test]

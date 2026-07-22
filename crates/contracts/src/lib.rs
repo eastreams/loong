@@ -2,6 +2,8 @@
 
 mod action_grant;
 mod audit_types;
+mod authorization_evidence;
+mod capabilities;
 mod child_process_env;
 mod clock;
 mod contracts;
@@ -17,17 +19,26 @@ mod secret_ref;
 mod secret_resolver;
 mod secret_value;
 mod task_state;
+mod tool_path;
 mod tool_types;
 mod work_types;
 mod workflow_types;
 
 pub use action_grant::{
-    GrantId, PolicyDecision, PolicyEntry, PolicyEvaluation, PolicyGrant, PolicyId, PolicyOutcome,
-    PolicyReport,
+    GrantId, PermissionResolution, PolicyDecision, PolicyEntry, PolicyEvaluation, PolicyGrant,
+    PolicyId, PolicyOutcome, PolicyRegistration, PolicyRegistrationSource, PolicyReport,
 };
 pub use audit_types::{
-    AuditEvent, AuditEventKind, ExecutionPlane, PlaneTier, ToolInvocationOutcome,
+    ActionExecutionEvent, AuditEvent, AuditEventKind, ExecutionPlane,
+    HistoricalToolInvocationOutcome, PlaneTier, RuntimeOperationOutcome,
 };
+pub use authorization_evidence::{
+    AuthorizationActionSnapshot, AuthorizationAttempt, AuthorizationAttemptEvent,
+    AuthorizationAttemptId, AuthorizationDenial, AuthorizationEvidence, AuthorizationFailure,
+    AuthorizationPermissionAuthority, AuthorizationPermissionInteraction, AuthorizationPolicyEvent,
+    AuthorizationScope, AuthorizationSubject, AuthorizationTerminalOutcome,
+};
+pub use capabilities::Capabilities;
 pub use child_process_env::{
     HIGH_RISK_CHILD_PROCESS_ENV_VARS, child_process_env_var_is_allowed, sanitized_child_process_env,
 };
@@ -56,9 +67,10 @@ pub use secret_ref::SecretRef;
 pub use secret_resolver::{SecretResolutionError, SecretResolver};
 pub use secret_value::SecretValue;
 pub use task_state::TaskState;
+pub use tool_path::{ToolPath, ToolPathError};
 pub use tool_types::{
-    ToolCoreOutcome, ToolCoreRequest, ToolExecutionError, ToolExtensionOutcome,
-    ToolExtensionRequest, ToolInputError, ToolOutcome, ToolPath, ToolSpec, ToolTier,
+    ToolCoreOutcome, ToolCoreRequest, ToolExtensionOutcome, ToolExtensionRequest, ToolInputError,
+    ToolSchedulingClass, ToolSpec, ToolTier,
 };
 pub use work_types::{
     WorkRuntimeHealthSnapshot, WorkSourceKind, WorkUnitEventRecord, WorkUnitKind,

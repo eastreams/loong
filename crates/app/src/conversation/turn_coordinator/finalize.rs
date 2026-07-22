@@ -3,37 +3,28 @@ use super::*;
 pub(super) async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized>(
     config: &LoongConfig,
     runtime: &R,
-    session_id: &str,
+    ctx: &Context<'_>,
     user_input: &str,
     tail_phase: &ProviderTurnReplyTailPhase,
     usage: Option<Value>,
     checkpoint: &TurnCheckpointSnapshot,
-    binding: ConversationRuntimeBinding<'_>,
 ) -> CliResult<ConversationTurnOutcome> {
-    let Some(persistence_mode) = checkpoint.finalization.persistence_mode() else {
+    let session_id = ctx.session().session_id();
+    if checkpoint.finalization.persistence_mode().is_none() {
         return Ok(ConversationTurnOutcome {
             reply: tail_phase.reply().to_owned(),
             usage,
         });
-    };
-    persist_reply_turns_with_mode(
-        runtime,
-        session_id,
-        user_input,
-        tail_phase.reply(),
-        persistence_mode,
-        binding,
-    )
-    .await?;
+    }
+    persist_reply_turns(runtime, user_input, tail_phase.reply(), ctx).await?;
 
     persist_turn_checkpoint_event(
         runtime,
-        session_id,
         checkpoint,
         TurnCheckpointStage::PostPersist,
         TurnCheckpointFinalizationProgress::pending(checkpoint),
         None,
-        binding,
+        ctx,
     )
     .await?;
 
@@ -48,14 +39,17 @@ pub(super) async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized
     }
 
     let after_turn_status = if checkpoint.finalization.runs_after_turn() {
-        if let Some(kernel_ctx) = binding.kernel_context() {
+        if matches!(
+            ctx.session().session_mode,
+            GovernedSessionMode::MutatingCapable
+        ) && ctx.allowed_capabilities().contains(Capability::MemoryWrite)
+        {
             match runtime
                 .after_turn(
-                    session_id,
                     user_input,
                     tail_phase.reply(),
                     tail_phase.after_turn_messages(),
-                    kernel_ctx,
+                    ctx,
                 )
                 .await
             {
@@ -63,7 +57,6 @@ pub(super) async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized
                 Err(error) => {
                     persist_turn_checkpoint_event(
                         runtime,
-                        session_id,
                         checkpoint,
                         TurnCheckpointStage::FinalizationFailed,
                         TurnCheckpointFinalizationProgress {
@@ -74,7 +67,7 @@ pub(super) async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized
                             step: TurnCheckpointFailureStep::AfterTurn,
                             error: error.clone(),
                         }),
-                        binding,
+                        ctx,
                     )
                     .await?;
                     return Err(error);
@@ -90,10 +83,10 @@ pub(super) async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized
         match maybe_compact_context(
             config,
             runtime,
-            session_id,
+            ctx,
             tail_phase.after_turn_messages(),
             tail_phase.estimated_tokens(),
-            binding,
+            tail_phase.runtime_self_continuity(),
             false,
         )
         .await
@@ -102,7 +95,6 @@ pub(super) async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized
             Err(error) => {
                 persist_turn_checkpoint_event(
                     runtime,
-                    session_id,
                     checkpoint,
                     TurnCheckpointStage::FinalizationFailed,
                     TurnCheckpointFinalizationProgress {
@@ -113,7 +105,7 @@ pub(super) async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized
                         step: TurnCheckpointFailureStep::Compaction,
                         error: error.clone(),
                     }),
-                    binding,
+                    ctx,
                 )
                 .await?;
                 return Err(error);
@@ -124,7 +116,6 @@ pub(super) async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized
     };
     persist_turn_checkpoint_event(
         runtime,
-        session_id,
         checkpoint,
         TurnCheckpointStage::Finalized,
         TurnCheckpointFinalizationProgress {
@@ -132,7 +123,7 @@ pub(super) async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized
             compaction: compaction_status,
         },
         None,
-        binding,
+        ctx,
     )
     .await?;
 
@@ -160,18 +151,16 @@ pub(super) async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized
 
 pub(super) async fn persist_resolved_provider_error_checkpoint<R: ConversationRuntime + ?Sized>(
     runtime: &R,
-    session_id: &str,
     checkpoint: &TurnCheckpointSnapshot,
-    binding: ConversationRuntimeBinding<'_>,
+    ctx: &Context<'_>,
 ) -> CliResult<()> {
     persist_turn_checkpoint_event(
         runtime,
-        session_id,
         checkpoint,
         TurnCheckpointStage::Finalized,
         TurnCheckpointFinalizationProgress::pending(checkpoint),
         None,
-        binding,
+        ctx,
     )
     .await
 }
@@ -179,22 +168,19 @@ pub(super) async fn persist_resolved_provider_error_checkpoint<R: ConversationRu
 pub(super) async fn apply_resolved_provider_turn<R: ConversationRuntime + ?Sized>(
     config: &LoongConfig,
     runtime: &R,
-    session_id: &str,
+    ctx: &Context<'_>,
     user_input: &str,
     preparation: &ProviderTurnPreparation,
     resolved: &ResolvedProviderTurn,
-    binding: ConversationRuntimeBinding<'_>,
     observer: Option<&ConversationTurnObserverHandle>,
 ) -> CliResult<ConversationTurnOutcome> {
     if let Some(error_text) = resolved.provider_error_text() {
-        emit_provider_failover_trust_event_if_needed(
-            config, runtime, session_id, error_text, binding,
-        )
-        .await;
+        emit_provider_failover_trust_event_if_needed(config, runtime, error_text, ctx).await;
     }
     let terminal_phase = resolved.terminal_phase(&preparation.session);
     let completion_event = match &terminal_phase {
         ProviderTurnTerminalPhase::PersistReply(phase) => {
+            let phase = phase.as_ref();
             let message_count = phase.tail_phase.after_turn_messages().len();
             let estimated_tokens = phase.tail_phase.estimated_tokens();
             let finalizing_event =
@@ -207,9 +193,7 @@ pub(super) async fn apply_resolved_provider_turn<R: ConversationRuntime + ?Sized
         }
         ProviderTurnTerminalPhase::ReturnError(_) => None,
     };
-    let apply_result = terminal_phase
-        .apply(config, runtime, session_id, user_input, binding)
-        .await;
+    let apply_result = terminal_phase.apply(config, runtime, ctx, user_input).await;
 
     let completion_observation = match (completion_event, apply_result.is_ok()) {
         (Some(event), true) => Some(event),

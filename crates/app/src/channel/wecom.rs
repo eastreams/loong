@@ -7,7 +7,6 @@ use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::CliResult;
-use crate::KernelContext;
 use crate::config::{
     ChannelDefaultAccountSelectionSource, LoongConfig, ResolvedWecomChannelConfig,
 };
@@ -293,10 +292,12 @@ pub(super) async fn run_wecom_channel(
     resolved_path: &std::path::Path,
     selected_by_default: bool,
     default_account_source: ChannelDefaultAccountSelectionSource,
-    kernel_ctx: KernelContext,
+    execution_runtime: Arc<loong_runtime::runtime::Runtime<crate::RuntimeContextFactory>>,
+    agent_id: impl Into<String>,
     runtime: Arc<ChannelOperationRuntimeTracker>,
     stop: ChannelServeStopHandle,
 ) -> CliResult<()> {
+    let agent_id = agent_id.into();
     let connection = resolve_wecom_connection_config(resolved)?;
     let _owner_guard = acquire_wecom_connection_owner(resolved).await?;
 
@@ -318,7 +319,8 @@ pub(super) async fn run_wecom_channel(
             resolved_path,
             resolved,
             &connection,
-            kernel_ctx.clone(),
+            execution_runtime.clone(),
+            agent_id.clone(),
             runtime.clone(),
             stop.clone(),
         )
@@ -359,7 +361,8 @@ async fn run_wecom_serve_session(
     resolved_path: &std::path::Path,
     resolved: &ResolvedWecomChannelConfig,
     connection: &WecomConnectionConfig,
-    kernel_ctx: KernelContext,
+    execution_runtime: Arc<loong_runtime::runtime::Runtime<crate::RuntimeContextFactory>>,
+    agent_id: impl AsRef<str>,
     runtime: Arc<ChannelOperationRuntimeTracker>,
     stop: ChannelServeStopHandle,
 ) -> CliResult<WecomServeSessionOutcome> {
@@ -370,12 +373,6 @@ async fn run_wecom_serve_session(
     let ping_interval = Duration::from_secs(resolved.ping_interval_s.max(1));
     let mut ping_timer = tokio::time::interval(ping_interval);
     ping_timer.tick().await;
-    let provider_ctx = Arc::new(KernelContext {
-        kernel: kernel_ctx.kernel.clone(),
-        pack: kernel_ctx.pack.clone(),
-        token: kernel_ctx.token.clone(),
-        tool_runtime_config: kernel_ctx.tool_runtime_config.clone(),
-    });
     let access_policy = build_wecom_access_policy(resolved);
 
     loop {
@@ -418,7 +415,8 @@ async fn run_wecom_serve_session(
                 config,
                 Some(resolved_path),
                 &parsed.message,
-                provider_ctx.as_ref(),
+                &execution_runtime,
+                agent_id.as_ref(),
                 ChannelTurnFeedbackPolicy::final_trace_significant(),
             )
             .await;
@@ -870,7 +868,6 @@ mod tests {
 
     use crate::channel::ChannelPlatform;
     use crate::config::ProviderConfig;
-    use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_test_kernel_context};
     use crate::test_utils::{ScopedEnv, unique_temp_dir};
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1501,8 +1498,10 @@ mod tests {
             .await
             .expect("start runtime tracker"),
         );
-        let kernel_ctx = bootstrap_test_kernel_context("wecom-channel-test", DEFAULT_TOKEN_TTL_S)
-            .expect("bootstrap kernel context");
+        let owner = crate::test_support::runtime_session_for_test(
+            "wecom-channel-test",
+            crate::tools::runtime_tool_view_from_loong_config(&config),
+        );
         let stop = ChannelServeStopHandle::new();
         let stop_for_task = stop.clone();
         let config_for_task = config.clone();
@@ -1514,7 +1513,8 @@ mod tests {
                 resolved_path.as_path(),
                 &resolved_for_task,
                 &connection,
-                kernel_ctx,
+                owner.runtime.clone(),
+                owner.session.agent_id().to_owned(),
                 runtime_for_task,
                 stop_for_task,
             )
@@ -1594,9 +1594,10 @@ mod tests {
             .await
             .expect("start runtime tracker"),
         );
-        let kernel_ctx =
-            bootstrap_test_kernel_context("wecom-channel-test-denied", DEFAULT_TOKEN_TTL_S)
-                .expect("bootstrap kernel context");
+        let owner = crate::test_support::runtime_session_for_test(
+            "wecom-channel-test-denied",
+            crate::tools::runtime_tool_view_from_loong_config(&config),
+        );
         let stop = ChannelServeStopHandle::new();
         let stop_for_task = stop.clone();
         let config_for_task = config.clone();
@@ -1608,7 +1609,8 @@ mod tests {
                 resolved_path.as_path(),
                 &resolved_for_task,
                 &connection,
-                kernel_ctx,
+                owner.runtime.clone(),
+                owner.session.agent_id().to_owned(),
                 runtime_for_task,
                 stop_for_task,
             )
@@ -1671,9 +1673,10 @@ mod tests {
             .await
             .expect("start reconnect runtime tracker"),
         );
-        let kernel_ctx =
-            bootstrap_test_kernel_context("wecom-channel-test-reconnect", DEFAULT_TOKEN_TTL_S)
-                .expect("bootstrap reconnect kernel context");
+        let owner = crate::test_support::runtime_session_for_test(
+            "wecom-channel-test-reconnect",
+            crate::tools::runtime_tool_view_from_loong_config(&config),
+        );
         let stop = ChannelServeStopHandle::new();
         let stop_for_task = stop.clone();
         let config_for_task = config.clone();
@@ -1686,7 +1689,8 @@ mod tests {
                 resolved_path.as_path(),
                 true,
                 ChannelDefaultAccountSelectionSource::ExplicitDefault,
-                kernel_ctx,
+                owner.runtime.clone(),
+                owner.session.agent_id().to_owned(),
                 runtime_for_task,
                 stop_for_task,
             )

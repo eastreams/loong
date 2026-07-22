@@ -1,20 +1,16 @@
 use loong_app as mvp;
 use serde_json::{Value, json};
 
-pub(crate) async fn load_session_prompt_frame_payload(
+pub(crate) async fn load_session_prompt_frame_payload<
+    R: mvp::conversation::ConversationRuntime + ?Sized,
+>(
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
-    session_id: &str,
+    context: &mvp::Context<'_>,
+    runtime: &R,
 ) -> Value {
     let summary_limit = prompt_frame_summary_limit(memory_config);
-    let binding = mvp::conversation::ConversationRuntimeBinding::direct();
-    let session_store_config = mvp::session::store::SessionStoreConfig::from(memory_config);
-    let summary_result = mvp::conversation::load_prompt_frame_event_summary(
-        session_id,
-        summary_limit,
-        binding,
-        &session_store_config,
-    )
-    .await;
+    let summary_result =
+        mvp::conversation::load_prompt_frame_event_summary(summary_limit, context, runtime).await;
 
     match summary_result {
         Ok(summary) => {

@@ -1,7 +1,7 @@
 use serde::Serialize;
 
 pub use super::super::tool_result_line::ToolResultLine;
-use super::super::turn_engine::{TurnFailure, TurnResult};
+use super::super::turn_engine::{ToolInputFailure, TurnFailure, TurnResult};
 use super::{
     ToolResultContinuation, parse_tool_result_continuation, parse_tool_result_followup_context,
     sanitize_reply_text,
@@ -9,9 +9,20 @@ use super::{
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolDrivenFollowupPayload {
-    ToolResult { text: String },
-    ToolFailure { reason: String, retryable: bool },
-    DiscoveryRecovery { reason: String },
+    ToolResult {
+        text: String,
+    },
+    ToolFailure {
+        reason: String,
+        retryable: bool,
+    },
+    ToolInputFailure {
+        reason: String,
+        input: ToolInputFailure,
+    },
+    DiscoveryRecovery {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -106,7 +117,9 @@ impl ToolDrivenFollowupPayload {
     pub fn kind(&self) -> ToolDrivenFollowupKind {
         match self {
             Self::ToolResult { .. } => ToolDrivenFollowupKind::ToolResult,
-            Self::ToolFailure { .. } => ToolDrivenFollowupKind::ToolFailure,
+            Self::ToolFailure { .. } | Self::ToolInputFailure { .. } => {
+                ToolDrivenFollowupKind::ToolFailure
+            }
             Self::DiscoveryRecovery { .. } => ToolDrivenFollowupKind::DiscoveryRecovery,
         }
     }
@@ -114,7 +127,9 @@ impl ToolDrivenFollowupPayload {
     pub fn label(&self) -> ToolDrivenFollowupLabel {
         match self {
             Self::ToolResult { .. } => ToolDrivenFollowupLabel::ToolResult,
-            Self::ToolFailure { .. } => ToolDrivenFollowupLabel::ToolFailure,
+            Self::ToolFailure { .. } | Self::ToolInputFailure { .. } => {
+                ToolDrivenFollowupLabel::ToolFailure
+            }
             Self::DiscoveryRecovery { .. } => ToolDrivenFollowupLabel::DiscoveryRecovery,
         }
     }
@@ -124,6 +139,9 @@ impl ToolDrivenFollowupPayload {
         match self {
             Self::ToolResult { text } => ToolDrivenFollowupTextRef::new(label, text.as_str()),
             Self::ToolFailure { reason, .. } => {
+                ToolDrivenFollowupTextRef::new(label, reason.as_str())
+            }
+            Self::ToolInputFailure { reason, .. } => {
                 ToolDrivenFollowupTextRef::new(label, reason.as_str())
             }
             Self::DiscoveryRecovery { reason } => {
@@ -140,7 +158,7 @@ impl ToolDrivenFollowupPayload {
             Self::ToolFailure {
                 retryable: true,
                 ..
-            }
+            } | Self::ToolInputFailure { .. }
         )
     }
 
@@ -148,7 +166,7 @@ impl ToolDrivenFollowupPayload {
         match self {
             Self::DiscoveryRecovery { .. } => true,
             Self::ToolResult { .. } => self.has_nonterminal_tool_result_continuation(),
-            Self::ToolFailure { .. } => false,
+            Self::ToolFailure { .. } | Self::ToolInputFailure { .. } => false,
         }
     }
 
@@ -165,7 +183,9 @@ impl ToolDrivenFollowupPayload {
                     .as_ref()
                     .and_then(|context| parse_tool_result_continuation(&context.payload_json))
             }
-            Self::ToolFailure { .. } | Self::DiscoveryRecovery { .. } => None,
+            Self::ToolFailure { .. }
+            | Self::ToolInputFailure { .. }
+            | Self::DiscoveryRecovery { .. } => None,
         }
     }
 }
@@ -197,12 +217,20 @@ pub fn tool_driven_followup_payload(
                 reason: failure.reason.clone(),
             })
         }
-        TurnResult::ToolDenied(failure) | TurnResult::ToolError(failure) => {
-            Some(ToolDrivenFollowupPayload::ToolFailure {
+        TurnResult::ToolDenied(failure) => Some(ToolDrivenFollowupPayload::ToolFailure {
+            reason: failure.reason.clone(),
+            retryable: failure.retryable,
+        }),
+        TurnResult::ToolError(failure) => match failure.tool_input.as_ref() {
+            Some(input) => Some(ToolDrivenFollowupPayload::ToolInputFailure {
+                reason: failure.reason.clone(),
+                input: input.as_ref().clone(),
+            }),
+            None => Some(ToolDrivenFollowupPayload::ToolFailure {
                 reason: failure.reason.clone(),
                 retryable: failure.retryable,
-            })
-        }
+            }),
+        },
         TurnResult::ProviderError(_) => None,
     }
 }

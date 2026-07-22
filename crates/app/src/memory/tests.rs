@@ -1,7 +1,8 @@
 use loong_contracts::MemoryCoreRequest;
 use serde_json::json;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
+use tokio::sync::Mutex;
 
 use super::*;
 
@@ -93,71 +94,6 @@ fn supported_memory_core_operations_for_sqlite_are_stable() {
             "read_stage_envelope",
         ]
     );
-}
-
-#[tokio::test]
-async fn mvp_memory_adapter_routes_through_kernel() {
-    use std::collections::{BTreeMap, BTreeSet};
-
-    use loong_contracts::Capability;
-    use loong_kernel::{ExecutionRoute, HarnessKind, Kernel, VerticalPackManifest};
-
-    let (mut kernel, _audit) =
-        Kernel::<crate::context::AppContextFactory>::new_with_in_memory_audit();
-
-    kernel.register_core_memory_adapter(KernelMemoryAdapter::new());
-    kernel
-        .set_default_core_memory_adapter("mvp-memory")
-        .expect("set default memory adapter");
-
-    let pack = VerticalPackManifest {
-        pack_id: "test-pack".to_owned(),
-        domain: "test".to_owned(),
-        version: "0.1.0".to_owned(),
-        default_route: ExecutionRoute {
-            harness_kind: HarnessKind::EmbeddedPi,
-            adapter: None,
-        },
-        allowed_connectors: BTreeSet::new(),
-        granted_capabilities: BTreeSet::from([Capability::MemoryRead, Capability::MemoryWrite]),
-        metadata: BTreeMap::new(),
-    };
-    kernel.register_pack(pack.clone()).expect("register pack");
-
-    let token = kernel
-        .issue_token("test-pack", "test-agent", 3600)
-        .expect("issue token");
-
-    let request = MemoryCoreRequest {
-        operation: "noop".to_owned(),
-        payload: json!({"test": true}),
-    };
-
-    let caps = BTreeSet::from([Capability::MemoryRead]);
-    let execution_context = crate::context::AppExecutionContext::new(
-        &kernel,
-        &pack,
-        &token,
-        kernel.now_epoch_s(),
-        loong_contracts::ExecutionPlane::Memory,
-        loong_contracts::PlaneTier::Core,
-        None,
-        &crate::tools::runtime_config::ToolRuntimeConfig::default(),
-    )
-    .expect("build memory execution context");
-    let outcome = kernel
-        .execute_memory_core(
-            "test-pack",
-            &token,
-            &caps,
-            None,
-            request,
-            &execution_context,
-        )
-        .await
-        .expect("kernel memory core execution should succeed");
-
-    assert_eq!(outcome.status, "ok");
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -458,9 +394,7 @@ fn load_prompt_context_with_diagnostics_uses_selected_memory_system_id_in_proven
 fn pre_compaction_durable_flush_deduplicates_repeated_summary_exports() {
     let durable_flush_lock = crate::test_utils::durable_memory_flush_test_lock();
     let _durable_flush_guard = durable_flush_lock.blocking_lock();
-    let _guard = core_dispatch_test_lock()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = core_dispatch_test_lock().blocking_lock();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -525,9 +459,7 @@ fn pre_compaction_durable_flush_deduplicates_repeated_summary_exports() {
 fn pre_compaction_durable_flush_skips_when_no_summary_checkpoint_exists() {
     let durable_flush_lock = crate::test_utils::durable_memory_flush_test_lock();
     let _durable_flush_guard = durable_flush_lock.blocking_lock();
-    let _guard = core_dispatch_test_lock()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = core_dispatch_test_lock().blocking_lock();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -564,9 +496,7 @@ fn pre_compaction_durable_flush_skips_when_no_summary_checkpoint_exists() {
 fn append_turn_direct_bypasses_core_dispatch() {
     use std::fs;
 
-    let _guard = core_dispatch_test_lock()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = core_dispatch_test_lock().blocking_lock();
 
     let tmp = std::env::temp_dir().join(format!(
         "loong-test-memory-append-fast-path-{}",
@@ -598,9 +528,7 @@ fn append_turn_direct_bypasses_core_dispatch() {
 fn window_direct_bypasses_core_dispatch() {
     use std::fs;
 
-    let _guard = core_dispatch_test_lock()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = core_dispatch_test_lock().blocking_lock();
 
     let tmp = std::env::temp_dir().join(format!(
         "loong-test-memory-window-fast-path-{}",
@@ -711,13 +639,14 @@ fn replace_session_turns_direct_requires_explicit_timestamps() {
     let _ = fs::remove_dir(&tmp);
 }
 
-#[test]
-fn registry_selected_system_can_override_memory_runtime_execution() {
+#[tokio::test]
+async fn registry_selected_system_can_override_typed_memory_runtime() {
     use async_trait::async_trait;
 
     struct RuntimeExecutingMemorySystem;
 
     struct RuntimeExecutingMemorySystemRuntime {
+        config: runtime_config::MemoryRuntimeConfig,
         metadata: MemorySystemMetadata,
     }
 
@@ -737,10 +666,13 @@ fn registry_selected_system_can_override_memory_runtime_execution() {
 
         fn create_runtime(
             &self,
-            _config: &runtime_config::MemoryRuntimeConfig,
+            config: &runtime_config::MemoryRuntimeConfig,
         ) -> crate::CliResult<Option<Box<dyn MemorySystemRuntime>>> {
             let metadata = self.metadata();
-            let runtime = RuntimeExecutingMemorySystemRuntime { metadata };
+            let runtime = RuntimeExecutingMemorySystemRuntime {
+                config: config.clone(),
+                metadata,
+            };
             let boxed_runtime: Box<dyn MemorySystemRuntime> = Box::new(runtime);
 
             Ok(Some(boxed_runtime))
@@ -753,29 +685,16 @@ fn registry_selected_system_can_override_memory_runtime_execution() {
             &self.metadata
         }
 
-        fn supported_core_operations(&self) -> Vec<MemoryCoreOperation> {
-            vec![MemoryCoreOperation::ReadContext]
+        fn config(&self) -> &runtime_config::MemoryRuntimeConfig {
+            &self.config
         }
 
-        fn execute_core(&self, request: MemoryCoreRequest) -> Result<MemoryCoreOutcome, String> {
-            let operation = request.operation;
-            let payload = json!({
-                "adapter": "registry-runtime-executing",
-                "operation": operation,
-            });
-            let outcome = MemoryCoreOutcome {
-                status: "ok".to_owned(),
-                payload,
-            };
-
-            Ok(outcome)
-        }
-
-        fn hydrate_stage_envelope(
+        async fn read_stage_envelope(
             &self,
-            _session_id: &str,
-            _workspace_root: Option<&std::path::Path>,
-        ) -> Result<StageEnvelope, String> {
+            _granted: loong_core::policy::grant::Granted<
+                loong_kernel::access::memory::MemoryReadStageEnvelopeAction,
+            >,
+        ) -> Result<StageEnvelope, loong_kernel::access::memory::MemoryBackendError> {
             let diagnostics = MemoryDiagnostics {
                 system_id: self.metadata.id.to_owned(),
                 fail_open: true,
@@ -804,11 +723,12 @@ fn registry_selected_system_can_override_memory_runtime_execution() {
             Ok(envelope)
         }
 
-        async fn run_compact_stage(
+        async fn compact(
             &self,
-            _session_id: &str,
-            _workspace_root: Option<&std::path::Path>,
-        ) -> Result<StageDiagnostics, String> {
+            _granted: loong_core::policy::grant::Granted<
+                loong_kernel::access::memory::MemoryCompactAction,
+            >,
+        ) -> Result<StageDiagnostics, loong_kernel::access::memory::MemoryBackendError> {
             let diagnostics = StageDiagnostics::succeeded(MemoryStageFamily::Compact);
             Ok(diagnostics)
         }
@@ -824,25 +744,36 @@ fn registry_selected_system_can_override_memory_runtime_execution() {
         });
     }
 
-    let _guard = core_dispatch_test_lock()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = core_dispatch_test_lock().lock().await;
 
     ensure_registry_runtime_executing_system_registered();
 
     let config = selected_memory_system_config("registry-runtime-executing");
 
-    let request = MemoryCoreRequest {
-        operation: "noop".to_owned(),
-        payload: json!({}),
-    };
-    let outcome = execute_memory_core_with_config(request, &config)
-        .expect("registry runtime should handle memory core execution");
-
-    assert_eq!(outcome.payload["adapter"], "registry-runtime-executing");
-
-    let envelope = hydrate_stage_envelope("runtime-executing-session", &config)
-        .expect("registry runtime should handle stage envelope hydration");
+    let app_config = crate::config::LoongConfig::default();
+    let runtime = crate::runtime::bootstrap_runtime_with_config(&app_config)
+        .expect("bootstrap typed memory test runtime");
+    let session = crate::Session::root(
+        runtime.as_ref(),
+        "test-agent",
+        "runtime-executing-session",
+        loong_contracts::GovernedSessionMode::MutatingCapable,
+        loong_contracts::Capabilities::from([loong_contracts::Capability::MemoryRead]),
+        crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        config,
+        crate::tools::runtime_tool_view(),
+        None,
+        None,
+    )
+    .expect("materialize selected memory runtime");
+    let context = crate::Context::new(runtime.as_ref(), &session)
+        .expect("Session must remain bound to its Runtime");
+    let envelope = context
+        .access()
+        .memory()
+        .read_stage_envelope()
+        .await
+        .expect("registry runtime should handle typed stage hydration");
 
     assert_eq!(
         envelope.hydrated.diagnostics.system_id,

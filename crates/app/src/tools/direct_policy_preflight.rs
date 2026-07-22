@@ -19,15 +19,13 @@ pub(super) fn run(
         return shell_policy_ext::authorize_direct_shell_payload(payload, config);
     }
 
-    let visible_tool_name = super::user_visible_tool_name(tool_name);
-    // `read`/`file.read` path mode is access-backed now. Keep this legacy
-    // preflight only for tools that have not moved their file side effects
-    // behind access.
-    // TODO(access-migration): Delete this file branch after write/edit and
-    // config.import move to typed Action/Policy access paths.
-    let is_file_tool =
-        matches!(visible_tool_name.as_str(), "write" | "edit") || tool_name == "config.import";
-    if is_file_tool {
+    // Kernel-routed file tools are access-backed typed tools now. This
+    // preflight belongs only to legacy direct dispatch through
+    // `execute_tool_core_with_config`, where all config.import modes remain
+    // until the tool receives a complete typed Tool + Access implementation.
+    // TODO(access-migration): Delete this file branch after the remaining
+    // legacy direct file tools move to typed Action/Policy access paths.
+    if tool_name == "config.import" {
         return file_policy_ext::authorize_direct_file_payload(tool_name, payload, config);
     }
 
@@ -80,7 +78,7 @@ mod tests {
     }
 
     #[test]
-    fn run_reuses_shared_file_policy_escape_guard() {
+    fn run_does_not_apply_file_policy_preflight_to_migrated_edit() {
         let root = unique_temp_dir("direct-policy-preflight");
         let config = runtime_config::ToolRuntimeConfig {
             file_root: Some(root),
@@ -88,27 +86,14 @@ mod tests {
         };
 
         let request = ToolCoreRequest {
-            tool_name: "file.write".to_owned(),
+            tool_name: "file.edit".to_owned(),
             payload: json!({
                 "path": "../outside.txt",
-                "content": "blocked"
+                "edits": [{"old_text": "old", "new_text": "new"}]
             }),
         };
 
-        let error = run(&request, &config).expect_err("escaped file path should be denied");
-
-        assert!(
-            error.starts_with("policy_denied: "),
-            "expected policy_denied prefix, got: {error}"
-        );
-        assert!(
-            error.contains("policy extension file-policy denied request"),
-            "expected shared file policy prefix, got: {error}"
-        );
-        assert!(
-            error.contains("escapes file root"),
-            "expected shared file policy denial, got: {error}"
-        );
+        assert!(run(&request, &config).is_ok());
     }
 
     #[test]
@@ -130,7 +115,7 @@ mod tests {
     }
 
     #[test]
-    fn run_reuses_shared_config_import_output_path_guard() {
+    fn run_applies_file_policy_preflight_to_legacy_config_import_apply() {
         let root = unique_temp_dir("direct-policy-preflight-import");
         let config = runtime_config::ToolRuntimeConfig {
             file_root: Some(root),
@@ -146,7 +131,49 @@ mod tests {
             }),
         };
 
-        let error = run(&request, &config).expect_err("escaped import output path should deny");
+        assert!(run(&request, &config).is_err());
+    }
+
+    #[test]
+    fn run_applies_file_policy_preflight_to_legacy_config_import_apply_selected() {
+        let root = unique_temp_dir("direct-policy-preflight-import-apply-selected");
+        let config = runtime_config::ToolRuntimeConfig {
+            file_root: Some(root),
+            ..runtime_config::ToolRuntimeConfig::default()
+        };
+
+        let request = ToolCoreRequest {
+            tool_name: "config.import".to_owned(),
+            payload: json!({
+                "mode": "apply_selected",
+                "apply_skills_plan": false,
+                "input_path": "legacy-config.toml",
+                "output_path": "../outside.toml"
+            }),
+        };
+
+        assert!(run(&request, &config).is_err());
+    }
+
+    #[test]
+    fn run_reuses_shared_legacy_config_import_path_guard() {
+        let root = unique_temp_dir("direct-policy-preflight-import-skills");
+        let config = runtime_config::ToolRuntimeConfig {
+            file_root: Some(root),
+            ..runtime_config::ToolRuntimeConfig::default()
+        };
+
+        let request = ToolCoreRequest {
+            tool_name: "config.import".to_owned(),
+            payload: json!({
+                "mode": "apply_selected",
+                "apply_skills_plan": true,
+                "input_path": "legacy-config.toml",
+                "output_path": "../outside.toml"
+            }),
+        };
+
+        let error = run(&request, &config).expect_err("escaped legacy import path should deny");
 
         assert!(
             error.starts_with("policy_denied: "),

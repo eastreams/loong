@@ -45,7 +45,7 @@ impl ChatSessionSurface {
             .count();
 
         let mut lines = vec![
-            format!("scope: {}", self.runtime.session_id),
+            format!("scope: {}", self.runtime.session.session_id()),
             format!("provider: {}", state.active_provider_label),
             format!("phase: {phase} · round={provider_round} · tools={tool_calls}"),
             format!(
@@ -310,7 +310,7 @@ impl ChatSessionSurface {
     ) -> CliResult<Vec<ApprovalQueueItemSummary>> {
         let store = self.control_plane_store()?;
 
-        let approvals = store.approval_queue(&self.runtime.session_id, limit)?;
+        let approvals = store.approval_queue(self.runtime.session.session_id(), limit)?;
 
         let mut items = Vec::new();
         for approval in approvals {

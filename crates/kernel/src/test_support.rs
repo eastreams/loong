@@ -1,10 +1,18 @@
 #![allow(clippy::expect_used, clippy::panic)]
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use loong_core::policy::context::{CapabilityContext, ContextFactory};
+use loong_contracts::{
+    AuthorizationScope, AuthorizationSubject, Capabilities, PolicyDecision, PolicyGrant,
+};
+use loong_core::policy::{
+    action::ActionMeta,
+    context::{ContextFactory, PolicyContext},
+    policy::PolicyAny,
+};
 use serde_json::json;
 
 use crate::connector::{ConnectorExtensionAdapter, CoreConnectorAdapter};
@@ -12,15 +20,13 @@ use crate::contracts::{
     Capability, CapabilityToken, ConnectorCommand, ConnectorOutcome, ExecutionRoute, HarnessKind,
     HarnessOutcome, HarnessRequest,
 };
-use crate::errors::{ConnectorError, PolicyError};
+use crate::errors::ConnectorError;
 use crate::harness::HarnessAdapter;
 use crate::memory::{
     CoreMemoryAdapter, MemoryCoreOutcome, MemoryCoreRequest, MemoryExtensionAdapter,
     MemoryExtensionOutcome, MemoryExtensionRequest,
 };
 use crate::pack::VerticalPackManifest;
-use crate::policy::KernelInvocationContext;
-use crate::policy_ext::{PolicyExtension, PolicyExtensionContext};
 use crate::runtime::{
     CoreRuntimeAdapter, RuntimeCoreOutcome, RuntimeCoreRequest, RuntimeExtensionAdapter,
     RuntimeExtensionOutcome, RuntimeExtensionRequest,
@@ -47,7 +53,7 @@ pub struct MockCoreTool;
 pub struct MockToolExtension;
 pub struct MockCoreMemory;
 pub struct MockMemoryExtension;
-pub struct NoNetworkEgressPolicyExtension;
+pub struct NoNetworkEgressPolicy;
 pub const TEST_CAPABILITY_VARIANTS: [Capability; 13] = [
     Capability::InvokeTool,
     Capability::InvokeConnector,
@@ -73,75 +79,31 @@ impl ContextFactory for TestContextFactory {
 
 #[derive(Clone)]
 pub struct TestPolicyContext {
-    pack: VerticalPackManifest,
     token: CapabilityToken,
-    now_epoch_s: u64,
-    request_parameters: Option<serde_json::Value>,
 }
 
 impl TestPolicyContext {
-    pub fn new(
-        pack: VerticalPackManifest,
-        token: CapabilityToken,
-        now_epoch_s: u64,
-        request_parameters: Option<serde_json::Value>,
-    ) -> Self {
+    pub fn from_token(token: &CapabilityToken) -> Self {
         Self {
-            pack,
-            token,
-            now_epoch_s,
-            request_parameters,
-        }
-    }
-
-    pub fn from_token(token: &CapabilityToken, now_epoch_s: u64) -> Self {
-        Self {
-            pack: VerticalPackManifest {
-                pack_id: token.pack_id.clone(),
-                domain: "test".to_owned(),
-                version: "0.1.0".to_owned(),
-                default_route: ExecutionRoute {
-                    harness_kind: HarnessKind::EmbeddedPi,
-                    adapter: None,
-                },
-                allowed_connectors: BTreeSet::new(),
-                granted_capabilities: token.allowed_capabilities.clone(),
-                metadata: BTreeMap::new(),
-            },
             token: token.clone(),
-            now_epoch_s,
-            request_parameters: None,
         }
     }
-
-    #[must_use]
-    pub fn with_request_parameters(mut self, request_parameters: serde_json::Value) -> Self {
-        self.request_parameters = Some(request_parameters);
-        self
-    }
 }
 
-impl CapabilityContext for TestPolicyContext {
-    fn allowed_capabilities(&self) -> BTreeSet<Capability> {
-        self.token.allowed_capabilities.clone()
-    }
-}
-
-impl KernelInvocationContext for TestPolicyContext {
-    fn pack(&self) -> &VerticalPackManifest {
-        &self.pack
+impl PolicyContext for TestPolicyContext {
+    fn allowed_capabilities(&self) -> Cow<'_, Capabilities> {
+        Cow::Owned(self.token.allowed_capabilities.iter().copied().collect())
     }
 
-    fn token(&self) -> &CapabilityToken {
-        &self.token
-    }
-
-    fn now_epoch_s(&self) -> u64 {
-        self.now_epoch_s
-    }
-
-    fn request_parameters(&self) -> Option<&serde_json::Value> {
-        self.request_parameters.as_ref()
+    fn authorization_subject(&self) -> AuthorizationSubject {
+        AuthorizationSubject {
+            actor_id: self.token.agent_id.clone(),
+            scope: AuthorizationScope::LegacyToken {
+                boundary: "kernel.test-support".to_owned(),
+                pack_id: self.token.pack_id.clone(),
+                token_id: self.token.token_id.clone(),
+            },
+        }
     }
 }
 
@@ -150,11 +112,11 @@ pub enum ToolGateMode {
     Deny,
 }
 #[derive(Debug)]
-pub struct ToolGatePolicyExtension {
+pub struct ToolGatePolicy {
     pub gated_tool: String,
     pub mode: ToolGateMode,
 }
-impl ToolGatePolicyExtension {
+impl ToolGatePolicy {
     pub fn new(gated_tool: &str, mode: ToolGateMode) -> Self {
         Self {
             gated_tool: gated_tool.to_owned(),
@@ -350,10 +312,7 @@ impl RuntimeExtensionAdapter for MockRuntimeExtension {
     }
 }
 #[async_trait]
-impl<C> CoreToolAdapter<C> for MockCoreTool
-where
-    C: ContextFactory + Send + Sync,
-{
+impl CoreToolAdapter for MockCoreTool {
     fn name(&self) -> &str {
         "core-tools"
     }
@@ -369,17 +328,14 @@ where
     }
 }
 #[async_trait]
-impl<C> ToolExtensionAdapter<C> for MockToolExtension
-where
-    C: ContextFactory + Send + Sync,
-{
+impl ToolExtensionAdapter for MockToolExtension {
     fn name(&self) -> &str {
         "sql-analytics"
     }
     async fn execute_tool_extension(
         &self,
         request: ToolExtensionRequest,
-        core: &(dyn CoreToolAdapter<C> + Sync),
+        core: &(dyn CoreToolAdapter + Sync),
     ) -> Result<ToolExtensionOutcome, crate::ToolPlaneError> {
         let core_probe = core
             .execute_core_tool(ToolCoreRequest {
@@ -430,43 +386,76 @@ impl MemoryExtensionAdapter for MockMemoryExtension {
         })
     }
 }
-impl PolicyExtension for NoNetworkEgressPolicyExtension {
-    fn name(&self) -> &str {
-        "no-network-egress"
+#[async_trait]
+impl<C> PolicyAny<C> for NoNetworkEgressPolicy
+where
+    C: ContextFactory + Send + Sync,
+{
+    fn name(&self) -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("no-network-egress")
     }
-    fn authorize_extension(&self, context: &PolicyExtensionContext<'_>) -> Result<(), PolicyError> {
-        if context
+
+    async fn grant(&self, _ctx: &C::Cx<'_>, action: &dyn ActionMeta) -> PolicyGrant {
+        if action
+            .metadata()
             .required_capabilities
             .contains(&Capability::NetworkEgress)
         {
-            return Err(PolicyError::ExtensionDenied {
-                extension: self.name().to_owned(),
-                reason: "network egress is blocked for this environment".to_owned(),
-            });
+            return PolicyGrant {
+                decision: PolicyDecision::Deny,
+                predicate: Some("action requires network egress".into()),
+                reason: "network egress is blocked for this environment".into(),
+            };
         }
-        Ok(())
+
+        PolicyGrant {
+            decision: PolicyDecision::Continue,
+            predicate: Some("action does not require network egress".into()),
+            reason: "network egress policy did not apply".into(),
+        }
     }
 }
-impl PolicyExtension for ToolGatePolicyExtension {
-    fn name(&self) -> &str {
-        "tool-gate"
+
+#[async_trait]
+impl PolicyAny<TestContextFactory> for ToolGatePolicy {
+    fn name(&self) -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("tool-gate")
     }
-    fn authorize_extension(&self, context: &PolicyExtensionContext<'_>) -> Result<(), PolicyError> {
-        let Some(params) = context.request_parameters else {
-            return Ok(());
-        };
-        let tool_name = params
-            .get("tool_name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if tool_name != self.gated_tool {
-            return Ok(());
+
+    async fn grant(
+        &self,
+        _ctx: &<TestContextFactory as ContextFactory>::Cx<'_>,
+        action: &dyn ActionMeta,
+    ) -> PolicyGrant {
+        if action.metadata().operation.as_ref() != self.gated_tool.as_str() {
+            return PolicyGrant {
+                decision: PolicyDecision::Continue,
+                predicate: Some("request targets a different tool".into()),
+                reason: "tool gate policy did not apply".into(),
+            };
+        }
+        if action
+            .payload()
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .is_none()
+        {
+            return PolicyGrant {
+                decision: PolicyDecision::Continue,
+                predicate: Some("request has no string command".into()),
+                reason: "tool gate policy did not apply".into(),
+            };
         }
         match self.mode {
-            ToolGateMode::Deny => Err(PolicyError::ToolCallDenied {
-                tool_name: tool_name.to_owned(),
-                reason: "blocked by deterministic policy rule".to_owned(),
-            }),
+            ToolGateMode::Deny => PolicyGrant {
+                decision: PolicyDecision::Deny,
+                predicate: Some("request targets gated tool with string command".into()),
+                reason: format!(
+                    "tool call denied by policy for {} by deterministic policy rule",
+                    self.gated_tool
+                )
+                .into(),
+            },
         }
     }
 }

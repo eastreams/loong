@@ -1,21 +1,42 @@
 use std::collections::BTreeSet;
+use std::fs;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use loong_contracts::{
-    Capability, ExecutionPlane, ExecutionRoute, HarnessKind, PlaneTier, ToolCoreRequest,
+    ActionExecutionEvent, AuditEvent, AuditEventKind, AuthorizationAttempt,
+    AuthorizationAttemptEvent, AuthorizationPolicyEvent, AuthorizationTerminalOutcome, Capability,
+    ExecutionRoute, HarnessKind, ToolPath,
 };
-use loong_core::tool::{RegisteredTool, ToolProvenance};
-use loong_kernel::{InMemoryAuditSink, Kernel, NoopAuditSink, SystemClock, VerticalPackManifest};
-use loong_tools::file::ReadFileTool;
+use loong_kernel::{
+    InMemoryAuditSink, Kernel, SystemClock, VerticalPackManifest,
+    access::fs::{
+        FsAtomicWriteAllowPolicy, FsContentSearchAllowPolicy, FsCopyFileAllowPolicy,
+        FsCreateDirAllAllowPolicy, FsGlobAllowPolicy, FsInspectPathAllowPolicy,
+        FsPathAllowedRootsPolicy, FsReadAllowPolicy, FsReadDirAllowPolicy,
+        FsReadFilenameDenyPolicy, FsRemoveDirAllAllowPolicy, FsRemoveFileAllowPolicy,
+        FsRenameAllowPolicy, FsResolvePathAllowPolicy, FsWriteAllowPolicy,
+    },
+    policy::PolicyPipelineBuilder,
+};
+use loong_runtime::tool_plane::ToolRegistration;
 use serde_json::json;
 
 use super::*;
-use crate::context::AppContextFactory;
+use crate::context::RuntimeContextFactory;
+use crate::tools::file_path::resolve_safe_file_path_with_config;
 use crate::tools::runtime_config::ToolRuntimeConfig;
 use crate::tools::runtime_events::{
     ToolFileChangeKind, ToolRuntimeEvent, ToolRuntimeEventSink, with_tool_runtime_event_sink,
 };
+
+// Contracts tests path validation; file fixtures use valid one-segment tool
+// identities and focus on access, grant, and fallback behavior.
+#[allow(clippy::expect_used)]
+fn tool_path(segment: &str) -> ToolPath {
+    ToolPath::new([segment]).expect("test tool path must be valid")
+}
 
 #[derive(Default)]
 struct RecordingRuntimeSink {
@@ -38,6 +59,49 @@ impl ToolRuntimeEventSink for RecordingRuntimeSink {
     }
 }
 
+/// Join execution evidence to the authorization action that owns tool identity.
+fn terminal_action_execution<'a>(
+    events: &'a [AuditEvent],
+    path: &ToolPath,
+) -> Option<&'a ActionExecutionEvent> {
+    let operation = path.to_string();
+    let grant_id = events.iter().find_map(|event| {
+        let AuditEventKind::Authorization { evidence } = &event.kind else {
+            return None;
+        };
+        if evidence.action.kind != "tool.invoke" || evidence.action.operation != operation {
+            return None;
+        }
+        let AuthorizationAttempt::Started {
+            event:
+                AuthorizationAttemptEvent::Policy {
+                    event:
+                        AuthorizationPolicyEvent::Terminal(AuthorizationTerminalOutcome::Allow {
+                            grant_id,
+                        }),
+                    ..
+                },
+            ..
+        } = &evidence.attempt
+        else {
+            return None;
+        };
+        Some(*grant_id)
+    })?;
+
+    events.iter().rev().find_map(|event| {
+        let AuditEventKind::ActionExecution {
+            grant_id: event_grant_id,
+            event,
+        } = &event.kind
+        else {
+            return None;
+        };
+        (*event_grant_id == grant_id && !matches!(event, ActionExecutionEvent::Started))
+            .then_some(event)
+    })
+}
+
 #[cfg(unix)]
 fn create_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
     std::os::unix::fs::symlink(target, link)
@@ -51,7 +115,7 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
     std::env::temp_dir().join(format!("{prefix}-{nanos}"))
 }
 
-fn test_pack() -> VerticalPackManifest {
+fn test_pack_with_capabilities(granted_capabilities: BTreeSet<Capability>) -> VerticalPackManifest {
     VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
         domain: "test".to_owned(),
@@ -61,73 +125,104 @@ fn test_pack() -> VerticalPackManifest {
             adapter: None,
         },
         allowed_connectors: BTreeSet::new(),
-        granted_capabilities: BTreeSet::from([
-            Capability::InvokeTool,
-            Capability::FilesystemRead,
-            Capability::FilesystemWrite,
-        ]),
+        granted_capabilities,
         metadata: Default::default(),
     }
 }
 
-async fn execute_file_read_with_test_context(
-    request: ToolCoreRequest,
-    config: &ToolRuntimeConfig,
-) -> Result<ToolCoreOutcome, String> {
-    let mut kernel =
-        Kernel::<AppContextFactory>::with_runtime(Arc::new(SystemClock), Arc::new(NoopAuditSink));
-    let pack = Arc::new(test_pack());
-    kernel
-        .register_pack((*pack).clone())
-        .map_err(|error| format!("register pack failed: {error}"))?;
-    let token = kernel
-        .issue_token("test-pack", "test-agent", 60)
-        .map_err(|error| format!("issue token failed: {error}"))?;
-    let kernel = Arc::new(kernel);
-    let kernel_ctx = crate::KernelContext {
-        kernel: kernel.clone(),
-        pack,
-        token,
-        tool_runtime_config: config.clone(),
-    };
-    let execution_context =
-        kernel_ctx.execution_context(ExecutionPlane::Tool, PlaneTier::Core, None, config)?;
-    let _ = config;
-    let tool =
-        RegisteredTool::<AppContextFactory>::from_tool(ToolProvenance::Compatibility, ReadFileTool);
-    let outcome = tool
-        .invoke(&execution_context, request.payload)
-        .await
-        .map_err(|error| error.to_string())?;
-    Ok(ToolCoreOutcome {
-        status: outcome.status,
-        payload: outcome.payload,
-    })
+fn test_pack() -> VerticalPackManifest {
+    test_pack_with_capabilities(BTreeSet::from([
+        Capability::InvokeTool,
+        Capability::FilesystemRead,
+        Capability::FilesystemWrite,
+    ]))
 }
 
-async fn execute_file_read_via_kernel_tool_registry(
-    request: ToolCoreRequest,
-    config: &ToolRuntimeConfig,
-) -> Result<(ToolCoreOutcome, Arc<InMemoryAuditSink>), loong_kernel::KernelError> {
-    let audit = Arc::new(InMemoryAuditSink::default());
-    let mut kernel =
-        Kernel::<AppContextFactory>::with_runtime(Arc::new(SystemClock), audit.clone());
-    let pack = Arc::new(test_pack());
-    kernel.register_pack((*pack).clone())?;
-    crate::tools::register_kernel_tools(
-        &mut kernel,
-        config.clone(),
-        crate::config::ObservabilityConfig::runtime_default(),
-    )?;
-    let token = kernel.issue_token("test-pack", "test-agent", 60)?;
-    let kernel_ctx = crate::KernelContext {
-        kernel: Arc::new(kernel),
-        pack,
-        token,
-        tool_runtime_config: config.clone(),
-    };
-    let outcome = crate::tools::execute_kernel_tool_request(&kernel_ctx, request, false).await?;
-    Ok((outcome, audit))
+/// Owned test boundary for direct typed Tool invocation.
+///
+/// It centralizes policy/bootstrap setup only; tests still spell out
+/// `context().tool(path).invoke(payload)` so legacy envelopes cannot creep back
+/// into the asserted execution path.
+struct TypedFileTestRuntime {
+    runtime: Arc<loong_runtime::runtime::Runtime<RuntimeContextFactory>>,
+    session: crate::context::Session,
+    audit: Arc<InMemoryAuditSink>,
+}
+
+impl TypedFileTestRuntime {
+    fn new(config: &ToolRuntimeConfig) -> Result<Self, String> {
+        Self::with_capabilities(
+            config,
+            loong_contracts::Capabilities::from([
+                Capability::InvokeTool,
+                Capability::FilesystemRead,
+                Capability::FilesystemWrite,
+            ]),
+        )
+    }
+
+    fn with_capabilities(
+        config: &ToolRuntimeConfig,
+        capabilities: loong_contracts::Capabilities,
+    ) -> Result<Self, String> {
+        let audit = Arc::new(InMemoryAuditSink::default());
+        let mut policy = PolicyPipelineBuilder::<RuntimeContextFactory>::new()
+            .with_pre_policy(crate::tools::plane::ToolVisibilityPolicy)
+            .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
+            .with_policy(FsResolvePathAllowPolicy::target())
+            .with_policy(FsResolvePathAllowPolicy::entry())
+            .with_policy(FsPathAllowedRootsPolicy::target())
+            .with_policy(FsPathAllowedRootsPolicy::entry());
+        if !config.fs.deny_read_filenames.is_empty() {
+            policy.push_policy(FsReadFilenameDenyPolicy::new(
+                config.fs.deny_read_filenames.clone(),
+            ));
+        }
+        policy.push_policy(FsReadAllowPolicy);
+        policy.push_policy(FsWriteAllowPolicy);
+        policy.push_policy(FsAtomicWriteAllowPolicy);
+        policy.push_policy(FsCopyFileAllowPolicy);
+        policy.push_policy(FsCreateDirAllAllowPolicy);
+        policy.push_policy(FsRemoveFileAllowPolicy);
+        policy.push_policy(FsRemoveDirAllAllowPolicy);
+        policy.push_policy(FsRenameAllowPolicy);
+        policy.push_policy(FsInspectPathAllowPolicy);
+        policy.push_policy(FsGlobAllowPolicy);
+        policy.push_policy(FsReadDirAllowPolicy);
+        policy.push_policy(FsContentSearchAllowPolicy);
+        let kernel = Kernel::<RuntimeContextFactory>::with_policy_runtime(
+            policy,
+            Arc::new(SystemClock),
+            audit.clone(),
+        );
+        let runtime = Arc::new(loong_runtime::runtime::Runtime::new(
+            kernel,
+            crate::tools::plane::test_builtin_tool_plane(),
+        ));
+        let tool_view = crate::tools::runtime_visible_tool_view(runtime.as_ref(), config, None);
+        let session = crate::context::Session::root(
+            runtime.as_ref(),
+            "test-agent",
+            "test-session",
+            loong_contracts::GovernedSessionMode::MutatingCapable,
+            capabilities,
+            config.clone(),
+            crate::memory::runtime_config::MemoryRuntimeConfig::default(),
+            tool_view,
+            None,
+            None,
+        )?;
+
+        Ok(Self {
+            runtime,
+            session,
+            audit,
+        })
+    }
+
+    fn context(&self) -> Result<crate::Context<'_>, crate::context::ContextSessionError> {
+        crate::Context::new(self.runtime.as_ref(), &self.session)
+    }
 }
 
 #[cfg(unix)]
@@ -167,25 +262,26 @@ async fn file_read_supports_line_window_pagination() {
         file_root: Some(root),
         ..ToolRuntimeConfig::default()
     };
-    let request = ToolCoreRequest {
-        tool_name: "file.read".to_owned(),
-        payload: json!({
+    let fixture = TypedFileTestRuntime::new(&config).expect("typed file fixture");
+    let outcome = fixture
+        .context()
+        .expect("typed file context")
+        .tool(tool_path("read"))
+        .expect("read should be registered")
+        .invoke(json!({
             "path": "notes.txt",
             "offset": 2,
             "limit": 2
-        }),
-    };
-
-    let outcome = execute_file_read_with_test_context(request, &config)
+        }))
         .await
         .expect("file.read window should succeed");
 
-    assert_eq!(outcome.payload["content"], json!("beta\ngamma"));
-    assert_eq!(outcome.payload["line_start"], json!(2));
-    assert_eq!(outcome.payload["line_end"], json!(3));
-    assert_eq!(outcome.payload["total_lines"], json!(4));
-    assert_eq!(outcome.payload["next_offset"], json!(4));
-    assert_eq!(outcome.payload["truncated"], json!(false));
+    assert_eq!(outcome["content"], json!("beta\ngamma"));
+    assert_eq!(outcome["line_start"], json!(2));
+    assert_eq!(outcome["line_end"], json!(3));
+    assert_eq!(outcome["total_lines"], json!(4));
+    assert_eq!(outcome["next_offset"], json!(4));
+    assert_eq!(outcome["truncated"], json!(false));
     let _ = fs::remove_dir_all(base);
 }
 
@@ -200,34 +296,30 @@ async fn kernel_routed_file_read_uses_typed_tool_registry() {
         file_root: Some(root),
         ..ToolRuntimeConfig::default()
     };
-    let request = ToolCoreRequest {
-        tool_name: "file.read".to_owned(),
-        payload: json!({
+    let fixture = TypedFileTestRuntime::new(&config).expect("typed file fixture");
+    let outcome = fixture
+        .context()
+        .expect("typed file context")
+        .tool(tool_path("read"))
+        .expect("read should be registered")
+        .invoke(json!({
             "path": "notes.txt",
             "offset": 2,
             "limit": 1
-        }),
-    };
-
-    let (outcome, audit) = execute_file_read_via_kernel_tool_registry(request, &config)
+        }))
         .await
         .expect("file.read should execute through typed registry");
 
-    assert_eq!(outcome.status, "ok");
-    assert_eq!(outcome.payload["content"], json!("beta"));
-    assert_eq!(outcome.payload["line_start"], json!(2));
-    assert_eq!(outcome.payload["line_end"], json!(2));
-    let events = audit.snapshot();
-    assert!(events.iter().any(|event| {
-        matches!(
-            &event.kind,
-            loong_kernel::AuditEventKind::ToolInvocation {
-                path_display,
-                outcome: loong_kernel::ToolInvocationOutcome::Completed,
-                ..
-            } if path_display == "read"
-        )
-    }));
+    assert_eq!(outcome["content"], json!("beta"));
+    assert_eq!(outcome["line_start"], json!(2));
+    assert_eq!(outcome["line_end"], json!(2));
+    assert!(outcome.get("adapter").is_none());
+    assert!(outcome.get("tool_name").is_none());
+    let events = fixture.audit.snapshot();
+    assert!(matches!(
+        terminal_action_execution(&events, &tool_path("read")),
+        Some(ActionExecutionEvent::Completed)
+    ));
     assert!(!events.iter().any(|event| {
         matches!(
             &event.kind,
@@ -241,7 +333,213 @@ async fn kernel_routed_file_read_uses_typed_tool_registry() {
 }
 
 #[tokio::test]
-async fn kernel_routed_file_read_input_error_does_not_fallback_to_legacy_adapter() {
+async fn capability_override_narrows_child_access_caps() {
+    let base = unique_temp_dir("loong-tool-invoke-read-capability-override");
+    let root = base.join("root");
+    fs::create_dir_all(&root).expect("create root");
+    fs::write(root.join("notes.txt"), "alpha").expect("write fixture");
+
+    let config = ToolRuntimeConfig {
+        file_root: Some(root),
+        ..ToolRuntimeConfig::default()
+    };
+    let fixture = TypedFileTestRuntime::new(&config).expect("typed file fixture");
+    let error = fixture
+        .context()
+        .expect("typed file context")
+        .tool(tool_path("read"))
+        .expect("read should be registered")
+        .with_capabilities_override(loong_contracts::Capabilities::new())
+        .invoke(json!({
+            "path": "notes.txt",
+        }))
+        .await
+        .expect_err("empty override should remove filesystem read from child context");
+
+    assert!(
+        error.to_string().contains("FilesystemRead")
+            || error.to_string().contains("filesystem_read"),
+        "expected filesystem read capability denial, got: {error}"
+    );
+    let _ = fs::remove_dir_all(base);
+}
+
+#[tokio::test]
+async fn capability_override_rejects_added_capabilities() {
+    let base = unique_temp_dir("loong-tool-invoke-read-capability-escalation");
+    let root = base.join("root");
+    fs::create_dir_all(&root).expect("create root");
+
+    let config = ToolRuntimeConfig {
+        file_root: Some(root),
+        ..ToolRuntimeConfig::default()
+    };
+    let fixture = TypedFileTestRuntime::new(&config).expect("typed file fixture");
+    let error = fixture
+        .context()
+        .expect("typed file context")
+        .tool(tool_path("read"))
+        .expect("read should be registered")
+        .with_capabilities_override(loong_contracts::Capabilities::from([
+            Capability::FilesystemWrite,
+        ]))
+        .invoke(json!({
+            "path": "notes.txt",
+        }))
+        .await
+        .expect_err("override must not add capabilities beyond read descriptor");
+
+    assert!(matches!(
+        error,
+        loong_runtime::tool_plane::error::ToolInvocationError::CapabilityOverride(
+            loong_runtime::tool_plane::error::CapabilityOverrideError {
+                path,
+                requested,
+                declared,
+            }
+        ) if path == tool_path("read")
+            && requested == loong_contracts::Capabilities::from([Capability::FilesystemWrite])
+            && declared == loong_contracts::Capabilities::from([Capability::FilesystemRead])
+    ));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[tokio::test]
+async fn kernel_routed_direct_read_glob_uses_typed_tool_registry() {
+    let base = unique_temp_dir("loong-read-glob-typed-registry");
+    let root = base.join("root");
+    fs::create_dir_all(root.join("src/nested")).expect("create root");
+    fs::write(root.join("src/lib.rs"), "pub fn alpha() {}").expect("write lib");
+    fs::write(root.join("src/nested/mod.rs"), "pub fn beta() {}").expect("write mod");
+    fs::write(root.join("README.md"), "hello").expect("write readme");
+
+    let config = ToolRuntimeConfig {
+        file_root: Some(root),
+        ..ToolRuntimeConfig::default()
+    };
+    let fixture = TypedFileTestRuntime::new(&config).expect("typed file fixture");
+    let outcome = fixture
+        .context()
+        .expect("typed file context")
+        .tool(tool_path("read"))
+        .expect("read should be registered")
+        .invoke(json!({
+            "pattern": "src/**/*.rs",
+            "max_results": 10
+        }))
+        .await
+        .expect("read glob should execute through typed registry");
+
+    let matches = outcome["matches"].as_array().expect("matches array");
+    assert_eq!(matches.len(), 2);
+    assert_eq!(matches[0]["path"], "src/lib.rs");
+    assert_eq!(matches[1]["path"], "src/nested/mod.rs");
+    let events = fixture.audit.snapshot();
+    assert!(matches!(
+        terminal_action_execution(&events, &tool_path("read")),
+        Some(ActionExecutionEvent::Completed)
+    ));
+    assert!(!events.iter().any(|event| {
+        matches!(
+            &event.kind,
+            loong_kernel::AuditEventKind::PlaneInvoked {
+                primary_adapter,
+                ..
+            } if primary_adapter.starts_with("legacy:")
+        )
+    }));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[tokio::test]
+async fn kernel_routed_direct_read_query_uses_typed_tool_registry() {
+    let base = unique_temp_dir("loong-read-query-typed-registry");
+    let root = base.join("root");
+    fs::create_dir_all(root.join("src")).expect("create root");
+    fs::write(
+        root.join("src/main.rs"),
+        "fn main() {\n    println!(\"hello world\");\n}\n",
+    )
+    .expect("write main");
+    fs::write(root.join("notes.txt"), "hello from notes").expect("write notes");
+
+    let config = ToolRuntimeConfig {
+        file_root: Some(root),
+        ..ToolRuntimeConfig::default()
+    };
+    let fixture = TypedFileTestRuntime::new(&config).expect("typed file fixture");
+    let outcome = fixture
+        .context()
+        .expect("typed file context")
+        .tool(tool_path("read"))
+        .expect("read should be registered")
+        .invoke(json!({
+            "query": "hello world",
+            "glob": "src/**/*.rs",
+            "max_results": 5
+        }))
+        .await
+        .expect("read query should execute through typed registry");
+
+    let matches = outcome["matches"].as_array().expect("matches array");
+    let first = matches.first().expect("first match");
+    assert_eq!(matches.len(), 1);
+    assert_eq!(first["path"], "src/main.rs");
+    assert_eq!(first["line"], 2);
+    assert_eq!(first["column"], 15);
+    assert_eq!(first["snippet"], "println!(\"hello world\");");
+    let events = fixture.audit.snapshot();
+    assert!(matches!(
+        terminal_action_execution(&events, &tool_path("read")),
+        Some(ActionExecutionEvent::Completed)
+    ));
+    assert!(!events.iter().any(|event| {
+        matches!(
+            &event.kind,
+            loong_kernel::AuditEventKind::PlaneInvoked {
+                primary_adapter,
+                ..
+            } if primary_adapter.starts_with("legacy:")
+        )
+    }));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[tokio::test]
+async fn kernel_routed_file_read_rejects_path_escape_through_typed_policy() {
+    let base = unique_temp_dir("loong-file-read-typed-path-policy");
+    let root = base.join("root");
+    let outside = base.join("outside");
+    fs::create_dir_all(&root).expect("create root");
+    fs::create_dir_all(&outside).expect("create outside");
+    fs::write(outside.join("secret.txt"), "secret").expect("write outside fixture");
+
+    let config = ToolRuntimeConfig {
+        file_root: Some(root),
+        ..ToolRuntimeConfig::default()
+    };
+    let fixture = TypedFileTestRuntime::new(&config).expect("typed file fixture");
+    let error = fixture
+        .context()
+        .expect("typed file context")
+        .tool(tool_path("read"))
+        .expect("read should be registered")
+        .invoke(json!({
+            "path": "../outside/secret.txt"
+        }))
+        .await
+        .expect_err("path escape should be denied by typed fs policy");
+
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains("policy_denied") || rendered.contains("escapes allowed filesystem roots"),
+        "expected fs path policy denial, got: {rendered}"
+    );
+    let _ = fs::remove_dir_all(base);
+}
+
+#[tokio::test]
+async fn kernel_routed_file_read_reports_typed_input_error() {
     let base = unique_temp_dir("loong-file-read-typed-error");
     let root = base.join("root");
     fs::create_dir_all(&root).expect("create root");
@@ -250,21 +548,571 @@ async fn kernel_routed_file_read_input_error_does_not_fallback_to_legacy_adapter
         file_root: Some(root),
         ..ToolRuntimeConfig::default()
     };
-    let request = ToolCoreRequest {
-        tool_name: "file.read".to_owned(),
-        payload: json!({
+    let fixture = TypedFileTestRuntime::new(&config).expect("typed file fixture");
+    let error = fixture
+        .context()
+        .expect("typed file context")
+        .tool(tool_path("read"))
+        .expect("read should be registered")
+        .invoke(json!({
             "path": "notes.txt",
             "offset": 0
-        }),
+        }))
+        .await
+        .expect_err("typed read input error should fail before execution");
+
+    assert!(matches!(
+        &error,
+        loong_runtime::tool_plane::error::ToolInvocationError::Dispatch {
+            source: loong_runtime::tool_plane::RegisteredToolError::Input(
+                loong_contracts::ToolInputError::InvalidField { field, reason }
+            ),
+            ..
+        } if field == "offset" && reason == "must be a positive integer"
+    ));
+    let events = fixture.audit.snapshot();
+    assert!(matches!(
+        terminal_action_execution(&events, &tool_path("read")),
+        Some(ActionExecutionEvent::InputRejected {
+            error: loong_contracts::ToolInputError::InvalidField { field, reason },
+        }) if field == "offset" && reason == "must be a positive integer"
+    ));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[tokio::test]
+async fn conversation_read_input_error_is_owned_and_audited_by_typed_tool() {
+    use crate::conversation::turn_engine::{ProviderTurn, ToolIntent, TurnResult};
+    use crate::test_support::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![ToolIntent {
+            tool_name: "read".into(),
+            args_json: json!({}),
+            source: "provider_tool_call".to_owned(),
+            turn_id: "typed-read-input-turn".to_owned(),
+            tool_call_id: "typed-read-input-call".to_owned(),
+        }],
+        raw_meta: serde_json::Value::Null,
     };
 
-    let error = execute_file_read_via_kernel_tool_registry(request, &config)
-        .await
-        .expect_err("typed read input error should not fallback");
+    let result = harness.execute(&turn).await;
 
+    let TurnResult::ToolError(failure) = result else {
+        panic!("typed input rejection should interrupt the turn as a tool error");
+    };
+    assert!(matches!(
+        failure.tool_input.as_deref(),
+        Some(crate::conversation::turn_engine::ToolInputFailure {
+            path,
+            provider_name,
+            error: loong_contracts::ToolInputError::MissingOneOf { fields },
+            ..
+        }) if path == &tool_path("read")
+            && provider_name == "read"
+            && fields == &["path".to_owned(), "query".to_owned(), "pattern".to_owned()]
+    ));
+    let events = harness.audit.snapshot();
+    assert!(matches!(
+        terminal_action_execution(&events, &tool_path("read")),
+        Some(ActionExecutionEvent::InputRejected {
+            error: loong_contracts::ToolInputError::MissingOneOf { fields }
+        }) if fields == &["path".to_owned(), "query".to_owned(), "pattern".to_owned()]
+    ));
+}
+
+#[tokio::test]
+async fn conversation_tool_invoke_preserves_empty_capability_override() {
+    use crate::conversation::turn_engine::{
+        NoopLegacyToolDispatcher, ProviderTurn, ToolIntent, TurnEngine, TurnResult,
+    };
+
+    let root = unique_temp_dir("loong-conversation-tool-invoke-override");
+    fs::create_dir_all(&root).expect("create fixture root");
+    fs::write(root.join("notes.txt"), "authority must stay narrowed").expect("write fixture file");
+    let config = ToolRuntimeConfig {
+        file_root: Some(root.clone()),
+        ..ToolRuntimeConfig::default()
+    };
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let policy = PolicyPipelineBuilder::<RuntimeContextFactory>::new_legacy_allow_fallback()
+        .with_pre_policy(crate::tools::plane::ToolVisibilityPolicy)
+        .with_policy(crate::tools::plane::ToolInvocationAllowPolicy)
+        .with_policy(FsResolvePathAllowPolicy::target())
+        .with_policy(FsPathAllowedRootsPolicy::target())
+        .with_policy(FsReadAllowPolicy);
+    let mut kernel = Kernel::<RuntimeContextFactory>::with_policy_runtime(
+        policy,
+        Arc::new(SystemClock),
+        audit.clone(),
+    );
+    kernel
+        .register_pack(test_pack())
+        .expect("register test pack");
+    let token = kernel
+        .issue_token("test-pack", "test-agent", 60)
+        .expect("issue test token");
+    let mut tools = loong_runtime::tool_plane::ToolPlaneRegistry::new();
+    // `tool.invoke` rejects provider-exposed paths. Bind the read implementation
+    // to a hidden catalog path so this fixture exercises the envelope boundary.
+    tools
+        .register(
+            tool_path("config.import"),
+            ToolRegistration::discoverable("config.import"),
+            loong_tools::file::ReadTool,
+        )
+        .expect("register hidden typed test tool");
+    let runtime = Arc::new(loong_runtime::runtime::Runtime::new(kernel, tools));
+    let session = crate::context::Session::root(
+        runtime.as_ref(),
+        "test-agent",
+        "test-session",
+        loong_contracts::GovernedSessionMode::MutatingCapable,
+        token.allowed_capabilities.iter().copied().collect(),
+        config,
+        crate::memory::runtime_config::MemoryRuntimeConfig::default(),
+        crate::tools::runtime_tool_view(),
+        None,
+        None,
+    )
+    .expect("build test session");
+    let legacy_tools = crate::conversation::DefaultLegacyToolDispatcher::from_test_token(
+        Arc::clone(&runtime),
+        crate::session::store::SessionStoreConfig::default(),
+        crate::config::ToolConfig::default(),
+        token,
+    );
+    let owner = crate::test_support::TestRuntimeSession {
+        runtime,
+        session,
+        legacy_tools,
+    };
+    let ctx = owner.context();
+    let arguments = serde_json::Map::from_iter([("path".to_owned(), json!("notes.txt"))]);
+    let lease = crate::tools::issue_tool_lease(&tool_path("config.import"), &arguments)
+        .expect("hidden typed tool lease should be issued");
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![ToolIntent {
+            tool_name: "tool.invoke".into(),
+            args_json: json!({
+                "tool_id": "config.import",
+                "lease": lease,
+                "arguments": arguments,
+                "capabilities_override": [],
+            }),
+            source: "provider_tool_call".to_owned(),
+            turn_id: "typed-override-turn".to_owned(),
+            tool_call_id: "typed-override-call".to_owned(),
+        }],
+        raw_meta: serde_json::Value::Null,
+    };
+
+    let result = TurnEngine::new(1)
+        .execute_turn_in_context(&turn, &ctx, &NoopLegacyToolDispatcher, None)
+        .await;
+
+    let TurnResult::FinalText(output) = result else {
+        panic!("a per-tool capability denial should remain local to the batch: {result:?}");
+    };
+    assert!(output.contains("missing capability: FilesystemRead"));
+    let events = audit.snapshot();
+    assert!(matches!(
+        terminal_action_execution(&events, &tool_path("config.import")),
+        Some(ActionExecutionEvent::Failed { reason })
+            if reason.contains("missing capability: FilesystemRead")
+    ));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn tool_invoke_does_not_alias_unregistered_file_write_path() {
+    use crate::conversation::turn_engine::{
+        NoopLegacyToolDispatcher, ProviderTurn, ToolIntent, TurnEngine, TurnResult,
+    };
+
+    let root = tempfile::tempdir().expect("temporary file root");
+    let target = root.path().join("must-not-exist.txt");
+    let mut config = crate::config::LoongConfig::default();
+    config.tools.file_root = Some(root.path().display().to_string());
+    config.tools.consent.default_mode = crate::config::ToolConsentMode::Full;
+    config.tools.approval.mode = crate::config::GovernedToolApprovalMode::Disabled;
+    let owner = crate::test_support::TestRuntimeSession::from_config(
+        &config,
+        "unregistered-file-write-session",
+        "test-agent",
+        loong_contracts::GovernedSessionMode::MutatingCapable,
+    )
+    .expect("typed runtime session");
+    let arguments = serde_json::Map::from_iter([
+        ("path".to_owned(), json!(target)),
+        ("content".to_owned(), json!("must not be written")),
+    ]);
+    let lease = crate::tools::issue_tool_lease(&tool_path("file.write"), &arguments)
+        .expect("lease should preserve the requested path");
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![ToolIntent {
+            tool_name: "tool.invoke".into(),
+            args_json: json!({
+                "tool_id": "file.write",
+                "lease": lease,
+                "arguments": arguments,
+            }),
+            source: "provider_tool_call".to_owned(),
+            turn_id: "unregistered-file-write-turn".to_owned(),
+            tool_call_id: "unregistered-file-write-call".to_owned(),
+        }],
+        raw_meta: serde_json::Value::Null,
+    };
+    let ctx = owner.context();
+
+    let result = TurnEngine::new(1)
+        .execute_turn_in_context(&turn, &ctx, &NoopLegacyToolDispatcher, None)
+        .await;
+
+    let TurnResult::ToolDenied(failure) = result else {
+        panic!("unregistered file.write path should be denied before dispatch: {result:?}");
+    };
+    assert_eq!(failure.code, "tool_not_found");
     assert!(
-        format!("{error}").contains("read payload.offset must be a positive integer"),
-        "expected file read input error, got: {error}"
+        !target.exists(),
+        "tool.invoke must not reinterpret file.write as the registered write path"
+    );
+}
+
+#[tokio::test]
+async fn kernel_routed_glob_search_uses_typed_tool_registry() {
+    let base = unique_temp_dir("loong-glob-search-typed-registry");
+    let root = base.join("root");
+    fs::create_dir_all(root.join("src/nested")).expect("create fixture dirs");
+    fs::write(root.join("src/lib.rs"), "pub fn alpha() {}").expect("write lib");
+    fs::write(root.join("src/nested/mod.rs"), "pub fn beta() {}").expect("write mod");
+
+    let config = ToolRuntimeConfig {
+        file_root: Some(root),
+        ..ToolRuntimeConfig::default()
+    };
+    let fixture = TypedFileTestRuntime::new(&config).expect("typed file fixture");
+    let outcome = fixture
+        .context()
+        .expect("typed file context")
+        .tool(tool_path("glob.search"))
+        .expect("glob.search should be registered")
+        .invoke(json!({
+            "pattern": "src/**/*.rs",
+            "max_results": 10
+        }))
+        .await
+        .expect("glob.search should execute through typed registry");
+
+    assert!(outcome.get("adapter").is_none());
+    assert!(outcome.get("tool_name").is_none());
+    assert_eq!(outcome["match_count"], json!(2));
+    assert_eq!(outcome["continuation"]["recommended_tool"], json!("read"));
+    let events = fixture.audit.snapshot();
+    assert!(matches!(
+        terminal_action_execution(&events, &tool_path("glob.search")),
+        Some(ActionExecutionEvent::Completed)
+    ));
+    assert!(!events.iter().any(|event| {
+        matches!(
+            &event.kind,
+            loong_kernel::AuditEventKind::PlaneInvoked {
+                primary_adapter,
+                ..
+            } if primary_adapter.starts_with("legacy:")
+        )
+    }));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[tokio::test]
+async fn kernel_routed_content_search_uses_typed_tool_registry() {
+    let base = unique_temp_dir("loong-content-search-typed-registry");
+    let root = base.join("root");
+    fs::create_dir_all(root.join("src")).expect("create fixture dirs");
+    fs::write(
+        root.join("src/main.rs"),
+        "fn main() {\n    println!(\"hello world\");\n}\n",
+    )
+    .expect("write main");
+
+    let config = ToolRuntimeConfig {
+        file_root: Some(root),
+        ..ToolRuntimeConfig::default()
+    };
+    let fixture = TypedFileTestRuntime::new(&config).expect("typed file fixture");
+    let outcome = fixture
+        .context()
+        .expect("typed file context")
+        .tool(tool_path("content.search"))
+        .expect("content.search should be registered")
+        .invoke(json!({
+            "query": "hello world",
+            "glob": "src/**/*.rs",
+            "max_results": 5
+        }))
+        .await
+        .expect("content.search should execute through typed registry");
+
+    assert!(outcome.get("adapter").is_none());
+    assert!(outcome.get("tool_name").is_none());
+    assert_eq!(outcome["match_count"], json!(1));
+    assert_eq!(outcome["matches"][0]["path"], json!("src/main.rs"));
+    let events = fixture.audit.snapshot();
+    assert!(matches!(
+        terminal_action_execution(&events, &tool_path("content.search")),
+        Some(ActionExecutionEvent::Completed)
+    ));
+    assert!(!events.iter().any(|event| {
+        matches!(
+            &event.kind,
+            loong_kernel::AuditEventKind::PlaneInvoked {
+                primary_adapter,
+                ..
+            } if primary_adapter.starts_with("legacy:")
+        )
+    }));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[tokio::test]
+async fn kernel_routed_file_write_uses_typed_tool_registry() {
+    let base = unique_temp_dir("loong-file-write-typed-registry");
+    let root = base.join("root");
+    fs::create_dir_all(&root).expect("create root");
+
+    let config = ToolRuntimeConfig {
+        file_root: Some(root.clone()),
+        ..ToolRuntimeConfig::default()
+    };
+    let fixture = TypedFileTestRuntime::new(&config).expect("typed file fixture");
+    let outcome = fixture
+        .context()
+        .expect("typed file context")
+        .tool(tool_path("write"))
+        .expect("write should be registered")
+        .invoke(json!({
+            "path": "nested/notes.txt",
+            "content": "alpha\nbeta\n",
+        }))
+        .await
+        .expect("file.write should execute through typed registry");
+
+    assert!(outcome.get("adapter").is_none());
+    assert!(outcome.get("tool_name").is_none());
+    let response_path = outcome["path"]
+        .as_str()
+        .expect("response path should be a string");
+    assert!(
+        response_path.ends_with("/nested/notes.txt"),
+        "unexpected response path: {response_path}"
+    );
+    assert_eq!(outcome["bytes_written"], json!(11));
+    assert_eq!(
+        fs::read_to_string(root.join("nested/notes.txt")).expect("read written file"),
+        "alpha\nbeta\n"
+    );
+    let events = fixture.audit.snapshot();
+    assert!(matches!(
+        terminal_action_execution(&events, &tool_path("write")),
+        Some(ActionExecutionEvent::Completed)
+    ));
+    assert!(!events.iter().any(|event| {
+        matches!(
+            &event.kind,
+            loong_kernel::AuditEventKind::PlaneInvoked {
+                primary_adapter,
+                ..
+            } if primary_adapter.starts_with("legacy:")
+        )
+    }));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[tokio::test]
+async fn context_direct_write_uses_typed_tool_registry() {
+    let base = unique_temp_dir("loong-context-direct-write-typed-registry");
+    let root = base.join("root");
+    fs::create_dir_all(&root).expect("create root");
+
+    let config = ToolRuntimeConfig {
+        file_root: Some(root.clone()),
+        ..ToolRuntimeConfig::default()
+    };
+    let fixture = TypedFileTestRuntime::new(&config).expect("typed file fixture");
+    let outcome = fixture
+        .context()
+        .expect("typed file context")
+        .tool(tool_path("write"))
+        .expect("lookup typed write")
+        .invoke(json!({
+            "path": "typed.txt",
+            "content": "typed"
+        }))
+        .await
+        .expect("context direct write should execute");
+
+    assert!(outcome.get("adapter").is_none());
+    assert!(outcome.get("tool_name").is_none());
+    assert_eq!(outcome["bytes_written"], json!(5));
+    assert_eq!(
+        fs::read_to_string(root.join("typed.txt")).expect("read written file"),
+        "typed"
+    );
+    let events = fixture.audit.snapshot();
+    assert!(matches!(
+        terminal_action_execution(&events, &tool_path("write")),
+        Some(ActionExecutionEvent::Completed)
+    ));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[tokio::test]
+async fn kernel_routed_file_edit_uses_typed_tool_registry_and_preview_observer() {
+    let base = unique_temp_dir("loong-file-edit-typed-registry");
+    let root = base.join("root");
+    fs::create_dir_all(&root).expect("create root");
+    let target = root.join("notes.txt");
+    fs::write(&target, "old line\nshared\n").expect("write fixture");
+
+    let config = ToolRuntimeConfig {
+        file_root: Some(root.clone()),
+        ..ToolRuntimeConfig::default()
+    };
+    let edit_blocks = json!([{
+        "old_text": "old line",
+        "new_text": "new line",
+    }]);
+    let sink = Arc::new(RecordingRuntimeSink::default());
+    let runtime_sink: Arc<dyn ToolRuntimeEventSink> = sink.clone();
+    let fixture = TypedFileTestRuntime::new(&config).expect("typed file fixture");
+    let context = fixture.context().expect("typed file context");
+    let invocation = context
+        .tool(tool_path("edit"))
+        .expect("edit should be registered");
+
+    let outcome = with_tool_runtime_event_sink(
+        runtime_sink,
+        invocation.invoke(json!({
+            "path": "notes.txt",
+            "edits": edit_blocks,
+        })),
+    )
+    .await
+    .expect("file.edit should execute through typed registry");
+
+    assert!(outcome.get("adapter").is_none());
+    assert!(outcome.get("tool_name").is_none());
+    assert_eq!(outcome["replacements_made"], json!(1));
+    assert_eq!(outcome["edit_blocks_applied"], json!(1));
+    assert_eq!(
+        fs::read_to_string(&target).expect("read edited file"),
+        "new line\nshared\n"
+    );
+
+    let events = lock_runtime_events(&sink);
+    let preview = events.iter().find_map(|event| {
+        if let ToolRuntimeEvent::FileChangePreview(preview) = event {
+            return Some(preview);
+        }
+
+        None
+    });
+    let preview = preview.expect("typed edit should emit preview event");
+    let preview_text = preview.preview.as_deref().unwrap_or_default();
+    assert_eq!(preview.kind, ToolFileChangeKind::Edit);
+    assert_eq!(preview.added_lines, 1);
+    assert_eq!(preview.removed_lines, 1);
+    assert!(preview_text.contains("-old line"));
+    assert!(preview_text.contains("+new line"));
+
+    let events = fixture.audit.snapshot();
+    assert!(matches!(
+        terminal_action_execution(&events, &tool_path("edit")),
+        Some(ActionExecutionEvent::Completed)
+    ));
+    assert!(!events.iter().any(|event| {
+        matches!(
+            &event.kind,
+            loong_kernel::AuditEventKind::PlaneInvoked {
+                primary_adapter,
+                ..
+            } if primary_adapter.starts_with("legacy:")
+        )
+    }));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[tokio::test]
+async fn kernel_routed_file_write_rejects_path_escape_through_typed_policy() {
+    let base = unique_temp_dir("loong-file-write-typed-path-policy");
+    let root = base.join("root");
+    let outside = base.join("outside");
+    fs::create_dir_all(&root).expect("create root");
+    fs::create_dir_all(&outside).expect("create outside");
+
+    let config = ToolRuntimeConfig {
+        file_root: Some(root),
+        ..ToolRuntimeConfig::default()
+    };
+    let fixture = TypedFileTestRuntime::new(&config).expect("typed file fixture");
+    let error = fixture
+        .context()
+        .expect("typed file context")
+        .tool(tool_path("write"))
+        .expect("write should be registered")
+        .invoke(json!({
+            "path": "../outside/secret.txt",
+            "content": "secret"
+        }))
+        .await
+        .expect_err("path escape should be denied by typed fs policy");
+
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains("policy_denied") || rendered.contains("escapes allowed filesystem roots"),
+        "expected fs path policy denial, got: {rendered}"
+    );
+    assert!(
+        !outside.join("secret.txt").exists(),
+        "denied write must not create escaped file"
+    );
+    let _ = fs::remove_dir_all(base);
+}
+
+#[tokio::test]
+async fn kernel_routed_file_write_requires_filesystem_write_capability() {
+    let base = unique_temp_dir("loong-file-write-capability");
+    let root = base.join("root");
+    fs::create_dir_all(&root).expect("create root");
+
+    let config = ToolRuntimeConfig {
+        file_root: Some(root.clone()),
+        ..ToolRuntimeConfig::default()
+    };
+    let fixture = TypedFileTestRuntime::with_capabilities(
+        &config,
+        loong_contracts::Capabilities::from([Capability::InvokeTool, Capability::FilesystemRead]),
+    )
+    .expect("typed file fixture");
+    fixture
+        .context()
+        .expect("typed file context")
+        .tool(tool_path("write"))
+        .expect("write should be registered")
+        .invoke(json!({
+            "path": "notes.txt",
+            "content": "alpha"
+        }))
+        .await
+        .expect_err("filesystem write capability should be required");
+    assert!(
+        !root.join("notes.txt").exists(),
+        "denied write must not create a file"
     );
     let _ = fs::remove_dir_all(base);
 }
@@ -280,76 +1128,24 @@ async fn file_read_rejects_line_offset_beyond_end_of_file() {
         file_root: Some(root),
         ..ToolRuntimeConfig::default()
     };
-    let request = ToolCoreRequest {
-        tool_name: "file.read".to_owned(),
-        payload: json!({
+    let fixture = TypedFileTestRuntime::new(&config).expect("typed file fixture");
+    let error = fixture
+        .context()
+        .expect("typed file context")
+        .tool(tool_path("read"))
+        .expect("read should be registered")
+        .invoke(json!({
             "path": "notes.txt",
             "offset": 3
-        }),
-    };
-
-    let error = execute_file_read_with_test_context(request, &config)
+        }))
         .await
         .expect_err("out-of-bounds file.read window should fail");
 
-    assert!(error.contains("offset 3 is beyond end of file (2 lines total)"));
-    let _ = fs::remove_dir_all(base);
-}
-
-#[cfg(unix)]
-#[test]
-fn file_write_rejects_symlink_directory_escape() {
-    let base = unique_temp_dir("loong-file-write");
-    let root = base.join("root");
-    let outside_dir = base.join("outside-dir");
-    fs::create_dir_all(&root).expect("create root");
-    fs::create_dir_all(&outside_dir).expect("create outside dir");
-
-    let link = root.join("escape");
-    assert!(create_symlink(&outside_dir, &link).is_ok());
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root),
-        ..ToolRuntimeConfig::default()
-    };
-    let request = ToolCoreRequest {
-        tool_name: "file.write".to_owned(),
-        payload: json!({
-            "path": "escape/pwned.txt",
-            "content": "owned",
-            "create_dirs": true
-        }),
-    };
-    let error = execute_file_write_tool_with_config(request, &config).expect_err("escape denied");
-
-    assert!(error.starts_with("policy_denied: "));
-    assert!(error.contains("escapes configured file root"));
-    let _ = fs::remove_dir_all(base);
-}
-
-#[test]
-fn file_write_allows_path_inside_root() {
-    let base = unique_temp_dir("loong-file-safe");
-    let root = base.join("root");
-    fs::create_dir_all(&root).expect("create root");
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root.clone()),
-        ..ToolRuntimeConfig::default()
-    };
-    let request = ToolCoreRequest {
-        tool_name: "file.write".to_owned(),
-        payload: json!({
-            "path": "safe/note.txt",
-            "content": "hello",
-            "create_dirs": true
-        }),
-    };
-    let result = execute_file_write_tool_with_config(request, &config);
-    assert!(result.is_ok());
-
-    let written = fs::read_to_string(root.join("safe/note.txt")).expect("read written file");
-    assert_eq!(written, "hello");
+    assert!(
+        error
+            .to_string()
+            .contains("offset 3 is beyond end of file (2 lines total)")
+    );
     let _ = fs::remove_dir_all(base);
 }
 
@@ -383,419 +1179,6 @@ fn resolve_safe_file_path_accepts_private_var_alias_inside_root() {
 }
 
 #[test]
-fn file_write_emits_create_change_preview_event() {
-    let base = unique_temp_dir("loong-file-write-preview");
-    let root = base.join("root");
-    fs::create_dir_all(&root).expect("create root");
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root),
-        ..ToolRuntimeConfig::default()
-    };
-    let request = ToolCoreRequest {
-        tool_name: "file.write".to_owned(),
-        payload: json!({
-            "path": "preview.txt",
-            "content": "alpha\nbeta\n",
-            "create_dirs": true
-        }),
-    };
-    let sink = Arc::new(RecordingRuntimeSink::default());
-    let runtime_sink: Arc<dyn ToolRuntimeEventSink> = sink.clone();
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("current-thread runtime");
-
-    let outcome = runtime.block_on(with_tool_runtime_event_sink(runtime_sink, async {
-        execute_file_write_tool_with_config(request, &config)
-    }));
-    let outcome = outcome.expect("file.write should succeed");
-    let events = lock_runtime_events(&sink);
-    let preview = events.iter().find_map(|event| {
-        if let ToolRuntimeEvent::FileChangePreview(preview) = event {
-            return Some(preview);
-        }
-
-        None
-    });
-    let preview = preview.expect("file.write should emit change preview");
-
-    assert_eq!(outcome.status, "ok");
-    assert_eq!(preview.kind, ToolFileChangeKind::Create);
-    assert_eq!(preview.added_lines, 2);
-    assert_eq!(preview.removed_lines, 0);
-    assert!(preview.path.ends_with("preview.txt"));
-}
-
-#[test]
-fn file_write_emits_overwrite_change_preview_event() {
-    let base = unique_temp_dir("loong-file-write-overwrite-preview");
-    let root = base.join("root");
-    fs::create_dir_all(&root).expect("create root");
-    let target = root.join("preview.txt");
-    fs::write(&target, "old line\nshared\n").expect("seed original file");
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root),
-        ..ToolRuntimeConfig::default()
-    };
-    let request = ToolCoreRequest {
-        tool_name: "file.write".to_owned(),
-        payload: json!({
-            "path": "preview.txt",
-            "content": "new line\nshared\nextra\n",
-            "overwrite": true
-        }),
-    };
-    let sink = Arc::new(RecordingRuntimeSink::default());
-    let runtime_sink: Arc<dyn ToolRuntimeEventSink> = sink.clone();
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("current-thread runtime");
-
-    let outcome = runtime.block_on(with_tool_runtime_event_sink(runtime_sink, async {
-        execute_file_write_tool_with_config(request, &config)
-    }));
-    let outcome = outcome.expect("file.write overwrite should succeed");
-    let events = lock_runtime_events(&sink);
-    let preview = events.iter().find_map(|event| {
-        if let ToolRuntimeEvent::FileChangePreview(preview) = event {
-            return Some(preview);
-        }
-
-        None
-    });
-    let preview = preview.expect("file.write overwrite should emit change preview");
-    let preview_text = preview.preview.as_deref().unwrap_or_default();
-
-    assert_eq!(outcome.status, "ok");
-    assert_eq!(preview.kind, ToolFileChangeKind::Overwrite);
-    assert_eq!(preview.added_lines, 2);
-    assert_eq!(preview.removed_lines, 1);
-    assert!(preview_text.contains("-old line"));
-    assert!(preview_text.contains("+new line"));
-    assert!(preview_text.contains("+extra"));
-}
-
-#[test]
-fn file_write_rejects_existing_file_without_overwrite_flag() {
-    let base = unique_temp_dir("loong-file-overwrite-denied");
-    let root = base.join("root");
-    fs::create_dir_all(&root).expect("create root");
-
-    let target_path = root.join("note.txt");
-    fs::write(&target_path, "original").expect("seed original file");
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root),
-        ..ToolRuntimeConfig::default()
-    };
-    let request = ToolCoreRequest {
-        tool_name: "file.write".to_owned(),
-        payload: json!({
-            "path": "note.txt",
-            "content": "updated",
-            "create_dirs": true
-        }),
-    };
-    let error = execute_file_write_tool_with_config(request, &config)
-        .expect_err("existing file should require overwrite=true");
-
-    assert!(
-        error.contains("overwrite=true"),
-        "unexpected error: {error}"
-    );
-    let written = fs::read_to_string(&target_path).expect("read original file");
-    assert_eq!(written, "original");
-    let _ = fs::remove_dir_all(base);
-}
-
-#[test]
-fn file_write_allows_existing_file_with_overwrite_true() {
-    let base = unique_temp_dir("loong-file-overwrite-allowed");
-    let root = base.join("root");
-    fs::create_dir_all(&root).expect("create root");
-
-    let target_path = root.join("note.txt");
-    fs::write(&target_path, "original").expect("seed original file");
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root),
-        ..ToolRuntimeConfig::default()
-    };
-    let request = ToolCoreRequest {
-        tool_name: "file.write".to_owned(),
-        payload: json!({
-            "path": "note.txt",
-            "content": "updated",
-            "create_dirs": true,
-            "overwrite": true
-        }),
-    };
-    let outcome = execute_file_write_tool_with_config(request, &config)
-        .expect("overwrite=true should allow replacing an existing file");
-
-    assert_eq!(outcome.status, "ok");
-    let written = fs::read_to_string(&target_path).expect("read updated file");
-    assert_eq!(written, "updated");
-    let _ = fs::remove_dir_all(base);
-}
-
-#[cfg(unix)]
-#[test]
-fn file_write_rejects_dangling_symlink_even_with_overwrite_true() {
-    let base = unique_temp_dir("loong-file-overwrite-symlink");
-    let root = base.join("root");
-    let outside = base.join("outside");
-    fs::create_dir_all(&root).expect("create root");
-    fs::create_dir_all(&outside).expect("create outside");
-
-    let dangling_target = outside.join("secret.txt");
-    let link_path = root.join("dangling-link");
-    create_symlink(&dangling_target, &link_path).expect("create dangling symlink");
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root),
-        ..ToolRuntimeConfig::default()
-    };
-    let request = ToolCoreRequest {
-        tool_name: "file.write".to_owned(),
-        payload: json!({
-            "path": "dangling-link",
-            "content": "updated",
-            "overwrite": true
-        }),
-    };
-    let error = execute_file_write_tool_with_config(request, &config).expect_err("symlink denied");
-
-    assert!(error.contains("refuses to open symlink"));
-    assert!(!dangling_target.exists());
-    let _ = fs::remove_dir_all(base);
-}
-
-fn make_edit_blocks_request(path: &str, edits: &[(&str, &str)]) -> ToolCoreRequest {
-    let edit_blocks = edits
-        .iter()
-        .map(|(old, new)| {
-            json!({
-                "old_text": old,
-                "new_text": new,
-            })
-        })
-        .collect::<Vec<_>>();
-    ToolCoreRequest {
-        tool_name: "file.edit".to_owned(),
-        payload: json!({
-            "path": path,
-            "edits": edit_blocks,
-        }),
-    }
-}
-
-fn make_camel_case_edit_blocks_request(path: &str, edits: &[(&str, &str)]) -> ToolCoreRequest {
-    let edit_blocks = edits
-        .iter()
-        .map(|(old, new)| {
-            json!({
-                "oldText": old,
-                "newText": new,
-            })
-        })
-        .collect::<Vec<_>>();
-    ToolCoreRequest {
-        tool_name: "file.edit".to_owned(),
-        payload: json!({
-            "path": path,
-            "edits": edit_blocks,
-        }),
-    }
-}
-
-#[test]
-fn file_edit_single_match_succeeds() {
-    let base = unique_temp_dir("loong-file-edit-single");
-    let root = base.join("root");
-    fs::create_dir_all(&root).expect("create root");
-    let target = root.join("file.txt");
-    fs::write(&target, "hello world").expect("write");
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root),
-        ..ToolRuntimeConfig::default()
-    };
-    let result = execute_file_edit_tool_with_config(
-        make_edit_blocks_request("file.txt", &[("hello", "hi")]),
-        &config,
-    );
-    assert!(result.is_ok(), "unexpected error: {result:?}");
-    let outcome = result.unwrap();
-    assert_eq!(outcome.status, "ok");
-    assert_eq!(outcome.payload["replacements_made"], 1);
-    assert_eq!(fs::read_to_string(&target).unwrap(), "hi world");
-    let _ = fs::remove_dir_all(base);
-}
-
-#[test]
-fn file_edit_no_match_errors() {
-    let base = unique_temp_dir("loong-file-edit-nomatch");
-    let root = base.join("root");
-    fs::create_dir_all(&root).expect("create root");
-    fs::write(root.join("file.txt"), "hello world").expect("write");
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root),
-        ..ToolRuntimeConfig::default()
-    };
-    let err = execute_file_edit_tool_with_config(
-        make_edit_blocks_request("file.txt", &[("nothere", "x")]),
-        &config,
-    )
-    .expect_err("should fail");
-    assert!(err.contains("old_text not found"), "got: {err}");
-    let _ = fs::remove_dir_all(base);
-}
-
-#[test]
-fn file_edit_multiple_match_errors() {
-    let base = unique_temp_dir("loong-file-edit-multi");
-    let root = base.join("root");
-    fs::create_dir_all(&root).expect("create root");
-    fs::write(root.join("file.txt"), "a\na\n").expect("write");
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root),
-        ..ToolRuntimeConfig::default()
-    };
-    let err = execute_file_edit_tool_with_config(
-        make_edit_blocks_request("file.txt", &[("a", "b")]),
-        &config,
-    )
-    .expect_err("should fail");
-    assert!(err.contains("matches 2 locations"), "got: {err}");
-    let _ = fs::remove_dir_all(base);
-}
-
-#[test]
-fn file_edit_emits_change_preview_event() {
-    let base = unique_temp_dir("loong-file-edit-preview");
-    let root = base.join("root");
-    fs::create_dir_all(&root).expect("create root");
-    let target = root.join("file.txt");
-    fs::write(&target, "old line\nshared\n").expect("write original file");
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root),
-        ..ToolRuntimeConfig::default()
-    };
-    let request = make_edit_blocks_request("file.txt", &[("old line", "new line")]);
-    let sink = Arc::new(RecordingRuntimeSink::default());
-    let runtime_sink: Arc<dyn ToolRuntimeEventSink> = sink.clone();
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("current-thread runtime");
-
-    let outcome = runtime.block_on(with_tool_runtime_event_sink(runtime_sink, async {
-        execute_file_edit_tool_with_config(request, &config)
-    }));
-    let outcome = outcome.expect("file.edit should succeed");
-    let events = lock_runtime_events(&sink);
-    let preview = events.iter().find_map(|event| {
-        if let ToolRuntimeEvent::FileChangePreview(preview) = event {
-            return Some(preview);
-        }
-
-        None
-    });
-    let preview = preview.expect("file.edit should emit change preview");
-    let preview_text = preview.preview.as_deref().unwrap_or_default();
-
-    assert_eq!(outcome.status, "ok");
-    assert_eq!(preview.kind, ToolFileChangeKind::Edit);
-    assert_eq!(preview.added_lines, 1);
-    assert_eq!(preview.removed_lines, 1);
-    assert!(preview_text.contains("-old line"));
-    assert!(preview_text.contains("+new line"));
-}
-
-#[test]
-fn file_edit_exact_edit_blocks_apply_multiple_replacements() {
-    let base = unique_temp_dir("loongclaw-file-edit-blocks");
-    let root = base.join("root");
-    fs::create_dir_all(&root).expect("create root");
-    let target = root.join("file.txt");
-    fs::write(&target, "alpha\nbeta\ngamma\n").expect("write");
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root),
-        ..ToolRuntimeConfig::default()
-    };
-    let result = execute_file_edit_tool_with_config(
-        make_edit_blocks_request("file.txt", &[("alpha", "ALPHA"), ("gamma", "GAMMA")]),
-        &config,
-    );
-    assert!(result.is_ok(), "unexpected error: {result:?}");
-    let outcome = result.unwrap();
-    assert_eq!(outcome.status, "ok");
-    assert_eq!(outcome.payload["replacements_made"], 2);
-    assert_eq!(outcome.payload["edit_blocks_applied"], 2);
-    let resolved_target = resolve_safe_file_path_with_config("file.txt", &config)
-        .expect("resolved target path")
-        .display()
-        .to_string();
-    assert_eq!(outcome.payload["continuation"]["recommended_tool"], "read");
-    assert_eq!(
-        outcome.payload["continuation"]["recommended_payload"]["path"],
-        resolved_target
-    );
-    assert_eq!(fs::read_to_string(&target).unwrap(), "ALPHA\nbeta\nGAMMA\n");
-    let _ = fs::remove_dir_all(base);
-}
-
-#[test]
-fn file_edit_exact_edit_blocks_reject_non_unique_matches() {
-    let base = unique_temp_dir("loongclaw-file-edit-blocks-non-unique");
-    let root = base.join("root");
-    fs::create_dir_all(&root).expect("create root");
-    fs::write(root.join("file.txt"), "dup\ndup\n").expect("write");
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root),
-        ..ToolRuntimeConfig::default()
-    };
-    let err = execute_file_edit_tool_with_config(
-        make_edit_blocks_request("file.txt", &[("dup", "only once")]),
-        &config,
-    )
-    .expect_err("non-unique block should fail");
-    assert!(err.contains("matches 2 locations"), "got: {err}");
-    let _ = fs::remove_dir_all(base);
-}
-
-#[test]
-fn file_edit_exact_edit_blocks_accept_camel_case_aliases() {
-    let base = unique_temp_dir("loongclaw-file-edit-blocks-camel");
-    let root = base.join("root");
-    fs::create_dir_all(&root).expect("create root");
-    let target = root.join("file.txt");
-    fs::write(&target, "hello world").expect("write");
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root),
-        ..ToolRuntimeConfig::default()
-    };
-    let result = execute_file_edit_tool_with_config(
-        make_camel_case_edit_blocks_request("file.txt", &[("hello", "hi")]),
-        &config,
-    );
-    assert!(result.is_ok(), "unexpected error: {result:?}");
-    assert_eq!(fs::read_to_string(&target).unwrap(), "hi world");
-    let _ = fs::remove_dir_all(base);
-}
-
-#[test]
 fn summarize_file_change_preview_preserves_shared_middle_lines_when_appending_tail() {
     let before_lines = vec!["old line".to_owned(), "shared".to_owned()];
     let after_lines = vec![
@@ -813,225 +1196,4 @@ fn summarize_file_change_preview_preserves_shared_middle_lines_when_appending_ta
     assert!(preview.contains("-old line"), "preview: {preview}");
     assert!(preview.contains("+new line"), "preview: {preview}");
     assert!(preview.contains("+extra"), "preview: {preview}");
-}
-
-#[test]
-fn file_edit_empty_old_string_errors() {
-    let base = unique_temp_dir("loong-file-edit-empty");
-    let root = base.join("root");
-    fs::create_dir_all(&root).expect("create root");
-    fs::write(root.join("file.txt"), "hello").expect("write");
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root),
-        ..ToolRuntimeConfig::default()
-    };
-    let err = execute_file_edit_tool_with_config(
-        make_edit_blocks_request("file.txt", &[("", "x")]),
-        &config,
-    )
-    .expect_err("should fail");
-    assert!(err.contains("old_text must not be empty"), "got: {err}");
-    let _ = fs::remove_dir_all(base);
-}
-
-#[cfg(unix)]
-#[test]
-fn file_edit_rejects_path_escape() {
-    let base = unique_temp_dir("loong-file-edit-escape");
-    let root = base.join("root");
-    let outside = base.join("outside");
-    fs::create_dir_all(&root).expect("create root");
-    fs::create_dir_all(&outside).expect("create outside");
-
-    let outside_file = outside.join("secret.txt");
-    fs::write(&outside_file, "secret content here").expect("write outside");
-    let link = root.join("escape-link");
-    assert!(create_symlink(&outside_file, &link).is_ok());
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root),
-        ..ToolRuntimeConfig::default()
-    };
-    let err = execute_file_edit_tool_with_config(
-        make_edit_blocks_request("escape-link", &[("secret", "pwned")]),
-        &config,
-    )
-    .expect_err("escape denied");
-
-    assert!(err.starts_with("policy_denied: "));
-    assert!(err.contains("escapes configured file root"));
-    let _ = fs::remove_dir_all(base);
-}
-
-#[test]
-fn glob_search_returns_workspace_relative_matches() {
-    let base = unique_temp_dir("loong-glob-search");
-    let root = base.join("root");
-    let nested = root.join("src/nested");
-    fs::create_dir_all(&nested).expect("create nested root");
-    fs::write(root.join("src/lib.rs"), "pub fn alpha() {}").expect("write lib");
-    fs::write(nested.join("mod.rs"), "pub fn beta() {}").expect("write mod");
-    fs::write(root.join("README.md"), "hello").expect("write readme");
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root),
-        ..ToolRuntimeConfig::default()
-    };
-    let request = ToolCoreRequest {
-        tool_name: "glob.search".to_owned(),
-        payload: json!({
-            "pattern": "src/**/*.rs",
-            "max_results": 10
-        }),
-    };
-    let outcome =
-        execute_glob_search_tool_with_config(request, &config).expect("glob search succeeds");
-    let matches = outcome.payload["matches"]
-        .as_array()
-        .expect("matches array");
-
-    assert_eq!(matches.len(), 2);
-    assert_eq!(matches[0]["path"], "src/lib.rs");
-    assert_eq!(matches[1]["path"], "src/nested/mod.rs");
-    assert_eq!(outcome.payload["continuation"]["state"], "path_listing");
-    assert_eq!(outcome.payload["continuation"]["is_terminal"], false);
-    assert_eq!(outcome.payload["continuation"]["recommended_tool"], "read");
-    assert_eq!(
-        outcome.payload["continuation"]["recommended_payload"]["path"],
-        "src/lib.rs"
-    );
-    let _ = fs::remove_dir_all(base);
-}
-
-#[test]
-fn content_search_returns_line_column_and_snippet() {
-    let base = unique_temp_dir("loong-content-search");
-    let root = base.join("root");
-    let nested = root.join("src");
-    fs::create_dir_all(&nested).expect("create nested root");
-    fs::write(
-        nested.join("main.rs"),
-        "fn main() {\n    println!(\"hello world\");\n}\n",
-    )
-    .expect("write main");
-    fs::write(root.join("notes.txt"), "hello from notes").expect("write notes");
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root),
-        ..ToolRuntimeConfig::default()
-    };
-    let request = ToolCoreRequest {
-        tool_name: "content.search".to_owned(),
-        payload: json!({
-            "query": "hello world",
-            "glob": "src/**/*.rs",
-            "max_results": 5
-        }),
-    };
-    let outcome =
-        execute_content_search_tool_with_config(request, &config).expect("content search succeeds");
-    let matches = outcome.payload["matches"]
-        .as_array()
-        .expect("matches array");
-    let first = matches.first().expect("first match");
-
-    assert_eq!(matches.len(), 1);
-    assert_eq!(first["path"], "src/main.rs");
-    assert_eq!(first["line"], 2);
-    assert_eq!(first["column"], 15);
-    assert_eq!(first["snippet"], "println!(\"hello world\");");
-    let _ = fs::remove_dir_all(base);
-}
-
-#[test]
-fn content_search_honors_explicit_root() {
-    let base = unique_temp_dir("loong-content-search-root");
-    let root = base.join("root");
-    let include = root.join("include");
-    let exclude = root.join("exclude");
-    fs::create_dir_all(&include).expect("create include");
-    fs::create_dir_all(&exclude).expect("create exclude");
-    fs::write(include.join("a.txt"), "needle here").expect("write include");
-    fs::write(exclude.join("b.txt"), "needle here too").expect("write exclude");
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root),
-        ..ToolRuntimeConfig::default()
-    };
-    let request = ToolCoreRequest {
-        tool_name: "content.search".to_owned(),
-        payload: json!({
-            "root": "include",
-            "query": "needle"
-        }),
-    };
-    let outcome =
-        execute_content_search_tool_with_config(request, &config).expect("content search succeeds");
-    let matches = outcome.payload["matches"]
-        .as_array()
-        .expect("matches array");
-
-    assert_eq!(matches.len(), 1);
-    assert_eq!(matches[0]["path"], "a.txt");
-    let _ = fs::remove_dir_all(base);
-}
-
-#[test]
-fn content_search_does_not_mark_exact_limit_files_as_truncated() {
-    let base = unique_temp_dir("loong-content-search-exact-limit");
-    let root = base.join("root");
-    fs::create_dir_all(&root).expect("create root");
-    fs::write(root.join("exact.txt"), "hello").expect("write exact-limit file");
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root),
-        ..ToolRuntimeConfig::default()
-    };
-    let request = ToolCoreRequest {
-        tool_name: "content.search".to_owned(),
-        payload: json!({
-            "query": "hello",
-            "max_bytes_per_file": 5
-        }),
-    };
-    let outcome =
-        execute_content_search_tool_with_config(request, &config).expect("content search succeeds");
-    let matches = outcome.payload["matches"]
-        .as_array()
-        .expect("matches array");
-    let first = matches.first().expect("first match");
-
-    assert_eq!(first["truncated_file"], false);
-    let _ = fs::remove_dir_all(base);
-}
-
-#[test]
-fn content_search_handles_unicode_case_insensitive_matches() {
-    let base = unique_temp_dir("loong-content-search-unicode");
-    let root = base.join("root");
-    fs::create_dir_all(&root).expect("create root");
-    fs::write(root.join("city.txt"), "Key value\n").expect("write city");
-
-    let config = ToolRuntimeConfig {
-        file_root: Some(root),
-        ..ToolRuntimeConfig::default()
-    };
-    let request = ToolCoreRequest {
-        tool_name: "content.search".to_owned(),
-        payload: json!({
-            "query": "key",
-            "case_sensitive": false
-        }),
-    };
-    let outcome =
-        execute_content_search_tool_with_config(request, &config).expect("content search succeeds");
-    let matches = outcome.payload["matches"]
-        .as_array()
-        .expect("matches array");
-    let first = matches.first().expect("first match");
-
-    assert_eq!(first["path"], "city.txt");
-    assert_eq!(first["match_text"], "Key");
-    let _ = fs::remove_dir_all(base);
 }

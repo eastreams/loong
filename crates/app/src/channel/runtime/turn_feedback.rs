@@ -220,7 +220,7 @@ fn channel_trace_visible_tool_name(tool_name: &str) -> String {
     match canonical_tool_name {
         "tool.search" => "discovery".to_owned(),
         "tool.invoke" => "hidden tool".to_owned(),
-        _ => crate::tools::user_visible_tool_name(canonical_tool_name),
+        _ => crate::tools::legacy_display_tool_name(canonical_tool_name),
     }
 }
 

@@ -60,9 +60,9 @@ fn delegate_child_prompt_summary_is_effective_stable_and_sparse() {
         timeout_seconds: 60,
         allow_shell_in_child: false,
         child_tool_allowlist: vec!["web.fetch".to_owned()],
+        capability_ceiling: loong_contracts::Capabilities::new(),
         workspace_root: None,
         runtime_narrowing: narrowing,
-        kernel_bound: false,
         identity: Some(ConstrainedSubagentIdentity {
             nickname: Some("child-research".to_owned()),
             specialization: Some("researcher".to_owned()),
@@ -87,7 +87,6 @@ Plan within these child-session runtime limits:\n\
 - child timeout seconds: 60\n\
 - child bash: denied\n\
 - child tool allowlist: web\n\
-- child runtime binding: direct\n\
 - subagent role: orchestrator\n\
 - subagent control scope: children\n\
 - web network private hosts: denied\n\

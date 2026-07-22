@@ -1,17 +1,15 @@
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::CliResult;
 use crate::acp::{
     AcpTurnResult, PersistedAcpRuntimeEventContext, build_persisted_runtime_event_records,
 };
 use crate::memory::{
     build_conversation_event_content, build_tool_decision_content, build_tool_outcome_content,
 };
+use crate::{CliResult, Context};
 
 use super::runtime::ConversationRuntime;
-use super::runtime_binding::ConversationRuntimeBinding;
-use super::turn_shared::ReplyPersistenceMode;
 
 const PROVIDER_ERROR_REPLY_PREFIX: &str = "[provider_error] ";
 
@@ -23,34 +21,14 @@ pub(super) fn provider_error_reply_body(reply: &str) -> Option<&str> {
     reply.strip_prefix(PROVIDER_ERROR_REPLY_PREFIX)
 }
 
-pub(super) async fn persist_success_turns<R: ConversationRuntime + ?Sized>(
+pub(super) async fn persist_reply_turns<R: ConversationRuntime + ?Sized>(
     runtime: &R,
-    session_id: &str,
     user_input: &str,
     assistant_reply: &str,
-    binding: ConversationRuntimeBinding<'_>,
+    ctx: &Context<'_>,
 ) -> CliResult<()> {
-    persist_and_ingest_turn(runtime, session_id, "user", user_input, binding).await?;
-    persist_and_ingest_turn(runtime, session_id, "assistant", assistant_reply, binding).await?;
-    Ok(())
-}
-
-pub(super) async fn persist_reply_turns_with_mode<R: ConversationRuntime + ?Sized>(
-    runtime: &R,
-    session_id: &str,
-    user_input: &str,
-    assistant_reply: &str,
-    persistence_mode: ReplyPersistenceMode,
-    binding: ConversationRuntimeBinding<'_>,
-) -> CliResult<()> {
-    match persistence_mode {
-        ReplyPersistenceMode::Success => {
-            persist_success_turns(runtime, session_id, user_input, assistant_reply, binding).await
-        }
-        ReplyPersistenceMode::InlineProviderError => {
-            persist_error_turns(runtime, session_id, user_input, assistant_reply, binding).await
-        }
-    }
+    persist_and_ingest_turn(runtime, "user", user_input, ctx).await?;
+    persist_and_ingest_turn(runtime, "assistant", assistant_reply, ctx).await
 }
 
 /// Persist a tool decision as a structured JSON assistant message.
@@ -60,11 +38,10 @@ pub(super) async fn persist_reply_turns_with_mode<R: ConversationRuntime + ?Size
 /// correlation identifiers (`session_id`, `turn_id`, `tool_call_id`).
 pub(super) async fn persist_tool_decision<R, D>(
     runtime: &R,
-    session_id: &str,
     turn_id: &str,
     tool_call_id: &str,
     decision: &D,
-    binding: ConversationRuntimeBinding<'_>,
+    ctx: &Context<'_>,
 ) -> CliResult<()>
 where
     R: ConversationRuntime + ?Sized,
@@ -75,7 +52,7 @@ where
         tool_call_id,
         serde_json::to_value(decision).map_err(|e| format!("serialize tool decision: {e}"))?,
     );
-    persist_and_ingest_turn(runtime, session_id, "assistant", &content, binding).await
+    persist_and_ingest_turn(runtime, "assistant", &content, ctx).await
 }
 
 /// Persist a tool outcome as a structured JSON assistant message.
@@ -85,11 +62,10 @@ where
 /// correlation identifiers (`session_id`, `turn_id`, `tool_call_id`).
 pub(super) async fn persist_tool_outcome<R, O>(
     runtime: &R,
-    session_id: &str,
     turn_id: &str,
     tool_call_id: &str,
     outcome: &O,
-    binding: ConversationRuntimeBinding<'_>,
+    ctx: &Context<'_>,
 ) -> CliResult<()>
 where
     R: ConversationRuntime + ?Sized,
@@ -100,127 +76,63 @@ where
         tool_call_id,
         serde_json::to_value(outcome).map_err(|e| format!("serialize tool outcome: {e}"))?,
     );
-    persist_and_ingest_turn(runtime, session_id, "assistant", &content, binding).await
+    persist_and_ingest_turn(runtime, "assistant", &content, ctx).await
 }
 
-pub(super) async fn persist_error_turns<R: ConversationRuntime + ?Sized>(
+pub(super) async fn persist_reply_turns_raw<R: ConversationRuntime + ?Sized>(
     runtime: &R,
-    session_id: &str,
-    user_input: &str,
-    synthetic_reply: &str,
-    binding: ConversationRuntimeBinding<'_>,
-) -> CliResult<()> {
-    persist_and_ingest_turn(runtime, session_id, "user", user_input, binding).await?;
-    persist_and_ingest_turn(runtime, session_id, "assistant", synthetic_reply, binding).await?;
-    Ok(())
-}
-
-pub(super) async fn persist_success_turns_raw<R: ConversationRuntime + ?Sized>(
-    runtime: &R,
-    session_id: &str,
     user_input: &str,
     assistant_reply: &str,
-    binding: ConversationRuntimeBinding<'_>,
+    ctx: &Context<'_>,
 ) -> CliResult<()> {
-    persist_turn_only(runtime, session_id, "user", user_input, binding).await?;
-    persist_turn_only(runtime, session_id, "assistant", assistant_reply, binding).await?;
-    Ok(())
+    runtime.persist_turn("user", user_input, ctx).await?;
+    runtime
+        .persist_turn("assistant", assistant_reply, ctx)
+        .await
 }
 
-pub(super) async fn persist_reply_turns_raw_with_mode<R: ConversationRuntime + ?Sized>(
-    runtime: &R,
-    session_id: &str,
-    user_input: &str,
-    assistant_reply: &str,
-    persistence_mode: ReplyPersistenceMode,
-    binding: ConversationRuntimeBinding<'_>,
-) -> CliResult<()> {
-    match persistence_mode {
-        ReplyPersistenceMode::Success => {
-            persist_success_turns_raw(runtime, session_id, user_input, assistant_reply, binding)
-                .await
-        }
-        ReplyPersistenceMode::InlineProviderError => {
-            persist_error_turns_raw(runtime, session_id, user_input, assistant_reply, binding).await
-        }
-    }
-}
-
-pub(super) async fn persist_error_turns_raw<R: ConversationRuntime + ?Sized>(
-    runtime: &R,
-    session_id: &str,
-    user_input: &str,
-    synthetic_reply: &str,
-    binding: ConversationRuntimeBinding<'_>,
-) -> CliResult<()> {
-    persist_turn_only(runtime, session_id, "user", user_input, binding).await?;
-    persist_turn_only(runtime, session_id, "assistant", synthetic_reply, binding).await?;
-    Ok(())
-}
-
+/// Preserve the intentional two-stage boundary shared by structured turns:
+/// durable legacy persistence first, then recursive context ingestion.
 async fn persist_and_ingest_turn<R: ConversationRuntime + ?Sized>(
     runtime: &R,
-    session_id: &str,
     role: &str,
     content: &str,
-    binding: ConversationRuntimeBinding<'_>,
+    ctx: &Context<'_>,
 ) -> CliResult<()> {
+    runtime.persist_turn(role, content, ctx).await?;
     runtime
-        .persist_turn(session_id, role, content, binding)
+        .ingest(
+            &json!({
+                "role": role,
+                "content": content,
+            }),
+            ctx,
+        )
         .await?;
-    if let Some(kernel_ctx) = binding.kernel_context() {
-        runtime
-            .ingest(
-                session_id,
-                &json!({
-                    "role": role,
-                    "content": content,
-                }),
-                kernel_ctx,
-            )
-            .await?;
-    }
     Ok(())
 }
 
 pub(super) async fn persist_conversation_event<R: ConversationRuntime + ?Sized>(
     runtime: &R,
-    session_id: &str,
     event_name: &str,
     payload: Value,
-    binding: ConversationRuntimeBinding<'_>,
+    ctx: &Context<'_>,
 ) -> CliResult<()> {
     let content = build_conversation_event_content(event_name, payload);
-    runtime
-        .persist_turn(session_id, "assistant", &content, binding)
-        .await
+    runtime.persist_turn("assistant", &content, ctx).await
 }
 
 pub(super) async fn persist_acp_runtime_events<R: ConversationRuntime + ?Sized>(
     runtime: &R,
-    session_id: &str,
     context: &PersistedAcpRuntimeEventContext,
     events: &[Value],
     result: Option<&AcpTurnResult>,
     error: Option<&str>,
-    binding: ConversationRuntimeBinding<'_>,
+    ctx: &Context<'_>,
 ) -> CliResult<()> {
     let records = build_persisted_runtime_event_records(context, events, result, error);
     for record in records {
-        persist_conversation_event(runtime, session_id, record.event, record.payload, binding)
-            .await?;
+        persist_conversation_event(runtime, record.event, record.payload, ctx).await?;
     }
     Ok(())
-}
-
-async fn persist_turn_only<R: ConversationRuntime + ?Sized>(
-    runtime: &R,
-    session_id: &str,
-    role: &str,
-    content: &str,
-    binding: ConversationRuntimeBinding<'_>,
-) -> CliResult<()> {
-    runtime
-        .persist_turn(session_id, role, content, binding)
-        .await
 }

@@ -30,13 +30,12 @@ pub struct DaemonTaskExecution {
 /// state instead of collapsing everything into a plain transport error.
 pub(crate) async fn execute_daemon_task_with_supervisor(
     kernel: &Kernel<SpecContextFactory>,
-    pack: &VerticalPackManifest,
     pack_id: &str,
     token: &CapabilityToken,
     intent: TaskIntent,
 ) -> CliResult<DaemonTaskExecution> {
     let mut supervisor = TaskSupervisor::new(intent);
-    let policy_context = SpecExecutionContext::new(pack, token, kernel.now_epoch_s(), None);
+    let policy_context = SpecExecutionContext::from_legacy_token(token);
     let dispatch_result = supervisor
         .execute(kernel, pack_id, token, &policy_context)
         .await;
@@ -183,6 +182,7 @@ pub(crate) fn normalize_explicit_acp_turn_execution_request(
 }
 
 pub(crate) async fn execute_explicit_acp_turn_request(
+    runtime: Arc<loong_runtime::runtime::Runtime<loong_app::RuntimeContextFactory>>,
     resolved_path: std::path::PathBuf,
     config: loong_app::config::LoongConfig,
     acp_manager: Arc<loong_app::acp::AcpSessionManager>,
@@ -191,6 +191,7 @@ pub(crate) async fn execute_explicit_acp_turn_request(
 ) -> CliResult<loong_app::agent_runtime::AgentTurnResult> {
     let (_address, gateway_request) = normalize_explicit_acp_turn_execution_request(request)?;
     execute_explicit_acp_turn_gateway_request(
+        runtime,
         resolved_path,
         config,
         acp_manager,
@@ -201,6 +202,7 @@ pub(crate) async fn execute_explicit_acp_turn_request(
 }
 
 pub(crate) async fn execute_explicit_acp_turn_gateway_request(
+    runtime: Arc<loong_runtime::runtime::Runtime<loong_app::RuntimeContextFactory>>,
     resolved_path: std::path::PathBuf,
     config: loong_app::config::LoongConfig,
     acp_manager: Arc<loong_app::acp::AcpSessionManager>,
@@ -210,7 +212,8 @@ pub(crate) async fn execute_explicit_acp_turn_gateway_request(
     let execution = loong_app::turn_gateway::TurnGatewayExecution {
         resolved_path,
         config,
-        kernel_ctx: None,
+        runtime,
+        agent_id: "gateway-acp".to_owned(),
         acp_manager: Some(acp_manager),
         event_sink,
         initialize_runtime_environment: false,
@@ -276,6 +279,7 @@ pub(crate) fn build_seeded_gateway_turn_execution(
 }
 
 pub(crate) async fn execute_seeded_gateway_turn(
+    runtime: Arc<loong_runtime::runtime::Runtime<loong_app::RuntimeContextFactory>>,
     execution: &SeededGatewayTurnExecution,
     observer: Option<loong_app::conversation::ConversationTurnObserverHandle>,
 ) -> Result<loong_app::agent_runtime::AgentTurnResult, String> {
@@ -300,6 +304,7 @@ pub(crate) async fn execute_seeded_gateway_turn(
         resolved_path,
         execution.run_config.clone(),
     )
+    .with_runtime(runtime, "gateway-openai")
     .without_runtime_environment_init();
     execute_daemon_turn_gateway_request(
         &turn_service,
@@ -395,7 +400,7 @@ fn build_daemon_runtime_kernel() -> Kernel<SpecContextFactory> {
     let audit_sink = Arc::new(InMemoryAuditSink::default());
     let audit_sink = audit_sink as Arc<dyn AuditSink>;
     let clock = Arc::new(SystemClock) as Arc<dyn kernel::Clock>;
-    let mut kernel = Kernel::<SpecContextFactory>::with_runtime(clock, audit_sink);
+    let mut kernel = Kernel::<SpecContextFactory>::with_legacy_allow_runtime(clock, audit_sink);
     let pack = daemon_runtime_pack_manifest();
     let register_pack_result = kernel.register_pack(pack);
     register_pack_result.expect("daemon runtime pack should register");
@@ -449,8 +454,6 @@ pub async fn run_demo() -> CliResult<()> {
     let token = kernel
         .issue_token(DEFAULT_PACK_ID, DEFAULT_AGENT_ID, 300)
         .map_err(|error| format!("token issue failed: {error}"))?;
-    let pack = loong_spec::default_pack_manifest();
-
     let task = TaskIntent {
         task_id: "task-bootstrap-01".to_owned(),
         objective: "summarize flaky test clusters".to_owned(),
@@ -459,7 +462,7 @@ pub async fn run_demo() -> CliResult<()> {
     };
 
     let task_dispatch =
-        execute_daemon_task_with_supervisor(&kernel, &pack, DEFAULT_PACK_ID, &token, task).await?;
+        execute_daemon_task_with_supervisor(&kernel, DEFAULT_PACK_ID, &token, task).await?;
     let (route, outcome) = require_successful_daemon_task_execution(&task_dispatch)?;
 
     println!(
@@ -467,7 +470,7 @@ pub async fn run_demo() -> CliResult<()> {
         route.harness_kind, task_dispatch.supervisor_state, outcome.output
     );
 
-    let policy_context = SpecExecutionContext::new(&pack, &token, kernel.now_epoch_s(), None);
+    let policy_context = SpecExecutionContext::from_legacy_token(&token);
     let connector_dispatch = kernel
         .execute_connector_core(
             DEFAULT_PACK_ID,
@@ -495,11 +498,8 @@ pub async fn run_task_cli(objective: &str, payload_raw: &str) -> CliResult<()> {
     let token = kernel
         .issue_token(DEFAULT_PACK_ID, DEFAULT_AGENT_ID, 120)
         .map_err(|error| format!("token issue failed: {error}"))?;
-    let pack = daemon_runtime_pack_manifest();
-
     let dispatch = execute_daemon_task_with_supervisor(
         &kernel,
-        &pack,
         DEFAULT_PACK_ID,
         &token,
         TaskIntent {
@@ -528,11 +528,8 @@ mod tests {
         let token = kernel
             .issue_token(DEFAULT_PACK_ID, DEFAULT_AGENT_ID, 120)
             .expect("issue token");
-        let pack = loong_spec::default_pack_manifest();
-
         let execution = execute_daemon_task_with_supervisor(
             &kernel,
-            &pack,
             DEFAULT_PACK_ID,
             &token,
             TaskIntent {
@@ -564,11 +561,8 @@ mod tests {
         let token = kernel
             .issue_token(DEFAULT_PACK_ID, DEFAULT_AGENT_ID, 120)
             .expect("issue token");
-        let pack = loong_spec::default_pack_manifest();
-
         let execution = execute_daemon_task_with_supervisor(
             &kernel,
-            &pack,
             DEFAULT_PACK_ID,
             &token,
             TaskIntent {
@@ -607,11 +601,8 @@ mod tests {
         let token = kernel
             .issue_token(DEFAULT_PACK_ID, DEFAULT_AGENT_ID, 120)
             .expect("issue token");
-        let pack = loong_spec::default_pack_manifest();
-
         let execution = execute_daemon_task_with_supervisor(
             &kernel,
-            &pack,
             "missing-pack",
             &token,
             TaskIntent {
@@ -643,14 +634,12 @@ mod tests {
         let token = kernel
             .issue_token(DEFAULT_PACK_ID, DEFAULT_AGENT_ID, 120)
             .expect("issue token");
-        let pack = daemon_runtime_pack_manifest();
         let payload = json!({
             "message": 42
         });
 
         let execution = execute_daemon_task_with_supervisor(
             &kernel,
-            &pack,
             DEFAULT_PACK_ID,
             &token,
             TaskIntent {

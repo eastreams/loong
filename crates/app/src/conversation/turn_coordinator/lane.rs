@@ -7,10 +7,10 @@ use crate::conversation::{
 pub(super) async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
     config: &LoongConfig,
     runtime: &R,
-    session_id: &str,
+    session_context: &Context<'_>,
     preparation: &ProviderTurnPreparation,
     turn: &ProviderTurn,
-    binding: ConversationRuntimeBinding<'_>,
+    legacy_tools: &DefaultLegacyToolDispatcher,
     ingress: Option<&ConversationIngressContext>,
     observer: Option<&ConversationTurnObserverHandle>,
     followup_chain_active: bool,
@@ -22,50 +22,17 @@ pub(super) async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         .any(|intent| intent.source.starts_with("provider_"));
     let search_tool_intents = 0usize;
     let discovery_search_turn = false;
-    let malformed_parse_followup_turn =
-        provider_turn_has_malformed_parse_followup_signal(&turn.raw_meta);
     let assistant_preface = turn.assistant_text.clone();
     let textual_tool_parse_followup_signal = provider_turn_has_textual_tool_parse_followup_signal(
         &turn.raw_meta,
         had_tool_intents,
         assistant_preface.as_str(),
     );
-    let supports_provider_turn_followup = followup_chain_active || malformed_parse_followup_turn;
     let lane = preparation.lane_plan.decision.lane;
-    let session_context = match runtime.session_context(config, session_id, binding) {
-        Ok(session_context) => session_context,
-        Err(error) => {
-            let turn_result = TurnResult::non_retryable_tool_error("session_context_failed", error);
-            let tool_events = build_provider_turn_tool_terminal_events(turn, &turn_result, None);
-            let tool_request_summary =
-                summarize_provider_lane_tool_request(turn, &turn_result, None);
-            return ProviderTurnLaneExecution {
-                lane,
-                assistant_preface,
-                provider_usage: provider_turn_usage(turn),
-                had_tool_intents,
-                provider_originated_tool_intents,
-                textual_tool_parse_followup_turn: textual_tool_parse_followup_signal,
-                tool_request_summary,
-                discovery_search_turn,
-                search_tool_intents,
-                malformed_parse_followup_turn,
-                supports_provider_turn_followup,
-                raw_tool_output_requested: preparation.raw_tool_output_requested,
-                turn_result,
-                safe_lane_terminal_route: None,
-                tool_events,
-            };
-        }
-    };
-    let base_app_dispatcher = DefaultAppToolDispatcher::with_config(
-        store::session_store_config_from_memory_config(&config.memory),
-        config.clone(),
-    );
-    let app_dispatcher = CoordinatorAppToolDispatcher {
+    let legacy_dispatcher = CoordinatorLegacyToolDispatcher {
         config,
         runtime,
-        fallback: &base_app_dispatcher,
+        fallback: legacy_tools,
     };
     let payload_summary_limit_chars = TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS;
     let parallel_tool_execution_enabled =
@@ -86,35 +53,31 @@ pub(super) async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
     );
     let validation = if use_safe_lane_plan_path {
         TurnEngine::with_tool_result_payload_summary_limit(usize::MAX, payload_summary_limit_chars)
-            .validate_turn_in_context(turn, &session_context)
+            .classify_turn(turn)
     } else {
-        engine.validate_turn_in_context(turn, &session_context)
+        engine.classify_turn(turn)
     };
     let (turn_result, safe_lane_terminal_route, fast_lane_tool_batch_trace) = match validation {
-        Ok(TurnValidation::FinalText(text)) => (TurnResult::FinalText(text), None, None),
-        Err(failure) => (TurnResult::ToolDenied(failure), None, None),
-        Ok(TurnValidation::ToolExecutionRequired) if use_safe_lane_plan_path => {
+        TurnValidation::FinalText(text) => (TurnResult::FinalText(text), None, None),
+        TurnValidation::ToolExecutionRequired if use_safe_lane_plan_path => {
             let outcome = execute_turn_with_safe_lane_plan(
                 config,
                 runtime,
-                session_id,
                 &preparation.lane_plan.decision,
                 turn,
-                &session_context,
-                &app_dispatcher,
-                binding,
+                session_context,
+                &legacy_dispatcher,
                 ingress,
             )
             .await;
             (outcome.result, outcome.terminal_route, None)
         }
-        Ok(TurnValidation::ToolExecutionRequired) => {
+        TurnValidation::ToolExecutionRequired => {
             let (result, trace) = engine
                 .execute_turn_in_context_with_trace(
                     turn,
-                    &session_context,
-                    &app_dispatcher,
-                    binding,
+                    session_context,
+                    &legacy_dispatcher,
                     ingress,
                     observer,
                 )
@@ -124,42 +87,27 @@ pub(super) async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
     };
 
     if let Some(trace) = fast_lane_tool_batch_trace.as_ref() {
-        let trace_persist_failed =
-            persist_fast_lane_tool_trace(runtime, session_id, trace, binding)
-                .await
-                .is_err();
-        if trace_persist_failed && let Some(ctx) = binding.kernel_context() {
-            let _ = ctx.kernel.record_audit_event(
-                Some(ctx.agent_id()),
-                AuditEventKind::PlaneInvoked {
-                    pack_id: ctx.pack_id().to_owned(),
-                    plane: ExecutionPlane::Runtime,
-                    tier: PlaneTier::Core,
-                    primary_adapter: "conversation.fast_lane".to_owned(),
-                    delegated_core_adapter: None,
+        if let Err(reason) = persist_fast_lane_tool_trace(runtime, trace, session_context).await {
+            let _ = session_context.runtime().record_audit_event(
+                Some(session_context.agent_id()),
+                AuditEventKind::RuntimeOperation {
                     operation: "conversation.fast_lane.tool_trace_persist_failed".to_owned(),
-                    required_capabilities: Vec::new(),
+                    outcome: RuntimeOperationOutcome::Failed { reason },
                 },
             );
         }
 
         let should_emit_batch_event = trace.has_execution_segments();
-        let batch_event_failed = should_emit_batch_event
-            && emit_fast_lane_tool_batch_event(runtime, session_id, trace, binding)
-                .await
-                .is_err();
-        if batch_event_failed && let Some(ctx) = binding.kernel_context() {
-            let _ = ctx.kernel.record_audit_event(
-                Some(ctx.agent_id()),
-                AuditEventKind::PlaneInvoked {
-                    pack_id: ctx.pack_id().to_owned(),
-                    plane: ExecutionPlane::Runtime,
-                    tier: PlaneTier::Core,
-                    primary_adapter: "conversation.fast_lane".to_owned(),
-                    delegated_core_adapter: None,
+        if should_emit_batch_event
+            && let Err(reason) =
+                emit_fast_lane_tool_batch_event(runtime, trace, session_context).await
+        {
+            let _ = session_context.runtime().record_audit_event(
+                Some(session_context.agent_id()),
+                AuditEventKind::RuntimeOperation {
                     operation: "conversation.fast_lane.fast_lane_tool_batch_persist_failed"
                         .to_owned(),
-                    required_capabilities: Vec::new(),
+                    outcome: RuntimeOperationOutcome::Failed { reason },
                 },
             );
         }

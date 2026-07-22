@@ -1,16 +1,55 @@
 use super::test_utils::*;
 use super::*;
-use crate::config::ToolConfig;
 use crate::test_utils::unique_temp_dir;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use loong_contracts::Capability;
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Metadata tests use the real builtin registry so typed schemas cannot
+/// accidentally fall back to catalog builders.
+fn metadata_runtime_for_test() -> crate::test_support::TestRuntimeSession {
+    crate::test_support::runtime_session_for_test(
+        "tool-metadata-test",
+        crate::tools::runtime_tool_view(),
+    )
+}
+
+#[cfg(feature = "tool-file")]
 #[test]
-fn normalize_without_fs_preserves_relative_parent_segments() {
-    let normalized = normalize_without_fs(Path::new("../../workspace/./src/../README.md"));
-    assert_eq!(normalized, PathBuf::from("../../workspace/README.md"));
+fn registered_read_spec_owns_line_window_metadata() {
+    let owner = metadata_runtime_for_test();
+    let (_, spec) = owner
+        .runtime
+        .tool_metadata(
+            &loong_contracts::ToolPath::new(["read"]).expect("test tool path must be valid"),
+        )
+        .expect("registered read metadata");
+    let properties = spec
+        .input_schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("read input schema properties");
+
+    assert!(properties.contains_key("offset"));
+    assert!(properties.contains_key("limit"));
+    assert!(
+        spec.argument_hint
+            .as_deref()
+            .is_some_and(|hint| hint.contains("offset?:integer") && hint.contains("limit?:integer"))
+    );
+}
+
+/// Exercise tool search with the registry metadata available in production.
+///
+/// The context-free legacy executor intentionally omits typed tools, so tests
+/// that assert `read` or `write` metadata must supply the real builtin plane.
+fn execute_tool_search_with_builtin_registry(
+    request: ToolCoreRequest,
+    config: &runtime_config::ToolRuntimeConfig,
+) -> Result<ToolCoreOutcome, String> {
+    let owner = metadata_runtime_for_test();
+    tool_search::execute_tool_search_tool_with_config(Some(owner.runtime.as_ref()), request, config)
 }
 
 #[test]
@@ -66,7 +105,9 @@ fn expected_tool_request_error_leaves_runtime_failures_as_warnable() {
 
 #[test]
 fn capability_snapshot_is_deterministic() {
-    let snapshot = capability_snapshot();
+    let owner = metadata_runtime_for_test();
+    let runtime = Some(owner.runtime.as_ref());
+    let snapshot = capability_snapshot(runtime).expect("builtin capability metadata");
     assert!(snapshot.starts_with("[tool_discovery_runtime]"));
     assert!(snapshot.contains("Available tools:"));
     assert!(snapshot.contains("- read:"));
@@ -83,7 +124,7 @@ fn capability_snapshot_is_deterministic() {
     assert!(!snapshot.contains("shell.exec"));
     assert!(!snapshot.contains("file.read"));
 
-    let snapshot2 = capability_snapshot();
+    let snapshot2 = capability_snapshot(runtime).expect("builtin capability metadata");
     assert!(snapshot2.starts_with("[tool_discovery_runtime]"));
     assert!(snapshot2.contains("- read:"));
 }
@@ -132,7 +173,9 @@ fn capability_snapshot_stays_compact_when_skills_are_installed() {
     )
     .expect("install should succeed");
 
-    let snapshot = capability_snapshot_with_config(&config);
+    let owner = metadata_runtime_for_test();
+    let snapshot = capability_snapshot_with_config(Some(owner.runtime.as_ref()), &config)
+        .expect("builtin capability metadata");
     assert!(snapshot.starts_with("[tool_discovery_runtime]"));
     assert!(snapshot.contains("[available_skills]"));
     assert!(snapshot.contains("demo-skill"));
@@ -160,7 +203,9 @@ fn capability_snapshot_stays_compact_when_skills_are_installed() {
 ))]
 #[test]
 fn capability_snapshot_only_lists_visible_direct_and_gateway_tools() {
-    let snapshot = capability_snapshot();
+    let owner = metadata_runtime_for_test();
+    let snapshot =
+        capability_snapshot(Some(owner.runtime.as_ref())).expect("builtin capability metadata");
     assert!(snapshot.contains("Available tools:"));
     assert!(snapshot.contains("- read:"));
     assert!(snapshot.contains("- write:"));
@@ -189,16 +234,21 @@ fn capability_snapshot_only_lists_visible_direct_and_gateway_tools() {
 #[test]
 fn tool_registry_returns_runtime_discoverable_tools_for_default_config() {
     let config = runtime_config::ToolRuntimeConfig::default();
-    let entries = tool_registry_with_config(Some(&config));
+    let owner = metadata_runtime_for_test();
+    let entries = tool_registry_with_config(Some(owner.runtime.as_ref()), Some(&config))
+        .expect("builtin tool registry metadata");
     let names = entries
         .iter()
         .map(|entry| entry.name.clone())
         .collect::<BTreeSet<_>>();
-    let expected =
-        visible_direct_tool_states_for_view(&runtime_tool_view_for_runtime_config(&config))
-            .into_iter()
-            .map(|state| state.surface_id)
-            .collect::<BTreeSet<_>>();
+    let expected = visible_direct_tool_states_for_view(&runtime_visible_tool_view(
+        owner.runtime.as_ref(),
+        &config,
+        None,
+    ))
+    .into_iter()
+    .map(|state| state.surface_id)
+    .collect::<BTreeSet<_>>();
     assert_eq!(names, expected);
 }
 
@@ -211,16 +261,21 @@ fn tool_registry_returns_runtime_discoverable_tools_for_default_config() {
 #[test]
 fn tool_registry_returns_runtime_discoverable_tools_for_default_config_no_websearch() {
     let config = runtime_config::ToolRuntimeConfig::default();
-    let entries = tool_registry_with_config(Some(&config));
+    let owner = metadata_runtime_for_test();
+    let entries = tool_registry_with_config(Some(owner.runtime.as_ref()), Some(&config))
+        .expect("builtin tool registry metadata");
     let names = entries
         .iter()
         .map(|entry| entry.name.clone())
         .collect::<BTreeSet<_>>();
-    let expected =
-        visible_direct_tool_states_for_view(&runtime_tool_view_for_runtime_config(&config))
-            .into_iter()
-            .map(|state| state.surface_id)
-            .collect::<BTreeSet<_>>();
+    let expected = visible_direct_tool_states_for_view(&runtime_visible_tool_view(
+        owner.runtime.as_ref(),
+        &config,
+        None,
+    ))
+    .into_iter()
+    .map(|state| state.surface_id)
+    .collect::<BTreeSet<_>>();
     assert_eq!(names, expected);
 }
 
@@ -233,25 +288,61 @@ fn tool_registry_re_exposes_session_mutation_tools_when_runtime_policy_allows_th
         ..runtime_config::ToolRuntimeConfig::default()
     };
 
-    let entries = tool_registry_with_config(Some(&config));
+    let owner = metadata_runtime_for_test();
+    let entries = tool_registry_with_config(Some(owner.runtime.as_ref()), Some(&config))
+        .expect("builtin tool registry metadata");
     let names = entries
         .iter()
         .map(|entry| entry.name.clone())
         .collect::<BTreeSet<_>>();
 
-    let expected =
-        visible_direct_tool_states_for_view(&runtime_tool_view_for_runtime_config(&config))
-            .into_iter()
-            .map(|state| state.surface_id)
-            .collect::<BTreeSet<_>>();
+    let expected = visible_direct_tool_states_for_view(&runtime_visible_tool_view(
+        owner.runtime.as_ref(),
+        &config,
+        None,
+    ))
+    .into_iter()
+    .map(|state| state.surface_id)
+    .collect::<BTreeSet<_>>();
     assert_eq!(names, expected);
+}
+
+#[cfg(feature = "tool-file")]
+#[test]
+fn tool_registry_and_snapshot_use_typed_read_summary() {
+    let config = runtime_config::ToolRuntimeConfig::default();
+    let owner = crate::test_support::runtime_session_for_test(
+        "typed-read-metadata",
+        crate::tools::runtime_tool_view(),
+    );
+    let ctx = owner.context();
+    let runtime = Some(ctx.runtime());
+    let registry =
+        tool_registry_with_config(runtime, Some(&config)).expect("typed tool registry metadata");
+    let read = registry
+        .iter()
+        .find(|entry| entry.name == "read")
+        .expect("read should be visible when file tools are compiled in");
+
+    assert!(
+        read.description
+            .contains("Read files, list paths, or search file contents in allowed roots.")
+    );
+    assert!(!read.description.contains("inspect file contents"));
+
+    let snapshot =
+        capability_snapshot_with_config(runtime, &config).expect("typed capability metadata");
+    assert!(
+        snapshot
+            .contains("- read: Read files, list paths, or search file contents in allowed roots.")
+    );
 }
 
 #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
 #[test]
 fn capability_snapshot_for_view_keeps_hidden_tools_out_of_direct_surface_copy() {
-    let view = ToolView::from_tool_names(["config.import", "shell.exec"]);
-    let snapshot = capability_snapshot_for_view(&view);
+    let view = ToolView::from_legacy_paths(["config.import", "shell.exec"]);
+    let snapshot = capability_snapshot_for_view(None, &view).expect("legacy capability metadata");
 
     assert!(snapshot.contains("Available tools:"));
     assert!(!snapshot.contains("- config.import:"));
@@ -261,9 +352,10 @@ fn capability_snapshot_for_view_keeps_hidden_tools_out_of_direct_surface_copy() 
 
 #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
 #[test]
-fn try_provider_tool_definitions_for_view_returns_empty_when_no_direct_tool_is_visible() {
-    let view = ToolView::from_tool_names(["config.import"]);
-    let defs = try_provider_tool_definitions_for_view(&view)
+fn provider_tool_definitions_for_view_returns_empty_when_no_direct_tool_is_visible() {
+    let view = ToolView::from_legacy_paths(["config.import"]);
+    let owner = metadata_runtime_for_test();
+    let defs = provider_tool_definitions_for_view(owner.runtime.as_ref(), &view)
         .expect("restricted runtime view should still expose direct tools");
     let names: Vec<&str> = defs
         .iter()
@@ -273,6 +365,31 @@ fn try_provider_tool_definitions_for_view_returns_empty_when_no_direct_tool_is_v
         .collect();
 
     assert!(names.is_empty());
+}
+
+#[cfg(feature = "tool-file")]
+#[test]
+fn provider_tool_definitions_do_not_resurrect_unregistered_typed_tools() {
+    let runtime = loong_runtime::runtime::Runtime::new(
+        loong_kernel::Kernel::<crate::context::RuntimeContextFactory>::new(),
+        loong_runtime::tool_plane::ToolPlaneRegistry::new(),
+    );
+
+    let definitions = provider_tool_definitions_for_view(&runtime, &runtime_tool_view())
+        .expect("legacy metadata remains available without typed registrations");
+    let names = definitions
+        .iter()
+        .filter_map(|definition| definition.get("function"))
+        .filter_map(|function| function.get("name"))
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+
+    for name in ["read", "write", "edit", "glob_search", "content_search"] {
+        assert!(
+            !names.contains(&name),
+            "unregistered typed tool `{name}` must remain absent"
+        );
+    }
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -376,15 +493,19 @@ fn runtime_tool_view_hides_web_fetch_when_disabled() {
 }
 
 #[test]
-fn runtime_tool_view_hides_hidden_file_executor_tools() {
+fn static_runtime_tool_view_does_not_duplicate_typed_file_registrations() {
     let root_view = runtime_tool_view_for_config(&crate::config::ToolConfig::default());
 
-    assert!(root_view.contains("read"));
-    assert!(root_view.contains("write"));
-    assert!(root_view.contains("edit"));
-    assert!(!root_view.contains("file.read"));
-    assert!(!root_view.contains("file.write"));
-    assert!(!root_view.contains("file.edit"));
+    for path in [
+        "read",
+        "write",
+        "edit",
+        "file.read",
+        "file.write",
+        "file.edit",
+    ] {
+        assert!(!root_view.contains(path));
+    }
 }
 
 #[test]
@@ -421,7 +542,7 @@ fn runtime_tool_view_respects_explicit_skills_toggle() {
 }
 
 #[test]
-fn runtime_tool_view_with_runtime_config_uses_runtime_skills_policy() {
+fn runtime_tool_view_for_runtime_config_uses_runtime_skills_policy() {
     let runtime_config = runtime_config::ToolRuntimeConfig {
         skills: runtime_config::SkillsRuntimePolicy {
             enabled: true,
@@ -430,7 +551,7 @@ fn runtime_tool_view_with_runtime_config_uses_runtime_skills_policy() {
         ..runtime_config::ToolRuntimeConfig::default()
     };
 
-    let view = runtime_tool_view_with_runtime_config(&ToolConfig::default(), &runtime_config);
+    let view = runtime_tool_view_for_runtime_config(&runtime_config);
 
     assert!(!view.contains("skills.fetch"));
     assert!(!view.contains("skills.list"));
@@ -460,7 +581,8 @@ fn capability_snapshot_with_config_uses_runtime_enabled_tool_view() {
         ..runtime_config::ToolRuntimeConfig::default()
     };
 
-    let snapshot = capability_snapshot_with_config(&config);
+    let snapshot =
+        capability_snapshot_with_config(None, &config).expect("legacy capability metadata");
     assert!(!snapshot.contains("- browser.open:"));
     assert!(!snapshot.contains("- web.fetch:"));
     assert!(!snapshot.contains("- delegate:"));
@@ -502,7 +624,12 @@ fn runtime_tool_view_exposes_sessions_send_only_when_messages_enabled() {
 #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
 #[test]
 fn delegate_child_tool_view_hides_shell_by_default() {
-    let view = delegate_child_tool_view_for_config(&crate::config::ToolConfig::default());
+    let owner = metadata_runtime_for_test();
+    let view = runtime_delegate_child_tool_view(
+        owner.runtime.as_ref(),
+        &crate::config::ToolConfig::default(),
+        None,
+    );
 
     assert!(view.contains("read"));
     assert!(view.contains("write"));
@@ -515,7 +642,8 @@ fn delegate_child_tool_view_can_allow_shell_when_enabled() {
     let mut config = crate::config::ToolConfig::default();
     config.delegate.allow_shell_in_child = true;
 
-    let view = delegate_child_tool_view_for_config(&config);
+    let owner = metadata_runtime_for_test();
+    let view = runtime_delegate_child_tool_view(owner.runtime.as_ref(), &config, None);
 
     assert!(view.contains("read"));
     assert!(view.contains("write"));
@@ -530,7 +658,13 @@ fn delegate_child_tool_view_can_allow_shell_when_enabled() {
 #[test]
 fn provider_tool_definitions_are_stable_and_cover_direct_surface() {
     let config = runtime_config::ToolRuntimeConfig::default();
-    let defs = provider_tool_definitions_with_config(Some(&config));
+    let owner = crate::test_support::runtime_session_for_test(
+        "provider-tool-metadata",
+        crate::tools::runtime_tool_view(),
+    );
+    let ctx = owner.context();
+    let defs = provider_tool_definitions_with_config(ctx.runtime(), Some(&config))
+        .expect("builtin provider metadata");
     let expected_names = vec!["bash", "browse", "edit", "read", "web", "write"];
     assert_eq!(defs.len(), expected_names.len());
 
@@ -557,6 +691,20 @@ fn provider_tool_definitions_are_stable_and_cover_direct_surface() {
         }
     }
 
+    let read = defs
+        .iter()
+        .find(|item| {
+            item.get("function")
+                .and_then(|function| function.get("name"))
+                .and_then(Value::as_str)
+                == Some("read")
+        })
+        .expect("read definition should exist");
+    assert_eq!(
+        read["function"]["description"],
+        "Read files, list paths, or search file contents in allowed roots."
+    );
+
     let web = defs
         .iter()
         .find(|item| {
@@ -579,15 +727,61 @@ fn provider_tool_definitions_are_stable_and_cover_direct_surface() {
     assert!(web_provider_description.contains("plain URL fetch/request mode"));
 }
 
+#[cfg(not(feature = "tool-file"))]
 #[test]
-fn provider_exposed_tool_gate_covers_direct_and_gateway_tools() {
-    assert!(is_provider_exposed_tool_name("read"));
-    assert!(is_provider_exposed_tool_name("write"));
+fn provider_tool_definitions_hide_typed_file_tools_when_file_feature_disabled() {
+    let config = runtime_config::ToolRuntimeConfig::default();
+    let owner = metadata_runtime_for_test();
+    let defs = provider_tool_definitions_with_config(owner.runtime.as_ref(), Some(&config))
+        .expect("builtin provider metadata");
+    let names = defs
+        .iter()
+        .filter_map(|item| item.get("function"))
+        .filter_map(|function| function.get("name"))
+        .filter_map(Value::as_str)
+        .collect::<BTreeSet<_>>();
+
+    assert!(!names.contains("read"));
+    assert!(!names.contains("write"));
+}
+
+#[cfg(not(feature = "tool-file"))]
+#[test]
+fn runtime_surfaces_hide_file_tools_when_file_feature_disabled() {
+    let config = runtime_config::ToolRuntimeConfig::default();
+    let view = runtime_tool_view_for_runtime_config(&config);
+
+    for tool_name in ["read", "write", "edit"] {
+        assert!(!view.contains(tool_name), "{tool_name} should be hidden");
+    }
+
+    let registry_names = tool_registry_with_config(None, Some(&config))
+        .expect("legacy tool registry metadata")
+        .into_iter()
+        .map(|entry| entry.name)
+        .collect::<BTreeSet<_>>();
+    let search_entry_names = runtime_tool_search_entries(None, &config, None, false)
+        .expect("legacy search metadata")
+        .into_iter()
+        .map(|entry| entry.canonical_name)
+        .collect::<BTreeSet<_>>();
+    let snapshot =
+        capability_snapshot_with_config(None, &config).expect("legacy capability metadata");
+
+    for tool_name in ["read", "write", "edit"] {
+        assert!(!registry_names.contains(tool_name));
+        assert!(!search_entry_names.contains(tool_name));
+        assert!(!snapshot.contains(&format!("- {tool_name}:")));
+    }
+}
+
+#[test]
+fn legacy_provider_exposed_tool_gate_uses_catalog_ownership() {
     assert!(is_provider_exposed_tool_name("bash"));
-    assert!(is_provider_exposed_tool_name("edit"));
     assert!(is_provider_exposed_tool_name("browse"));
-    assert!(is_provider_exposed_tool_name("file.read"));
     assert!(!is_provider_exposed_tool_name("shell.exec"));
+    assert!(!is_provider_exposed_tool_name("read"));
+    assert!(!is_provider_exposed_tool_name("file.read"));
 }
 
 #[cfg(feature = "tool-http")]
@@ -656,102 +850,6 @@ fn shell_exec_catalog_exposes_timeout_ms() {
     );
 }
 
-#[cfg(feature = "tool-file")]
-#[test]
-fn file_write_catalog_exposes_overwrite_flag() {
-    let catalog = tool_catalog();
-    let descriptor = catalog
-        .descriptor("write")
-        .expect("write should be in the catalog");
-    let definition = descriptor.provider_definition();
-    let properties = definition["function"]["parameters"]["properties"]
-        .as_object()
-        .expect("write parameters");
-    let required_fields = definition["function"]["parameters"]["required"].as_array();
-
-    assert!(
-        properties.contains_key("overwrite"),
-        "write schema should expose overwrite parameter"
-    );
-    assert!(
-        required_fields
-            .is_none_or(|fields| !fields.contains(&Value::String("overwrite".to_owned()))),
-        "write schema should keep overwrite optional"
-    );
-
-    let entry = catalog::find_tool_catalog_entry("file.write")
-        .expect("file.write alias should resolve in catalog entries");
-    assert!(
-        entry
-            .argument_hint
-            .split(',')
-            .any(|part| part == "overwrite?:boolean"),
-        "write argument hint should expose overwrite"
-    );
-}
-
-#[cfg(feature = "tool-file")]
-#[test]
-fn direct_edit_catalog_exposes_exact_edit_blocks_and_write_stays_whole_file_only() {
-    let catalog = tool_catalog();
-    let write_descriptor = catalog
-        .descriptor("write")
-        .expect("write should be in the catalog");
-    let write_definition = write_descriptor.provider_definition();
-    let write_properties = write_definition["function"]["parameters"]["properties"]
-        .as_object()
-        .expect("write parameters");
-
-    assert!(
-        write_properties.contains_key("content"),
-        "write schema should keep whole-file content mode"
-    );
-    assert!(!write_properties.contains_key("edits"));
-    assert!(!write_properties.contains_key("old_string"));
-    assert!(!write_properties.contains_key("new_string"));
-    assert!(
-        write_definition["function"]["parameters"]
-            .get("anyOf")
-            .is_none(),
-        "write should no longer advertise mixed edit branches"
-    );
-    assert_eq!(write_descriptor.required_fields(), vec!["path", "content"]);
-
-    let edit_descriptor = catalog
-        .descriptor("edit")
-        .expect("edit should be in the catalog");
-    let edit_definition = edit_descriptor.provider_definition();
-    let edit_properties = edit_definition["function"]["parameters"]["properties"]
-        .as_object()
-        .expect("edit parameters");
-
-    assert!(
-        edit_properties.contains_key("edits"),
-        "edit schema should expose exact edit blocks"
-    );
-    assert!(
-        edit_descriptor.argument_hint().contains("edits:array"),
-        "edit argument hint should expose edits"
-    );
-    assert!(
-        edit_descriptor
-            .parameter_types()
-            .contains(&("edits", "array")),
-        "edit parameter types should expose edits"
-    );
-    assert_eq!(edit_descriptor.required_fields(), vec!["path", "edits"]);
-    assert_eq!(
-        edit_definition["function"]["parameters"]["required"],
-        json!(["path", "edits"])
-    );
-    assert!(
-        edit_definition["function"]["parameters"]
-            .get("anyOf")
-            .is_none(),
-        "edit should expose one canonical provider-visible shape"
-    );
-}
-
 #[cfg(feature = "tool-websearch")]
 #[test]
 fn tool_registry_hides_web_search_when_runtime_disabled() {
@@ -763,7 +861,8 @@ fn tool_registry_hides_web_search_when_runtime_disabled() {
         ..runtime_config::ToolRuntimeConfig::default()
     };
 
-    let entries = tool_registry_with_config(Some(&config));
+    let entries =
+        tool_registry_with_config(None, Some(&config)).expect("legacy tool registry metadata");
 
     assert!(
         !entries.iter().any(|entry| entry.name == "web.search"),
@@ -796,7 +895,9 @@ fn provider_tool_definitions_trim_web_query_mode_when_search_is_runtime_disabled
         ..runtime_config::ToolRuntimeConfig::default()
     };
 
-    let defs = provider_tool_definitions_with_config(Some(&config));
+    let owner = metadata_runtime_for_test();
+    let defs = provider_tool_definitions_with_config(owner.runtime.as_ref(), Some(&config))
+        .expect("builtin provider metadata");
     let web = defs
         .iter()
         .find(|item| {
@@ -818,8 +919,12 @@ fn provider_tool_definitions_trim_web_query_mode_when_search_is_runtime_disabled
 
 #[test]
 fn provider_tool_definitions_include_browse_surface_when_browser_is_enabled() {
-    let defs =
-        provider_tool_definitions_with_config(Some(&runtime_config::ToolRuntimeConfig::default()));
+    let owner = metadata_runtime_for_test();
+    let defs = provider_tool_definitions_with_config(
+        owner.runtime.as_ref(),
+        Some(&runtime_config::ToolRuntimeConfig::default()),
+    )
+    .expect("builtin provider metadata");
     assert!(defs.iter().any(|item| {
         item.get("function")
             .and_then(|function| function.get("name"))
@@ -830,8 +935,12 @@ fn provider_tool_definitions_include_browse_surface_when_browser_is_enabled() {
 
 #[test]
 fn provider_tool_definitions_expose_browse_page_actions() {
-    let defs =
-        provider_tool_definitions_with_config(Some(&runtime_config::ToolRuntimeConfig::default()));
+    let owner = metadata_runtime_for_test();
+    let defs = provider_tool_definitions_with_config(
+        owner.runtime.as_ref(),
+        Some(&runtime_config::ToolRuntimeConfig::default()),
+    )
+    .expect("builtin provider metadata");
     let browse = defs
         .iter()
         .find(|item| {
@@ -873,7 +982,8 @@ fn runtime_tool_search_entries_trim_web_search_mode_when_query_mode_is_disabled(
         ..runtime_config::ToolRuntimeConfig::default()
     };
 
-    let entries = runtime_tool_search_entries(&config, None, false);
+    let entries =
+        runtime_tool_search_entries(None, &config, None, false).expect("legacy search metadata");
     let web = entries
         .iter()
         .find(|entry| entry.tool_id == "web")
@@ -897,14 +1007,20 @@ fn runtime_tool_search_entries_hide_browse_surface_when_browser_is_disabled() {
         },
         ..runtime_config::ToolRuntimeConfig::default()
     };
-    let entries = runtime_tool_search_entries(&config, None, false);
+    let entries =
+        runtime_tool_search_entries(None, &config, None, false).expect("legacy search metadata");
     assert!(!entries.iter().any(|entry| entry.tool_id == "browse"));
 }
 
 #[test]
 fn runtime_tool_search_entries_expose_browse_surface_when_browser_is_enabled() {
-    let entries =
-        runtime_tool_search_entries(&runtime_config::ToolRuntimeConfig::default(), None, false);
+    let entries = runtime_tool_search_entries(
+        None,
+        &runtime_config::ToolRuntimeConfig::default(),
+        None,
+        false,
+    )
+    .expect("legacy search metadata");
     let browse = entries
         .iter()
         .find(|entry| entry.tool_id == "browse")
@@ -922,8 +1038,8 @@ fn canonical_tool_name_maps_known_aliases() {
     assert_eq!(canonical_tool_name("claw.migrate"), "config.import");
     assert_eq!(canonical_tool_name("claw_migrate"), "config.import");
     assert_eq!(canonical_tool_name("config_import"), "config.import");
-    assert_eq!(canonical_tool_name("file_read"), "read");
-    assert_eq!(canonical_tool_name("file_write"), "write");
+    assert_eq!(canonical_tool_name("file_read"), "file_read");
+    assert_eq!(canonical_tool_name("file_write"), "file_write");
     assert_eq!(canonical_tool_name("provider_switch"), "provider.switch");
     assert_eq!(canonical_tool_name("browser_open"), "browser.open");
     assert_eq!(canonical_tool_name("browse.open"), "browser.open");
@@ -931,7 +1047,7 @@ fn canonical_tool_name_maps_known_aliases() {
     assert_eq!(canonical_tool_name("browse.extract"), "browser.extract");
     assert_eq!(canonical_tool_name("browser_click"), "browser.click");
     assert_eq!(canonical_tool_name("browse.click"), "browser.click");
-    assert_eq!(canonical_tool_name("file_edit"), "edit");
+    assert_eq!(canonical_tool_name("file_edit"), "file_edit");
     assert_eq!(canonical_tool_name("shell_exec"), "shell.exec");
     assert_eq!(canonical_tool_name("shell"), "shell.exec");
     assert_eq!(canonical_tool_name("web_fetch"), "web.fetch");
@@ -977,20 +1093,7 @@ fn canonical_tool_name_maps_known_aliases() {
         canonical_tool_name("feishu_calendar_freebusy"),
         "feishu.calendar.freebusy"
     );
-    assert_eq!(canonical_tool_name("file.read"), "read");
-}
-
-#[test]
-fn tool_id_visible_in_view_supports_direct_aliases_and_grouped_surfaces() {
-    let view = ToolView::from_tool_names(["file.read", "feishu.messages.send"]);
-
-    assert!(tool_id_visible_in_view("file.read", &view));
-    assert!(tool_id_visible_in_view("read", &view));
-    assert!(tool_id_visible_in_view("feishu.messages.send", &view));
-    assert!(tool_id_visible_in_view("feishu_messages_send", &view));
-    assert!(!tool_id_visible_in_view("channel", &view));
-    assert!(!tool_id_visible_in_view("skills", &view));
-    assert!(!tool_id_visible_in_view("skills.install", &view));
+    assert_eq!(canonical_tool_name("file.read"), "file.read");
 }
 
 #[cfg(feature = "tool-file")]
@@ -1043,7 +1146,7 @@ fn tool_search_returns_direct_results_for_common_file_queries() {
     fs::write(root.join("README.md"), "hello tool search").expect("write fixture");
 
     let config = test_tool_runtime_config(root.clone());
-    let outcome = execute_tool_core_with_config(
+    let outcome = execute_tool_search_with_builtin_registry(
         ToolCoreRequest {
             tool_name: "tool.search".to_owned(),
             payload: json!({
@@ -1668,8 +1771,8 @@ fn tool_search_matches_prompt_style_queries_across_tool_surfaces() {
             tool_name: "tool.search".to_owned(),
             payload,
         };
-        let outcome =
-            execute_tool_core_with_config(request, &config).expect("tool search should succeed");
+        let outcome = execute_tool_search_with_builtin_registry(request, &config)
+            .expect("tool search should succeed");
         let results = outcome.payload["results"].as_array().expect("results");
         let expected_entry = results
             .iter()
@@ -1702,7 +1805,7 @@ fn tool_search_uses_coarse_listing_fallback_when_query_is_missing() {
     std::fs::create_dir_all(&root).expect("create fixture root");
 
     let config = test_tool_runtime_config(root.clone());
-    let outcome = execute_tool_core_with_config(
+    let outcome = execute_tool_search_with_builtin_registry(
         ToolCoreRequest {
             tool_name: "tool.search".to_owned(),
             payload: json!({
@@ -1774,7 +1877,7 @@ fn tool_search_prefers_direct_write_for_write_queries() {
     std::fs::create_dir_all(&root).expect("create fixture root");
 
     let config = test_tool_runtime_config(root.clone());
-    let outcome = execute_tool_core_with_config(
+    let outcome = execute_tool_search_with_builtin_registry(
         ToolCoreRequest {
             tool_name: "tool.search".to_owned(),
             payload: json!({
@@ -1803,7 +1906,7 @@ fn tool_search_accepts_keywords_array_queries() {
     std::fs::create_dir_all(&root).expect("create fixture root");
 
     let config = test_tool_runtime_config(root.clone());
-    let outcome = execute_tool_core_with_config(
+    let outcome = execute_tool_search_with_builtin_registry(
         ToolCoreRequest {
             tool_name: "tool.search".to_owned(),
             payload: json!({
@@ -1830,7 +1933,7 @@ fn tool_search_accepts_keywords_array_queries() {
 
 #[test]
 fn capability_snapshot_summarizes_hidden_tags_without_tool_names() {
-    let snapshot = capability_snapshot();
+    let snapshot = capability_snapshot(None).expect("legacy capability metadata");
     assert!(!snapshot.contains("Hidden specialized tool tags currently discoverable:"));
 }
 
@@ -1858,9 +1961,12 @@ fn runtime_discoverable_tool_surface_summary_only_reports_direct_surfaces() {
 fn runtime_discoverable_tool_surface_summary_uses_provider_invokable_hidden_entries() {
     let config = runtime_config::ToolRuntimeConfig::default();
     let view = runtime_tool_view_for_runtime_config(&config);
-    let all_discoverable_entries = runtime_discoverable_tool_entries(&config, Some(&view), false);
+    let all_discoverable_entries =
+        runtime_discoverable_tool_entries(None, &config, Some(&view), false)
+            .expect("legacy discoverable metadata");
     let provider_discoverable_entries =
-        runtime_discoverable_tool_entries(&config, Some(&view), true);
+        runtime_discoverable_tool_entries(None, &config, Some(&view), true)
+            .expect("legacy discoverable metadata");
     let all_discoverable_names = all_discoverable_entries
         .iter()
         .map(|entry| entry.canonical_name.as_str())
@@ -1902,164 +2008,8 @@ fn direct_web_routes_low_level_request_fields_through_web_surface() {
 }
 
 #[test]
-fn direct_read_ignores_empty_mode_fields_and_accepts_glob_alias() {
-    assert_eq!(
-        super::routing::route_direct_tool_name(
-            "read",
-            &json!({
-                "pattern": "",
-                "path": "",
-                "query": "",
-                "glob": "README.md|AGENTS.md",
-                "root": ".",
-                "max_results": 20
-            })
-        )
-        .expect("glob alias should route through direct read"),
-        "read"
-    );
-}
-
-#[test]
-fn direct_read_prioritizes_path_over_incidental_search_fields() {
-    assert_eq!(
-        super::routing::route_direct_tool_name(
-            "read",
-            &json!({
-                "path": "CLAUDE.md",
-                "query": "",
-                "pattern": "",
-                "glob": "*.md",
-                "root": "",
-                "max_results": 20,
-                "max_bytes_per_file": 20000
-            })
-        )
-        .expect("path mode should win over incidental search fields"),
-        "read"
-    );
-}
-
-#[test]
-fn direct_read_glob_alias_executes_glob_search_with_pattern_rewrite() {
-    let root = unique_temp_dir("loong-direct-read-glob-alias");
-    std::fs::create_dir_all(root.join("docs")).expect("create docs dir");
-    std::fs::write(root.join("AGENTS.md"), "agent guidance").expect("write AGENTS fixture");
-    std::fs::write(root.join("docs/README.md"), "docs overview").expect("write docs fixture");
-    let config = test_tool_runtime_config(&root).into_inner();
-
-    let outcome = execute_tool_core_with_config(
-        ToolCoreRequest {
-            tool_name: "read".to_owned(),
-            payload: json!({
-                "path": "",
-                "query": "",
-                "pattern": "",
-                "glob": "README.md|AGENTS.md",
-                "root": ".",
-                "max_results": 20
-            }),
-        },
-        &config,
-    )
-    .expect("glob alias direct read should execute");
-
-    assert_eq!(outcome.payload["tool_name"], "read");
-    let matches = outcome.payload["matches"]
-        .as_array()
-        .expect("glob search matches");
-    assert!(
-        matches.iter().any(|entry| entry["path"] == "AGENTS.md"),
-        "glob alias should return AGENTS.md: {matches:?}"
-    );
-}
-
-#[test]
-fn direct_read_path_mode_requires_kernel_context_after_dropping_incidental_search_fields() {
-    let root = unique_temp_dir("loong-direct-read-path-priority");
-    std::fs::create_dir_all(&root).expect("create read-priority root");
-    std::fs::write(root.join("CLAUDE.md"), "claude guidance").expect("write CLAUDE fixture");
-    let config = test_tool_runtime_config(&root).into_inner();
-
-    let error = execute_tool_core_with_config(
-        ToolCoreRequest {
-            tool_name: "read".to_owned(),
-            payload: json!({
-                "path": "CLAUDE.md",
-                "query": "",
-                "pattern": "",
-                "glob": "*.md",
-                "root": "",
-                "max_results": 20,
-                "max_bytes_per_file": 20000
-            }),
-        },
-        &config,
-    )
-    .expect_err("path-priority direct read requires kernel context");
-
-    assert_eq!(error, "read requires kernel access context");
-}
-
-#[test]
-fn direct_write_executes_without_hopping_through_hidden_file_write() {
-    let root = unique_temp_dir("loong-direct-write");
-    std::fs::create_dir_all(&root).expect("create direct-write root");
-    let config = test_tool_runtime_config(&root).into_inner();
-
-    let outcome = execute_tool_core_with_config(
-        ToolCoreRequest {
-            tool_name: "write".to_owned(),
-            payload: json!({
-                "path": "notes.txt",
-                "content": "hello"
-            }),
-        },
-        &config,
-    )
-    .expect("direct write should execute");
-
-    assert_eq!(outcome.payload["tool_name"], "write");
-    assert_eq!(
-        std::fs::read_to_string(root.join("notes.txt")).unwrap(),
-        "hello"
-    );
-}
-
-#[test]
-fn direct_edit_executes_without_hopping_through_hidden_file_edit() {
-    let root = unique_temp_dir("loong-direct-edit");
-    std::fs::create_dir_all(&root).expect("create direct-edit root");
-    std::fs::write(root.join("notes.txt"), "alpha\nbeta\n").expect("write edit fixture");
-    let config = test_tool_runtime_config(&root).into_inner();
-
-    let outcome = execute_tool_core_with_config(
-        ToolCoreRequest {
-            tool_name: "edit".to_owned(),
-            payload: json!({
-                "path": "notes.txt",
-                "edits": [
-                    {
-                        "old_text": "beta",
-                        "new_text": "gamma"
-                    }
-                ]
-            }),
-        },
-        &config,
-    )
-    .expect("direct edit should execute");
-
-    assert_eq!(outcome.payload["tool_name"], "edit");
-    assert_eq!(
-        std::fs::read_to_string(root.join("notes.txt")).unwrap(),
-        "alpha\ngamma\n"
-    );
-}
-
-#[test]
 fn direct_web_runtime_routing_keeps_network_mode_when_search_mode_is_unavailable() {
-    let view = ToolView::from_tool_names(["web.fetch", "http.request"]);
+    let view = ToolView::from_legacy_paths(["web.fetch", "http.request"]);
     let error = route_direct_web_tool_name_for_view(
         &json!({
             "query": "rust http client"
@@ -2073,7 +2023,7 @@ fn direct_web_runtime_routing_keeps_network_mode_when_search_mode_is_unavailable
         &json!({
             "url": "https://example.com/docs"
         }),
-        &ToolView::from_tool_names(["http.request"]),
+        &ToolView::from_legacy_paths(["http.request"]),
     )
     .expect("plain URL web mode should fall back to http.request when fetch mode is absent");
     assert_eq!(fallback, "http.request");
@@ -2165,20 +2115,25 @@ fn tool_search_respects_visible_tool_ids_from_runtime_context() {
     std::fs::create_dir_all(&root).expect("create fixture root");
 
     let config = test_tool_runtime_config(root.clone());
-    let outcome = execute_tool_core_with_test_context(
-        ToolCoreRequest {
-            tool_name: "tool.search".to_owned(),
-            payload: json!({
-                "query": "session history status",
-                "_loong": {
-                    "tool_search": {
-                        "visible_tool_ids": ["tool.search", "tool.invoke", "file.read"],
-                    }
+    let owner = crate::test_support::runtime_session_for_test(
+        "tool-search-visible-filter",
+        crate::tools::runtime_tool_view(),
+    );
+    let ctx = owner.context();
+    let request = ToolCoreRequest {
+        tool_name: "tool.search".to_owned(),
+        payload: json!({
+            "query": "session history status",
+            "_loong": {
+                "tool_search": {
+                    "visible_tool_ids": ["tool.search", "tool.invoke", "read"],
                 }
-            }),
-        },
-        &config,
-    )
+            }
+        }),
+    };
+    let outcome = with_trusted_internal_tool_payload(|| {
+        tool_search::execute_tool_search_tool_with_config(Some(ctx.runtime()), request, &config)
+    })
     .expect("tool search should succeed");
 
     let results = outcome.payload["results"].as_array().expect("results");
@@ -2188,6 +2143,123 @@ fn tool_search_respects_visible_tool_ids_from_runtime_context() {
             .is_some_and(|tool_id| tool_id.starts_with("session"))),
         "search should honor the injected visible tool surface: {results:?}"
     );
+    let read = results
+        .iter()
+        .find(|entry| entry["tool_id"] == "read")
+        .expect("exact read path should expose the typed read surface");
+    assert_eq!(
+        read["schema_preview"]["required_field_groups"],
+        json!([["path"], ["query"], ["pattern"]])
+    );
+    assert_eq!(
+        read["search_hint"],
+        "read one file, page through a large file, search workspace content, or list matching paths through one direct tool"
+    );
+    assert_eq!(
+        read["argument_hint"],
+        "path?:string,offset?:integer,limit?:integer,max_bytes?:integer,query?:string,pattern?:string,root?:string,glob?:string,max_results?:integer,max_bytes_per_file?:integer,case_sensitive?:boolean,include_directories?:boolean"
+    );
+    assert_eq!(read["tags"], json!(["surface", "read", "file", "search"]));
+    assert!(
+        read["schema_preview"]["common_optional_fields"]
+            .as_array()
+            .expect("read optional fields should be an array")
+            .contains(&json!("offset")),
+        "typed read schema should drive tool.search metadata: {read:?}"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[cfg(feature = "tool-file")]
+#[test]
+fn tool_search_uses_typed_write_metadata() {
+    let root = unique_temp_dir("loongclaw-tool-search-typed-write");
+    std::fs::create_dir_all(&root).expect("create fixture root");
+
+    let config = test_tool_runtime_config(root.clone());
+    let owner = crate::test_support::runtime_session_for_test(
+        "tool-search-write-metadata",
+        crate::tools::runtime_tool_view(),
+    );
+    let ctx = owner.context();
+    let request = ToolCoreRequest {
+        tool_name: "tool.search".to_owned(),
+        payload: json!({
+            "query": "write exact file contents",
+            "_loong": {
+                "tool_search": {
+                    "visible_tool_ids": ["tool.search", "tool.invoke", "write"],
+                }
+            }
+        }),
+    };
+    let outcome = with_trusted_internal_tool_payload(|| {
+        tool_search::execute_tool_search_tool_with_config(Some(ctx.runtime()), request, &config)
+    })
+    .expect("tool search should succeed");
+
+    let results = outcome.payload["results"].as_array().expect("results");
+    let write = results
+        .iter()
+        .find(|entry| entry["tool_id"] == "write")
+        .expect("exact write path should expose the typed write surface");
+
+    let required_fields = write["schema_preview"]["required_fields"]
+        .as_array()
+        .expect("write required fields should be an array");
+    assert!(required_fields.contains(&json!("path")));
+    assert!(required_fields.contains(&json!("content")));
+    assert_eq!(
+        write["search_hint"],
+        "write exact file contents, optionally creating parent directories or overwriting an existing file"
+    );
+    assert_eq!(write["tags"], json!(["surface", "write", "file"]));
+    assert!(
+        write["schema_preview"]["common_optional_fields"]
+            .as_array()
+            .expect("write optional fields should be an array")
+            .contains(&json!("overwrite")),
+        "typed write schema should drive tool.search metadata: {write:?}"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[cfg(feature = "tool-file")]
+#[tokio::test]
+async fn legacy_fallback_tool_search_receives_runtime_typed_metadata() {
+    let root = unique_temp_dir("loongclaw-kernel-tool-search-typed-metadata");
+    std::fs::create_dir_all(&root).expect("create fixture root");
+    let config = test_tool_runtime_config(root.clone());
+    let owner = crate::test_support::TurnTestHarness::with_tool_config(
+        BTreeSet::from([
+            Capability::InvokeTool,
+            Capability::FilesystemRead,
+            Capability::FilesystemWrite,
+        ]),
+        config.into_inner(),
+    );
+    let context = owner.context();
+
+    let outcome = crate::conversation::turn_engine::LegacyToolDispatcher::execute_core_tool(
+        &owner.legacy_tools,
+        &context,
+        ToolCoreRequest {
+            tool_name: "tool.search".to_owned(),
+            payload: json!({"query": "write exact file contents"}),
+        },
+        false,
+    )
+    .await
+    .expect("legacy search should read typed metadata through its execution context");
+
+    let results = outcome.payload["results"].as_array().expect("results");
+    let write = results
+        .iter()
+        .find(|entry| entry["tool_id"] == "write")
+        .expect("typed write metadata should be searchable");
+    assert_eq!(write["tags"], json!(["surface", "write", "file"]));
 
     std::fs::remove_dir_all(&root).ok();
 }
@@ -2198,8 +2270,9 @@ fn runtime_discoverable_tool_entries_intersect_injected_view_with_runtime_surfac
     let mut config = test_tool_runtime_config(std::env::temp_dir());
     config.sessions_enabled = false;
 
-    let injected = ToolView::from_tool_names(["sessions_list", "config.import"]);
-    let names = runtime_discoverable_tool_entries(&config, Some(&injected), false)
+    let injected = ToolView::from_legacy_paths(["sessions_list", "config.import"]);
+    let names = runtime_discoverable_tool_entries(None, &config, Some(&injected), false)
+        .expect("legacy discoverable metadata")
         .into_iter()
         .map(|entry| entry.canonical_name)
         .collect::<Vec<_>>();
@@ -2773,7 +2846,7 @@ fn tool_invoke_rejects_forged_reserved_internal_context_inside_arguments() {
 #[test]
 fn tool_search_hides_app_only_discoverables_from_provider_visible_results() {
     let config = runtime_config::ToolRuntimeConfig::default();
-    let result = execute_tool_core_with_config(
+    let result = execute_tool_search_with_builtin_registry(
         ToolCoreRequest {
             tool_name: "tool.search".to_owned(),
             payload: json!({
@@ -2917,7 +2990,7 @@ fn tool_search_hides_tools_exceeding_granted_capabilities() {
     std::fs::create_dir_all(&root).expect("create fixture root");
 
     let config = test_tool_runtime_config(root.clone());
-    let result = execute_tool_core_with_config(
+    let result = execute_tool_search_with_builtin_registry(
         ToolCoreRequest {
             tool_name: "tool.search".to_owned(),
             payload: json!({
@@ -2937,8 +3010,8 @@ fn tool_search_hides_tools_exceeding_granted_capabilities() {
         .filter_map(|entry| entry["tool_id"].as_str())
         .collect();
     assert!(
-        !tool_ids.contains(&"file.read"),
-        "file.read requires FilesystemRead, should be hidden when only InvokeTool is granted; got: {tool_ids:?}"
+        !tool_ids.contains(&"read"),
+        "read requires FilesystemRead, should be hidden when only InvokeTool is granted; got: {tool_ids:?}"
     );
 
     std::fs::remove_dir_all(&root).ok();
@@ -2981,70 +3054,6 @@ fn tool_search_hides_bash_exec_without_side_effect_capabilities() {
     std::fs::remove_dir_all(&root).ok();
 }
 
-#[test]
-fn is_known_tool_name_accepts_canonical_and_alias_forms() {
-    assert!(is_known_tool_name("config.import"));
-    assert!(is_known_tool_name("config_import"));
-    assert!(is_known_tool_name("claw.migrate"));
-    assert!(is_known_tool_name("claw_migrate"));
-    assert!(is_known_tool_name("file.read"));
-    assert!(is_known_tool_name("file_read"));
-    assert!(is_known_tool_name("file.write"));
-    assert!(is_known_tool_name("file_write"));
-    assert!(is_known_tool_name("provider.switch"));
-    assert!(is_known_tool_name("provider_switch"));
-    assert!(is_known_tool_name("browser.open"));
-    assert!(is_known_tool_name("browser_open"));
-    assert!(is_known_tool_name("browser.extract"));
-    assert!(is_known_tool_name("browser_extract"));
-    assert!(is_known_tool_name("browser.click"));
-    assert!(is_known_tool_name("browser_click"));
-    assert!(is_known_tool_name("shell.exec"));
-    assert!(is_known_tool_name("shell_exec"));
-    assert!(is_known_tool_name("shell"));
-    #[cfg(feature = "tool-http")]
-    {
-        assert!(is_known_tool_name(HTTP_REQUEST_TOOL_NAME));
-        assert!(is_known_tool_name("http_request"));
-    }
-    #[cfg(not(feature = "tool-http"))]
-    {
-        assert!(!is_known_tool_name(HTTP_REQUEST_TOOL_NAME));
-        assert!(!is_known_tool_name("http_request"));
-    }
-    assert!(is_known_tool_name("web.fetch"));
-    assert!(is_known_tool_name("web_fetch"));
-    assert!(is_known_tool_name("feishu.whoami"));
-    assert!(is_known_tool_name("feishu_whoami"));
-    assert!(is_known_tool_name("feishu.doc.create"));
-    assert!(is_known_tool_name("feishu_doc_create"));
-    assert!(is_known_tool_name("feishu.doc.append"));
-    assert!(is_known_tool_name("feishu_doc_append"));
-    assert!(is_known_tool_name("feishu.doc.read"));
-    assert!(is_known_tool_name("feishu_doc_read"));
-    assert!(is_known_tool_name("feishu.messages.history"));
-    assert!(is_known_tool_name("feishu_messages_history"));
-    assert!(is_known_tool_name("feishu.messages.get"));
-    assert!(is_known_tool_name("feishu_messages_get"));
-    assert!(is_known_tool_name("feishu.messages.resource.get"));
-    assert!(is_known_tool_name("feishu_messages_resource_get"));
-    assert!(is_known_tool_name("feishu.messages.search"));
-    assert!(is_known_tool_name("feishu_messages_search"));
-    assert!(is_known_tool_name("feishu.messages.send"));
-    assert!(is_known_tool_name("feishu_messages_send"));
-    assert!(is_known_tool_name("feishu.messages.reply"));
-    assert!(is_known_tool_name("feishu_messages_reply"));
-    assert!(is_known_tool_name("feishu.card.update"));
-    assert!(is_known_tool_name("feishu_card_update"));
-    assert!(is_known_tool_name("feishu.calendar.list"));
-    assert!(is_known_tool_name("feishu_calendar_list"));
-    assert!(is_known_tool_name("feishu.calendar.freebusy"));
-    assert!(is_known_tool_name("feishu_calendar_freebusy"));
-    assert!(!is_known_tool_name("agent"));
-    assert!(!is_known_tool_name("skills"));
-    assert!(!is_known_tool_name("nonexistent.tool"));
-}
-
 #[cfg(feature = "feishu-integration")]
 #[test]
 fn tool_registry_with_config_includes_feishu_tools_when_runtime_configured() {
@@ -3059,17 +3068,22 @@ fn tool_registry_with_config_includes_feishu_tools_when_runtime_configured() {
         integration: crate::config::FeishuIntegrationConfig::default(),
     });
 
-    let entries = tool_registry_with_config(Some(&config));
+    let owner = metadata_runtime_for_test();
+    let entries = tool_registry_with_config(Some(owner.runtime.as_ref()), Some(&config))
+        .expect("builtin tool registry metadata");
     let names = entries
         .iter()
         .map(|entry| entry.name.clone())
         .collect::<BTreeSet<_>>();
 
-    let expected =
-        visible_direct_tool_states_for_view(&runtime_tool_view_for_runtime_config(&config))
-            .into_iter()
-            .map(|state| state.surface_id)
-            .collect::<BTreeSet<_>>();
+    let expected = visible_direct_tool_states_for_view(&runtime_visible_tool_view(
+        owner.runtime.as_ref(),
+        &config,
+        None,
+    ))
+    .into_iter()
+    .map(|state| state.surface_id)
+    .collect::<BTreeSet<_>>();
     assert_eq!(names, expected);
 }
 
@@ -3087,7 +3101,13 @@ fn provider_tool_definitions_with_config_keeps_direct_surface_when_feishu_runtim
         integration: crate::config::FeishuIntegrationConfig::default(),
     });
 
-    let defs = provider_tool_definitions_with_config(Some(&config));
+    let owner = crate::test_support::runtime_session_for_test(
+        "feishu-provider-tool-metadata",
+        crate::tools::runtime_tool_view(),
+    );
+    let ctx = owner.context();
+    let defs = provider_tool_definitions_with_config(ctx.runtime(), Some(&config))
+        .expect("builtin provider metadata");
     let names = defs
         .iter()
         .filter_map(|item| item.get("function"))
@@ -12146,10 +12166,13 @@ fn provider_switch_without_selector_reports_current_provider_state() {
 
 #[test]
 fn unknown_tool_returns_hard_error_code() {
-    let err = execute_tool_core(ToolCoreRequest {
-        tool_name: "unknown".to_owned(),
-        payload: json!({"hello":"world"}),
-    })
+    let err = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "unknown".to_owned(),
+            payload: json!({"hello":"world"}),
+        },
+        &runtime_config::ToolRuntimeConfig::default(),
+    )
     .expect_err("unknown tool should return an error");
     assert!(
         err.contains("tool_not_found"),
@@ -12697,7 +12720,7 @@ fn config_import_apply_selected_mode_writes_manifest_and_backup() {
 }
 
 #[test]
-fn config_import_apply_selected_mode_can_apply_skills_plan() {
+fn config_import_apply_selected_mode_rejects_skills_plan_until_access_backed() {
     use std::{
         fs,
         path::{Path, PathBuf},
@@ -12748,7 +12771,7 @@ fn config_import_apply_selected_mode_can_apply_skills_plan() {
         file_root: Some(root.clone()),
         ..runtime_config::ToolRuntimeConfig::default()
     };
-    let outcome = execute_tool_core_with_config(
+    let error = execute_tool_core_with_config(
         ToolCoreRequest {
             tool_name: "config.import".to_owned(),
             payload: json!({
@@ -12761,46 +12784,24 @@ fn config_import_apply_selected_mode_can_apply_skills_plan() {
         },
         &config,
     )
-    .expect("config import apply_selected with skills should succeed");
+    .expect_err("unmigrated skill writes must fail closed at the tool boundary");
 
-    assert_eq!(outcome.status, "ok");
-    assert_eq!(
-        outcome.payload["result"]["external_skill_artifact_count"],
-        2
-    );
-    assert_eq!(
-        outcome.payload["result"]["external_skill_entries_applied"],
-        6
-    );
-    assert_eq!(
-        outcome.payload["result"]["external_skill_managed_install_count"],
-        1
-    );
-    assert_eq!(
-        outcome.payload["result"]["external_skill_managed_skill_ids"],
-        json!(["release-guard"])
+    assert!(
+        error.contains("apply_selected with apply_skills_plan is not access-backed yet"),
+        "unexpected denial: {error}"
     );
     assert!(
-        outcome.payload["apply_skills_plan"]
-            .as_bool()
-            .unwrap_or(false),
-        "canonical apply_skills_plan should be present"
+        !output_path.exists(),
+        "a rejected skill plan must not write config output"
     );
     assert!(
-        outcome.payload["result"]["skills_manifest_path"]
-            .as_str()
-            .is_some(),
-        "canonical skills_manifest_path should exist"
-    );
-    let raw = fs::read_to_string(&output_path).expect("read output config");
-    assert!(raw.contains("Imported External Skills Artifacts"));
-    assert!(
-        root.join(crate::config::HOME_DIR_NAME)
+        !root
+            .join(crate::config::HOME_DIR_NAME)
             .join("skills")
             .join("release-guard")
             .join("SKILL.md")
             .exists(),
-        "config.import should bridge installable local skills into the managed runtime"
+        "a rejected skill plan must not install managed skills"
     );
 
     fs::remove_dir_all(&root).ok();
@@ -12908,7 +12909,7 @@ struct SharedTestToolAdapter {
 }
 
 #[async_trait]
-impl CoreToolAdapter<crate::context::AppContextFactory> for SharedTestToolAdapter {
+impl CoreToolAdapter for SharedTestToolAdapter {
     fn name(&self) -> &str {
         "test-tool-shared"
     }
@@ -12928,14 +12929,17 @@ impl CoreToolAdapter<crate::context::AppContextFactory> for SharedTestToolAdapte
     }
 }
 
-fn build_tool_kernel_context(
+fn build_tool_runtime_session(
     audit: Arc<InMemoryAuditSink>,
     capabilities: BTreeSet<Capability>,
-) -> (KernelContext, Arc<Mutex<Vec<ToolCoreRequest>>>) {
+) -> (
+    crate::test_support::TestRuntimeSession,
+    Arc<Mutex<Vec<ToolCoreRequest>>>,
+) {
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = Kernel::with_runtime(clock, audit);
+    let mut kernel = Kernel::with_legacy_allow_runtime(clock, audit);
 
-    let pack = Arc::new(VerticalPackManifest {
+    let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
         domain: "testing".to_owned(),
         version: "0.1.0".to_owned(),
@@ -12944,12 +12948,10 @@ fn build_tool_kernel_context(
             adapter: None,
         },
         allowed_connectors: BTreeSet::new(),
-        granted_capabilities: capabilities,
+        granted_capabilities: capabilities.clone(),
         metadata: BTreeMap::new(),
-    });
-    kernel
-        .register_pack((*pack).clone())
-        .expect("register pack");
+    };
+    kernel.register_pack(pack).expect("register pack");
 
     let invocations = Arc::new(Mutex::new(Vec::new()));
     let adapter = SharedTestToolAdapter {
@@ -12964,35 +12966,63 @@ fn build_tool_kernel_context(
         .issue_token("test-pack", "test-agent", 3600)
         .expect("issue token");
 
-    let ctx = KernelContext {
-        kernel: Arc::new(kernel),
-        pack,
+    let runtime = Arc::new(loong_runtime::runtime::Runtime::new(
+        kernel,
+        crate::tools::plane::test_builtin_tool_plane(),
+    ));
+    let session = crate::context::Session::root(
+        runtime.as_ref(),
+        "test-agent",
+        "test-session",
+        loong_contracts::GovernedSessionMode::MutatingCapable,
+        capabilities.into_iter().collect(),
+        crate::tools::runtime_config::ToolRuntimeConfig::default(),
+        crate::memory::runtime_config::MemoryRuntimeConfig::default(),
+        crate::tools::runtime_tool_view(),
+        None,
+        None,
+    )
+    .expect("build tool test session");
+    let legacy_tools = crate::conversation::DefaultLegacyToolDispatcher::from_test_token(
+        Arc::clone(&runtime),
+        crate::session::store::SessionStoreConfig::default(),
+        crate::config::ToolConfig::default(),
         token,
-        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
+    );
+    let owner = crate::test_support::TestRuntimeSession {
+        runtime,
+        session,
+        legacy_tools,
     };
 
-    (ctx, invocations)
+    (owner, invocations)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tool_call_through_kernel_records_audit() {
     let audit = Arc::new(InMemoryAuditSink::default());
-    let (ctx, invocations) =
-        build_tool_kernel_context(audit.clone(), BTreeSet::from([Capability::InvokeTool]));
+    let (owner, invocations) =
+        build_tool_runtime_session(audit.clone(), BTreeSet::from([Capability::InvokeTool]));
+    let ctx = owner.context();
 
     let request = ToolCoreRequest {
-        tool_name: "echo".to_owned(),
+        tool_name: "tool.search".to_owned(),
         payload: json!({"msg": "hello"}),
     };
-    let outcome = execute_tool(request, &ctx)
-        .await
-        .expect("tool call via kernel should succeed");
+    let outcome = crate::conversation::turn_engine::LegacyToolDispatcher::execute_core_tool(
+        &owner.legacy_tools,
+        &ctx,
+        request,
+        false,
+    )
+    .await
+    .expect("tool call via kernel should succeed");
     assert_eq!(outcome.status, "ok");
 
     // Verify the tool adapter received the request.
     let captured = invocations.lock().expect("invocations lock");
     assert_eq!(captured.len(), 1);
-    assert_eq!(captured[0].tool_name, "echo");
+    assert_eq!(captured[0].tool_name, "tool.search");
 
     // Verify audit events contain a tool plane invocation.
     let events = audit.snapshot();
@@ -13006,15 +13036,152 @@ async fn tool_call_through_kernel_records_audit() {
         )
     });
     assert!(has_tool_plane, "audit should contain tool plane invocation");
+    assert!(
+        !events.iter().any(|event| matches!(
+            event.kind,
+            loong_kernel::AuditEventKind::ActionExecution { .. }
+        )),
+        "legacy fallback must not emit typed tool invocation evidence"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn kernel_tool_adapter_routes_through_kernel() {
-    use kernel_adapter::KernelToolAdapter;
+async fn tool_invoke_capability_override_fails_closed_for_legacy_target() {
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let (owner, invocations) =
+        build_tool_runtime_session(audit, BTreeSet::from([Capability::InvokeTool]));
+    let ctx = owner.context();
+    let arguments = serde_json::Map::new();
+    let lease = issue_tool_lease(
+        &loong_contracts::ToolPath::new(["config.import"]).expect("test tool path must be valid"),
+        &arguments,
+    )
+    .expect("legacy config import lease should be issued");
+    let request = ToolCoreRequest {
+        tool_name: "tool.invoke".to_owned(),
+        payload: json!({
+            "tool_id": "config.import",
+            "arguments": arguments,
+            "lease": lease,
+            "capabilities_override": [],
+        }),
+    };
 
+    let result = crate::conversation::TurnEngine::new(1)
+        .execute_turn_in_context(
+            &crate::conversation::ProviderTurn {
+                assistant_text: String::new(),
+                tool_intents: vec![crate::conversation::ToolIntent {
+                    tool_name: request.tool_name.into(),
+                    args_json: request.payload,
+                    source: "provider_tool_call".to_owned(),
+                    turn_id: "legacy-override-turn".to_owned(),
+                    tool_call_id: "legacy-override-call".to_owned(),
+                }],
+                raw_meta: serde_json::Value::Null,
+            },
+            &ctx,
+            &crate::conversation::NoopLegacyToolDispatcher,
+            None,
+        )
+        .await;
+
+    let failure = result
+        .failure()
+        .expect("legacy tools must not silently discard capability narrowing");
+    assert!(
+        failure
+            .reason
+            .contains("capabilities_override requires a registered typed tool")
+    );
+    assert!(invocations.lock().expect("invocations lock").is_empty());
+}
+
+#[test]
+fn typed_tool_lookup_never_falls_back_when_registration_is_missing() {
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let (owner, invocations) =
+        build_tool_runtime_session(audit, BTreeSet::from([Capability::InvokeTool]));
+    let ctx = owner.context();
+    let path =
+        loong_contracts::ToolPath::new(["config.import"]).expect("test tool path must be valid");
+
+    let error = match ctx.tool(path.clone()) {
+        Ok(_) => {
+            panic!("typed lookup must not reinterpret missing registration as legacy fallback")
+        }
+        Err(error) => error,
+    };
+
+    assert!(matches!(
+        error,
+        loong_runtime::tool_plane::error::LookupError::NotRegistered { path: missing }
+            if missing == path
+    ));
+    assert!(invocations.lock().expect("invocations lock").is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_invoke_legacy_core_fallback_forwards_the_normalized_request() {
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let (owner, invocations) = build_tool_runtime_session(
+        audit,
+        BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead]),
+    );
+    let ctx = owner.context();
+    let arguments = serde_json::Map::from_iter([("mode".to_owned(), json!("inspect"))]);
+    let lease = issue_tool_lease(
+        &loong_contracts::ToolPath::new(["config.import"]).expect("test tool path must be valid"),
+        &arguments,
+    )
+    .expect("legacy config import lease should be issued");
+    let request = ToolCoreRequest {
+        tool_name: "tool.invoke".to_owned(),
+        payload: json!({
+            "tool_id": "config.import",
+            "arguments": arguments,
+            "lease": lease,
+        }),
+    };
+
+    let result = crate::conversation::TurnEngine::new(1)
+        .execute_turn_in_context(
+            &crate::conversation::ProviderTurn {
+                assistant_text: String::new(),
+                tool_intents: vec![crate::conversation::ToolIntent {
+                    tool_name: request.tool_name.into(),
+                    args_json: request.payload,
+                    source: "provider_tool_call".to_owned(),
+                    turn_id: "legacy-fallback-turn".to_owned(),
+                    tool_call_id: "legacy-fallback-call".to_owned(),
+                }],
+                raw_meta: serde_json::Value::Null,
+            },
+            &ctx,
+            &owner.legacy_tools,
+            None,
+        )
+        .await;
+    assert!(matches!(
+        result,
+        crate::conversation::TurnResult::FinalText(_)
+    ));
+
+    let captured = invocations.lock().expect("invocations lock");
+    assert_eq!(
+        captured.as_slice(),
+        [ToolCoreRequest {
+            tool_name: "config.import".to_owned(),
+            payload: json!({ "mode": "inspect" }),
+        }]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn legacy_fallback_routes_through_kernel_governance() {
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = Kernel::with_runtime(clock, audit.clone());
+    let mut kernel = Kernel::with_legacy_allow_runtime(clock, audit.clone());
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -13029,40 +13196,53 @@ async fn kernel_tool_adapter_routes_through_kernel() {
         metadata: BTreeMap::new(),
     };
     kernel.register_pack(pack.clone()).expect("register pack");
-    kernel.register_core_tool_adapter(KernelToolAdapter::new());
-    kernel
-        .set_default_core_tool_adapter("mvp-tools")
-        .expect("set default");
-
     let token = kernel
         .issue_token("test-pack", "test-agent", 3600)
         .expect("issue token");
 
-    let caps = BTreeSet::from([Capability::InvokeTool]);
-    // Use an unknown tool name — it should propagate as an error through the adapter
+    // Use an unknown tool name; the app-owned fallback should preserve its error.
     let request = ToolCoreRequest {
         tool_name: "noop".to_owned(),
         payload: json!({"key": "value"}),
     };
-    let tool_policy_params = json!({
-        "tool_name": &request.tool_name,
-        "payload": &request.payload,
-    });
-    let execution_context = crate::context::AppExecutionContext::new(
-        &kernel,
-        &pack,
-        &token,
-        kernel.now_epoch_s(),
-        loong_contracts::ExecutionPlane::Tool,
-        loong_contracts::PlaneTier::Core,
-        Some(&tool_policy_params),
-        &crate::tools::runtime_config::ToolRuntimeConfig::default(),
+    let runtime = Arc::new(loong_runtime::runtime::Runtime::new(
+        kernel,
+        crate::tools::plane::test_builtin_tool_plane(),
+    ));
+    let tool_runtime_config = crate::tools::runtime_config::ToolRuntimeConfig::default();
+    let session = crate::context::Session::root(
+        runtime.as_ref(),
+        "test-agent",
+        "test-session",
+        loong_contracts::GovernedSessionMode::MutatingCapable,
+        token.allowed_capabilities.iter().copied().collect(),
+        tool_runtime_config.clone(),
+        crate::memory::runtime_config::MemoryRuntimeConfig::default(),
+        crate::tools::runtime_tool_view(),
+        None,
+        None,
     )
-    .expect("build tool execution context");
-    let err = kernel
-        .execute_tool_core("test-pack", &token, &caps, None, request, execution_context)
-        .await
-        .expect_err("unknown tool via KernelToolAdapter should fail");
+    .expect("build test session");
+    let legacy_tools = crate::conversation::DefaultLegacyToolDispatcher::from_test_token(
+        Arc::clone(&runtime),
+        crate::session::store::SessionStoreConfig::default(),
+        crate::config::ToolConfig::default(),
+        token.clone(),
+    );
+    let owner = crate::test_support::TestRuntimeSession {
+        runtime: Arc::clone(&runtime),
+        session,
+        legacy_tools,
+    };
+    let execution_context = owner.context();
+    let err = crate::conversation::turn_engine::LegacyToolDispatcher::execute_core_tool(
+        &owner.legacy_tools,
+        &execution_context,
+        request,
+        false,
+    )
+    .await
+    .expect_err("unknown tool via legacy fallback should fail");
     assert!(
         format!("{err}").contains("tool_not_found"),
         "error should contain tool_not_found, got: {err}"
@@ -13070,12 +13250,10 @@ async fn kernel_tool_adapter_routes_through_kernel() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn kernel_tool_adapter_rejects_reserved_internal_payload_through_kernel_by_default() {
-    use kernel_adapter::KernelToolAdapter;
-
+async fn legacy_fallback_rejects_reserved_internal_payload_by_default() {
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = Kernel::with_runtime(clock, audit.clone());
+    let mut kernel = Kernel::with_legacy_allow_runtime(clock, audit.clone());
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -13090,16 +13268,10 @@ async fn kernel_tool_adapter_rejects_reserved_internal_payload_through_kernel_by
         metadata: BTreeMap::new(),
     };
     kernel.register_pack(pack.clone()).expect("register pack");
-    kernel.register_core_tool_adapter(KernelToolAdapter::new());
-    kernel
-        .set_default_core_tool_adapter("mvp-tools")
-        .expect("set default");
-
     let token = kernel
         .issue_token("test-pack", "test-agent", 3600)
         .expect("issue token");
 
-    let caps = BTreeSet::from([Capability::InvokeTool]);
     let request = ToolCoreRequest {
         tool_name: "shell.exec".to_owned(),
         payload: json!({
@@ -13115,25 +13287,44 @@ async fn kernel_tool_adapter_rejects_reserved_internal_payload_through_kernel_by
             }
         }),
     };
-    let tool_policy_params = json!({
-        "tool_name": &request.tool_name,
-        "payload": &request.payload,
-    });
-    let execution_context = crate::context::AppExecutionContext::new(
-        &kernel,
-        &pack,
-        &token,
-        kernel.now_epoch_s(),
-        loong_contracts::ExecutionPlane::Tool,
-        loong_contracts::PlaneTier::Core,
-        Some(&tool_policy_params),
-        &crate::tools::runtime_config::ToolRuntimeConfig::default(),
+    let runtime = Arc::new(loong_runtime::runtime::Runtime::new(
+        kernel,
+        crate::tools::plane::test_builtin_tool_plane(),
+    ));
+    let tool_runtime_config = crate::tools::runtime_config::ToolRuntimeConfig::default();
+    let session = crate::context::Session::root(
+        runtime.as_ref(),
+        "test-agent",
+        "test-session",
+        loong_contracts::GovernedSessionMode::MutatingCapable,
+        token.allowed_capabilities.iter().copied().collect(),
+        tool_runtime_config.clone(),
+        crate::memory::runtime_config::MemoryRuntimeConfig::default(),
+        crate::tools::runtime_tool_view(),
+        None,
+        None,
     )
-    .expect("build tool execution context");
-    let err = kernel
-        .execute_tool_core("test-pack", &token, &caps, None, request, execution_context)
-        .await
-        .expect_err("kernel-routed tool call should reject reserved internal payload by default");
+    .expect("build test session");
+    let legacy_tools = crate::conversation::DefaultLegacyToolDispatcher::from_test_token(
+        Arc::clone(&runtime),
+        crate::session::store::SessionStoreConfig::default(),
+        crate::config::ToolConfig::default(),
+        token.clone(),
+    );
+    let owner = crate::test_support::TestRuntimeSession {
+        runtime: Arc::clone(&runtime),
+        session,
+        legacy_tools,
+    };
+    let execution_context = owner.context();
+    let err = crate::conversation::turn_engine::LegacyToolDispatcher::execute_core_tool(
+        &owner.legacy_tools,
+        &execution_context,
+        request,
+        false,
+    )
+    .await
+    .expect_err("kernel-routed tool call should reject reserved internal payload by default");
 
     assert!(
         format!("{err}").contains("payload._loong is reserved for trusted internal tool context"),
@@ -13145,20 +13336,28 @@ async fn kernel_tool_adapter_rejects_reserved_internal_payload_through_kernel_by
 async fn tool_call_through_kernel_denied_without_capability() {
     let audit = Arc::new(InMemoryAuditSink::default());
     // Grant MemoryRead only — InvokeTool is missing.
-    let (ctx, _invocations) =
-        build_tool_kernel_context(audit, BTreeSet::from([Capability::MemoryRead]));
+    let (owner, _invocations) =
+        build_tool_runtime_session(audit, BTreeSet::from([Capability::MemoryRead]));
+    let ctx = owner.context();
 
     let request = ToolCoreRequest {
-        tool_name: "echo".to_owned(),
+        tool_name: "tool.search".to_owned(),
         payload: json!({"msg": "hello"}),
     };
-    let err = execute_tool(request, &ctx)
-        .await
-        .expect_err("should be denied without InvokeTool capability");
+    let err = crate::conversation::turn_engine::LegacyToolDispatcher::execute_core_tool(
+        &owner.legacy_tools,
+        &ctx,
+        request,
+        false,
+    )
+    .await
+    .expect_err("should be denied without InvokeTool capability");
 
     // The error message should indicate a policy/capability denial.
     assert!(
-        err.contains("denied") || err.contains("capability") || err.contains("Capability"),
+        err.to_string().contains("denied")
+            || err.to_string().contains("capability")
+            || err.to_string().contains("Capability"),
         "error should mention denial or capability, got: {err}"
     );
 }
@@ -13166,11 +13365,9 @@ async fn tool_call_through_kernel_denied_without_capability() {
 #[cfg(feature = "tool-webfetch")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn web_fetch_through_kernel_requires_network_egress_capability() {
-    use kernel_adapter::KernelToolAdapter;
-
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = Kernel::with_runtime(clock, audit);
+    let mut kernel = Kernel::with_legacy_allow_runtime(clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -13185,15 +13382,9 @@ async fn web_fetch_through_kernel_requires_network_egress_capability() {
         metadata: BTreeMap::new(),
     };
     kernel.register_pack(pack).expect("register pack");
-    kernel.register_policy_extension(loong_kernel::test_support::NoNetworkEgressPolicyExtension);
 
     let mut config = runtime_config::ToolRuntimeConfig::default();
     config.web_fetch.enabled = true;
-    kernel.register_core_tool_adapter(KernelToolAdapter::with_config(config));
-    kernel
-        .set_default_core_tool_adapter("mvp-tools")
-        .expect("set default");
-
     let mut token = kernel
         .issue_token("test-pack", "test-agent", 3600)
         .expect("issue token");
@@ -13205,37 +13396,67 @@ async fn web_fetch_through_kernel_requires_network_egress_capability() {
         "issued token should include network egress before we remove it for the test"
     );
 
-    let ctx = KernelContext {
-        kernel: Arc::new(kernel),
-        token: token.clone(),
-        pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
-        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
+    let runtime = Arc::new(loong_runtime::runtime::Runtime::new(
+        kernel,
+        crate::tools::plane::test_builtin_tool_plane(),
+    ));
+    let session = crate::context::Session::root(
+        runtime.as_ref(),
+        "test-agent",
+        "test-session",
+        loong_contracts::GovernedSessionMode::MutatingCapable,
+        token.allowed_capabilities.iter().copied().collect(),
+        config,
+        crate::memory::runtime_config::MemoryRuntimeConfig::default(),
+        crate::tools::runtime_tool_view(),
+        None,
+        None,
+    )
+    .expect("build web fetch test session");
+    let legacy_tools = crate::conversation::DefaultLegacyToolDispatcher::from_test_token(
+        Arc::clone(&runtime),
+        crate::session::store::SessionStoreConfig::default(),
+        crate::config::ToolConfig::default(),
+        token,
+    );
+    let owner = crate::test_support::TestRuntimeSession {
+        runtime,
+        session,
+        legacy_tools,
     };
+    let ctx = owner.context();
     let request = ToolCoreRequest {
         tool_name: "web.fetch".to_owned(),
         payload: json!({"url": "https://example.com"}),
     };
 
-    let error = execute_kernel_tool_request(&ctx, request, false)
-        .await
-        .expect_err("web.fetch should fail closed without network egress capability");
+    let error = crate::conversation::turn_engine::LegacyToolDispatcher::execute_core_tool(
+        &owner.legacy_tools,
+        &ctx,
+        request,
+        false,
+    )
+    .await
+    .expect_err("web.fetch should fail closed without network egress capability");
 
     assert!(matches!(
         error,
-        loong_kernel::KernelError::Policy(
+        crate::tools::LegacyToolRequestError::Legacy(loong_kernel::KernelError::Policy(
             loong_kernel::PolicyError::MissingCapability { capability, .. }
-        ) if capability == Capability::NetworkEgress
+        )) if capability == Capability::NetworkEgress
     ));
 }
 
 #[cfg(feature = "tool-webfetch")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn web_fetch_through_kernel_exposes_network_egress_to_policy_extensions() {
-    use kernel_adapter::KernelToolAdapter;
-
+async fn web_fetch_through_kernel_exposes_network_egress_to_pre_policy() {
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = Kernel::with_runtime(clock, audit);
+    let mut policy = loong_kernel::policy::PolicyPipelineBuilder::<
+        crate::context::RuntimeContextFactory,
+    >::new_legacy_allow_fallback();
+    policy.push_pre_policy(loong_kernel::test_support::NoNetworkEgressPolicy);
+    let mut kernel = Kernel::with_policy_runtime(policy, clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -13250,38 +13471,60 @@ async fn web_fetch_through_kernel_exposes_network_egress_to_policy_extensions() 
         metadata: BTreeMap::new(),
     };
     kernel.register_pack(pack).expect("register pack");
-    kernel.register_policy_extension(loong_kernel::test_support::NoNetworkEgressPolicyExtension);
 
     let mut config = runtime_config::ToolRuntimeConfig::default();
     config.web_fetch.enabled = true;
-    kernel.register_core_tool_adapter(KernelToolAdapter::with_config(config));
-    kernel
-        .set_default_core_tool_adapter("mvp-tools")
-        .expect("set default");
-
     let token = kernel
         .issue_token("test-pack", "test-agent", 3600)
         .expect("issue token");
 
-    let ctx = KernelContext {
-        kernel: Arc::new(kernel),
-        token: token.clone(),
-        pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
-        tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
+    let runtime = Arc::new(loong_runtime::runtime::Runtime::new(
+        kernel,
+        crate::tools::plane::test_builtin_tool_plane(),
+    ));
+    let session = crate::context::Session::root(
+        runtime.as_ref(),
+        "test-agent",
+        "test-session",
+        loong_contracts::GovernedSessionMode::MutatingCapable,
+        token.allowed_capabilities.iter().copied().collect(),
+        config,
+        crate::memory::runtime_config::MemoryRuntimeConfig::default(),
+        crate::tools::runtime_tool_view(),
+        None,
+        None,
+    )
+    .expect("build web fetch test session");
+    let legacy_tools = crate::conversation::DefaultLegacyToolDispatcher::from_test_token(
+        Arc::clone(&runtime),
+        crate::session::store::SessionStoreConfig::default(),
+        crate::config::ToolConfig::default(),
+        token,
+    );
+    let owner = crate::test_support::TestRuntimeSession {
+        runtime,
+        session,
+        legacy_tools,
     };
+    let ctx = owner.context();
     let request = ToolCoreRequest {
         tool_name: "web.fetch".to_owned(),
         payload: json!({"url": "https://example.com"}),
     };
 
-    let error = execute_kernel_tool_request(&ctx, request, false)
-        .await
-        .expect_err("policy extension should block web.fetch network egress");
+    let error = crate::conversation::turn_engine::LegacyToolDispatcher::execute_core_tool(
+        &owner.legacy_tools,
+        &ctx,
+        request,
+        false,
+    )
+    .await
+    .expect_err("pre policy should block web.fetch network egress");
 
     assert!(matches!(
         error,
-        loong_kernel::KernelError::Policy(
+        crate::tools::LegacyToolRequestError::Legacy(loong_kernel::KernelError::Policy(
             loong_kernel::PolicyError::ExtensionDenied { ref extension, .. }
-        ) if extension == "no-network-egress"
+        )) if extension == "policy-engine"
     ));
 }

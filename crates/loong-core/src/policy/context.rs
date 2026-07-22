@@ -1,22 +1,49 @@
-use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::borrow::Cow;
 
-use loong_contracts::Capability;
+use async_trait::async_trait;
+use loong_contracts::{AuthorizationSubject, Capabilities, PermissionResolution, PolicyReport};
 
-pub trait CapabilityContext: Send + Sync {
-    /// Allowed capabilities
-    fn allowed_capabilities(&self) -> BTreeSet<Capability>;
-}
+use crate::{error::PermissionRequestError, policy::action::ActionMeta};
 
-/// Filesystem view required by fs access.
+/// Policy-facing authority available for every governed action.
 ///
-/// This lives in core so app-defined contexts can implement it without
-/// depending on `loong-access`; access modules consume the trait through the
-/// shared policy/access context boundary.
-pub trait FsAccessContext {
-    fn fs_resolution_root(&self) -> &Path;
+/// Keep this view independent of app concrete context types. Action-specific
+/// policies add narrower requirement traits beside the action they govern.
+#[async_trait]
+pub trait PolicyContext: Send + Sync {
+    /// Capabilities currently available to the recursive execution scope.
+    fn allowed_capabilities(&self) -> Cow<'_, Capabilities>;
 
-    fn fs_allowed_roots(&self) -> &[PathBuf];
+    /// Stable actor and typed-or-legacy authority scope for authorization evidence.
+    fn authorization_subject(&self) -> AuthorizationSubject;
+
+    /// Request consent from the current session's parent.
+    ///
+    /// Contexts without a parent permission interaction fail closed with
+    /// [`PermissionRequestError::Unavailable`] by default.
+    async fn request_parent_permission(
+        &self,
+        _action: &dyn ActionMeta,
+        _report: &PolicyReport,
+    ) -> Result<PermissionResolution, PermissionRequestError> {
+        Err(PermissionRequestError::Unavailable {
+            reason: Cow::Borrowed("parent permission interaction is unavailable"),
+        })
+    }
+
+    /// Request consent from the user, the root authority outside the session tree.
+    ///
+    /// Contexts without a user permission interaction fail closed with
+    /// [`PermissionRequestError::Unavailable`] by default.
+    async fn request_user_permission(
+        &self,
+        _action: &dyn ActionMeta,
+        _report: &PolicyReport,
+    ) -> Result<PermissionResolution, PermissionRequestError> {
+        Err(PermissionRequestError::Unavailable {
+            reason: Cow::Borrowed("user permission interaction is unavailable"),
+        })
+    }
 }
 
 /// Type-level factory for policy/access execution contexts.
@@ -25,7 +52,7 @@ pub trait FsAccessContext {
 /// by one runtime integration. It does not construct context values; app or
 /// runtime code owns value construction and passes contexts into kernel calls.
 pub trait ContextFactory: Send + Sync + 'static {
-    type Cx<'a>: CapabilityContext
+    type Cx<'a>: PolicyContext
     where
         Self: 'a;
 }

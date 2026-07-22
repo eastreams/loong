@@ -11,6 +11,7 @@ use tokio::time::sleep;
 use crate::config::ProviderAuthScheme;
 use crate::config::ProviderConfig;
 use crate::conversation::turn_engine::{ProviderTurn, ToolIntent};
+use crate::provider::native_tool_surface::ProviderToolRequestSurface;
 
 use super::{
     auth_profile_runtime::ProviderAuthProfile,
@@ -924,6 +925,7 @@ pub(super) async fn execute_streaming_turn_request<PreStatusError>(
     build_body: impl FnMut(CompletionPayloadMode) -> Value + Unpin,
     session_id: Option<&str>,
     turn_id: Option<&str>,
+    tool_surface: &ProviderToolRequestSurface,
     _messages: &[Value],
     on_token: StreamingTokenCallback,
     mut pre_status_error: PreStatusError,
@@ -1155,11 +1157,28 @@ where
                     None,
                 )
             })?;
+            let tool_name = tool_surface
+                .resolve(tool_call.name.as_str())
+                .ok_or_else(|| {
+                    build_model_request_error(
+                        format!(
+                            "provider returned tool `{}` outside the submitted surface",
+                            tool_call.name
+                        ),
+                        false,
+                        ProviderFailoverReason::ResponseShapeInvalid,
+                        ProviderFailoverStage::ResponseDecode,
+                        &model_name,
+                        1,
+                        1,
+                        None,
+                        None,
+                    )
+                })?;
             Ok(ToolIntent {
-                tool_name: tool_call.name.clone(),
+                tool_name,
                 args_json,
                 source: "provider_tool_call".to_owned(),
-                session_id: session_id.unwrap_or("").to_owned(),
                 turn_id: turn_id.unwrap_or("").to_owned(),
                 tool_call_id: tool_call.id.clone(),
             })
@@ -1389,6 +1408,8 @@ pub type StreamingTokenCallback = Option<Arc<dyn Fn(StreamingCallbackData) + Sen
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
     use crate::provider::contracts::provider_runtime_contract;
     use serde_json::json;
@@ -1962,12 +1983,21 @@ mod tests {
             retry_progress: None,
             capture_content: false,
         };
+        let tool_surface = ProviderToolRequestSurface::new(
+            vec![json!({
+                "type": "function",
+                "function": { "name": "get_weather", "parameters": { "type": "object" } }
+            })],
+            BTreeMap::new(),
+        )
+        .expect("tool request surface");
 
         let turn = execute_streaming_turn_request(
             runtime,
             |_| json!({}),
             Some("session-123"),
             Some("turn-123"),
+            &tool_surface,
             &[],
             None,
             |_| false,
@@ -1977,7 +2007,7 @@ mod tests {
 
         assert!(turn.assistant_text.is_empty(), "turn={turn:?}");
         assert_eq!(turn.tool_intents.len(), 1, "turn={turn:?}");
-        assert_eq!(turn.tool_intents[0].tool_name, "get_weather");
+        assert_eq!(turn.tool_intents[0].tool_name.name(), "get_weather");
         assert_eq!(turn.tool_intents[0].tool_call_id, "call_123");
         assert_eq!(turn.tool_intents[0].args_json, json!({"location":"NYC"}));
     }
@@ -2039,12 +2069,15 @@ mod tests {
             retry_progress: None,
             capture_content: false,
         };
+        let tool_surface = ProviderToolRequestSurface::new(Vec::new(), BTreeMap::new())
+            .expect("empty tool request surface");
 
         let turn = execute_streaming_turn_request(
             runtime,
             |_| json!({}),
             Some("session-123"),
             Some("turn-123"),
+            &tool_surface,
             &[],
             None,
             |_| false,

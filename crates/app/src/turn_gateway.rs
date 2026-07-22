@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 use crate::{
-    CliResult, KernelContext,
+    CliResult,
     acp::{AcpSessionManager, AcpTurnEventSink, AcpTurnProvenance},
     agent_runtime::{
         AgentTurnMode, AgentTurnRequest, AgentTurnResult, TurnExecutionOptions,
@@ -35,7 +35,9 @@ impl TurnGatewayProvenance {
 pub struct TurnGatewayExecution<'a> {
     pub resolved_path: PathBuf,
     pub config: LoongConfig,
-    pub kernel_ctx: Option<KernelContext>,
+    /// Gateway/channel hosts own Runtime beyond any individual turn.
+    pub runtime: Arc<loong_runtime::runtime::Runtime<crate::RuntimeContextFactory>>,
+    pub agent_id: String,
     pub acp_manager: Option<Arc<AcpSessionManager>>,
     pub event_sink: Option<&'a dyn AcpTurnEventSink>,
     pub initialize_runtime_environment: bool,
@@ -91,10 +93,8 @@ pub async fn run_turn_gateway(
     execution: TurnGatewayExecution<'_>,
     request: TurnGatewayRequest,
 ) -> CliResult<AgentTurnResult> {
-    let mut turn_service = TurnExecutionService::new(execution.resolved_path, execution.config);
-    if let Some(kernel_ctx) = execution.kernel_ctx {
-        turn_service = turn_service.with_kernel_ctx(kernel_ctx);
-    }
+    let mut turn_service = TurnExecutionService::new(execution.resolved_path, execution.config)
+        .with_runtime(execution.runtime, execution.agent_id);
     if let Some(acp_manager) = execution.acp_manager {
         turn_service = turn_service.with_acp_manager(acp_manager);
     }

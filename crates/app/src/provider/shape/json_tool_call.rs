@@ -3,7 +3,7 @@ use serde_json::Value;
 use crate::conversation::turn_engine::ToolIntent;
 
 use super::{
-    OpenAiTextToolTurnExtraction, ProviderToolBridgeContext, attach_provider_parse_telemetry,
+    OpenAiTextToolTurnExtraction, ProviderToolSchemaView, attach_provider_parse_telemetry,
     build_provider_tool_intent, extract_openai_text_tool_turn, is_inside_markdown_fence,
     is_inside_markdown_indented_code_block, is_standalone_block_end, is_standalone_block_start,
     normalize_text,
@@ -12,11 +12,10 @@ use super::{
 pub(super) fn extract_json_tool_call_turn(
     text: &str,
     raw_meta: &mut Value,
-    session_id: Option<&str>,
     turn_id: Option<&str>,
-    bridge_context: &ProviderToolBridgeContext,
+    schema: &ProviderToolSchemaView,
 ) -> Option<(String, Vec<ToolIntent>)> {
-    match extract_json_tool_call_turn_result(text, session_id, turn_id, bridge_context) {
+    match extract_json_tool_call_turn_result(text, turn_id, schema) {
         JsonToolBlockParseResult::Parsed {
             cleaned_text,
             tool_intents,
@@ -128,13 +127,12 @@ fn attach_json_tool_block_parse_telemetry(
 
 fn extract_json_tool_call_turn_result(
     text: &str,
-    session_id: Option<&str>,
     turn_id: Option<&str>,
-    bridge_context: &ProviderToolBridgeContext,
+    schema: &ProviderToolSchemaView,
 ) -> JsonToolBlockParseResult {
-    match extract_tagged_json_tool_call_turn(text, session_id, turn_id, bridge_context) {
+    match extract_tagged_json_tool_call_turn(text, turn_id, schema) {
         JsonToolBlockParseResult::Absent => {
-            extract_plain_json_tool_call_turn(text, session_id, turn_id, bridge_context)
+            extract_plain_json_tool_call_turn(text, turn_id, schema)
         }
         result @ JsonToolBlockParseResult::Parsed { .. }
         | result @ JsonToolBlockParseResult::Malformed { .. } => result,
@@ -143,9 +141,8 @@ fn extract_json_tool_call_turn_result(
 
 fn extract_tagged_json_tool_call_turn(
     text: &str,
-    session_id: Option<&str>,
     turn_id: Option<&str>,
-    bridge_context: &ProviderToolBridgeContext,
+    schema: &ProviderToolSchemaView,
 ) -> JsonToolBlockParseResult {
     const TOOL_CALL_OPEN: &str = "<tool_call>";
     const TOOL_CALL_CLOSE: &str = "</tool_call>";
@@ -185,46 +182,40 @@ fn extract_tagged_json_tool_call_turn(
         }
 
         let block_body = &text[body_start..body_start + body_end];
-        let parsed_tool_intents = match parse_json_tool_call_sequence(
-            block_body,
-            session_id,
-            turn_id,
-            bridge_context,
-            tool_intents.len(),
-        ) {
-            Ok(parsed_tool_intents) => parsed_tool_intents,
-            Err(JsonToolBlockParseError::UnsupportedShape) => {
-                cleaned.push_str(&text[cursor..block_end]);
-                cursor = block_end;
-                continue;
-            }
-            Err(JsonToolBlockParseError::InvalidJson) => {
-                let fallback_tool_intents = parse_wrapped_non_json_tool_calls(
-                    block_body,
-                    session_id,
-                    turn_id,
-                    bridge_context,
-                    tool_intents.len(),
-                );
-                let Some(fallback_tool_intents) = fallback_tool_intents else {
+        let parsed_tool_intents =
+            match parse_json_tool_call_sequence(block_body, turn_id, schema, tool_intents.len()) {
+                Ok(parsed_tool_intents) => parsed_tool_intents,
+                Err(JsonToolBlockParseError::UnsupportedShape) => {
+                    cleaned.push_str(&text[cursor..block_end]);
+                    cursor = block_end;
+                    continue;
+                }
+                Err(JsonToolBlockParseError::InvalidJson) => {
+                    let fallback_tool_intents = parse_wrapped_non_json_tool_calls(
+                        block_body,
+                        turn_id,
+                        schema,
+                        tool_intents.len(),
+                    );
+                    let Some(fallback_tool_intents) = fallback_tool_intents else {
+                        return JsonToolBlockParseResult::Malformed {
+                            telemetry: JsonToolBlockParseTelemetry::malformed(
+                                tool_intents.len(),
+                                JsonToolBlockParseError::InvalidJson,
+                            ),
+                        };
+                    };
+                    fallback_tool_intents
+                }
+                Err(error_code) => {
                     return JsonToolBlockParseResult::Malformed {
                         telemetry: JsonToolBlockParseTelemetry::malformed(
                             tool_intents.len(),
-                            JsonToolBlockParseError::InvalidJson,
+                            error_code,
                         ),
                     };
-                };
-                fallback_tool_intents
-            }
-            Err(error_code) => {
-                return JsonToolBlockParseResult::Malformed {
-                    telemetry: JsonToolBlockParseTelemetry::malformed(
-                        tool_intents.len(),
-                        error_code,
-                    ),
-                };
-            }
-        };
+                }
+            };
 
         if parsed_tool_intents.is_empty() {
             cleaned.push_str(&text[cursor..block_end]);
@@ -252,9 +243,8 @@ fn extract_tagged_json_tool_call_turn(
 
 fn extract_plain_json_tool_call_turn(
     text: &str,
-    session_id: Option<&str>,
     turn_id: Option<&str>,
-    bridge_context: &ProviderToolBridgeContext,
+    schema: &ProviderToolSchemaView,
 ) -> JsonToolBlockParseResult {
     let mut cursor = 0usize;
     let mut cleaned = String::new();
@@ -274,9 +264,8 @@ fn extract_plain_json_tool_call_turn(
 
         match parse_plain_json_tool_call_candidate(
             &text[start..],
-            session_id,
             turn_id,
-            bridge_context,
+            schema,
             tool_intents.len(),
         ) {
             JsonToolBlockCandidate::Parsed {
@@ -347,9 +336,8 @@ fn array_candidate_starts_with_object(text: &str, start: usize) -> bool {
 
 fn parse_json_tool_call_sequence(
     body: &str,
-    session_id: Option<&str>,
     turn_id: Option<&str>,
-    bridge_context: &ProviderToolBridgeContext,
+    schema: &ProviderToolSchemaView,
     tool_offset: usize,
 ) -> Result<Vec<ToolIntent>, JsonToolBlockParseError> {
     let stream = serde_json::Deserializer::from_str(body).into_iter::<Value>();
@@ -359,14 +347,9 @@ fn parse_json_tool_call_sequence(
         let value = result.map_err(|_error| JsonToolBlockParseError::InvalidJson)?;
         let envelope = json_tool_call_envelope(&value, JsonToolCallEnvelopeMode::TaggedBlock)?
             .ok_or(JsonToolBlockParseError::UnsupportedShape)?;
-        let tool_intent = build_json_tool_intent(
-            envelope,
-            session_id,
-            turn_id,
-            bridge_context,
-            tool_offset + tool_intents.len(),
-        )
-        .ok_or(JsonToolBlockParseError::UnsupportedShape)?;
+        let tool_intent =
+            build_json_tool_intent(envelope, turn_id, schema, tool_offset + tool_intents.len())
+                .ok_or(JsonToolBlockParseError::UnsupportedShape)?;
         tool_intents.push(tool_intent);
     }
 
@@ -379,22 +362,15 @@ fn parse_json_tool_call_sequence(
 
 fn parse_wrapped_non_json_tool_calls(
     block_body: &str,
-    session_id: Option<&str>,
     turn_id: Option<&str>,
-    bridge_context: &ProviderToolBridgeContext,
+    schema: &ProviderToolSchemaView,
     tool_offset: usize,
 ) -> Option<Vec<ToolIntent>> {
     let mut nested_raw_meta = Value::Object(serde_json::Map::new());
     let OpenAiTextToolTurnExtraction {
         assistant_text,
         tool_intents,
-    } = extract_openai_text_tool_turn(
-        block_body,
-        &mut nested_raw_meta,
-        session_id,
-        turn_id,
-        bridge_context,
-    );
+    } = extract_openai_text_tool_turn(block_body, &mut nested_raw_meta, turn_id, schema);
     if tool_intents.is_empty() || !assistant_text.is_empty() {
         return None;
     }
@@ -413,9 +389,8 @@ fn parse_wrapped_non_json_tool_calls(
 
 fn parse_plain_json_tool_call_candidate(
     text: &str,
-    session_id: Option<&str>,
     turn_id: Option<&str>,
-    bridge_context: &ProviderToolBridgeContext,
+    schema: &ProviderToolSchemaView,
     tool_offset: usize,
 ) -> JsonToolBlockCandidate {
     let mut stream = serde_json::Deserializer::from_str(text).into_iter::<Value>();
@@ -432,9 +407,8 @@ fn parse_plain_json_tool_call_candidate(
             text,
             &value,
             consumed_bytes,
-            session_id,
             turn_id,
-            bridge_context,
+            schema,
             tool_offset,
         ) {
             return candidate;
@@ -450,9 +424,8 @@ fn parse_plain_json_tool_call_candidate(
             text,
             &repaired_value,
             repaired_consumed_bytes,
-            session_id,
             turn_id,
-            bridge_context,
+            schema,
             tool_offset,
         )
     {
@@ -463,9 +436,8 @@ fn parse_plain_json_tool_call_candidate(
         text,
         &value,
         consumed_bytes,
-        session_id,
         turn_id,
-        bridge_context,
+        schema,
         tool_offset,
     ) {
         return candidate;
@@ -480,9 +452,8 @@ fn build_plain_json_tool_call_candidate(
     text: &str,
     value: &Value,
     consumed_bytes: usize,
-    session_id: Option<&str>,
     turn_id: Option<&str>,
-    bridge_context: &ProviderToolBridgeContext,
+    schema: &ProviderToolSchemaView,
     tool_offset: usize,
 ) -> Option<JsonToolBlockCandidate> {
     let standalone_end = is_standalone_block_end(text, consumed_bytes);
@@ -506,9 +477,8 @@ fn build_plain_json_tool_call_candidate(
                 };
             let tool_intent = match build_json_tool_intent(
                 envelope,
-                session_id,
                 turn_id,
-                bridge_context,
+                schema,
                 tool_offset + tool_intents.len(),
             ) {
                 Some(tool_intent) => tool_intent,
@@ -542,15 +512,14 @@ fn build_plain_json_tool_call_candidate(
         }
         Err(error) => return Some(JsonToolBlockCandidate::Malformed(error)),
     };
-    let tool_intent =
-        match build_json_tool_intent(envelope, session_id, turn_id, bridge_context, tool_offset) {
-            Some(tool_intent) => tool_intent,
-            None => {
-                return Some(JsonToolBlockCandidate::Unsupported {
-                    consumed_bytes: Some(consumed_bytes),
-                });
-            }
-        };
+    let tool_intent = match build_json_tool_intent(envelope, turn_id, schema, tool_offset) {
+        Some(tool_intent) => tool_intent,
+        None => {
+            return Some(JsonToolBlockCandidate::Unsupported {
+                consumed_bytes: Some(consumed_bytes),
+            });
+        }
+    };
 
     Some(JsonToolBlockCandidate::Parsed {
         consumed_bytes,
@@ -716,21 +685,19 @@ fn json_tool_call_envelope(
 
 fn build_json_tool_intent(
     envelope: JsonToolCallEnvelope,
-    session_id: Option<&str>,
     turn_id: Option<&str>,
-    bridge_context: &ProviderToolBridgeContext,
+    schema: &ProviderToolSchemaView,
     tool_index: usize,
 ) -> Option<ToolIntent> {
     build_provider_tool_intent(
         envelope.raw_tool_name.as_str(),
         envelope.args_json,
         "provider_json_tool_call",
-        session_id,
         turn_id,
         envelope
             .tool_call_id
             .unwrap_or_else(|| format!("json-call-{tool_index}")),
-        bridge_context,
+        schema,
     )
 }
 

@@ -127,21 +127,8 @@ pub(super) async fn process_cli_chat_input(
         "usage: /history",
     ))? {
         ChatCommandMatchResult::Matched => {
-            #[cfg(feature = "memory-sqlite")]
-            print_history(
-                &runtime.session_id,
-                runtime.config.memory.sliding_window,
-                runtime.conversation_binding(),
-                &runtime.memory_config,
-            )
-            .await?;
-            #[cfg(not(feature = "memory-sqlite"))]
-            print_history(
-                &runtime.session_id,
-                runtime.config.memory.sliding_window,
-                runtime.conversation_binding(),
-            )
-            .await?;
+            let context = runtime.context().map_err(|error| error.to_string())?;
+            print_history(runtime.config.memory.sliding_window, &context).await?;
             return Ok(CliChatLoopControl::Continue);
         }
         ChatCommandMatchResult::UsageError(usage) => {
@@ -158,17 +145,12 @@ pub(super) async fn process_cli_chat_input(
         parse_fast_lane_summary_limit(input, runtime.config.memory.sliding_window);
     match fast_lane_limit_result {
         Ok(Some(limit)) => {
-            #[cfg(feature = "memory-sqlite")]
-            print_fast_lane_summary(
-                &runtime.session_id,
-                limit,
-                runtime.conversation_binding(),
-                &runtime.memory_config,
-            )
-            .await?;
-            #[cfg(not(feature = "memory-sqlite"))]
-            print_fast_lane_summary(&runtime.session_id, limit, runtime.conversation_binding())
-                .await?;
+            let context = runtime.context().map_err(|error| error.to_string())?;
+            let history_runtime =
+                crate::conversation::DefaultConversationRuntime::from_config_or_env(
+                    &runtime.config,
+                )?;
+            print_fast_lane_summary(limit, &context, &history_runtime).await?;
             return Ok(CliChatLoopControl::Continue);
         }
         Ok(None) => {}
@@ -186,21 +168,16 @@ pub(super) async fn process_cli_chat_input(
         parse_safe_lane_summary_limit(input, runtime.config.memory.sliding_window);
     match safe_lane_limit_result {
         Ok(Some(limit)) => {
-            #[cfg(feature = "memory-sqlite")]
+            let context = runtime.context().map_err(|error| error.to_string())?;
+            let history_runtime =
+                crate::conversation::DefaultConversationRuntime::from_config_or_env(
+                    &runtime.config,
+                )?;
             print_safe_lane_summary(
-                &runtime.session_id,
                 limit,
                 &runtime.config.conversation,
-                runtime.conversation_binding(),
-                &runtime.memory_config,
-            )
-            .await?;
-            #[cfg(not(feature = "memory-sqlite"))]
-            print_safe_lane_summary(
-                &runtime.session_id,
-                limit,
-                &runtime.config.conversation,
-                runtime.conversation_binding(),
+                &context,
+                &history_runtime,
             )
             .await?;
             return Ok(CliChatLoopControl::Continue);
@@ -220,23 +197,12 @@ pub(super) async fn process_cli_chat_input(
         parse_turn_checkpoint_summary_limit(input, runtime.config.memory.sliding_window);
     match turn_checkpoint_limit_result {
         Ok(Some(limit)) => {
-            #[cfg(feature = "memory-sqlite")]
+            let context = runtime.context().map_err(|error| error.to_string())?;
             print_turn_checkpoint_summary(
                 &runtime.turn_coordinator,
                 &runtime.config,
-                &runtime.session_id,
+                &context,
                 limit,
-                runtime.conversation_binding(),
-                &runtime.memory_config,
-            )
-            .await?;
-            #[cfg(not(feature = "memory-sqlite"))]
-            print_turn_checkpoint_summary(
-                &runtime.turn_coordinator,
-                &runtime.config,
-                &runtime.session_id,
-                limit,
-                runtime.conversation_binding(),
             )
             .await?;
             return Ok(CliChatLoopControl::Continue);
@@ -253,13 +219,9 @@ pub(super) async fn process_cli_chat_input(
     }
     match classify_chat_command_match_result(is_turn_checkpoint_repair_command(input))? {
         ChatCommandMatchResult::Matched => {
-            print_turn_checkpoint_repair(
-                &runtime.turn_coordinator,
-                &runtime.config,
-                &runtime.session_id,
-                runtime.conversation_binding(),
-            )
-            .await?;
+            let context = runtime.context().map_err(|error| error.to_string())?;
+            print_turn_checkpoint_repair(&runtime.turn_coordinator, &runtime.config, &context)
+                .await?;
             return Ok(CliChatLoopControl::Continue);
         }
         ChatCommandMatchResult::UsageError(usage) => {

@@ -1,72 +1,204 @@
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use serde_json::Value;
+use loong_core::policy::context::PolicyContext;
 
-use super::super::runtime_binding::OwnedConversationRuntimeBinding;
-use super::super::subagent::{ConstrainedSubagentExecution, DelegateBuiltinProfile};
+use crate::conversation::DefaultLegacyToolDispatcher;
+use crate::{Context, Session};
+use async_trait::async_trait;
+
+use super::super::subagent::{
+    ConstrainedSubagentExecution, ConstrainedSubagentSpawnEventPayload, DelegateBuiltinProfile,
+};
 use super::super::{delegate_support, turn_coordinator};
-use super::{LoongConfig, RuntimeSelfContinuity, load_default_conversation_runtime};
+use super::{LoongConfig, RuntimeSelfContinuity};
 
 #[derive(Clone)]
 pub struct AsyncDelegateSpawnRequest {
-    pub child_session_id: String,
-    pub parent_session_id: String,
-    pub task: String,
-    pub canonical_task_id: Option<String>,
-    pub label: Option<String>,
-    pub profile: Option<DelegateBuiltinProfile>,
-    pub execution: ConstrainedSubagentExecution,
-    pub(crate) runtime_self_continuity: Option<RuntimeSelfContinuity>,
-    pub timeout_seconds: u64,
-    pub binding: OwnedConversationRuntimeBinding,
+    /// Parent fallback owner retained for lifecycle hooks after detachment.
+    legacy_tools: DefaultLegacyToolDispatcher,
+    parent_session: Session,
+    session: Session,
+    task: String,
+    canonical_task_id: Option<String>,
 }
 
 impl AsyncDelegateSpawnRequest {
-    pub fn runtime_self_continuity_json(&self) -> Result<Option<Value>, String> {
-        let continuity = self.runtime_self_continuity.as_ref();
-        let encoded_continuity =
-            continuity
-                .map(serde_json::to_value)
-                .transpose()
-                .map_err(|error| {
-                    format!("serialize async delegate runtime-self continuity failed: {error}")
-                })?;
-
-        Ok(encoded_continuity)
+    /// Bind detached work to one already-derived child Session and Runtime.
+    ///
+    /// Identity and execution limits are deliberately not constructor inputs:
+    /// the atomically-derived child Session is their sole source, so callers
+    /// cannot assemble a request whose lifecycle and execution evidence disagree.
+    pub(crate) fn new(
+        parent_context: &Context<'_>,
+        legacy_tools: &DefaultLegacyToolDispatcher,
+        session: Session,
+        task: String,
+        canonical_task_id: Option<String>,
+    ) -> Result<Self, String> {
+        if !std::ptr::eq(
+            parent_context.runtime(),
+            legacy_tools.execution_runtime().as_ref(),
+        ) {
+            return Err("async delegate fallback belongs to a different Runtime".to_owned());
+        }
+        if session.parent_session_id() != Some(parent_context.session().session_id()) {
+            return Err("async delegate child Session does not belong to the caller".to_owned());
+        }
+        let execution = session
+            .subagent_execution()
+            .ok_or_else(|| "async delegate child Session has no execution anchor".to_owned())?;
+        if session.baseline_capabilities() != &execution.capability_ceiling {
+            return Err("async delegate execution does not match child capabilities".to_owned());
+        }
+        let parent_capabilities = parent_context.allowed_capabilities();
+        let parent_session = parent_context
+            .session()
+            .clone()
+            .narrow_capabilities(parent_capabilities.as_ref())?;
+        Ok(Self {
+            legacy_tools: legacy_tools.clone(),
+            parent_session,
+            session,
+            task,
+            canonical_task_id,
+        })
     }
-}
 
-pub fn async_delegate_spawn_request_from_serialized_parts(
-    child_session_id: String,
-    parent_session_id: String,
-    task: String,
-    canonical_task_id: Option<String>,
-    label: Option<String>,
-    profile: Option<DelegateBuiltinProfile>,
-    execution: ConstrainedSubagentExecution,
-    runtime_self_continuity_json: Option<Value>,
-    timeout_seconds: u64,
-    binding: OwnedConversationRuntimeBinding,
-) -> Result<AsyncDelegateSpawnRequest, String> {
-    let runtime_self_continuity = runtime_self_continuity_json
-        .map(serde_json::from_value::<RuntimeSelfContinuity>)
-        .transpose()
-        .map_err(|error| format!("parse async delegate runtime-self continuity failed: {error}"))?;
-    let request = AsyncDelegateSpawnRequest {
-        child_session_id,
-        parent_session_id,
-        task,
-        canonical_task_id,
-        label,
-        profile,
-        execution,
-        runtime_self_continuity,
-        timeout_seconds,
-        binding,
-    };
+    #[must_use]
+    pub fn child_session_id(&self) -> &str {
+        self.session.session_id()
+    }
 
-    Ok(request)
+    #[must_use]
+    pub fn parent_session_id(&self) -> &str {
+        self.parent_session.session_id()
+    }
+
+    #[must_use]
+    pub fn task(&self) -> &str {
+        &self.task
+    }
+
+    #[must_use]
+    pub fn canonical_task_id(&self) -> Option<&str> {
+        self.canonical_task_id.as_deref()
+    }
+
+    #[must_use]
+    pub fn label(&self) -> Option<&str> {
+        self.session
+            .resolved_subagent_identity()
+            .and_then(|identity| identity.nickname.as_deref())
+    }
+
+    #[must_use]
+    pub fn profile(&self) -> Option<DelegateBuiltinProfile> {
+        self.session.profile
+    }
+
+    #[must_use]
+    #[allow(
+        clippy::expect_used,
+        reason = "private constructors reject a child Session without this anchor, and the request cannot be deserialized or assembled by callers"
+    )]
+    pub fn execution(&self) -> &ConstrainedSubagentExecution {
+        self.session
+            .subagent_execution()
+            .expect("AsyncDelegateSpawnRequest requires a child execution anchor")
+    }
+
+    #[must_use]
+    pub fn runtime_self_continuity(&self) -> Option<&RuntimeSelfContinuity> {
+        self.session.runtime_self_continuity.as_ref()
+    }
+
+    #[must_use]
+    pub fn timeout_seconds(&self) -> u64 {
+        self.execution().timeout_seconds
+    }
+
+    #[must_use]
+    pub fn session(&self) -> &Session {
+        &self.session
+    }
+
+    pub(crate) fn parent_session(&self) -> &Session {
+        &self.parent_session
+    }
+
+    pub(crate) fn legacy_tools(&self) -> &DefaultLegacyToolDispatcher {
+        &self.legacy_tools
+    }
+
+    /// Restore detached execution exclusively from persisted delegate evidence.
+    ///
+    /// The process payload identifies the child and its audit actor; capability,
+    /// path, tool, profile, and timeout authority are rebuilt from the queued
+    /// event and validated again by Session and request construction.
+    #[cfg(feature = "memory-sqlite")]
+    pub fn from_persisted_child(
+        config: &LoongConfig,
+        child_session_id: &str,
+        agent_id: &str,
+    ) -> Result<Self, String> {
+        let memory_config =
+            crate::session::store::session_store_config_from_memory_config_without_env_overrides(
+                &config.memory,
+            );
+        let repo = crate::session::repository::SessionRepository::new(&memory_config)?;
+        let event = repo
+            .list_delegate_lifecycle_events(child_session_id)?
+            .into_iter()
+            .rev()
+            .find(|event| {
+                matches!(
+                    event.event_kind.as_str(),
+                    "delegate_queued" | "delegate_started"
+                )
+            })
+            .ok_or_else(|| {
+                format!("delegate session `{child_session_id}` has no persisted execution anchor")
+            })?;
+        let persisted: ConstrainedSubagentSpawnEventPayload =
+            serde_json::from_value(event.payload_json).map_err(|error| {
+                format!("decode persisted delegate execution for `{child_session_id}`: {error}")
+            })?;
+
+        let runtime = crate::runtime::bootstrap_runtime_with_config(config)?;
+        let child_session = Session::from_config(
+            runtime.as_ref(),
+            config,
+            child_session_id,
+            agent_id,
+            loong_contracts::GovernedSessionMode::MutatingCapable,
+        )?;
+        let parent_session_id = child_session.parent_session_id().ok_or_else(|| {
+            format!("detached delegate `{child_session_id}` has no parent Session")
+        })?;
+        let parent_session = Session::from_config(
+            runtime.as_ref(),
+            config,
+            parent_session_id,
+            agent_id,
+            loong_contracts::GovernedSessionMode::MutatingCapable,
+        )?;
+        let parent_context =
+            Context::new(runtime.as_ref(), &parent_session).map_err(|error| error.to_string())?;
+        let legacy_tools = DefaultLegacyToolDispatcher::with_config(
+            Arc::clone(&runtime),
+            &parent_session,
+            memory_config,
+            config.clone(),
+        )?;
+
+        Self::new(
+            &parent_context,
+            &legacy_tools,
+            child_session,
+            persisted.task,
+            persisted.task_scope.map(|scope| scope.task_id),
+        )
+    }
 }
 
 #[async_trait]
@@ -103,46 +235,49 @@ pub async fn execute_async_delegate_spawn_request(
     config: &LoongConfig,
     request: AsyncDelegateSpawnRequest,
 ) -> Result<(), String> {
+    let execution = request.execution().clone();
     let AsyncDelegateSpawnRequest {
-        child_session_id,
-        parent_session_id,
+        legacy_tools,
+        parent_session,
+        session,
         task,
         canonical_task_id,
-        label,
-        profile,
-        execution,
-        runtime_self_continuity,
-        timeout_seconds,
-        binding,
     } = request;
 
+    let parent_session_id = parent_session.session_id().to_owned();
+    let child_session_id = session.session_id().to_owned();
+    let label = session
+        .resolved_subagent_identity()
+        .and_then(|identity| identity.nickname.clone());
+    let profile = session.profile;
+    let runtime_self_continuity = session.runtime_self_continuity.clone();
     let execution_timeout_seconds = execution.timeout_seconds;
-
-    if timeout_seconds != execution_timeout_seconds {
-        return Err(format!(
-            "async_delegate_timeout_mismatch: request timeout {} != execution timeout {}",
-            timeout_seconds, execution_timeout_seconds
-        ));
-    }
 
     let memory_config =
         crate::session::store::session_store_config_from_memory_config_without_env_overrides(
             &config.memory,
         );
     let repo = crate::session::repository::SessionRepository::new(&memory_config)?;
-    let runtime = load_default_conversation_runtime(config)?;
-    let runtime_ref = &runtime;
+    let parent_session =
+        parent_session.rematerialize(legacy_tools.execution_runtime().as_ref(), config)?;
+    let session = session.rematerialize(legacy_tools.execution_runtime().as_ref(), config)?;
+    let parent_runtime = super::DefaultConversationRuntime::from_config_or_env(config)?;
+    let child_legacy_tools = legacy_tools.for_session(&session)?;
+    let child_runtime = super::DefaultConversationRuntime::from_config_or_env(config)?;
+    let parent_context = Context::new(legacy_tools.execution_runtime(), &parent_session)
+        .map_err(|error| error.to_string())?;
+    let parent_mailbox = parent_session.mailbox().sender();
+    let child_execution_runtime = Arc::clone(legacy_tools.execution_runtime());
+    let child_session = session.clone();
     let child_session_id_for_spawn = child_session_id.clone();
     let parent_session_id_for_spawn = parent_session_id.clone();
-    let borrowed_binding = binding.as_borrowed();
-    let child_binding = binding.clone();
-
-    delegate_support::with_prepared_subagent_spawn_cleanup_if_kernel_bound(
-        runtime_ref,
-        &parent_session_id,
+    delegate_support::with_subagent_lifecycle(
+        &parent_runtime,
         &child_session_id,
-        borrowed_binding,
+        &parent_context,
         move || async move {
+            let child_context = Context::new(&child_execution_runtime, &child_session)
+                .map_err(|error| error.to_string())?;
             let event_payload_json = execution
                 .spawn_payload_with_profile_and_runtime_self_continuity(
                     &task,
@@ -175,15 +310,15 @@ pub async fn execute_async_delegate_spawn_request(
 
             let _ = turn_coordinator::run_started_delegate_child_turn_with_runtime(
                 config,
-                runtime_ref,
-                &child_session_id_for_spawn,
-                &parent_session_id_for_spawn,
+                &child_runtime,
+                &child_context,
+                &parent_mailbox,
+                &child_legacy_tools,
                 label,
                 &task,
                 profile,
                 execution,
                 execution_timeout_seconds,
-                child_binding.as_borrowed(),
             )
             .await;
 

@@ -1,4 +1,5 @@
-use super::runtime_binding::ConversationRuntimeBinding;
+use loong_contracts::{Capabilities, Capability};
+
 use crate::tools::CapabilityActionClass;
 use crate::tools::runtime_config::{AutonomyOperationMode, AutonomyPolicySnapshot};
 
@@ -27,7 +28,8 @@ pub const SESSION_MUTATION_APPROVAL_CODE: &str =
 pub const SESSION_MUTATION_DISALLOWED_CODE: &str = "autonomy_policy_session_mutation_disallowed";
 pub const SESSION_MUTATION_BUDGET_EXCEEDED_CODE: &str =
     "autonomy_policy_session_mutation_budget_exceeded";
-pub const BINDING_MISSING_CODE: &str = "autonomy_policy_binding_missing";
+pub const INVOKE_TOOL_CAPABILITY_MISSING_CODE: &str =
+    "autonomy_policy_invoke_tool_capability_missing";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct AutonomyTurnBudgetState {
@@ -75,7 +77,7 @@ pub enum PolicyDecision {
 pub struct PolicyDecisionInput<'a> {
     pub snapshot: &'a AutonomyPolicySnapshot,
     pub action_class: CapabilityActionClass,
-    pub binding: ConversationRuntimeBinding<'a>,
+    pub capabilities: &'a Capabilities,
     pub budget: &'a AutonomyTurnBudgetState,
 }
 
@@ -90,10 +92,12 @@ pub fn evaluate_policy(input: PolicyDecisionInput<'_>) -> PolicyDecision {
         };
     }
 
-    if input.snapshot.requires_kernel_binding && !input.binding.is_kernel_bound() {
+    if input.snapshot.requires_tool_invocation
+        && !input.capabilities.contains(Capability::InvokeTool)
+    {
         return PolicyDecision::Deny {
-            rule_id: "autonomy_policy_requires_kernel_binding",
-            reason_code: BINDING_MISSING_CODE,
+            rule_id: "autonomy_policy_requires_tool_invocation",
+            reason_code: INVOKE_TOOL_CAPABILITY_MISSING_CODE,
         };
     }
 
@@ -249,7 +253,6 @@ fn topology_budget_reason_code(action_class: CapabilityActionClass) -> &'static 
 
 pub fn render_reason(
     snapshot: &AutonomyPolicySnapshot,
-    action_class: CapabilityActionClass,
     tool_name: &str,
     reason_code: &str,
 ) -> String {
@@ -314,10 +317,8 @@ pub fn render_reason(
             "autonomy policy denied `{tool_name}`: session mutation budget exceeded for `{}`",
             snapshot.profile.as_str()
         ),
-        BINDING_MISSING_CODE => format!(
-            "autonomy policy denied `{tool_name}`: `{}` requires kernel-bound execution for `{}`",
-            snapshot.profile.as_str(),
-            action_class.as_str()
+        INVOKE_TOOL_CAPABILITY_MISSING_CODE => format!(
+            "autonomy policy denied `{tool_name}`: the recursive execution context lacks invoke_tool capability"
         ),
         _ => format!(
             "autonomy policy denied `{tool_name}` with reason `{reason_code}` under `{}`",
@@ -329,22 +330,18 @@ pub fn render_reason(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::KernelContext;
     use crate::config::AutonomyProfile;
     use crate::tools::runtime_config::AutonomyPolicySnapshot;
-    use loong_contracts::{Capability, ExecutionRoute, HarnessKind};
-    use loong_kernel::{FixedClock, InMemoryAuditSink, Kernel, VerticalPackManifest};
-    use std::collections::{BTreeMap, BTreeSet};
-    use std::sync::Arc;
 
     #[test]
-    fn autonomy_policy_decision_requires_kernel_binding_before_guided_capability_install() {
+    fn autonomy_policy_decision_requires_tool_invocation_before_guided_capability_install() {
         let snapshot = AutonomyPolicySnapshot::from_profile(AutonomyProfile::GuidedAcquisition);
         let budget = AutonomyTurnBudgetState::default();
+        let capabilities = Capabilities::default();
         let input = PolicyDecisionInput {
             snapshot: &snapshot,
             action_class: CapabilityActionClass::CapabilityInstall,
-            binding: ConversationRuntimeBinding::direct(),
+            capabilities: &capabilities,
             budget: &budget,
         };
 
@@ -353,8 +350,8 @@ mod tests {
         assert_eq!(
             decision,
             PolicyDecision::Deny {
-                rule_id: "autonomy_policy_requires_kernel_binding",
-                reason_code: BINDING_MISSING_CODE,
+                rule_id: "autonomy_policy_requires_tool_invocation",
+                reason_code: INVOKE_TOOL_CAPABILITY_MISSING_CODE,
             }
         );
     }
@@ -366,7 +363,7 @@ mod tests {
             capability_acquisition_mode: AutonomyOperationMode::Deny,
             provider_switch_mode: AutonomyOperationMode::Deny,
             topology_mutation_mode: AutonomyOperationMode::ApprovalRequired,
-            requires_kernel_binding: false,
+            requires_tool_invocation: false,
             budget: crate::tools::runtime_config::AutonomyBudgetPolicy {
                 max_capability_acquisitions_per_turn: 0,
                 max_provider_switches_per_turn: 0,
@@ -374,10 +371,11 @@ mod tests {
             },
         };
         let budget = AutonomyTurnBudgetState::default();
+        let capabilities = Capabilities::default();
         let input = PolicyDecisionInput {
             snapshot: &snapshot,
             action_class: CapabilityActionClass::TopologyExpand,
-            binding: ConversationRuntimeBinding::direct(),
+            capabilities: &capabilities,
             budget: &budget,
         };
 
@@ -399,7 +397,7 @@ mod tests {
             capability_acquisition_mode: AutonomyOperationMode::Allow,
             provider_switch_mode: AutonomyOperationMode::Deny,
             topology_mutation_mode: AutonomyOperationMode::Deny,
-            requires_kernel_binding: false,
+            requires_tool_invocation: false,
             budget: crate::tools::runtime_config::AutonomyBudgetPolicy {
                 max_capability_acquisitions_per_turn: 2,
                 max_provider_switches_per_turn: 0,
@@ -411,10 +409,11 @@ mod tests {
             provider_switches_used: 0,
             topology_mutations_used: 0,
         };
+        let capabilities = Capabilities::default();
         let input = PolicyDecisionInput {
             snapshot: &snapshot,
             action_class: CapabilityActionClass::CapabilityInstall,
-            binding: ConversationRuntimeBinding::kernel(kernel_context_placeholder()),
+            capabilities: &capabilities,
             budget: &budget,
         };
 
@@ -436,7 +435,7 @@ mod tests {
             capability_acquisition_mode: AutonomyOperationMode::Deny,
             provider_switch_mode: AutonomyOperationMode::Deny,
             topology_mutation_mode: AutonomyOperationMode::Allow,
-            requires_kernel_binding: false,
+            requires_tool_invocation: false,
             budget: crate::tools::runtime_config::AutonomyBudgetPolicy {
                 max_capability_acquisitions_per_turn: 0,
                 max_provider_switches_per_turn: 0,
@@ -448,10 +447,11 @@ mod tests {
             provider_switches_used: 0,
             topology_mutations_used: 1,
         };
+        let capabilities = Capabilities::default();
         let input = PolicyDecisionInput {
             snapshot: &snapshot,
             action_class: CapabilityActionClass::SessionMutation,
-            binding: ConversationRuntimeBinding::direct(),
+            capabilities: &capabilities,
             budget: &budget,
         };
 
@@ -464,36 +464,5 @@ mod tests {
                 reason_code: SESSION_MUTATION_BUDGET_EXCEEDED_CODE,
             }
         );
-    }
-
-    fn kernel_context_placeholder() -> &'static KernelContext {
-        static HOLDER: std::sync::OnceLock<KernelContext> = std::sync::OnceLock::new();
-        HOLDER.get_or_init(|| {
-            let audit = Arc::new(InMemoryAuditSink::default());
-            let clock = Arc::new(FixedClock::new(1_700_000_000));
-            let mut kernel = Kernel::with_runtime(clock, audit);
-            let pack = VerticalPackManifest {
-                pack_id: "autonomy-policy-test-pack".to_owned(),
-                domain: "testing".to_owned(),
-                version: "0.1.0".to_owned(),
-                default_route: ExecutionRoute {
-                    harness_kind: HarnessKind::EmbeddedPi,
-                    adapter: None,
-                },
-                allowed_connectors: BTreeSet::new(),
-                granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
-                metadata: BTreeMap::new(),
-            };
-            kernel.register_pack(pack).expect("register pack");
-            let token = kernel
-                .issue_token("autonomy-policy-test-pack", "autonomy-policy-agent", 60)
-                .expect("issue token");
-            KernelContext {
-                kernel: Arc::new(kernel),
-                token: token.clone(),
-                pack: Arc::new(crate::context::pack_manifest_from_token(&token)),
-                tool_runtime_config: crate::tools::runtime_config::ToolRuntimeConfig::default(),
-            }
-        })
     }
 }
