@@ -8,9 +8,8 @@
 //! record; it does not grant permission. An action does not choose where it
 //! runs.
 
-use std::{any::Any, borrow::Cow};
+use std::{any::Any, borrow::Cow, future::Future};
 
-use async_trait::async_trait;
 use loong_contracts::capability::Capabilities;
 use serde_json::Value;
 use uuid::Uuid;
@@ -25,31 +24,54 @@ pub trait ActionMeta: Any + Send + Sync {
 ///
 /// Implement this only at the domain side-effect boundary. `run` consumes a
 /// [`Granted<Self>`], so raw action values cannot execute side effects.
-#[async_trait]
 pub trait Action<Cx: ?Sized>: ActionMeta + Sized
 where
     Cx: Sync,
 {
     type Output;
-    type Error;
+    type Error: std::error::Error + Send + Sync + 'static;
 
-    async fn run(granted: Granted<Self>, ctx: &Cx) -> Result<Self::Output, Self::Error>;
+    fn run(
+        granted: Granted<Self>,
+        ctx: &Cx,
+    ) -> impl Future<Output = Result<Self::Output, Self::Error>> + Send;
 }
 
-/// Authorization represented as an unforgeable value.
+/// Identifier assigned to an action grant by the concrete policy engine.
 ///
-/// The constructor is crate-private. Callers can inspect and execute a grant,
-/// but only policy helpers inside core can mint one.
+/// This is correlation metadata; [`Granted<A>`] remains the execution proof.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GrantId(Uuid);
+
+/// A recorded authorization represented as an unforgeable value.
+///
+/// Its fields and constructor are private. Callers can inspect or consume a
+/// grant, but only the trusted policy path inside core can bind an action to a
+/// recorded grant identifier.
 #[derive(Debug)]
-pub struct Granted<A: ActionMeta>(A);
+pub struct Granted<A: ActionMeta> {
+    grant_id: GrantId,
+    action: A,
+}
 
 impl<A: ActionMeta> Granted<A> {
-    pub(crate) fn new(action: A) -> Self {
-        Self(action)
+    pub(crate) fn new(grant_id: Uuid, action: A) -> Self {
+        Self {
+            grant_id: GrantId(grant_id),
+            action,
+        }
     }
 
-    pub fn into_action(self) -> A {
-        self.0
+    pub fn grant_id(&self) -> GrantId {
+        self.grant_id
+    }
+
+    pub fn action(&self) -> &A {
+        &self.action
+    }
+
+    pub fn into_parts(self) -> (GrantId, A) {
+        (self.grant_id, self.action)
     }
 
     /// Consume this authorization proof through the action's execution hook.
@@ -69,56 +91,41 @@ impl<A: ActionMeta> Granted<A> {
     }
 }
 
-impl<A> AsRef<A> for Granted<A>
-where
-    A: ActionMeta,
-{
-    /// Inspect the granted action before the grant is consumed.
-    ///
-    /// This supports audit and metadata capture at the execution boundary. It
-    /// must not grow into a way to clone, mint, or bypass grants.
-    fn as_ref(&self) -> &A {
-        &self.0
-    }
-}
+// TODO: Here may be a Approval-relevant type for "requesting parent for approval"
 
-/// Identifier assigned to an action grant by the concrete policy engine.
-///
-/// This is correlation metadata; [`Granted<A>`] remains the execution proof.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct GrantId(Uuid);
+#[cfg(test)]
+mod tests {
+    use std::borrow::Cow;
 
-#[derive(Debug)]
-pub struct ActionGrant<A: ActionMeta> {
-    grant_id: GrantId,
-    granted: Granted<A>,
-}
+    use loong_contracts::capability::Capabilities;
+    use serde_json::Value;
+    use uuid::Uuid;
 
-impl<A: ActionMeta> ActionGrant<A> {
-    pub(crate) fn new(grant_id: GrantId, granted: Granted<A>) -> Self {
-        Self { grant_id, granted }
+    use super::{ActionMeta, Granted};
+
+    struct TestAction;
+
+    impl ActionMeta for TestAction {
+        fn name(&self) -> Cow<'_, str> {
+            Cow::Borrowed("test")
+        }
+
+        fn payload(&self) -> Cow<'_, Value> {
+            Cow::Borrowed(&Value::Null)
+        }
+
+        fn required_capabilities(&self) -> Capabilities {
+            Capabilities::empty()
+        }
     }
 
-    pub fn into_parts(self) -> (GrantId, Granted<A>) {
-        (self.grant_id, self.granted)
+    #[test]
+    fn granted_binds_the_recorded_id_to_the_action() {
+        for recorded_id in [Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(42)] {
+            let granted = Granted::new(recorded_id, TestAction);
+
+            assert_eq!(granted.grant_id.0, recorded_id);
+            assert!(matches!(granted.action, TestAction));
+        }
     }
-
-    pub fn grant_id(&self) -> GrantId {
-        self.grant_id
-    }
-
-    pub fn granted(&self) -> &Granted<A> {
-        &self.granted
-    }
-}
-
-pub struct ToBeApproved<A: ActionMeta>(A);
-
-/// The action to approve one action.
-/// This action has a special privilege to grant other actions.
-///
-/// When action A is given `RequireApproval` in the policy engine
-/// of one node, this action should be evaluated by its parent.
-pub struct ApprovalAction /*<A: ActionMeta>*/ {
-    // TODO
 }

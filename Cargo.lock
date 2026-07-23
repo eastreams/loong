@@ -85,7 +85,6 @@ dependencies = [
 name = "loong-access"
 version = "0.2.0"
 dependencies = [
- "async-trait",
  "loong-contracts",
  "loong-core",
  "serde_json",

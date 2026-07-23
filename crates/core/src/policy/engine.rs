@@ -1,34 +1,44 @@
 //! Policy Engine for Loong.
 //!
-//! Callers use `PolicyEngine`. `PolicyEngineImpl` is trusted code. An engine may
-//! return a grant only after policy allows the action and the grant is recorded.
-//! Denial and approval are decisions; evaluation and recording failures are
-//! errors.
+//! Callers use `PolicyEngine`. `PolicyEngineImpl` is trusted final-application
+//! code. Evaluation is total and fail-closed. Recording and parent-request
+//! failures remain errors because callers may need to diagnose or retry them.
 
-use loong_contracts::policy::PolicyResultFinal;
+use loong_contracts::policy::{PolicyDecisionFinal, PolicyResultFinal};
 use uuid::Uuid;
 
 use crate::{
-    action::{ActionGrant, ActionMeta},
-    policy::GrantRequester,
+    action::{ActionMeta, Granted},
+    policy::{GrantOutcome, ParentGrantRequester},
 };
 
-/// This trait should be restrained in implementation.
-/// The implementor of this trait should stay in trusted domain.
+/// Trusted policy evaluation and grant-recording hooks.
 ///
-/// Mostly, this should only be implemented in Kernel.
+/// Stable Rust cannot restrict this public trait to one downstream crate.
+/// Implement it only in the final application composition boundary.
 pub trait PolicyEngineImpl<Cx>
 where
-    Cx: GrantRequester + Sync,
+    Cx: Sync,
     Self: Sync,
 {
+    /// Failure to finish issuing a grant after evaluation has completed.
+    ///
+    /// Implementations return this when recording fails. The composed engine
+    /// uses the same error type for parent-request failures. Policy denial is a
+    /// successful [`GrantOutcome::Denied`], not an error.
     type Error: std::error::Error + Send + Sync + 'static;
 
+    /// Evaluate the action inside the final application's trusted boundary.
+    ///
+    /// Capability ceilings are policy input and are not rechecked by the
+    /// blanket `grant` implementation. Never return `Allow` when the current
+    /// context lacks authority; use `RequiresApproval` when a parent should
+    /// evaluate the same action.
     fn evaluate<A: ActionMeta>(
         &self,
         ctx: &Cx,
         action: &A,
-    ) -> impl Future<Output = Result<PolicyResultFinal, Self::Error>> + Send;
+    ) -> impl Future<Output = PolicyResultFinal> + Send;
 
     fn record_action_granted<A: ActionMeta>(
         &self,
@@ -42,27 +52,26 @@ mod sealed {
 }
 
 pub trait PolicyEngine<Cx>: sealed::Sealed<Cx> {
+    /// Failure to record a local grant or complete a parent grant request.
+    ///
+    /// Policy denial is returned as [`GrantOutcome::Denied`].
     type Error: std::error::Error + Send + Sync + 'static;
 
-    // TODO: proper error type
     fn grant<A: ActionMeta>(
         &self,
         ctx: &Cx,
         action: A,
-    ) -> impl Future<Output = Result<ActionGrant<A>, Self::Error>> + Send;
+    ) -> impl Future<Output = Result<GrantOutcome<A>, Self::Error>> + Send;
 }
 
-impl<Cx, P: PolicyEngineImpl<Cx>> sealed::Sealed<Cx> for P
-where
-    Cx: GrantRequester + Sync,
-    P: Sync,
+impl<Cx, P: PolicyEngineImpl<Cx>> sealed::Sealed<Cx> for P where
+    Cx: ParentGrantRequester<Error = P::Error> + Sync
 {
 }
 
 impl<Cx, P: PolicyEngineImpl<Cx>> PolicyEngine<Cx> for P
 where
-    Cx: GrantRequester + Sync,
-    P: Sync,
+    Cx: ParentGrantRequester<Error = P::Error> + Sync,
 {
     type Error = P::Error;
 
@@ -70,13 +79,21 @@ where
         &self,
         ctx: &Cx,
         action: A,
-    ) -> Result<ActionGrant<A>, Self::Error> {
-        let result = self.evaluate(ctx, &action).await?;
-        todo!()
-        // match result.decision {
-        //     PolicyDecisionFinal::Allow => Ok(ActionGrant::Allow),
-        //     PolicyDecisionFinal::Deny => Ok(ActionGrant::Deny),
-        //     PolicyDecisionFinal::RequiresApproval => ctx.
-        // }
+    ) -> Result<GrantOutcome<A>, Self::Error> {
+        let result = self.evaluate(ctx, &action).await;
+
+        match result.decision {
+            PolicyDecisionFinal::Allow => {
+                let grant_id = self.record_action_granted(ctx, &action).await?;
+                Ok(GrantOutcome::Granted(Granted::new(grant_id, action)))
+            }
+            PolicyDecisionFinal::Deny => Ok(GrantOutcome::Denied {
+                reason: result.reason,
+            }),
+            PolicyDecisionFinal::RequiresApproval => ctx.grant(action).await,
+        }
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -1,8 +1,10 @@
 //! Policies form multiple chains, where each chain contains
 //! a set of policies that are evaluated in order.
 //!
-//! The types below describe those decisions. Errors while evaluating or
-//! recording them belong to the policy engine.
+//! The types below describe those decisions. Evaluation has no operational
+//! error channel: failures return deny, while `Abstain` and `SkipChain` are
+//! deliberate chain-control decisions. Grant-recording and parent-request
+//! failures belong to the policy engine.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyDecisionFinal {

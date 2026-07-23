@@ -40,29 +40,11 @@ evaluate the same action; it may not expand its own ceiling.
 Still unresolved:
 
 - How is the parent boundary located without introducing global authority?
-- How are approval, denial, cancellation, and transport failure represented?
+- How does cancellation interrupt or outlive a parent request?
 - Which audit record links the child request, parent decision, and execution?
 
 No `SessionAuthority`, `CapabilityToken`, or second grant proof should be
 introduced to answer these questions.
-
-## Policy Outcomes and Operational Errors
-
-Policy denial and required approval are normal outcomes. Evaluation, storage,
-or parent-request failures are errors. `PolicyEngine::grant` still needs a
-return shape that represents both categories without conflating them.
-
-The chosen type must also preserve the rule that only an allowed and recorded
-action can become `Granted<A>`.
-
-## Policy Trusted Computing Base
-
-`PolicyEngineImpl` is currently a public trait. Any downstream implementation
-can therefore participate in the path that records an allow decision and mints
-a grant through core.
-
-Decide whether this is an intentional trusted extension point or whether
-implementations must be restricted to a smaller owner such as the kernel.
 
 ## Grant Identifier Semantics
 
