@@ -1,0 +1,11 @@
+[package]
+name = "loong-kernel"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+loong-access.workspace = true
+
+[lints]
+workspace = true

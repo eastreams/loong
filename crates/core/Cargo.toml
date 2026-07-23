@@ -1,0 +1,14 @@
+[package]
+name = "loong-core"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+loong-contracts.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

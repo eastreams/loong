@@ -1,0 +1,16 @@
+[package]
+name = "loong-access"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+loong-core.workspace = true
+loong-contracts.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true
