@@ -1,0 +1,65 @@
+# Loong Architecture
+
+Loong keeps crate dependencies one-way and sends protected side effects through
+one authorization path. Detailed API rules live in the module docs linked
+below.
+
+## Crate Relationships
+
+Arrows point from a crate to its dependency:
+
+```text
+loong-cli -> loong-kernel -> loong-access
+loong-access -> loong-core -> loong-contracts
+loong-access -> loong-contracts
+```
+
+`loong-contracts` defines data shared between layers. `loong-core` builds the
+authorization model on those contracts. `loong-access` uses both to expose
+domain operations. `loong-kernel` composes access implementations, and final
+application assembly belongs in `loong-cli`. A lower crate never depends on a
+crate above it.
+
+## Access -> Action -> Policy
+
+```text
+caller or tool
+    -> Access
+    -> concrete Action
+    -> Policy
+    -> Granted<Action>
+    -> Action::run or backend
+```
+
+An [access API](crates/access/src/lib.rs) is the only operation surface given to
+a caller. It exposes a narrow set of requests and does not reveal the kernel,
+session, runtime, backend, or a global context.
+
+Each request becomes a [concrete action](crates/core/src/action.rs).
+`ActionMeta` gives policy the action's name, payload, and required capabilities;
+generic policy may inspect it as `dyn ActionMeta`, while core still owns the
+concrete `A`. The resulting proof can therefore remain `Granted<A>`. An action
+describes what should happen, not where it runs.
+
+[Policy](crates/core/src/policy.rs) evaluates that same action but does not
+execute it. The capabilities allowed by the
+[policy context](crates/core/src/policy/context.rs) are a ceiling. If an action
+needs more, a parent may evaluate the same action; the current context cannot
+expand its own authority.
+
+After policy allows the action and the decision is recorded, the
+[policy engine](crates/core/src/policy/engine.rs) may create `Granted<A>`.
+`Granted<A>` keeps the concrete action type and is the only proof accepted by
+side-effect code. If `A` implements `Action<Cx>`, `Granted<A>::run` consumes the
+grant and calls `Action::run`. Otherwise, a backend may consume
+`Granted<ConcreteAction>` directly. A backend must not accept a raw action and
+repeat the permission check itself.
+
+`GrantId` only identifies the grant record. It does not authorize execution,
+and it is not a second proof.
+
+## Open Questions
+
+Runtime and session ownership, turn and step boundaries, execution-plane
+ownership, and runtime extension isolation remain unresolved. See
+[Open Architecture Questions](docs/open-questions.md).

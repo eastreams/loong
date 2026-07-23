@@ -1,3 +1,13 @@
+//! Actions and their grants.
+//!
+//! `ActionMeta` gives policy an action's name, payload, and capabilities.
+//! `Action<Cx>` lets an action execute itself when that model fits.
+//!
+//! Code that performs a Loong side effect must require `Granted<A>`. Its
+//! constructor is private to `loong-core`. `GrantId` only identifies the grant
+//! record; it does not grant permission. An action does not choose where it
+//! runs.
+
 use std::{any::Any, borrow::Cow};
 
 use async_trait::async_trait;

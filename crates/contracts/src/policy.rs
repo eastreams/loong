@@ -1,5 +1,8 @@
 //! Policies form multiple chains, where each chain contains
 //! a set of policies that are evaluated in order.
+//!
+//! The types below describe those decisions. Errors while evaluating or
+//! recording them belong to the policy engine.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyDecisionFinal {

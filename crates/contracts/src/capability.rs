@@ -1,3 +1,8 @@
+//! Capabilities and capability sets.
+//!
+//! Serialize capabilities by their string names. Numeric IDs only index the
+//! private bitset and must never appear in stored or exchanged data.
+
 use std::{borrow::Cow, collections::BTreeSet};
 
 use schemars::{JsonSchema, Schema, SchemaGenerator};

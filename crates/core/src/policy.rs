@@ -1,3 +1,8 @@
+//! Interfaces for checking actions against policy.
+//!
+//! `Policy` handles a known action type. `PolicyAny` accepts any `ActionMeta`.
+//! A policy returns a decision; it does not run the action or create a grant.
+
 mod context;
 pub use context::*;
 

@@ -1,3 +1,9 @@
+//! Capability limits and requests to a parent.
+//!
+//! A nested context must never allow more capabilities than its parent. If an
+//! action needs more, it may ask the parent to evaluate the same action. It
+//! must not enlarge its own set or create another authority token.
+
 use loong_contracts::capability::Capabilities;
 
 use crate::action::{ActionGrant, ActionMeta};

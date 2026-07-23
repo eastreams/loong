@@ -1,4 +1,9 @@
 //! Policy Engine for Loong.
+//!
+//! Callers use `PolicyEngine`. `PolicyEngineImpl` is trusted code. An engine may
+//! return a grant only after policy allows the action and the grant is recorded.
+//! Denial and approval are decisions; evaluation and recording failures are
+//! errors.
 
 use loong_contracts::policy::PolicyResultFinal;
 use uuid::Uuid;
