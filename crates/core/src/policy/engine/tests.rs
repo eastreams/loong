@@ -19,29 +19,12 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
-    action::{ActionMeta, Granted},
-    policy::{GrantOutcome, ParentGrantRequester, PolicyEngine, PolicyEngineImpl},
+    action::{ActionMeta, Denied, Granted},
+    policy::{ParentGrantRequester, PolicyEngine, PolicyEngineImpl},
 };
 
 const LOCAL_GRANT_UUID: Uuid = Uuid::from_u128(1);
 const PARENT_GRANT_UUID: Uuid = Uuid::from_u128(2);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TestError {
-    Record,
-    Parent,
-}
-
-impl core::fmt::Display for TestError {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::Record => formatter.write_str("record failed"),
-            Self::Parent => formatter.write_str("parent failed"),
-        }
-    }
-}
-
-impl core::error::Error for TestError {}
 
 #[derive(Debug)]
 struct TestAction(u8);
@@ -62,7 +45,7 @@ impl ActionMeta for TestAction {
 
 struct TestEngine {
     result: PolicyResultFinal,
-    record_result: Result<Uuid, TestError>,
+    record_result: Uuid,
     record_calls: AtomicUsize,
 }
 
@@ -73,15 +56,13 @@ impl TestEngine {
                 decision,
                 reason: reason.map(str::to_owned),
             },
-            record_result: Ok(LOCAL_GRANT_UUID),
+            record_result: LOCAL_GRANT_UUID,
             record_calls: AtomicUsize::new(0),
         }
     }
 }
 
 impl<Cx: Sync> PolicyEngineImpl<Cx> for TestEngine {
-    type Error = TestError;
-
     fn evaluate<A: ActionMeta>(
         &self,
         _ctx: &Cx,
@@ -94,7 +75,7 @@ impl<Cx: Sync> PolicyEngineImpl<Cx> for TestEngine {
         &self,
         _ctx: &Cx,
         _action: &A,
-    ) -> impl Future<Output = Result<Uuid, Self::Error>> + Send {
+    ) -> impl Future<Output = Uuid> + Send {
         self.record_calls.fetch_add(1, Ordering::Relaxed);
         ready(self.record_result)
     }
@@ -103,7 +84,6 @@ impl<Cx: Sync> PolicyEngineImpl<Cx> for TestEngine {
 enum ParentResult {
     Granted(Uuid),
     Denied(Option<String>),
-    Error(TestError),
 }
 
 struct TestContext {
@@ -122,18 +102,13 @@ impl TestContext {
 
 #[async_trait]
 impl ParentGrantRequester for TestContext {
-    type Error = TestError;
-
-    async fn grant<A: ActionMeta>(&self, action: A) -> Result<GrantOutcome<A>, Self::Error> {
+    async fn grant<A: ActionMeta>(&self, action: A) -> Result<Granted<A>, Denied> {
         self.parent_calls.fetch_add(1, Ordering::Relaxed);
         match &self.parent_result {
-            ParentResult::Granted(grant_id) => {
-                Ok(GrantOutcome::Granted(Granted::new(*grant_id, action)))
-            }
-            ParentResult::Denied(reason) => Ok(GrantOutcome::Denied {
+            ParentResult::Granted(grant_id) => Ok(Granted::new(*grant_id, action)),
+            ParentResult::Denied(reason) => Err(Denied {
                 reason: reason.clone(),
             }),
-            ParentResult::Error(error) => Err(*error),
         }
     }
 }
@@ -145,12 +120,10 @@ struct RecursiveContext<'a> {
 
 #[async_trait]
 impl ParentGrantRequester for RecursiveContext<'_> {
-    type Error = TestError;
-
-    async fn grant<A: ActionMeta>(&self, action: A) -> Result<GrantOutcome<A>, Self::Error> {
+    async fn grant<A: ActionMeta>(&self, action: A) -> Result<Granted<A>, Denied> {
         match self.parent {
             Some(parent) => PolicyEngine::grant(self.engine, parent, action).await,
-            None => Ok(GrantOutcome::Denied {
+            None => Err(Denied {
                 reason: Some("no parent".to_owned()),
             }),
         }
@@ -173,7 +146,7 @@ fn allow_records_before_returning_a_grant() {
     let context = TestContext::new(ParentResult::Denied(None));
 
     let result = resolve(PolicyEngine::grant(&engine, &context, TestAction(7)));
-    let Ok(GrantOutcome::Granted(granted)) = result else {
+    let Ok(granted) = result else {
         panic!("allow should return a grant");
     };
     let expected_grant_id = Granted::new(LOCAL_GRANT_UUID, TestAction(0)).grant_id();
@@ -194,7 +167,7 @@ fn deny_keeps_reason_without_recording() {
 
     assert!(matches!(
         result,
-        Ok(GrantOutcome::Denied { reason }) if reason.as_deref() == Some("not allowed")
+        Err(Denied { reason }) if reason.as_deref() == Some("not allowed")
     ));
     assert_eq!(engine.record_calls.load(Ordering::Relaxed), 0);
     assert_eq!(context.parent_calls.load(Ordering::Relaxed), 0);
@@ -206,7 +179,7 @@ fn approval_preserves_the_parent_grant_and_action() {
     let context = TestContext::new(ParentResult::Granted(PARENT_GRANT_UUID));
 
     let result = resolve(PolicyEngine::grant(&engine, &context, TestAction(7)));
-    let Ok(GrantOutcome::Granted(granted)) = result else {
+    let Ok(granted) = result else {
         panic!("parent allow should return its grant");
     };
     let expected_grant_id = Granted::new(PARENT_GRANT_UUID, TestAction(0)).grant_id();
@@ -227,33 +200,8 @@ fn approval_keeps_the_parent_denial() {
 
     assert!(matches!(
         result,
-        Ok(GrantOutcome::Denied { reason }) if reason.as_deref() == Some("parent denied")
+        Err(Denied { reason }) if reason.as_deref() == Some("parent denied")
     ));
-    assert_eq!(engine.record_calls.load(Ordering::Relaxed), 0);
-    assert_eq!(context.parent_calls.load(Ordering::Relaxed), 1);
-}
-
-#[test]
-fn recording_failure_does_not_return_a_grant() {
-    let mut engine = TestEngine::new(PolicyDecisionFinal::Allow, None);
-    engine.record_result = Err(TestError::Record);
-    let context = TestContext::new(ParentResult::Denied(None));
-
-    let result = resolve(PolicyEngine::grant(&engine, &context, TestAction(7)));
-
-    assert!(matches!(result, Err(TestError::Record)));
-    assert_eq!(engine.record_calls.load(Ordering::Relaxed), 1);
-    assert_eq!(context.parent_calls.load(Ordering::Relaxed), 0);
-}
-
-#[test]
-fn parent_failure_stays_an_operational_error() {
-    let engine = TestEngine::new(PolicyDecisionFinal::RequiresApproval, None);
-    let context = TestContext::new(ParentResult::Error(TestError::Parent));
-
-    let result = resolve(PolicyEngine::grant(&engine, &context, TestAction(7)));
-
-    assert!(matches!(result, Err(TestError::Parent)));
     assert_eq!(engine.record_calls.load(Ordering::Relaxed), 0);
     assert_eq!(context.parent_calls.load(Ordering::Relaxed), 1);
 }
@@ -274,7 +222,7 @@ fn parent_request_can_reenter_the_policy_engine() {
 
     assert!(matches!(
         result,
-        Ok(GrantOutcome::Denied { reason }) if reason.as_deref() == Some("no parent")
+        Err(Denied { reason }) if reason.as_deref() == Some("no parent")
     ));
     assert_eq!(engine.record_calls.load(Ordering::Relaxed), 0);
 }

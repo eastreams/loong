@@ -8,6 +8,7 @@ version.workspace = true
 loong-contracts.workspace = true
 serde_json.workspace = true
 async-trait.workspace = true
+thiserror.workspace = true
 uuid.workspace = true
 
 [lints]

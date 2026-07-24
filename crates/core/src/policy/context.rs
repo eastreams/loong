@@ -8,7 +8,7 @@ use alloc::boxed::Box;
 use async_trait::async_trait;
 use loong_contracts::capability::Capabilities;
 
-use crate::{action::ActionMeta, policy::GrantOutcome};
+use crate::action::{ActionMeta, Denied, Granted};
 
 /// Has a set of allowed capabilities that are nested monotonically.
 pub trait CapabilityContext {
@@ -22,11 +22,9 @@ pub trait CapabilityContext {
 /// recursive future type.
 #[async_trait]
 pub trait ParentGrantRequester {
-    /// Failure to complete the request to the parent policy boundary.
+    /// Ask the parent for a final grant, propagating refusal as `Err(Denied)`.
     ///
-    /// Policy denial is a successful request represented by
-    /// [`GrantOutcome::Denied`], not an error.
-    type Error: core::error::Error + Send + Sync + 'static;
-
-    async fn grant<A: ActionMeta>(&self, action: A) -> Result<GrantOutcome<A>, Self::Error>;
+    /// The `Err` branch is a policy conclusion rather than a transport or
+    /// runtime failure.
+    async fn grant<A: ActionMeta>(&self, action: A) -> Result<Granted<A>, Denied>;
 }

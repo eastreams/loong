@@ -11,24 +11,11 @@ pub use context::*;
 mod engine;
 pub use engine::*;
 
-use alloc::{boxed::Box, string::String};
+use alloc::boxed::Box;
 use async_trait::async_trait;
 use loong_contracts::policy::PolicyResult;
 
-use crate::{
-    ContextFactory,
-    action::{ActionMeta, Granted},
-};
-
-/// The final result of trying to authorize one action.
-///
-/// Approval requests are resolved through the parent before this result is
-/// returned, so callers only handle an executable grant or a denial.
-#[derive(Debug)]
-pub enum GrantOutcome<A: ActionMeta> {
-    Granted(Granted<A>),
-    Denied { reason: Option<String> },
-}
+use crate::{ContextFactory, action::ActionMeta};
 
 #[async_trait]
 pub trait Policy<A: ActionMeta, C: ContextFactory> {

@@ -1,12 +1,8 @@
-use std::{
-    borrow::Cow,
-    io,
-    path::{Path, PathBuf},
-};
+use std::{borrow::Cow, io, path::PathBuf};
 
 use loong_contracts::capability::{Capabilities, Capability};
 use loong_core::{
-    action::{Action, ActionMeta, Granted},
+    action::{Action, ActionMeta, Denied, Granted},
     policy::PolicyEngine,
 };
 use serde_json::Value;
@@ -14,30 +10,24 @@ use thiserror::Error;
 
 use crate::fs::FsAccess;
 
-/// Failure while executing an authorized filesystem read.
+/// Failure while authorizing or executing a filesystem read.
 #[derive(Debug, Error)]
-#[error("failed to read `{}`: {source}", .path.display())]
-pub struct FsReadError {
-    path: PathBuf,
-    #[source]
-    source: io::Error,
-}
-
-impl FsReadError {
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
+pub enum FsReadError {
+    #[error(transparent)]
+    Denied(#[from] Denied),
+    #[error("failed to read `{}`: {source}", .path.display())]
+    Io { path: PathBuf, source: io::Error },
 }
 
 impl<'a, Cx: Sync, P> FsAccess<'a, Cx, P>
 where
     P: PolicyEngine<Cx>,
 {
-    // TODO
-    // pub async fn read(&self, path: impl Into<PathBuf>) -> Result<Vec<u8>, P::Error> {
-    //     let action = FsReadAction { path: path.into() };
-    //     self.policy_engine.grant(self.ctx, action).await?;
-    // }
+    pub async fn read(&self, path: impl Into<PathBuf>) -> Result<Vec<u8>, FsReadError> {
+        let action = FsReadAction { path: path.into() };
+        let granted = self.policy_engine.grant(self.ctx, action).await?;
+        granted.run(self.ctx).await
+    }
 }
 
 /// Internal scaffold for the read execution boundary.
@@ -83,28 +73,6 @@ impl<Cx: Sync> Action<Cx> for FsReadAction {
 
         tokio::fs::read(&path)
             .await
-            .map_err(|source| FsReadError { path, source })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{error::Error as _, io, path::Path};
-
-    use super::FsReadError;
-
-    #[test]
-    fn read_error_keeps_path_and_source() {
-        let error = FsReadError {
-            path: "/workspace/missing.txt".into(),
-            source: io::Error::new(io::ErrorKind::NotFound, "missing"),
-        };
-
-        assert_eq!(error.path(), Path::new("/workspace/missing.txt"));
-        assert!(error.source().is_some());
-        assert_eq!(
-            error.to_string(),
-            "failed to read `/workspace/missing.txt`: missing"
-        );
+            .map_err(|source| FsReadError::Io { path, source })
     }
 }

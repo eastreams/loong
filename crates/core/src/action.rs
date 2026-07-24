@@ -10,9 +10,10 @@
 
 use core::any::Any;
 
-use alloc::borrow::Cow;
+use alloc::{borrow::Cow, string::String};
 use loong_contracts::capability::Capabilities;
 use serde_json::Value;
+use thiserror::Error;
 use uuid::Uuid;
 
 pub trait ActionMeta: Any + Send + Sync {
@@ -90,6 +91,20 @@ impl<A: ActionMeta> Granted<A> {
     {
         A::run(self, ctx).await
     }
+}
+
+/// A final policy denial.
+///
+/// This is an expected authorization conclusion rather than a policy-engine
+/// failure. It still implements [`core::error::Error`] so application errors
+/// can preserve and propagate the denial as their source.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error(
+    "action denied: {}",
+    .reason.as_deref().unwrap_or("no reason provided")
+)]
+pub struct Denied {
+    pub reason: Option<String>,
 }
 
 // TODO: Here may be a Approval-relevant type for "requesting parent for approval"

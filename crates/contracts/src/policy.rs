@@ -3,8 +3,8 @@
 //!
 //! The types below describe those decisions. Evaluation has no operational
 //! error channel: failures return deny, while `Abstain` and `SkipChain` are
-//! deliberate chain-control decisions. Grant-recording and parent-request
-//! failures belong to the policy engine.
+//! deliberate chain-control decisions. Grant issuance and parent requests use
+//! the same total boundary: callers receive either a grant or a final denial.
 
 use alloc::string::String;
 

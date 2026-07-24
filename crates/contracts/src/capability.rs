@@ -121,6 +121,30 @@ impl Capabilities {
         self.0[byte] |= 1u8 << bit;
         self
     }
+
+    pub const fn contains(&self, capability: Capability) -> bool {
+        let id = capability.into_id() as usize;
+        let byte = id / u8::BITS as usize;
+        let bit = id % u8::BITS as usize;
+        self.0[byte] & (1u8 << bit) != 0
+    }
+
+    pub fn covers(self, other: Self) -> bool {
+        for i in 0..CAPABILITY_BYTES {
+            if self.0[i] & other.0[i] != other.0[i] {
+                return false;
+            }
+        }
+        true
+    }
+
+    pub fn intersection(self, other: Self) -> Self {
+        let mut ret = Self::empty();
+        for i in 0..CAPABILITY_BYTES {
+            ret.0[i] = self.0[i] & other.0[i];
+        }
+        ret
+    }
 }
 
 impl FromIterator<Capability> for Capabilities {
