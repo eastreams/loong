@@ -11,6 +11,7 @@ pub use context::*;
 mod engine;
 pub use engine::*;
 
+use alloc::{boxed::Box, string::String};
 use async_trait::async_trait;
 use loong_contracts::policy::PolicyResult;
 

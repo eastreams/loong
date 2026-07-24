@@ -8,8 +8,9 @@
 //! record; it does not grant permission. An action does not choose where it
 //! runs.
 
-use std::{any::Any, borrow::Cow, future::Future};
+use core::any::Any;
 
+use alloc::borrow::Cow;
 use loong_contracts::capability::Capabilities;
 use serde_json::Value;
 use uuid::Uuid;
@@ -29,7 +30,7 @@ where
     Cx: Sync,
 {
     type Output;
-    type Error: std::error::Error + Send + Sync + 'static;
+    type Error: core::error::Error + Send + Sync + 'static;
 
     fn run(
         granted: Granted<Self>,
@@ -95,7 +96,7 @@ impl<A: ActionMeta> Granted<A> {
 
 #[cfg(test)]
 mod tests {
-    use std::borrow::Cow;
+    use alloc::borrow::Cow;
 
     use loong_contracts::capability::Capabilities;
     use serde_json::Value;

@@ -1,10 +1,13 @@
-use std::{
-    borrow::Cow,
-    error::Error,
-    fmt,
-    future::{Future, ready},
+use core::{
+    future::ready,
     sync::atomic::{AtomicUsize, Ordering},
     task::{Context, Poll, Waker},
+};
+
+use alloc::{
+    borrow::{Cow, ToOwned},
+    boxed::Box,
+    string::String,
 };
 
 use async_trait::async_trait;
@@ -29,8 +32,8 @@ enum TestError {
     Parent,
 }
 
-impl fmt::Display for TestError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl core::fmt::Display for TestError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Record => formatter.write_str("record failed"),
             Self::Parent => formatter.write_str("parent failed"),
@@ -38,7 +41,7 @@ impl fmt::Display for TestError {
     }
 }
 
-impl Error for TestError {}
+impl core::error::Error for TestError {}
 
 #[derive(Debug)]
 struct TestAction(u8);
@@ -155,7 +158,7 @@ impl ParentGrantRequester for RecursiveContext<'_> {
 }
 
 fn resolve<F: Future>(future: F) -> F::Output {
-    let mut future = std::pin::pin!(future);
+    let mut future = core::pin::pin!(future);
     let mut context = Context::from_waker(Waker::noop());
 
     match future.as_mut().poll(&mut context) {

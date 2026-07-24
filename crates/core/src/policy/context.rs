@@ -4,6 +4,7 @@
 //! action needs more, it may ask the parent to evaluate the same action. It
 //! must not enlarge its own set or create another authority token.
 
+use alloc::boxed::Box;
 use async_trait::async_trait;
 use loong_contracts::capability::Capabilities;
 
@@ -25,7 +26,7 @@ pub trait ParentGrantRequester {
     ///
     /// Policy denial is a successful request represented by
     /// [`GrantOutcome::Denied`], not an error.
-    type Error: std::error::Error + Send + Sync + 'static;
+    type Error: core::error::Error + Send + Sync + 'static;
 
     async fn grant<A: ActionMeta>(&self, action: A) -> Result<GrantOutcome<A>, Self::Error>;
 }

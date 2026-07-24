@@ -26,7 +26,7 @@ where
     /// Implementations return this when recording fails. The composed engine
     /// uses the same error type for parent-request failures. Policy denial is a
     /// successful [`GrantOutcome::Denied`], not an error.
-    type Error: std::error::Error + Send + Sync + 'static;
+    type Error: core::error::Error + Send + Sync + 'static;
 
     /// Evaluate the action inside the final application's trusted boundary.
     ///
@@ -55,7 +55,7 @@ pub trait PolicyEngine<Cx>: sealed::Sealed<Cx> {
     /// Failure to record a local grant or complete a parent grant request.
     ///
     /// Policy denial is returned as [`GrantOutcome::Denied`].
-    type Error: std::error::Error + Send + Sync + 'static;
+    type Error: core::error::Error + Send + Sync + 'static;
 
     fn grant<A: ActionMeta>(
         &self,
