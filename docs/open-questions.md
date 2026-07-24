@@ -1,26 +1,79 @@
 # Open Architecture Questions
 
-This file records decisions that the rewrite deliberately does not settle.
-Code should not introduce placeholder owners or compatibility abstractions to
-make these questions appear resolved.
+This file records decisions that the rewrite deliberately does not settle and
+temporary conclusions that constrain those questions. Code should not introduce
+placeholder owners or compatibility abstractions to make an open question
+appear resolved.
 
-## Runtime, Session, and Context Ownership
+## Actix Actor Model (Temporary Decision)
 
-- Which component owns a runtime and its shutdown lifecycle?
-- Is a session an owned task, a borrowed view, an actor, or another control
-  boundary?
-- Who constructs per-operation context, and which values may it borrow?
-- What is the primary input/output control API?
+Loong temporarily adopts Actix's actor ownership and polling model. This fixes
+the architecture vocabulary for further design; it does not yet make the Actix
+crate or the types below a stable public dependency.
 
-Until these are answered, there should be no global `Context`, concrete
-`Runtime`, or `Session` state model in the skeleton.
+```rust
+type RuntimeHandle = actix::Addr<RuntimeActor>;
 
-## Turn and Step Boundaries
+struct AgentHost<A> {
+    agent: A,
+    runtime: RuntimeHandle,
+    allowed: AllowedCapabilities,
+}
 
-- What event begins and ends a turn?
+pub struct Context<'a, A>
+where
+    A: actix::Actor<Context = actix::Context<A>>,
+{
+    actor: &'a mut actix::Context<A>,
+    runtime: &'a RuntimeHandle,
+    allowed: &'a AllowedCapabilities,
+}
+```
+
+The final application owns the Actix system lifecycle and the root
+`RuntimeHandle`. `RuntimeActor` is the sole mutable owner of runtime state, and
+each `AgentHost<A>` is an Actix actor that owns one business agent plus its
+runtime address and current capability ceiling; the business `A` is not a
+second actor. A Loong `Context<'_, AgentHost<A>>` is constructed privately for
+each handler invocation or actor-future poll; callers cannot replace its
+address, forge its allowed capabilities, or obtain the raw runtime address
+through its public API.
+
+Asynchronous handlers that need actor state use `ResponseActFuture`. Actix lends
+fresh `&mut AgentHost<A>` and `&mut actix::Context<_>` references on each poll and
+releases them on `Pending`, so the mailbox may process another message while the
+response is waiting. `AtomicResponse` or `ctx.wait` is the explicit boundary for
+work that must freeze mailbox processing. Protected admission must use bounded
+`Addr::send`/`try_send`; `do_send` must not bypass capacity on those paths.
+
+This runtime context proves a valid actor execution environment, not permission
+to perform a side effect. Tools still receive only narrowed access facades, and
+side-effect code still requires `Granted<ConcreteAction>`. Nested capability
+ceilings may only shrink; that does not create an implicit parent-child lifetime.
+
+The [runtime model review](../RUNTIME-MODEL-REVIEW.md) records the Actix source
+comparison. Its [Tokio-only probe](../prototypes/runtime-model) validates a
+stricter serialized alternative and its cancellation invariants; that ordinary
+borrowing-handler scheduler is not part of this temporary Actix conclusion.
+
+## Session, Turn, and Step Semantics
+
+The actor model settles state ownership and poll-time scheduling. An actor,
+message, or response future is not automatically a product `Session`, `Turn`,
+or `Step`.
+
+Still unresolved:
+
+- What owns a session, how does it relate to root agents, and when does it end?
+- What external input/output API drives a session and exposes streamed events?
+- What event begins and commits a turn, and which state survives it?
 - Are steps policy/audit units, scheduling units, or both?
-- Which state survives a step or turn, and who commits it?
-- Where do cancellation and partial failure become observable?
+- How do request abandonment, explicit cancellation, actor stop, panic, and
+  partial side effects map to product-visible outcomes and audit records?
+- Which active response futures are cancelled during shutdown or session
+  cancellation? Dropping an Actix request does not by itself guarantee that an
+  already-started response future stops.
+- Which actor failures are terminal, supervised, or restartable?
 
 ## Execution Plane Ownership
 
@@ -31,30 +84,22 @@ Until these are answered, there should be no global `Context`, concrete
 
 `ExecutionPlane` must not be added to `Action` until this is decided.
 
-## Elevation and Parent Policy Control
+## Parent Policy Request Semantics
 
-The current direction is that a context's capabilities form a monotonic
-ceiling. When an action needs more capability, a child may ask a parent to
-evaluate the same action; it may not expand its own ceiling.
+The application context locates the parent boundary by implementing
+`ParentGrantRequester`. `RequiresApproval` passes the same concrete action to
+that boundary and returns the parent's final `Granted<A>` or denial; the child
+does not expand its own capability ceiling or mint a replacement grant.
 
 Still unresolved:
 
-- How is the parent boundary located without introducing global authority?
-- How does cancellation interrupt or outlive a parent request?
-- Which audit record links the child request, parent decision, and execution?
+- Does dropping a `ParentGrantRequester` future cancel parent evaluation, or
+  only stop waiting for its result?
+- Is a separate approval-request audit event required, and how does it refer to
+  the final `GrantId` without becoming another authorization proof?
 
 No `SessionAuthority`, `CapabilityToken`, or second grant proof should be
 introduced to answer these questions.
-
-## Grant Identifier Semantics
-
-`GrantId` currently wraps an opaque UUID generated by the concrete policy
-implementation. Decide whether UUID v7 generation is required and which
-ordering guarantee, if any, callers may rely on.
-
-UUID v7 can provide useful time ordering, but it is not a continuous integer
-sequence or a strict cross-process global order. `GrantId` remains correlation
-metadata regardless of the chosen generation policy.
 
 ## Runtime Extension Trust Boundary
 

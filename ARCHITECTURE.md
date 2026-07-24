@@ -61,11 +61,20 @@ proof accepted by side-effect code. If `A` implements `Action<Cx>`,
 backend may consume `Granted<ConcreteAction>` directly. A backend must not
 accept a raw action and repeat the permission check itself.
 
-`GrantId` only identifies the grant record. It does not authorize execution,
-and it is not a second proof.
+`GrantId` only identifies the grant record. The concrete policy implementation
+assigns its opaque UUID; callers have no ordering contract. It does not
+authorize execution, and it is not a second proof.
+
+## Runtime Actor Model
+
+The temporary runtime conclusion follows Actix's `Actor`/`Addr`/`Context` and
+poll-time `ResponseActFuture` model. This fixes the ownership and reentrancy
+model for continued design without yet making Actix a stable public dependency.
+See [Open Architecture Questions](docs/open-questions.md) for the exact temporary
+boundary and the product semantics that remain open.
 
 ## Open Questions
 
-Runtime and session ownership, turn and step boundaries, execution-plane
-ownership, and runtime extension isolation remain unresolved. See
-[Open Architecture Questions](docs/open-questions.md).
+Session, turn and step semantics, active cancellation and supervision,
+execution-plane ownership, approval audit, and runtime extension isolation
+remain unresolved. See [Open Architecture Questions](docs/open-questions.md).
