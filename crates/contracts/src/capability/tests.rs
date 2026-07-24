@@ -1,3 +1,5 @@
+use alloc::vec;
+
 use super::{Capabilities, Capability};
 
 const READ_CAPABILITIES: Capabilities = Capabilities::singleton(Capability::FsRead);

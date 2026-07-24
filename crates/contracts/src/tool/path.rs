@@ -1,4 +1,5 @@
-use std::{
+use alloc::{string::String, vec::Vec};
+use core::{
     ops::{Index, IndexMut},
     slice::SliceIndex,
 };
@@ -43,8 +44,8 @@ impl AsRef<str> for ToolPathSegment {
     }
 }
 
-impl std::fmt::Display for ToolPathSegment {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for ToolPathSegment {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}", self.0)
     }
 }
@@ -95,6 +96,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use alloc::{borrow::ToOwned, string::ToString};
+
     use super::{ToolPathSegment, ToolPathSegmentError};
 
     #[test]

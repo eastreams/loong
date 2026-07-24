@@ -6,6 +6,8 @@
 //! deliberate chain-control decisions. Grant-recording and parent-request
 //! failures belong to the policy engine.
 
+use alloc::string::String;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyDecisionFinal {
     Allow,

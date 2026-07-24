@@ -3,8 +3,10 @@
 //! Serialize capabilities by their string names. Numeric IDs only index the
 //! private bitset and must never appear in stored or exchanged data.
 
-use std::{borrow::Cow, collections::BTreeSet};
+use core::iter::FusedIterator;
 
+use alloc::{borrow::Cow, collections::BTreeSet};
+use alloc::{string::String, vec::Vec};
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 
@@ -202,7 +204,7 @@ impl Iterator for CapabilitiesIntoIter {
     }
 }
 
-impl std::iter::FusedIterator for CapabilitiesIntoIter {}
+impl FusedIterator for CapabilitiesIntoIter {}
 
 impl IntoIterator for Capabilities {
     type Item = Capability;

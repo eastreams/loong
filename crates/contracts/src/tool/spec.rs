@@ -1,4 +1,4 @@
-use std::borrow::Cow;
+use alloc::borrow::Cow;
 
 use schemars::Schema;
 use serde::{Deserialize, Serialize};
