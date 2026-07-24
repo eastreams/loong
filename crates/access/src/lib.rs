@@ -4,4 +4,5 @@
 //! kernel, a session, a runtime, a backend, or a global context. Application
 //! setup belongs elsewhere.
 
+#[cfg(feature = "fs")]
 pub mod fs;
