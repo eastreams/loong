@@ -202,17 +202,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
-name = "loong-access"
-version = "0.2.0"
-dependencies = [
- "loong-contracts",
- "loong-core",
- "serde_json",
- "thiserror",
- "tokio",
-]
-
-[[package]]
 name = "loong-cli"
 version = "0.2.0"
 dependencies = [
@@ -231,25 +220,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "loong-core"
-version = "0.2.0"
-dependencies = [
- "async-trait",
- "loong-contracts",
- "serde_json",
- "thiserror",
- "uuid",
-]
-
-[[package]]
 name = "loong-kernel"
 version = "0.2.0"
 dependencies = [
  "actix",
  "async-trait",
- "loong-access",
  "loong-contracts",
- "loong-core",
+ "serde_json",
+ "thiserror",
  "tokio",
  "uuid",
 ]

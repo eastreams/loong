@@ -8,11 +8,10 @@
 //! record; it does not grant permission. An action does not choose where it
 //! runs.
 
-use core::any::Any;
-
-use alloc::{borrow::Cow, string::String};
 use loong_contracts::capability::Capabilities;
 use serde_json::Value;
+use std::any::Any;
+use std::borrow::Cow;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -57,7 +56,7 @@ pub struct Granted<A: ActionMeta> {
 }
 
 impl<A: ActionMeta> Granted<A> {
-    pub(crate) fn new(grant_id: Uuid, action: A) -> Self {
+    pub(super) fn new(grant_id: Uuid, action: A) -> Self {
         Self {
             grant_id: GrantId(grant_id),
             action,
@@ -111,7 +110,7 @@ pub struct Denied {
 
 #[cfg(test)]
 mod tests {
-    use alloc::borrow::Cow;
+    use std::borrow::Cow;
 
     use loong_contracts::capability::Capabilities;
     use serde_json::Value;

@@ -1,82 +1,73 @@
 //! Code that connects domain access to the application.
-use actix::prelude::*;
 
-use async_trait::async_trait;
-use uuid::Uuid;
+pub mod access;
+pub mod actors;
+pub mod policy;
 
-use loong_access::fs::FsAccess;
-use loong_contracts::{
-    capability::Capabilities,
-    policy::{PolicyDecisionFinal, PolicyResultFinal},
-};
-use loong_core::{
-    action::{ActionMeta, Denied, Granted},
-    policy::{ParentGrantRequester, PolicyEngineImpl},
-};
+use actix::{WeakAddr, prelude::*};
 
-pub struct Kernel {}
+use thiserror::Error;
+
+use crate::access::fs::FsAccess;
+use crate::policy::action::{ActionMeta, Denied, Granted};
+use crate::policy::engine::PolicyEngine;
+use loong_contracts::capability::Capabilities;
+
+pub struct Kernel {
+    policy_engine: PolicyEngine,
+}
 
 impl Actor for Kernel {
     type Context = actix::Context<Self>;
 }
 
 #[derive(Message)]
-#[rtype(result = "()")]
-pub struct Shutdown {}
-
-impl Handler<Shutdown> for Kernel {
-    type Result = ResponseActFuture<Self, ()>;
-    fn handle(&mut self, _msg: Shutdown, _ctx: &mut Self::Context) -> Self::Result {
-        tokio::time::sleep(std::time::Duration::from_secs(1))
-            .into_actor(self)
-            .map(|(), _actor, ctx| ctx.stop())
-            .boxed_local()
-    }
+#[rtype(result = "Result<Granted<A>, Denied>")]
+pub struct PolicyEvent<A: ActionMeta> {
+    action: A,
+    ctx: Facade,
 }
 
-pub struct Handle {
-    kernel: Addr<Kernel>,
-}
-
-impl<Cx: Sync> PolicyEngineImpl<Cx> for Handle {
-    async fn evaluate<A: loong_core::action::ActionMeta>(
-        &self,
-        _ctx: &Cx,
-        _action: &A,
-    ) -> PolicyResultFinal {
-        PolicyResultFinal {
-            decision: PolicyDecisionFinal::Deny,
-            reason: None,
-        }
-    }
-
-    async fn record_action_granted<A: loong_core::action::ActionMeta>(
-        &self,
-        _ctx: &Cx,
-        _action: &A,
-    ) -> Uuid {
-        Uuid::nil() // TODO: real id generation
+impl<A: ActionMeta> Handler<PolicyEvent<A>> for Kernel {
+    type Result = Result<Granted<A>, Denied>;
+    fn handle(&mut self, msg: PolicyEvent<A>, _ctx: &mut Self::Context) -> Self::Result {
+        self.policy_engine.grant(&msg.ctx, msg.action)
     }
 }
-
-impl Handle {}
 
 #[derive(Clone)]
-pub struct Facade<'a> {
-    handle: &'a Handle,
+pub struct Facade {
+    handle: WeakAddr<Kernel>,
     capabilities: Capabilities,
 }
 
-#[async_trait]
-impl ParentGrantRequester for Facade<'_> {
-    async fn grant<A: ActionMeta>(&self, _action: A) -> Result<Granted<A>, Denied> {
-        Err(Denied { reason: None })
+#[derive(Debug, Error)]
+pub enum GrantSendError {
+    #[error("denied {0}")]
+    Denied(#[from] Denied),
+    #[error("kernel unavailable")]
+    KernelUnavailable,
+    #[error("mailbox error {0}")]
+    Mailbox(#[from] MailboxError),
+}
+
+impl Facade {
+    pub async fn grant<A: ActionMeta>(&self, action: A) -> Result<Granted<A>, GrantSendError> {
+        Ok(self
+            .handle
+            .upgrade()
+            .ok_or(GrantSendError::KernelUnavailable)?
+            .send(PolicyEvent {
+                action,
+                ctx: self.clone(),
+            })
+            .await??)
     }
 }
 
-impl<'a> Facade<'a> {
+impl Facade {
     #[must_use]
-    pub fn fs<'b>(&'b self) -> FsAccess<'b, Self, Handle> {
-        FsAccess::new(self.handle, self)
+    pub fn fs<'b>(&'b self) -> FsAccess<'b> {
+        FsAccess::new(self)
     }
 }

@@ -6,12 +6,16 @@ version.workspace = true
 
 [dependencies]
 actix = "0.13.5"
-loong-access.workspace = true
 loong-contracts.workspace = true
-loong-core.workspace = true
 uuid.workspace = true
 async-trait.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "fs", "net", "time"] }
+thiserror.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true
+
+[features]
+default = ["fs"]
+fs = []

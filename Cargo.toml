@@ -1,9 +1,7 @@
 [workspace]
 members = [
     "apps/loong",
-    "crates/access",
     "crates/contracts",
-    "crates/core",
     "crates/kernel",
 ]
 resolver = "3"
@@ -17,9 +15,7 @@ version = "0.2.0"
 unsafe_code = "forbid"
 
 [workspace.dependencies]
-loong-access = { path = "crates/access" }
 loong-contracts = { path = "crates/contracts" }
-loong-core = { path = "crates/core" }
 loong-kernel = { path = "crates/kernel" }
 
 bincode = "1.3.3"

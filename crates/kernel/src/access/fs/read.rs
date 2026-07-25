@@ -1,31 +1,28 @@
 use std::{borrow::Cow, io, path::PathBuf};
 
+use crate::policy::action::{Action, ActionMeta, Granted};
 use loong_contracts::capability::{Capabilities, Capability};
-use loong_core::{
-    action::{Action, ActionMeta, Denied, Granted},
-    policy::PolicyEngine,
-};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::fs::FsAccess;
+use crate::GrantSendError;
+
+use super::FsAccess;
 
 /// Failure while authorizing or executing a filesystem read.
 #[derive(Debug, Error)]
 pub enum FsReadError {
-    #[error(transparent)]
-    Denied(#[from] Denied),
+    #[error("access denied: {0:?}")]
+    Denied(#[from] GrantSendError),
     #[error("failed to read `{}`: {source}", .path.display())]
     Io { path: PathBuf, source: io::Error },
 }
 
-impl<'a, Cx: Sync, P> FsAccess<'a, Cx, P>
-where
-    P: PolicyEngine<Cx>,
-{
+impl<'a> FsAccess<'a> {
+    #[inline]
     pub async fn read(&self, path: impl Into<PathBuf>) -> Result<Vec<u8>, FsReadError> {
         let action = FsReadAction { path: path.into() };
-        let granted = self.policy_engine.grant(self.ctx, action).await?;
+        let granted = self.grant(action).await?;
         granted.run(self.ctx).await
     }
 }
@@ -34,18 +31,10 @@ where
 ///
 /// A raw `PathBuf` is not a resolved-path proof. Do not expose or construct
 /// this action from an access method until that field uses the resolved type.
-#[allow(
-    dead_code,
-    reason = "read actions stay unreachable until the resolved-path boundary exists"
-)]
 pub struct FsReadAction {
     pub path: PathBuf,
 }
 
-#[allow(
-    dead_code,
-    reason = "read action metadata is unreachable with the action scaffold"
-)]
 impl FsReadAction {
     const NAME: &str = "fs.read";
     const CAPABILITIES: Capabilities = Capabilities::singleton(Capability::FsRead);
