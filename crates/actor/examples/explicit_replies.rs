@@ -102,7 +102,7 @@ impl Handler<MultiplyExclusively> for Store {
     }
 }
 
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let owner = spawn(Store {
         cache: HashMap::from([("cached".to_owned(), 21)]),

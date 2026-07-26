@@ -43,7 +43,7 @@ impl Handler<Add> for Counter {
     }
 }
 
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let owner = spawn(Counter(0));
     let counter = owner.actor_ref();
