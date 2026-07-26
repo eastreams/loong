@@ -286,7 +286,7 @@ fn spawn_actor<A: Actor>(
     parent: Option<ParentLink>,
 ) -> (ActorRef<A>, OwnedActor) {
     let (mailbox, inbox) = ActorMailbox::channel(options.mailbox_capacity().get());
-    let actor_ref = ActorRef::new(Arc::downgrade(&mailbox), mailbox.control.subscribe_exit());
+    let actor_ref = ActorRef::new(Arc::downgrade(&mailbox), mailbox.control.subscribe_mode());
 
     // Each child emits exactly one terminal event. A nonblocking signal plane
     // avoids teardown deadlocks and is bounded by the parent's owned children.
@@ -498,7 +498,8 @@ async fn run_actor<A: Actor>(
                 scheduler.clear();
                 return fail_actor(&scope.control, &mut scope.children, &mut inbox).await;
             }
-            Mode::Aborting | Mode::Exited => return ExitReason::Aborted,
+            Mode::Exited(reason) => return reason,
+            Mode::Aborting => return ExitReason::Aborted,
         }
 
         let turn = AssertUnwindSafe(actor_turn(
@@ -740,7 +741,8 @@ async fn drain_actor<A: Actor>(
                 return fail_actor(&scope.control, &mut scope.children, inbox).await;
             }
             Mode::Running | Mode::Draining | Mode::Stopping => {}
-            Mode::Aborting | Mode::Exited => return ExitReason::Aborted,
+            Mode::Exited(reason) => return reason,
+            Mode::Aborting => return ExitReason::Aborted,
         }
 
         if inbox_drained && scheduler.is_empty() {
@@ -826,7 +828,7 @@ async fn finish_replies<A: Actor>(
                 return Work::Panicked;
             }
             Mode::Running | Mode::Draining | Mode::Stopping => {}
-            Mode::Aborting | Mode::Exited => {
+            Mode::Aborting | Mode::Exited(_) => {
                 scheduler.clear();
                 return Work::Killed;
             }
@@ -894,9 +896,8 @@ async fn fail_actor<A: Actor>(
     let reason = match control.mode() {
         Mode::Killing => ExitReason::Killed,
         Mode::Aborting => ExitReason::Aborted,
-        Mode::Running | Mode::Draining | Mode::Stopping | Mode::Failing | Mode::Exited => {
-            ExitReason::Panicked
-        }
+        Mode::Exited(reason) => reason,
+        Mode::Running | Mode::Draining | Mode::Stopping | Mode::Failing => ExitReason::Panicked,
     };
     close_and_discard(inbox);
     children.shutdown_all(Shutdown::Kill).await;

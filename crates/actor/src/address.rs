@@ -13,15 +13,12 @@ use crate::{
 /// shutdown. Admission waits are woken as soon as shutdown closes the mailbox.
 pub struct ActorRef<A: Actor> {
     mailbox: Weak<ActorMailbox<A>>,
-    exit: watch::Receiver<Option<ExitReason>>,
+    mode: watch::Receiver<Mode>,
 }
 
 impl<A: Actor> ActorRef<A> {
-    pub(crate) fn new(
-        mailbox: Weak<ActorMailbox<A>>,
-        exit: watch::Receiver<Option<ExitReason>>,
-    ) -> Self {
-        Self { mailbox, exit }
+    pub(crate) fn new(mailbox: Weak<ActorMailbox<A>>, mode: watch::Receiver<Mode>) -> Self {
+        Self { mailbox, mode }
     }
 
     /// Sends a typed request, waiting for bounded mailbox capacity if needed.
@@ -122,7 +119,10 @@ impl<A: Actor> ActorRef<A> {
 
     /// Returns the exit reason if the actor has already terminated.
     pub fn exit_reason(&self) -> Option<ExitReason> {
-        *self.exit.borrow()
+        match *self.mode.borrow() {
+            Mode::Exited(reason) => Some(reason),
+            _ => None,
+        }
     }
 
     /// Waits until the actor publishes its terminal event.
@@ -132,13 +132,13 @@ impl<A: Actor> ActorRef<A> {
     /// cannot await from `Drop`, so descendants have received Kill but may still
     /// be terminating.
     pub async fn closed(&self) -> ExitReason {
-        let mut exit = self.exit.clone();
+        let mut mode = self.mode.clone();
         loop {
-            if let Some(reason) = *exit.borrow_and_update() {
+            if let Mode::Exited(reason) = *mode.borrow_and_update() {
                 return reason;
             }
 
-            exit.changed()
+            mode.changed()
                 .await
                 .expect("the actor task publishes an exit reason before closing");
         }
@@ -149,7 +149,7 @@ impl<A: Actor> Clone for ActorRef<A> {
     fn clone(&self) -> Self {
         Self {
             mailbox: self.mailbox.clone(),
-            exit: self.exit.clone(),
+            mode: self.mode.clone(),
         }
     }
 }
@@ -201,7 +201,7 @@ pub(crate) async fn wait_for_kill(mode: &mut watch::Receiver<Mode>) {
     loop {
         if matches!(
             *mode.borrow_and_update(),
-            Mode::Killing | Mode::Failing | Mode::Aborting | Mode::Exited
+            Mode::Killing | Mode::Failing | Mode::Aborting | Mode::Exited(_)
         ) {
             return;
         }

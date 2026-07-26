@@ -18,39 +18,27 @@ pub(crate) enum Mode {
     Killing,
     Failing,
     Aborting,
-    Exited,
-}
-
-#[derive(Debug)]
-struct Gate {
-    mode: Mode,
-    exit_reason: Option<ExitReason>,
+    Exited(ExitReason),
 }
 
 #[derive(Debug)]
 pub(crate) struct Control {
-    gate: Mutex<Gate>,
+    gate: Mutex<Mode>,
     mode_tx: watch::Sender<Mode>,
-    exit_tx: watch::Sender<Option<ExitReason>>,
 }
 
 impl Control {
     pub(crate) fn new() -> Arc<Self> {
         let (mode_tx, _) = watch::channel(Mode::Running);
-        let (exit_tx, _) = watch::channel(None);
 
         Arc::new(Self {
-            gate: Mutex::new(Gate {
-                mode: Mode::Running,
-                exit_reason: None,
-            }),
+            gate: Mutex::new(Mode::Running),
             mode_tx,
-            exit_tx,
         })
     }
 
     pub(crate) fn mode(&self) -> Mode {
-        self.lock_gate().mode
+        *self.lock_gate()
     }
 
     pub(crate) fn is_running(&self) -> bool {
@@ -58,22 +46,21 @@ impl Control {
     }
 
     pub(crate) fn exit_reason(&self) -> Option<ExitReason> {
-        self.lock_gate().exit_reason
+        match *self.lock_gate() {
+            Mode::Exited(reason) => Some(reason),
+            _ => None,
+        }
     }
 
     pub(crate) fn subscribe_mode(&self) -> watch::Receiver<Mode> {
         self.mode_tx.subscribe()
     }
 
-    pub(crate) fn subscribe_exit(&self) -> watch::Receiver<Option<ExitReason>> {
-        self.exit_tx.subscribe()
-    }
-
     /// Serializes request commit with lifecycle cutoff. The closure must not
     /// await or invoke user code.
     pub(crate) fn admit<T>(&self, commit: impl FnOnce() -> T) -> Result<T, ()> {
         let gate = self.lock_gate();
-        if gate.mode != Mode::Running {
+        if *gate != Mode::Running {
             return Err(());
         }
 
@@ -86,25 +73,20 @@ impl Control {
     /// transition. No user code or user-owned value is touched under the gate.
     fn begin_dispatch(self: &Arc<Self>) -> Result<DispatchPermit, CallError> {
         let gate = self.lock_gate();
-        if matches!(gate.mode, Mode::Running | Mode::Draining) {
+        if matches!(*gate, Mode::Running | Mode::Draining) {
             Ok(DispatchPermit {
                 control: Arc::clone(self),
             })
         } else {
-            Err(Self::call_failure_locked(&gate, CallPhase::Queued))
+            Err(Self::call_failure_locked(*gate, CallPhase::Queued))
         }
     }
 
     pub(crate) fn request(&self, shutdown: Shutdown) -> ShutdownStatus {
         let mut gate = self.lock_gate();
 
-        let next = match (gate.mode, shutdown) {
-            (Mode::Exited, _) => {
-                return ShutdownStatus::Exited(
-                    gate.exit_reason
-                        .expect("exited actors always publish an exit reason"),
-                );
-            }
+        let next = match (*gate, shutdown) {
+            (Mode::Exited(reason), _) => return ShutdownStatus::Exited(reason),
             (Mode::Running, Shutdown::Stop) => Mode::Stopping,
             (Mode::Running, Shutdown::Drain) => Mode::Draining,
             (Mode::Running, Shutdown::Kill) => Mode::Killing,
@@ -122,7 +104,7 @@ impl Control {
 
     pub(crate) fn begin_failure(&self) {
         let mut gate = self.lock_gate();
-        if !matches!(gate.mode, Mode::Killing | Mode::Aborting | Mode::Exited) {
+        if !matches!(*gate, Mode::Killing | Mode::Aborting | Mode::Exited(_)) {
             self.set_mode(&mut gate, Mode::Failing);
         }
     }
@@ -132,52 +114,47 @@ impl Control {
         // ActorTask::drop cannot await descendant teardown. Even an earlier Kill
         // is therefore downgraded to the explicitly weaker Aborted guarantee
         // unless normal task completion already published the terminal state.
-        if gate.mode != Mode::Exited {
+        if !matches!(*gate, Mode::Exited(_)) {
             self.set_mode(&mut gate, Mode::Aborting);
         }
     }
 
     pub(crate) fn finish(&self, proposed: ExitReason) -> ExitReason {
         let mut gate = self.lock_gate();
-        if gate.mode == Mode::Exited {
-            return gate
-                .exit_reason
-                .expect("exited actors always publish an exit reason");
+        if let Mode::Exited(reason) = *gate {
+            return reason;
         }
 
         // Finalization shares the lifecycle gate with Kill. Whichever commits
         // first determines whether graceful completion or escalation wins.
-        let reason = match gate.mode {
+        let reason = match *gate {
             Mode::Killing => ExitReason::Killed,
             Mode::Failing => ExitReason::Panicked,
             Mode::Aborting => ExitReason::Aborted,
             Mode::Running | Mode::Draining | Mode::Stopping => proposed,
-            Mode::Exited => unreachable!("exited was handled above"),
+            Mode::Exited(_) => unreachable!("exited was handled above"),
         };
-        gate.exit_reason = Some(reason);
-        self.set_mode(&mut gate, Mode::Exited);
-        let _ = self.exit_tx.send_replace(Some(reason));
+        self.set_mode(&mut gate, Mode::Exited(reason));
         reason
     }
 
     pub(crate) fn fallback_exit_reason(&self) -> ExitReason {
-        match self.lock_gate().mode {
+        match *self.lock_gate() {
             Mode::Killing => ExitReason::Killed,
             Mode::Failing => ExitReason::Panicked,
-            Mode::Running | Mode::Draining | Mode::Stopping | Mode::Aborting | Mode::Exited => {
-                ExitReason::Aborted
-            }
+            Mode::Exited(reason) => reason,
+            Mode::Running | Mode::Draining | Mode::Stopping | Mode::Aborting => ExitReason::Aborted,
         }
     }
 
     pub(crate) async fn wait_for_exit(&self) -> ExitReason {
-        let mut exit = self.subscribe_exit();
+        let mut mode = self.subscribe_mode();
         loop {
-            if let Some(reason) = *exit.borrow_and_update() {
+            if let Mode::Exited(reason) = *mode.borrow_and_update() {
                 return reason;
             }
 
-            exit.changed()
+            mode.changed()
                 .await
                 .expect("the exit publisher lives until it publishes a reason");
         }
@@ -185,16 +162,16 @@ impl Control {
 
     fn call_failure(&self, phase: CallPhase) -> CallError {
         let gate = self.lock_gate();
-        Self::call_failure_locked(&gate, phase)
+        Self::call_failure_locked(*gate, phase)
     }
 
-    fn call_failure_locked(gate: &Gate, phase: CallPhase) -> CallError {
-        let reason = match gate.mode {
+    fn call_failure_locked(mode: Mode, phase: CallPhase) -> CallError {
+        let reason = match mode {
             Mode::Stopping if phase == CallPhase::Queued => ExitReason::Stopped,
             Mode::Killing => ExitReason::Killed,
             Mode::Failing => ExitReason::Panicked,
             Mode::Aborting => ExitReason::Aborted,
-            Mode::Exited => gate.exit_reason.unwrap_or(ExitReason::Aborted),
+            Mode::Exited(reason) => reason,
             Mode::Running | Mode::Draining | Mode::Stopping => ExitReason::Panicked,
         };
 
@@ -204,14 +181,14 @@ impl Control {
         }
     }
 
-    fn set_mode(&self, gate: &mut Gate, mode: Mode) {
-        gate.mode = mode;
+    fn set_mode(&self, gate: &mut Mode, mode: Mode) {
+        *gate = mode;
         // Publish while holding the admission gate so concurrent requests can
         // never make the observed lifecycle move backwards.
         let _ = self.mode_tx.send_replace(mode);
     }
 
-    fn lock_gate(&self) -> MutexGuard<'_, Gate> {
+    fn lock_gate(&self) -> MutexGuard<'_, Mode> {
         // No user code runs under this mutex. Recovering poison preserves the
         // terminal state machine if an internal assertion ever unwinds.
         self.gate
@@ -237,10 +214,10 @@ impl DispatchPermit {
     /// carries the decision beyond the mutex without exposing lifecycle state.
     fn begin_completion(&self) -> Result<CompletionPermit, CallError> {
         let gate = self.control.lock_gate();
-        match gate.mode {
+        match *gate {
             Mode::Running | Mode::Draining | Mode::Stopping => Ok(CompletionPermit),
-            Mode::Killing | Mode::Failing | Mode::Aborting | Mode::Exited => {
-                Err(Control::call_failure_locked(&gate, CallPhase::Dispatching))
+            Mode::Killing | Mode::Failing | Mode::Aborting | Mode::Exited(_) => {
+                Err(Control::call_failure_locked(*gate, CallPhase::Dispatching))
             }
         }
     }
@@ -548,7 +525,7 @@ mod tests {
         let exited = Control::new();
         assert_eq!(exited.finish(ExitReason::Stopped), ExitReason::Stopped);
         exited.begin_abort();
-        assert_eq!(exited.mode(), Mode::Exited);
+        assert_eq!(exited.mode(), Mode::Exited(ExitReason::Stopped));
         assert_eq!(exited.exit_reason(), Some(ExitReason::Stopped));
     }
 }
