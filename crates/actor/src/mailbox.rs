@@ -105,10 +105,10 @@ impl Control {
                         .expect("exited actors always publish an exit reason"),
                 );
             }
-            (Mode::Running, Shutdown::Stop) => Some(Mode::Stopping),
-            (Mode::Running, Shutdown::Drain) => Some(Mode::Draining),
-            (Mode::Running, Shutdown::Kill) => Some(Mode::Killing),
-            (Mode::Draining | Mode::Stopping, Shutdown::Kill) => Some(Mode::Killing),
+            (Mode::Running, Shutdown::Stop) => Mode::Stopping,
+            (Mode::Running, Shutdown::Drain) => Mode::Draining,
+            (Mode::Running, Shutdown::Kill) => Mode::Killing,
+            (Mode::Draining | Mode::Stopping, Shutdown::Kill) => Mode::Killing,
             (Mode::Draining, _) => return ShutdownStatus::InProgress(Shutdown::Drain),
             (Mode::Stopping, _) => return ShutdownStatus::InProgress(Shutdown::Stop),
             (Mode::Killing | Mode::Failing | Mode::Aborting, _) => {
@@ -116,10 +116,7 @@ impl Control {
             }
         };
 
-        self.set_mode(
-            &mut gate,
-            next.expect("running transitions always select a mode"),
-        );
+        self.set_mode(&mut gate, next);
         ShutdownStatus::Requested
     }
 
