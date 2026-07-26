@@ -26,6 +26,6 @@ impl<'a> Deref for FsAccess<'a> {
     type Target = Facade;
     #[inline]
     fn deref(&self) -> &Self::Target {
-        &self.ctx
+        self.ctx
     }
 }
