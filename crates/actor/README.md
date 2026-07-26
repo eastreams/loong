@@ -61,8 +61,10 @@ be a bounded channel receiver or another application-defined stream handle.
 Owned and interleaved replies permit mailbox re-entry only while another
 `max_in_flight` slot is free. With a limit of one, an outer reply waiting for its
 own queued call deadlocks until externally interrupted. Awaiting a self-call
-from an exclusive reply, `on_start`, `on_child_exit`, or `on_stop` has the same
-limitation. Prefer `ActorFutureExt::map` or `then` for consecutive work on the
-same actor. Address cycles can likewise deadlock when every participant waits.
+from an exclusive reply, `on_start`, or a running actor's `on_child_exit` has the
+same limitation. Admission is already closed in `on_stop`, so a new self-call
+returns `Closed` instead. Prefer `ActorFutureExt::map` or `then` for consecutive
+work on the same actor. Address cycles can likewise deadlock when every
+participant waits.
 
 Licensed under the MIT License.
