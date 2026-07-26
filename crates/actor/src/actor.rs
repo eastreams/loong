@@ -96,9 +96,9 @@ pub trait Message: Send + 'static {
 /// One actor may implement this trait for any number of message types. The
 /// runtime erases each request only after pairing the concrete message with its
 /// concrete reply channel, so no downcast is involved. Each implementation
-/// statically selects one reply wrapper while keeping its concrete type opaque.
-/// Mailbox FIFO determines the order in which eligible handlers are dispatched;
-/// asynchronous replies may complete in a different order.
+/// statically selects one concrete reply representation while keeping its type
+/// opaque. Mailbox FIFO determines the order in which eligible handlers are
+/// dispatched; asynchronous replies may complete in a different order.
 pub trait Handler<M: Message>: Actor {
     /// Synchronously starts handling `message` and chooses its reply semantics.
     ///

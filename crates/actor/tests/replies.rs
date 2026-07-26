@@ -72,7 +72,7 @@ impl Handler<ChooseReply> for Counter {
         if message.0 {
             reply::Either::Left(reply::ready(1))
         } else {
-            reply::Either::Right(reply::owned(async { 2 }))
+            reply::Either::Right(async { 2 })
         }
     }
 }
@@ -111,10 +111,10 @@ impl Handler<PendingOwned> for ProgressActor {
         message: PendingOwned,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, PendingOwned> + use<> {
-        reply::owned(async move {
+        async move {
             let _ = message.entered.send(());
             let _ = message.release.await;
-        })
+        }
     }
 }
 
@@ -285,10 +285,10 @@ impl Handler<PendingOwned> for ExclusiveActor {
         message: PendingOwned,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, PendingOwned> + use<> {
-        reply::owned(async move {
+        async move {
             let _ = message.entered.send(());
             let _ = message.release.await;
-        })
+        }
     }
 }
 
@@ -442,10 +442,10 @@ impl Handler<StopOwned> for StopActor {
         message: StopOwned,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, StopOwned> + use<> {
-        reply::owned(async move {
+        async move {
             let _ = message.entered.send(());
             let _ = message.release.await;
-        })
+        }
     }
 }
 
@@ -523,10 +523,10 @@ impl Handler<PendingSibling> for PanicActor {
         message: PendingSibling,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, PendingSibling> + use<> {
-        reply::owned(async move {
+        async move {
             let _ = message.entered.send(());
             let _ = message.release.await;
-        })
+        }
     }
 }
 
@@ -545,11 +545,11 @@ impl Handler<PanicReply> for PanicActor {
         message: PanicReply,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, PanicReply> + use<> {
-        reply::owned(async move {
+        async move {
             let _ = message.entered.send(());
             let _ = message.release.await;
             panic!("intentional reply panic");
-        })
+        }
     }
 }
 
@@ -622,7 +622,7 @@ impl Handler<OwnedSelfCall> for SelfCaller {
         scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, OwnedSelfCall> + use<> {
         let response = scope.myself().try_call(Echo(message.0)).unwrap();
-        reply::owned(async move { response.await.unwrap() })
+        async move { response.await.unwrap() }
     }
 }
 
@@ -642,7 +642,7 @@ impl Handler<SingleSlotSelfCall> for SelfCaller {
     ) -> impl loong_actor::IntoReply<Self, SingleSlotSelfCall> + use<> {
         let response = scope.myself().try_call(Echo(1)).unwrap();
         let _ = message.entered.send(());
-        reply::owned(async move { response.await.unwrap() })
+        async move { response.await.unwrap() }
     }
 }
 
@@ -779,13 +779,13 @@ impl Handler<ActiveReply> for FairActor {
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, ActiveReply> + use<> {
         let handled = self.handled.clone();
-        reply::owned(async move {
+        async move {
             let _ = message.entered.send(());
             let _ = message.release.await;
             message
                 .completed_at
                 .store(handled.load(Ordering::SeqCst), Ordering::SeqCst);
-        })
+        }
     }
 }
 
@@ -955,10 +955,10 @@ impl Handler<PendingOwned> for FairChildExitActor {
         message: PendingOwned,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, PendingOwned> + use<> {
-        reply::owned(async move {
+        async move {
             let _ = message.entered.send(());
             let _ = message.release.await;
-        })
+        }
     }
 }
 

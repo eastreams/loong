@@ -204,11 +204,11 @@ impl Handler<OwnedDrainStep> for OwnedDrainActor {
         message: OwnedDrainStep,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, OwnedDrainStep> + use<> {
-        reply::owned(async move {
+        async move {
             let _ = message.entered.send(());
             let _ = message.release.await;
             message.id
-        })
+        }
     }
 }
 
@@ -513,11 +513,11 @@ impl Handler<PanicAfterBarrier> for PanicActor {
         message: PanicAfterBarrier,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, PanicAfterBarrier> + use<> {
-        reply::owned(async move {
+        async move {
             let _ = message.entered.send(());
             message.barrier.wait();
             panic!("panic loses to an already committed Kill");
-        })
+        }
     }
 }
 

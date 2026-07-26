@@ -5,9 +5,10 @@
 //! Typed local actors with bounded mailboxes and structured supervision.
 //!
 //! Implement [`Actor`] and a typed [`Handler`] for each accepted [`Message`]. A
-//! handler synchronously selects its scheduling semantics through the [`reply`]
-//! constructors; that module documents actor borrowing, fairness, in-flight
-//! capacity, panic, and Kill behavior.
+//! handler synchronously selects its reply scheduling semantics: a bare
+//! [`Future`] uses owned scheduling, while the [`reply`] module provides ready
+//! and actor-aware strategies. That module documents actor borrowing, fairness,
+//! in-flight capacity, panic, and Kill behavior.
 //!
 //! Use [`ActorRef::call`] for admission with backpressure or
 //! [`ActorRef::try_call`] for immediate admission with message recovery. Request
