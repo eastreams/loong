@@ -8,16 +8,9 @@ use std::{
 
 use pin_project_lite::pin_project;
 
-use crate::{Actor, ActorFuture, ActorScope, ErasedFuture, Message, mailbox::DispatchReply};
-
-pub(crate) type ErasedActorFuture<A> = Pin<Box<dyn ActorFuture<A, Output = ()> + Send + 'static>>;
-
-pub(crate) enum ReplyWork<A: Actor> {
-    Complete,
-    Owned(ErasedFuture<'static>),
-    Interleaved(ErasedActorFuture<A>),
-    Exclusive(ErasedActorFuture<A>),
-}
+use crate::{
+    Actor, ActorFuture, ActorScope, Message, mailbox::DispatchReply, scheduler::ReplyScheduler,
+};
 
 /// Creates an immediately completed reply.
 pub fn ready<R>(value: R) -> Ready<R> {
@@ -81,87 +74,88 @@ pub enum Either<L, R> {
     Right(R),
 }
 
-/// A crate-controlled conversion from a handler result to scheduled work.
+/// A crate-controlled reply strategy returned by a handler.
 ///
 /// This trait is sealed so reply senders and lifecycle error construction stay
 /// private to the runtime. Use this trait as an opaque handler return bound and
 /// construct values with [`ready`], [`owned`], [`interleaved`], or [`exclusive`].
-pub trait IntoReply<A: Actor, M: Message>: sealed::IntoReply<A, M> {}
+pub trait IntoReply<A: Actor, M: Message>: sealed::HandleReply<A, M> {}
 
 impl<A, M, T> IntoReply<A, M> for T
 where
     A: Actor,
     M: Message,
-    T: sealed::IntoReply<A, M>,
+    T: sealed::HandleReply<A, M>,
 {
 }
 
-// A public supertrait inside a private module is the standard sealing pattern.
-// Its method deliberately mentions crate-private scheduling types so external
-// code cannot invoke the conversion even through generic trait bounds.
-#[allow(private_interfaces)]
-mod sealed {
+// Crate visibility lets the mailbox invoke the static reply implementation
+// after dynamic envelope dispatch, while downstream crates cannot name it.
+#[expect(
+    private_interfaces,
+    reason = "sealed reply dispatch deliberately uses crate-private runtime types"
+)]
+pub(crate) mod sealed {
     use super::*;
 
-    pub trait IntoReply<A: Actor, M: Message> {
-        fn into_reply(self, reply: DispatchReply<M::Reply>) -> ReplyWork<A>;
+    pub trait HandleReply<A: Actor, M: Message> {
+        fn handle(self, scheduler: &mut ReplyScheduler<A>, reply: DispatchReply<M::Reply>);
     }
 
-    impl<A, M> IntoReply<A, M> for Ready<M::Reply>
+    impl<A, M> HandleReply<A, M> for Ready<M::Reply>
     where
         A: Actor,
         M: Message,
     {
-        fn into_reply(self, reply: DispatchReply<M::Reply>) -> ReplyWork<A> {
+        fn handle(self, _scheduler: &mut ReplyScheduler<A>, reply: DispatchReply<M::Reply>) {
             reply.complete(self.value);
-            ReplyWork::Complete
         }
     }
 
-    impl<A, M, F> IntoReply<A, M> for Owned<F>
+    impl<A, M, F> HandleReply<A, M> for Owned<F>
     where
         A: Actor,
         M: Message,
         F: Future<Output = M::Reply> + Send + 'static,
     {
-        fn into_reply(self, reply: DispatchReply<M::Reply>) -> ReplyWork<A> {
-            ReplyWork::Owned(Box::pin(CompleteOwnedReply::new(self.future, reply)))
+        fn handle(self, scheduler: &mut ReplyScheduler<A>, reply: DispatchReply<M::Reply>) {
+            scheduler.push_owned(CompleteOwnedReply::new(self.future, reply));
         }
     }
 
-    impl<A, M, F> IntoReply<A, M> for Interleaved<F>
+    impl<A, M, F> HandleReply<A, M> for Interleaved<F>
     where
         A: Actor,
         M: Message,
         F: ActorFuture<A, Output = M::Reply> + Send + 'static,
     {
-        fn into_reply(self, reply: DispatchReply<M::Reply>) -> ReplyWork<A> {
-            ReplyWork::Interleaved(Box::pin(CompleteReply::new(self.future, reply)))
+        fn handle(self, scheduler: &mut ReplyScheduler<A>, reply: DispatchReply<M::Reply>) {
+            scheduler.push_interleaved(CompleteReply::new(self.future, reply));
         }
     }
 
-    impl<A, M, F> IntoReply<A, M> for Exclusive<F>
+    impl<A, M, F> HandleReply<A, M> for Exclusive<F>
     where
         A: Actor,
         M: Message,
         F: ActorFuture<A, Output = M::Reply> + Send + 'static,
     {
-        fn into_reply(self, reply: DispatchReply<M::Reply>) -> ReplyWork<A> {
-            ReplyWork::Exclusive(Box::pin(CompleteReply::new(self.future, reply)))
+        fn handle(self, scheduler: &mut ReplyScheduler<A>, reply: DispatchReply<M::Reply>) {
+            scheduler.push_exclusive(CompleteReply::new(self.future, reply));
         }
     }
 
-    impl<A, M, L, R> IntoReply<A, M> for Either<L, R>
+    impl<A, M, L, R> HandleReply<A, M> for Either<L, R>
     where
         A: Actor,
         M: Message,
-        L: IntoReply<A, M>,
-        R: IntoReply<A, M>,
+        L: HandleReply<A, M>,
+        R: HandleReply<A, M>,
     {
-        fn into_reply(self, reply: DispatchReply<M::Reply>) -> ReplyWork<A> {
+        fn handle(self, scheduler: &mut ReplyScheduler<A>, reply: DispatchReply<M::Reply>) {
             match self {
-                Either::Left(left) => left.into_reply(reply),
-                Either::Right(right) => right.into_reply(reply),
+                Either::Left(left) => left.handle(scheduler, reply),
+                Either::Right(right) => right.handle(scheduler, reply),
             }
         }
     }
@@ -243,13 +237,4 @@ where
             .complete(value);
         Poll::Ready(())
     }
-}
-
-pub(crate) fn into_work<A, M, R>(result: R, reply: DispatchReply<M::Reply>) -> ReplyWork<A>
-where
-    A: Actor,
-    M: Message,
-    R: IntoReply<A, M>,
-{
-    sealed::IntoReply::into_reply(result, reply)
 }

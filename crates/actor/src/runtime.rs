@@ -678,7 +678,7 @@ fn start_envelope<A: Actor>(
         return;
     }
 
-    scheduler.push(envelope.dispatch(actor, scope));
+    envelope.dispatch(actor, scope, scheduler);
 }
 
 async fn handle_child_exit<A: Actor>(

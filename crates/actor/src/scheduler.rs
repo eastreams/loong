@@ -1,5 +1,7 @@
 use std::{
+    future::Future,
     num::NonZeroUsize,
+    pin::Pin,
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -8,12 +10,13 @@ use std::{
 };
 
 use crate::{
-    Actor, ActorScope, ErasedFuture,
+    Actor, ActorFuture, ActorScope, ErasedFuture,
     mailbox::{Control, Mode},
-    reply::{ErasedActorFuture, ReplyWork},
 };
 
 const ACTIVE_POLL_BUDGET: usize = 16;
+
+type ErasedActorFuture<A> = Pin<Box<dyn ActorFuture<A, Output = ()> + Send + 'static>>;
 
 /// Actor-local ownership boundary for replies that outlive handler dispatch.
 /// Its collections cannot exceed `max_in_flight`; no stored future borrows the
@@ -59,22 +62,30 @@ impl<A: Actor> ReplyScheduler<A> {
         !self.interleaved.is_empty()
     }
 
-    pub(crate) fn push(&mut self, work: ReplyWork<A>) {
-        match work {
-            ReplyWork::Complete => return,
-            ReplyWork::Owned(future) => {
-                self.owned.push(future);
-                self.owned_sweep.restart();
-            }
-            ReplyWork::Interleaved(future) => {
-                self.interleaved.push(future);
-                self.interleaved_sweep.restart();
-            }
-            ReplyWork::Exclusive(future) => {
-                debug_assert!(self.exclusive.is_none(), "exclusive work cannot overlap");
-                self.exclusive = Some(future);
-            }
-        }
+    pub(crate) fn push_owned<F>(&mut self, future: F)
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        self.owned.push(Box::pin(future));
+        self.owned_sweep.restart();
+        debug_assert!(self.in_flight() <= self.max_in_flight.get());
+    }
+
+    pub(crate) fn push_interleaved<F>(&mut self, future: F)
+    where
+        F: ActorFuture<A, Output = ()> + Send + 'static,
+    {
+        self.interleaved.push(Box::pin(future));
+        self.interleaved_sweep.restart();
+        debug_assert!(self.in_flight() <= self.max_in_flight.get());
+    }
+
+    pub(crate) fn push_exclusive<F>(&mut self, future: F)
+    where
+        F: ActorFuture<A, Output = ()> + Send + 'static,
+    {
+        debug_assert!(self.exclusive.is_none(), "exclusive work cannot overlap");
+        self.exclusive = Some(Box::pin(future));
         debug_assert!(self.in_flight() <= self.max_in_flight.get());
     }
 
@@ -427,7 +438,7 @@ mod tests {
         let control = Control::new();
         let polls: Vec<_> = (0..20).map(|_| Arc::new(AtomicUsize::new(0))).collect();
         for count in &polls {
-            scheduler.push(ReplyWork::Owned(Box::pin(PollCounter(Arc::clone(count)))));
+            scheduler.push_owned(PollCounter(Arc::clone(count)));
         }
 
         let wakes = Arc::new(WakeCounter(AtomicUsize::new(0)));
@@ -466,12 +477,12 @@ mod tests {
         let control = Control::new();
         let first_polls = Arc::new(AtomicUsize::new(0));
         let first_waker = Arc::new(Mutex::new(None));
-        scheduler.push(ReplyWork::Owned(Box::pin(CaptureWaker {
+        scheduler.push_owned(CaptureWaker {
             polls: Arc::clone(&first_polls),
             waker: Arc::clone(&first_waker),
-        })));
+        });
         for _ in 1..20 {
-            scheduler.push(ReplyWork::Owned(Box::pin(std::future::pending())));
+            scheduler.push_owned(std::future::pending());
         }
 
         let notified = Arc::new(NotifyFlag(AtomicBool::new(false)));
@@ -507,11 +518,11 @@ mod tests {
         let control = Control::new();
         let polls = Arc::new((0..17).map(|_| AtomicUsize::new(0)).collect::<Vec<_>>());
         for index in 0..17 {
-            scheduler.push(ReplyWork::Owned(Box::pin(IndexedPoll {
+            scheduler.push_owned(IndexedPoll {
                 index,
                 polls: Arc::clone(&polls),
                 completes: index == 0,
-            })));
+            });
         }
         scheduler.owned_sweep.cursor = 2;
 
@@ -538,13 +549,11 @@ mod tests {
         let control = Control::new();
         let first_polls = Arc::new(AtomicUsize::new(0));
         let second_polls = Arc::new(AtomicUsize::new(0));
-        scheduler.push(ReplyWork::Owned(Box::pin(KillOnPoll {
+        scheduler.push_owned(KillOnPoll {
             control: Arc::clone(&control),
             polls: Arc::clone(&first_polls),
-        })));
-        scheduler.push(ReplyWork::Owned(Box::pin(PollCounter(Arc::clone(
-            &second_polls,
-        )))));
+        });
+        scheduler.push_owned(PollCounter(Arc::clone(&second_polls)));
 
         let wakes = Arc::new(WakeCounter(AtomicUsize::new(0)));
         let waker = Waker::from(wakes);

@@ -4,7 +4,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::{
     Actor, ActorScope, CallError, ExitReason, Handler, Message, Shutdown, ShutdownStatus,
-    reply::{ReplyWork, into_work},
+    reply::sealed::HandleReply, scheduler::ReplyScheduler,
 };
 
 pub(crate) type ReplyReceiver<R> = oneshot::Receiver<Result<R, CallError>>;
@@ -265,7 +265,12 @@ impl<A: Actor> ActorMailbox<A> {
 pub(crate) trait Envelope<A: Actor>: Send {
     fn is_abandoned(&self) -> bool;
 
-    fn dispatch(self: Box<Self>, actor: &mut A, scope: &mut ActorScope<A>) -> ReplyWork<A>;
+    fn dispatch(
+        self: Box<Self>,
+        actor: &mut A,
+        scope: &mut ActorScope<A>,
+        scheduler: &mut ReplyScheduler<A>,
+    );
 }
 
 pub(crate) struct CallEnvelope<M: Message> {
@@ -297,7 +302,12 @@ where
         self.reply.as_ref().is_none_or(oneshot::Sender::is_closed)
     }
 
-    fn dispatch(mut self: Box<Self>, actor: &mut A, scope: &mut ActorScope<A>) -> ReplyWork<A> {
+    fn dispatch(
+        mut self: Box<Self>,
+        actor: &mut A,
+        scope: &mut ActorScope<A>,
+        scheduler: &mut ReplyScheduler<A>,
+    ) {
         let message = self
             .message
             .take()
@@ -313,14 +323,14 @@ where
             Err(error) => {
                 let _ = reply.send(Err(error));
                 drop(message);
-                return ReplyWork::Complete;
+                return;
             }
         };
 
         // The permit commits DuringDispatch before any user code runs,
         // including synchronous reply construction.
         let reply = DispatchReply::new(reply, permit);
-        into_work::<A, M, _>(actor.handle(message, scope), reply)
+        HandleReply::handle(actor.handle(message, scope), scheduler, reply);
     }
 }
 
@@ -396,8 +406,8 @@ mod tests {
             self: Box<Self>,
             _actor: &mut TestActor,
             _scope: &mut ActorScope<TestActor>,
-        ) -> ReplyWork<TestActor> {
-            ReplyWork::Complete
+            _scheduler: &mut ReplyScheduler<TestActor>,
+        ) {
         }
     }
 
