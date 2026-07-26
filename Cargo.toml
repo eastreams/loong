@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "apps/loong",
+    "crates/actor",
     "crates/contracts",
     "crates/kernel",
 ]

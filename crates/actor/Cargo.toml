@@ -1,0 +1,28 @@
+[package]
+name = "loong-actor"
+version = "0.1.0"
+edition.workspace = true
+rust-version = "1.97.1"
+license.workspace = true
+description = "Typed local actors with bounded mailboxes and structured supervision"
+readme = "README.md"
+repository = "https://github.com/eastreams/loong"
+keywords = ["actor", "async", "concurrency", "supervision"]
+categories = ["asynchronous", "concurrency"]
+
+[dependencies]
+futures-util = { version = "0.3.31", default-features = false, features = ["std"] }
+pin-project-lite = "0.2.16"
+thiserror = "2.0.19"
+tokio = { version = "1.53.1", features = ["macros", "rt", "sync"] }
+
+[dev-dependencies]
+criterion = { version = "0.5.1", default-features = false, features = ["async_tokio"] }
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "time"] }
+
+[[bench]]
+name = "message_round_trip"
+harness = false
+
+[lints]
+workspace = true
