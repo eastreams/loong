@@ -40,7 +40,7 @@ pub use actor::{Actor, Handler, Message};
 pub use address::{ActorRef, Response};
 pub use error::{CallError, SpawnChildError, TryCallError, TryCallErrorKind};
 pub use future::{ActorFuture, ActorFutureExt, FutureActor, IntoActorFuture, Map, Then};
-pub use reply::IntoReply;
+pub use reply::{IntoReply, ReplyExt};
 pub use runtime::{ActorOwner, ActorScope, SpawnOptions, spawn, spawn_with};
 pub use supervision::{Child, ChildExit, ChildId, ExitReason, Shutdown, ShutdownStatus};
 

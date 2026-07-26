@@ -7,7 +7,7 @@ use std::{
 
 use loong_actor::{
     Actor, ActorFutureExt, ActorScope, CallError, ExitReason, Handler, IntoActorFuture, Message,
-    Shutdown, ShutdownStatus, SpawnOptions, TryCallErrorKind, reply, spawn, spawn_with,
+    ReplyExt, Shutdown, ShutdownStatus, SpawnOptions, TryCallErrorKind, spawn, spawn_with,
 };
 use tokio::sync::oneshot;
 
@@ -50,22 +50,21 @@ impl Handler<Step> for LifecycleActor {
         mut message: Step,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, Step> + use<> {
-        reply::exclusive(
-            async move {
-                if let Some(entered) = message.entered.take() {
-                    let _ = entered.send(());
-                }
-                if let Some(release) = message.release.take() {
-                    let _ = release.await;
-                }
-                message.id
+        async move {
+            if let Some(entered) = message.entered.take() {
+                let _ = entered.send(());
             }
-            .into_actor()
-            .map(|id, actor: &mut Self, _scope| {
-                lock(&actor.handled).push(id);
-                id
-            }),
-        )
+            if let Some(release) = message.release.take() {
+                let _ = release.await;
+            }
+            message.id
+        }
+        .into_actor()
+        .map(|id, actor: &mut Self, _scope| {
+            lock(&actor.handled).push(id);
+            id
+        })
+        .exclusive()
     }
 }
 
@@ -310,14 +309,13 @@ impl Handler<Interruptible> for LifecycleActor {
         message: Interruptible,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, Interruptible> + use<> {
-        reply::exclusive(
-            async move {
-                let _dropped = message.dropped;
-                let _ = message.entered.send(());
-                let _ = message.release.await;
-            }
-            .into_actor(),
-        )
+        async move {
+            let _dropped = message.dropped;
+            let _ = message.entered.send(());
+            let _ = message.release.await;
+        }
+        .into_actor()
+        .exclusive()
     }
 }
 
@@ -481,7 +479,7 @@ impl Handler<PanicNow> for PanicActor {
     ) -> impl loong_actor::IntoReply<Self, PanicNow> + use<> {
         panic!("intentional handler panic");
         #[allow(unreachable_code)]
-        reply::ready(())
+        ().ready()
     }
 }
 

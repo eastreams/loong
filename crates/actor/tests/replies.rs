@@ -13,7 +13,7 @@ use std::{
 
 use loong_actor::{
     Actor, ActorFutureExt, ActorRef, ActorScope, CallError, ChildExit, ExitReason, Handler,
-    IntoActorFuture, Message, Response, Shutdown, SpawnOptions, reply, spawn, spawn_with,
+    IntoActorFuture, Message, ReplyExt, Response, Shutdown, SpawnOptions, reply, spawn, spawn_with,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -40,7 +40,7 @@ impl Handler<Increment> for Counter {
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, Increment> + use<> {
         self.0 += 1;
-        reply::ready(self.0)
+        self.0.ready()
     }
 }
 
@@ -70,7 +70,7 @@ impl Handler<ChooseReply> for Counter {
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, ChooseReply> + use<> {
         if message.0 {
-            reply::Either::Left(reply::ready(1))
+            reply::Either::Left(1.ready())
         } else {
             reply::Either::Right(async { 2 })
         }
@@ -131,7 +131,7 @@ impl Handler<Record> for ProgressActor {
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, Record> + use<> {
         lock(&self.log).push(message.0);
-        reply::ready(())
+        ().ready()
     }
 }
 
@@ -152,14 +152,13 @@ impl Handler<ThenSequence> for ProgressActor {
         _message: ThenSequence,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, ThenSequence> + use<> {
-        reply::interleaved(
-            async { 1_u8 }
-                .into_actor()
-                .then(|value, actor: &mut Self, _scope| {
-                    lock(&actor.log).push("then");
-                    async move { value + 1 }.into_actor()
-                }),
-        )
+        async { 1_u8 }
+            .into_actor()
+            .then(|value, actor: &mut Self, _scope| {
+                lock(&actor.log).push("then");
+                async move { value + 1 }.into_actor()
+            })
+            .interleaved()
     }
 }
 
@@ -175,15 +174,14 @@ impl Handler<InterleavedSequence> for ProgressActor {
     ) -> impl loong_actor::IntoReply<Self, InterleavedSequence> + use<> {
         lock(&self.log).push("interleaved-start");
         let _ = message.started.send(());
-        reply::interleaved(
-            async move {
-                let _ = message.release.await;
-            }
-            .into_actor()
-            .map(|(), actor: &mut Self, _scope| {
-                lock(&actor.log).push("interleaved-finish");
-            }),
-        )
+        async move {
+            let _ = message.release.await;
+        }
+        .into_actor()
+        .map(|(), actor: &mut Self, _scope| {
+            lock(&actor.log).push("interleaved-finish");
+        })
+        .interleaved()
     }
 }
 
@@ -254,7 +252,7 @@ impl Handler<StopChild> for HookChild {
         scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, StopChild> + use<> {
         scope.request_shutdown(Shutdown::Stop);
-        reply::ready(())
+        ().ready()
     }
 }
 
@@ -308,7 +306,9 @@ impl Handler<InterleavedGate> for ExclusiveActor {
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, InterleavedGate> + use<> {
         let _ = message.dispatched.send(());
-        reply::interleaved(async move { drop(message.release.await) }.into_actor())
+        async move { drop(message.release.await) }
+            .into_actor()
+            .interleaved()
     }
 }
 
@@ -327,13 +327,12 @@ impl Handler<ExclusiveGate> for ExclusiveActor {
         message: ExclusiveGate,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, ExclusiveGate> + use<> {
-        reply::exclusive(
-            async move {
-                let _ = message.entered.send(());
-                let _ = message.release.await;
-            }
-            .into_actor(),
-        )
+        async move {
+            let _ = message.entered.send(());
+            let _ = message.release.await;
+        }
+        .into_actor()
+        .exclusive()
     }
 }
 
@@ -350,7 +349,7 @@ impl Handler<Mark> for ExclusiveActor {
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, Mark> + use<> {
         let _ = message.0.send(());
-        reply::ready(())
+        ().ready()
     }
 }
 
@@ -605,7 +604,7 @@ impl Handler<Echo> for SelfCaller {
         message: Echo,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, Echo> + use<> {
-        reply::ready(message.0)
+        message.0.ready()
     }
 }
 
@@ -659,7 +658,9 @@ impl Handler<InterleavedSelfCall> for SelfCaller {
         scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, InterleavedSelfCall> + use<> {
         let response = scope.myself().try_call(Echo(message.0)).unwrap();
-        reply::interleaved(async move { response.await.unwrap() }.into_actor())
+        async move { response.await.unwrap() }
+            .into_actor()
+            .interleaved()
     }
 }
 
@@ -681,13 +682,12 @@ impl Handler<ExclusiveSelfCall> for SelfCaller {
         let awaited = scope.myself().try_call(Echo(1)).unwrap();
         let observed = scope.myself().try_call(Echo(2)).unwrap();
         let _ = message.observed.send(observed);
-        reply::exclusive(
-            async move {
-                let _ = message.polled.send(());
-                awaited.await.unwrap();
-            }
-            .into_actor(),
-        )
+        async move {
+            let _ = message.polled.send(());
+            awaited.await.unwrap();
+        }
+        .into_actor()
+        .exclusive()
     }
 }
 
@@ -805,17 +805,16 @@ impl Handler<ActiveInterleavedReply> for FairActor {
         message: ActiveInterleavedReply,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, ActiveInterleavedReply> + use<> {
-        reply::interleaved(
-            async move {
-                let _ = message.entered.send(());
-                let _ = message.release.await;
-                message.completed_at
-            }
-            .into_actor()
-            .map(|completed_at, actor: &mut Self, _scope| {
-                completed_at.store(actor.handled.load(Ordering::SeqCst), Ordering::SeqCst);
-            }),
-        )
+        async move {
+            let _ = message.entered.send(());
+            let _ = message.release.await;
+            message.completed_at
+        }
+        .into_actor()
+        .map(|completed_at, actor: &mut Self, _scope| {
+            completed_at.store(actor.handled.load(Ordering::SeqCst), Ordering::SeqCst);
+        })
+        .interleaved()
     }
 }
 
@@ -832,7 +831,7 @@ impl Handler<ReadyWork> for FairActor {
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, ReadyWork> + use<> {
         self.handled.fetch_add(1, Ordering::SeqCst);
-        reply::ready(())
+        ().ready()
     }
 }
 
@@ -968,13 +967,12 @@ impl Handler<ExclusiveGate> for FairChildExitActor {
         message: ExclusiveGate,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, ExclusiveGate> + use<> {
-        reply::exclusive(
-            async move {
-                let _ = message.entered.send(());
-                let _ = message.release.await;
-            }
-            .into_actor(),
-        )
+        async move {
+            let _ = message.entered.send(());
+            let _ = message.release.await;
+        }
+        .into_actor()
+        .exclusive()
     }
 }
 
@@ -985,7 +983,7 @@ impl Handler<ReadyWork> for FairChildExitActor {
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, ReadyWork> + use<> {
         self.handled.fetch_add(1, Ordering::SeqCst);
-        reply::ready(())
+        ().ready()
     }
 }
 

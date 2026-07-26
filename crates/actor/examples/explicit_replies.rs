@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use loong_actor::{
-    Actor, ActorScope, ExitReason, Handler, IntoReply, Message, Shutdown, reply, spawn,
+    Actor, ActorScope, ExitReason, Handler, IntoReply, Message, ReplyExt, Shutdown, reply, spawn,
 };
 
 struct Store {
@@ -23,7 +23,7 @@ impl Handler<Lookup> for Store {
         _scope: &mut ActorScope<Self>,
     ) -> impl IntoReply<Self, Lookup> + use<> {
         if let Some(&value) = self.cache.get(&message.0) {
-            reply::Either::Left(reply::ready(value))
+            reply::Either::Left(value.ready())
         } else {
             reply::Either::Right(load_value(message.0))
         }

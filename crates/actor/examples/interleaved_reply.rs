@@ -1,6 +1,6 @@
 use loong_actor::{
     Actor, ActorFutureExt, ActorScope, ExitReason, Handler, IntoActorFuture, IntoReply, Message,
-    Shutdown, reply, spawn,
+    ReplyExt, Shutdown, spawn,
 };
 use tokio::sync::oneshot;
 
@@ -23,20 +23,19 @@ impl Handler<AddAfter> for Counter {
         message: AddAfter,
         _scope: &mut ActorScope<Self>,
     ) -> impl IntoReply<Self, AddAfter> + use<> {
-        reply::interleaved(
-            async move {
-                message
-                    .resume
-                    .await
-                    .expect("the example retains the resume sender");
-                message.amount
-            }
-            .into_actor()
-            .map(|amount, actor: &mut Self, _scope| {
-                actor.0 += amount;
-                actor.0
-            }),
-        )
+        async move {
+            message
+                .resume
+                .await
+                .expect("the example retains the resume sender");
+            message.amount
+        }
+        .into_actor()
+        .map(|amount, actor: &mut Self, _scope| {
+            actor.0 += amount;
+            actor.0
+        })
+        .interleaved()
     }
 }
 
@@ -52,7 +51,7 @@ impl Handler<Read> for Counter {
         _message: Read,
         _scope: &mut ActorScope<Self>,
     ) -> impl IntoReply<Self, Read> + use<> {
-        reply::ready(self.0)
+        self.0.ready()
     }
 }
 

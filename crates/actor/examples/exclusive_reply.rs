@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use loong_actor::{
     Actor, ActorFutureExt, ActorScope, ExitReason, Handler, IntoActorFuture, IntoReply, Message,
-    Shutdown, reply, spawn,
+    ReplyExt, Shutdown, spawn,
 };
 use tokio::sync::oneshot;
 
@@ -26,24 +26,23 @@ impl Handler<AddAfter> for Counter {
         message: AddAfter,
         _scope: &mut ActorScope<Self>,
     ) -> impl IntoReply<Self, AddAfter> + use<> {
-        reply::exclusive(
-            async move {
-                message
-                    .started
-                    .send(())
-                    .expect("the example retains the started receiver");
-                message
-                    .resume
-                    .await
-                    .expect("the example retains the resume sender");
-                message.amount
-            }
-            .into_actor()
-            .map(|amount, actor: &mut Self, _scope| {
-                actor.0 += amount;
-                actor.0
-            }),
-        )
+        async move {
+            message
+                .started
+                .send(())
+                .expect("the example retains the started receiver");
+            message
+                .resume
+                .await
+                .expect("the example retains the resume sender");
+            message.amount
+        }
+        .into_actor()
+        .map(|amount, actor: &mut Self, _scope| {
+            actor.0 += amount;
+            actor.0
+        })
+        .exclusive()
     }
 }
 
@@ -59,7 +58,7 @@ impl Handler<Read> for Counter {
         _message: Read,
         _scope: &mut ActorScope<Self>,
     ) -> impl IntoReply<Self, Read> + use<> {
-        reply::ready(self.0)
+        self.0.ready()
     }
 }
 

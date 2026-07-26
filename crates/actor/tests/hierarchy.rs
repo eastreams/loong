@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use loong_actor::{
     Actor, ActorRef, ActorScope, CallError, ExitReason, Handler, IntoActorFuture, Message,
-    Shutdown, ShutdownStatus, reply, spawn,
+    ReplyExt, Shutdown, ShutdownStatus, spawn,
 };
 use tokio::sync::oneshot;
 
@@ -82,7 +82,7 @@ impl Handler<ParentPing> for LogParent {
         _message: ParentPing,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, ParentPing> + use<> {
-        reply::ready(())
+        ().ready()
     }
 }
 
@@ -109,7 +109,7 @@ impl Handler<Work> for Worker {
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, Work> + use<> {
         lock(&self.log).push(format!("work-{}", message.0));
-        reply::ready(message.0)
+        message.0.ready()
     }
 }
 
@@ -153,13 +153,12 @@ impl Handler<ParentBlock> for DrainParent {
         message: ParentBlock,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, ParentBlock> + use<> {
-        reply::exclusive(
-            async move {
-                let _ = message.entered.send(());
-                let _ = message.release.await;
-            }
-            .into_actor(),
-        )
+        async move {
+            let _ = message.entered.send(());
+            let _ = message.release.await;
+        }
+        .into_actor()
+        .exclusive()
     }
 }
 
@@ -303,7 +302,7 @@ impl Handler<PanicTree> for PanicParent {
     ) -> impl loong_actor::IntoReply<Self, PanicTree> + use<> {
         panic!("intentional parent panic");
         #[allow(unreachable_code)]
-        reply::ready(())
+        ().ready()
     }
 }
 

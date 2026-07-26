@@ -19,7 +19,7 @@ The crate is an early MVP. Its current contract is deliberately narrow:
 
 ```rust
 use loong_actor::{
-    Actor, ActorScope, ExitReason, Handler, IntoReply, Message, Shutdown, reply, spawn,
+    Actor, ActorScope, ExitReason, Handler, IntoReply, Message, ReplyExt, Shutdown, spawn,
 };
 
 struct Counter(u64);
@@ -39,7 +39,7 @@ impl Handler<Add> for Counter {
         _scope: &mut ActorScope<Self>,
     ) -> impl IntoReply<Self, Add> + use<> {
         self.0 += message.0;
-        reply::ready(self.0)
+        self.0.ready()
     }
 }
 
