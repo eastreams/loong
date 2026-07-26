@@ -12,15 +12,28 @@ pub(crate) type DynEnvelope<A> = Box<dyn Envelope<A>>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Mode {
+    /// Accepting and dispatching new messages.
     Running,
+    /// Dispatching the fixed queue accepted before Drain committed.
     Draining,
+    /// Finishing dispatched replies after queued messages were discarded.
     Stopping,
+    /// Cooperatively discarding actor work and killing the owned subtree.
     Killing,
+    /// Containing an actor panic and killing the owned subtree.
     Failing,
+    /// The executor dropped the actor task without awaitable teardown.
     Aborting,
+    /// Terminal state and its atomically published reason.
     Exited(ExitReason),
 }
 
+/// Shared linearization boundary for the complete actor lifecycle.
+///
+/// The mutex-protected mode is authoritative for admission, dispatch,
+/// completion, shutdown, and finalization decisions. `mode_tx` mirrors every
+/// committed transition while that gate is held, giving async observers one
+/// state stream whose terminal variant always carries its [`ExitReason`].
 #[derive(Debug)]
 pub(crate) struct Control {
     gate: Mutex<Mode>,
@@ -56,8 +69,10 @@ impl Control {
         self.mode_tx.subscribe()
     }
 
-    /// Serializes request commit with lifecycle cutoff. The closure must not
-    /// await or invoke user code.
+    /// Serializes request commit with lifecycle cutoff.
+    ///
+    /// The closure runs exactly once only while Running. It must not await or
+    /// invoke user code.
     pub(crate) fn admit<T>(&self, commit: impl FnOnce() -> T) -> Result<T, ()> {
         let gate = self.lock_gate();
         if *gate != Mode::Running {
@@ -82,6 +97,10 @@ impl Control {
         }
     }
 
+    /// Commits the first shutdown mode and permits only a later Kill upgrade.
+    ///
+    /// Repeated and losing requests observe the already committed behavior;
+    /// final actors return their published reason.
     pub(crate) fn request(&self, shutdown: Shutdown) -> ShutdownStatus {
         let mut gate = self.lock_gate();
 
@@ -102,6 +121,7 @@ impl Control {
         ShutdownStatus::Requested
     }
 
+    /// Commits panic handling unless Kill, abort, or finalization already won.
     pub(crate) fn begin_failure(&self) {
         let mut gate = self.lock_gate();
         if !matches!(*gate, Mode::Killing | Mode::Aborting | Mode::Exited(_)) {
@@ -119,6 +139,10 @@ impl Control {
         }
     }
 
+    /// Publishes exactly one terminal mode and returns the reason that won.
+    ///
+    /// The proposed runner result is accepted only if Kill, failure, or abort has
+    /// not already committed through the same gate.
     pub(crate) fn finish(&self, proposed: ExitReason) -> ExitReason {
         let mut gate = self.lock_gate();
         if let Mode::Exited(reason) = *gate {
@@ -147,6 +171,7 @@ impl Control {
         }
     }
 
+    /// Waits on the lifecycle state stream until its terminal reason appears.
     pub(crate) async fn wait_for_exit(&self) -> ExitReason {
         let mut mode = self.subscribe_mode();
         loop {
@@ -330,6 +355,11 @@ impl<R> DispatchReply<R> {
         }
     }
 
+    /// Completes the call only if its response commits before Kill, failure,
+    /// abort, or terminal publication.
+    ///
+    /// The gate decides the outcome; channel notification and destruction of a
+    /// rejected user response happen after the mutex is released.
     pub(crate) fn complete(mut self, response: R) {
         let outcome = self.permit.begin_completion();
         let reply = self

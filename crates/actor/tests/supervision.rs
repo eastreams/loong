@@ -116,8 +116,9 @@ async fn clean_child_exit_is_reported_exactly_once() {
     assert_eq!(event.reason(), ExitReason::Stopped);
     assert_eq!(watchdog(child.closed()).await, ExitReason::Stopped);
 
-    // Supervision is prioritized over ordinary messages, so this call is a
-    // barrier for any duplicate terminal event already sent by the child.
+    // Receiving `event` proves its hook already updated the parent. Child exits
+    // and mailbox work otherwise share fair scheduling; this call only confirms
+    // the parent remains responsive with the recorded state.
     assert_eq!(watchdog(supervisor.call(Observed)).await.unwrap(), 1);
     assert!(events.try_recv().is_err());
     assert_eq!(

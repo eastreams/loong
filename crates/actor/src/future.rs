@@ -15,15 +15,28 @@ use crate::{Actor, ActorScope};
 /// A future that receives temporary access to actor state on every poll.
 ///
 /// Implementations must not retain `actor` or `scope` after [`poll`](Self::poll)
-/// returns. Loong actor tasks run on Tokio and only schedule owned work, so an
-/// actor future that cannot cross threads or outlive its creator is not useful
-/// to this runtime.
+/// returns; state retained between polls must be owned by the future. Loong actor
+/// tasks run on Tokio and keep scheduled replies beyond handler dispatch, so the
+/// future itself must be `Send + 'static`. These bounds do not allow it to retain
+/// either temporary mutable borrow.
+///
+/// An actor future does not choose its own scheduling mode. It remains inert
+/// until polled directly or returned through a reply wrapper such as
+/// [`crate::reply::interleaved`] or [`crate::reply::exclusive`]. Both wrappers
+/// support actor futures that are not `Unpin`.
 #[must_use = "actor futures do nothing unless scheduled or polled"]
 pub trait ActorFuture<A: Actor>: Send + 'static {
     /// The value produced when the future completes.
     type Output;
 
     /// Advances the future with fresh actor and scope borrows.
+    ///
+    /// This method follows the ordinary [`Future::poll`] wake contract. Each call
+    /// must return promptly with [`Poll::Pending`] or [`Poll::Ready`]. One poll is
+    /// synchronous actor work: a poll that blocks or never returns prevents the
+    /// actor task from observing lifecycle changes or progressing its mailbox and
+    /// other replies. Kill may commit concurrently, but cannot interrupt that
+    /// poll.
     fn poll(
         self: Pin<&mut Self>,
         actor: &mut A,
@@ -32,10 +45,23 @@ pub trait ActorFuture<A: Actor>: Send + 'static {
     ) -> Poll<Self::Output>;
 }
 
-/// Combinators for [`ActorFuture`].
+/// Combinators for sequencing work inside one [`ActorFuture`].
+///
+/// The combinators do not send messages through the mailbox and do not consume
+/// another in-flight reply slot. They inherit the scheduling and cancellation
+/// behavior of the reply wrapper around the combined future, and support
+/// component futures that are not `Unpin`.
 #[must_use = "actor future combinators do nothing unless scheduled or polled"]
 pub trait ActorFutureExt<A: Actor>: ActorFuture<A> {
     /// Maps the completed value while actor state is temporarily available.
+    ///
+    /// When the source becomes ready, `f` runs exactly once in that same poll
+    /// with the current actor and scope borrows, and its return value completes
+    /// the combined future. There is no mailbox turn, extra in-flight slot, or
+    /// cancellation point between source completion and `f`. If the combined
+    /// future is cancelled before the source completes, `f` is never called.
+    ///
+    /// The returned [`Map`] supports a source future that is not `Unpin`.
     fn map<F, U>(self, f: F) -> Map<Self, F>
     where
         Self: Sized,
@@ -45,6 +71,17 @@ pub trait ActorFutureExt<A: Actor>: ActorFuture<A> {
     }
 
     /// Starts another actor future after this one completes.
+    ///
+    /// When the first future becomes ready, `f` runs exactly once in that same
+    /// poll with temporary actor and scope borrows. The returned second future is
+    /// installed directly and polled immediately in that outer poll; the
+    /// transition does not pass through the mailbox or consume another in-flight
+    /// slot.
+    ///
+    /// Cancellation before the transition drops the first future and the unused
+    /// closure. Cancellation after the transition drops the second future; the
+    /// completed first stage is not repeated. The returned [`Then`] supports both
+    /// stage futures when they are not `Unpin`.
     fn then<F, Fut>(self, f: F) -> Then<Self, Fut, F>
     where
         Self: Sized,
@@ -63,9 +100,19 @@ where
 }
 
 /// Converts an ordinary future into an actor-typed, borrow-free future.
+///
+/// Conversion neither spawns a task nor chooses a reply scheduling mode. The
+/// ordinary future is still polled by whichever caller or reply wrapper later
+/// drives it, and it never receives the actor or scope borrows. Its `Send +
+/// 'static` bounds require all data retained across polls to be owned.
 #[must_use = "the converted actor future must be scheduled or polled"]
 pub trait IntoActorFuture<A: Actor>: Future + Send + Sized + 'static {
     /// Wraps this future without storing or borrowing actor state.
+    ///
+    /// Use [`ActorFutureExt::map`] or [`ActorFutureExt::then`] for a later step
+    /// that needs temporary actor access, then return the combined future through
+    /// [`crate::reply::interleaved`] or [`crate::reply::exclusive`] to choose how
+    /// it interacts with other actor work.
     fn into_actor(self) -> FutureActor<A, Self> {
         FutureActor {
             actor: PhantomData,
@@ -83,6 +130,10 @@ where
 
 pin_project! {
     /// An ordinary future viewed as an [`ActorFuture`].
+    ///
+    /// This wrapper is created by [`IntoActorFuture::into_actor`], ignores the
+    /// actor and scope passed to each poll, and does not spawn or select a reply
+    /// scheduling mode. The wrapped future may be `!Unpin`.
     #[derive(Debug)]
     #[must_use = "futures do nothing unless polled"]
     pub struct FutureActor<A, F> {
@@ -111,6 +162,9 @@ where
 
 pin_project! {
     /// Future returned by [`ActorFutureExt::map`].
+    ///
+    /// It keeps mapping inside the enclosing reply's scheduling slot and supports
+    /// a source future that is `!Unpin`.
     #[derive(Debug)]
     #[must_use = "futures do nothing unless polled"]
     pub struct Map<Fut, F> {
@@ -176,6 +230,9 @@ where
 
 pin_project! {
     /// Future returned by [`ActorFutureExt::then`].
+    ///
+    /// It runs both stages inside the enclosing reply's scheduling slot and
+    /// supports stage futures that are `!Unpin`.
     #[derive(Debug)]
     #[must_use = "futures do nothing unless polled"]
     pub struct Then<First, Second, F> {

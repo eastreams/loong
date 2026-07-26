@@ -3,14 +3,32 @@ use std::{fmt, hash, sync::Arc};
 use crate::{Actor, ActorRef};
 
 /// A requested actor shutdown mode.
+///
+/// Every mode closes admission as soon as the request commits. Stop and Drain
+/// are graceful, first-wins peers; Kill may upgrade either one. Graceful
+/// shutdown proceeds post-order through the owned actor tree, while Kill skips
+/// actor cleanup but still waits for descendants before publishing a normal
+/// terminal event.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum Shutdown {
-    /// Finish dispatched replies, discard queued messages, then run cleanup.
+    /// Finishes dispatched replies and discards messages still queued for
+    /// dispatch.
+    ///
+    /// The actor then requests Stop from its children, waits for their terminal
+    /// events, and runs [`Actor::on_stop`] with [`ExitReason::Stopped`].
     Stop,
-    /// Dispatch the fixed accepted queue, finish its replies, then run cleanup.
+    /// Dispatches the fixed queue accepted before Drain committed and finishes
+    /// all resulting replies.
+    ///
+    /// The actor then requests Drain from its children, waits for their terminal
+    /// events, and runs [`Actor::on_stop`] with [`ExitReason::Drained`].
     Drain,
-    /// Drop the current cooperative future and queued messages without cleanup.
+    /// Drops queued messages and active cooperative actor work without running
+    /// [`Actor::on_stop`], then kills and waits for the owned subtree.
+    ///
+    /// Kill takes effect between polls. It cannot interrupt a synchronous
+    /// handler, a poll call that does not return, or user `Drop` code.
     Kill,
 }
 
@@ -19,16 +37,27 @@ pub enum Shutdown {
 #[non_exhaustive]
 pub enum ShutdownStatus {
     /// The request established or upgraded the actor's shutdown mode.
-    Requested,
-    /// A shutdown is already in progress.
     ///
-    /// Stop and Drain are first-wins peers. Kill may upgrade either one.
+    /// This confirms only that the request committed, not that shutdown has
+    /// completed.
+    Requested,
+    /// The request made no change because shutdown is already in progress.
+    ///
+    /// Stop or Drain identifies the graceful mode that already won. Kill either
+    /// identifies an active Kill or reports that panic/executor teardown has made
+    /// graceful shutdown impossible; inspect the eventual [`ExitReason`] for the
+    /// terminal guarantee.
     InProgress(Shutdown),
-    /// The actor has already exited.
+    /// The actor has already published its terminal reason.
     Exited(ExitReason),
 }
 
 /// Why an actor terminated.
+///
+/// Stopped, Drained, Killed, and Panicked are strong terminal events: the
+/// actor's owned descendants have terminated before the reason is published.
+/// Aborted is deliberately weaker because synchronous executor teardown cannot
+/// wait for descendants.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ExitReason {
@@ -99,6 +128,11 @@ impl hash::Hash for ChildId {
 }
 
 /// The terminal event of a direct child actor.
+///
+/// While the parent is active, the runtime delivers this value serially to
+/// [`Actor::on_child_exit`]. An event not entered before parent cleanup begins is
+/// absorbed by subtree teardown instead, including an exit caused by that
+/// cleanup.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChildExit {
     child: ChildId,
@@ -122,6 +156,9 @@ impl ChildExit {
 }
 
 /// A typed, non-owning reference to a child registered in its parent's tree.
+///
+/// The parent [`crate::ActorScope`] retains lifecycle ownership. Cloning or
+/// dropping a `Child` does not keep the child alive or initiate shutdown.
 pub struct Child<A: Actor> {
     id: ChildId,
     actor_ref: ActorRef<A>,

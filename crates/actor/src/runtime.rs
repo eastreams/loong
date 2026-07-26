@@ -24,6 +24,10 @@ use crate::{
 };
 
 /// Configuration applied when one actor is spawned.
+///
+/// Mailbox capacity bounds accepted work waiting for dispatch. The independent
+/// in-flight limit bounds dispatched replies that have not completed. Both
+/// limits default to 32.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SpawnOptions {
     mailbox_capacity: NonZeroUsize,
@@ -39,7 +43,9 @@ impl SpawnOptions {
 
     /// Sets the maximum number of dispatched, incomplete replies.
     ///
-    /// The exclusive slot counts toward this limit.
+    /// At the limit, new mailbox dispatch pauses while the scheduler continues
+    /// polling eligible active replies. The exclusive slot counts toward this
+    /// limit, and no slot is reserved for a reply that makes a self-call.
     pub const fn with_max_in_flight(mut self, max_in_flight: NonZeroUsize) -> Self {
         self.max_in_flight = max_in_flight;
         self
@@ -52,7 +58,8 @@ impl SpawnOptions {
 
     /// Returns the maximum number of dispatched, incomplete replies.
     ///
-    /// The exclusive slot counts toward this limit.
+    /// See [`with_max_in_flight`](Self::with_max_in_flight) for the dispatch and
+    /// self-call behavior governed by this limit.
     pub const fn max_in_flight(self) -> NonZeroUsize {
         self.max_in_flight
     }
@@ -70,7 +77,9 @@ impl Default for SpawnOptions {
 
 /// Spawns a root actor with [`SpawnOptions::default`].
 ///
-/// This function must be called from a Tokio runtime.
+/// The returned [`ActorOwner`] uniquely owns the actor lifecycle. The actor runs
+/// [`Actor::on_start`] before dispatching its first message. This function must
+/// be called from a Tokio runtime.
 #[must_use = "dropping the returned owner requests Kill"]
 pub fn spawn<A: Actor>(actor: A) -> ActorOwner<A> {
     spawn_with(actor, SpawnOptions::default())
@@ -78,7 +87,9 @@ pub fn spawn<A: Actor>(actor: A) -> ActorOwner<A> {
 
 /// Spawns a root actor with explicit options.
 ///
-/// This function must be called from a Tokio runtime.
+/// The returned [`ActorOwner`] uniquely owns the actor lifecycle. The actor runs
+/// [`Actor::on_start`] before dispatching its first message. This function must
+/// be called from a Tokio runtime.
 #[must_use = "dropping the returned owner requests Kill"]
 pub fn spawn_with<A: Actor>(actor: A, options: SpawnOptions) -> ActorOwner<A> {
     let (actor_ref, owned) = spawn_actor(actor, options, None);
@@ -105,11 +116,19 @@ impl<A: Actor> ActorOwner<A> {
     }
 
     /// Requests Stop, Drain, or Kill without waiting for completion.
+    ///
+    /// The request atomically closes admission if it establishes a mode. Stop
+    /// and Drain are first-wins peers, while Kill may upgrade either one. See
+    /// [`Shutdown`] for retained work and cleanup behavior, and
+    /// [`ShutdownStatus`] for the meaning of the immediate result.
     pub fn request_shutdown(&self, shutdown: Shutdown) -> ShutdownStatus {
         self.owned.control.request(shutdown)
     }
 
     /// Returns the terminal reason if the actor has already exited.
+    ///
+    /// The reason carries the strong or weak subtree guarantee documented by
+    /// [`ExitReason`].
     pub fn exit_reason(&self) -> Option<ExitReason> {
         self.owned.control.exit_reason()
     }
@@ -126,6 +145,17 @@ impl<A: Actor> ActorOwner<A> {
 
     /// Requests shutdown and waits for the terminal event described by
     /// [`wait`](Self::wait), including its weaker Aborted guarantee.
+    ///
+    /// The returned reason is the actor's final outcome, which can differ from
+    /// the requested mode after a concurrent request, Kill upgrade, panic, or
+    /// executor teardown.
+    ///
+    /// This future owns the actor owner. Cancelling it before terminal
+    /// publication therefore drops the owner and requests best-effort Kill. If
+    /// Stop or Drain already committed, Drop upgrades it to Kill; if this future
+    /// was never polled, the graceful request never committed. To retain control
+    /// after cancelling a wait, call [`request_shutdown`](Self::request_shutdown)
+    /// and apply the deadline to [`wait`](Self::wait) instead.
     pub async fn shutdown(mut self, shutdown: Shutdown) -> ExitReason {
         self.request_shutdown(shutdown);
         self.wait().await
@@ -146,6 +176,8 @@ impl<A: Actor> fmt::Debug for ActorOwner<A> {
 ///
 /// The scope owns child lifecycles on behalf of the actor. Actor state may keep
 /// a returned [`Child`] or [`ActorRef`], but those values do not own the child.
+/// Graceful parent shutdown waits for the owned subtree before the parent's
+/// cleanup hook and terminal event.
 pub struct ActorScope<A: Actor> {
     actor_ref: ActorRef<A>,
     control: Arc<Control>,
@@ -158,30 +190,50 @@ impl<A: Actor> ActorScope<A> {
     /// Returns this actor's non-owning address.
     ///
     /// Self-calls from owned and interleaved replies can progress only while an
-    /// additional in-flight slot is free. Awaiting one from an exclusive reply
-    /// or serial lifecycle hook blocks actor dispatch until externally
-    /// interrupted.
+    /// additional in-flight slot is free. A call accepted from an exclusive
+    /// reply cannot be dispatched until that reply ends, so awaiting it requires
+    /// Kill, actor failure, or executor teardown to break the wait.
+    ///
+    /// A serial lifecycle hook also blocks dispatch. While admission is still
+    /// open, as in `on_start` or a running actor's `on_child_exit`, awaiting an
+    /// accepted self-call likewise waits until Kill or executor teardown. After
+    /// shutdown closes admission, including in `on_stop`, [`ActorRef::call`]
+    /// returns [`CallError::Closed`](crate::CallError::Closed) and
+    /// [`ActorRef::try_call`] reports
+    /// [`TryCallErrorKind::Closed`](crate::TryCallErrorKind::Closed) instead.
     pub const fn myself(&self) -> &ActorRef<A> {
         &self.actor_ref
     }
 
     /// Requests shutdown of this actor and, eventually, its subtree.
+    ///
+    /// This has the same first-wins and Kill-upgrade behavior as
+    /// [`ActorOwner::request_shutdown`]. It commits synchronously, but Kill is
+    /// cooperative: the current handler or poll returns before the runtime drops
+    /// remaining actor work and propagates shutdown to children.
+    ///
+    /// Stop and Drain retain already-dispatched replies. Kill and reply
+    /// completion instead commit through the same lifecycle gate, so whichever
+    /// commits first determines the caller's result.
     pub fn request_shutdown(&self, shutdown: Shutdown) -> ShutdownStatus {
         self.control.request(shutdown)
     }
 
-    /// Spawns and owns a direct child with default options.
+    /// Spawns a direct child that remains owned by this scope.
     ///
-    /// Returns the untouched actor value if post-order cleanup has already
-    /// closed child admission.
+    /// The returned [`Child`] is a non-owning identity and address. Returns the
+    /// untouched actor value if post-order cleanup has already closed child
+    /// admission.
     pub fn spawn_child<C: Actor>(&mut self, child: C) -> Result<Child<C>, SpawnChildError<C>> {
         self.spawn_child_with(child, SpawnOptions::default())
     }
 
-    /// Spawns and owns a direct child with explicit options.
+    /// Spawns a direct child with explicit options that remains owned by this
+    /// scope.
     ///
-    /// Returns the untouched actor value if post-order cleanup has already
-    /// closed child admission.
+    /// The returned [`Child`] is a non-owning identity and address. Returns the
+    /// untouched actor value if post-order cleanup has already closed child
+    /// admission.
     pub fn spawn_child_with<C: Actor>(
         &mut self,
         child: C,
@@ -569,6 +621,12 @@ struct TurnCursor {
     clippy::too_many_arguments,
     reason = "one turn borrows each independently owned runner resource"
 )]
+// Ordinary turns resume from a persistent cursor across mailbox dispatch,
+// owned replies, interleaved replies, and child-exit events. With exclusive work
+// present, only owned and exclusive replies are eligible, and their first-poll
+// priority alternates. Lifecycle observation sits outside this fairness domain
+// with biased priority, and mode checks between candidates keep Kill ahead of
+// subsequent user polls.
 async fn actor_turn<A: Actor>(
     actor: &mut A,
     scope: &mut ActorScope<A>,
@@ -856,8 +914,8 @@ async fn finish_replies<A: Actor>(
     Work::Complete(())
 }
 
-/// Graceful shutdown is post-order: a parent finishes its accepted work, then
-/// waits for children, and only then runs its own cleanup hook.
+/// Graceful shutdown is post-order: a parent finishes the work retained by the
+/// selected mode, then waits for children, and only then runs its cleanup hook.
 async fn graceful_finish<A: Actor>(
     actor: &mut A,
     scope: &mut ActorScope<A>,

@@ -10,7 +10,8 @@ use crate::{
 /// A cloneable address that can communicate with, but does not own, an actor.
 ///
 /// Keeping any number of addresses alive does not delay owner-initiated
-/// shutdown. Admission waits are woken as soon as shutdown closes the mailbox.
+/// shutdown. Admission waits are woken as soon as shutdown closes admission.
+/// Requests accepted by cloned addresses share the same bounded mailbox.
 pub struct ActorRef<A: Actor> {
     mailbox: Weak<ActorMailbox<A>>,
     mode: watch::Receiver<Mode>,
@@ -23,10 +24,22 @@ impl<A: Actor> ActorRef<A> {
 
     /// Sends a typed request, waiting for bounded mailbox capacity if needed.
     ///
-    /// Admission and shutdown have a single linearization point. [`Closed`](
-    /// CallError::Closed) therefore guarantees that the handler was never
-    /// invoked. Dropping this future before dispatch lets the runtime skip the
-    /// request; dropping it after dispatch does not cancel handler effects.
+    /// Admission and shutdown have a single commit point. [`CallError::Closed`]
+    /// therefore means the message was not accepted and its handler was never
+    /// invoked. Unlike [`try_call`](Self::try_call), this method does not return
+    /// the message when admission fails.
+    ///
+    /// After admission, the request waits in mailbox order until in-flight
+    /// capacity and reply scheduling permit dispatch. Dropping this future while
+    /// the request is still queued permits the runtime to skip its handler. Once
+    /// dispatch begins, dropping the future abandons only the result; synchronous
+    /// handler effects and its selected reply continue.
+    ///
+    /// After dispatch, successful completion and lifecycle interruption also
+    /// have one commit point. Completion first returns `Ok`, even if Kill follows
+    /// immediately. Kill, panic, or executor teardown first returns
+    /// [`CallError::DuringDispatch`], including when the handler selected
+    /// [`reply::ready`](crate::reply::ready).
     ///
     /// This method has no built-in deadline and can wait indefinitely while a
     /// running actor or its mailbox makes no progress. An external timeout drops
@@ -79,7 +92,13 @@ impl<A: Actor> ActorRef<A> {
 
     /// Attempts immediate bounded admission without waiting for capacity.
     ///
+    /// Success means the message was accepted, not that its handler has run. The
+    /// returned [`Response`] follows the same queued, dispatch, completion, and
+    /// cancellation behavior as [`call`](Self::call).
+    ///
     /// On failure the returned error retains the original, uncommitted message.
+    /// [`TryCallErrorKind::Full`] means no mailbox slot was immediately available;
+    /// [`TryCallErrorKind::Closed`] means lifecycle shutdown had closed admission.
     pub fn try_call<M>(&self, message: M) -> Result<Response<M::Reply>, TryCallError<M>>
     where
         A: Handler<M>,
@@ -117,7 +136,10 @@ impl<A: Actor> ActorRef<A> {
         }
     }
 
-    /// Returns the exit reason if the actor has already terminated.
+    /// Returns a non-waiting snapshot of the actor's terminal reason.
+    ///
+    /// `None` includes both a running actor and an actor still completing
+    /// shutdown. Use [`closed`](Self::closed) to wait for terminal publication.
     pub fn exit_reason(&self) -> Option<ExitReason> {
         match *self.mode.borrow() {
             Mode::Exited(reason) => Some(reason),
@@ -126,6 +148,9 @@ impl<A: Actor> ActorRef<A> {
     }
 
     /// Waits until the actor publishes its terminal event.
+    ///
+    /// This method observes lifecycle state and does not initiate shutdown.
+    /// Dropping the returned future does not affect the actor.
     ///
     /// Stop, Drain, Kill, and contained panic publish only after the owned
     /// subtree terminates. [`ExitReason::Aborted`] is weaker: executor teardown
@@ -165,8 +190,14 @@ impl<A: Actor> fmt::Debug for ActorRef<A> {
 
 /// The typed reply of an accepted [`ActorRef::try_call`] request.
 ///
-/// Dropping a queued response permits the runtime to skip its handler. Once the
-/// handler starts, dropping the response only abandons the result.
+/// The message has committed to the mailbox, but its handler may not have run.
+/// Dropping a queued response permits the runtime to skip that handler. Once
+/// dispatch starts, dropping the response only abandons the result; handler and
+/// reply effects continue.
+///
+/// Awaiting this value returns the phase-aware [`CallError`] contract. In
+/// particular, completion committed before Kill returns `Ok`, while Kill
+/// committed first returns [`CallError::DuringDispatch`].
 #[must_use = "dropping a queued response may abandon its message"]
 pub struct Response<R> {
     receiver: ReplyReceiver<R>,

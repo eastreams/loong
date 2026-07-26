@@ -4,26 +4,52 @@ use thiserror::Error;
 
 use crate::ExitReason;
 
-/// A failure after or while attempting asynchronous admission.
+/// A request failure reported before a typed reply is delivered.
+///
+/// Variants identify the last user-visible request phase committed by the
+/// runtime:
+///
+/// - [`Closed`](Self::Closed): admission did not commit.
+/// - [`BeforeDispatch`](Self::BeforeDispatch): admission committed, but dispatch
+///   did not.
+/// - [`DuringDispatch`](Self::DuringDispatch): dispatch committed, but successful
+///   completion did not.
+///
+/// Admission, dispatch, and successful completion are each ordered atomically
+/// against shutdown and actor failure. If completion commits first, the caller
+/// receives `Ok`. Otherwise the error identifies whether interruption happened
+/// before or during dispatch. [`ResponseLost`](Self::ResponseLost) is the
+/// fallback when no precise lifecycle phase reaches the response channel.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 #[non_exhaustive]
 pub enum CallError {
     /// The actor stopped accepting requests before this message was committed.
+    ///
+    /// The handler was never invoked. [`ActorRef::call`](crate::ActorRef::call)
+    /// consumes the message on this path; use
+    /// [`ActorRef::try_call`](crate::ActorRef::try_call) when the original message
+    /// must be recoverable after failed admission.
     #[error("the actor is closed to new messages")]
     Closed,
 
-    /// The message was accepted, but its handler was never invoked.
+    /// The message was accepted, but lifecycle shutdown or failure discarded it
+    /// before its handler was invoked.
     #[error("the actor exited before dispatch: {0}")]
     BeforeDispatch(ExitReason),
 
-    /// The handler began and was interrupted before producing its reply.
+    /// The handler began, but interruption committed before successful reply
+    /// completion.
     ///
-    /// External effects may already have happened, so this error is not proof
-    /// that retrying the request is safe.
+    /// Synchronous handler work and earlier future polls may already have caused
+    /// effects. This error is therefore not proof that retrying is safe, even for
+    /// a handler that selected [`reply::ready`](crate::reply::ready).
     #[error("the actor exited during dispatch: {0}")]
     DuringDispatch(ExitReason),
 
     /// The response channel vanished without the runtime reporting a phase.
+    ///
+    /// The request's last committed phase is unknown, so this error does not make
+    /// retrying safe.
     #[error("the actor response channel was lost")]
     ResponseLost,
 }

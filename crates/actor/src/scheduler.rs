@@ -19,8 +19,11 @@ const ACTIVE_POLL_BUDGET: usize = 16;
 type ErasedActorFuture<A> = Pin<Box<dyn ActorFuture<A, Output = ()> + Send + 'static>>;
 
 /// Actor-local ownership boundary for replies that outlive handler dispatch.
+///
 /// Its collections cannot exceed `max_in_flight`; no stored future borrows the
-/// actor or scope between polls.
+/// actor or scope between polls. Each collection maintains a budgeted circular
+/// sweep, while the runtime owns fairness between mailbox, reply, and child-exit
+/// classes. Lifecycle changes are checked between user future polls.
 pub(crate) struct ReplyScheduler<A: Actor> {
     owned: Vec<ErasedFuture<'static>>,
     interleaved: Vec<ErasedActorFuture<A>>,
@@ -149,6 +152,10 @@ impl<A: Actor> ReplyScheduler<A> {
         Poll::Ready(())
     }
 
+    /// Polls the owned lane and whichever actor-aware lane is currently eligible.
+    ///
+    /// Ready reports reply progress or a lifecycle change, not that every active
+    /// reply has completed.
     pub(crate) fn poll_active(
         &mut self,
         actor: &mut A,
@@ -188,6 +195,7 @@ impl<A: Actor> ReplyScheduler<A> {
     }
 }
 
+/// Persistent recovery point for one collection's logical round-robin sweep.
 #[derive(Default)]
 struct SweepState {
     cursor: usize,
@@ -265,9 +273,16 @@ impl Wake for SweepWaker {
     }
 }
 
-// Each collection gets one proxy waker. Its generation distinguishes future
-// notifications from budget continuation wakes, so a coalesced external wake
-// triggers a confirmation sweep without making an all-pending collection spin.
+// When no sweep is in progress, polling starts one logical circular pass over
+// the eligible collection. The per-visit budget bounds how many items are polled
+// before returning to the runner's other fairness classes; it cannot bound the
+// duration of an individual user poll. `remaining` and `cursor` preserve the
+// recovery point and, while the collection remains eligible, self-wake until the
+// sweep is complete. Each collection gets one proxy waker whose generation
+// distinguishes future notifications from budget continuation wakes, so a
+// coalesced external wake triggers a confirmation sweep without making an
+// all-pending collection spin. Ready means an item completed or lifecycle
+// changed, not that the collection is empty.
 fn poll_collection<T>(
     items: &mut Vec<T>,
     sweep: &mut SweepState,

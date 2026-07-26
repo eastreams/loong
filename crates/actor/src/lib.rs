@@ -4,23 +4,24 @@
 
 //! Typed local actors with bounded mailboxes and structured supervision.
 //!
-//! The runtime separates communication from ownership. An [`ActorRef`] is a
-//! cloneable, non-owning address, while the unique [`ActorOwner`] controls a
-//! root actor's lifetime. Child ownership stays inside the parent's
-//! [`ActorScope`], forming a runtime-enforced tree.
+//! Implement [`Actor`] and a typed [`Handler`] for each accepted [`Message`]. A
+//! handler synchronously selects its scheduling semantics through the [`reply`]
+//! constructors; that module documents actor borrowing, fairness, in-flight
+//! capacity, panic, and Kill behavior.
 //!
-//! The tree governs lifecycle ownership, not the communication graph. Addresses
-//! may still form cycles, and cyclic request/reply waits can deadlock.
+//! Use [`ActorRef::call`] for admission with backpressure or
+//! [`ActorRef::try_call`] for immediate admission with message recovery. Request
+//! failures retain their admission/dispatch phase in [`CallError`].
 //!
-//! Handlers synchronously choose an explicit reply scheduling mode. Actor-aware
-//! reply futures borrow actor state only for one poll at a time; owned replies
-//! never borrow it. Dropping a future cannot undo effects that already occurred.
+//! Communication and lifecycle ownership are separate. An [`ActorRef`] is a
+//! cloneable, non-owning address, while the unique [`ActorOwner`] owns a root
+//! actor. [`ActorScope::spawn_child`] keeps child ownership in the parent scope,
+//! forming a runtime-enforced tree. See [`Shutdown`] for lifecycle behavior.
 //!
-//! Mailbox FIFO governs dispatch order, not reply completion order. Owned and
-//! interleaved self-calls require an additional free in-flight slot; prefer
-//! [`ActorFutureExt::map`] or [`ActorFutureExt::then`] for consecutive local
-//! actor work. Kill is cooperative between polls and cannot interrupt a running
-//! synchronous handler, a poll call that never returns, or user `Drop` code.
+//! The ownership tree does not constrain the communication graph: addresses may
+//! form cycles. [`ActorScope::myself`] documents self-call progress and deadlock
+//! boundaries; use [`ActorFutureExt::map`] or [`ActorFutureExt::then`] for
+//! consecutive actor-local work that does not require a mailbox boundary.
 
 use std::{future::Future, pin::Pin};
 
