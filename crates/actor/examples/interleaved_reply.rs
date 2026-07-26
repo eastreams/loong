@@ -1,7 +1,4 @@
-use loong_actor::{
-    Actor, ActorFutureExt, ActorScope, ExitReason, Handler, IntoActorFuture, IntoReply, Message,
-    ReplyExt, Shutdown, spawn,
-};
+use loong_actor::{ExitReason, Shutdown, prelude::*, spawn};
 use tokio::sync::oneshot;
 
 struct Counter(u64);

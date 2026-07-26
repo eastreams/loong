@@ -23,6 +23,8 @@
 //! form cycles. [`ActorScope::myself`] documents self-call progress and deadlock
 //! boundaries; use [`ActorFutureExt::map`] or [`ActorFutureExt::then`] for
 //! consecutive actor-local work that does not require a mailbox boundary.
+//! [`prelude`] collects the traits and context needed to define actors; runtime
+//! ownership, lifecycle controls, addresses, and errors remain explicit imports.
 
 use std::{future::Future, pin::Pin};
 
@@ -43,6 +45,18 @@ pub use future::{ActorFuture, ActorFutureExt, FutureActor, IntoActorFuture, Map,
 pub use reply::{IntoReply, ReplyExt};
 pub use runtime::{ActorOwner, ActorScope, SpawnOptions, spawn, spawn_with};
 pub use supervision::{Child, ChildExit, ChildId, ExitReason, Shutdown, ShutdownStatus};
+
+/// Common traits and types for defining actors and handlers.
+///
+/// This prelude deliberately stops at the actor definition boundary. Runtime
+/// entry points, ownership handles, lifecycle controls, addresses, and errors
+/// remain explicit imports so operational behavior stays visible at call sites.
+pub mod prelude {
+    pub use crate::{
+        Actor, ActorFuture, ActorFutureExt, ActorScope, Handler, IntoActorFuture, IntoReply,
+        Message, ReplyExt, reply,
+    };
+}
 
 // Heap type erasure is confined to heterogeneous scheduler/mailbox ownership
 // and the once-per-actor task wrapper. Public reply construction stays generic.

@@ -18,9 +18,7 @@ The crate is an early MVP. Its current contract is deliberately narrow:
   a running synchronous handler, a poll call that never returns, or user `Drop`.
 
 ```rust
-use loong_actor::{
-    Actor, ActorScope, ExitReason, Handler, IntoReply, Message, ReplyExt, Shutdown, spawn,
-};
+use loong_actor::{ExitReason, Shutdown, prelude::*, spawn};
 
 struct Counter(u64);
 
