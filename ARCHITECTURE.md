@@ -67,11 +67,18 @@ authorize execution, and it is not a second proof.
 
 ## Runtime Actor Model
 
-The temporary runtime conclusion follows Actix's `Actor`/`Addr`/`Context` and
-poll-time `ResponseActFuture` model. This fixes the ownership and reentrancy
-model for continued design without yet making Actix a stable public dependency.
-See [Open Architecture Questions](docs/open-questions.md) for the exact temporary
-boundary and the product semantics that remain open.
+[`loong-actor`](crates/actor/src/lib.rs) implements the Tokio actor contract:
+bounded mailbox admission, an independent `max_in_flight` limit, separate
+`ActorRef` and `ActorOwner` roles, actor-owned child lifecycles,
+ready/owned/interleaved/exclusive reply scheduling, and Stop/Drain/Kill
+termination. This settles actor-local ownership and scheduling, not product
+`Session` ownership or `Turn`/`Step` semantics.
+
+[`loong-kernel`](crates/kernel/src/lib.rs) still contains an Actix prototype that
+has not migrated to this runtime. It is not a second supported actor model. The
+owner of each root actor tree, and how that ownership relates to product session
+lifecycle, remain open questions; migration must not hide those gaps behind a
+compatibility facade. See [Open Architecture Questions](docs/open-questions.md).
 
 ## Open Questions
 
