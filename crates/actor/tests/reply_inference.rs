@@ -75,19 +75,23 @@ impl Handler<Read> for SecondActor {
 
 #[tokio::test]
 async fn handler_context_selects_the_actor_future_implementation() {
+    // One concrete future implements ActorFuture for both actors. Driving both
+    // handlers in one expression ensures each IntoReply context selects its
+    // actor-specific implementation without an explicit type annotation.
     let first_owner = spawn(FirstActor(1));
     let second_owner = spawn(SecondActor(2));
     let first = first_owner.actor_ref();
     let second = second_owner.actor_ref();
 
-    assert_eq!(watchdog(first.call(Read)).await, Ok(1));
-    assert_eq!(watchdog(second.call(Read)).await, Ok(2));
-    assert_eq!(
-        watchdog(first_owner.shutdown(Shutdown::Stop)).await,
-        ExitReason::Stopped
+    let (first_reply, second_reply) =
+        tokio::join!(watchdog(first.call(Read)), watchdog(second.call(Read)),);
+    assert_eq!(first_reply, Ok(1));
+    assert_eq!(second_reply, Ok(2));
+
+    let (first_exit, second_exit) = tokio::join!(
+        watchdog(first_owner.shutdown(Shutdown::Stop)),
+        watchdog(second_owner.shutdown(Shutdown::Stop)),
     );
-    assert_eq!(
-        watchdog(second_owner.shutdown(Shutdown::Stop)).await,
-        ExitReason::Stopped
-    );
+    assert_eq!(first_exit, ExitReason::Stopped);
+    assert_eq!(second_exit, ExitReason::Stopped);
 }
