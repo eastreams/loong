@@ -1,99 +1,21 @@
+#[path = "lifecycle/fixtures.rs"]
+mod fixtures;
 mod support;
 
 use std::{
     future::{Future, poll_fn},
     num::NonZeroUsize,
-    sync::{Arc, Barrier, Mutex},
+    sync::{Arc, Barrier},
 };
 
 use loong_actor::{
-    Actor, ActorFutureExt, ActorScope, CallError, ExitReason, Handler, IntoActorFuture, Message,
-    ReplyExt, Shutdown, ShutdownStatus, SpawnOptions, TryCallErrorKind, spawn, spawn_with,
+    Actor, ActorScope, CallError, ExitReason, Handler, IntoActorFuture, Message, ReplyExt, Shutdown,
+    ShutdownStatus, SpawnOptions, TryCallErrorKind, spawn, spawn_with,
 };
 use tokio::sync::oneshot;
 
+use fixtures::{DropSignal, LifecycleActor, LifecycleHarness, Step, actor_with_capacity};
 use support::{lock, watchdog};
-
-struct LifecycleActor {
-    handled: Arc<Mutex<Vec<u8>>>,
-    cleanup: Arc<Mutex<Vec<ExitReason>>>,
-}
-
-impl Actor for LifecycleActor {
-    async fn on_stop(&mut self, reason: ExitReason, _scope: &mut ActorScope<Self>) {
-        lock(&self.cleanup).push(reason);
-    }
-}
-
-struct Step {
-    id: u8,
-    entered: Option<oneshot::Sender<()>>,
-    release: Option<oneshot::Receiver<()>>,
-}
-
-impl Step {
-    fn immediate(id: u8) -> Self {
-        Self {
-            id,
-            entered: None,
-            release: None,
-        }
-    }
-}
-
-impl Message for Step {
-    type Reply = u8;
-}
-
-impl Handler<Step> for LifecycleActor {
-    fn handle(
-        &mut self,
-        mut message: Step,
-        _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, Step> + use<> {
-        async move {
-            if let Some(entered) = message.entered.take() {
-                let _ = entered.send(());
-            }
-            if let Some(release) = message.release.take() {
-                let _ = release.await;
-            }
-            message.id
-        }
-        .into_actor()
-        .map(|id, actor: &mut Self, _scope| {
-            lock(&actor.handled).push(id);
-            id
-        })
-        .exclusive()
-    }
-}
-
-struct LifecycleHarness {
-    owner: loong_actor::ActorOwner<LifecycleActor>,
-    handled: Arc<Mutex<Vec<u8>>>,
-    cleanup: Arc<Mutex<Vec<ExitReason>>>,
-}
-
-fn actor_with_capacity(capacity: usize) -> LifecycleHarness {
-    let handled = Arc::new(Mutex::new(Vec::new()));
-    let cleanup = Arc::new(Mutex::new(Vec::new()));
-    let actor = LifecycleActor {
-        handled: handled.clone(),
-        cleanup: cleanup.clone(),
-    };
-    let owner = spawn_with(
-        actor,
-        SpawnOptions::default()
-            .with_mailbox_capacity(NonZeroUsize::new(capacity).expect("test capacity is non-zero"))
-            .with_max_in_flight(NonZeroUsize::new(1).expect("one is non-zero")),
-    );
-    LifecycleHarness {
-        owner,
-        handled,
-        cleanup,
-    }
-}
 
 #[tokio::test]
 async fn stop_finishes_current_and_cancels_queued_messages() {
@@ -300,16 +222,6 @@ async fn shutdown_requests_after_exit_report_the_published_reason() {
                 owner.request_shutdown(requested),
                 ShutdownStatus::Exited(expected_reason)
             );
-        }
-    }
-}
-
-struct DropSignal(Option<oneshot::Sender<()>>);
-
-impl Drop for DropSignal {
-    fn drop(&mut self) {
-        if let Some(signal) = self.0.take() {
-            let _ = signal.send(());
         }
     }
 }
