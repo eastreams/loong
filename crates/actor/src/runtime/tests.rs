@@ -1,15 +1,17 @@
 use std::{
     num::NonZeroUsize,
+    pin::Pin,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
+    task::{Context, Poll},
 };
 
 use tokio::sync::mpsc;
 
 use crate::{
-    Actor, ActorRef, ActorScope, ChildExit, ChildId, ExitReason, IntoActorFuture,
+    Actor, ActorFuture, ActorRef, ActorScope, ChildExit, ChildId, ExitReason, IntoActorFuture,
     mailbox::{ActorMailbox, DynEnvelope, Envelope, Mode},
     scheduler::ReplyScheduler,
 };
@@ -19,6 +21,22 @@ use super::{ChildSet, Turn, TurnCursor, actor_turn};
 struct TestActor;
 
 impl Actor for TestActor {}
+
+struct CountPendingExclusive(Arc<AtomicUsize>);
+
+impl ActorFuture<TestActor> for CountPendingExclusive {
+    type Output = ();
+
+    fn poll(
+        self: Pin<&mut Self>,
+        _actor: &mut TestActor,
+        _scope: &mut ActorScope<TestActor>,
+        _task: &mut Context<'_>,
+    ) -> Poll<Self::Output> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Poll::Pending
+    }
+}
 
 struct CountEnvelope(Arc<AtomicUsize>);
 
@@ -122,4 +140,47 @@ async fn ordinary_cursor_visits_all_eligible_classes_before_repeating_mailbox() 
     assert!(interleaved_completed.load(Ordering::SeqCst));
     assert_eq!(mailbox_dispatches.load(Ordering::SeqCst), 1);
     assert_eq!(inbox.len(), 4);
+}
+
+#[tokio::test]
+async fn exclusive_progresses_while_owned_replies_keep_completing() {
+    // A fixed owned-first order would return after each ready owned reply and
+    // never poll the continuously eligible exclusive reply.
+    let (mailbox, mut inbox) = ActorMailbox::<TestActor>::channel(1);
+    let control = Arc::clone(&mailbox.control);
+    let actor_ref = ActorRef::new(Arc::downgrade(&mailbox), control.subscribe_mode());
+    let (supervisor_tx, mut supervisor_rx) = mpsc::unbounded_channel();
+    let mut scope = ActorScope {
+        actor_ref,
+        control: Arc::clone(&control),
+        children: ChildSet::default(),
+        accepts_children: true,
+        supervisor_tx,
+    };
+    let exclusive_polls = Arc::new(AtomicUsize::new(0));
+    let mut scheduler = ReplyScheduler::new(NonZeroUsize::new(2).unwrap());
+    scheduler.push_exclusive(CountPendingExclusive(Arc::clone(&exclusive_polls)));
+    let mut actor = TestActor;
+    let mut mode = control.subscribe_mode();
+    let mut cursor = TurnCursor::default();
+
+    for expected_polls in 1..=4 {
+        scheduler.push_owned(std::future::ready(()));
+        assert!(matches!(
+            actor_turn(
+                &mut actor,
+                &mut scope,
+                &mut inbox,
+                &mut supervisor_rx,
+                &mut mode,
+                &mut scheduler,
+                true,
+                Mode::Running,
+                &mut cursor,
+            )
+            .await,
+            Turn::ReplyProgress
+        ));
+        assert_eq!(exclusive_polls.load(Ordering::SeqCst), expected_polls);
+    }
 }
