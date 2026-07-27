@@ -319,6 +319,38 @@ impl Handler<Interruptible> for LifecycleActor {
     }
 }
 
+struct KillBeforeReady;
+
+impl Message for KillBeforeReady {
+    type Reply = ();
+}
+
+impl Handler<KillBeforeReady> for LifecycleActor {
+    fn handle(
+        &mut self,
+        _message: KillBeforeReady,
+        scope: &mut ActorScope<Self>,
+    ) -> impl loong_actor::IntoReply<Self, KillBeforeReady> + use<> {
+        assert_eq!(
+            scope.request_shutdown(Shutdown::Kill),
+            ShutdownStatus::Requested
+        );
+        ().ready()
+    }
+}
+
+#[tokio::test]
+async fn kill_before_ready_completion_reports_the_dispatching_phase() {
+    let mut owner = actor_with_capacity(1).owner;
+    let actor = owner.actor_ref();
+
+    assert_eq!(
+        watchdog(actor.call(KillBeforeReady)).await,
+        Err(CallError::DuringDispatch(ExitReason::Killed))
+    );
+    assert_eq!(watchdog(owner.wait()).await, ExitReason::Killed);
+}
+
 #[tokio::test]
 async fn kill_drops_current_and_queued_work_without_cleanup() {
     let LifecycleHarness {
