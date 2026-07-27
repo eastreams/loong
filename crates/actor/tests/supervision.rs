@@ -4,10 +4,11 @@ use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
+use std::task::Poll;
 
 use loong_actor::{
-    Actor, ActorRef, ActorScope, CallError, ChildExit, ExitReason, Handler, Message, Shutdown,
-    reply, spawn,
+    Actor, ActorRef, ActorScope, CallError, ChildExit, ExitReason, Handler, IntoActorFuture,
+    Message, Shutdown, reply, spawn,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -90,6 +91,34 @@ impl Handler<Observed> for Supervisor {
     }
 }
 
+struct ChildExitBarrier;
+
+impl Message for ChildExitBarrier {
+    type Reply = ();
+}
+
+impl Handler<ChildExitBarrier> for Supervisor {
+    fn handle(
+        &mut self,
+        _message: ChildExitBarrier,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loong_actor::IntoReply<Self, ChildExitBarrier> + use<> {
+        let mut yielded = false;
+        reply::interleaved(
+            std::future::poll_fn(move |task| {
+                if yielded {
+                    Poll::Ready(())
+                } else {
+                    yielded = true;
+                    task.waker().wake_by_ref();
+                    Poll::Pending
+                }
+            })
+            .into_actor(),
+        )
+    }
+}
+
 fn spawn_supervisor() -> (
     loong_actor::ActorOwner<Supervisor>,
     oneshot::Receiver<ActorRef<ChildActor>>,
@@ -105,7 +134,7 @@ fn spawn_supervisor() -> (
     (owner, child_rx, events_rx)
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn clean_child_exit_is_reported_exactly_once() {
     let (owner, child_rx, mut events) = spawn_supervisor();
     let supervisor = owner.actor_ref();
@@ -116,9 +145,9 @@ async fn clean_child_exit_is_reported_exactly_once() {
     assert_eq!(event.reason(), ExitReason::Stopped);
     assert_eq!(watchdog(child.closed()).await, ExitReason::Stopped);
 
-    // Receiving `event` proves its hook already updated the parent. Child exits
-    // and mailbox work otherwise share fair scheduling; this call only confirms
-    // the parent remains responsive with the recorded state.
+    // The barrier remains pending across a child-exit scheduling opportunity, so
+    // a duplicate queued behind the first hook cannot hide behind mailbox work.
+    assert_eq!(watchdog(supervisor.call(ChildExitBarrier)).await, Ok(()));
     assert_eq!(watchdog(supervisor.call(Observed)).await.unwrap(), 1);
     assert!(events.try_recv().is_err());
     assert_eq!(
