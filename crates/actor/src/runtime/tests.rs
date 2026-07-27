@@ -6,7 +6,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
-    task::{Context, Poll},
+    task::{Context, Poll, Waker},
 };
 
 use tokio::sync::mpsc;
@@ -18,7 +18,10 @@ use crate::{
     scheduler::ReplyScheduler,
 };
 
-use super::{ChildSet, Turn, TurnCursor, actor_turn, kill_actor, spawn_actor};
+use super::{
+    ChildSet, DiscardOutcome, TEARDOWN_DROP_BUDGET, Turn, TurnCursor, actor_turn,
+    close_and_discard, kill_actor, spawn_actor,
+};
 
 struct TestActor;
 
@@ -94,6 +97,39 @@ impl Envelope<TestActor> for ChildKillDropProbe {
         _scheduler: &mut ReplyScheduler<TestActor>,
     ) {
         unreachable!("Kill discards queued envelopes")
+    }
+}
+
+enum TeardownEnvelope {
+    Noop,
+    RequestKill(Arc<Control>),
+    MarkDropped(Arc<AtomicBool>),
+}
+
+impl Drop for TeardownEnvelope {
+    fn drop(&mut self) {
+        match self {
+            Self::Noop => {}
+            Self::RequestKill(control) => {
+                control.request(Shutdown::Kill);
+            }
+            Self::MarkDropped(observed) => observed.store(true, Ordering::SeqCst),
+        }
+    }
+}
+
+impl Envelope<TestActor> for TeardownEnvelope {
+    fn is_abandoned(&self) -> bool {
+        false
+    }
+
+    fn dispatch(
+        self: Box<Self>,
+        _actor: &mut TestActor,
+        _scope: &mut ActorScope<TestActor>,
+        _scheduler: &mut ReplyScheduler<TestActor>,
+    ) {
+        unreachable!("teardown discards queued envelopes")
     }
 }
 
@@ -229,6 +265,9 @@ async fn exclusive_progresses_while_owned_replies_keep_completing() {
 
 #[tokio::test]
 async fn child_kill_commits_before_actor_work_is_dropped() {
+    // Active replies and queued envelopes may both run arbitrary destructors.
+    // Observing the child mode from each Drop rejects any teardown that merely
+    // waits for children after clearing local work instead of cancelling first.
     let (_child_ref, child) = spawn_actor(TestActor, SpawnOptions::default(), None);
     let child_control = Arc::clone(&child.control);
     let mut children = ChildSet::default();
@@ -270,4 +309,81 @@ async fn child_kill_commits_before_actor_work_is_dropped() {
     );
     assert!(active_observed_kill.load(Ordering::SeqCst));
     assert!(queued_observed_kill.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn stop_discard_observes_kill_from_each_envelope_drop() {
+    // The first destructor upgrades Stop to Kill. Leaving the second envelope
+    // queued proves teardown observes the transition between individual Drops,
+    // before hard teardown takes ownership of the remaining work.
+    let (mailbox, mut inbox) = ActorMailbox::<TestActor>::channel(2);
+    let second_dropped = Arc::new(AtomicBool::new(false));
+    mailbox
+        .sender
+        .try_send(Box::new(TeardownEnvelope::RequestKill(Arc::clone(
+            &mailbox.control,
+        ))))
+        .unwrap();
+    mailbox
+        .sender
+        .try_send(Box::new(TeardownEnvelope::MarkDropped(Arc::clone(
+            &second_dropped,
+        ))))
+        .unwrap();
+    assert_eq!(
+        mailbox.control.request(Shutdown::Stop),
+        ShutdownStatus::Requested
+    );
+
+    assert_eq!(
+        close_and_discard(&mut inbox, &mailbox.control, Mode::Stopping).await,
+        DiscardOutcome::ModeChanged
+    );
+    assert_eq!(mailbox.control.mode(), Mode::Killing);
+    assert!(!second_dropped.load(Ordering::SeqCst));
+    assert_eq!(inbox.len(), 1);
+
+    assert_eq!(
+        close_and_discard(&mut inbox, &mailbox.control, Mode::Killing).await,
+        DiscardOutcome::Complete
+    );
+    assert!(second_dropped.load(Ordering::SeqCst));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn queued_discard_yields_after_its_fixed_drop_budget() {
+    // One manual poll must stop before the seventeenth Drop, and the next must
+    // complete it. This locks the exact cooperative boundary while rejecting
+    // both an unbounded drain and an implementation that yields too frequently.
+    let (mailbox, mut inbox) = ActorMailbox::<TestActor>::channel(TEARDOWN_DROP_BUDGET + 1);
+    for _ in 0..TEARDOWN_DROP_BUDGET {
+        mailbox
+            .sender
+            .try_send(Box::new(TeardownEnvelope::Noop))
+            .unwrap();
+    }
+
+    let last_dropped = Arc::new(AtomicBool::new(false));
+    mailbox
+        .sender
+        .try_send(Box::new(TeardownEnvelope::MarkDropped(Arc::clone(
+            &last_dropped,
+        ))))
+        .unwrap();
+    assert_eq!(
+        mailbox.control.request(Shutdown::Stop),
+        ShutdownStatus::Requested
+    );
+
+    let discard = close_and_discard(&mut inbox, &mailbox.control, Mode::Stopping);
+    tokio::pin!(discard);
+    let mut task = Context::from_waker(Waker::noop());
+
+    assert_eq!(discard.as_mut().poll(&mut task), Poll::Pending);
+    assert!(!last_dropped.load(Ordering::SeqCst));
+    assert_eq!(
+        discard.as_mut().poll(&mut task),
+        Poll::Ready(DiscardOutcome::Complete)
+    );
+    assert!(last_dropped.load(Ordering::SeqCst));
 }

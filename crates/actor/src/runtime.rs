@@ -749,7 +749,17 @@ async fn stop_actor<A: Actor>(
     mode: &mut watch::Receiver<Mode>,
     scheduler: &mut ReplyScheduler<A>,
 ) -> ExitReason {
-    close_and_discard(inbox);
+    match close_and_discard(inbox, &scope.control, Mode::Stopping).await {
+        DiscardOutcome::Complete => {}
+        DiscardOutcome::ModeChanged => match scope.control.mode() {
+            Mode::Killing => return kill_actor(scope, inbox, scheduler).await,
+            Mode::Failing => return fail_actor(scope, inbox, scheduler).await,
+            // Lifecycle cannot return to a graceful mode. Aborting and Exited
+            // belong to ActorTask's outer drop/publication path, which cannot
+            // repoll this inner future after committing either state.
+            mode => unreachable!("stop discard observed impossible mode: {mode:?}"),
+        },
+    }
     match finish_replies(actor, scope, scheduler, mode).await {
         Work::Complete(()) => {}
         Work::Killed => return kill_actor(scope, inbox, scheduler).await,
@@ -919,7 +929,13 @@ async fn kill_actor<A: Actor>(
     inbox.close();
     scope.children.request_all(Shutdown::Kill);
     scheduler.clear();
-    close_and_discard(inbox);
+    let mut expected_mode = Mode::Killing;
+    loop {
+        match close_and_discard(inbox, &scope.control, expected_mode).await {
+            DiscardOutcome::Complete => break,
+            DiscardOutcome::ModeChanged => expected_mode = scope.control.mode(),
+        }
+    }
     scope.children.wait_all().await;
     ExitReason::Killed
 }
@@ -940,14 +956,58 @@ async fn fail_actor<A: Actor>(
     inbox.close();
     scope.children.request_all(Shutdown::Kill);
     scheduler.clear();
-    close_and_discard(inbox);
+    let mut expected_mode = control.mode();
+    loop {
+        match close_and_discard(inbox, &control, expected_mode).await {
+            DiscardOutcome::Complete => break,
+            DiscardOutcome::ModeChanged => expected_mode = control.mode(),
+        }
+    }
     scope.children.wait_all().await;
     reason
 }
 
-fn close_and_discard<A: Actor>(inbox: &mut mpsc::Receiver<DynEnvelope<A>>) {
+const TEARDOWN_DROP_BUDGET: usize = 16;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiscardOutcome {
+    Complete,
+    ModeChanged,
+}
+
+/// Closes the inbox and drops its accepted envelopes in bounded batches.
+///
+/// Each envelope may run arbitrary user destructors. The lifecycle mode is
+/// checked before selecting a value and again after dropping it, so a transition
+/// returns [`DiscardOutcome::ModeChanged`] before another value is selected.
+/// Every uninterrupted mode pass yields after [`TEARDOWN_DROP_BUDGET`] drops so
+/// a large accepted queue cannot monopolize a current-thread executor.
+async fn close_and_discard<A: Actor>(
+    inbox: &mut mpsc::Receiver<DynEnvelope<A>>,
+    control: &Control,
+    expected_mode: Mode,
+) -> DiscardOutcome {
     inbox.close();
-    while inbox.try_recv().is_ok() {}
+    let mut dropped = 0;
+    loop {
+        if control.mode() != expected_mode {
+            return DiscardOutcome::ModeChanged;
+        }
+
+        let Ok(envelope) = inbox.try_recv() else {
+            return DiscardOutcome::Complete;
+        };
+        drop(envelope);
+
+        if control.mode() != expected_mode {
+            return DiscardOutcome::ModeChanged;
+        }
+        dropped += 1;
+        if dropped == TEARDOWN_DROP_BUDGET {
+            dropped = 0;
+            tokio::task::yield_now().await;
+        }
+    }
 }
 
 #[cfg(test)]
