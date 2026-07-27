@@ -13,8 +13,8 @@ use std::{
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use loong_actor::{
-    Actor, ActorOwner, ActorRef, ActorScope, ExitReason, Handler, Message, ReplyExt, Response,
-    Shutdown, SpawnOptions, TryCallErrorKind, spawn_with,
+    Actor, ActorOwner, ActorRef, ActorScope, ExitReason, Handler, Message, Response, Shutdown,
+    SpawnOptions, TryCallErrorKind, reply, spawn_with,
 };
 
 const MAILBOX_CAPACITIES: [usize; 3] = [1, 32, 256];
@@ -35,7 +35,7 @@ impl Handler<ReadyTraffic> for MailboxActor {
         _message: ReadyTraffic,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, ReadyTraffic> + use<> {
-        ().ready()
+        reply::ready(())
     }
 }
 

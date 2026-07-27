@@ -6,8 +6,8 @@ and a Ractor-style supervision tree.
 
 The crate is an early MVP. Its current contract is deliberately narrow:
 
-- handlers synchronously choose an immediate ready value, a bare `Future` for
-  owned scheduling, or an `interleaved`/`exclusive` actor-aware reply;
+- handlers synchronously choose `ready`, `owned`, `interleaved`, or `exclusive`
+  reply scheduling;
 - dispatched work is bounded independently from mailbox capacity;
 - `ActorRef` values communicate but do not own actor lifetimes;
 - the unique `ActorOwner` controls root lifetime;
@@ -37,7 +37,7 @@ impl Handler<Add> for Counter {
         _scope: &mut ActorScope<Self>,
     ) -> impl IntoReply<Self, Add> + use<> {
         self.0 += message.0;
-        self.0.ready()
+        reply::ready(self.0)
     }
 }
 

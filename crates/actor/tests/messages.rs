@@ -9,7 +9,7 @@ use std::{
 
 use loong_actor::{
     Actor, ActorFutureExt, ActorScope, CallError, ExitReason, Handler, IntoActorFuture, Message,
-    ReplyExt, Shutdown, SpawnOptions, TryCallErrorKind, spawn, spawn_with,
+    Shutdown, SpawnOptions, TryCallErrorKind, reply, spawn, spawn_with,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -32,7 +32,7 @@ impl Handler<Add> for Calculator {
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, Add> + use<> {
         self.0 += message.0;
-        self.0.ready()
+        reply::ready(self.0)
     }
 }
 
@@ -48,7 +48,7 @@ impl Handler<Describe> for Calculator {
         _message: Describe,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, Describe> + use<> {
-        format!("count={}", self.0).ready()
+        reply::ready(format!("count={}", self.0))
     }
 }
 
@@ -81,7 +81,7 @@ impl Handler<Events> for Calculator {
         let (events, receiver) = mpsc::channel(2);
         events.try_send(1).expect("the stream buffer has room");
         events.try_send(2).expect("the stream buffer has room");
-        receiver.ready()
+        reply::ready(receiver)
     }
 }
 
@@ -122,12 +122,13 @@ impl Handler<Block> for SerialActor {
         message: Block,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, Block> + use<> {
-        async move {
-            let _ = message.entered.send(());
-            let _ = message.release.await;
-        }
-        .into_actor()
-        .exclusive()
+        reply::exclusive(
+            async move {
+                let _ = message.entered.send(());
+                let _ = message.release.await;
+            }
+            .into_actor(),
+        )
     }
 }
 
@@ -144,7 +145,7 @@ impl Handler<Record> for SerialActor {
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, Record> + use<> {
         lock(&self.committed).push(message.0);
-        message.0.ready()
+        reply::ready(message.0)
     }
 }
 
@@ -160,7 +161,7 @@ impl Handler<Snapshot> for SerialActor {
         _message: Snapshot,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, Snapshot> + use<> {
-        lock(&self.committed).clone().ready()
+        reply::ready(lock(&self.committed).clone())
     }
 }
 
@@ -254,16 +255,17 @@ impl Handler<CommitAfterRelease> for SerialActor {
         message: CommitAfterRelease,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, CommitAfterRelease> + use<> {
-        async move {
-            let _ = message.entered.send(());
-            let _ = message.release.await;
-            message.value
-        }
-        .into_actor()
-        .map(|value, actor: &mut Self, _scope| {
-            lock(&actor.committed).push(value);
-        })
-        .exclusive()
+        reply::exclusive(
+            async move {
+                let _ = message.entered.send(());
+                let _ = message.release.await;
+                message.value
+            }
+            .into_actor()
+            .map(|value, actor: &mut Self, _scope| {
+                lock(&actor.committed).push(value);
+            }),
+        )
     }
 }
 

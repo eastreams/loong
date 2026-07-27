@@ -5,10 +5,9 @@
 //! Typed local actors with bounded mailboxes and structured supervision.
 //!
 //! Implement [`Actor`] and a typed [`Handler`] for each accepted [`Message`]. A
-//! handler synchronously selects its reply scheduling semantics: a bare
-//! [`Future`] uses owned scheduling, while the [`reply`] module provides ready
-//! and actor-aware strategies. That module documents actor borrowing, fairness,
-//! in-flight capacity, panic, and Kill behavior.
+//! handler synchronously selects its scheduling semantics through the [`reply`]
+//! constructors; that module documents actor borrowing, fairness, in-flight
+//! capacity, panic, and Kill behavior.
 //!
 //! Use [`ActorRef::call`] for admission with backpressure or
 //! [`ActorRef::try_call`] for immediate admission with message recovery. Request
@@ -42,7 +41,7 @@ pub use actor::{Actor, Handler, Message};
 pub use address::{ActorRef, Response};
 pub use error::{CallError, SpawnChildError, TryCallError, TryCallErrorKind};
 pub use future::{ActorFuture, ActorFutureExt, FutureActor, IntoActorFuture, Map, Then};
-pub use reply::{IntoReply, ReplyExt};
+pub use reply::IntoReply;
 pub use runtime::{ActorOwner, ActorScope, SpawnOptions, spawn, spawn_with};
 pub use supervision::{Child, ChildExit, ChildId, ExitReason, Shutdown, ShutdownStatus};
 
@@ -54,7 +53,7 @@ pub use supervision::{Child, ChildExit, ChildId, ExitReason, Shutdown, ShutdownS
 pub mod prelude {
     pub use crate::{
         Actor, ActorFuture, ActorFutureExt, ActorScope, Handler, IntoActorFuture, IntoReply,
-        Message, ReplyExt, reply,
+        Message, reply,
     };
 }
 

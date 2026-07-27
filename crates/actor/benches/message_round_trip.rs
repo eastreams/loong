@@ -1,9 +1,7 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use loong_actor::{
-    Actor, ActorScope, Handler, IntoActorFuture, Message, ReplyExt, Shutdown, spawn,
-};
+use loong_actor::{Actor, ActorScope, Handler, IntoActorFuture, Message, Shutdown, reply, spawn};
 
 struct ReplyActor;
 
@@ -21,7 +19,7 @@ impl Handler<Ready> for ReplyActor {
         _message: Ready,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, Ready> + use<> {
-        1.ready()
+        reply::ready(1)
     }
 }
 
@@ -37,7 +35,7 @@ impl Handler<Owned> for ReplyActor {
         _message: Owned,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, Owned> + use<> {
-        async { 1 }
+        reply::owned(async { 1 })
     }
 }
 
@@ -53,7 +51,7 @@ impl Handler<Interleaved> for ReplyActor {
         _message: Interleaved,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, Interleaved> + use<> {
-        std::future::ready(1).into_actor().interleaved()
+        reply::interleaved(std::future::ready(1).into_actor())
     }
 }
 
@@ -69,7 +67,7 @@ impl Handler<Exclusive> for ReplyActor {
         _message: Exclusive,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, Exclusive> + use<> {
-        std::future::ready(1).into_actor().exclusive()
+        reply::exclusive(std::future::ready(1).into_actor())
     }
 }
 

@@ -33,7 +33,7 @@ impl Handler<Ready> for ReplyActor {
         _message: Ready,
         _scope: &mut ActorScope<Self>,
     ) -> impl IntoReply<Self, Ready> + use<> {
-        1.ready()
+        reply::ready(1)
     }
 }
 
@@ -51,7 +51,7 @@ impl Handler<Owned> for ReplyActor {
     ) -> impl IntoReply<Self, Owned> + use<> {
         // Match the actor-aware modes' concrete base future so byte counts
         // reflect reply wrappers and scheduler ownership, not payload layout.
-        std::future::ready(1)
+        reply::owned(std::future::ready(1))
     }
 }
 
@@ -67,7 +67,7 @@ impl Handler<Interleaved> for ReplyActor {
         _message: Interleaved,
         _scope: &mut ActorScope<Self>,
     ) -> impl IntoReply<Self, Interleaved> + use<> {
-        std::future::ready(1).into_actor().interleaved()
+        reply::interleaved(std::future::ready(1).into_actor())
     }
 }
 
@@ -83,7 +83,7 @@ impl Handler<Exclusive> for ReplyActor {
         _message: Exclusive,
         _scope: &mut ActorScope<Self>,
     ) -> impl IntoReply<Self, Exclusive> + use<> {
-        std::future::ready(1).into_actor().exclusive()
+        reply::exclusive(std::future::ready(1).into_actor())
     }
 }
 

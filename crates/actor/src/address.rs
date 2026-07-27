@@ -39,7 +39,7 @@ impl<A: Actor> ActorRef<A> {
     /// have one commit point. Completion first returns `Ok`, even if Kill follows
     /// immediately. Kill, panic, or executor teardown first returns
     /// [`CallError::DuringDispatch`], including when the handler selected
-    /// [`ReplyExt::ready`](crate::ReplyExt::ready).
+    /// [`reply::ready`](crate::reply::ready).
     ///
     /// This method has no built-in deadline and can wait indefinitely while a
     /// running actor or its mailbox makes no progress. An external timeout drops

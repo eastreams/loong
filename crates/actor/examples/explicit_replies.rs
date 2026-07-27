@@ -21,9 +21,9 @@ impl Handler<Lookup> for Store {
         _scope: &mut ActorScope<Self>,
     ) -> impl IntoReply<Self, Lookup> + use<> {
         if let Some(&value) = self.cache.get(&message.0) {
-            reply::Either::Left(value.ready())
+            reply::Either::Left(reply::ready(value))
         } else {
-            reply::Either::Right(load_value(message.0))
+            reply::Either::Right(reply::owned(load_value(message.0)))
         }
     }
 }

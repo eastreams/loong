@@ -2,7 +2,7 @@ use std::num::NonZeroUsize;
 
 use loong_actor::{
     Actor, ActorScope, CallError, ExitReason, Handler, Message, Shutdown, ShutdownStatus,
-    SpawnOptions, TryCallErrorKind, spawn_with,
+    SpawnOptions, TryCallErrorKind, reply, spawn_with,
 };
 use tokio::sync::oneshot;
 
@@ -120,11 +120,11 @@ impl Handler<OwnedDrainStep> for OwnedDrainActor {
         message: OwnedDrainStep,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, OwnedDrainStep> + use<> {
-        async move {
+        reply::owned(async move {
             let _ = message.entered.send(());
             let _ = message.release.await;
             message.id
-        }
+        })
     }
 }
 

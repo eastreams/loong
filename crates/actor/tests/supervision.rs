@@ -6,8 +6,8 @@ use std::sync::{
 };
 
 use loong_actor::{
-    Actor, ActorRef, ActorScope, CallError, ChildExit, ExitReason, Handler, Message, ReplyExt,
-    Shutdown, spawn,
+    Actor, ActorRef, ActorScope, CallError, ChildExit, ExitReason, Handler, Message, Shutdown,
+    reply, spawn,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -30,7 +30,7 @@ impl Handler<StopSelf> for ChildActor {
         scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, StopSelf> + use<> {
         scope.request_shutdown(Shutdown::Stop);
-        ().ready()
+        reply::ready(())
     }
 }
 
@@ -48,7 +48,7 @@ impl Handler<PanicSelf> for ChildActor {
     ) -> impl loong_actor::IntoReply<Self, PanicSelf> + use<> {
         panic!("intentional child panic");
         #[allow(unreachable_code)]
-        ().ready()
+        reply::ready(())
     }
 }
 
@@ -86,7 +86,7 @@ impl Handler<Observed> for Supervisor {
         _message: Observed,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, Observed> + use<> {
-        self.observed.load(Ordering::SeqCst).ready()
+        reply::ready(self.observed.load(Ordering::SeqCst))
     }
 }
 

@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use loong_actor::{
     Actor, ActorRef, ActorScope, CallError, ExitReason, Handler, IntoActorFuture, Message,
-    ReplyExt, Shutdown, ShutdownStatus, spawn,
+    Shutdown, ShutdownStatus, reply, spawn,
 };
 use tokio::sync::oneshot;
 
@@ -82,7 +82,7 @@ impl Handler<ParentPing> for LogParent {
         _message: ParentPing,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, ParentPing> + use<> {
-        ().ready()
+        reply::ready(())
     }
 }
 
@@ -109,7 +109,7 @@ impl Handler<Work> for Worker {
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, Work> + use<> {
         lock(&self.log).push(format!("work-{}", message.0));
-        message.0.ready()
+        reply::ready(message.0)
     }
 }
 
@@ -153,12 +153,13 @@ impl Handler<ParentBlock> for DrainParent {
         message: ParentBlock,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, ParentBlock> + use<> {
-        async move {
-            let _ = message.entered.send(());
-            let _ = message.release.await;
-        }
-        .into_actor()
-        .exclusive()
+        reply::exclusive(
+            async move {
+                let _ = message.entered.send(());
+                let _ = message.release.await;
+            }
+            .into_actor(),
+        )
     }
 }
 
@@ -179,7 +180,7 @@ impl Handler<Forward> for DrainParent {
             .as_ref()
             .expect("on_start installs the worker")
             .clone();
-        async move { worker.call(Work(message.0)).await }
+        reply::owned(async move { worker.call(Work(message.0)).await })
     }
 }
 
@@ -302,7 +303,7 @@ impl Handler<PanicTree> for PanicParent {
     ) -> impl loong_actor::IntoReply<Self, PanicTree> + use<> {
         panic!("intentional parent panic");
         #[allow(unreachable_code)]
-        ().ready()
+        reply::ready(())
     }
 }
 

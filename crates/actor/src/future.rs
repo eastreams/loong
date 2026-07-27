@@ -22,8 +22,8 @@ use crate::{Actor, ActorScope};
 ///
 /// An actor future does not choose its own scheduling mode. It remains inert
 /// until polled directly or returned through a reply wrapper such as
-/// [`crate::ReplyExt::interleaved`] or [`crate::ReplyExt::exclusive`]. Both
-/// wrappers support actor futures that are not `Unpin`.
+/// [`crate::reply::interleaved`] or [`crate::reply::exclusive`]. Both wrappers
+/// support actor futures that are not `Unpin`.
 #[must_use = "actor futures do nothing unless scheduled or polled"]
 pub trait ActorFuture<A: Actor>: Send + 'static {
     /// The value produced when the future completes.
@@ -111,8 +111,8 @@ pub trait IntoActorFuture<A: Actor>: Future + Send + Sized + 'static {
     ///
     /// Use [`ActorFutureExt::map`] or [`ActorFutureExt::then`] for a later step
     /// that needs temporary actor access, then return the combined future through
-    /// [`crate::ReplyExt::interleaved`] or [`crate::ReplyExt::exclusive`] to
-    /// choose how it interacts with other actor work.
+    /// [`crate::reply::interleaved`] or [`crate::reply::exclusive`] to choose how
+    /// it interacts with other actor work.
     fn into_actor(self) -> FutureActor<A, Self> {
         FutureActor {
             actor: PhantomData,

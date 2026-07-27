@@ -24,7 +24,7 @@ use std::{
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use loong_actor::{
     Actor, ActorOwner, ActorRef, ActorScope, ExitReason, Handler, IntoActorFuture, Message,
-    ReplyExt, Response, Shutdown, SpawnOptions, TryCallErrorKind, spawn_with,
+    Response, Shutdown, SpawnOptions, TryCallErrorKind, reply, spawn_with,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -50,10 +50,10 @@ impl Handler<OwnedReply> for ReplyActor {
         message: OwnedReply,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, OwnedReply> + use<> {
-        async move {
+        reply::owned(async move {
             let _ = message.started.send(());
             let _ = message.release.await;
-        }
+        })
     }
 }
 
@@ -72,12 +72,13 @@ impl Handler<InterleavedReply> for ReplyActor {
         message: InterleavedReply,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, InterleavedReply> + use<> {
-        async move {
-            let _ = message.started.send(());
-            let _ = message.release.await;
-        }
-        .into_actor()
-        .interleaved()
+        reply::interleaved(
+            async move {
+                let _ = message.started.send(());
+                let _ = message.release.await;
+            }
+            .into_actor(),
+        )
     }
 }
 
@@ -122,7 +123,7 @@ impl Handler<OwnedWakeProbe> for ReplyActor {
         message: OwnedWakeProbe,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, OwnedWakeProbe> + use<> {
-        message.0
+        reply::owned(message.0)
     }
 }
 
@@ -138,7 +139,7 @@ impl Handler<InterleavedWakeProbe> for ReplyActor {
         message: InterleavedWakeProbe,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, InterleavedWakeProbe> + use<> {
-        message.0.into_actor().interleaved()
+        reply::interleaved(message.0.into_actor())
     }
 }
 
@@ -154,7 +155,7 @@ impl Handler<MailboxBacklog> for ReplyActor {
         _message: MailboxBacklog,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, MailboxBacklog> + use<> {
-        ().ready()
+        reply::ready(())
     }
 }
 
@@ -183,7 +184,7 @@ impl Handler<MailboxTurnTrigger> for ReplyActor {
         {
             panic!("the selected wake probe has one empty command slot");
         }
-        ().ready()
+        reply::ready(())
     }
 }
 
@@ -202,15 +203,16 @@ impl Handler<StageMailboxBacklog> for ReplyActor {
         message: StageMailboxBacklog,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, StageMailboxBacklog> + use<> {
-        async move {
-            let _ = message.entered.send(());
-            message
-                .release
-                .await
-                .expect("the benchmark releases the exclusive staging barrier");
-        }
-        .into_actor()
-        .exclusive()
+        reply::exclusive(
+            async move {
+                let _ = message.entered.send(());
+                message
+                    .release
+                    .await
+                    .expect("the benchmark releases the exclusive staging barrier");
+            }
+            .into_actor(),
+        )
     }
 }
 

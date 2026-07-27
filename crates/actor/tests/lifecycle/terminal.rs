@@ -1,7 +1,7 @@
 use std::sync::{Arc, Barrier};
 
 use loong_actor::{
-    Actor, ActorScope, CallError, ExitReason, Handler, Message, ReplyExt, Shutdown, ShutdownStatus,
+    Actor, ActorScope, CallError, ExitReason, Handler, Message, Shutdown, ShutdownStatus, reply,
     spawn,
 };
 use tokio::sync::oneshot;
@@ -110,7 +110,7 @@ impl Handler<PanicNow> for PanicActor {
     ) -> impl loong_actor::IntoReply<Self, PanicNow> + use<> {
         panic!("intentional handler panic");
         #[allow(unreachable_code)]
-        ().ready()
+        reply::ready(())
     }
 }
 
@@ -142,11 +142,11 @@ impl Handler<PanicAfterBarrier> for PanicActor {
         message: PanicAfterBarrier,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, PanicAfterBarrier> + use<> {
-        async move {
+        reply::owned(async move {
             let _ = message.entered.send(());
             message.barrier.wait();
             panic!("panic loses to an already committed Kill");
-        }
+        })
     }
 }
 

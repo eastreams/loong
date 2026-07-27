@@ -20,19 +20,20 @@ impl Handler<AddAfter> for Counter {
         message: AddAfter,
         _scope: &mut ActorScope<Self>,
     ) -> impl IntoReply<Self, AddAfter> + use<> {
-        async move {
-            message
-                .resume
-                .await
-                .expect("the example retains the resume sender");
-            message.amount
-        }
-        .into_actor()
-        .map(|amount, actor: &mut Self, _scope| {
-            actor.0 += amount;
-            actor.0
-        })
-        .interleaved()
+        reply::interleaved(
+            async move {
+                message
+                    .resume
+                    .await
+                    .expect("the example retains the resume sender");
+                message.amount
+            }
+            .into_actor()
+            .map(|amount, actor: &mut Self, _scope| {
+                actor.0 += amount;
+                actor.0
+            }),
+        )
     }
 }
 
@@ -48,7 +49,7 @@ impl Handler<Read> for Counter {
         _message: Read,
         _scope: &mut ActorScope<Self>,
     ) -> impl IntoReply<Self, Read> + use<> {
-        self.0.ready()
+        reply::ready(self.0)
     }
 }
 
