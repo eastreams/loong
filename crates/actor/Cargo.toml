@@ -17,6 +17,7 @@ thiserror = "2.0.19"
 tokio = { version = "1.53.1", features = ["macros", "rt", "sync"] }
 
 [dev-dependencies]
+allocation-counter = "0.8.1"
 criterion = { version = "0.5.1", default-features = false, features = ["async_tokio"] }
 tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "time"] }
 
@@ -30,6 +31,10 @@ harness = false
 
 [[bench]]
 name = "mailbox_saturation"
+harness = false
+
+[[bench]]
+name = "reply_allocations"
 harness = false
 
 [lints]
