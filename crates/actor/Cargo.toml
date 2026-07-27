@@ -24,5 +24,9 @@ tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "time"] }
 name = "message_round_trip"
 harness = false
 
+[[bench]]
+name = "reply_scheduler"
+harness = false
+
 [lints]
 workspace = true
