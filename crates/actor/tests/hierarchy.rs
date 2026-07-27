@@ -1,6 +1,10 @@
 mod support;
 
-use std::sync::{Arc, Mutex};
+use std::{
+    future::Future,
+    sync::{Arc, Mutex, mpsc as sync_mpsc},
+    task::Poll,
+};
 
 use loong_actor::{
     Actor, ActorRef, ActorScope, CallError, ExitReason, Handler, IntoActorFuture, Message,
@@ -225,6 +229,8 @@ async fn parent_drain_finishes_parent_queue_before_draining_children() {
 }
 
 struct Leaf {
+    drop_entered: Option<oneshot::Sender<()>>,
+    drop_release: Option<sync_mpsc::Receiver<()>>,
     dropped: Option<oneshot::Sender<()>>,
 }
 
@@ -232,6 +238,12 @@ impl Actor for Leaf {}
 
 impl Drop for Leaf {
     fn drop(&mut self) {
+        if let Some(entered) = self.drop_entered.take() {
+            let _ = entered.send(());
+        }
+        if let Some(release) = self.drop_release.take() {
+            let _ = release.recv();
+        }
         if let Some(dropped) = self.dropped.take() {
             let _ = dropped.send(());
         }
@@ -240,6 +252,8 @@ impl Drop for Leaf {
 
 struct Branch {
     leaf_started: Option<oneshot::Sender<ActorRef<Leaf>>>,
+    leaf_drop_entered: Option<oneshot::Sender<()>>,
+    leaf_drop_release: Option<sync_mpsc::Receiver<()>>,
     leaf_dropped: Option<oneshot::Sender<()>>,
     dropped: Option<oneshot::Sender<()>>,
 }
@@ -248,6 +262,8 @@ impl Actor for Branch {
     async fn on_start<'a>(&'a mut self, scope: &'a mut ActorScope<Self>) {
         let leaf = scope
             .spawn_child(Leaf {
+                drop_entered: self.leaf_drop_entered.take(),
+                drop_release: self.leaf_drop_release.take(),
                 dropped: self.leaf_dropped.take(),
             })
             .expect("on_start accepts children")
@@ -269,6 +285,8 @@ impl Drop for Branch {
 struct PanicParent {
     branch_started: Option<oneshot::Sender<ActorRef<Branch>>>,
     leaf_started: Option<oneshot::Sender<ActorRef<Leaf>>>,
+    leaf_drop_entered: Option<oneshot::Sender<()>>,
+    leaf_drop_release: Option<sync_mpsc::Receiver<()>>,
     branch_dropped: Option<oneshot::Sender<()>>,
     leaf_dropped: Option<oneshot::Sender<()>>,
 }
@@ -278,6 +296,8 @@ impl Actor for PanicParent {
         let branch = scope
             .spawn_child(Branch {
                 leaf_started: self.leaf_started.take(),
+                leaf_drop_entered: self.leaf_drop_entered.take(),
+                leaf_drop_release: self.leaf_drop_release.take(),
                 leaf_dropped: self.leaf_dropped.take(),
                 dropped: self.branch_dropped.take(),
             })
@@ -307,15 +327,19 @@ impl Handler<PanicTree> for PanicParent {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn parent_panic_kills_descendants_before_parent_exit() {
     let (branch_tx, branch_rx) = oneshot::channel();
     let (leaf_tx, leaf_rx) = oneshot::channel();
+    let (leaf_drop_entered_tx, leaf_drop_entered_rx) = oneshot::channel();
+    let (leaf_drop_release_tx, leaf_drop_release_rx) = sync_mpsc::channel();
     let (branch_dropped_tx, branch_dropped_rx) = oneshot::channel();
     let (leaf_dropped_tx, leaf_dropped_rx) = oneshot::channel();
     let mut owner = spawn(PanicParent {
         branch_started: Some(branch_tx),
         leaf_started: Some(leaf_tx),
+        leaf_drop_entered: Some(leaf_drop_entered_tx),
+        leaf_drop_release: Some(leaf_drop_release_rx),
         branch_dropped: Some(branch_dropped_tx),
         leaf_dropped: Some(leaf_dropped_tx),
     });
@@ -327,7 +351,15 @@ async fn parent_panic_kills_descendants_before_parent_exit() {
         watchdog(parent.call(PanicTree)).await,
         Err(CallError::DuringDispatch(ExitReason::Panicked))
     );
-    assert_eq!(watchdog(owner.wait()).await, ExitReason::Panicked);
+    watchdog(leaf_drop_entered_rx).await.unwrap();
+
+    let mut parent_exit = Box::pin(owner.wait());
+    let first_poll =
+        std::future::poll_fn(|task| Poll::Ready(parent_exit.as_mut().poll(task))).await;
+    assert!(first_poll.is_pending());
+
+    leaf_drop_release_tx.send(()).unwrap();
+    assert_eq!(watchdog(parent_exit).await, ExitReason::Panicked);
 
     assert_eq!(branch.exit_reason(), Some(ExitReason::Killed));
     assert_eq!(leaf.exit_reason(), Some(ExitReason::Killed));
