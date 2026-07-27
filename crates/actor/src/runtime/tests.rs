@@ -1,4 +1,5 @@
 use std::{
+    future::Future,
     num::NonZeroUsize,
     pin::Pin,
     sync::{
@@ -12,11 +13,12 @@ use tokio::sync::mpsc;
 
 use crate::{
     Actor, ActorFuture, ActorRef, ActorScope, ChildExit, ChildId, ExitReason, IntoActorFuture,
-    mailbox::{ActorMailbox, DynEnvelope, Envelope, Mode},
+    Shutdown, ShutdownStatus, SpawnOptions,
+    mailbox::{ActorMailbox, Control, DynEnvelope, Envelope, Mode},
     scheduler::ReplyScheduler,
 };
 
-use super::{ChildSet, Turn, TurnCursor, actor_turn};
+use super::{ChildSet, Turn, TurnCursor, actor_turn, kill_actor, spawn_actor};
 
 struct TestActor;
 
@@ -52,6 +54,46 @@ impl Envelope<TestActor> for CountEnvelope {
         _scheduler: &mut ReplyScheduler<TestActor>,
     ) {
         self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+struct ChildKillDropProbe {
+    child: Arc<Control>,
+    observed_kill: Arc<AtomicBool>,
+}
+
+impl Future for ChildKillDropProbe {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, _task: &mut Context<'_>) -> Poll<Self::Output> {
+        Poll::Pending
+    }
+}
+
+impl Drop for ChildKillDropProbe {
+    fn drop(&mut self) {
+        self.observed_kill.store(
+            matches!(
+                self.child.mode(),
+                Mode::Killing | Mode::Exited(ExitReason::Killed)
+            ),
+            Ordering::SeqCst,
+        );
+    }
+}
+
+impl Envelope<TestActor> for ChildKillDropProbe {
+    fn is_abandoned(&self) -> bool {
+        false
+    }
+
+    fn dispatch(
+        self: Box<Self>,
+        _actor: &mut TestActor,
+        _scope: &mut ActorScope<TestActor>,
+        _scheduler: &mut ReplyScheduler<TestActor>,
+    ) {
+        unreachable!("Kill discards queued envelopes")
     }
 }
 
@@ -183,4 +225,49 @@ async fn exclusive_progresses_while_owned_replies_keep_completing() {
         ));
         assert_eq!(exclusive_polls.load(Ordering::SeqCst), expected_polls);
     }
+}
+
+#[tokio::test]
+async fn child_kill_commits_before_actor_work_is_dropped() {
+    let (_child_ref, child) = spawn_actor(TestActor, SpawnOptions::default(), None);
+    let child_control = Arc::clone(&child.control);
+    let mut children = ChildSet::default();
+    children.insert(ChildId::new(), child);
+
+    let active_observed_kill = Arc::new(AtomicBool::new(false));
+    let queued_observed_kill = Arc::new(AtomicBool::new(false));
+    let (mailbox, mut inbox) = ActorMailbox::<TestActor>::channel(1);
+    mailbox
+        .sender
+        .try_send(Box::new(ChildKillDropProbe {
+            child: Arc::clone(&child_control),
+            observed_kill: Arc::clone(&queued_observed_kill),
+        }))
+        .unwrap();
+    assert_eq!(
+        mailbox.control.request(Shutdown::Kill),
+        ShutdownStatus::Requested
+    );
+
+    let actor_ref = ActorRef::new(Arc::downgrade(&mailbox), mailbox.control.subscribe_mode());
+    let (supervisor_tx, _supervisor_rx) = mpsc::unbounded_channel();
+    let mut scope = ActorScope {
+        actor_ref,
+        control: Arc::clone(&mailbox.control),
+        children,
+        accepts_children: true,
+        supervisor_tx,
+    };
+    let mut scheduler = ReplyScheduler::new(NonZeroUsize::new(1).unwrap());
+    scheduler.push_owned(ChildKillDropProbe {
+        child: child_control,
+        observed_kill: Arc::clone(&active_observed_kill),
+    });
+
+    assert_eq!(
+        kill_actor(&mut scope, &mut inbox, &mut scheduler).await,
+        ExitReason::Killed
+    );
+    assert!(active_observed_kill.load(Ordering::SeqCst));
+    assert!(queued_observed_kill.load(Ordering::SeqCst));
 }

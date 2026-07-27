@@ -325,11 +325,6 @@ impl ChildSet {
         }
         self.actors.clear();
     }
-
-    async fn shutdown_all(&mut self, shutdown: Shutdown) {
-        self.request_all(shutdown);
-        self.wait_all().await;
-    }
 }
 
 fn spawn_actor<A: Actor>(
@@ -513,8 +508,8 @@ async fn run_actor<A: Actor>(
 
     match await_actor_work(async { actor.on_start(&mut scope).await }, &mut mode).await {
         Work::Complete(()) => {}
-        Work::Killed => return kill_actor(&mut scope, &mut inbox).await,
-        Work::Panicked => return fail_actor(&scope.control, &mut scope.children, &mut inbox).await,
+        Work::Killed => return kill_actor(&mut scope, &mut inbox, &mut scheduler).await,
+        Work::Panicked => return fail_actor(&mut scope, &mut inbox, &mut scheduler).await,
     }
 
     loop {
@@ -543,12 +538,10 @@ async fn run_actor<A: Actor>(
                 .await;
             }
             Mode::Killing => {
-                scheduler.clear();
-                return kill_actor(&mut scope, &mut inbox).await;
+                return kill_actor(&mut scope, &mut inbox, &mut scheduler).await;
             }
             Mode::Failing => {
-                scheduler.clear();
-                return fail_actor(&scope.control, &mut scope.children, &mut inbox).await;
+                return fail_actor(&mut scope, &mut inbox, &mut scheduler).await;
             }
             Mode::Exited(reason) => return reason,
             Mode::Aborting => return ExitReason::Aborted,
@@ -572,8 +565,7 @@ async fn run_actor<A: Actor>(
             Ok(turn) => turn,
             Err(_) => {
                 scope.control.begin_failure();
-                scheduler.clear();
-                return fail_actor(&scope.control, &mut scope.children, &mut inbox).await;
+                return fail_actor(&mut scope, &mut inbox, &mut scheduler).await;
             }
         };
 
@@ -583,21 +575,18 @@ async fn run_actor<A: Actor>(
                 match handle_child_exit(&mut actor, &mut scope, event, &mut mode).await {
                     Work::Complete(()) => {}
                     Work::Killed => {
-                        scheduler.clear();
-                        return kill_actor(&mut scope, &mut inbox).await;
+                        return kill_actor(&mut scope, &mut inbox, &mut scheduler).await;
                     }
                     Work::Panicked => {
                         scope.control.begin_failure();
-                        scheduler.clear();
-                        return fail_actor(&scope.control, &mut scope.children, &mut inbox).await;
+                        return fail_actor(&mut scope, &mut inbox, &mut scheduler).await;
                     }
                 }
             }
             Turn::Message => {}
             Turn::InboxClosed => {
                 scope.control.begin_failure();
-                scheduler.clear();
-                return fail_actor(&scope.control, &mut scope.children, &mut inbox).await;
+                return fail_actor(&mut scope, &mut inbox, &mut scheduler).await;
             }
         }
     }
@@ -763,14 +752,14 @@ async fn stop_actor<A: Actor>(
     close_and_discard(inbox);
     match finish_replies(actor, scope, scheduler, mode).await {
         Work::Complete(()) => {}
-        Work::Killed => return kill_actor(scope, inbox).await,
-        Work::Panicked => return fail_actor(&scope.control, &mut scope.children, inbox).await,
+        Work::Killed => return kill_actor(scope, inbox, scheduler).await,
+        Work::Panicked => return fail_actor(scope, inbox, scheduler).await,
     }
 
     match graceful_finish(actor, scope, Shutdown::Stop, ExitReason::Stopped, mode).await {
         Work::Complete(()) => ExitReason::Stopped,
-        Work::Killed => kill_actor(scope, inbox).await,
-        Work::Panicked => fail_actor(&scope.control, &mut scope.children, inbox).await,
+        Work::Killed => kill_actor(scope, inbox, scheduler).await,
+        Work::Panicked => fail_actor(scope, inbox, scheduler).await,
     }
 }
 
@@ -791,12 +780,10 @@ async fn drain_actor<A: Actor>(
     loop {
         match scope.control.mode() {
             Mode::Killing => {
-                scheduler.clear();
-                return kill_actor(scope, inbox).await;
+                return kill_actor(scope, inbox, scheduler).await;
             }
             Mode::Failing => {
-                scheduler.clear();
-                return fail_actor(&scope.control, &mut scope.children, inbox).await;
+                return fail_actor(scope, inbox, scheduler).await;
             }
             Mode::Running | Mode::Draining | Mode::Stopping => {}
             Mode::Exited(reason) => return reason,
@@ -809,11 +796,10 @@ async fn drain_actor<A: Actor>(
             };
             match handle_child_exit(actor, scope, event, mode).await {
                 Work::Complete(()) => continue,
-                Work::Killed => return kill_actor(scope, inbox).await,
+                Work::Killed => return kill_actor(scope, inbox, scheduler).await,
                 Work::Panicked => {
                     scope.control.begin_failure();
-                    scheduler.clear();
-                    return fail_actor(&scope.control, &mut scope.children, inbox).await;
+                    return fail_actor(scope, inbox, scheduler).await;
                 }
             }
         }
@@ -836,8 +822,7 @@ async fn drain_actor<A: Actor>(
             Ok(turn) => turn,
             Err(_) => {
                 scope.control.begin_failure();
-                scheduler.clear();
-                return fail_actor(&scope.control, &mut scope.children, inbox).await;
+                return fail_actor(scope, inbox, scheduler).await;
             }
         };
 
@@ -846,13 +831,11 @@ async fn drain_actor<A: Actor>(
             Turn::Child(event) => match handle_child_exit(actor, scope, event, mode).await {
                 Work::Complete(()) => {}
                 Work::Killed => {
-                    scheduler.clear();
-                    return kill_actor(scope, inbox).await;
+                    return kill_actor(scope, inbox, scheduler).await;
                 }
                 Work::Panicked => {
                     scope.control.begin_failure();
-                    scheduler.clear();
-                    return fail_actor(&scope.control, &mut scope.children, inbox).await;
+                    return fail_actor(scope, inbox, scheduler).await;
                 }
             },
             Turn::Message => {}
@@ -862,8 +845,8 @@ async fn drain_actor<A: Actor>(
 
     match graceful_finish(actor, scope, Shutdown::Drain, ExitReason::Drained, mode).await {
         Work::Complete(()) => ExitReason::Drained,
-        Work::Killed => kill_actor(scope, inbox).await,
-        Work::Panicked => fail_actor(&scope.control, &mut scope.children, inbox).await,
+        Work::Killed => kill_actor(scope, inbox, scheduler).await,
+        Work::Panicked => fail_actor(scope, inbox, scheduler).await,
     }
 }
 
@@ -877,19 +860,10 @@ async fn finish_replies<A: Actor>(
     let control = Arc::clone(&scope.control);
     while !scheduler.is_empty() {
         match scope.control.mode() {
-            Mode::Killing => {
-                scheduler.clear();
-                return Work::Killed;
-            }
-            Mode::Failing => {
-                scheduler.clear();
-                return Work::Panicked;
-            }
+            Mode::Killing => return Work::Killed,
+            Mode::Failing => return Work::Panicked,
             Mode::Running | Mode::Draining | Mode::Stopping => {}
-            Mode::Aborting | Mode::Exited(_) => {
-                scheduler.clear();
-                return Work::Killed;
-            }
+            Mode::Aborting | Mode::Exited(_) => return Work::Killed,
         }
 
         let result = AssertUnwindSafe(async {
@@ -906,7 +880,6 @@ async fn finish_replies<A: Actor>(
 
         if result.is_err() {
             scope.control.begin_failure();
-            scheduler.clear();
             return Work::Panicked;
         }
     }
@@ -939,17 +912,24 @@ async fn graceful_finish<A: Actor>(
 async fn kill_actor<A: Actor>(
     scope: &mut ActorScope<A>,
     inbox: &mut mpsc::Receiver<DynEnvelope<A>>,
+    scheduler: &mut ReplyScheduler<A>,
 ) -> ExitReason {
+    // Commit subtree cancellation before running arbitrary Drop code from actor
+    // work. Children can then begin terminating even if a destructor is slow.
+    inbox.close();
+    scope.children.request_all(Shutdown::Kill);
+    scheduler.clear();
     close_and_discard(inbox);
-    scope.children.shutdown_all(Shutdown::Kill).await;
+    scope.children.wait_all().await;
     ExitReason::Killed
 }
 
 async fn fail_actor<A: Actor>(
-    control: &Arc<Control>,
-    children: &mut ChildSet,
+    scope: &mut ActorScope<A>,
     inbox: &mut mpsc::Receiver<DynEnvelope<A>>,
+    scheduler: &mut ReplyScheduler<A>,
 ) -> ExitReason {
+    let control = Arc::clone(&scope.control);
     control.begin_failure();
     let reason = match control.mode() {
         Mode::Killing => ExitReason::Killed,
@@ -957,8 +937,11 @@ async fn fail_actor<A: Actor>(
         Mode::Exited(reason) => reason,
         Mode::Running | Mode::Draining | Mode::Stopping | Mode::Failing => ExitReason::Panicked,
     };
+    inbox.close();
+    scope.children.request_all(Shutdown::Kill);
+    scheduler.clear();
     close_and_discard(inbox);
-    children.shutdown_all(Shutdown::Kill).await;
+    scope.children.wait_all().await;
     reason
 }
 
