@@ -284,6 +284,26 @@ async fn drain_respects_max_in_flight_while_finishing_the_fixed_owned_queue() {
     assert_eq!(watchdog(owner.wait()).await, ExitReason::Drained);
 }
 
+#[tokio::test]
+async fn shutdown_requests_after_exit_report_the_published_reason() {
+    for (initial, expected_reason) in [
+        (Shutdown::Stop, ExitReason::Stopped),
+        (Shutdown::Drain, ExitReason::Drained),
+        (Shutdown::Kill, ExitReason::Killed),
+    ] {
+        let mut owner = spawn(OwnedDrainActor);
+        assert_eq!(owner.request_shutdown(initial), ShutdownStatus::Requested);
+        assert_eq!(watchdog(owner.wait()).await, expected_reason);
+
+        for requested in [Shutdown::Stop, Shutdown::Drain, Shutdown::Kill] {
+            assert_eq!(
+                owner.request_shutdown(requested),
+                ShutdownStatus::Exited(expected_reason)
+            );
+        }
+    }
+}
+
 struct DropSignal(Option<oneshot::Sender<()>>);
 
 impl Drop for DropSignal {
