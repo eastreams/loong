@@ -35,7 +35,7 @@ impl Handler<Owned> for ReplyActor {
         _message: Owned,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, Owned> + use<> {
-        reply::owned(async { 1 })
+        reply::owned(std::future::ready(1))
     }
 }
 
