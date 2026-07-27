@@ -1,15 +1,48 @@
 use std::num::NonZeroUsize;
 
 use loong_actor::{
-    Actor, ActorScope, CallError, ExitReason, Handler, Message, Shutdown, ShutdownStatus,
-    SpawnOptions, TryCallErrorKind, reply, spawn_with,
+    Actor, ActorFutureExt, ActorScope, CallError, ExitReason, Handler, IntoActorFuture, Message,
+    Shutdown, ShutdownStatus, SpawnOptions, TryCallErrorKind, reply, spawn_with,
 };
 use tokio::sync::oneshot;
 
 use super::{
-    fixtures::{LifecycleHarness, Step, actor_with_capacity},
+    fixtures::{LifecycleActor, LifecycleHarness, Step, actor_with_capacity},
     support::{lock, watchdog},
 };
+
+struct StopFromExclusive;
+
+impl Message for StopFromExclusive {
+    type Reply = ();
+}
+
+impl Handler<StopFromExclusive> for LifecycleActor {
+    fn handle(
+        &mut self,
+        _message: StopFromExclusive,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loong_actor::IntoReply<Self, StopFromExclusive> + use<> {
+        reply::exclusive(async {}.into_actor().map(|(), _actor: &mut Self, scope| {
+            assert_eq!(
+                scope.request_shutdown(Shutdown::Stop),
+                ShutdownStatus::Requested
+            );
+        }))
+    }
+}
+
+#[tokio::test]
+async fn exclusive_completion_can_commit_graceful_shutdown_without_repoll() {
+    let LifecycleHarness {
+        mut owner, cleanup, ..
+    } = actor_with_capacity(1);
+    let actor = owner.actor_ref();
+
+    assert_eq!(watchdog(actor.call(StopFromExclusive)).await, Ok(()));
+    assert_eq!(watchdog(owner.wait()).await, ExitReason::Stopped);
+    assert_eq!(*lock(&cleanup), vec![ExitReason::Stopped]);
+}
 
 #[tokio::test]
 async fn stop_finishes_current_and_cancels_queued_messages() {

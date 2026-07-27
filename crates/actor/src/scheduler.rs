@@ -141,6 +141,12 @@ impl<A: Actor> ReplyScheduler<A> {
             return Poll::Pending;
         };
         let result = exclusive.as_mut().poll(actor, scope, task);
+        // A final actor-aware poll may commit Stop or Drain. Retire completed
+        // work before observing that mode change so graceful finalization cannot
+        // poll the already-completed user future again.
+        if result.is_ready() {
+            self.exclusive = None;
+        }
         if control.mode() != expected_mode {
             return Poll::Ready(());
         }
@@ -148,7 +154,6 @@ impl<A: Actor> ReplyScheduler<A> {
             return Poll::Pending;
         }
 
-        self.exclusive = None;
         Poll::Ready(())
     }
 
