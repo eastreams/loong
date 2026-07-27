@@ -909,8 +909,17 @@ async fn graceful_finish<A: Actor>(
     // Cleanup starts after the final child set has been established. Rejecting
     // later spawns keeps the post-order exit guarantee type-visible.
     scope.accepts_children = false;
-    scope.children.request_all(shutdown);
-    match await_actor_work(async { scope.children.wait_all().await }, mode).await {
+    // Keep child submission inside the biased lifecycle guard. A Kill already
+    // committed before this poll must win before Stop or Drain reaches children.
+    match await_actor_work(
+        async {
+            scope.children.request_all(shutdown);
+            scope.children.wait_all().await;
+        },
+        mode,
+    )
+    .await
+    {
         Work::Complete(()) => {}
         Work::Killed => return Work::Killed,
         Work::Panicked => return Work::Panicked,

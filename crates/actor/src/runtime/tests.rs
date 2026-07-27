@@ -19,8 +19,8 @@ use crate::{
 };
 
 use super::{
-    ChildSet, DiscardOutcome, TEARDOWN_DROP_BUDGET, Turn, TurnCursor, actor_turn,
-    close_and_discard, kill_actor, spawn_actor,
+    ChildSet, DiscardOutcome, OwnedActor, TEARDOWN_DROP_BUDGET, Turn, TurnCursor, Work, actor_turn,
+    close_and_discard, graceful_finish, kill_actor, spawn_actor,
 };
 
 struct TestActor;
@@ -131,6 +131,50 @@ impl Envelope<TestActor> for TeardownEnvelope {
     ) {
         unreachable!("teardown discards queued envelopes")
     }
+}
+
+#[tokio::test]
+async fn committed_kill_prevents_a_graceful_child_request() {
+    // The child mode distinguishes biased Kill observation from an incorrect
+    // first poll of the guarded future: request_all would synchronously commit
+    // Stop before graceful_finish could return Work::Killed.
+    let child_control = Control::new();
+    let mut children = ChildSet::default();
+    children.insert(
+        ChildId::new(),
+        OwnedActor {
+            control: Arc::clone(&child_control),
+            join: None,
+        },
+    );
+
+    let (mailbox, _inbox) = ActorMailbox::<TestActor>::channel(1);
+    let control = Arc::clone(&mailbox.control);
+    let actor_ref = ActorRef::new(Arc::downgrade(&mailbox), control.subscribe_mode());
+    let (supervisor_tx, _supervisor_rx) = mpsc::unbounded_channel();
+    let mut scope = ActorScope {
+        actor_ref,
+        control: Arc::clone(&control),
+        children,
+        accepts_children: true,
+        supervisor_tx,
+    };
+    let mut mode = control.subscribe_mode();
+    let mut actor = TestActor;
+
+    assert_eq!(control.request(Shutdown::Kill), ShutdownStatus::Requested);
+    assert!(matches!(
+        graceful_finish(
+            &mut actor,
+            &mut scope,
+            Shutdown::Stop,
+            ExitReason::Stopped,
+            &mut mode,
+        )
+        .await,
+        Work::Killed
+    ));
+    assert_eq!(child_control.mode(), Mode::Running);
 }
 
 #[tokio::test]
