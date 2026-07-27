@@ -124,8 +124,14 @@ impl Control {
     /// Commits panic handling unless Kill, abort, or finalization already won.
     pub(crate) fn begin_failure(&self) {
         let mut gate = self.lock_gate();
-        if !matches!(*gate, Mode::Killing | Mode::Aborting | Mode::Exited(_)) {
-            self.set_mode(&mut gate, Mode::Failing);
+        self.begin_failure_locked(&mut gate);
+    }
+
+    // Both caught panics and DispatchReply's pre-publication path use this
+    // transition so Kill/abort precedence cannot diverge between them.
+    fn begin_failure_locked(&self, gate: &mut Mode) {
+        if matches!(*gate, Mode::Running | Mode::Draining | Mode::Stopping) {
+            self.set_mode(gate, Mode::Failing);
         }
     }
 
@@ -245,6 +251,13 @@ impl DispatchPermit {
                 Err(Control::call_failure_locked(*gate, CallPhase::Dispatching))
             }
         }
+    }
+
+    /// Commits handler failure before making its dispatch error observable.
+    fn fail(&self) -> CallError {
+        let mut gate = self.control.lock_gate();
+        self.control.begin_failure_locked(&mut gate);
+        Control::call_failure_locked(*gate, CallPhase::Dispatching)
     }
 }
 
@@ -384,7 +397,7 @@ impl<R> Drop for DispatchReply<R> {
         let Some(reply) = self.reply.take() else {
             return;
         };
-        let error = self.permit.control.call_failure(CallPhase::Dispatching);
+        let error = self.permit.fail();
         let _ = reply.send(Err(error));
     }
 }
@@ -504,6 +517,22 @@ mod tests {
             receiver.await,
             Ok(Err(CallError::DuringDispatch(ExitReason::Killed)))
         ));
+    }
+
+    #[tokio::test]
+    async fn dropped_dispatch_reply_closes_admission_before_publishing_failure() {
+        let control = Control::new();
+        let permit = control.begin_dispatch().expect("dispatch wins the gate");
+        let (sender, receiver) = oneshot::channel();
+
+        drop(DispatchReply::<()>::new(sender, permit));
+
+        assert!(matches!(
+            receiver.await,
+            Ok(Err(CallError::DuringDispatch(ExitReason::Panicked)))
+        ));
+        assert_eq!(control.mode(), Mode::Failing);
+        assert_eq!(control.admit(|| ()), Err(()));
     }
 
     struct GateDropProbe {
