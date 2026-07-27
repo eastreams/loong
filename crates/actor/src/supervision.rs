@@ -24,8 +24,15 @@ pub enum Shutdown {
     /// The actor then requests Drain from its children, waits for their terminal
     /// events, and runs [`Actor::on_stop`] with [`ExitReason::Drained`].
     Drain,
-    /// Drops queued messages and active cooperative actor work without running
-    /// [`Actor::on_stop`], then kills and waits for the owned subtree.
+    /// Cancels cooperative actor work without running [`Actor::on_stop`] and
+    /// waits for the owned subtree to terminate.
+    ///
+    /// If Kill interrupts an entered lifecycle hook, that hook is first dropped
+    /// to release its mutable scope borrow. Once the scope is available, Kill is
+    /// submitted to children before active replies and queued messages are
+    /// dropped, allowing descendants to begin termination ahead of arbitrary
+    /// user destructors. The terminal event is published only after the subtree
+    /// exits.
     ///
     /// Kill takes effect between polls. It cannot interrupt a synchronous
     /// handler, a poll call that does not return, or user `Drop` code.
