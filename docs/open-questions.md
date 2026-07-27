@@ -91,5 +91,6 @@ host also has policy types.
 - Which latency, throughput, allocation, binary-size, and memory metrics matter?
 - Which regressions should become enforced benchmark gates?
 
-Until measurement exists, high performance is a design goal rather than a
-quantified compatibility promise.
+Actor benchmarks now quantify selected runtime paths, but representative product
+workloads, accepted baselines, and enforced regression gates remain open. Until
+those are defined, high performance is not a quantified compatibility promise.
