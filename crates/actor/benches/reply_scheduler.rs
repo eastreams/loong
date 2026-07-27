@@ -6,6 +6,12 @@
 //! target future is polled. The latter is deliberately a steady-state latency:
 //! scheduler continuation work may already be runnable, and work after the
 //! target records the duration is outside the interval.
+//!
+//! `mailbox_turn_to_target_poll_under_backlog` starts inside the first mailbox
+//! handler after an exclusive staging barrier, with more ready messages still
+//! queued, and ends inside the selected owned or interleaved probe's next poll.
+//! The all-class fairness contract remains a deterministic runtime test; this
+//! benchmark reports only the notification-to-poll handoff under mailbox load.
 
 use std::{
     future::Future,
@@ -18,11 +24,12 @@ use std::{
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use loong_actor::{
     Actor, ActorOwner, ActorRef, ActorScope, ExitReason, Handler, IntoActorFuture, Message,
-    ReplyExt, Response, Shutdown, SpawnOptions, spawn_with,
+    ReplyExt, Response, Shutdown, SpawnOptions, TryCallErrorKind, spawn_with,
 };
 use tokio::sync::{mpsc, oneshot};
 
 const ACTIVE_COUNTS: [usize; 3] = [1, 32, 256];
+const MAILBOX_BACKLOG: usize = 32;
 
 struct ReplyActor;
 
@@ -132,6 +139,78 @@ impl Handler<InterleavedWakeProbe> for ReplyActor {
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, InterleavedWakeProbe> + use<> {
         message.0.into_actor().interleaved()
+    }
+}
+
+struct MailboxBacklog;
+
+impl Message for MailboxBacklog {
+    type Reply = ();
+}
+
+impl Handler<MailboxBacklog> for ReplyActor {
+    fn handle(
+        &mut self,
+        _message: MailboxBacklog,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loong_actor::IntoReply<Self, MailboxBacklog> + use<> {
+        ().ready()
+    }
+}
+
+struct MailboxTurnTrigger {
+    commands: mpsc::Sender<WakeCommand>,
+    completed: oneshot::Sender<Duration>,
+}
+
+impl Message for MailboxTurnTrigger {
+    type Reply = ();
+}
+
+impl Handler<MailboxTurnTrigger> for ReplyActor {
+    fn handle(
+        &mut self,
+        message: MailboxTurnTrigger,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loong_actor::IntoReply<Self, MailboxTurnTrigger> + use<> {
+        if message
+            .commands
+            .try_send(WakeCommand {
+                started: Instant::now(),
+                completed: message.completed,
+            })
+            .is_err()
+        {
+            panic!("the selected wake probe has one empty command slot");
+        }
+        ().ready()
+    }
+}
+
+struct StageMailboxBacklog {
+    entered: oneshot::Sender<()>,
+    release: oneshot::Receiver<()>,
+}
+
+impl Message for StageMailboxBacklog {
+    type Reply = ();
+}
+
+impl Handler<StageMailboxBacklog> for ReplyActor {
+    fn handle(
+        &mut self,
+        message: StageMailboxBacklog,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loong_actor::IntoReply<Self, StageMailboxBacklog> + use<> {
+        async move {
+            let _ = message.entered.send(());
+            message
+                .release
+                .await
+                .expect("the benchmark releases the exclusive staging barrier");
+        }
+        .into_actor()
+        .exclusive()
     }
 }
 
@@ -303,6 +382,84 @@ async fn measure_single_wake_to_target_poll(
     measured
 }
 
+async fn measure_mailbox_turn_to_target_poll_under_backlog(
+    iters: u64,
+    backlog: usize,
+    enqueue: EnqueueWakeProbe,
+) -> Duration {
+    let queued_after_trigger = backlog
+        .checked_sub(1)
+        .expect("mailbox backlog counts include a trigger message");
+    let mailbox_capacity = NonZeroUsize::new(backlog).expect("mailbox backlog counts are non-zero");
+    let owner = spawn_with(
+        ReplyActor,
+        SpawnOptions::default()
+            .with_mailbox_capacity(mailbox_capacity)
+            .with_max_in_flight(NonZeroUsize::new(2).expect("two active slots are non-zero")),
+    );
+    let actor = owner.actor_ref();
+    let (mut commands, probe_responses) = install_wake_probes(&actor, 1, enqueue).await;
+    let commands = commands.pop().expect("one wake probe was installed");
+    let mut measured = Duration::ZERO;
+
+    for _ in 0..iters {
+        let (entered_tx, entered_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let exclusive_response = actor
+            .try_call(StageMailboxBacklog {
+                entered: entered_tx,
+                release: release_rx,
+            })
+            .expect("the exclusive probe is admitted");
+        entered_rx
+            .await
+            .expect("the exclusive probe reaches its first poll");
+
+        let (completed_tx, completed_rx) = oneshot::channel();
+        let trigger_response = actor
+            .try_call(MailboxTurnTrigger {
+                commands: commands.clone(),
+                completed: completed_tx,
+            })
+            .expect("the mailbox trigger is admitted");
+        let mailbox_responses: Vec<_> = (0..queued_after_trigger)
+            .map(|_| {
+                actor
+                    .try_call(MailboxBacklog)
+                    .expect("the configured mailbox backlog is admitted")
+            })
+            .collect();
+        let full = actor
+            .try_call(MailboxBacklog)
+            .expect_err("the mailbox is full before contention timing begins");
+        assert_eq!(full.kind(), TryCallErrorKind::Full);
+
+        release_tx
+            .send(())
+            .expect("the exclusive staging barrier remains scheduled");
+        measured += completed_rx
+            .await
+            .expect("the target probe records its poll latency");
+
+        exclusive_response
+            .await
+            .expect("the exclusive probe completes before cleanup");
+        trigger_response
+            .await
+            .expect("the mailbox trigger completes before cleanup");
+        for response in mailbox_responses {
+            response
+                .await
+                .expect("the ready mailbox backlog drains after measurement");
+        }
+    }
+
+    assert_eq!(owner.shutdown(Shutdown::Kill).await, ExitReason::Killed);
+    drop(commands);
+    drop(probe_responses);
+    measured
+}
+
 fn reply_scheduler(criterion: &mut Criterion) {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
@@ -344,6 +501,21 @@ fn reply_scheduler(criterion: &mut Criterion) {
                 },
             );
         }
+
+        group.throughput(Throughput::Elements(1));
+        group.bench_with_input(
+            BenchmarkId::new("mailbox_turn_to_target_poll_under_backlog", MAILBOX_BACKLOG),
+            &MAILBOX_BACKLOG,
+            |bencher, &backlog| {
+                bencher.to_async(&runtime).iter_custom(move |iters| {
+                    measure_mailbox_turn_to_target_poll_under_backlog(
+                        iters,
+                        backlog,
+                        enqueue_wake_probe,
+                    )
+                });
+            },
+        );
         group.finish();
     }
 }
