@@ -966,3 +966,6 @@ fn close_and_discard<A: Actor>(inbox: &mut mpsc::Receiver<DynEnvelope<A>>) {
     inbox.close();
     while inbox.try_recv().is_ok() {}
 }
+
+#[cfg(test)]
+mod tests;
