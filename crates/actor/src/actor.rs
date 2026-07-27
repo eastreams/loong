@@ -115,6 +115,25 @@ pub trait Handler<M: Message>: Actor {
     /// message or a cloned handle; it cannot carry either mutable borrow beyond
     /// this call. Use [`crate::reply::Either`] when runtime branching requires two
     /// statically known reply strategies.
+    ///
+    /// This helper compiles because the returned reply cannot capture either input
+    /// borrow:
+    ///
+    /// ```
+    /// use loong_actor::{ActorScope, Handler, IntoReply, Message};
+    ///
+    /// fn detach_reply<A, M>(
+    ///     actor: &mut A,
+    ///     message: M,
+    ///     scope: &mut ActorScope<A>,
+    /// ) -> impl IntoReply<A, M> + use<A, M>
+    /// where
+    ///     A: Handler<M>,
+    ///     M: Message,
+    /// {
+    ///     actor.handle(message, scope)
+    /// }
+    /// ```
     fn handle(
         &mut self,
         message: M,
