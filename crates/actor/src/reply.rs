@@ -145,6 +145,23 @@ pub enum Either<L, R> {
 /// This trait is sealed so reply senders and lifecycle error construction stay
 /// private to the runtime. Use this trait as an opaque handler return bound and
 /// construct values with [`ready`], [`owned`], [`interleaved`], or [`exclusive`].
+///
+/// Downstream crates cannot add reply strategies:
+///
+/// ```compile_fail,E0277
+/// use loong_actor::{Actor, IntoReply, Message};
+///
+/// struct MyActor;
+/// impl Actor for MyActor {}
+///
+/// struct MyMessage;
+/// impl Message for MyMessage {
+///     type Reply = ();
+/// }
+///
+/// struct ForeignReply;
+/// impl IntoReply<MyActor, MyMessage> for ForeignReply {}
+/// ```
 pub trait IntoReply<A: Actor, M: Message>: sealed::HandleReply<A, M> {}
 
 impl<A, M, T> IntoReply<A, M> for T
