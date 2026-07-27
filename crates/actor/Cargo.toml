@@ -28,5 +28,9 @@ harness = false
 name = "reply_scheduler"
 harness = false
 
+[[bench]]
+name = "mailbox_saturation"
+harness = false
+
 [lints]
 workspace = true
