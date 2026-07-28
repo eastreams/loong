@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -8,7 +8,18 @@ use crate::{
 };
 
 pub(crate) type ReplyReceiver<R> = oneshot::Receiver<Result<R, CallError>>;
+
+/// A type-erased mailbox entry for one statically checked message.
+///
+/// Addresses construct a concrete call or one-way envelope only when the actor
+/// implements the corresponding `Handler<M>`. Erasure lets one bounded inbox
+/// hold every message type handled by that actor. Dynamic dispatch ends at
+/// [`Envelope::dispatch`]; the selected handler and reply strategy stay
+/// statically dispatched.
 pub(crate) type DynEnvelope<A> = Box<dyn Envelope<A>>;
+
+/// Capacity and the concrete envelope remain recoverable when admission loses.
+pub(crate) type RejectedAdmission<A, E> = (mpsc::OwnedPermit<DynEnvelope<A>>, Box<E>);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Mode {
@@ -30,28 +41,24 @@ pub(crate) enum Mode {
 
 /// Shared linearization boundary for the complete actor lifecycle.
 ///
-/// The mutex-protected mode is authoritative for admission, dispatch,
-/// completion, shutdown, and finalization decisions. `mode_tx` mirrors every
-/// committed transition while that gate is held, giving async observers one
-/// state stream whose terminal variant always carries its [`ExitReason`].
+/// The watched value is both the authoritative state and the gate for admission,
+/// dispatch, completion, shutdown, and finalization decisions. Transactions use
+/// the channel's write lock, while Tokio releases that lock before notifying
+/// observers, so a safe custom waker may reenter lifecycle APIs.
 #[derive(Debug)]
 pub(crate) struct Control {
-    gate: Mutex<Mode>,
-    mode_tx: watch::Sender<Mode>,
+    mode: watch::Sender<Mode>,
 }
 
 impl Control {
     pub(crate) fn new() -> Arc<Self> {
-        let (mode_tx, _) = watch::channel(Mode::Running);
+        let (mode, _) = watch::channel(Mode::Running);
 
-        Arc::new(Self {
-            gate: Mutex::new(Mode::Running),
-            mode_tx,
-        })
+        Arc::new(Self { mode })
     }
 
     pub(crate) fn mode(&self) -> Mode {
-        *self.lock_gate()
+        *self.mode.borrow()
     }
 
     pub(crate) fn is_running(&self) -> bool {
@@ -59,27 +66,14 @@ impl Control {
     }
 
     pub(crate) fn exit_reason(&self) -> Option<ExitReason> {
-        match *self.lock_gate() {
+        match self.mode() {
             Mode::Exited(reason) => Some(reason),
             _ => None,
         }
     }
 
     pub(crate) fn subscribe_mode(&self) -> watch::Receiver<Mode> {
-        self.mode_tx.subscribe()
-    }
-
-    /// Serializes request commit with lifecycle cutoff.
-    ///
-    /// The closure runs exactly once only while Running. It must not await or
-    /// invoke user code.
-    pub(crate) fn admit<T>(&self, commit: impl FnOnce() -> T) -> Result<T, ()> {
-        let gate = self.lock_gate();
-        if *gate != Mode::Running {
-            return Err(());
-        }
-
-        Ok(commit())
+        self.mode.subscribe()
     }
 
     /// Linearizes handler dispatch with graceful cutoff and Kill.
@@ -87,14 +81,16 @@ impl Control {
     /// The returned permit proves dispatch committed before a later lifecycle
     /// transition. No user code or user-owned value is touched under the gate.
     fn begin_dispatch(self: &Arc<Self>) -> Result<DispatchPermit, CallError> {
-        let gate = self.lock_gate();
-        if matches!(*gate, Mode::Running | Mode::Draining) {
-            Ok(DispatchPermit {
-                control: Arc::clone(self),
-            })
-        } else {
-            Err(Self::call_failure_locked(*gate, CallPhase::Queued))
-        }
+        self.transact(|mode| {
+            let result = if matches!(mode, Mode::Running | Mode::Draining) {
+                Ok(DispatchPermit {
+                    control: Arc::clone(self),
+                })
+            } else {
+                Err(Self::call_failure_for(mode, CallPhase::Queued))
+            };
+            (mode, result)
+        })
     }
 
     /// Commits the first shutdown mode and permits only a later Kill upgrade.
@@ -102,47 +98,45 @@ impl Control {
     /// Repeated and losing requests observe the already committed behavior;
     /// final actors return their published reason.
     pub(crate) fn request(&self, shutdown: Shutdown) -> ShutdownStatus {
-        let mut gate = self.lock_gate();
-
-        let next = match (*gate, shutdown) {
-            (Mode::Exited(reason), _) => return ShutdownStatus::Exited(reason),
-            (Mode::Running, Shutdown::Stop) => Mode::Stopping,
-            (Mode::Running, Shutdown::Drain) => Mode::Draining,
-            (Mode::Running, Shutdown::Kill) => Mode::Killing,
-            (Mode::Draining | Mode::Stopping, Shutdown::Kill) => Mode::Killing,
-            (Mode::Draining, _) => return ShutdownStatus::InProgress(Shutdown::Drain),
-            (Mode::Stopping, _) => return ShutdownStatus::InProgress(Shutdown::Stop),
-            (Mode::Killing | Mode::Failing | Mode::Aborting, _) => {
-                return ShutdownStatus::InProgress(Shutdown::Kill);
+        self.transact(|mode| match (mode, shutdown) {
+            (Mode::Exited(reason), _) => (mode, ShutdownStatus::Exited(reason)),
+            (Mode::Running, Shutdown::Stop) => (Mode::Stopping, ShutdownStatus::Requested),
+            (Mode::Running, Shutdown::Drain) => (Mode::Draining, ShutdownStatus::Requested),
+            (Mode::Running, Shutdown::Kill) | (Mode::Draining | Mode::Stopping, Shutdown::Kill) => {
+                (Mode::Killing, ShutdownStatus::Requested)
             }
-        };
-
-        self.set_mode(&mut gate, next);
-        ShutdownStatus::Requested
+            (Mode::Draining, _) => (mode, ShutdownStatus::InProgress(Shutdown::Drain)),
+            (Mode::Stopping, _) => (mode, ShutdownStatus::InProgress(Shutdown::Stop)),
+            (Mode::Killing | Mode::Failing | Mode::Aborting, _) => {
+                (mode, ShutdownStatus::InProgress(Shutdown::Kill))
+            }
+        })
     }
 
     /// Commits panic handling unless Kill, abort, or finalization already won.
     pub(crate) fn begin_failure(&self) {
-        let mut gate = self.lock_gate();
-        self.begin_failure_locked(&mut gate);
-    }
-
-    // Both caught panics and DispatchReply's pre-publication path use this
-    // transition so Kill/abort precedence cannot diverge between them.
-    fn begin_failure_locked(&self, gate: &mut Mode) {
-        if matches!(*gate, Mode::Running | Mode::Draining | Mode::Stopping) {
-            self.set_mode(gate, Mode::Failing);
-        }
+        self.transact(|mode| {
+            let next = if matches!(mode, Mode::Running | Mode::Draining | Mode::Stopping) {
+                Mode::Failing
+            } else {
+                mode
+            };
+            (next, ())
+        });
     }
 
     pub(crate) fn begin_abort(&self) {
-        let mut gate = self.lock_gate();
         // ActorTask::drop cannot await descendant teardown. Even an earlier Kill
         // is therefore downgraded to the explicitly weaker Aborted guarantee
         // unless normal task completion already published the terminal state.
-        if !matches!(*gate, Mode::Exited(_)) {
-            self.set_mode(&mut gate, Mode::Aborting);
-        }
+        self.transact(|mode| {
+            let next = if matches!(mode, Mode::Exited(_)) {
+                mode
+            } else {
+                Mode::Aborting
+            };
+            (next, ())
+        });
     }
 
     /// Publishes exactly one terminal mode and returns the reason that won.
@@ -150,26 +144,22 @@ impl Control {
     /// The proposed runner result is accepted only if Kill, failure, or abort has
     /// not already committed through the same gate.
     pub(crate) fn finish(&self, proposed: ExitReason) -> ExitReason {
-        let mut gate = self.lock_gate();
-        if let Mode::Exited(reason) = *gate {
-            return reason;
-        }
-
-        // Finalization shares the lifecycle gate with Kill. Whichever commits
-        // first determines whether graceful completion or escalation wins.
-        let reason = match *gate {
-            Mode::Killing => ExitReason::Killed,
-            Mode::Failing => ExitReason::Panicked,
-            Mode::Aborting => ExitReason::Aborted,
-            Mode::Running | Mode::Draining | Mode::Stopping => proposed,
-            Mode::Exited(_) => unreachable!("exited was handled above"),
-        };
-        self.set_mode(&mut gate, Mode::Exited(reason));
-        reason
+        self.transact(|mode| {
+            // Finalization shares the lifecycle gate with Kill. Whichever
+            // commits first determines graceful completion versus escalation.
+            let reason = match mode {
+                Mode::Killing => ExitReason::Killed,
+                Mode::Failing => ExitReason::Panicked,
+                Mode::Aborting => ExitReason::Aborted,
+                Mode::Running | Mode::Draining | Mode::Stopping => proposed,
+                Mode::Exited(reason) => return (mode, reason),
+            };
+            (Mode::Exited(reason), reason)
+        })
     }
 
     pub(crate) fn fallback_exit_reason(&self) -> ExitReason {
-        match *self.lock_gate() {
+        match self.mode() {
             Mode::Killing => ExitReason::Killed,
             Mode::Failing => ExitReason::Panicked,
             Mode::Exited(reason) => reason,
@@ -192,11 +182,10 @@ impl Control {
     }
 
     fn call_failure(&self, phase: CallPhase) -> CallError {
-        let gate = self.lock_gate();
-        Self::call_failure_locked(*gate, phase)
+        Self::call_failure_for(self.mode(), phase)
     }
 
-    fn call_failure_locked(mode: Mode, phase: CallPhase) -> CallError {
+    fn call_failure_for(mode: Mode, phase: CallPhase) -> CallError {
         let reason = match mode {
             Mode::Stopping if phase == CallPhase::Queued => ExitReason::Stopped,
             Mode::Killing => ExitReason::Killed,
@@ -212,19 +201,22 @@ impl Control {
         }
     }
 
-    fn set_mode(&self, gate: &mut Mode, mode: Mode) {
-        *gate = mode;
-        // Publish while holding the admission gate so concurrent requests can
-        // never make the observed lifecycle move backwards.
-        let _ = self.mode_tx.send_replace(mode);
-    }
-
-    fn lock_gate(&self) -> MutexGuard<'_, Mode> {
-        // No user code runs under this mutex. Recovering poison preserves the
-        // terminal state machine if an internal assertion ever unwinds.
-        self.gate
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    /// Runs one lifecycle transaction against the sole authoritative value.
+    ///
+    /// The callback receives a copy and returns the complete next state, so a
+    /// callback panic cannot leave a partially mutated, unnotified mode. Tokio
+    /// publishes only actual changes and releases its write lock before waking
+    /// observers.
+    fn transact<T>(&self, transaction: impl FnOnce(Mode) -> (Mode, T)) -> T {
+        let mut result = None;
+        self.mode.send_if_modified(|mode| {
+            let (next, output) = transaction(*mode);
+            let changed = *mode != next;
+            result = Some(output);
+            *mode = next;
+            changed
+        });
+        result.expect("a watch transaction executes exactly once")
     }
 }
 
@@ -242,22 +234,33 @@ struct CompletionPermit;
 
 impl DispatchPermit {
     /// Linearizes successful completion with Kill/failure. The unit permit
-    /// carries the decision beyond the mutex without exposing lifecycle state.
+    /// carries the decision beyond the transaction without exposing lifecycle
+    /// state.
     fn begin_completion(&self) -> Result<CompletionPermit, CallError> {
-        let gate = self.control.lock_gate();
-        match *gate {
-            Mode::Running | Mode::Draining | Mode::Stopping => Ok(CompletionPermit),
-            Mode::Killing | Mode::Failing | Mode::Aborting | Mode::Exited(_) => {
-                Err(Control::call_failure_locked(*gate, CallPhase::Dispatching))
-            }
-        }
+        self.control.transact(|mode| {
+            let result = match mode {
+                Mode::Running | Mode::Draining | Mode::Stopping => Ok(CompletionPermit),
+                Mode::Killing | Mode::Failing | Mode::Aborting | Mode::Exited(_) => {
+                    Err(Control::call_failure_for(mode, CallPhase::Dispatching))
+                }
+            };
+            (mode, result)
+        })
     }
 
     /// Commits handler failure before making its dispatch error observable.
     fn fail(&self) -> CallError {
-        let mut gate = self.control.lock_gate();
-        self.control.begin_failure_locked(&mut gate);
-        Control::call_failure_locked(*gate, CallPhase::Dispatching)
+        self.control.transact(|mode| {
+            let next = if matches!(mode, Mode::Running | Mode::Draining | Mode::Stopping) {
+                Mode::Failing
+            } else {
+                mode
+            };
+            (
+                next,
+                Control::call_failure_for(next, CallPhase::Dispatching),
+            )
+        })
     }
 }
 
@@ -267,6 +270,30 @@ pub(crate) struct ActorMailbox<A: Actor> {
 }
 
 impl<A: Actor> ActorMailbox<A> {
+    /// Materializes one prebuilt envelope at the admission commit point.
+    ///
+    /// The fixed operation makes running arbitrary code under the lifecycle
+    /// transaction impossible. The private inbox is polled exclusively by the
+    /// Tokio-spawned ActorTask, so its wake cannot invoke a user waker. Rejected
+    /// permits and envelopes leave through the transaction result and are
+    /// returned untouched for lock-free recovery and destruction.
+    pub(crate) fn admit<E>(
+        &self,
+        permit: mpsc::OwnedPermit<DynEnvelope<A>>,
+        envelope: Box<E>,
+    ) -> Result<mpsc::Sender<DynEnvelope<A>>, RejectedAdmission<A, E>>
+    where
+        E: Envelope<A> + 'static,
+    {
+        self.control.transact(move |mode| {
+            if mode == Mode::Running {
+                (mode, Ok(permit.send(envelope as DynEnvelope<A>)))
+            } else {
+                (mode, Err((permit, envelope)))
+            }
+        })
+    }
+
     pub(crate) fn channel(capacity: usize) -> (Arc<Self>, mpsc::Receiver<DynEnvelope<A>>) {
         let (sender, receiver) = mpsc::channel(capacity);
         let control = Control::new();
@@ -274,9 +301,25 @@ impl<A: Actor> ActorMailbox<A> {
     }
 }
 
+/// Runtime behavior of a concrete mailbox entry after its message type is
+/// erased for storage.
+///
+/// An admitted entry remains queued until the actor task either discards it or
+/// consumes it exactly once for dispatch. Concrete envelope types own their
+/// queued cleanup behavior, including whether a waiting caller must be notified.
 pub(crate) trait Envelope<A: Actor>: Send {
+    /// Reports whether queued work has no remaining caller that can observe it.
+    ///
+    /// The actor task may discard an abandoned call without invoking its
+    /// handler. One-way messages cannot be abandoned after admission.
     fn is_abandoned(&self) -> bool;
 
+    /// Attempts to move one accepted entry from the queue into actor execution.
+    ///
+    /// The implementation first commits dispatch against lifecycle shutdown.
+    /// If dispatch wins, it invokes the statically selected handler and hands
+    /// reply completion to the actor scheduler; otherwise it performs queued
+    /// rejection without invoking user handler code.
     fn dispatch(
         self: Box<Self>,
         actor: &mut A,
@@ -285,23 +328,64 @@ pub(crate) trait Envelope<A: Actor>: Send {
     );
 }
 
-pub(crate) struct CallEnvelope<M: Message> {
-    message: Option<M>,
-    reply: Option<oneshot::Sender<Result<M::Reply, CallError>>>,
+/// Coupled ownership of a two-way call before it leaves the queued phase.
+struct QueuedCall<M: Message> {
+    message: M,
+    reply: oneshot::Sender<Result<M::Reply, CallError>>,
     control: Arc<Control>,
 }
 
+enum CallEnvelopeState<M: Message> {
+    Queued(QueuedCall<M>),
+    /// Tombstone installed after queued ownership leaves the envelope, making
+    /// its subsequent `Drop` a no-op.
+    Consumed,
+}
+
+/// A request-response mailbox entry awaiting dispatch.
+///
+/// While queued, dropping the caller's response marks the entry abandoned, and
+/// dropping the entry reports a phase-aware queued failure to a remaining
+/// caller. Dispatch consumes the queued state and transfers reply ownership to
+/// [`DispatchReply`].
+pub(crate) struct CallEnvelope<M: Message> {
+    state: CallEnvelopeState<M>,
+}
+
 impl<M: Message> CallEnvelope<M> {
+    /// Creates the queued entry and the response endpoint retained by its caller.
     pub(crate) fn new(message: M, control: Arc<Control>) -> (Self, ReplyReceiver<M::Reply>) {
         let (reply, response) = oneshot::channel();
         (
             Self {
-                message: Some(message),
-                reply: Some(reply),
-                control,
+                state: CallEnvelopeState::Queued(QueuedCall {
+                    message,
+                    reply,
+                    control,
+                }),
             },
             response,
         )
+    }
+
+    /// Recovers a message whose envelope lost admission before dispatch.
+    pub(crate) fn into_message(mut self) -> M {
+        let QueuedCall {
+            message,
+            reply,
+            control,
+        } = self.take_queued();
+        drop(reply);
+        drop(control);
+        message
+    }
+
+    /// Moves the coupled queued state out while disarming queued-failure Drop.
+    fn take_queued(&mut self) -> QueuedCall<M> {
+        match std::mem::replace(&mut self.state, CallEnvelopeState::Consumed) {
+            CallEnvelopeState::Queued(queued) => queued,
+            CallEnvelopeState::Consumed => panic!("a call envelope is consumed at most once"),
+        }
     }
 }
 
@@ -311,7 +395,12 @@ where
     M: Message,
 {
     fn is_abandoned(&self) -> bool {
-        self.reply.as_ref().is_none_or(oneshot::Sender::is_closed)
+        match &self.state {
+            CallEnvelopeState::Queued(queued) => queued.reply.is_closed(),
+            CallEnvelopeState::Consumed => {
+                panic!("a consumed call envelope cannot remain in the mailbox")
+            }
+        }
     }
 
     fn dispatch(
@@ -320,15 +409,11 @@ where
         scope: &mut ActorScope<A>,
         scheduler: &mut ReplyScheduler<A>,
     ) {
-        let message = self
-            .message
-            .take()
-            .expect("an envelope is dispatched at most once");
-        let reply = self
-            .reply
-            .take()
-            .expect("an envelope is dispatched at most once");
-        let control = Arc::clone(&self.control);
+        let QueuedCall {
+            message,
+            reply,
+            control,
+        } = self.take_queued();
 
         let permit = match control.begin_dispatch() {
             Ok(permit) => permit,
@@ -348,10 +433,17 @@ where
 
 impl<M: Message> Drop for CallEnvelope<M> {
     fn drop(&mut self) {
-        let Some(reply) = self.reply.take() else {
+        let CallEnvelopeState::Queued(QueuedCall {
+            message,
+            reply,
+            control,
+        }) = std::mem::replace(&mut self.state, CallEnvelopeState::Consumed)
+        else {
             return;
         };
-        let _ = reply.send(Err(self.control.call_failure(CallPhase::Queued)));
+
+        let _ = reply.send(Err(control.call_failure(CallPhase::Queued)));
+        drop(message);
     }
 }
 
@@ -368,6 +460,11 @@ pub(crate) struct SendEnvelope<M: Message<Reply = ()>> {
 impl<M: Message<Reply = ()>> SendEnvelope<M> {
     pub(crate) fn new(message: M, control: Arc<Control>) -> Self {
         Self { message, control }
+    }
+
+    /// Recovers a message whose envelope lost admission before dispatch.
+    pub(crate) fn into_message(self) -> M {
+        self.message
     }
 }
 
@@ -426,8 +523,8 @@ impl<R> DispatchReply<R> {
     /// failure, abort, or terminal publication.
     ///
     /// The gate decides the outcome; caller notification and destruction of a
-    /// rejected reply value happen after the mutex is released. One-way work
-    /// follows the same gate without creating a response channel.
+    /// rejected reply value happen after the watch transaction is released.
+    /// One-way work follows the same gate without creating a response channel.
     pub(crate) fn complete(mut self, response: R) {
         let outcome = self.permit.begin_completion();
         let DispatchReplyState::Pending(destination) =
@@ -474,7 +571,16 @@ impl<R> Drop for DispatchReply<R> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::{
+        future::Future,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+            mpsc as std_mpsc,
+        },
+        task::{Context, Poll, Wake, Waker},
+        time::Duration,
+    };
 
     use super::*;
 
@@ -498,6 +604,30 @@ mod tests {
         }
     }
 
+    struct RecoverMessage(Arc<AtomicUsize>);
+
+    impl Drop for RecoverMessage {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    impl Message for RecoverMessage {
+        type Reply = ();
+    }
+
+    impl Handler<RecoverMessage> for TestActor {
+        fn handle(
+            &mut self,
+            _message: RecoverMessage,
+            _scope: &mut ActorScope<Self>,
+        ) -> impl crate::IntoReply<Self, RecoverMessage> + use<> {
+            crate::reply::ready(())
+        }
+    }
+
+    // A capacity reservation is not admission. Once Drain wins the lifecycle
+    // transaction, the reserved slot must be returned without entering inbox.
     #[tokio::test]
     async fn shutdown_wins_over_an_acquired_but_uncommitted_permit() {
         let (mailbox, mut receiver) = ActorMailbox::<TestActor>::channel(1);
@@ -512,11 +642,13 @@ mod tests {
             mailbox.control.request(Shutdown::Drain),
             ShutdownStatus::Requested
         );
-        let committed = mailbox.control.admit(|| {
-            drop(permit.send(Box::new(NoopEnvelope)));
-        });
+        let committed = mailbox.admit(permit, Box::new(NoopEnvelope));
 
-        assert_eq!(committed, Err(()));
+        let Err((permit, envelope)) = committed else {
+            panic!("shutdown must reject the uncommitted envelope");
+        };
+        drop(permit);
+        drop(envelope);
         assert!(matches!(
             receiver.try_recv(),
             Err(mpsc::error::TryRecvError::Empty)
@@ -535,12 +667,11 @@ mod tests {
             .await
             .expect("the test mailbox is open");
 
-        mailbox
-            .control
-            .admit(|| {
-                drop(permit.send(Box::new(NoopEnvelope)));
-            })
-            .expect("the commit wins admission");
+        let committed = mailbox.admit(permit, Box::new(NoopEnvelope));
+        let Ok(sender) = committed else {
+            panic!("the commit must win admission");
+        };
+        drop(sender);
         assert_eq!(
             mailbox.control.request(Shutdown::Drain),
             ShutdownStatus::Requested
@@ -551,6 +682,93 @@ mod tests {
             receiver.try_recv(),
             Err(mpsc::error::TryRecvError::Empty)
         ));
+    }
+
+    // The typed rejected path must recover the concrete call message rather
+    // than dropping CallEnvelope and publishing a fabricated queued failure.
+    #[tokio::test]
+    async fn rejected_call_admission_recovers_its_message_without_a_reply() {
+        let (mailbox, mut receiver) = ActorMailbox::<TestActor>::channel(1);
+        let permit = mailbox
+            .sender
+            .clone()
+            .reserve_owned()
+            .await
+            .expect("the test mailbox is open");
+        let drops = Arc::new(AtomicUsize::new(0));
+        let (envelope, mut response) = CallEnvelope::new(
+            RecoverMessage(Arc::clone(&drops)),
+            Arc::clone(&mailbox.control),
+        );
+        assert_eq!(
+            mailbox.control.request(Shutdown::Stop),
+            ShutdownStatus::Requested
+        );
+
+        let rejected = mailbox.admit(permit, Box::new(envelope));
+        let Err((permit, envelope)) = rejected else {
+            panic!("shutdown must reject the call envelope");
+        };
+        drop(permit);
+        let message = (*envelope).into_message();
+
+        assert_eq!(
+            response.try_recv(),
+            Err(oneshot::error::TryRecvError::Closed)
+        );
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        drop(message);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+    }
+
+    struct WakeCounter(AtomicUsize);
+
+    impl Wake for WakeCounter {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    // Running-to-Running admission is the hot path. It must take the same write
+    // gate without publishing a fake lifecycle change to every closed() waiter.
+    #[test]
+    fn mailbox_admission_does_not_wake_lifecycle_observers() {
+        let (mailbox, mut receiver) = ActorMailbox::<TestActor>::channel(1);
+        let mut mode = mailbox.control.subscribe_mode();
+        let mut changed = Box::pin(mode.changed());
+        let wakes = Arc::new(WakeCounter(AtomicUsize::new(0)));
+        let waker = Waker::from(Arc::clone(&wakes));
+        let mut task = Context::from_waker(&waker);
+        let permit = mailbox
+            .sender
+            .clone()
+            .try_reserve_owned()
+            .expect("the test mailbox has capacity");
+
+        assert!(matches!(changed.as_mut().poll(&mut task), Poll::Pending));
+        let admitted = mailbox.admit(permit, Box::new(NoopEnvelope));
+        let Ok(sender) = admitted else {
+            panic!("Running must admit the envelope");
+        };
+        drop(sender);
+        assert_eq!(wakes.0.load(Ordering::SeqCst), 0);
+        assert!(matches!(changed.as_mut().poll(&mut task), Poll::Pending));
+
+        drop(changed);
+        assert!(
+            !mode
+                .has_changed()
+                .expect("the control still owns its sender")
+        );
+        drop(receiver.try_recv().expect("admission physically enqueues"));
     }
 
     #[test]
@@ -604,39 +822,51 @@ mod tests {
             Ok(Err(CallError::DuringDispatch(ExitReason::Panicked)))
         ));
         assert_eq!(control.mode(), Mode::Failing);
-        assert_eq!(control.admit(|| ()), Err(()));
+        assert!(!control.is_running());
     }
 
     struct GateDropProbe {
         control: Arc<Control>,
-        dropped_without_gate: Arc<AtomicBool>,
+        reentered: Arc<AtomicBool>,
     }
 
     impl Drop for GateDropProbe {
         fn drop(&mut self) {
-            self.dropped_without_gate
-                .store(self.control.gate.try_lock().is_ok(), Ordering::SeqCst);
+            let _ = self.control.mode();
+            self.reentered.store(true, Ordering::SeqCst);
         }
     }
 
+    // A rejected user response may reenter lifecycle APIs from Drop. Completing
+    // on an OS thread turns accidental in-transaction destruction into a bounded
+    // failure instead of hanging the entire test process.
     #[tokio::test]
     async fn rejected_response_is_dropped_outside_the_lifecycle_gate() {
         let control = Control::new();
         let permit = control.begin_dispatch().expect("dispatch wins the gate");
         let (sender, receiver) = oneshot::channel();
-        let dropped_without_gate = Arc::new(AtomicBool::new(false));
+        let reentered = Arc::new(AtomicBool::new(false));
         assert_eq!(control.request(Shutdown::Kill), ShutdownStatus::Requested);
 
-        DispatchReply::new(sender, permit).complete(GateDropProbe {
-            control,
-            dropped_without_gate: Arc::clone(&dropped_without_gate),
+        let reply = DispatchReply::new(sender, permit);
+        let (done_tx, done_rx) = std_mpsc::sync_channel(1);
+        let completion = std::thread::spawn({
+            let reentered = Arc::clone(&reentered);
+            move || {
+                reply.complete(GateDropProbe { control, reentered });
+                let _ = done_tx.send(());
+            }
         });
+        done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("response Drop must not retain the lifecycle transaction");
+        completion.join().expect("completion thread must not panic");
 
         assert!(matches!(
             receiver.await,
             Ok(Err(CallError::DuringDispatch(ExitReason::Killed)))
         ));
-        assert!(dropped_without_gate.load(Ordering::SeqCst));
+        assert!(reentered.load(Ordering::SeqCst));
     }
 
     #[test]

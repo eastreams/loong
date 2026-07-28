@@ -5,7 +5,7 @@ use tokio::sync::{mpsc, watch};
 use crate::{
     Actor, CallError, ExitReason, Handler, Message, SendError, TryCallError, TryCallErrorKind,
     TrySendError, TrySendErrorKind,
-    mailbox::{ActorMailbox, CallEnvelope, DynEnvelope, Mode, ReplyReceiver, SendEnvelope},
+    mailbox::{ActorMailbox, CallEnvelope, Mode, ReplyReceiver, SendEnvelope},
 };
 
 /// A cloneable address that can communicate with, but does not own, an actor.
@@ -75,18 +75,17 @@ impl<A: Actor> ActorRef<A> {
             }
         };
 
-        let mut message = Some(message);
-        let response = mailbox
-            .control
-            .admit(|| {
-                let message = message
-                    .take()
-                    .expect("admission commits a message at most once");
-                let (envelope, response) = CallEnvelope::new(message, mailbox.control.clone());
-                drop(permit.send(Box::new(envelope) as DynEnvelope<A>));
-                response
-            })
-            .map_err(|()| CallError::Closed)?;
+        let (envelope, response) = CallEnvelope::new(message, mailbox.control.clone());
+        let admission = mailbox.admit(permit, Box::new(envelope));
+        match admission {
+            Ok(sender) => drop(sender),
+            Err((permit, envelope)) => {
+                drop(permit);
+                drop(response);
+                drop((*envelope).into_message());
+                return Err(CallError::Closed);
+            }
+        }
 
         Response::new(response).await
     }
@@ -143,18 +142,17 @@ impl<A: Actor> ActorRef<A> {
             }
         };
 
-        let mut message = Some(message);
-        mailbox
-            .control
-            .admit(|| {
-                let message = message
-                    .take()
-                    .expect("admission commits a message at most once");
-                drop(permit.send(
-                    Box::new(SendEnvelope::new(message, mailbox.control.clone())) as DynEnvelope<A>,
-                ));
-            })
-            .map_err(|()| SendError::new(message.expect("closed admission retains the message")))
+        let envelope = Box::new(SendEnvelope::new(message, mailbox.control.clone()));
+        match mailbox.admit(permit, envelope) {
+            Ok(sender) => {
+                drop(sender);
+                Ok(())
+            }
+            Err((permit, envelope)) => {
+                drop(permit);
+                Err(SendError::new((*envelope).into_message()))
+            }
+        }
     }
 
     /// Attempts immediate bounded admission without waiting for capacity.
@@ -175,31 +173,35 @@ impl<A: Actor> ActorRef<A> {
             return Err(TryCallError::new(TryCallErrorKind::Closed, message));
         };
 
-        let sender = mailbox.sender.clone();
-        let mut message = Some(message);
-        let admitted = mailbox.control.admit(|| match sender.try_reserve_owned() {
-            Ok(permit) => {
-                let message = message
-                    .take()
-                    .expect("admission commits a message at most once");
-                let (envelope, response) = CallEnvelope::new(message, mailbox.control.clone());
-                drop(permit.send(Box::new(envelope) as DynEnvelope<A>));
-                Ok(response)
+        let permit = match mailbox.sender.clone().try_reserve_owned() {
+            Ok(permit) => permit,
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                let kind = if mailbox.control.is_running() {
+                    TryCallErrorKind::Full
+                } else {
+                    TryCallErrorKind::Closed
+                };
+                return Err(TryCallError::new(kind, message));
             }
-            Err(mpsc::error::TrySendError::Full(_)) => Err(TryCallErrorKind::Full),
-            Err(mpsc::error::TrySendError::Closed(_)) => Err(TryCallErrorKind::Closed),
-        });
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                return Err(TryCallError::new(TryCallErrorKind::Closed, message));
+            }
+        };
 
-        match admitted {
-            Ok(Ok(response)) => Ok(Response::new(response)),
-            Ok(Err(kind)) => Err(TryCallError::new(
-                kind,
-                message.expect("failed admission retains the message"),
-            )),
-            Err(()) => Err(TryCallError::new(
-                TryCallErrorKind::Closed,
-                message.expect("closed admission retains the message"),
-            )),
+        let (envelope, response) = CallEnvelope::new(message, mailbox.control.clone());
+        match mailbox.admit(permit, Box::new(envelope)) {
+            Ok(sender) => {
+                drop(sender);
+                Ok(Response::new(response))
+            }
+            Err((permit, envelope)) => {
+                drop(permit);
+                drop(response);
+                Err(TryCallError::new(
+                    TryCallErrorKind::Closed,
+                    (*envelope).into_message(),
+                ))
+            }
         }
     }
 
@@ -222,32 +224,34 @@ impl<A: Actor> ActorRef<A> {
             return Err(TrySendError::new(TrySendErrorKind::Closed, message));
         };
 
-        let sender = mailbox.sender.clone();
-        let mut message = Some(message);
-        let admitted = mailbox.control.admit(|| match sender.try_reserve_owned() {
-            Ok(permit) => {
-                let message = message
-                    .take()
-                    .expect("admission commits a message at most once");
-                drop(permit.send(
-                    Box::new(SendEnvelope::new(message, mailbox.control.clone())) as DynEnvelope<A>,
-                ));
+        let permit = match mailbox.sender.clone().try_reserve_owned() {
+            Ok(permit) => permit,
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                let kind = if mailbox.control.is_running() {
+                    TrySendErrorKind::Full
+                } else {
+                    TrySendErrorKind::Closed
+                };
+                return Err(TrySendError::new(kind, message));
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                return Err(TrySendError::new(TrySendErrorKind::Closed, message));
+            }
+        };
+
+        let envelope = Box::new(SendEnvelope::new(message, mailbox.control.clone()));
+        match mailbox.admit(permit, envelope) {
+            Ok(sender) => {
+                drop(sender);
                 Ok(())
             }
-            Err(mpsc::error::TrySendError::Full(_)) => Err(TrySendErrorKind::Full),
-            Err(mpsc::error::TrySendError::Closed(_)) => Err(TrySendErrorKind::Closed),
-        });
-
-        match admitted {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(kind)) => Err(TrySendError::new(
-                kind,
-                message.expect("failed admission retains the message"),
-            )),
-            Err(()) => Err(TrySendError::new(
-                TrySendErrorKind::Closed,
-                message.expect("closed admission retains the message"),
-            )),
+            Err((permit, envelope)) => {
+                drop(permit);
+                Err(TrySendError::new(
+                    TrySendErrorKind::Closed,
+                    (*envelope).into_message(),
+                ))
+            }
         }
     }
 

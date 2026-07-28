@@ -1,8 +1,17 @@
-use std::sync::{Arc, Barrier};
+use std::{
+    future::Future,
+    sync::{
+        Arc, Barrier,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
+    task::{Context, Poll, Wake, Waker},
+    time::Duration,
+};
 
 use loong_actor::{
-    Actor, ActorScope, CallError, ExitReason, Handler, Message, Shutdown, ShutdownStatus, reply,
-    spawn,
+    Actor, ActorOwner, ActorScope, CallError, ExitReason, Handler, Message, Shutdown,
+    ShutdownStatus, reply, spawn,
 };
 use tokio::sync::oneshot;
 
@@ -56,6 +65,79 @@ async fn actor_refs_do_not_keep_an_actor_alive() {
     assert_eq!(watchdog(actor.closed()).await, ExitReason::Killed);
     watchdog(dropped_rx).await.unwrap();
     assert_eq!(another_ref.exit_reason(), Some(ExitReason::Killed));
+}
+
+struct ReentrantShutdownWaker {
+    owner: Arc<ActorOwner<ExitedActor>>,
+    entered: AtomicBool,
+    result: mpsc::SyncSender<ShutdownStatus>,
+}
+
+impl ReentrantShutdownWaker {
+    fn reenter(&self) {
+        if !self.entered.swap(true, Ordering::SeqCst) {
+            let _ = self
+                .result
+                .send(self.owner.request_shutdown(Shutdown::Kill));
+        }
+    }
+}
+
+impl Wake for ReentrantShutdownWaker {
+    fn wake(self: Arc<Self>) {
+        self.reenter();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.reenter();
+    }
+}
+
+// Lifecycle observers may use any safe Waker. Requesting Stop on an OS thread
+// makes synchronous reentry observable without allowing the old self-deadlock
+// to freeze this current-thread runtime or hide behind an async timeout.
+#[tokio::test(flavor = "current_thread")]
+async fn lifecycle_notification_allows_reentrant_shutdown_from_a_safe_waker() {
+    let owner = Arc::new(spawn(ExitedActor));
+    let actor = owner.actor_ref();
+    let (kill_tx, kill_rx) = mpsc::sync_channel(1);
+    let probe = Arc::new(ReentrantShutdownWaker {
+        owner: Arc::clone(&owner),
+        entered: AtomicBool::new(false),
+        result: kill_tx,
+    });
+    let waker = Waker::from(Arc::clone(&probe));
+    let mut task = Context::from_waker(&waker);
+    let mut closed = Box::pin(actor.closed());
+    assert_eq!(closed.as_mut().poll(&mut task), Poll::Pending);
+
+    let (stop_tx, stop_rx) = mpsc::sync_channel(1);
+    let requester = std::thread::spawn({
+        let owner = Arc::clone(&owner);
+        move || {
+            let _ = stop_tx.send(owner.request_shutdown(Shutdown::Stop));
+        }
+    });
+
+    assert_eq!(
+        kill_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("the lifecycle waker must reenter without deadlocking"),
+        ShutdownStatus::Requested
+    );
+    assert_eq!(
+        stop_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("the outer shutdown request must return after notification"),
+        ShutdownStatus::Requested
+    );
+    requester.join().expect("shutdown thread must not panic");
+
+    drop(closed);
+    drop(waker);
+    drop(probe);
+    drop(owner);
+    assert_eq!(watchdog(actor.closed()).await, ExitReason::Killed);
 }
 
 struct PendingStart {

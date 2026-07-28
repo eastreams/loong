@@ -782,11 +782,12 @@ async fn drain_actor<A: Actor>(
     scheduler: &mut ReplyScheduler<A>,
     turn_cursor: &mut TurnCursor,
 ) -> ExitReason {
-    // Admission is already closed under the shared gate. Every accepted send is
-    // therefore in this fixed queue; outstanding permits cannot extend Drain.
+    // Admission physically enqueues under the lifecycle transaction, so this
+    // queue is stable once Drain commits. Capacity permits that never reached
+    // admission are not accepted work and must not extend graceful shutdown.
     inbox.close();
     mode.borrow_and_update();
-    let mut inbox_drained = false;
+    let mut inbox_drained = inbox.is_empty();
     loop {
         match scope.control.mode() {
             Mode::Killing => {
@@ -798,6 +799,10 @@ async fn drain_actor<A: Actor>(
             Mode::Running | Mode::Draining | Mode::Stopping => {}
             Mode::Exited(reason) => return reason,
             Mode::Aborting => return ExitReason::Aborted,
+        }
+
+        if !inbox_drained && inbox.is_empty() {
+            inbox_drained = true;
         }
 
         if inbox_drained && scheduler.is_empty() {

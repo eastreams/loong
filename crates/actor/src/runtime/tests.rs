@@ -7,6 +7,7 @@ use std::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     task::{Context, Poll, Waker},
+    time::Duration,
 };
 
 use tokio::sync::mpsc;
@@ -20,7 +21,7 @@ use crate::{
 
 use super::{
     ChildSet, DiscardOutcome, OwnedActor, TEARDOWN_DROP_BUDGET, Turn, TurnCursor, Work, actor_turn,
-    close_and_discard, graceful_finish, kill_actor, spawn_actor,
+    close_and_discard, graceful_finish, kill_actor, run_actor, spawn_actor,
 };
 
 struct TestActor;
@@ -131,6 +132,50 @@ impl Envelope<TestActor> for TeardownEnvelope {
     ) {
         unreachable!("teardown discards queued envelopes")
     }
+}
+
+// Reserving capacity is not admission. Drain must finish from the stable queue
+// snapshot even if an internal raw permit remains alive and keeps mpsc from
+// reporting channel termination.
+#[tokio::test]
+async fn unadmitted_mailbox_permit_does_not_extend_drain() {
+    let (mailbox, inbox) = ActorMailbox::<TestActor>::channel(1);
+    let permit = mailbox
+        .sender
+        .clone()
+        .reserve_owned()
+        .await
+        .expect("the test mailbox is open");
+    let control = Arc::clone(&mailbox.control);
+    let actor_ref = ActorRef::new(Arc::downgrade(&mailbox), control.subscribe_mode());
+    let (supervisor_tx, supervisor_rx) = mpsc::unbounded_channel();
+    let scope = ActorScope {
+        actor_ref,
+        control: Arc::clone(&control),
+        children: ChildSet::default(),
+        accepts_children: true,
+        supervisor_tx,
+    };
+    let mode = control.subscribe_mode();
+    assert_eq!(control.request(Shutdown::Drain), ShutdownStatus::Requested);
+
+    let reason = tokio::time::timeout(
+        Duration::from_secs(1),
+        run_actor(
+            TestActor,
+            scope,
+            inbox,
+            supervisor_rx,
+            mode,
+            mailbox,
+            NonZeroUsize::new(1).unwrap(),
+        ),
+    )
+    .await
+    .expect("an unadmitted capacity permit must not hold Drain open");
+
+    assert_eq!(reason, ExitReason::Drained);
+    drop(permit);
 }
 
 #[tokio::test]
