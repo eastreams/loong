@@ -137,9 +137,9 @@ impl hash::Hash for ChildId {
 /// The terminal event of a direct child actor.
 ///
 /// While the parent is active, the runtime delivers this value serially to
-/// [`Actor::on_child_exit`]. An event not entered before parent cleanup begins is
-/// absorbed by subtree teardown instead, including an exit caused by that
-/// cleanup.
+/// [`Actor::on_child_exit`]. Hook entry and graceful cutoff share one lifecycle
+/// gate: an event that loses the cutoff is absorbed, while a hook admitted first
+/// is allowed to finish before parent cleanup proceeds.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChildExit {
     child: ChildId,

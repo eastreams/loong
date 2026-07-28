@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::{
     Actor, ActorFuture, ActorRef, ActorScope, ChildExit, ChildId, ExitReason, IntoActorFuture,
@@ -21,12 +21,40 @@ use crate::{
 
 use super::{
     ChildSet, DiscardOutcome, OwnedActor, TEARDOWN_DROP_BUDGET, Turn, TurnCursor, Work, actor_turn,
-    close_and_discard, graceful_finish, kill_actor, run_actor, spawn_actor,
+    close_and_discard, graceful_finish, handle_child_exit, kill_actor, run_actor, spawn_actor,
 };
 
 struct TestActor;
 
 impl Actor for TestActor {}
+
+struct CountChildExit(Arc<AtomicUsize>);
+
+impl Actor for CountChildExit {
+    async fn on_child_exit(&mut self, _event: ChildExit, _scope: &mut ActorScope<Self>) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+struct ControlledChildExit {
+    entered: Option<oneshot::Sender<()>>,
+    release: Option<oneshot::Receiver<()>>,
+    completed: Option<oneshot::Sender<()>>,
+}
+
+impl Actor for ControlledChildExit {
+    async fn on_child_exit(&mut self, _event: ChildExit, _scope: &mut ActorScope<Self>) {
+        if let Some(entered) = self.entered.take() {
+            let _ = entered.send(());
+        }
+        if let Some(release) = self.release.take() {
+            let _ = release.await;
+        }
+        if let Some(completed) = self.completed.take() {
+            let _ = completed.send(());
+        }
+    }
+}
 
 struct CountPendingExclusive(Arc<AtomicUsize>);
 
@@ -131,6 +159,115 @@ impl Envelope<TestActor> for TeardownEnvelope {
         _scheduler: &mut ReplyScheduler<TestActor>,
     ) {
         unreachable!("teardown discards queued envelopes")
+    }
+}
+
+// This recreates the original race window after actor_turn has dequeued a
+// valid event. A graceful cutoff that commits in that window must retire the
+// child without entering user code, for both graceful modes.
+#[tokio::test]
+async fn graceful_cutoff_absorbs_a_dequeued_child_exit() {
+    for shutdown in [Shutdown::Stop, Shutdown::Drain] {
+        let observed = Arc::new(AtomicUsize::new(0));
+        let child_id = ChildId::new();
+        let mut children = ChildSet::default();
+        children.insert(
+            child_id.clone(),
+            OwnedActor {
+                control: Control::new(),
+                join: None,
+            },
+        );
+
+        let (mailbox, _inbox) = ActorMailbox::<CountChildExit>::channel(1);
+        let control = Arc::clone(&mailbox.control);
+        let actor_ref = ActorRef::new(Arc::downgrade(&mailbox), control.subscribe_mode());
+        let (supervisor_tx, _supervisor_rx) = mpsc::unbounded_channel();
+        let mut scope = ActorScope {
+            actor_ref,
+            control: Arc::clone(&control),
+            children,
+            accepts_children: true,
+            supervisor_tx,
+        };
+        let mut actor = CountChildExit(Arc::clone(&observed));
+        let mut mode = control.subscribe_mode();
+
+        assert_eq!(control.request(shutdown), ShutdownStatus::Requested);
+        assert!(matches!(
+            handle_child_exit(
+                &mut actor,
+                &mut scope,
+                ChildExit::new(child_id, ExitReason::Stopped),
+                &mut mode,
+            )
+            .await,
+            Work::Complete(())
+        ));
+        assert_eq!(observed.load(Ordering::SeqCst), 0);
+        assert_eq!(scope.children.len(), 0);
+    }
+}
+
+// Once hook entry wins the lifecycle gate, Stop and Drain must wait for that
+// serial hook rather than cancelling it or publishing graceful completion
+// around it. Kill cancellation is covered separately by lifecycle hook tests.
+#[tokio::test]
+async fn admitted_child_exit_hook_finishes_across_graceful_cutoff() {
+    for shutdown in [Shutdown::Stop, Shutdown::Drain] {
+        let (entered_tx, entered_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let (completed_tx, completed_rx) = oneshot::channel();
+        let child_id = ChildId::new();
+        let mut children = ChildSet::default();
+        children.insert(
+            child_id.clone(),
+            OwnedActor {
+                control: Control::new(),
+                join: None,
+            },
+        );
+
+        let (mailbox, _inbox) = ActorMailbox::<ControlledChildExit>::channel(1);
+        let control = Arc::clone(&mailbox.control);
+        let actor_ref = ActorRef::new(Arc::downgrade(&mailbox), control.subscribe_mode());
+        let (supervisor_tx, _supervisor_rx) = mpsc::unbounded_channel();
+        let mut scope = ActorScope {
+            actor_ref,
+            control: Arc::clone(&control),
+            children,
+            accepts_children: true,
+            supervisor_tx,
+        };
+        let mut actor = ControlledChildExit {
+            entered: Some(entered_tx),
+            release: Some(release_rx),
+            completed: Some(completed_tx),
+        };
+        let mut mode = control.subscribe_mode();
+        let controller = Arc::clone(&control);
+
+        let (work, ()) = tokio::time::timeout(Duration::from_secs(1), async {
+            tokio::join!(
+                handle_child_exit(
+                    &mut actor,
+                    &mut scope,
+                    ChildExit::new(child_id, ExitReason::Stopped),
+                    &mut mode,
+                ),
+                async move {
+                    entered_rx.await.unwrap();
+                    assert_eq!(controller.request(shutdown), ShutdownStatus::Requested);
+                    release_tx.send(()).unwrap();
+                }
+            )
+        })
+        .await
+        .expect("an admitted hook must remain live across graceful cutoff");
+
+        assert!(matches!(work, Work::Complete(())));
+        completed_rx.await.unwrap();
+        assert_eq!(scope.children.len(), 0);
     }
 }
 

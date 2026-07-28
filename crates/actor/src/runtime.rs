@@ -19,7 +19,7 @@ use crate::{
     Actor, ActorRef, Child, ChildExit, ChildId, ErasedFuture, ExitReason, Shutdown, ShutdownStatus,
     SpawnChildError,
     address::wait_for_kill,
-    mailbox::{ActorMailbox, Control, DynEnvelope, Mode},
+    mailbox::{ActorMailbox, Control, DynEnvelope, HookEntryPermit, Mode},
     scheduler::ReplyScheduler,
 };
 
@@ -182,6 +182,9 @@ pub struct ActorScope<A: Actor> {
     actor_ref: ActorRef<A>,
     control: Arc<Control>,
     children: ChildSet,
+    // This actor-task-local gate closes only after retained work has finished.
+    // Work admitted before graceful cutoff may still add a child that cleanup
+    // must include; it is not a second source of shared lifecycle state.
     accepts_children: bool,
     supervisor_tx: mpsc::UnboundedSender<ChildExit>,
 }
@@ -739,6 +742,21 @@ async fn handle_child_exit<A: Actor>(
         return Work::Complete(());
     }
 
+    let Some(permit) = scope.control.begin_child_hook() else {
+        return Work::Complete(());
+    };
+
+    run_child_exit_hook(actor, scope, event, mode, permit).await
+}
+
+/// Makes the private gate proof mandatory at the only user hook call site.
+async fn run_child_exit_hook<A: Actor>(
+    actor: &mut A,
+    scope: &mut ActorScope<A>,
+    event: ChildExit,
+    mode: &mut watch::Receiver<Mode>,
+    _permit: HookEntryPermit,
+) -> Work {
     await_actor_work(async { actor.on_child_exit(event, scope).await }, mode).await
 }
 

@@ -41,9 +41,10 @@ pub trait Actor: Send + Sized + 'static {
     ///
     /// The child has already terminated when this hook begins. A direct child
     /// contributes at most one event, and its exit reason does not by itself stop
-    /// the parent. Events still pending when post-order parent cleanup begins,
-    /// including exits caused by that cleanup, are absorbed by teardown instead
-    /// of being re-entered as hooks.
+    /// the parent. Hook entry is linearized with Stop and Drain: an entry that
+    /// commits first is allowed to finish before graceful shutdown proceeds,
+    /// while an event whose hook loses that cutoff is absorbed without calling
+    /// user code. Kill may still cancel an entered hook between polls.
     ///
     /// Restart policy is intentionally application-owned: the hook may spawn a
     /// replacement child, ignore the event, or request parent shutdown. While

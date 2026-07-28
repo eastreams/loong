@@ -93,6 +93,18 @@ impl Control {
         })
     }
 
+    /// Linearizes a child-exit hook's first entry with lifecycle cutoff.
+    ///
+    /// The actor task serially waits for an admitted hook, so the permit needs
+    /// no running counter: Stop and Drain wait naturally, while Kill may still
+    /// cancel the hook through the lifecycle watcher.
+    pub(crate) fn begin_child_hook(&self) -> Option<HookEntryPermit> {
+        self.transact(|mode| {
+            let permit = (mode == Mode::Running).then_some(HookEntryPermit(()));
+            (mode, permit)
+        })
+    }
+
     /// Commits the first shutdown mode and permits only a later Kill upgrade.
     ///
     /// Repeated and losing requests observe the already committed behavior;
@@ -229,6 +241,8 @@ enum CallPhase {
 struct DispatchPermit {
     control: Arc<Control>,
 }
+
+pub(crate) struct HookEntryPermit(());
 
 struct CompletionPermit;
 
