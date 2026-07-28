@@ -9,7 +9,7 @@ use std::{
 
 use loong_actor::{
     Actor, ActorFutureExt, ActorScope, CallError, ExitReason, Handler, IntoActorFuture, Message,
-    Shutdown, SpawnOptions, TryCallErrorKind, reply, spawn, spawn_with,
+    Shutdown, SpawnOptions, TryCallErrorKind, TrySendErrorKind, reply, spawn, spawn_with,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -165,6 +165,23 @@ impl Handler<Snapshot> for SerialActor {
     }
 }
 
+struct Notify(u8);
+
+impl Message for Notify {
+    type Reply = ();
+}
+
+impl Handler<Notify> for SerialActor {
+    fn handle(
+        &mut self,
+        message: Notify,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loong_actor::IntoReply<Self, Notify> + use<> {
+        lock(&self.committed).push(message.0);
+        reply::ready(())
+    }
+}
+
 fn single_slot_options() -> SpawnOptions {
     let one = NonZeroUsize::new(1).expect("one is non-zero");
     SpawnOptions::default()
@@ -237,6 +254,174 @@ async fn abandoning_a_queued_response_skips_its_handler() {
         watchdog(owner.shutdown(Shutdown::Drain)).await,
         ExitReason::Drained
     );
+}
+
+// A one-way envelope must remain dispatchable after admission because there is
+// intentionally no Response whose lifetime can keep it alive. Filling the queue
+// proves that a waiting send commits when capacity returns; requesting Drain
+// immediately afterward proves that commit joined Drain's fixed accepted queue.
+#[tokio::test]
+async fn admitted_one_way_message_cannot_be_abandoned_by_its_sender() {
+    let committed = Arc::new(Mutex::new(Vec::new()));
+    let owner = spawn_with(
+        SerialActor {
+            committed: Arc::clone(&committed),
+        },
+        single_slot_options(),
+    );
+    let actor = owner.actor_ref();
+    let (entered_tx, entered_rx) = oneshot::channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    let current = tokio::spawn({
+        let actor = actor.clone();
+        async move {
+            actor
+                .call(Block {
+                    entered: entered_tx,
+                    release: release_rx,
+                })
+                .await
+        }
+    });
+
+    watchdog(entered_rx).await.unwrap();
+    actor.try_send(Notify(7)).unwrap();
+    let mut waiting = Box::pin(actor.send(Notify(8)));
+    let first_poll =
+        std::future::poll_fn(|context| Poll::Ready(waiting.as_mut().poll(context))).await;
+    assert!(first_poll.is_pending());
+    assert!(lock(&committed).is_empty());
+
+    release_tx.send(()).unwrap();
+    assert_eq!(watchdog(current).await.unwrap(), Ok(()));
+    watchdog(waiting).await.unwrap();
+    assert_eq!(
+        watchdog(owner.shutdown(Shutdown::Drain)).await,
+        ExitReason::Drained
+    );
+    assert_eq!(*lock(&committed), vec![7, 8]);
+}
+
+// Cancelling a capacity wait cannot commit its message, but unlike a returned
+// SendError it also cannot give ownership back. Releasing the actor afterward
+// proves that only the already-admitted envelope reaches its handler.
+#[tokio::test]
+async fn cancelling_a_waiting_send_discards_the_uncommitted_message() {
+    let committed = Arc::new(Mutex::new(Vec::new()));
+    let owner = spawn_with(
+        SerialActor {
+            committed: Arc::clone(&committed),
+        },
+        single_slot_options(),
+    );
+    let actor = owner.actor_ref();
+    let (entered_tx, entered_rx) = oneshot::channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    let current = tokio::spawn({
+        let actor = actor.clone();
+        async move {
+            actor
+                .call(Block {
+                    entered: entered_tx,
+                    release: release_rx,
+                })
+                .await
+        }
+    });
+
+    watchdog(entered_rx).await.unwrap();
+    actor.try_send(Notify(1)).unwrap();
+    let mut waiting = Box::pin(actor.send(Notify(2)));
+    let first_poll =
+        std::future::poll_fn(|context| Poll::Ready(waiting.as_mut().poll(context))).await;
+    assert!(first_poll.is_pending());
+    drop(waiting);
+
+    release_tx.send(()).unwrap();
+    assert_eq!(watchdog(current).await.unwrap(), Ok(()));
+    assert_eq!(watchdog(actor.call(Snapshot)).await.unwrap(), vec![1]);
+    assert_eq!(
+        watchdog(owner.shutdown(Shutdown::Drain)).await,
+        ExitReason::Drained
+    );
+}
+
+// Immediate one-way admission must make retry decisions lossless: both a full
+// mailbox and lifecycle cutoff return the exact message that never committed.
+#[tokio::test]
+async fn try_send_recovers_messages_rejected_as_full_or_closed() {
+    let owner = spawn_with(SerialActor::default(), single_slot_options());
+    let actor = owner.actor_ref();
+    let (entered_tx, entered_rx) = oneshot::channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    let current = tokio::spawn({
+        let actor = actor.clone();
+        async move {
+            actor
+                .call(Block {
+                    entered: entered_tx,
+                    release: release_rx,
+                })
+                .await
+        }
+    });
+
+    watchdog(entered_rx).await.unwrap();
+    actor.try_send(Notify(1)).unwrap();
+    let full = actor.try_send(Notify(2)).unwrap_err();
+    assert_eq!(full.kind(), TrySendErrorKind::Full);
+    assert_eq!(full.into_message().0, 2);
+
+    assert!(matches!(
+        owner.request_shutdown(Shutdown::Stop),
+        loong_actor::ShutdownStatus::Requested
+    ));
+    let closed = actor.try_send(Notify(3)).unwrap_err();
+    assert_eq!(closed.kind(), TrySendErrorKind::Closed);
+    assert_eq!(closed.into_message().0, 3);
+
+    release_tx.send(()).unwrap();
+    assert_eq!(watchdog(current).await.unwrap(), Ok(()));
+    assert_eq!(watchdog(actor.closed()).await, ExitReason::Stopped);
+}
+
+// A blocked send owns its message until admission commits, so shutdown must
+// wake the waiter and return that message instead of silently discarding it.
+#[tokio::test]
+async fn send_recovers_a_message_when_shutdown_wins_admission() {
+    let owner = spawn_with(SerialActor::default(), single_slot_options());
+    let actor = owner.actor_ref();
+    let (entered_tx, entered_rx) = oneshot::channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    let current = tokio::spawn({
+        let actor = actor.clone();
+        async move {
+            actor
+                .call(Block {
+                    entered: entered_tx,
+                    release: release_rx,
+                })
+                .await
+        }
+    });
+
+    watchdog(entered_rx).await.unwrap();
+    actor.try_send(Notify(1)).unwrap();
+    let mut waiting = Box::pin(actor.send(Notify(2)));
+    let first_poll =
+        std::future::poll_fn(|context| Poll::Ready(waiting.as_mut().poll(context))).await;
+    assert!(first_poll.is_pending());
+
+    assert!(matches!(
+        owner.request_shutdown(Shutdown::Stop),
+        loong_actor::ShutdownStatus::Requested
+    ));
+    let rejected = watchdog(waiting).await.unwrap_err();
+    assert_eq!(rejected.into_message().0, 2);
+
+    release_tx.send(()).unwrap();
+    assert_eq!(watchdog(current).await.unwrap(), Ok(()));
+    assert_eq!(watchdog(actor.closed()).await, ExitReason::Stopped);
 }
 
 struct CommitAfterRelease {

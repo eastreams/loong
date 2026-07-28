@@ -241,7 +241,7 @@ struct DispatchPermit {
 struct CompletionPermit;
 
 impl DispatchPermit {
-    /// Linearizes a successful response with Kill/failure. The unit permit
+    /// Linearizes successful completion with Kill/failure. The unit permit
     /// carries the decision beyond the mutex without exposing lifecycle state.
     fn begin_completion(&self) -> Result<CompletionPermit, CallError> {
         let gate = self.control.lock_gate();
@@ -355,50 +355,120 @@ impl<M: Message> Drop for CallEnvelope<M> {
     }
 }
 
+/// A queued message whose sender observes admission but not completion.
+///
+/// Keeping this envelope distinct from `CallEnvelope` makes the absence of a
+/// response receiver structural: queued one-way work is never mistaken for an
+/// abandoned call and does not allocate a dummy channel.
+pub(crate) struct SendEnvelope<M: Message<Reply = ()>> {
+    message: M,
+    control: Arc<Control>,
+}
+
+impl<M: Message<Reply = ()>> SendEnvelope<M> {
+    pub(crate) fn new(message: M, control: Arc<Control>) -> Self {
+        Self { message, control }
+    }
+}
+
+impl<A, M> Envelope<A> for SendEnvelope<M>
+where
+    A: Handler<M>,
+    M: Message<Reply = ()>,
+{
+    fn is_abandoned(&self) -> bool {
+        false
+    }
+
+    fn dispatch(
+        self: Box<Self>,
+        actor: &mut A,
+        scope: &mut ActorScope<A>,
+        scheduler: &mut ReplyScheduler<A>,
+    ) {
+        let Self { message, control } = *self;
+        let permit = match control.begin_dispatch() {
+            Ok(permit) => permit,
+            Err(_) => return,
+        };
+
+        // One-way completion still owns a dispatch permit, so panic and Kill
+        // use the same state transition as a call even though no result is sent.
+        let reply = DispatchReply::one_way(permit);
+        HandleReply::handle(actor.handle(message, scope), scheduler, reply);
+    }
+}
+
+enum ReplyDestination<R> {
+    Caller(oneshot::Sender<Result<R, CallError>>),
+    OneWay,
+}
+
+enum DispatchReplyState<R> {
+    Pending(ReplyDestination<R>),
+    Completed,
+}
+
 pub(crate) struct DispatchReply<R> {
-    reply: Option<oneshot::Sender<Result<R, CallError>>>,
+    state: DispatchReplyState<R>,
     permit: DispatchPermit,
 }
 
 impl<R> DispatchReply<R> {
     fn new(reply: oneshot::Sender<Result<R, CallError>>, permit: DispatchPermit) -> Self {
         Self {
-            reply: Some(reply),
+            state: DispatchReplyState::Pending(ReplyDestination::Caller(reply)),
             permit,
         }
     }
 
-    /// Completes the call only if its response commits before Kill, failure,
-    /// abort, or terminal publication.
+    /// Completes dispatched work only if completion commits before Kill,
+    /// failure, abort, or terminal publication.
     ///
-    /// The gate decides the outcome; channel notification and destruction of a
-    /// rejected user response happen after the mutex is released.
+    /// The gate decides the outcome; caller notification and destruction of a
+    /// rejected reply value happen after the mutex is released. One-way work
+    /// follows the same gate without creating a response channel.
     pub(crate) fn complete(mut self, response: R) {
         let outcome = self.permit.begin_completion();
-        let reply = self
-            .reply
-            .take()
-            .expect("a dispatch reply completes at most once");
+        let DispatchReplyState::Pending(destination) =
+            std::mem::replace(&mut self.state, DispatchReplyState::Completed)
+        else {
+            panic!("a dispatch reply completes at most once");
+        };
 
-        match outcome {
-            Ok(CompletionPermit) => {
+        match (destination, outcome) {
+            (ReplyDestination::Caller(reply), Ok(CompletionPermit)) => {
                 let _ = reply.send(Ok(response));
             }
-            Err(error) => {
+            (ReplyDestination::Caller(reply), Err(error)) => {
                 let _ = reply.send(Err(error));
                 drop(response);
             }
+            (ReplyDestination::OneWay, Ok(CompletionPermit) | Err(_)) => drop(response),
+        }
+    }
+}
+
+impl DispatchReply<()> {
+    fn one_way(permit: DispatchPermit) -> Self {
+        Self {
+            state: DispatchReplyState::Pending(ReplyDestination::OneWay),
+            permit,
         }
     }
 }
 
 impl<R> Drop for DispatchReply<R> {
     fn drop(&mut self) {
-        let Some(reply) = self.reply.take() else {
+        let DispatchReplyState::Pending(destination) =
+            std::mem::replace(&mut self.state, DispatchReplyState::Completed)
+        else {
             return;
         };
         let error = self.permit.fail();
-        let _ = reply.send(Err(error));
+        if let ReplyDestination::Caller(reply) = destination {
+            let _ = reply.send(Err(error));
+        }
     }
 }
 
@@ -455,6 +525,8 @@ mod tests {
 
     #[tokio::test]
     async fn committed_send_is_part_of_the_fixed_drain_queue() {
+        // Observe the inbox directly to isolate the admission/Drain ordering:
+        // once admission wins the shared gate, Drain must retain that envelope.
         let (mailbox, mut receiver) = ActorMailbox::<TestActor>::channel(1);
         let permit = mailbox
             .sender

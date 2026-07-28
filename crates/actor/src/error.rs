@@ -54,6 +54,88 @@ pub enum CallError {
     ResponseLost,
 }
 
+/// A one-way message that could not commit to an actor's mailbox.
+///
+/// The actor had already closed admission, so the handler was never invoked.
+/// The original message can be recovered with [`into_message`](Self::into_message)
+/// and is safe to retry elsewhere.
+#[derive(thiserror::Error)]
+#[error("the actor is closed to new messages")]
+pub struct SendError<M> {
+    message: M,
+}
+
+impl<M> SendError<M> {
+    pub(crate) const fn new(message: M) -> Self {
+        Self { message }
+    }
+
+    /// Returns the message without retrying or dropping it.
+    pub fn into_message(self) -> M {
+        self.message
+    }
+}
+
+impl<M> fmt::Debug for SendError<M> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SendError")
+            .field("message", &"<message>")
+            .finish()
+    }
+}
+
+/// The reason a synchronous one-way admission attempt failed.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[non_exhaustive]
+pub enum TrySendErrorKind {
+    /// No mailbox slot was immediately available.
+    #[error("the actor mailbox is full")]
+    Full,
+
+    /// The actor no longer accepts new messages.
+    #[error("the actor is closed to new messages")]
+    Closed,
+}
+
+/// A failed [`ActorRef::try_send`](crate::ActorRef::try_send) attempt.
+///
+/// The original message is retained and can be recovered with
+/// [`into_message`](Self::into_message). Neither failure kind commits the
+/// message, so retrying it elsewhere is safe.
+#[derive(thiserror::Error)]
+#[error("{kind}")]
+pub struct TrySendError<M> {
+    kind: TrySendErrorKind,
+    message: M,
+}
+
+impl<M> TrySendError<M> {
+    pub(crate) const fn new(kind: TrySendErrorKind, message: M) -> Self {
+        Self { kind, message }
+    }
+
+    /// Returns why admission failed.
+    pub const fn kind(&self) -> TrySendErrorKind {
+        self.kind
+    }
+
+    /// Returns the message without retrying or dropping it.
+    pub fn into_message(self) -> M {
+        self.message
+    }
+}
+
+impl<M> fmt::Debug for TrySendError<M> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TrySendError")
+            .field("kind", &self.kind)
+            .field("message", &"<message>")
+            .finish()
+    }
+}
+
 /// The reason a synchronous admission attempt failed.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 #[non_exhaustive]

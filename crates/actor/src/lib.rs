@@ -9,9 +9,12 @@
 //! constructors; that module documents actor borrowing, fairness, in-flight
 //! capacity, panic, and Kill behavior.
 //!
-//! Use [`ActorRef::call`] for admission with backpressure or
-//! [`ActorRef::try_call`] for immediate admission with message recovery. Request
-//! failures retain their admission/dispatch phase in [`CallError`].
+//! Use [`ActorRef::call`] for a typed response and [`ActorRef::send`] for
+//! admission-only one-way delivery. Their `try_` variants attempt immediate
+//! admission and return an uncommitted message on failure. Call failures retain
+//! their admission/dispatch phase in [`CallError`]. [`SendError`] and
+//! [`TrySendError`] report only that one-way admission did not commit; accepted
+//! one-way work has no completion result.
 //!
 //! Communication and lifecycle ownership are separate. An [`ActorRef`] is a
 //! cloneable, non-owning address, while the unique [`ActorOwner`] owns a root
@@ -39,7 +42,10 @@ mod supervision;
 
 pub use actor::{Actor, Handler, Message};
 pub use address::{ActorRef, Response};
-pub use error::{CallError, SpawnChildError, TryCallError, TryCallErrorKind};
+pub use error::{
+    CallError, SendError, SpawnChildError, TryCallError, TryCallErrorKind, TrySendError,
+    TrySendErrorKind,
+};
 pub use future::{ActorFuture, ActorFutureExt, FutureActor, IntoActorFuture, Map, Then};
 pub use reply::IntoReply;
 pub use runtime::{ActorOwner, ActorScope, SpawnOptions, spawn, spawn_with};

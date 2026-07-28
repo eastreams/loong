@@ -3,8 +3,9 @@ use std::{fmt, future::Future, pin::Pin, sync::Weak, task};
 use tokio::sync::{mpsc, watch};
 
 use crate::{
-    Actor, CallError, ExitReason, Handler, Message, TryCallError, TryCallErrorKind,
-    mailbox::{ActorMailbox, CallEnvelope, DynEnvelope, Mode, ReplyReceiver},
+    Actor, CallError, ExitReason, Handler, Message, SendError, TryCallError, TryCallErrorKind,
+    TrySendError, TrySendErrorKind,
+    mailbox::{ActorMailbox, CallEnvelope, DynEnvelope, Mode, ReplyReceiver, SendEnvelope},
 };
 
 /// A cloneable address that can communicate with, but does not own, an actor.
@@ -90,6 +91,72 @@ impl<A: Actor> ActorRef<A> {
         Response::new(response).await
     }
 
+    /// Sends a one-way message, waiting for bounded mailbox capacity if needed.
+    ///
+    /// `Ok(())` means admission committed; it does not wait for the handler or
+    /// its selected reply work to run. Once accepted, the runtime owns the
+    /// message and executes it under the same dispatch, scheduling, and
+    /// lifecycle rules as [`call`](Self::call). In particular, Stop or Kill may
+    /// still discard queued work after this method returns.
+    ///
+    /// Unlike dropping a queued [`Response`], returning from this method cannot
+    /// abandon the message: one-way envelopes have no response receiver. If
+    /// shutdown wins before admission, the error retains the uncommitted message
+    /// and its handler is never invoked.
+    ///
+    /// This method has no built-in deadline and can wait indefinitely while a
+    /// running actor or its mailbox makes no progress. Cancelling the future
+    /// before it returns drops the still-uncommitted message; use
+    /// [`try_send`](Self::try_send) when capacity failure must return the message.
+    pub async fn send<M>(&self, message: M) -> Result<(), SendError<M>>
+    where
+        A: Handler<M>,
+        M: Message<Reply = ()>,
+    {
+        let Some(mailbox) = self.mailbox.upgrade() else {
+            return Err(SendError::new(message));
+        };
+        let sender = mailbox.sender.clone();
+        let mut mode = mailbox.control.subscribe_mode();
+
+        if !mailbox.control.is_running() {
+            return Err(SendError::new(message));
+        }
+
+        let reserve = sender.reserve_owned();
+        tokio::pin!(reserve);
+
+        let permit = loop {
+            tokio::select! {
+                biased;
+                changed = mode.changed() => {
+                    if changed.is_err() || !mailbox.control.is_running() {
+                        return Err(SendError::new(message));
+                    }
+                }
+                reserved = &mut reserve => {
+                    match reserved {
+                        Ok(permit) => break permit,
+                        Err(_) => return Err(SendError::new(message)),
+                    }
+                }
+            }
+        };
+
+        let mut message = Some(message);
+        mailbox
+            .control
+            .admit(|| {
+                let message = message
+                    .take()
+                    .expect("admission commits a message at most once");
+                drop(permit.send(
+                    Box::new(SendEnvelope::new(message, mailbox.control.clone())) as DynEnvelope<A>,
+                ));
+            })
+            .map_err(|()| SendError::new(message.expect("closed admission retains the message")))
+    }
+
     /// Attempts immediate bounded admission without waiting for capacity.
     ///
     /// Success means the message was accepted, not that its handler has run. The
@@ -131,6 +198,54 @@ impl<A: Actor> ActorRef<A> {
             )),
             Err(()) => Err(TryCallError::new(
                 TryCallErrorKind::Closed,
+                message.expect("closed admission retains the message"),
+            )),
+        }
+    }
+
+    /// Attempts immediate bounded admission of a one-way message.
+    ///
+    /// Success means the message was accepted, not that its handler has run.
+    /// Accepted work has no response receiver and therefore cannot be abandoned
+    /// by the sender. It otherwise follows the same dispatch, reply scheduling,
+    /// and lifecycle rules as [`send`](Self::send).
+    ///
+    /// On failure the returned error retains the original, uncommitted message.
+    /// [`TrySendErrorKind::Full`] means no mailbox slot was immediately available;
+    /// [`TrySendErrorKind::Closed`] means lifecycle shutdown had closed admission.
+    pub fn try_send<M>(&self, message: M) -> Result<(), TrySendError<M>>
+    where
+        A: Handler<M>,
+        M: Message<Reply = ()>,
+    {
+        let Some(mailbox) = self.mailbox.upgrade() else {
+            return Err(TrySendError::new(TrySendErrorKind::Closed, message));
+        };
+
+        let sender = mailbox.sender.clone();
+        let mut message = Some(message);
+        let admitted = mailbox.control.admit(|| match sender.try_reserve_owned() {
+            Ok(permit) => {
+                let message = message
+                    .take()
+                    .expect("admission commits a message at most once");
+                drop(permit.send(
+                    Box::new(SendEnvelope::new(message, mailbox.control.clone())) as DynEnvelope<A>,
+                ));
+                Ok(())
+            }
+            Err(mpsc::error::TrySendError::Full(_)) => Err(TrySendErrorKind::Full),
+            Err(mpsc::error::TrySendError::Closed(_)) => Err(TrySendErrorKind::Closed),
+        });
+
+        match admitted {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(kind)) => Err(TrySendError::new(
+                kind,
+                message.expect("failed admission retains the message"),
+            )),
+            Err(()) => Err(TrySendError::new(
+                TrySendErrorKind::Closed,
                 message.expect("closed admission retains the message"),
             )),
         }
