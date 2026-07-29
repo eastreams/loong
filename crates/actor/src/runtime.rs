@@ -670,7 +670,7 @@ async fn actor_turn<A: Actor>(
             let selected = match class {
                 0 if receive_messages && scheduler.can_dispatch() => match inbox.poll_recv(task) {
                     Poll::Ready(Some(envelope)) => {
-                        start_envelope(actor, scope, scheduler, envelope);
+                        envelope.dispatch(actor, scope, scheduler);
                         Some(Turn::Message)
                     }
                     Poll::Ready(None) => Some(Turn::InboxClosed),
@@ -715,21 +715,6 @@ async fn actor_turn<A: Actor>(
         _ = mode.changed() => Turn::Mode,
         turn = fair_turn => turn,
     }
-}
-
-/// Starts user-visible dispatch only after admission and capacity checks. This
-/// is the sole transition from a queued envelope into scheduler-owned work.
-fn start_envelope<A: Actor>(
-    actor: &mut A,
-    scope: &mut ActorScope<A>,
-    scheduler: &mut ReplyScheduler<A>,
-    envelope: DynEnvelope<A>,
-) {
-    if envelope.is_abandoned() {
-        return;
-    }
-
-    envelope.dispatch(actor, scope, scheduler);
 }
 
 async fn handle_child_exit<A: Actor>(

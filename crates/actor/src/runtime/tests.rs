@@ -75,10 +75,6 @@ impl ActorFuture<TestActor> for CountPendingExclusive {
 struct CountEnvelope(Arc<AtomicUsize>);
 
 impl Envelope<TestActor> for CountEnvelope {
-    fn is_abandoned(&self) -> bool {
-        false
-    }
-
     fn dispatch(
         self: Box<Self>,
         _actor: &mut TestActor,
@@ -115,10 +111,6 @@ impl Drop for ChildKillDropProbe {
 }
 
 impl Envelope<TestActor> for ChildKillDropProbe {
-    fn is_abandoned(&self) -> bool {
-        false
-    }
-
     fn dispatch(
         self: Box<Self>,
         _actor: &mut TestActor,
@@ -148,10 +140,6 @@ impl Drop for TeardownEnvelope {
 }
 
 impl Envelope<TestActor> for TeardownEnvelope {
-    fn is_abandoned(&self) -> bool {
-        false
-    }
-
     fn dispatch(
         self: Box<Self>,
         _actor: &mut TestActor,

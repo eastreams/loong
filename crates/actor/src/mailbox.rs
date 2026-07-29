@@ -322,15 +322,10 @@ impl<A: Actor> ActorMailbox<A> {
 /// consumes it exactly once for dispatch. Concrete envelope types own their
 /// queued cleanup behavior, including whether a waiting caller must be notified.
 pub(crate) trait Envelope<A: Actor>: Send {
-    /// Reports whether queued work has no remaining caller that can observe it.
-    ///
-    /// The actor task may discard an abandoned call without invoking its
-    /// handler. One-way messages cannot be abandoned after admission.
-    fn is_abandoned(&self) -> bool;
-
     /// Attempts to move one accepted entry from the queue into actor execution.
     ///
-    /// The implementation first commits dispatch against lifecycle shutdown.
+    /// Abandoned calls return before lifecycle dispatch. Other entries first
+    /// commit dispatch against lifecycle shutdown.
     /// If dispatch wins, it invokes the statically selected handler and hands
     /// reply completion to the actor scheduler; otherwise it performs queued
     /// rejection without invoking user handler code.
@@ -408,21 +403,21 @@ where
     A: Handler<M>,
     M: Message,
 {
-    fn is_abandoned(&self) -> bool {
-        match &self.state {
-            CallEnvelopeState::Queued(queued) => queued.reply.is_closed(),
-            CallEnvelopeState::Consumed => {
-                panic!("a consumed call envelope cannot remain in the mailbox")
-            }
-        }
-    }
-
     fn dispatch(
         mut self: Box<Self>,
         actor: &mut A,
         scope: &mut ActorScope<A>,
         scheduler: &mut ReplyScheduler<A>,
     ) {
+        // Only calls can be abandoned; one-way envelopes have no receiver.
+        match &self.state {
+            CallEnvelopeState::Queued(queued) if queued.reply.is_closed() => return,
+            CallEnvelopeState::Queued(_) => {}
+            CallEnvelopeState::Consumed => {
+                panic!("a consumed call envelope cannot remain in the mailbox")
+            }
+        }
+
         let QueuedCall {
             message,
             reply,
@@ -487,10 +482,6 @@ where
     A: Handler<M>,
     M: Message<Reply = ()>,
 {
-    fn is_abandoned(&self) -> bool {
-        false
-    }
-
     fn dispatch(
         self: Box<Self>,
         actor: &mut A,
@@ -607,10 +598,6 @@ mod tests {
     struct NoopEnvelope;
 
     impl Envelope<TestActor> for NoopEnvelope {
-        fn is_abandoned(&self) -> bool {
-            false
-        }
-
         fn dispatch(
             self: Box<Self>,
             _actor: &mut TestActor,
