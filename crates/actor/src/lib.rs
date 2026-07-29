@@ -148,6 +148,10 @@
 //! Runtime operations remain explicit imports.
 //! This keeps lifecycle choices visible at call sites.
 
+// Derives use this name inside the runtime package.
+// External callers may still rename their dependency.
+extern crate self as loong_actor;
+
 use std::{future::Future, pin::Pin};
 
 mod actor;
@@ -167,6 +171,7 @@ pub use error::{
     TrySendErrorKind,
 };
 pub use future::{ActorFuture, ActorFutureExt, FutureActor, IntoActorFuture, Map, Then};
+pub use loong_actor_macros::Message;
 pub use reply::{IntoReply, ReplyExt};
 pub use runtime::{ActorOwner, ActorScope, SpawnOptions, spawn, spawn_with};
 pub use supervision::{Child, ChildExit, ChildId, ExitReason, Shutdown, ShutdownStatus};
@@ -186,3 +191,19 @@ pub mod prelude {
 // Heap type erasure is confined to heterogeneous scheduler/mailbox ownership
 // and the once-per-actor task wrapper. Public reply construction stays generic.
 pub(crate) type ErasedFuture<'a, T = ()> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+#[cfg(test)]
+mod message_derive_tests {
+    #[derive(crate::Message)]
+    struct InternalMessage;
+
+    // Unit targets make proc-macro-crate return `Itself`.
+    // This proves expansions use the stable runtime alias.
+    #[test]
+    fn derive_resolves_runtime_package() {
+        // This helper makes reply mismatches fail compilation.
+        fn assert_message<M: crate::Message<Reply = ()>>() {}
+
+        assert_message::<InternalMessage>();
+    }
+}

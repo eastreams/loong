@@ -1,0 +1,5 @@
+error: expected a Rust type after `reply =`
+ --> tests/ui/fail/quoted_reply.rs:3:19
+  |
+3 | #[message(reply = "u8")]
+  |                   ^^^^

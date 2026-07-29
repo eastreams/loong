@@ -1,0 +1,5 @@
+error: duplicate `reply` option
+ --> tests/ui/fail/duplicate_option.rs:3:23
+  |
+3 | #[message(reply = u8, reply = u16)]
+  |                       ^^^^^

@@ -1,0 +1,5 @@
+error: unsupported message option; expected `reply = <type>`
+ --> tests/ui/fail/unknown_option.rs:3:11
+  |
+3 | #[message(result = u8)]
+  |           ^^^^^^

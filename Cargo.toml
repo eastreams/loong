@@ -2,6 +2,7 @@
 members = [
     "apps/loong",
     "crates/actor",
+    "crates/actor-macros",
     "crates/contracts",
     "crates/kernel",
 ]
