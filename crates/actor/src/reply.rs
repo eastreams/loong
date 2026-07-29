@@ -6,6 +6,7 @@
 //! register one active reply, which occupies a
 //! [`max_in_flight`](crate::SpawnOptions::max_in_flight) slot until it completes
 //! or is dropped.
+//! [`SyncHandler`](crate::SyncHandler) selects ready scheduling automatically.
 //!
 //! Returning a bare `Future<Output = M::Reply> + Send + 'static` selects owned
 //! scheduling. The future cannot retain the handler call's actor or scope
@@ -59,6 +60,10 @@ pub trait ReplyExt: Sized {
     /// remains occupied afterward. Dispatch itself still waits until an
     /// in-flight slot is available because the runtime cannot know the selected
     /// reply strategy before invoking the handler.
+    ///
+    /// Prefer [`SyncHandler`](crate::SyncHandler) when every invocation returns
+    /// an immediate value. Use this method inside [`Handler`](crate::Handler)
+    /// when runtime branching requires explicit ready scheduling.
     ///
     /// For a value already produced by a handler, prefer `value.ready()` over
     /// [`std::future::ready(value)`](std::future::ready). The latter creates an

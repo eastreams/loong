@@ -13,7 +13,8 @@ use std::{
 
 use loong_actor::{
     Actor, ActorFutureExt, ActorRef, ActorScope, CallError, ChildExit, ExitReason, Handler,
-    IntoActorFuture, Message, ReplyExt, Response, Shutdown, SpawnOptions, reply, spawn, spawn_with,
+    IntoActorFuture, Message, ReplyExt, Response, Shutdown, SpawnOptions, SyncHandler, reply,
+    spawn, spawn_with,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -33,19 +34,15 @@ impl Message for Increment {
     type Reply = u8;
 }
 
-impl Handler<Increment> for Counter {
-    fn handle(
-        &mut self,
-        _message: Increment,
-        _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, Increment> + use<> {
+impl SyncHandler<Increment> for Counter {
+    fn handle(&mut self, _message: Increment, _scope: &mut ActorScope<Self>) -> u8 {
         self.0 += 1;
-        self.0.ready()
+        self.0
     }
 }
 
 #[tokio::test]
-async fn ready_mutates_actor_and_replies_immediately() {
+async fn sync_handler_mutates_actor_and_replies_immediately() {
     let owner = spawn(Counter(0));
     let actor = owner.actor_ref();
 

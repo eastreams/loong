@@ -15,8 +15,8 @@
 //! Implement [`Actor`] for state owned by one actor.
 //! Implement [`Message`] for every message type.
 //! Its [`Message::Reply`] type defines a successful call result.
-//! Implement [`Handler<M>`](Handler) to process each message type.
-//! Each handler chooses a reply strategy before returning.
+//! Implement [`SyncHandler<M>`](SyncHandler) for an immediate reply.
+//! Implement [`Handler<M>`](Handler) for other reply strategies.
 //!
 //! # Start an actor
 //!
@@ -62,14 +62,14 @@
 //!     type Reply = u64;
 //! }
 //!
-//! impl Handler<Add> for Counter {
+//! impl SyncHandler<Add> for Counter {
 //!     fn handle(
 //!         &mut self,
 //!         message: Add,
 //!         _scope: &mut ActorScope<Self>,
-//!     ) -> impl IntoReply<Self, Add> + use<> {
+//!     ) -> u64 {
 //!         self.0 += message.0;
-//!         self.0.ready()
+//!         self.0
 //!     }
 //! }
 //!
@@ -89,7 +89,8 @@
 //! # Replies and actor progress
 //!
 //! A reply strategy controls actor progress after dispatch.
-//! Use [`ReplyExt::ready`] for a value already produced.
+//! [`SyncHandler`] automatically selects ready scheduling.
+//! Inside [`Handler`], use [`ReplyExt::ready`] for a produced value.
 //! Returning a bare [`Future`] selects owned scheduling automatically.
 //! Owned futures receive no actor or scope access.
 //! They can progress alongside other actor work.
@@ -159,7 +160,7 @@ mod runtime;
 mod scheduler;
 mod supervision;
 
-pub use actor::{Actor, Handler, Message};
+pub use actor::{Actor, Handler, Message, SyncHandler};
 pub use address::{ActorRef, Response};
 pub use error::{
     CallError, SendError, SpawnChildError, TryCallError, TryCallErrorKind, TrySendError,
@@ -178,7 +179,7 @@ pub use supervision::{Child, ChildExit, ChildId, ExitReason, Shutdown, ShutdownS
 pub mod prelude {
     pub use crate::{
         Actor, ActorFuture, ActorFutureExt, ActorScope, Handler, IntoActorFuture, IntoReply,
-        Message, ReplyExt, reply,
+        Message, ReplyExt, SyncHandler, reply,
     };
 }
 

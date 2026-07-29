@@ -6,7 +6,7 @@ and a Ractor-style supervision tree.
 
 The crate is an early MVP. Its current contract is deliberately narrow:
 
-- handlers return `value.ready()` for immediate replies;
+- `SyncHandler` returns immediate reply values;
 - bare `Future` values use owned scheduling;
 - `.interleaved()` and `.exclusive()` select actor-aware scheduling;
 - dispatched work is bounded independently from mailbox capacity;
@@ -31,14 +31,14 @@ impl Message for Add {
     type Reply = u64;
 }
 
-impl Handler<Add> for Counter {
+impl SyncHandler<Add> for Counter {
     fn handle(
         &mut self,
         message: Add,
         _scope: &mut ActorScope<Self>,
-    ) -> impl IntoReply<Self, Add> + use<> {
+    ) -> u64 {
         self.0 += message.0;
-        self.0.ready()
+        self.0
     }
 }
 

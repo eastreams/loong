@@ -9,7 +9,8 @@ use std::{
 
 use loong_actor::{
     Actor, ActorFutureExt, ActorScope, CallError, ExitReason, Handler, IntoActorFuture, Message,
-    ReplyExt, Shutdown, SpawnOptions, TryCallErrorKind, TrySendErrorKind, spawn, spawn_with,
+    ReplyExt, Shutdown, SpawnOptions, SyncHandler, TryCallErrorKind, TrySendErrorKind, spawn,
+    spawn_with,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -170,14 +171,9 @@ impl Message for Notify {
     type Reply = ();
 }
 
-impl Handler<Notify> for SerialActor {
-    fn handle(
-        &mut self,
-        message: Notify,
-        _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, Notify> + use<> {
+impl SyncHandler<Notify> for SerialActor {
+    fn handle(&mut self, message: Notify, _scope: &mut ActorScope<Self>) {
         lock(&self.committed).push(message.0);
-        ().ready()
     }
 }
 

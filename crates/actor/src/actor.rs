@@ -1,6 +1,9 @@
 use std::future::Future;
 
-use crate::{ActorScope, ChildExit, ExitReason, IntoReply};
+use crate::{
+    ActorScope, ChildExit, ExitReason,
+    reply::{IntoReply, ReplyExt},
+};
 
 /// State that can be run as an actor.
 ///
@@ -92,7 +95,53 @@ pub trait Message: Send + 'static {
     type Reply: Send + 'static;
 }
 
+/// Handles one message by producing its reply before returning.
+///
+/// Use this trait when no asynchronous reply work remains. The runtime adapts
+/// it to [`Handler`] and submits the returned value with
+/// [`ReplyExt::ready`](crate::ReplyExt::ready).
+///
+/// `Sync` describes reply production. It does not permit blocking the actor
+/// task. The method runs inside the synchronous dispatch turn. It inherits the
+/// panic and Kill behavior documented by [`Handler::handle`].
+///
+/// Implement either `SyncHandler<M>` or `Handler<M>` for one actor and message
+/// pair. The blanket adaptation makes implementing both a conflicting impl.
+///
+/// A unit reply needs no explicit return expression:
+///
+/// ```
+/// use loong_actor::{Actor, ActorScope, Handler, Message, SyncHandler};
+///
+/// struct Worker {
+///     notifications: usize,
+/// }
+///
+/// impl Actor for Worker {}
+///
+/// struct Notify;
+///
+/// impl Message for Notify {
+///     type Reply = ();
+/// }
+///
+/// impl SyncHandler<Notify> for Worker {
+///     fn handle(&mut self, _message: Notify, _scope: &mut ActorScope<Self>) {
+///         self.notifications += 1;
+///     }
+/// }
+///
+/// fn accepts_handler<A: Handler<Notify>>() {}
+/// accepts_handler::<Worker>();
+/// ```
+pub trait SyncHandler<M: Message>: Actor {
+    /// Processes `message` and returns its completed reply value.
+    fn handle(&mut self, message: M, scope: &mut ActorScope<Self>) -> M::Reply;
+}
+
 /// Handles one message type for an [`Actor`].
+///
+/// Use [`SyncHandler`] when `handle` produces the reply before returning.
 ///
 /// One actor may implement this trait for any number of message types. The
 /// runtime erases each request only after pairing the concrete message with its
@@ -140,4 +189,18 @@ pub trait Handler<M: Message>: Actor {
         message: M,
         scope: &mut ActorScope<Self>,
     ) -> impl IntoReply<Self, M> + use<Self, M>;
+}
+
+impl<A, M> Handler<M> for A
+where
+    A: SyncHandler<M>,
+    M: Message,
+{
+    fn handle(
+        &mut self,
+        message: M,
+        scope: &mut ActorScope<Self>,
+    ) -> impl IntoReply<Self, M> + use<A, M> {
+        <A as SyncHandler<M>>::handle(self, message, scope).ready()
+    }
 }
