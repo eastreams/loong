@@ -25,11 +25,9 @@ struct Counter(u64);
 
 impl Actor for Counter {}
 
+#[derive(Message)]
+#[message(reply = u64)]
 struct Add(u64);
-
-impl Message for Add {
-    type Reply = u64;
-}
 
 impl SyncHandler<Add> for Counter {
     fn handle(

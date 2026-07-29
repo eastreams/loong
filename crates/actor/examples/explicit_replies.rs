@@ -8,11 +8,9 @@ struct Store {
 
 impl Actor for Store {}
 
+#[derive(Message)]
+#[message(reply = u64)]
 struct Lookup(String);
-
-impl Message for Lookup {
-    type Reply = u64;
-}
 
 impl Handler<Lookup> for Store {
     fn handle(
