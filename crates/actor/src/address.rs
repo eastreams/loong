@@ -5,7 +5,7 @@ use tokio::sync::{mpsc, watch};
 use crate::{
     Actor, CallError, ExitReason, Handler, Message, SendError, TryCallError, TryCallErrorKind,
     TrySendError, TrySendErrorKind,
-    mailbox::{ActorMailbox, CallEnvelope, Mode, ReplyReceiver, SendEnvelope},
+    mailbox::{ActorMailbox, CallEnvelope, Mode, ReplyReceiver, SendEnvelope, mode_changed},
 };
 
 /// A cloneable address that can communicate with, but does not own, an actor.
@@ -64,13 +64,13 @@ impl<A: Actor> ActorRef<A> {
         let permit = loop {
             tokio::select! {
                 biased;
-                changed = mode.changed() => {
+                reserved = &mut reserve => {
+                    break reserved.map_err(|_| CallError::Closed)?;
+                }
+                changed = mode_changed(&mut mode) => {
                     if changed.is_err() || !mailbox.control.is_running() {
                         return Err(CallError::Closed);
                     }
-                }
-                reserved = &mut reserve => {
-                    break reserved.map_err(|_| CallError::Closed)?;
                 }
             }
         };
@@ -128,15 +128,15 @@ impl<A: Actor> ActorRef<A> {
         let permit = loop {
             tokio::select! {
                 biased;
-                changed = mode.changed() => {
-                    if changed.is_err() || !mailbox.control.is_running() {
-                        return Err(SendError::new(message));
-                    }
-                }
                 reserved = &mut reserve => {
                     match reserved {
                         Ok(permit) => break permit,
                         Err(_) => return Err(SendError::new(message)),
+                    }
+                }
+                changed = mode_changed(&mut mode) => {
+                    if changed.is_err() || !mailbox.control.is_running() {
+                        return Err(SendError::new(message));
                     }
                 }
             }
@@ -282,7 +282,7 @@ impl<A: Actor> ActorRef<A> {
                 return reason;
             }
 
-            mode.changed()
+            mode_changed(&mut mode)
                 .await
                 .expect("the actor task publishes an exit reason before closing");
         }
@@ -344,20 +344,5 @@ impl<R> Future for Response<R> {
 impl<R> fmt::Debug for Response<R> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("Response(..)")
-    }
-}
-
-pub(crate) async fn wait_for_kill(mode: &mut watch::Receiver<Mode>) {
-    loop {
-        if matches!(
-            *mode.borrow_and_update(),
-            Mode::Killing | Mode::Failing | Mode::Aborting | Mode::Exited(_)
-        ) {
-            return;
-        }
-
-        if mode.changed().await.is_err() {
-            return;
-        }
     }
 }

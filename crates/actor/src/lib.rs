@@ -159,6 +159,7 @@ mod address;
 mod error;
 mod future;
 mod mailbox;
+mod owned;
 pub mod reply;
 mod runtime;
 mod scheduler;

@@ -9,7 +9,7 @@ The crate is an early MVP. Its current contract is deliberately narrow:
 - `SyncHandler` returns immediate reply values;
 - bare `Future` values use owned scheduling;
 - `.interleaved()` and `.exclusive()` select actor-aware scheduling;
-- dispatched work is bounded independently from mailbox capacity;
+- interleaved work has a separate bound; owned tasks are unbounded;
 - `ActorRef` values communicate but do not own actor lifetimes;
 - the unique `ActorOwner` controls root lifetime;
 - child actors are owned by their parent's runtime scope;
@@ -55,13 +55,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Streaming does not require a runtime-specific message kind: a message reply may
 be a bounded channel receiver or another application-defined stream handle.
 
-Owned and interleaved replies permit mailbox re-entry only while another
-`max_in_flight` slot is free. With a limit of one, an outer reply waiting for its
-own queued call deadlocks until externally interrupted. Awaiting a self-call
-from an exclusive reply, `on_start`, or a running actor's `on_child_exit` has the
-same limitation. Admission is already closed in `on_stop`, so a new self-call
-returns `Closed` instead. Prefer `ActorFutureExt::map` or `then` for consecutive
-work on the same actor. Address cycles can likewise deadlock when every
-participant waits.
+Owned replies consume no `max_in_flight` slot. Their self-calls can progress
+while an interleaved slot remains available. Interleaved replies need another
+slot for mailbox re-entry. An exclusive reply blocks its queued self-call.
+`on_start` and `on_child_exit` also block dispatch while running. Admission is
+closed in `on_stop`, so a new self-call returns `Closed`. Prefer
+`ActorFutureExt::map` or `then` for consecutive actor work. Address cycles can
+still deadlock when every participant waits.
 
 Licensed under the MIT License.

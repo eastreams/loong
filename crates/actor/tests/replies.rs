@@ -8,7 +8,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
-    task::Poll,
+    task::{Context, Poll},
 };
 
 use loong_actor::{
@@ -446,58 +446,58 @@ impl Handler<StopOwned> for StopActor {
 }
 
 #[tokio::test]
-async fn max_in_flight_bounds_dispatch_and_stop_waits_for_all_active_replies() {
-    let options = SpawnOptions::default()
-        .with_mailbox_capacity(NonZeroUsize::new(4).unwrap())
-        .with_max_in_flight(NonZeroUsize::new(2).unwrap());
-    let mut owner = spawn_with(StopActor, options);
-    let actor = owner.actor_ref();
+async fn owned_replies_ignore_max_in_flight_and_graceful_shutdown_waits() {
+    // All three must start with one interleaved slot.
+    // Each partial release must leave shutdown pending.
+    // That proves shutdown waits for every owned task.
+    for (shutdown, expected) in [
+        (Shutdown::Stop, ExitReason::Stopped),
+        (Shutdown::Drain, ExitReason::Drained),
+    ] {
+        let options = SpawnOptions::default()
+            .with_mailbox_capacity(NonZeroUsize::new(4).unwrap())
+            .with_max_in_flight(NonZeroUsize::new(1).unwrap());
+        let mut owner = spawn_with(StopActor, options);
+        let actor = owner.actor_ref();
+        let mut entered = Vec::new();
+        let mut releases = Vec::new();
+        let mut replies = Vec::new();
 
-    let (first_entered_tx, first_entered_rx) = oneshot::channel();
-    let (first_release_tx, first_release_rx) = oneshot::channel();
-    let first = actor
-        .try_call(StopOwned {
-            entered: first_entered_tx,
-            release: first_release_rx,
-        })
-        .unwrap();
-    let (second_entered_tx, second_entered_rx) = oneshot::channel();
-    let (second_release_tx, second_release_rx) = oneshot::channel();
-    let second = actor
-        .try_call(StopOwned {
-            entered: second_entered_tx,
-            release: second_release_rx,
-        })
-        .unwrap();
-    watchdog(first_entered_rx).await.unwrap();
-    watchdog(second_entered_rx).await.unwrap();
+        for _ in 0..3 {
+            let (entered_tx, entered_rx) = oneshot::channel();
+            let (release_tx, release_rx) = oneshot::channel();
+            replies.push(
+                actor
+                    .try_call(StopOwned {
+                        entered: entered_tx,
+                        release: release_rx,
+                    })
+                    .unwrap(),
+            );
+            entered.push(entered_rx);
+            releases.push(release_tx);
+        }
+        for entered in entered {
+            watchdog(entered).await.unwrap();
+        }
 
-    let (third_entered_tx, third_entered_rx) = oneshot::channel();
-    let (_third_release_tx, third_release_rx) = oneshot::channel();
-    let third = actor
-        .try_call(StopOwned {
-            entered: third_entered_tx,
-            release: third_release_rx,
-        })
-        .unwrap();
-    let mut third_entered = Box::pin(third_entered_rx);
-    assert!(poll_once(third_entered.as_mut()).await.is_pending());
+        assert_eq!(
+            owner.request_shutdown(shutdown),
+            loong_actor::ShutdownStatus::Requested
+        );
+        let mut stopped = Box::pin(owner.wait());
+        assert!(poll_once(stopped.as_mut()).await.is_pending());
 
-    assert_eq!(
-        owner.request_shutdown(Shutdown::Stop),
-        loong_actor::ShutdownStatus::Requested
-    );
-    assert!(watchdog(third_entered).await.is_err());
-    assert_eq!(
-        watchdog(third).await,
-        Err(CallError::BeforeDispatch(ExitReason::Stopped))
-    );
-
-    first_release_tx.send(()).unwrap();
-    second_release_tx.send(()).unwrap();
-    assert_eq!(watchdog(first).await, Ok(()));
-    assert_eq!(watchdog(second).await, Ok(()));
-    assert_eq!(watchdog(owner.wait()).await, ExitReason::Stopped);
+        let task_count = releases.len();
+        for (index, (release, reply)) in releases.into_iter().zip(replies).enumerate() {
+            release.send(()).unwrap();
+            assert_eq!(watchdog(reply).await, Ok(()));
+            if index + 1 < task_count {
+                assert!(poll_once(stopped.as_mut()).await.is_pending());
+            }
+        }
+        assert_eq!(watchdog(stopped).await, expected);
+    }
 }
 
 struct PanicActor;
@@ -529,6 +529,36 @@ impl Handler<PendingSibling> for PanicActor {
 struct PanicReply {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
+}
+
+struct PanicAfterReady;
+
+impl Message for PanicAfterReady {
+    type Reply = ();
+}
+
+impl Future for PanicAfterReady {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, _task: &mut Context<'_>) -> Poll<Self::Output> {
+        Poll::Ready(())
+    }
+}
+
+impl Drop for PanicAfterReady {
+    fn drop(&mut self) {
+        panic!("intentional post-completion drop panic");
+    }
+}
+
+impl Handler<PanicAfterReady> for PanicActor {
+    fn handle(
+        &mut self,
+        message: PanicAfterReady,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loong_actor::IntoReply<Self, PanicAfterReady> + use<> {
+        message
+    }
 }
 
 impl Message for PanicReply {
@@ -585,6 +615,17 @@ async fn reply_panic_fails_sibling_in_flight_work() {
     assert_eq!(watchdog(owner.wait()).await, ExitReason::Panicked);
 }
 
+// Reply completion consumes its lifecycle gate first.
+// A later future Drop panic must still fail the actor.
+#[tokio::test]
+async fn owned_task_panic_after_reply_completion_still_fails_the_actor() {
+    let mut owner = spawn(PanicActor);
+    let actor = owner.actor_ref();
+
+    assert_eq!(watchdog(actor.call(PanicAfterReady)).await, Ok(()));
+    assert_eq!(watchdog(owner.wait()).await, ExitReason::Panicked);
+}
+
 struct SelfCaller;
 
 impl Actor for SelfCaller {}
@@ -618,26 +659,6 @@ impl Handler<OwnedSelfCall> for SelfCaller {
         scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, OwnedSelfCall> + use<> {
         let response = scope.myself().try_call(Echo(message.0)).unwrap();
-        async move { response.await.unwrap() }
-    }
-}
-
-struct SingleSlotSelfCall {
-    entered: oneshot::Sender<()>,
-}
-
-impl Message for SingleSlotSelfCall {
-    type Reply = u8;
-}
-
-impl Handler<SingleSlotSelfCall> for SelfCaller {
-    fn handle(
-        &mut self,
-        message: SingleSlotSelfCall,
-        scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, SingleSlotSelfCall> + use<> {
-        let response = scope.myself().try_call(Echo(1)).unwrap();
-        let _ = message.entered.send(());
         async move { response.await.unwrap() }
     }
 }
@@ -726,31 +747,20 @@ async fn nonexclusive_self_calls_progress_but_exclusive_self_call_waits() {
 }
 
 #[tokio::test]
-async fn self_call_waits_when_the_outer_reply_owns_the_only_active_slot() {
+async fn owned_self_call_progresses_with_one_interleaved_slot() {
+    // Owned tasks consume no interleaved slot.
+    // The inner call can use the configured slot.
     let options = SpawnOptions::default()
         .with_mailbox_capacity(NonZeroUsize::new(2).unwrap())
         .with_max_in_flight(NonZeroUsize::new(1).unwrap());
-    let mut owner = spawn_with(SelfCaller, options);
+    let owner = spawn_with(SelfCaller, options);
     let actor = owner.actor_ref();
-    let (entered_tx, entered_rx) = oneshot::channel();
-    let response = actor
-        .try_call(SingleSlotSelfCall {
-            entered: entered_tx,
-        })
-        .unwrap();
-    tokio::pin!(response);
 
-    watchdog(entered_rx).await.unwrap();
-    assert!(poll_once(response.as_mut()).await.is_pending());
+    assert_eq!(watchdog(actor.call(OwnedSelfCall(1))).await, Ok(1));
     assert_eq!(
-        owner.request_shutdown(Shutdown::Kill),
-        loong_actor::ShutdownStatus::Requested
+        watchdog(owner.shutdown(Shutdown::Stop)).await,
+        ExitReason::Stopped
     );
-    assert_eq!(
-        watchdog(response).await,
-        Err(CallError::DuringDispatch(ExitReason::Killed))
-    );
-    assert_eq!(watchdog(owner.wait()).await, ExitReason::Killed);
 }
 
 struct FairActor {
@@ -759,30 +769,20 @@ struct FairActor {
 
 impl Actor for FairActor {}
 
-struct ActiveReply {
-    entered: oneshot::Sender<()>,
-    release: oneshot::Receiver<()>,
-    completed_at: Arc<AtomicUsize>,
+struct OwnedTaskIdentity;
+
+impl Message for OwnedTaskIdentity {
+    type Reply = bool;
 }
 
-impl Message for ActiveReply {
-    type Reply = ();
-}
-
-impl Handler<ActiveReply> for FairActor {
+impl Handler<OwnedTaskIdentity> for FairActor {
     fn handle(
         &mut self,
-        message: ActiveReply,
+        _message: OwnedTaskIdentity,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, ActiveReply> + use<> {
-        let handled = self.handled.clone();
-        async move {
-            let _ = message.entered.send(());
-            let _ = message.release.await;
-            message
-                .completed_at
-                .store(handled.load(Ordering::SeqCst), Ordering::SeqCst);
-        }
+    ) -> impl loong_actor::IntoReply<Self, OwnedTaskIdentity> + use<> {
+        let actor_task = tokio::task::id();
+        async move { tokio::task::id() != actor_task }
     }
 }
 
@@ -832,42 +832,16 @@ impl Handler<ReadyWork> for FairActor {
     }
 }
 
+// Task identity distinguishes spawning from actor-local polling.
+// Progress alone would pass under both implementations.
 #[tokio::test]
-async fn ready_mailbox_input_does_not_starve_active_reply() {
+async fn owned_reply_runs_in_a_distinct_tokio_task() {
     let handled = Arc::new(AtomicUsize::new(0));
-    let options = SpawnOptions::default()
-        .with_mailbox_capacity(NonZeroUsize::new(64).unwrap())
-        .with_max_in_flight(NonZeroUsize::new(4).unwrap());
-    let owner = spawn_with(
-        FairActor {
-            handled: handled.clone(),
-        },
-        options,
-    );
+    let owner = spawn(FairActor {
+        handled: handled.clone(),
+    });
     let actor = owner.actor_ref();
-    let completed_at = Arc::new(AtomicUsize::new(usize::MAX));
-    let (entered_tx, entered_rx) = oneshot::channel();
-    let (release_tx, release_rx) = oneshot::channel();
-    let active = actor
-        .try_call(ActiveReply {
-            entered: entered_tx,
-            release: release_rx,
-            completed_at: completed_at.clone(),
-        })
-        .unwrap();
-    watchdog(entered_rx).await.unwrap();
-
-    let queued: Vec<_> = (0..32)
-        .map(|_| actor.try_call(ReadyWork).unwrap())
-        .collect();
-    release_tx.send(()).unwrap();
-    assert_eq!(watchdog(active).await, Ok(()));
-    assert!(completed_at.load(Ordering::SeqCst) < queued.len());
-
-    for response in queued {
-        assert_eq!(watchdog(response).await, Ok(()));
-    }
-    assert_eq!(handled.load(Ordering::SeqCst), 32);
+    assert_eq!(watchdog(actor.call(OwnedTaskIdentity)).await, Ok(true));
     assert_eq!(
         watchdog(owner.shutdown(Shutdown::Stop)).await,
         ExitReason::Stopped

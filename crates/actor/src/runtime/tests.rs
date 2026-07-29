@@ -13,9 +13,10 @@ use std::{
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
-    Actor, ActorFuture, ActorRef, ActorScope, ChildExit, ChildId, ExitReason, IntoActorFuture,
-    Shutdown, ShutdownStatus, SpawnOptions,
+    Actor, ActorRef, ActorScope, ChildExit, ChildId, ExitReason, IntoActorFuture, Shutdown,
+    ShutdownStatus, SpawnOptions,
     mailbox::{ActorMailbox, Control, DynEnvelope, Envelope, Mode},
+    owned::OwnedTasks,
     scheduler::ReplyScheduler,
 };
 
@@ -56,22 +57,6 @@ impl Actor for ControlledChildExit {
     }
 }
 
-struct CountPendingExclusive(Arc<AtomicUsize>);
-
-impl ActorFuture<TestActor> for CountPendingExclusive {
-    type Output = ();
-
-    fn poll(
-        self: Pin<&mut Self>,
-        _actor: &mut TestActor,
-        _scope: &mut ActorScope<TestActor>,
-        _task: &mut Context<'_>,
-    ) -> Poll<Self::Output> {
-        self.0.fetch_add(1, Ordering::SeqCst);
-        Poll::Pending
-    }
-}
-
 struct CountEnvelope(Arc<AtomicUsize>);
 
 impl Envelope<TestActor> for CountEnvelope {
@@ -79,6 +64,7 @@ impl Envelope<TestActor> for CountEnvelope {
         self: Box<Self>,
         _actor: &mut TestActor,
         _scope: &mut ActorScope<TestActor>,
+        _owned: &OwnedTasks,
         _scheduler: &mut ReplyScheduler<TestActor>,
     ) {
         self.0.fetch_add(1, Ordering::SeqCst);
@@ -115,6 +101,7 @@ impl Envelope<TestActor> for ChildKillDropProbe {
         self: Box<Self>,
         _actor: &mut TestActor,
         _scope: &mut ActorScope<TestActor>,
+        _owned: &OwnedTasks,
         _scheduler: &mut ReplyScheduler<TestActor>,
     ) {
         unreachable!("Kill discards queued envelopes")
@@ -144,6 +131,7 @@ impl Envelope<TestActor> for TeardownEnvelope {
         self: Box<Self>,
         _actor: &mut TestActor,
         _scope: &mut ActorScope<TestActor>,
+        _owned: &OwnedTasks,
         _scheduler: &mut ReplyScheduler<TestActor>,
     ) {
         unreachable!("teardown discards queued envelopes")
@@ -179,15 +167,13 @@ async fn graceful_cutoff_absorbs_a_dequeued_child_exit() {
             supervisor_tx,
         };
         let mut actor = CountChildExit(Arc::clone(&observed));
-        let mut mode = control.subscribe_mode();
-
         assert_eq!(control.request(shutdown), ShutdownStatus::Requested);
         assert!(matches!(
             handle_child_exit(
                 &mut actor,
                 &mut scope,
                 ChildExit::new(child_id, ExitReason::Stopped),
-                &mut mode,
+                &control,
             )
             .await,
             Work::Complete(())
@@ -232,7 +218,6 @@ async fn admitted_child_exit_hook_finishes_across_graceful_cutoff() {
             release: Some(release_rx),
             completed: Some(completed_tx),
         };
-        let mut mode = control.subscribe_mode();
         let controller = Arc::clone(&control);
 
         let (work, ()) = tokio::time::timeout(Duration::from_secs(1), async {
@@ -241,7 +226,7 @@ async fn admitted_child_exit_hook_finishes_across_graceful_cutoff() {
                     &mut actor,
                     &mut scope,
                     ChildExit::new(child_id, ExitReason::Stopped),
-                    &mut mode,
+                    &control,
                 ),
                 async move {
                     entered_rx.await.unwrap();
@@ -281,7 +266,6 @@ async fn unadmitted_mailbox_permit_does_not_extend_drain() {
         accepts_children: true,
         supervisor_tx,
     };
-    let mode = control.subscribe_mode();
     assert_eq!(control.request(Shutdown::Drain), ShutdownStatus::Requested);
 
     let reason = tokio::time::timeout(
@@ -291,7 +275,6 @@ async fn unadmitted_mailbox_permit_does_not_extend_drain() {
             scope,
             inbox,
             supervisor_rx,
-            mode,
             mailbox,
             NonZeroUsize::new(1).unwrap(),
         ),
@@ -329,7 +312,6 @@ async fn committed_kill_prevents_a_graceful_child_request() {
         accepts_children: true,
         supervisor_tx,
     };
-    let mut mode = control.subscribe_mode();
     let mut actor = TestActor;
 
     assert_eq!(control.request(Shutdown::Kill), ShutdownStatus::Requested);
@@ -337,9 +319,9 @@ async fn committed_kill_prevents_a_graceful_child_request() {
         graceful_finish(
             &mut actor,
             &mut scope,
+            &control,
             Shutdown::Stop,
             ExitReason::Stopped,
-            &mut mode,
         )
         .await,
         Work::Killed
@@ -348,9 +330,8 @@ async fn committed_kill_prevents_a_graceful_child_request() {
 }
 
 #[tokio::test]
-async fn ordinary_cursor_visits_all_eligible_classes_before_repeating_mailbox() {
-    // All four ordinary classes are eligible before the first turn. Reusing one
-    // cursor is the contract under test; its starting class and order are not.
+async fn ordinary_cursor_visits_each_actor_source_before_repeating_mailbox() {
+    // Each actor source must win before mailbox work repeats.
     let mailbox_dispatches = Arc::new(AtomicUsize::new(0));
     let (mailbox, mut inbox) = ActorMailbox::<TestActor>::channel(5);
     for _ in 0..5 {
@@ -376,15 +357,9 @@ async fn ordinary_cursor_visits_all_eligible_classes_before_repeating_mailbox() 
         .send(ChildExit::new(ChildId::new(), ExitReason::Stopped))
         .unwrap();
 
-    let owned_completed = Arc::new(AtomicBool::new(false));
     let interleaved_completed = Arc::new(AtomicBool::new(false));
-    let mut scheduler = ReplyScheduler::new(NonZeroUsize::new(4).unwrap());
-    scheduler.push_owned({
-        let completed = Arc::clone(&owned_completed);
-        async move {
-            completed.store(true, Ordering::SeqCst);
-        }
-    });
+    let owned = OwnedTasks::new(Arc::clone(&control));
+    let mut scheduler = ReplyScheduler::new(NonZeroUsize::new(2).unwrap());
     scheduler.push_interleaved({
         let completed = Arc::clone(&interleaved_completed);
         async move {
@@ -392,21 +367,21 @@ async fn ordinary_cursor_visits_all_eligible_classes_before_repeating_mailbox() 
         }
         .into_actor()
     });
-
     let mut actor = TestActor;
-    let mut mode = control.subscribe_mode();
-    let mut cursor = TurnCursor::default();
+    // Start at child work to prove the cursor wraps across all sources.
+    let mut cursor = TurnCursor { ordinary: 2 };
     let mut mailbox_turns = 0;
     let mut reply_turns = 0;
     let mut child_turns = 0;
 
-    for _ in 0..4 {
+    for _ in 0..3 {
         match actor_turn(
             &mut actor,
             &mut scope,
             &mut inbox,
             &mut supervisor_rx,
-            &mut mode,
+            &control,
+            &owned,
             &mut scheduler,
             true,
             Mode::Running,
@@ -421,25 +396,28 @@ async fn ordinary_cursor_visits_all_eligible_classes_before_repeating_mailbox() 
                 child_turns += 1;
             }
             Turn::Mode => panic!("the lifecycle mode changed unexpectedly"),
+            Turn::RepliesFinished => panic!("running work cannot finish reply scheduling"),
             Turn::InboxClosed => panic!("the mailbox closed unexpectedly"),
         }
     }
 
     assert_eq!(mailbox_turns, 1);
-    assert_eq!(reply_turns, 2);
+    assert_eq!(reply_turns, 1);
     assert_eq!(child_turns, 1);
-    assert!(owned_completed.load(Ordering::SeqCst));
     assert!(interleaved_completed.load(Ordering::SeqCst));
     assert_eq!(mailbox_dispatches.load(Ordering::SeqCst), 1);
     assert_eq!(inbox.len(), 4);
 }
 
+// Drain must absorb queued child exits before its completion barrier.
+// Otherwise cleanup skips events already accepted by supervision.
 #[tokio::test]
-async fn exclusive_progresses_while_owned_replies_keep_completing() {
-    // A fixed owned-first order would return after each ready owned reply and
-    // never poll the continuously eligible exclusive reply.
+async fn drain_absorbs_ready_child_exit_before_owned_completion() {
     let (mailbox, mut inbox) = ActorMailbox::<TestActor>::channel(1);
     let control = Arc::clone(&mailbox.control);
+    assert_eq!(control.request(Shutdown::Drain), ShutdownStatus::Requested);
+    control.actor_notified().await;
+
     let actor_ref = ActorRef::new(Arc::downgrade(&mailbox), control.subscribe_mode());
     let (supervisor_tx, mut supervisor_rx) = mpsc::unbounded_channel();
     let mut scope = ActorScope {
@@ -447,34 +425,73 @@ async fn exclusive_progresses_while_owned_replies_keep_completing() {
         control: Arc::clone(&control),
         children: ChildSet::default(),
         accepts_children: true,
-        supervisor_tx,
+        supervisor_tx: supervisor_tx.clone(),
     };
-    let exclusive_polls = Arc::new(AtomicUsize::new(0));
-    let mut scheduler = ReplyScheduler::new(NonZeroUsize::new(2).unwrap());
-    scheduler.push_exclusive(CountPendingExclusive(Arc::clone(&exclusive_polls)));
+    let child = ChildId::new();
+    supervisor_tx
+        .send(ChildExit::new(child.clone(), ExitReason::Stopped))
+        .unwrap();
+
+    let owned = OwnedTasks::new(Arc::clone(&control));
+    owned.close();
+    let mut scheduler = ReplyScheduler::new(NonZeroUsize::MIN);
     let mut actor = TestActor;
-    let mut mode = control.subscribe_mode();
     let mut cursor = TurnCursor::default();
 
-    for expected_polls in 1..=4 {
-        scheduler.push_owned(std::future::ready(()));
-        assert!(matches!(
-            actor_turn(
-                &mut actor,
-                &mut scope,
-                &mut inbox,
-                &mut supervisor_rx,
-                &mut mode,
-                &mut scheduler,
-                true,
-                Mode::Running,
-                &mut cursor,
-            )
-            .await,
-            Turn::ReplyProgress
-        ));
-        assert_eq!(exclusive_polls.load(Ordering::SeqCst), expected_polls);
+    let turn = actor_turn(
+        &mut actor,
+        &mut scope,
+        &mut inbox,
+        &mut supervisor_rx,
+        &control,
+        &owned,
+        &mut scheduler,
+        false,
+        Mode::Draining,
+        &mut cursor,
+    )
+    .await;
+    let Turn::Child(event) = turn else {
+        panic!("ready child exit must precede owned completion");
+    };
+    assert_eq!(event.child(), &child);
+
+    assert!(matches!(
+        actor_turn(
+            &mut actor,
+            &mut scope,
+            &mut inbox,
+            &mut supervisor_rx,
+            &control,
+            &owned,
+            &mut scheduler,
+            false,
+            Mode::Draining,
+            &mut cursor,
+        )
+        .await,
+        Turn::RepliesFinished
+    ));
+}
+
+// Roots and children share OwnedActor.
+// Cancelling one wait must retain their private completion barrier.
+// The second wait must reuse the same JoinHandle.
+#[tokio::test]
+async fn cancelled_owned_actor_wait_retains_its_join_handle() {
+    let (_actor_ref, mut owned) = spawn_actor(TestActor, SpawnOptions::default(), None);
+    {
+        let mut wait = Box::pin(owned.wait());
+        let mut task = Context::from_waker(Waker::noop());
+        assert!(wait.as_mut().poll(&mut task).is_pending());
     }
+
+    assert!(owned.join.is_some());
+    assert_eq!(
+        owned.control.request(Shutdown::Kill),
+        ShutdownStatus::Requested
+    );
+    assert_eq!(owned.wait().await, ExitReason::Killed);
 }
 
 #[tokio::test]
@@ -511,14 +528,15 @@ async fn child_kill_commits_before_actor_work_is_dropped() {
         accepts_children: true,
         supervisor_tx,
     };
+    let owned = OwnedTasks::new(Arc::clone(&scope.control));
     let mut scheduler = ReplyScheduler::new(NonZeroUsize::new(1).unwrap());
-    scheduler.push_owned(ChildKillDropProbe {
+    owned.spawn(ChildKillDropProbe {
         child: child_control,
         observed_kill: Arc::clone(&active_observed_kill),
     });
 
     assert_eq!(
-        kill_actor(&mut scope, &mut inbox, &mut scheduler).await,
+        kill_actor(&mut scope, &mut inbox, &owned, &mut scheduler).await,
         ExitReason::Killed
     );
     assert!(active_observed_kill.load(Ordering::SeqCst));

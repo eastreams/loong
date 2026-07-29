@@ -1,13 +1,14 @@
 //! Steady-state end-to-end allocation counts for reply strategies.
 //!
-//! The measurement includes mailbox admission, envelope and response transport,
-//! handler dispatch, and any reply-scheduler ownership. Runtime creation, actor
-//! spawn, per-mode warmup, reporting, and shutdown stay outside each region.
-//! Counts are raw diagnostics rather than compatibility thresholds; the ready
-//! row is the common transport baseline and is not subtracted from other rows.
-//! The allocator counter is thread-local, so the current-thread runtime is part
-//! of the measurement contract: it keeps both caller and actor-task allocations
-//! on the thread enclosed by `measure`.
+//! Measurement includes mailbox admission, envelopes, response transport, and dispatch.
+//! It also includes Tokio-task or actor-scheduler ownership.
+//! Runtime creation and actor spawn stay outside each region.
+//! Warmup, reporting, and shutdown also stay outside.
+//! Counts are diagnostics, not compatibility thresholds.
+//! The ready row is the common transport baseline.
+//! Other rows do not subtract it.
+//! The allocator counter is thread-local.
+//! A current-thread runtime keeps measured allocations on one thread.
 
 use std::hint::black_box;
 
@@ -49,8 +50,8 @@ impl Handler<Owned> for ReplyActor {
         _message: Owned,
         _scope: &mut ActorScope<Self>,
     ) -> impl IntoReply<Self, Owned> + use<> {
-        // Match the actor-aware modes' concrete base future so byte counts
-        // reflect reply wrappers and scheduler ownership, not payload layout.
+        // All asynchronous modes share this concrete base future.
+        // Counts therefore isolate wrappers and execution ownership.
         std::future::ready(1)
     }
 }

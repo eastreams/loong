@@ -1,3 +1,5 @@
+use std::{future, sync::mpsc as std_mpsc, time::Duration};
+
 use loong_actor::{
     ActorScope, CallError, ExitReason, Handler, IntoActorFuture, Message, ReplyExt, Shutdown,
     ShutdownStatus,
@@ -32,6 +34,43 @@ impl Handler<Interruptible> for LifecycleActor {
         }
         .into_actor()
         .exclusive()
+    }
+}
+
+struct OwnedInterruptible {
+    entered: oneshot::Sender<()>,
+    drop_barrier: DropBarrier,
+}
+
+struct DropBarrier {
+    entered: Option<oneshot::Sender<()>>,
+    release: std_mpsc::Receiver<()>,
+}
+
+impl Drop for DropBarrier {
+    fn drop(&mut self) {
+        if let Some(entered) = self.entered.take() {
+            let _ = entered.send(());
+        }
+        let _ = self.release.recv();
+    }
+}
+
+impl Message for OwnedInterruptible {
+    type Reply = ();
+}
+
+impl Handler<OwnedInterruptible> for LifecycleActor {
+    fn handle(
+        &mut self,
+        message: OwnedInterruptible,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loong_actor::IntoReply<Self, OwnedInterruptible> + use<> {
+        async move {
+            let _drop_barrier = message.drop_barrier;
+            let _ = message.entered.send(());
+            future::pending().await
+        }
     }
 }
 
@@ -105,6 +144,44 @@ async fn kill_drops_current_and_queued_work_without_cleanup() {
     assert_eq!(watchdog(owner.wait()).await, ExitReason::Killed);
     assert!(lock(&handled).is_empty());
     assert!(lock(&cleanup).is_empty());
+}
+
+// The destructor blocks after confirming cancellation.
+// Killed must remain unpublished until that barrier opens.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kill_joins_owned_reply_cancellation_before_publishing_exit() {
+    let mut owner = actor_with_capacity(1).owner;
+    let actor = owner.actor_ref();
+    let (entered_tx, entered_rx) = oneshot::channel();
+    let (drop_entered_tx, drop_entered_rx) = oneshot::channel();
+    let (drop_release_tx, drop_release_rx) = std_mpsc::channel();
+    let response = actor
+        .try_call(OwnedInterruptible {
+            entered: entered_tx,
+            drop_barrier: DropBarrier {
+                entered: Some(drop_entered_tx),
+                release: drop_release_rx,
+            },
+        })
+        .unwrap();
+    watchdog(entered_rx).await.unwrap();
+
+    assert_eq!(
+        owner.request_shutdown(Shutdown::Kill),
+        ShutdownStatus::Requested
+    );
+    let wait = owner.wait();
+    tokio::pin!(wait);
+    watchdog(drop_entered_rx).await.unwrap();
+    let early = tokio::time::timeout(Duration::from_millis(20), wait.as_mut()).await;
+    drop_release_tx.send(()).unwrap();
+
+    assert!(early.is_err());
+    assert_eq!(watchdog(wait).await, ExitReason::Killed);
+    assert_eq!(
+        watchdog(response).await,
+        Err(CallError::DuringDispatch(ExitReason::Killed))
+    );
 }
 
 #[tokio::test]

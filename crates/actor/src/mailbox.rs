@@ -1,10 +1,17 @@
-use std::sync::Arc;
+use std::{
+    any::Any,
+    future::{Future, poll_fn},
+    panic::{self, AssertUnwindSafe},
+    sync::Arc,
+    task::{Context, Wake, Waker},
+};
 
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{Notify, mpsc, oneshot, watch};
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     Actor, ActorScope, CallError, ExitReason, Handler, Message, Shutdown, ShutdownStatus,
-    reply::sealed::HandleReply, scheduler::ReplyScheduler,
+    owned::OwnedTasks, reply::sealed::HandleReply, scheduler::ReplyScheduler,
 };
 
 pub(crate) type ReplyReceiver<R> = oneshot::Receiver<Result<R, CallError>>;
@@ -20,6 +27,51 @@ pub(crate) type DynEnvelope<A> = Box<dyn Envelope<A>>;
 
 /// Capacity and the concrete envelope remain recoverable when admission loses.
 pub(crate) type RejectedAdmission<A, E> = (mpsc::OwnedPermit<DynEnvelope<A>>, Box<E>);
+
+/// Waits without registering an external waker in Tokio's fanout.
+///
+/// One observer may panic while waking.
+/// The proxy contains that panic before Tokio continues fanout.
+pub(crate) async fn mode_changed(
+    mode: &mut watch::Receiver<Mode>,
+) -> Result<(), watch::error::RecvError> {
+    let mut changed = std::pin::pin!(mode.changed());
+    poll_fn(|task| {
+        let waker = Waker::from(Arc::new(PanicSafeWake(task.waker().clone())));
+        let mut task = Context::from_waker(&waker);
+        changed.as_mut().poll(&mut task)
+    })
+    .await
+}
+
+struct PanicSafeWake(Waker);
+
+impl PanicSafeWake {
+    fn forward(&self) {
+        if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| self.0.wake_by_ref())) {
+            Control::discard_panic(payload);
+        }
+    }
+}
+
+impl Wake for PanicSafeWake {
+    fn wake(self: Arc<Self>) {
+        self.forward();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.forward();
+    }
+}
+
+impl Drop for PanicSafeWake {
+    fn drop(&mut self) {
+        let waker = std::mem::replace(&mut self.0, Waker::noop().clone());
+        if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| drop(waker))) {
+            Control::discard_panic(payload);
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Mode {
@@ -39,22 +91,30 @@ pub(crate) enum Mode {
     Exited(ExitReason),
 }
 
-/// Shared linearization boundary for the complete actor lifecycle.
+/// Owns the actor's authoritative lifecycle state.
 ///
-/// The watched value is both the authoritative state and the gate for admission,
-/// dispatch, completion, shutdown, and finalization decisions. Transactions use
-/// the channel's write lock, while Tokio releases that lock before notifying
-/// observers, so a safe custom waker may reenter lifecycle APIs.
+/// The watch value also gates every lifecycle decision.
+/// Admission, dispatch, completion, shutdown, and finalization share its lock.
+/// Tokio releases that lock before notifying public observers.
+/// Custom public wakers may therefore reenter lifecycle APIs.
+/// Private wake hints carry no state.
+/// Every runtime consumer rereads [`Mode`].
 #[derive(Debug)]
 pub(crate) struct Control {
     mode: watch::Sender<Mode>,
+    actor_wake: Notify,
+    owned_cancellation: CancellationToken,
 }
 
 impl Control {
     pub(crate) fn new() -> Arc<Self> {
         let (mode, _) = watch::channel(Mode::Running);
 
-        Arc::new(Self { mode })
+        Arc::new(Self {
+            mode,
+            actor_wake: Notify::new(),
+            owned_cancellation: CancellationToken::new(),
+        })
     }
 
     pub(crate) fn mode(&self) -> Mode {
@@ -76,6 +136,20 @@ impl Control {
         self.mode.subscribe()
     }
 
+    /// Returns the private signal used to wake owned tasks after hard cutoff.
+    ///
+    /// [`Mode`] remains authoritative. Tasks also read it before each user poll.
+    pub(crate) fn owned_cancellation(&self) -> CancellationToken {
+        self.owned_cancellation.clone()
+    }
+
+    /// Waits for a private lifecycle hint.
+    ///
+    /// The actor task must reread [`Mode`] after waking.
+    pub(crate) async fn actor_notified(&self) {
+        self.actor_wake.notified().await;
+    }
+
     /// Linearizes handler dispatch with graceful cutoff and Kill.
     ///
     /// The returned permit proves dispatch committed before a later lifecycle
@@ -95,9 +169,10 @@ impl Control {
 
     /// Linearizes a child-exit hook's first entry with lifecycle cutoff.
     ///
-    /// The actor task serially waits for an admitted hook, so the permit needs
-    /// no running counter: Stop and Drain wait naturally, while Kill may still
-    /// cancel the hook through the lifecycle watcher.
+    /// The actor task serially waits for each admitted hook.
+    /// No running counter is needed.
+    /// Stop and Drain wait naturally.
+    /// Kill wakes and cancels the hook.
     pub(crate) fn begin_child_hook(&self) -> Option<HookEntryPermit> {
         self.transact(|mode| {
             let permit = (mode == Mode::Running).then_some(HookEntryPermit(()));
@@ -153,8 +228,7 @@ impl Control {
 
     /// Publishes exactly one terminal mode and returns the reason that won.
     ///
-    /// The proposed runner result is accepted only if Kill, failure, or abort has
-    /// not already committed through the same gate.
+    /// The proposed task result is accepted only when no stronger state won.
     pub(crate) fn finish(&self, proposed: ExitReason) -> ExitReason {
         self.transact(|mode| {
             // Finalization shares the lifecycle gate with Kill. Whichever
@@ -187,7 +261,7 @@ impl Control {
                 return reason;
             }
 
-            mode.changed()
+            mode_changed(&mut mode)
                 .await
                 .expect("the exit publisher lives until it publishes a reason");
         }
@@ -213,22 +287,65 @@ impl Control {
         }
     }
 
+    /// Commits actor failure and consumes every panic payload without unwinding.
+    ///
+    /// This is used where another destructor may panic after containment.
+    pub(crate) fn contain_panic(&self, payload: Box<dyn Any + Send>) {
+        if let Err(notification) = panic::catch_unwind(AssertUnwindSafe(|| self.begin_failure())) {
+            Self::discard_panic(notification);
+        }
+        Self::discard_panic(payload);
+    }
+
+    /// Contains user destruction and external notification callbacks.
+    fn contain(&self, action: impl FnOnce()) {
+        if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(action)) {
+            self.contain_panic(payload);
+        }
+    }
+
+    fn discard_panic(payload: Box<dyn Any + Send>) {
+        if let Err(nested) = panic::catch_unwind(AssertUnwindSafe(|| drop(payload))) {
+            // A cascading payload destructor cannot safely leave containment.
+            std::mem::forget(nested);
+        }
+    }
+
     /// Runs one lifecycle transaction against the sole authoritative value.
     ///
-    /// The callback receives a copy and returns the complete next state, so a
-    /// callback panic cannot leave a partially mutated, unnotified mode. Tokio
-    /// publishes only actual changes and releases its write lock before waking
-    /// observers.
+    /// The private actor hint commits before public notification.
+    /// Owned cancellation runs after releasing the watch lock.
+    /// Their wakers belong only to Tokio tasks.
+    /// A public observer panic cannot stall either path.
     fn transact<T>(&self, transaction: impl FnOnce(Mode) -> (Mode, T)) -> T {
         let mut result = None;
-        self.mode.send_if_modified(|mode| {
-            let (next, output) = transaction(*mode);
-            let changed = *mode != next;
-            result = Some(output);
-            *mode = next;
-            changed
-        });
-        result.expect("a watch transaction executes exactly once")
+        let mut cancel_owned = false;
+        let notification = panic::catch_unwind(AssertUnwindSafe(|| {
+            self.mode.send_if_modified(|mode| {
+                let (next, output) = transaction(*mode);
+                let changed = *mode != next;
+                result = Some(output);
+                *mode = next;
+                if changed {
+                    self.actor_wake.notify_one();
+                    cancel_owned = matches!(next, Mode::Killing | Mode::Failing | Mode::Aborting);
+                }
+                changed
+            });
+        }));
+        if cancel_owned {
+            self.owned_cancellation.cancel();
+        }
+
+        match (result, notification) {
+            (Some(output), Ok(())) => output,
+            (Some(output), Err(payload)) => {
+                Self::discard_panic(payload);
+                output
+            }
+            (None, Err(payload)) => panic::resume_unwind(payload),
+            (None, Ok(())) => panic!("a watch transaction executes exactly once"),
+        }
     }
 }
 
@@ -264,17 +381,8 @@ impl DispatchPermit {
 
     /// Commits handler failure before making its dispatch error observable.
     fn fail(&self) -> CallError {
-        self.control.transact(|mode| {
-            let next = if matches!(mode, Mode::Running | Mode::Draining | Mode::Stopping) {
-                Mode::Failing
-            } else {
-                mode
-            };
-            (
-                next,
-                Control::call_failure_for(next, CallPhase::Dispatching),
-            )
-        })
+        self.control.contain(|| self.control.begin_failure());
+        self.control.call_failure(CallPhase::Dispatching)
     }
 }
 
@@ -327,12 +435,13 @@ pub(crate) trait Envelope<A: Actor>: Send {
     /// Abandoned calls return before lifecycle dispatch. Other entries first
     /// commit dispatch against lifecycle shutdown.
     /// If dispatch wins, it invokes the statically selected handler and hands
-    /// reply completion to the actor scheduler; otherwise it performs queued
+    /// reply completion to the actor runtime; otherwise it performs queued
     /// rejection without invoking user handler code.
     fn dispatch(
         self: Box<Self>,
         actor: &mut A,
         scope: &mut ActorScope<A>,
+        owned: &OwnedTasks,
         scheduler: &mut ReplyScheduler<A>,
     );
 }
@@ -384,7 +493,9 @@ impl<M: Message> CallEnvelope<M> {
             reply,
             control,
         } = self.take_queued();
-        drop(reply);
+        if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| drop(reply))) {
+            Control::discard_panic(payload);
+        }
         drop(control);
         message
     }
@@ -407,6 +518,7 @@ where
         mut self: Box<Self>,
         actor: &mut A,
         scope: &mut ActorScope<A>,
+        owned: &OwnedTasks,
         scheduler: &mut ReplyScheduler<A>,
     ) {
         // Only calls can be abandoned; one-way envelopes have no receiver.
@@ -427,8 +539,10 @@ where
         let permit = match control.begin_dispatch() {
             Ok(permit) => permit,
             Err(error) => {
-                let _ = reply.send(Err(error));
-                drop(message);
+                control.contain(|| {
+                    let _ = reply.send(Err(error));
+                });
+                control.contain(|| drop(message));
                 return;
             }
         };
@@ -436,7 +550,7 @@ where
         // The permit commits DuringDispatch before any user code runs,
         // including synchronous reply construction.
         let reply = DispatchReply::new(reply, permit);
-        HandleReply::handle(actor.handle(message, scope), scheduler, reply);
+        HandleReply::handle(actor.handle(message, scope), owned, scheduler, reply);
     }
 }
 
@@ -451,8 +565,11 @@ impl<M: Message> Drop for CallEnvelope<M> {
             return;
         };
 
-        let _ = reply.send(Err(control.call_failure(CallPhase::Queued)));
-        drop(message);
+        let error = control.call_failure(CallPhase::Queued);
+        control.contain(|| {
+            let _ = reply.send(Err(error));
+        });
+        control.contain(|| drop(message));
     }
 }
 
@@ -486,6 +603,7 @@ where
         self: Box<Self>,
         actor: &mut A,
         scope: &mut ActorScope<A>,
+        owned: &OwnedTasks,
         scheduler: &mut ReplyScheduler<A>,
     ) {
         let Self { message, control } = *self;
@@ -497,17 +615,13 @@ where
         // One-way completion still owns a dispatch permit, so panic and Kill
         // use the same state transition as a call even though no result is sent.
         let reply = DispatchReply::one_way(permit);
-        HandleReply::handle(actor.handle(message, scope), scheduler, reply);
+        HandleReply::handle(actor.handle(message, scope), owned, scheduler, reply);
     }
 }
 
-enum ReplyDestination<R> {
+enum DispatchReplyState<R> {
     Caller(oneshot::Sender<Result<R, CallError>>),
     OneWay,
-}
-
-enum DispatchReplyState<R> {
-    Pending(ReplyDestination<R>),
     Completed,
 }
 
@@ -519,7 +633,7 @@ pub(crate) struct DispatchReply<R> {
 impl<R> DispatchReply<R> {
     fn new(reply: oneshot::Sender<Result<R, CallError>>, permit: DispatchPermit) -> Self {
         Self {
-            state: DispatchReplyState::Pending(ReplyDestination::Caller(reply)),
+            state: DispatchReplyState::Caller(reply),
             permit,
         }
     }
@@ -532,21 +646,26 @@ impl<R> DispatchReply<R> {
     /// One-way work follows the same gate without creating a response channel.
     pub(crate) fn complete(mut self, response: R) {
         let outcome = self.permit.begin_completion();
-        let DispatchReplyState::Pending(destination) =
-            std::mem::replace(&mut self.state, DispatchReplyState::Completed)
-        else {
-            panic!("a dispatch reply completes at most once");
-        };
+        let state = std::mem::replace(&mut self.state, DispatchReplyState::Completed);
 
-        match (destination, outcome) {
-            (ReplyDestination::Caller(reply), Ok(CompletionPermit)) => {
-                let _ = reply.send(Ok(response));
+        match (state, outcome) {
+            (DispatchReplyState::Caller(reply), Ok(CompletionPermit)) => {
+                self.permit.control.contain(|| {
+                    let _ = reply.send(Ok(response));
+                });
             }
-            (ReplyDestination::Caller(reply), Err(error)) => {
-                let _ = reply.send(Err(error));
-                drop(response);
+            (DispatchReplyState::Caller(reply), Err(error)) => {
+                self.permit.control.contain(|| {
+                    let _ = reply.send(Err(error));
+                });
+                self.permit.control.contain(|| drop(response));
             }
-            (ReplyDestination::OneWay, Ok(CompletionPermit) | Err(_)) => drop(response),
+            (DispatchReplyState::OneWay, Ok(CompletionPermit) | Err(_)) => {
+                self.permit.control.contain(|| drop(response));
+            }
+            (DispatchReplyState::Completed, _) => {
+                panic!("a dispatch reply completes at most once")
+            }
         }
     }
 }
@@ -554,7 +673,7 @@ impl<R> DispatchReply<R> {
 impl DispatchReply<()> {
     fn one_way(permit: DispatchPermit) -> Self {
         Self {
-            state: DispatchReplyState::Pending(ReplyDestination::OneWay),
+            state: DispatchReplyState::OneWay,
             permit,
         }
     }
@@ -562,14 +681,17 @@ impl DispatchReply<()> {
 
 impl<R> Drop for DispatchReply<R> {
     fn drop(&mut self) {
-        let DispatchReplyState::Pending(destination) =
-            std::mem::replace(&mut self.state, DispatchReplyState::Completed)
-        else {
-            return;
+        let state = std::mem::replace(&mut self.state, DispatchReplyState::Completed);
+        let reply = match state {
+            DispatchReplyState::Caller(reply) => Some(reply),
+            DispatchReplyState::OneWay => None,
+            DispatchReplyState::Completed => return,
         };
         let error = self.permit.fail();
-        if let ReplyDestination::Caller(reply) = destination {
-            let _ = reply.send(Err(error));
+        if let Some(reply) = reply {
+            self.permit.control.contain(|| {
+                let _ = reply.send(Err(error));
+            });
         }
     }
 }
@@ -602,6 +724,7 @@ mod tests {
             self: Box<Self>,
             _actor: &mut TestActor,
             _scope: &mut ActorScope<TestActor>,
+            _owned: &OwnedTasks,
             _scheduler: &mut ReplyScheduler<TestActor>,
         ) {
         }
@@ -740,6 +863,171 @@ mod tests {
         }
     }
 
+    struct PanicWake(Arc<AtomicUsize>);
+
+    impl Wake for PanicWake {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            panic!("intentional notification panic");
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            panic!("intentional notification panic");
+        }
+    }
+
+    // Tokio must see a Waker that never unwinds from wake.
+    // Direct invocation avoids depending on fanout bucket order.
+    #[test]
+    fn lifecycle_waker_proxy_contains_external_wake_panic() {
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let external = Waker::from(Arc::new(PanicWake(Arc::clone(&wakes))));
+        let proxy = Waker::from(Arc::new(PanicSafeWake(external)));
+
+        let result = panic::catch_unwind(AssertUnwindSafe(|| proxy.wake_by_ref()));
+
+        assert!(result.is_ok());
+        assert_eq!(wakes.load(Ordering::SeqCst), 1);
+    }
+
+    struct PanicWakeDrop(Arc<AtomicBool>);
+
+    impl Wake for PanicWakeDrop {
+        fn wake(self: Arc<Self>) {
+            panic!("intentional waker panic");
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            panic!("intentional waker panic");
+        }
+    }
+
+    impl Drop for PanicWakeDrop {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+            panic!("intentional waker drop panic");
+        }
+    }
+
+    // Tokio consumes proxy Wakers during fanout.
+    // Their inner Waker may also panic while dropping.
+    #[test]
+    fn lifecycle_waker_proxy_contains_external_drop_panic() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let external = Waker::from(Arc::new(PanicWakeDrop(Arc::clone(&dropped))));
+        let proxy = Waker::from(Arc::new(PanicSafeWake(external)));
+
+        let result = panic::catch_unwind(AssertUnwindSafe(|| proxy.wake()));
+
+        assert!(result.is_ok());
+        assert!(dropped.load(Ordering::SeqCst));
+    }
+
+    struct PanicDropMessage(Arc<AtomicBool>);
+
+    impl Message for PanicDropMessage {
+        type Reply = ();
+    }
+
+    impl Drop for PanicDropMessage {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+            panic!("intentional message drop panic");
+        }
+    }
+
+    // Public observers may install arbitrary safe Wakers.
+    // One panic must not suppress another lifecycle waiter.
+    // It must not consume the private actor hint.
+    #[test]
+    fn public_notification_panic_preserves_every_other_waiter() {
+        let control = Control::new();
+        let public_wakes = Arc::new(AtomicUsize::new(0));
+        let public_waker = Waker::from(Arc::new(PanicWake(Arc::clone(&public_wakes))));
+        let mut public_task = Context::from_waker(&public_waker);
+        let mut public_mode = control.subscribe_mode();
+        let mut public_changed = Box::pin(mode_changed(&mut public_mode));
+        assert!(public_changed.as_mut().poll(&mut public_task).is_pending());
+
+        let other_wakes = Arc::new(WakeCounter(AtomicUsize::new(0)));
+        let other_waker = Waker::from(Arc::clone(&other_wakes));
+        let mut other_task = Context::from_waker(&other_waker);
+        let mut other_mode = control.subscribe_mode();
+        let mut other_changed = Box::pin(mode_changed(&mut other_mode));
+        assert!(other_changed.as_mut().poll(&mut other_task).is_pending());
+
+        let actor_wakes = Arc::new(WakeCounter(AtomicUsize::new(0)));
+        let actor_waker = Waker::from(Arc::clone(&actor_wakes));
+        let mut actor_task = Context::from_waker(&actor_waker);
+        let mut actor_notified = Box::pin(control.actor_notified());
+        assert!(actor_notified.as_mut().poll(&mut actor_task).is_pending());
+
+        control.begin_failure();
+
+        assert_eq!(public_wakes.load(Ordering::SeqCst), 1);
+        assert_eq!(other_wakes.0.load(Ordering::SeqCst), 1);
+        assert_eq!(actor_wakes.0.load(Ordering::SeqCst), 1);
+        assert!(other_changed.as_mut().poll(&mut other_task).is_ready());
+        assert!(actor_notified.as_mut().poll(&mut actor_task).is_ready());
+        assert_eq!(control.mode(), Mode::Failing);
+    }
+
+    // Admission recovery notifies a still-live response receiver.
+    // Its Waker panic must not consume the recovered message.
+    // Uncommitted work must not fail the actor.
+    #[test]
+    fn call_recovery_contains_response_waker_panic() {
+        let control = Control::new();
+        let message_drops = Arc::new(AtomicUsize::new(0));
+        let (envelope, response) = CallEnvelope::new(
+            RecoverMessage(Arc::clone(&message_drops)),
+            Arc::clone(&control),
+        );
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let waker = Waker::from(Arc::new(PanicWake(Arc::clone(&wakes))));
+        let mut task = Context::from_waker(&waker);
+        let mut response = Box::pin(response);
+        assert!(response.as_mut().poll(&mut task).is_pending());
+
+        let recovered = panic::catch_unwind(AssertUnwindSafe(|| envelope.into_message()));
+
+        assert!(recovered.is_ok());
+        assert_eq!(wakes.load(Ordering::SeqCst), 1);
+        assert_eq!(message_drops.load(Ordering::SeqCst), 0);
+        assert_eq!(control.mode(), Mode::Running);
+        drop(recovered.unwrap());
+        assert_eq!(message_drops.load(Ordering::SeqCst), 1);
+    }
+
+    // Queued rejection first notifies the caller, then drops its message.
+    // Both callbacks may panic and must remain separate containment boundaries.
+    #[test]
+    fn queued_call_drop_contains_notification_and_message_drop_panics() {
+        let control = Control::new();
+        let message_dropped = Arc::new(AtomicBool::new(false));
+        let (envelope, response) = CallEnvelope::new(
+            PanicDropMessage(Arc::clone(&message_dropped)),
+            Arc::clone(&control),
+        );
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let waker = Waker::from(Arc::new(PanicWake(Arc::clone(&wakes))));
+        let mut task = Context::from_waker(&waker);
+        let mut response = Box::pin(response);
+        assert!(response.as_mut().poll(&mut task).is_pending());
+
+        let dropped = panic::catch_unwind(AssertUnwindSafe(|| drop(envelope)));
+
+        assert!(dropped.is_ok());
+        assert!(message_dropped.load(Ordering::SeqCst));
+        assert_eq!(wakes.load(Ordering::SeqCst), 1);
+        assert_eq!(control.mode(), Mode::Failing);
+        assert!(matches!(
+            response.as_mut().get_mut().try_recv(),
+            Ok(Err(CallError::BeforeDispatch(ExitReason::Panicked)))
+        ));
+    }
+
     // Running-to-Running admission is the hot path. It must take the same write
     // gate without publishing a fake lifecycle change to every closed() waiter.
     #[test]
@@ -826,6 +1114,36 @@ mod tests {
         ));
         assert_eq!(control.mode(), Mode::Failing);
         assert!(!control.is_running());
+    }
+
+    // Lifecycle and response notifications can invoke safe custom wakers.
+    // Neither panic may escape Drop or combine with a later user destructor.
+    #[test]
+    fn dispatch_reply_drop_contains_notification_panics() {
+        let control = Control::new();
+        let permit = control.begin_dispatch().expect("dispatch wins the gate");
+        let (sender, response) = oneshot::channel();
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let waker = Waker::from(Arc::new(PanicWake(Arc::clone(&wakes))));
+        let mut task = Context::from_waker(&waker);
+
+        let mut mode = control.subscribe_mode();
+        let mut changed = Box::pin(mode.changed());
+        assert!(changed.as_mut().poll(&mut task).is_pending());
+        let mut response = Box::pin(response);
+        assert!(response.as_mut().poll(&mut task).is_pending());
+
+        let dropped = panic::catch_unwind(AssertUnwindSafe(|| {
+            drop(DispatchReply::<()>::new(sender, permit));
+        }));
+
+        assert!(dropped.is_ok());
+        assert_eq!(wakes.load(Ordering::SeqCst), 2);
+        assert_eq!(control.mode(), Mode::Failing);
+        assert!(matches!(
+            response.as_mut().get_mut().try_recv(),
+            Ok(Err(CallError::DuringDispatch(ExitReason::Panicked)))
+        ));
     }
 
     struct GateDropProbe {

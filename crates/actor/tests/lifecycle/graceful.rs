@@ -136,46 +136,48 @@ async fn drain_runs_the_fixed_accepted_queue_in_order() {
     assert_eq!(*lock(&cleanup), vec![ExitReason::Drained]);
 }
 
-struct OwnedDrainActor;
+struct InterleavedDrainActor;
 
-impl Actor for OwnedDrainActor {}
+impl Actor for InterleavedDrainActor {}
 
-struct OwnedDrainStep {
+struct InterleavedDrainStep {
     id: u8,
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
 }
 
-impl Message for OwnedDrainStep {
+impl Message for InterleavedDrainStep {
     type Reply = u8;
 }
 
-impl Handler<OwnedDrainStep> for OwnedDrainActor {
+impl Handler<InterleavedDrainStep> for InterleavedDrainActor {
     fn handle(
         &mut self,
-        message: OwnedDrainStep,
+        message: InterleavedDrainStep,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, OwnedDrainStep> + use<> {
+    ) -> impl loong_actor::IntoReply<Self, InterleavedDrainStep> + use<> {
         async move {
             let _ = message.entered.send(());
             let _ = message.release.await;
             message.id
         }
+        .into_actor()
+        .interleaved()
     }
 }
 
 #[tokio::test]
-async fn drain_respects_max_in_flight_while_finishing_the_fixed_owned_queue() {
+async fn drain_respects_max_in_flight_for_the_fixed_interleaved_queue() {
     let options = SpawnOptions::default()
         .with_mailbox_capacity(NonZeroUsize::new(3).unwrap())
         .with_max_in_flight(NonZeroUsize::new(2).unwrap());
-    let mut owner = spawn_with(OwnedDrainActor, options);
+    let mut owner = spawn_with(InterleavedDrainActor, options);
     let actor = owner.actor_ref();
 
     let (first_entered_tx, first_entered_rx) = oneshot::channel();
     let (first_release_tx, first_release_rx) = oneshot::channel();
     let first = actor
-        .try_call(OwnedDrainStep {
+        .try_call(InterleavedDrainStep {
             id: 1,
             entered: first_entered_tx,
             release: first_release_rx,
@@ -184,7 +186,7 @@ async fn drain_respects_max_in_flight_while_finishing_the_fixed_owned_queue() {
     let (second_entered_tx, second_entered_rx) = oneshot::channel();
     let (second_release_tx, second_release_rx) = oneshot::channel();
     let second = actor
-        .try_call(OwnedDrainStep {
+        .try_call(InterleavedDrainStep {
             id: 2,
             entered: second_entered_tx,
             release: second_release_rx,
@@ -196,7 +198,7 @@ async fn drain_respects_max_in_flight_while_finishing_the_fixed_owned_queue() {
     let (third_entered_tx, mut third_entered_rx) = oneshot::channel();
     let (third_release_tx, third_release_rx) = oneshot::channel();
     let third = actor
-        .try_call(OwnedDrainStep {
+        .try_call(InterleavedDrainStep {
             id: 3,
             entered: third_entered_tx,
             release: third_release_rx,
@@ -211,7 +213,7 @@ async fn drain_respects_max_in_flight_while_finishing_the_fixed_owned_queue() {
     let (_fourth_release_tx, fourth_release_rx) = oneshot::channel();
     assert_eq!(
         actor
-            .try_call(OwnedDrainStep {
+            .try_call(InterleavedDrainStep {
                 id: 4,
                 entered: fourth_entered_tx,
                 release: fourth_release_rx,

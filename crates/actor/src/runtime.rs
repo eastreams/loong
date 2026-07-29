@@ -10,24 +10,21 @@ use std::{
 };
 
 use futures_util::FutureExt;
-use tokio::{
-    sync::{mpsc, watch},
-    task::JoinHandle,
-};
+use tokio::{sync::mpsc, task::JoinHandle};
 
 use crate::{
     Actor, ActorRef, Child, ChildExit, ChildId, ErasedFuture, ExitReason, Shutdown, ShutdownStatus,
     SpawnChildError,
-    address::wait_for_kill,
     mailbox::{ActorMailbox, Control, DynEnvelope, HookEntryPermit, Mode},
+    owned::OwnedTasks,
     scheduler::ReplyScheduler,
 };
 
 /// Configuration applied when one actor is spawned.
 ///
-/// Mailbox capacity bounds accepted work waiting for dispatch. The independent
-/// in-flight limit bounds dispatched replies that have not completed. Both
-/// limits default to 32.
+/// Mailbox capacity bounds accepted work waiting for dispatch.
+/// The in-flight limit bounds active interleaved replies.
+/// Both limits default to 32.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SpawnOptions {
     mailbox_capacity: NonZeroUsize,
@@ -41,11 +38,14 @@ impl SpawnOptions {
         self
     }
 
-    /// Sets the maximum number of dispatched, incomplete replies.
+    /// Sets the maximum number of active interleaved replies.
     ///
-    /// At the limit, new mailbox dispatch pauses while the scheduler continues
-    /// polling eligible active replies. The exclusive slot counts toward this
-    /// limit, and no slot is reserved for a reply that makes a self-call.
+    /// At the limit, new mailbox dispatch pauses.
+    /// This also delays ready or owned handler dispatch.
+    /// The runtime learns the reply mode only after dispatch.
+    /// Owned tasks are unbounded and consume no slot.
+    /// Exclusive work runs alone among actor-aware replies.
+    /// No slot is reserved for self-calls.
     pub const fn with_max_in_flight(mut self, max_in_flight: NonZeroUsize) -> Self {
         self.max_in_flight = max_in_flight;
         self
@@ -56,7 +56,7 @@ impl SpawnOptions {
         self.mailbox_capacity
     }
 
-    /// Returns the maximum number of dispatched, incomplete replies.
+    /// Returns the maximum number of active interleaved replies.
     ///
     /// See [`with_max_in_flight`](Self::with_max_in_flight) for the dispatch and
     /// self-call behavior governed by this limit.
@@ -192,10 +192,10 @@ pub struct ActorScope<A: Actor> {
 impl<A: Actor> ActorScope<A> {
     /// Returns this actor's non-owning address.
     ///
-    /// Self-calls from owned and interleaved replies can progress only while an
-    /// additional in-flight slot is free. A call accepted from an exclusive
-    /// reply cannot be dispatched until that reply ends, so awaiting it requires
-    /// Kill, actor failure, or executor teardown to break the wait.
+    /// An owned reply consumes no interleaved slot.
+    /// Its self-call can progress while a slot remains available.
+    /// An interleaved reply needs one additional slot for its self-call.
+    /// An exclusive reply blocks its queued self-call until it ends.
     ///
     /// A serial lifecycle hook also blocks dispatch. While admission is still
     /// open, as in `on_start` or a running actor's `on_child_exit`, awaiting an
@@ -279,11 +279,17 @@ struct OwnedActor {
 
 impl OwnedActor {
     async fn wait(&mut self) -> ExitReason {
-        let reason = self.control.wait_for_exit().await;
-        if let Some(join) = self.join.take() {
-            let _ = join.await;
+        // This bypasses shared lifecycle notification.
+        // Cancellation retains the JoinHandle for another wait.
+        let joined = match &mut self.join {
+            Some(join) => join.await,
+            None => return self.control.wait_for_exit().await,
+        };
+        self.join = None;
+        match joined {
+            Ok(reason) => reason,
+            Err(_) => self.control.wait_for_exit().await,
         }
-        reason
     }
 }
 
@@ -348,14 +354,12 @@ fn spawn_actor<A: Actor>(
         accepts_children: true,
         supervisor_tx,
     };
-    let mode = mailbox.control.subscribe_mode();
     let control = mailbox.control.clone();
     let future = Box::pin(run_actor(
         actor,
         scope,
         inbox,
         supervisor_rx,
-        mode,
         mailbox,
         options.max_in_flight(),
     ));
@@ -480,20 +484,29 @@ enum Work<T = ()> {
     Panicked,
 }
 
-async fn await_actor_work<F, T>(future: F, mode: &mut watch::Receiver<Mode>) -> Work<T>
+async fn await_actor_work<F, T>(future: F, control: &Control) -> Work<T>
 where
     F: Future<Output = T> + Send,
 {
     let guarded = AssertUnwindSafe(future).catch_unwind();
     tokio::pin!(guarded);
 
-    tokio::select! {
-        biased;
-        () = wait_for_kill(mode) => Work::Killed,
-        result = &mut guarded => match result {
-            Ok(value) => Work::Complete(value),
-            Err(_) => Work::Panicked,
-        },
+    loop {
+        if matches!(
+            control.mode(),
+            Mode::Killing | Mode::Failing | Mode::Aborting | Mode::Exited(_)
+        ) {
+            return Work::Killed;
+        }
+
+        tokio::select! {
+            biased;
+            () = control.actor_notified() => {}
+            result = &mut guarded => return match result {
+                Ok(value) => Work::Complete(value),
+                Err(_) => Work::Panicked,
+            },
+        }
     }
 }
 
@@ -502,17 +515,18 @@ async fn run_actor<A: Actor>(
     mut scope: ActorScope<A>,
     mut inbox: mpsc::Receiver<DynEnvelope<A>>,
     mut supervisor_rx: mpsc::UnboundedReceiver<ChildExit>,
-    mut mode: watch::Receiver<Mode>,
     _mailbox: Arc<ActorMailbox<A>>,
     max_in_flight: NonZeroUsize,
 ) -> ExitReason {
+    let control = Arc::clone(&scope.control);
+    let owned = OwnedTasks::new(Arc::clone(&scope.control));
     let mut scheduler = ReplyScheduler::new(max_in_flight);
     let mut turn_cursor = TurnCursor::default();
 
-    match await_actor_work(async { actor.on_start(&mut scope).await }, &mut mode).await {
+    match await_actor_work(async { actor.on_start(&mut scope).await }, &control).await {
         Work::Complete(()) => {}
-        Work::Killed => return kill_actor(&mut scope, &mut inbox, &mut scheduler).await,
-        Work::Panicked => return fail_actor(&mut scope, &mut inbox, &mut scheduler).await,
+        Work::Killed => return kill_actor(&mut scope, &mut inbox, &owned, &mut scheduler).await,
+        Work::Panicked => return fail_actor(&mut scope, &mut inbox, &owned, &mut scheduler).await,
     }
 
     loop {
@@ -524,7 +538,8 @@ async fn run_actor<A: Actor>(
                     &mut scope,
                     &mut inbox,
                     &mut supervisor_rx,
-                    &mut mode,
+                    &control,
+                    &owned,
                     &mut scheduler,
                     &mut turn_cursor,
                 )
@@ -535,16 +550,17 @@ async fn run_actor<A: Actor>(
                     &mut actor,
                     &mut scope,
                     &mut inbox,
-                    &mut mode,
+                    &control,
+                    &owned,
                     &mut scheduler,
                 )
                 .await;
             }
             Mode::Killing => {
-                return kill_actor(&mut scope, &mut inbox, &mut scheduler).await;
+                return kill_actor(&mut scope, &mut inbox, &owned, &mut scheduler).await;
             }
             Mode::Failing => {
-                return fail_actor(&mut scope, &mut inbox, &mut scheduler).await;
+                return fail_actor(&mut scope, &mut inbox, &owned, &mut scheduler).await;
             }
             Mode::Exited(reason) => return reason,
             Mode::Aborting => return ExitReason::Aborted,
@@ -555,7 +571,8 @@ async fn run_actor<A: Actor>(
             &mut scope,
             &mut inbox,
             &mut supervisor_rx,
-            &mut mode,
+            &control,
+            &owned,
             &mut scheduler,
             true,
             Mode::Running,
@@ -568,28 +585,31 @@ async fn run_actor<A: Actor>(
             Ok(turn) => turn,
             Err(_) => {
                 scope.control.begin_failure();
-                return fail_actor(&mut scope, &mut inbox, &mut scheduler).await;
+                return fail_actor(&mut scope, &mut inbox, &owned, &mut scheduler).await;
             }
         };
 
         match turn {
             Turn::Mode | Turn::ReplyProgress => {}
+            Turn::RepliesFinished => {
+                unreachable!("a running actor cannot finish reply scheduling")
+            }
             Turn::Child(event) => {
-                match handle_child_exit(&mut actor, &mut scope, event, &mut mode).await {
+                match handle_child_exit(&mut actor, &mut scope, event, &control).await {
                     Work::Complete(()) => {}
                     Work::Killed => {
-                        return kill_actor(&mut scope, &mut inbox, &mut scheduler).await;
+                        return kill_actor(&mut scope, &mut inbox, &owned, &mut scheduler).await;
                     }
                     Work::Panicked => {
                         scope.control.begin_failure();
-                        return fail_actor(&mut scope, &mut inbox, &mut scheduler).await;
+                        return fail_actor(&mut scope, &mut inbox, &owned, &mut scheduler).await;
                     }
                 }
             }
             Turn::Message => {}
             Turn::InboxClosed => {
                 scope.control.begin_failure();
-                return fail_actor(&mut scope, &mut inbox, &mut scheduler).await;
+                return fail_actor(&mut scope, &mut inbox, &owned, &mut scheduler).await;
             }
         }
     }
@@ -598,6 +618,8 @@ async fn run_actor<A: Actor>(
 enum Turn {
     Mode,
     ReplyProgress,
+    // Drain handles child exits while awaiting this barrier.
+    RepliesFinished,
     Child(ChildExit),
     Message,
     InboxClosed,
@@ -606,91 +628,73 @@ enum Turn {
 #[derive(Default)]
 struct TurnCursor {
     ordinary: usize,
-    exclusive_owned_first: bool,
 }
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "one turn borrows each independently owned runner resource"
+    reason = "one turn borrows each independent actor-task resource"
 )]
-// Ordinary turns resume from a persistent cursor across mailbox dispatch,
-// owned replies, interleaved replies, and child-exit events. With exclusive work
-// present, only owned and exclusive replies are eligible, and their first-poll
-// priority alternates. Lifecycle observation sits outside this fairness domain
-// with biased priority, and mode checks between candidates keep Kill ahead of
-// subsequent user polls.
+// Mailbox, interleaved, and child work share the cursor.
+// Owned tasks do not share this rotation.
+// Exclusive work pauses those three sources.
+// Lifecycle changes are checked before the rotation.
 async fn actor_turn<A: Actor>(
     actor: &mut A,
     scope: &mut ActorScope<A>,
     inbox: &mut mpsc::Receiver<DynEnvelope<A>>,
     supervisor_rx: &mut mpsc::UnboundedReceiver<ChildExit>,
-    mode: &mut watch::Receiver<Mode>,
+    control: &Control,
+    owned: &OwnedTasks,
     scheduler: &mut ReplyScheduler<A>,
     receive_messages: bool,
     expected_mode: Mode,
     cursor: &mut TurnCursor,
 ) -> Turn {
-    let control = Arc::clone(&scope.control);
+    let wait_for_owned = !receive_messages && scheduler.is_empty();
     let fair_turn = std::future::poll_fn(|task| {
         if control.mode() != expected_mode {
             return Poll::Ready(Turn::Mode);
         }
 
         if scheduler.has_exclusive() {
-            let owned_first = cursor.exclusive_owned_first;
-            for poll_owned in [owned_first, !owned_first] {
-                if control.mode() != expected_mode {
-                    return Poll::Ready(Turn::Mode);
-                }
-                let ready = if poll_owned {
-                    scheduler.has_owned()
-                        && scheduler
-                            .poll_owned(&control, expected_mode, task)
-                            .is_ready()
-                } else {
-                    scheduler
-                        .poll_exclusive(actor, scope, &control, expected_mode, task)
-                        .is_ready()
-                };
-                if ready {
-                    cursor.exclusive_owned_first = !poll_owned;
-                    return Poll::Ready(Turn::ReplyProgress);
-                }
-            }
-            cursor.exclusive_owned_first = !owned_first;
-            return Poll::Pending;
-        }
-
-        let start = cursor.ordinary;
-        for offset in 0..4 {
+            let ready = scheduler
+                .poll_exclusive(actor, scope, control, expected_mode, task)
+                .is_ready();
             if control.mode() != expected_mode {
                 return Poll::Ready(Turn::Mode);
             }
-            let class = (start + offset) % 4;
+            return if ready {
+                Poll::Ready(Turn::ReplyProgress)
+            } else {
+                Poll::Pending
+            };
+        }
+
+        let start = cursor.ordinary;
+        for offset in 0..3 {
+            if control.mode() != expected_mode {
+                return Poll::Ready(Turn::Mode);
+            }
+            let class = (start + offset) % 3;
             let selected = match class {
-                0 if receive_messages && scheduler.can_dispatch() => match inbox.poll_recv(task) {
-                    Poll::Ready(Some(envelope)) => {
-                        envelope.dispatch(actor, scope, scheduler);
-                        Some(Turn::Message)
+                0 if receive_messages && scheduler.has_dispatch_capacity() => {
+                    match inbox.poll_recv(task) {
+                        Poll::Ready(Some(envelope)) => {
+                            envelope.dispatch(actor, scope, owned, scheduler);
+                            Some(Turn::Message)
+                        }
+                        Poll::Ready(None) => Some(Turn::InboxClosed),
+                        Poll::Pending => None,
                     }
-                    Poll::Ready(None) => Some(Turn::InboxClosed),
-                    Poll::Pending => None,
-                },
-                1 if scheduler.has_owned()
+                }
+                1 if scheduler.has_interleaved()
                     && scheduler
-                        .poll_owned(&control, expected_mode, task)
+                        .poll_interleaved(actor, scope, control, expected_mode, task)
                         .is_ready() =>
                 {
                     Some(Turn::ReplyProgress)
                 }
-                2 if scheduler.has_interleaved()
-                    && scheduler
-                        .poll_interleaved(actor, scope, &control, expected_mode, task)
-                        .is_ready() =>
-                {
-                    Some(Turn::ReplyProgress)
-                }
-                3 => match supervisor_rx.poll_recv(task) {
+                2 => match supervisor_rx.poll_recv(task) {
                     Poll::Ready(Some(event)) => Some(Turn::Child(event)),
                     Poll::Ready(None) => Some(Turn::Mode),
                     Poll::Pending => None,
@@ -699,21 +703,21 @@ async fn actor_turn<A: Actor>(
             };
 
             if let Some(turn) = selected {
-                cursor.ordinary = (class + 1) % 4;
+                cursor.ordinary = (class + 1) % 3;
                 return Poll::Ready(turn);
             }
         }
 
-        cursor.ordinary = (start + 1) % 4;
+        cursor.ordinary = (start + 1) % 3;
         Poll::Pending
     });
 
-    // Keep the watch future alive while the fair-turn future is pending. The
-    // biased order gives lifecycle control, especially Kill, first poll rights.
+    // Lifecycle always gets first poll rights, especially Kill.
     tokio::select! {
         biased;
-        _ = mode.changed() => Turn::Mode,
+        () = control.actor_notified() => Turn::Mode,
         turn = fair_turn => turn,
+        () = owned.wait(), if wait_for_owned => Turn::RepliesFinished,
     }
 }
 
@@ -721,7 +725,7 @@ async fn handle_child_exit<A: Actor>(
     actor: &mut A,
     scope: &mut ActorScope<A>,
     event: ChildExit,
-    mode: &mut watch::Receiver<Mode>,
+    control: &Control,
 ) -> Work {
     if !scope.children.remove(event.child()) {
         return Work::Complete(());
@@ -731,7 +735,7 @@ async fn handle_child_exit<A: Actor>(
         return Work::Complete(());
     };
 
-    run_child_exit_hook(actor, scope, event, mode, permit).await
+    run_child_exit_hook(actor, scope, event, control, permit).await
 }
 
 /// Makes the private gate proof mandatory at the only user hook call site.
@@ -739,49 +743,56 @@ async fn run_child_exit_hook<A: Actor>(
     actor: &mut A,
     scope: &mut ActorScope<A>,
     event: ChildExit,
-    mode: &mut watch::Receiver<Mode>,
+    control: &Control,
     _permit: HookEntryPermit,
 ) -> Work {
-    await_actor_work(async { actor.on_child_exit(event, scope).await }, mode).await
+    await_actor_work(async { actor.on_child_exit(event, scope).await }, control).await
 }
 
 async fn stop_actor<A: Actor>(
     actor: &mut A,
     scope: &mut ActorScope<A>,
     inbox: &mut mpsc::Receiver<DynEnvelope<A>>,
-    mode: &mut watch::Receiver<Mode>,
+    control: &Control,
+    owned: &OwnedTasks,
     scheduler: &mut ReplyScheduler<A>,
 ) -> ExitReason {
     match close_and_discard(inbox, &scope.control, Mode::Stopping).await {
         DiscardOutcome::Complete => {}
         DiscardOutcome::ModeChanged => match scope.control.mode() {
-            Mode::Killing => return kill_actor(scope, inbox, scheduler).await,
-            Mode::Failing => return fail_actor(scope, inbox, scheduler).await,
+            Mode::Killing => return kill_actor(scope, inbox, owned, scheduler).await,
+            Mode::Failing => return fail_actor(scope, inbox, owned, scheduler).await,
             // Lifecycle cannot return to a graceful mode. Aborting and Exited
             // belong to ActorTask's outer drop/publication path, which cannot
             // repoll this inner future after committing either state.
             mode => unreachable!("stop discard observed impossible mode: {mode:?}"),
         },
     }
-    match finish_replies(actor, scope, scheduler, mode).await {
+    owned.close();
+    match finish_replies(actor, scope, control, owned, scheduler).await {
         Work::Complete(()) => {}
-        Work::Killed => return kill_actor(scope, inbox, scheduler).await,
-        Work::Panicked => return fail_actor(scope, inbox, scheduler).await,
+        Work::Killed => return kill_actor(scope, inbox, owned, scheduler).await,
+        Work::Panicked => return fail_actor(scope, inbox, owned, scheduler).await,
     }
 
-    match graceful_finish(actor, scope, Shutdown::Stop, ExitReason::Stopped, mode).await {
+    match graceful_finish(actor, scope, control, Shutdown::Stop, ExitReason::Stopped).await {
         Work::Complete(()) => ExitReason::Stopped,
-        Work::Killed => kill_actor(scope, inbox, scheduler).await,
-        Work::Panicked => fail_actor(scope, inbox, scheduler).await,
+        Work::Killed => kill_actor(scope, inbox, owned, scheduler).await,
+        Work::Panicked => fail_actor(scope, inbox, owned, scheduler).await,
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "drain borrows each independent actor-task resource"
+)]
 async fn drain_actor<A: Actor>(
     actor: &mut A,
     scope: &mut ActorScope<A>,
     inbox: &mut mpsc::Receiver<DynEnvelope<A>>,
     supervisor_rx: &mut mpsc::UnboundedReceiver<ChildExit>,
-    mode: &mut watch::Receiver<Mode>,
+    control: &Control,
+    owned: &OwnedTasks,
     scheduler: &mut ReplyScheduler<A>,
     turn_cursor: &mut TurnCursor,
 ) -> ExitReason {
@@ -789,15 +800,17 @@ async fn drain_actor<A: Actor>(
     // queue is stable once Drain commits. Capacity permits that never reached
     // admission are not accepted work and must not extend graceful shutdown.
     inbox.close();
-    mode.borrow_and_update();
     let mut inbox_drained = inbox.is_empty();
+    if inbox_drained {
+        owned.close();
+    }
     loop {
         match scope.control.mode() {
             Mode::Killing => {
-                return kill_actor(scope, inbox, scheduler).await;
+                return kill_actor(scope, inbox, owned, scheduler).await;
             }
             Mode::Failing => {
-                return fail_actor(scope, inbox, scheduler).await;
+                return fail_actor(scope, inbox, owned, scheduler).await;
             }
             Mode::Running | Mode::Draining | Mode::Stopping => {}
             Mode::Exited(reason) => return reason,
@@ -806,20 +819,7 @@ async fn drain_actor<A: Actor>(
 
         if !inbox_drained && inbox.is_empty() {
             inbox_drained = true;
-        }
-
-        if inbox_drained && scheduler.is_empty() {
-            let Ok(event) = supervisor_rx.try_recv() else {
-                break;
-            };
-            match handle_child_exit(actor, scope, event, mode).await {
-                Work::Complete(()) => continue,
-                Work::Killed => return kill_actor(scope, inbox, scheduler).await,
-                Work::Panicked => {
-                    scope.control.begin_failure();
-                    return fail_actor(scope, inbox, scheduler).await;
-                }
-            }
+            owned.close();
         }
 
         let turn = AssertUnwindSafe(actor_turn(
@@ -827,7 +827,8 @@ async fn drain_actor<A: Actor>(
             scope,
             inbox,
             supervisor_rx,
-            mode,
+            control,
+            owned,
             scheduler,
             !inbox_drained,
             Mode::Draining,
@@ -840,42 +841,45 @@ async fn drain_actor<A: Actor>(
             Ok(turn) => turn,
             Err(_) => {
                 scope.control.begin_failure();
-                return fail_actor(scope, inbox, scheduler).await;
+                return fail_actor(scope, inbox, owned, scheduler).await;
             }
         };
 
         match turn {
             Turn::Mode | Turn::ReplyProgress => {}
-            Turn::Child(event) => match handle_child_exit(actor, scope, event, mode).await {
+            Turn::RepliesFinished => break,
+            Turn::Child(event) => match handle_child_exit(actor, scope, event, control).await {
                 Work::Complete(()) => {}
                 Work::Killed => {
-                    return kill_actor(scope, inbox, scheduler).await;
+                    return kill_actor(scope, inbox, owned, scheduler).await;
                 }
                 Work::Panicked => {
                     scope.control.begin_failure();
-                    return fail_actor(scope, inbox, scheduler).await;
+                    return fail_actor(scope, inbox, owned, scheduler).await;
                 }
             },
             Turn::Message => {}
-            Turn::InboxClosed => inbox_drained = true,
+            Turn::InboxClosed => {
+                inbox_drained = true;
+                owned.close();
+            }
         }
     }
 
-    match graceful_finish(actor, scope, Shutdown::Drain, ExitReason::Drained, mode).await {
+    match graceful_finish(actor, scope, control, Shutdown::Drain, ExitReason::Drained).await {
         Work::Complete(()) => ExitReason::Drained,
-        Work::Killed => kill_actor(scope, inbox, scheduler).await,
-        Work::Panicked => fail_actor(scope, inbox, scheduler).await,
+        Work::Killed => kill_actor(scope, inbox, owned, scheduler).await,
+        Work::Panicked => fail_actor(scope, inbox, owned, scheduler).await,
     }
 }
 
 async fn finish_replies<A: Actor>(
     actor: &mut A,
     scope: &mut ActorScope<A>,
+    control: &Control,
+    owned: &OwnedTasks,
     scheduler: &mut ReplyScheduler<A>,
-    mode: &mut watch::Receiver<Mode>,
 ) -> Work {
-    mode.borrow_and_update();
-    let control = Arc::clone(&scope.control);
     while !scheduler.is_empty() {
         match scope.control.mode() {
             Mode::Killing => return Work::Killed,
@@ -887,9 +891,9 @@ async fn finish_replies<A: Actor>(
         let result = AssertUnwindSafe(async {
             tokio::select! {
                 biased;
-                _ = mode.changed() => {}
+                () = control.actor_notified() => {}
                 () = std::future::poll_fn(|task| {
-                    scheduler.poll_active(actor, scope, &control, Mode::Stopping, task)
+                    scheduler.poll_active(actor, scope, control, Mode::Stopping, task)
                 }) => {}
             }
         })
@@ -902,7 +906,33 @@ async fn finish_replies<A: Actor>(
         }
     }
 
-    Work::Complete(())
+    loop {
+        match scope.control.mode() {
+            Mode::Killing => return Work::Killed,
+            Mode::Failing => return Work::Panicked,
+            Mode::Running | Mode::Draining | Mode::Stopping => {}
+            Mode::Aborting | Mode::Exited(_) => return Work::Killed,
+        }
+
+        let result = AssertUnwindSafe(async {
+            tokio::select! {
+                biased;
+                () = control.actor_notified() => false,
+                () = owned.wait() => true,
+            }
+        })
+        .catch_unwind()
+        .await;
+
+        match result {
+            Ok(true) => return Work::Complete(()),
+            Ok(false) => {}
+            Err(_) => {
+                scope.control.begin_failure();
+                return Work::Panicked;
+            }
+        }
+    }
 }
 
 /// Graceful shutdown is post-order: a parent finishes the work retained by the
@@ -910,9 +940,9 @@ async fn finish_replies<A: Actor>(
 async fn graceful_finish<A: Actor>(
     actor: &mut A,
     scope: &mut ActorScope<A>,
+    control: &Control,
     shutdown: Shutdown,
     reason: ExitReason,
-    mode: &mut watch::Receiver<Mode>,
 ) -> Work {
     // Cleanup starts after the final child set has been established. Rejecting
     // later spawns keeps the post-order exit guarantee type-visible.
@@ -924,7 +954,7 @@ async fn graceful_finish<A: Actor>(
             scope.children.request_all(shutdown);
             scope.children.wait_all().await;
         },
-        mode,
+        control,
     )
     .await
     {
@@ -933,18 +963,20 @@ async fn graceful_finish<A: Actor>(
         Work::Panicked => return Work::Panicked,
     }
 
-    await_actor_work(async { actor.on_stop(reason, scope).await }, mode).await
+    await_actor_work(async { actor.on_stop(reason, scope).await }, control).await
 }
 
 async fn kill_actor<A: Actor>(
     scope: &mut ActorScope<A>,
     inbox: &mut mpsc::Receiver<DynEnvelope<A>>,
+    owned: &OwnedTasks,
     scheduler: &mut ReplyScheduler<A>,
 ) -> ExitReason {
     // Commit subtree cancellation before running arbitrary Drop code from actor
     // work. Children can then begin terminating even if a destructor is slow.
     inbox.close();
     scope.children.request_all(Shutdown::Kill);
+    owned.close();
     scheduler.clear();
     let mut expected_mode = Mode::Killing;
     loop {
@@ -953,6 +985,7 @@ async fn kill_actor<A: Actor>(
             DiscardOutcome::ModeChanged => expected_mode = scope.control.mode(),
         }
     }
+    owned.wait().await;
     scope.children.wait_all().await;
     ExitReason::Killed
 }
@@ -960,6 +993,7 @@ async fn kill_actor<A: Actor>(
 async fn fail_actor<A: Actor>(
     scope: &mut ActorScope<A>,
     inbox: &mut mpsc::Receiver<DynEnvelope<A>>,
+    owned: &OwnedTasks,
     scheduler: &mut ReplyScheduler<A>,
 ) -> ExitReason {
     let control = Arc::clone(&scope.control);
@@ -972,6 +1006,7 @@ async fn fail_actor<A: Actor>(
     };
     inbox.close();
     scope.children.request_all(Shutdown::Kill);
+    owned.close();
     scheduler.clear();
     let mut expected_mode = control.mode();
     loop {
@@ -980,6 +1015,7 @@ async fn fail_actor<A: Actor>(
             DiscardOutcome::ModeChanged => expected_mode = control.mode(),
         }
     }
+    owned.wait().await;
     scope.children.wait_all().await;
     reason
 }

@@ -1,5 +1,4 @@
 use std::{
-    future::Future,
     num::NonZeroUsize,
     pin::Pin,
     sync::{
@@ -10,7 +9,7 @@ use std::{
 };
 
 use crate::{
-    Actor, ActorFuture, ActorScope, ErasedFuture,
+    Actor, ActorFuture, ActorScope,
     mailbox::{Control, Mode},
 };
 
@@ -18,60 +17,38 @@ const ACTIVE_POLL_BUDGET: usize = 16;
 
 type ErasedActorFuture<A> = Pin<Box<dyn ActorFuture<A, Output = ()> + Send + 'static>>;
 
-/// Actor-local ownership boundary for replies that outlive handler dispatch.
-///
-/// Its collections cannot exceed `max_in_flight`; no stored future borrows the
-/// actor or scope between polls. Each collection maintains a budgeted circular
-/// sweep, while the runtime owns fairness between mailbox, reply, and child-exit
-/// classes. Lifecycle changes are checked between user future polls.
+/// Polls replies that require temporary actor access.
 pub(crate) struct ReplyScheduler<A: Actor> {
-    owned: Vec<ErasedFuture<'static>>,
     interleaved: Vec<ErasedActorFuture<A>>,
     exclusive: Option<ErasedActorFuture<A>>,
-    owned_sweep: SweepState,
     interleaved_sweep: SweepState,
-    max_in_flight: NonZeroUsize,
+    max_interleaved: NonZeroUsize,
 }
 
 impl<A: Actor> ReplyScheduler<A> {
-    pub(crate) fn new(max_in_flight: NonZeroUsize) -> Self {
+    pub(crate) fn new(max_interleaved: NonZeroUsize) -> Self {
         Self {
-            owned: Vec::new(),
             interleaved: Vec::new(),
             exclusive: None,
-            owned_sweep: SweepState::default(),
             interleaved_sweep: SweepState::default(),
-            max_in_flight,
+            max_interleaved,
         }
     }
 
-    pub(crate) fn can_dispatch(&self) -> bool {
-        self.in_flight() < self.max_in_flight.get()
+    pub(crate) fn has_dispatch_capacity(&self) -> bool {
+        self.exclusive.is_none() && self.interleaved.len() < self.max_interleaved.get()
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.in_flight() == 0
+        self.interleaved.is_empty() && self.exclusive.is_none()
     }
 
     pub(crate) fn has_exclusive(&self) -> bool {
         self.exclusive.is_some()
     }
 
-    pub(crate) fn has_owned(&self) -> bool {
-        !self.owned.is_empty()
-    }
-
     pub(crate) fn has_interleaved(&self) -> bool {
         !self.interleaved.is_empty()
-    }
-
-    pub(crate) fn push_owned<F>(&mut self, future: F)
-    where
-        F: Future<Output = ()> + Send + 'static,
-    {
-        self.owned.push(Box::pin(future));
-        self.owned_sweep.restart();
-        debug_assert!(self.in_flight() <= self.max_in_flight.get());
     }
 
     pub(crate) fn push_interleaved<F>(&mut self, future: F)
@@ -80,7 +57,7 @@ impl<A: Actor> ReplyScheduler<A> {
     {
         self.interleaved.push(Box::pin(future));
         self.interleaved_sweep.restart();
-        debug_assert!(self.in_flight() <= self.max_in_flight.get());
+        debug_assert!(self.interleaved.len() <= self.max_interleaved.get());
     }
 
     pub(crate) fn push_exclusive<F>(&mut self, future: F)
@@ -89,23 +66,6 @@ impl<A: Actor> ReplyScheduler<A> {
     {
         debug_assert!(self.exclusive.is_none(), "exclusive work cannot overlap");
         self.exclusive = Some(Box::pin(future));
-        debug_assert!(self.in_flight() <= self.max_in_flight.get());
-    }
-
-    pub(crate) fn poll_owned(
-        &mut self,
-        control: &Control,
-        expected_mode: Mode,
-        task: &mut Context<'_>,
-    ) -> Poll<()> {
-        poll_collection(
-            &mut self.owned,
-            &mut self.owned_sweep,
-            control,
-            expected_mode,
-            task,
-            |future, task| future.as_mut().poll(task).is_ready(),
-        )
     }
 
     pub(crate) fn poll_interleaved(
@@ -157,7 +117,7 @@ impl<A: Actor> ReplyScheduler<A> {
         Poll::Ready(())
     }
 
-    /// Polls the owned lane and whichever actor-aware lane is currently eligible.
+    /// Polls the eligible actor-aware lane.
     ///
     /// Ready reports reply progress or a lifecycle change, not that every active
     /// reply has completed.
@@ -169,34 +129,17 @@ impl<A: Actor> ReplyScheduler<A> {
         expected_mode: Mode,
         task: &mut Context<'_>,
     ) -> Poll<()> {
-        let mut completed = self.poll_owned(control, expected_mode, task).is_ready();
-        if control.mode() != expected_mode {
-            return Poll::Ready(());
-        }
-        completed |= if self.has_exclusive() {
+        if self.has_exclusive() {
             self.poll_exclusive(actor, scope, control, expected_mode, task)
-                .is_ready()
         } else {
             self.poll_interleaved(actor, scope, control, expected_mode, task)
-                .is_ready()
-        };
-        if completed {
-            Poll::Ready(())
-        } else {
-            Poll::Pending
         }
     }
 
     pub(crate) fn clear(&mut self) {
         self.exclusive = None;
         self.interleaved.clear();
-        self.owned.clear();
         self.interleaved_sweep.clear();
-        self.owned_sweep.clear();
-    }
-
-    fn in_flight(&self) -> usize {
-        self.owned.len() + self.interleaved.len() + usize::from(self.exclusive.is_some())
     }
 }
 
@@ -280,7 +223,7 @@ impl Wake for SweepWaker {
 
 // When no sweep is in progress, polling starts one logical circular pass over
 // the eligible collection. The per-visit budget bounds how many items are polled
-// before returning to the runner's other fairness classes; it cannot bound the
+// before returning to other actor work; it cannot bound the
 // duration of an individual user poll. `remaining` and `cursor` preserve the
 // recovery point and, while the collection remains eligible, self-wake until the
 // sweep is complete. Each collection gets one proxy waker whose generation
@@ -452,24 +395,40 @@ mod tests {
         }
     }
 
+    type TestFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
+
+    // Tests the shared sweep without constructing an actor scope.
+    fn poll_futures(
+        items: &mut Vec<TestFuture>,
+        sweep: &mut SweepState,
+        control: &Control,
+        task: &mut Context<'_>,
+    ) -> Poll<()> {
+        poll_collection(
+            items,
+            sweep,
+            control,
+            Mode::Running,
+            task,
+            |future, task| future.as_mut().poll(task).is_ready(),
+        )
+    }
+
     #[test]
-    fn budgeted_owned_scan_resumes_at_the_unpolled_tail() {
-        let mut scheduler = ReplyScheduler::<TestActor>::new(NonZeroUsize::new(32).unwrap());
+    fn budgeted_scan_resumes_at_the_unpolled_tail() {
         let control = Control::new();
         let polls: Vec<_> = (0..20).map(|_| Arc::new(AtomicUsize::new(0))).collect();
-        for count in &polls {
-            scheduler.push_owned(PollCounter(Arc::clone(count)));
-        }
+        let mut items: Vec<TestFuture> = polls
+            .iter()
+            .map(|count| Box::pin(PollCounter(Arc::clone(count))) as TestFuture)
+            .collect();
+        let mut sweep = SweepState::default();
 
         let wakes = Arc::new(WakeCounter(AtomicUsize::new(0)));
         let waker = Waker::from(Arc::clone(&wakes));
         let mut task = Context::from_waker(&waker);
 
-        assert!(
-            scheduler
-                .poll_owned(&control, Mode::Running, &mut task)
-                .is_pending()
-        );
+        assert!(poll_futures(&mut items, &mut sweep, &control, &mut task).is_pending());
         assert!(
             polls[..ACTIVE_POLL_BUDGET]
                 .iter()
@@ -482,114 +441,88 @@ mod tests {
         );
         assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
 
-        assert!(
-            scheduler
-                .poll_owned(&control, Mode::Running, &mut task)
-                .is_pending()
-        );
+        assert!(poll_futures(&mut items, &mut sweep, &control, &mut task).is_pending());
         assert!(polls.iter().all(|count| count.load(Ordering::SeqCst) > 0));
         assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
     }
 
     #[test]
     fn future_wake_coalesced_with_continuation_starts_another_sweep() {
-        let mut scheduler = ReplyScheduler::<TestActor>::new(NonZeroUsize::new(32).unwrap());
         let control = Control::new();
         let first_polls = Arc::new(AtomicUsize::new(0));
         let first_waker = Arc::new(Mutex::new(None));
-        scheduler.push_owned(CaptureWaker {
+        let mut items: Vec<TestFuture> = vec![Box::pin(CaptureWaker {
             polls: Arc::clone(&first_polls),
             waker: Arc::clone(&first_waker),
-        });
+        })];
         for _ in 1..20 {
-            scheduler.push_owned(std::future::pending());
+            items.push(Box::pin(std::future::pending()));
         }
+        let mut sweep = SweepState::default();
 
         let notified = Arc::new(NotifyFlag(AtomicBool::new(false)));
         let waker = Waker::from(Arc::clone(&notified));
         let mut task = Context::from_waker(&waker);
 
-        assert!(
-            scheduler
-                .poll_owned(&control, Mode::Running, &mut task)
-                .is_pending()
-        );
+        assert!(poll_futures(&mut items, &mut sweep, &control, &mut task).is_pending());
         first_waker.lock().unwrap().as_ref().unwrap().wake_by_ref();
         assert!(notified.0.swap(false, Ordering::SeqCst));
 
-        assert!(
-            scheduler
-                .poll_owned(&control, Mode::Running, &mut task)
-                .is_pending()
-        );
+        assert!(poll_futures(&mut items, &mut sweep, &control, &mut task).is_pending());
         assert!(notified.0.swap(false, Ordering::SeqCst));
 
-        assert!(
-            scheduler
-                .poll_owned(&control, Mode::Running, &mut task)
-                .is_pending()
-        );
+        assert!(poll_futures(&mut items, &mut sweep, &control, &mut task).is_pending());
         assert_eq!(first_polls.load(Ordering::SeqCst), 2);
     }
 
     #[test]
     fn completion_does_not_skip_the_unpolled_item_after_cursor_wraps() {
-        let mut scheduler = ReplyScheduler::<TestActor>::new(NonZeroUsize::new(32).unwrap());
         let control = Control::new();
         let polls = Arc::new((0..17).map(|_| AtomicUsize::new(0)).collect::<Vec<_>>());
-        for index in 0..17 {
-            scheduler.push_owned(IndexedPoll {
-                index,
-                polls: Arc::clone(&polls),
-                completes: index == 0,
-            });
-        }
-        scheduler.owned_sweep.cursor = 2;
+        let mut items: Vec<TestFuture> = (0..17)
+            .map(|index| {
+                Box::pin(IndexedPoll {
+                    index,
+                    polls: Arc::clone(&polls),
+                    completes: index == 0,
+                }) as TestFuture
+            })
+            .collect();
+        let mut sweep = SweepState {
+            cursor: 2,
+            ..SweepState::default()
+        };
 
         let wakes = Arc::new(WakeCounter(AtomicUsize::new(0)));
         let waker = Waker::from(Arc::clone(&wakes));
         let mut task = Context::from_waker(&waker);
 
-        assert!(
-            scheduler
-                .poll_owned(&control, Mode::Running, &mut task)
-                .is_ready()
-        );
-        assert!(
-            scheduler
-                .poll_owned(&control, Mode::Running, &mut task)
-                .is_pending()
-        );
+        assert!(poll_futures(&mut items, &mut sweep, &control, &mut task).is_ready());
+        assert!(poll_futures(&mut items, &mut sweep, &control, &mut task).is_pending());
         assert!(polls.iter().all(|count| count.load(Ordering::SeqCst) == 1));
     }
 
     #[test]
     fn kill_committed_by_one_reply_prevents_polling_the_next_reply() {
-        let mut scheduler = ReplyScheduler::<TestActor>::new(NonZeroUsize::new(2).unwrap());
         let control = Control::new();
         let first_polls = Arc::new(AtomicUsize::new(0));
         let second_polls = Arc::new(AtomicUsize::new(0));
-        scheduler.push_owned(KillOnPoll {
-            control: Arc::clone(&control),
-            polls: Arc::clone(&first_polls),
-        });
-        scheduler.push_owned(PollCounter(Arc::clone(&second_polls)));
+        let mut items: Vec<TestFuture> = vec![
+            Box::pin(KillOnPoll {
+                control: Arc::clone(&control),
+                polls: Arc::clone(&first_polls),
+            }),
+            Box::pin(PollCounter(Arc::clone(&second_polls))),
+        ];
+        let mut sweep = SweepState::default();
 
         let wakes = Arc::new(WakeCounter(AtomicUsize::new(0)));
         let waker = Waker::from(wakes);
         let mut task = Context::from_waker(&waker);
 
-        assert!(
-            scheduler
-                .poll_owned(&control, Mode::Running, &mut task)
-                .is_ready()
-        );
+        assert!(poll_futures(&mut items, &mut sweep, &control, &mut task).is_ready());
         assert_eq!(first_polls.load(Ordering::SeqCst), 1);
         assert_eq!(second_polls.load(Ordering::SeqCst), 0);
         assert_eq!(control.mode(), Mode::Killing);
     }
-
-    struct TestActor;
-
-    impl Actor for TestActor {}
 }

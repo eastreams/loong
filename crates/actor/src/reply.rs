@@ -1,38 +1,43 @@
 //! Reply scheduling strategies.
 //!
-//! A [`Handler`](crate::Handler) synchronously selects one of the strategies
-//! described here. [`ReplyExt::ready`] completes in that dispatch call. A bare
-//! [`Future`], [`ReplyExt::interleaved`], and [`ReplyExt::exclusive`] instead
-//! register one active reply, which occupies a
-//! [`max_in_flight`](crate::SpawnOptions::max_in_flight) slot until it completes
-//! or is dropped.
+//! A [`Handler`](crate::Handler) chooses one strategy before returning.
+//! [`ReplyExt::ready`] completes during dispatch.
+//! A bare [`Future`] starts an owned Tokio task.
+//! [`ReplyExt::interleaved`] occupies a
+//! [`max_in_flight`](crate::SpawnOptions::max_in_flight) slot.
+//! [`ReplyExt::exclusive`] pauses other actor-aware work.
 //! [`SyncHandler`](crate::SyncHandler) selects ready scheduling automatically.
 //!
-//! Returning a bare `Future<Output = M::Reply> + Send + 'static` selects owned
-//! scheduling. The future cannot retain the handler call's actor or scope
-//! borrows; clone or move owned handles into it and construct borrowed views
-//! inside the future. The actor task polls it directly without `tokio::spawn`.
-//! While it is pending, mailbox and actor-aware work may progress fairly, and it
-//! continues to receive poll opportunities while an exclusive reply is active.
+//! A bare `Future<Output = M::Reply> + Send + 'static` selects owned scheduling.
+//! It cannot retain actor or scope borrows from its handler.
+//! Move owned handles into it.
+//! Recreate borrowed views inside the future.
+//! Tokio polls it in a separate task.
+//! Dispatched owned tasks are unbounded.
+//! Mailbox capacity does not bound them.
+//! The actor tracks each task until it stops.
+//! Stop and Drain wait for every task.
+//! Kill and actor failure request cancellation, then wait.
+//! Cancellation takes effect between user polls.
+//! It cannot interrupt synchronous code or user destructors.
 //!
-//! Asynchronous replies are polled by the actor task; the runtime does not spawn
-//! each one as an independent Tokio task. Without an exclusive reply, eligible
-//! mailbox dispatch, owned replies, interleaved replies, and entry into
-//! direct-child exit hooks are scheduled fairly. Fairness guarantees continued
-//! opportunities to make progress, not a deterministic poll order or reply
-//! completion order.
+//! The actor task polls actor-aware replies.
+//! Mailbox, interleaved, and child-exit work progress fairly.
+//! Tokio schedules owned future polls independently.
+//! Neither execution path promises poll or completion order.
 //!
-//! Lifecycle observation sits outside that fairness domain and is checked
-//! before a new fair turn and between user future polls. While an exclusive
-//! reply exists, mailbox dispatch, interleaved replies, and child-exit hooks
-//! pause; the exclusive reply and already-dispatched owned replies both continue
-//! to receive progress opportunities.
+//! Lifecycle changes are checked before scheduled actor work.
+//! Owned tasks check the same authoritative state.
+//! Exclusive work pauses mailbox and actor-aware peers.
+//! Already-dispatched owned replies remain Tokio-scheduled.
 //!
-//! A panic in synchronous handler dispatch or in any reply poll causes actor
-//! failure and drops its other work unless Kill commits first.
-//! [`Shutdown::Kill`](crate::Shutdown::Kill) likewise drops active replies once
-//! the current poll returns. Reply completion and Kill share a lifecycle
-//! decision: completion first delivers `Ok`, while Kill first reports
+//! A panic in handler dispatch or any reply poll fails the actor.
+//! Owned future destruction follows the same rule.
+//! Kill wins if it commits first.
+//! [`Shutdown::Kill`](crate::Shutdown::Kill) drops active replies after running polls return.
+//! Reply completion and Kill share one lifecycle decision.
+//! Completion first delivers `Ok`.
+//! Kill first reports
 //! [`CallError::DuringDispatch`](crate::CallError::DuringDispatch).
 
 use std::{
@@ -44,7 +49,8 @@ use std::{
 use pin_project_lite::pin_project;
 
 use crate::{
-    Actor, ActorFuture, ActorScope, Message, mailbox::DispatchReply, scheduler::ReplyScheduler,
+    Actor, ActorFuture, ActorScope, Message, mailbox::DispatchReply, owned::OwnedTasks,
+    scheduler::ReplyScheduler,
 };
 
 /// Extension methods that select explicit reply scheduling strategies.
@@ -55,22 +61,21 @@ use crate::{
 pub trait ReplyExt: Sized {
     /// Creates a reply from a value produced during synchronous handler dispatch.
     ///
-    /// The value is submitted immediately after the handler returns, within the
-    /// same synchronous dispatch, so no future is stored and no in-flight slot
-    /// remains occupied afterward. Dispatch itself still waits until an
-    /// in-flight slot is available because the runtime cannot know the selected
-    /// reply strategy before invoking the handler.
+    /// The value is submitted after its handler returns.
+    /// No future remains after this dispatch.
+    /// Dispatch may wait behind full interleaved capacity.
+    /// The runtime learns the strategy only after calling the handler.
     ///
     /// Prefer [`SyncHandler`](crate::SyncHandler) when every invocation returns
     /// an immediate value. Use this method inside [`Handler`](crate::Handler)
     /// when runtime branching requires explicit ready scheduling.
     ///
-    /// For a value already produced by a handler, prefer `value.ready()` over
-    /// [`std::future::ready(value)`](std::future::ready). The latter creates an
-    /// ordinary [`Future`] and therefore selects owned scheduling when returned
-    /// directly: it occupies an active slot until polled and adds another point
-    /// at which Kill may commit before completion. Use `std::future::ready` when
-    /// a future is intentionally needed for composition, such as before
+    /// Prefer `value.ready()` for an already-produced value.
+    /// [`std::future::ready(value)`](std::future::ready) creates an ordinary [`Future`].
+    /// Returning it selects owned scheduling.
+    /// That spawns a task and adds a cancellation point.
+    /// Use `std::future::ready` only when composition needs a future.
+    /// For example, call
     /// [`IntoActorFuture::into_actor`](crate::IntoActorFuture::into_actor).
     ///
     /// Kill can commit after dispatch begins but before this value is submitted,
@@ -83,24 +88,24 @@ pub trait ReplyExt: Sized {
 
     /// Creates an actor-aware reply that yields actor access between polls.
     ///
-    /// The [`ActorFuture`] receives fresh temporary actor and scope borrows on
-    /// each poll. Those borrows end whenever the poll returns, including on
-    /// `Pending`, so eligible mailbox dispatch, other replies, and direct-child
-    /// exit hooks may run before it is polled again. An active
-    /// [`exclusive`](ReplyExt::exclusive) reply pauses these polls.
+    /// The [`ActorFuture`] receives temporary actor and scope borrows each poll.
+    /// Those borrows end whenever the poll returns.
+    /// `Pending` therefore allows eligible mailbox and child-exit work.
+    /// It also allows other interleaved replies.
+    /// An active [`exclusive`](ReplyExt::exclusive) reply pauses these polls.
+    /// Each active interleaved reply consumes one configured slot.
     fn interleaved(self) -> Interleaved<Self> {
         Interleaved { future: self }
     }
 
     /// Creates an actor-aware reply that reserves actor-aware execution until done.
     ///
-    /// Like [`interleaved`](ReplyExt::interleaved), its [`ActorFuture`] receives
-    /// fresh actor and scope borrows for each poll and cannot retain them across
-    /// `Pending`. Unlike `interleaved`, the runtime does not dispatch mailbox
-    /// messages, poll interleaved replies, or run direct-child exit hooks while
-    /// this reply exists. Already-dispatched owned futures continue to make
-    /// progress, and Kill can still drop the exclusive reply after its current
-    /// poll returns.
+    /// Its [`ActorFuture`] receives fresh actor and scope borrows each poll.
+    /// It cannot retain those borrows across `Pending`.
+    /// While this reply exists, the runtime pauses mailbox dispatch.
+    /// It also pauses interleaved replies and child-exit hooks.
+    /// Already-dispatched owned futures continue making progress.
+    /// Kill may drop this reply after its current poll.
     fn exclusive(self) -> Exclusive<Self> {
         Exclusive { future: self }
     }
@@ -193,7 +198,12 @@ pub(crate) mod sealed {
     use super::*;
 
     pub trait HandleReply<A: Actor, M: Message> {
-        fn handle(self, scheduler: &mut ReplyScheduler<A>, reply: DispatchReply<M::Reply>);
+        fn handle(
+            self,
+            owned: &OwnedTasks,
+            scheduler: &mut ReplyScheduler<A>,
+            reply: DispatchReply<M::Reply>,
+        );
     }
 
     impl<A, M> HandleReply<A, M> for Ready<M::Reply>
@@ -201,7 +211,12 @@ pub(crate) mod sealed {
         A: Actor,
         M: Message,
     {
-        fn handle(self, _scheduler: &mut ReplyScheduler<A>, reply: DispatchReply<M::Reply>) {
+        fn handle(
+            self,
+            _owned: &OwnedTasks,
+            _scheduler: &mut ReplyScheduler<A>,
+            reply: DispatchReply<M::Reply>,
+        ) {
             reply.complete(self.value);
         }
     }
@@ -212,8 +227,13 @@ pub(crate) mod sealed {
         M: Message,
         F: Future<Output = M::Reply> + Send + 'static,
     {
-        fn handle(self, scheduler: &mut ReplyScheduler<A>, reply: DispatchReply<M::Reply>) {
-            scheduler.push_owned(CompleteReply::new(self, reply));
+        fn handle(
+            self,
+            owned: &OwnedTasks,
+            _scheduler: &mut ReplyScheduler<A>,
+            reply: DispatchReply<M::Reply>,
+        ) {
+            owned.spawn(CompleteReply::new(self, reply));
         }
     }
 
@@ -223,7 +243,12 @@ pub(crate) mod sealed {
         M: Message,
         F: ActorFuture<A, Output = M::Reply> + Send + 'static,
     {
-        fn handle(self, scheduler: &mut ReplyScheduler<A>, reply: DispatchReply<M::Reply>) {
+        fn handle(
+            self,
+            _owned: &OwnedTasks,
+            scheduler: &mut ReplyScheduler<A>,
+            reply: DispatchReply<M::Reply>,
+        ) {
             scheduler.push_interleaved(CompleteReply::new(self.future, reply));
         }
     }
@@ -234,7 +259,12 @@ pub(crate) mod sealed {
         M: Message,
         F: ActorFuture<A, Output = M::Reply> + Send + 'static,
     {
-        fn handle(self, scheduler: &mut ReplyScheduler<A>, reply: DispatchReply<M::Reply>) {
+        fn handle(
+            self,
+            _owned: &OwnedTasks,
+            scheduler: &mut ReplyScheduler<A>,
+            reply: DispatchReply<M::Reply>,
+        ) {
             scheduler.push_exclusive(CompleteReply::new(self.future, reply));
         }
     }
@@ -246,10 +276,15 @@ pub(crate) mod sealed {
         L: HandleReply<A, M>,
         R: HandleReply<A, M>,
     {
-        fn handle(self, scheduler: &mut ReplyScheduler<A>, reply: DispatchReply<M::Reply>) {
+        fn handle(
+            self,
+            owned: &OwnedTasks,
+            scheduler: &mut ReplyScheduler<A>,
+            reply: DispatchReply<M::Reply>,
+        ) {
             match self {
-                Either::Left(left) => left.handle(scheduler, reply),
-                Either::Right(right) => right.handle(scheduler, reply),
+                Either::Left(left) => left.handle(owned, scheduler, reply),
+                Either::Right(right) => right.handle(owned, scheduler, reply),
             }
         }
     }

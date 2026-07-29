@@ -1,17 +1,23 @@
-//! Reply-scheduler scaling benchmarks.
+//! Reply execution scaling benchmarks.
 //!
-//! `complete_all` starts with every reply pending and measures releasing and
-//! completing the whole active set. `single_wake_to_target_poll` keeps that set
-//! pending across iterations and measures one external notification until its
-//! target future is polled. The latter is deliberately a steady-state latency:
-//! scheduler continuation work may already be runnable, and work after the
-//! target records the duration is outside the interval.
+//! Owned cases measure Tokio task scheduling.
+//! Interleaved cases measure actor-local scanning.
+//! After dispatch, owned work stays outside actor fairness.
+//! Exclusive work only stages the mailbox backlog fixture.
 //!
-//! `mailbox_turn_to_target_poll_under_backlog` starts inside the first mailbox
-//! handler after an exclusive staging barrier, with more ready messages still
-//! queued, and ends inside the selected owned or interleaved probe's next poll.
-//! The all-class fairness contract remains a deterministic runtime test; this
-//! benchmark reports only the notification-to-poll handoff under mailbox load.
+//! `complete_all` starts with every reply pending.
+//! It measures releasing and completing the entire active set.
+//! `single_wake_to_target_poll` keeps that set pending across iterations.
+//! It measures one external notification until the target poll.
+//! That result is deliberately steady-state latency.
+//! Continuation work may already be runnable.
+//! Later work stays outside the measured interval.
+//!
+//! `mailbox_turn_to_target_poll_under_backlog` begins inside a mailbox handler.
+//! An exclusive barrier stages more ready messages behind it.
+//! Measurement ends inside the selected probe's next poll.
+//! Deterministic tests cover the complete fairness contract.
+//! This benchmark measures notification-to-poll handoff under mailbox load.
 
 use std::{
     future::Future,
@@ -30,6 +36,66 @@ use tokio::sync::{mpsc, oneshot};
 
 const ACTIVE_COUNTS: [usize; 3] = [1, 32, 256];
 const MAILBOX_BACKLOG: usize = 32;
+
+#[derive(Clone, Copy)]
+enum ReplyExecution {
+    Owned,
+    Interleaved,
+}
+
+impl ReplyExecution {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Owned => "owned",
+            Self::Interleaved => "interleaved",
+        }
+    }
+
+    fn max_interleaved(self, active: usize) -> NonZeroUsize {
+        match self {
+            Self::Owned => NonZeroUsize::MIN,
+            Self::Interleaved => {
+                NonZeroUsize::new(active).expect("active reply counts are non-zero")
+            }
+        }
+    }
+
+    fn enqueue_reply(
+        self,
+        actor: &ActorRef<ReplyActor>,
+        started: oneshot::Sender<()>,
+        release: oneshot::Receiver<()>,
+    ) -> Response<()> {
+        match self {
+            Self::Owned => actor
+                .try_call(OwnedReply { started, release })
+                .expect("the benchmark mailbox has capacity"),
+            Self::Interleaved => actor
+                .try_call(InterleavedReply { started, release })
+                .expect("the benchmark mailbox has capacity"),
+        }
+    }
+
+    fn enqueue_wake_probe(
+        self,
+        actor: &ActorRef<ReplyActor>,
+        started: oneshot::Sender<()>,
+        commands: mpsc::Receiver<WakeCommand>,
+    ) -> Response<()> {
+        let probe = WakeProbe {
+            started: Some(started),
+            commands,
+        };
+        match self {
+            Self::Owned => actor
+                .try_call(OwnedWakeProbe(probe))
+                .expect("the benchmark mailbox has capacity"),
+            Self::Interleaved => actor
+                .try_call(InterleavedWakeProbe(probe))
+                .expect("the benchmark mailbox has capacity"),
+        }
+    }
+}
 
 struct ReplyActor;
 
@@ -214,71 +280,20 @@ impl Handler<StageMailboxBacklog> for ReplyActor {
     }
 }
 
-type EnqueueReply =
-    fn(&ActorRef<ReplyActor>, oneshot::Sender<()>, oneshot::Receiver<()>) -> Response<()>;
-type EnqueueWakeProbe =
-    fn(&ActorRef<ReplyActor>, oneshot::Sender<()>, mpsc::Receiver<WakeCommand>) -> Response<()>;
-
-fn enqueue_owned(
-    actor: &ActorRef<ReplyActor>,
-    started: oneshot::Sender<()>,
-    release: oneshot::Receiver<()>,
-) -> Response<()> {
-    actor
-        .try_call(OwnedReply { started, release })
-        .expect("the benchmark mailbox has capacity")
-}
-
-fn enqueue_interleaved(
-    actor: &ActorRef<ReplyActor>,
-    started: oneshot::Sender<()>,
-    release: oneshot::Receiver<()>,
-) -> Response<()> {
-    actor
-        .try_call(InterleavedReply { started, release })
-        .expect("the benchmark mailbox has capacity")
-}
-
-fn enqueue_owned_wake_probe(
-    actor: &ActorRef<ReplyActor>,
-    started: oneshot::Sender<()>,
-    commands: mpsc::Receiver<WakeCommand>,
-) -> Response<()> {
-    actor
-        .try_call(OwnedWakeProbe(WakeProbe {
-            started: Some(started),
-            commands,
-        }))
-        .expect("the benchmark mailbox has capacity")
-}
-
-fn enqueue_interleaved_wake_probe(
-    actor: &ActorRef<ReplyActor>,
-    started: oneshot::Sender<()>,
-    commands: mpsc::Receiver<WakeCommand>,
-) -> Response<()> {
-    actor
-        .try_call(InterleavedWakeProbe(WakeProbe {
-            started: Some(started),
-            commands,
-        }))
-        .expect("the benchmark mailbox has capacity")
-}
-
-fn spawn_benchmark_actor(active: usize) -> ActorOwner<ReplyActor> {
+fn spawn_benchmark_actor(active: usize, max_interleaved: NonZeroUsize) -> ActorOwner<ReplyActor> {
     let capacity = NonZeroUsize::new(active).expect("active reply counts are non-zero");
     spawn_with(
         ReplyActor,
         SpawnOptions::default()
             .with_mailbox_capacity(capacity)
-            .with_max_in_flight(capacity),
+            .with_max_in_flight(max_interleaved),
     )
 }
 
 async fn install_pending(
     actor: &ActorRef<ReplyActor>,
     count: usize,
-    enqueue: EnqueueReply,
+    execution: ReplyExecution,
 ) -> (Vec<oneshot::Sender<()>>, Vec<Response<()>>) {
     let mut started = Vec::with_capacity(count);
     let mut releases = Vec::with_capacity(count);
@@ -287,7 +302,7 @@ async fn install_pending(
     for _ in 0..count {
         let (started_tx, started_rx) = oneshot::channel();
         let (release_tx, release_rx) = oneshot::channel();
-        responses.push(enqueue(actor, started_tx, release_rx));
+        responses.push(execution.enqueue_reply(actor, started_tx, release_rx));
         started.push(started_rx);
         releases.push(release_tx);
     }
@@ -303,7 +318,7 @@ async fn install_pending(
 async fn install_wake_probes(
     actor: &ActorRef<ReplyActor>,
     count: usize,
-    enqueue: EnqueueWakeProbe,
+    execution: ReplyExecution,
 ) -> (Vec<mpsc::Sender<WakeCommand>>, Vec<Response<()>>) {
     let mut started = Vec::with_capacity(count);
     let mut commands = Vec::with_capacity(count);
@@ -312,7 +327,7 @@ async fn install_wake_probes(
     for _ in 0..count {
         let (started_tx, started_rx) = oneshot::channel();
         let (commands_tx, commands_rx) = mpsc::channel(1);
-        responses.push(enqueue(actor, started_tx, commands_rx));
+        responses.push(execution.enqueue_wake_probe(actor, started_tx, commands_rx));
         started.push(started_rx);
         commands.push(commands_tx);
     }
@@ -325,14 +340,14 @@ async fn install_wake_probes(
     (commands, responses)
 }
 
-async fn measure_complete_all(iters: u64, active: usize, enqueue: EnqueueReply) -> Duration {
-    let owner = spawn_benchmark_actor(active);
+async fn measure_complete_all(iters: u64, active: usize, execution: ReplyExecution) -> Duration {
+    let owner = spawn_benchmark_actor(active, execution.max_interleaved(active));
     let actor = owner.actor_ref();
     let mut measured = Duration::ZERO;
 
     for _ in 0..iters {
         // Dispatch and first-poll setup stay outside the accumulated duration.
-        let (releases, responses) = install_pending(&actor, active, enqueue).await;
+        let (releases, responses) = install_pending(&actor, active, execution).await;
         let started = Instant::now();
         for release in releases {
             release
@@ -352,11 +367,11 @@ async fn measure_complete_all(iters: u64, active: usize, enqueue: EnqueueReply) 
 async fn measure_single_wake_to_target_poll(
     iters: u64,
     active: usize,
-    enqueue: EnqueueWakeProbe,
+    execution: ReplyExecution,
 ) -> Duration {
-    let owner = spawn_benchmark_actor(active);
+    let owner = spawn_benchmark_actor(active, execution.max_interleaved(active));
     let actor = owner.actor_ref();
-    let (commands, responses) = install_wake_probes(&actor, active, enqueue).await;
+    let (commands, responses) = install_wake_probes(&actor, active, execution).await;
     let mut measured = Duration::ZERO;
     let mut index = 0;
 
@@ -385,7 +400,7 @@ async fn measure_single_wake_to_target_poll(
 async fn measure_mailbox_turn_to_target_poll_under_backlog(
     iters: u64,
     backlog: usize,
-    enqueue: EnqueueWakeProbe,
+    execution: ReplyExecution,
 ) -> Duration {
     let queued_after_trigger = backlog
         .checked_sub(1)
@@ -395,10 +410,11 @@ async fn measure_mailbox_turn_to_target_poll_under_backlog(
         ReplyActor,
         SpawnOptions::default()
             .with_mailbox_capacity(mailbox_capacity)
-            .with_max_in_flight(NonZeroUsize::new(2).expect("two active slots are non-zero")),
+            // A pending probe needs capacity for staging dispatch.
+            .with_max_in_flight(execution.max_interleaved(2)),
     );
     let actor = owner.actor_ref();
-    let (mut commands, probe_responses) = install_wake_probes(&actor, 1, enqueue).await;
+    let (mut commands, probe_responses) = install_wake_probes(&actor, 1, execution).await;
     let commands = commands.pop().expect("one wake probe was installed");
     let mut measured = Duration::ZERO;
 
@@ -460,24 +476,13 @@ async fn measure_mailbox_turn_to_target_poll_under_backlog(
     measured
 }
 
-fn reply_scheduler(criterion: &mut Criterion) {
+fn reply_execution(criterion: &mut Criterion) {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
         .expect("the benchmark runtime builds");
 
-    for (reply, enqueue, enqueue_wake_probe) in [
-        (
-            "owned",
-            enqueue_owned as EnqueueReply,
-            enqueue_owned_wake_probe as EnqueueWakeProbe,
-        ),
-        (
-            "interleaved",
-            enqueue_interleaved as EnqueueReply,
-            enqueue_interleaved_wake_probe as EnqueueWakeProbe,
-        ),
-    ] {
-        let mut group = criterion.benchmark_group(format!("reply_scheduler/{reply}"));
+    for execution in [ReplyExecution::Owned, ReplyExecution::Interleaved] {
+        let mut group = criterion.benchmark_group(format!("reply_execution/{}", execution.name()));
         for active in ACTIVE_COUNTS {
             group.throughput(Throughput::Elements(active as u64));
             group.bench_with_input(
@@ -486,7 +491,7 @@ fn reply_scheduler(criterion: &mut Criterion) {
                 |bencher, &active| {
                     bencher
                         .to_async(&runtime)
-                        .iter_custom(move |iters| measure_complete_all(iters, active, enqueue));
+                        .iter_custom(move |iters| measure_complete_all(iters, active, execution));
                 },
             );
 
@@ -496,7 +501,7 @@ fn reply_scheduler(criterion: &mut Criterion) {
                 &active,
                 |bencher, &active| {
                     bencher.to_async(&runtime).iter_custom(move |iters| {
-                        measure_single_wake_to_target_poll(iters, active, enqueue_wake_probe)
+                        measure_single_wake_to_target_poll(iters, active, execution)
                     });
                 },
             );
@@ -508,11 +513,7 @@ fn reply_scheduler(criterion: &mut Criterion) {
             &MAILBOX_BACKLOG,
             |bencher, &backlog| {
                 bencher.to_async(&runtime).iter_custom(move |iters| {
-                    measure_mailbox_turn_to_target_poll_under_backlog(
-                        iters,
-                        backlog,
-                        enqueue_wake_probe,
-                    )
+                    measure_mailbox_turn_to_target_poll_under_backlog(iters, backlog, execution)
                 });
             },
         );
@@ -520,5 +521,5 @@ fn reply_scheduler(criterion: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, reply_scheduler);
+criterion_group!(benches, reply_execution);
 criterion_main!(benches);

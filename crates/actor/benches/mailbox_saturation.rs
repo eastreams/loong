@@ -39,8 +39,8 @@ impl Handler<ReadyTraffic> for MailboxActor {
     }
 }
 
-/// Ready replies release their slot during dispatch, so one fixed active slot
-/// leaves mailbox capacity as the only varying configuration.
+/// Ready replies leave no interleaved work active.
+/// The fixed limit leaves mailbox capacity as the only variable.
 fn spawn_benchmark_actor(capacity: usize) -> ActorOwner<MailboxActor> {
     let capacity = NonZeroUsize::new(capacity).expect("mailbox capacities are non-zero");
     spawn_with(
