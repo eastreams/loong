@@ -6,8 +6,9 @@ and a Ractor-style supervision tree.
 
 The crate is an early MVP. Its current contract is deliberately narrow:
 
-- handlers synchronously choose `ready`, `owned`, `interleaved`, or `exclusive`
-  reply scheduling;
+- handlers use `reply::ready(value)` for immediate replies;
+- bare `Future` values use owned scheduling;
+- `reply::interleaved` and `reply::exclusive` select actor-aware scheduling;
 - dispatched work is bounded independently from mailbox capacity;
 - `ActorRef` values communicate but do not own actor lifetimes;
 - the unique `ActorOwner` controls root lifetime;

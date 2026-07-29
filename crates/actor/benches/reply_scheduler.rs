@@ -50,10 +50,10 @@ impl Handler<OwnedReply> for ReplyActor {
         message: OwnedReply,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, OwnedReply> + use<> {
-        reply::owned(async move {
+        async move {
             let _ = message.started.send(());
             let _ = message.release.await;
-        })
+        }
     }
 }
 
@@ -123,7 +123,7 @@ impl Handler<OwnedWakeProbe> for ReplyActor {
         message: OwnedWakeProbe,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, OwnedWakeProbe> + use<> {
-        reply::owned(message.0)
+        message.0
     }
 }
 

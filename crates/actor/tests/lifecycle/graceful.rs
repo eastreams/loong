@@ -153,11 +153,11 @@ impl Handler<OwnedDrainStep> for OwnedDrainActor {
         message: OwnedDrainStep,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, OwnedDrainStep> + use<> {
-        reply::owned(async move {
+        async move {
             let _ = message.entered.send(());
             let _ = message.release.await;
             message.id
-        })
+        }
     }
 }
 

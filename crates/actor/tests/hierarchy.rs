@@ -184,7 +184,7 @@ impl Handler<Forward> for DrainParent {
             .as_ref()
             .expect("on_start installs the worker")
             .clone();
-        reply::owned(async move { worker.call(Work(message.0)).await })
+        async move { worker.call(Work(message.0)).await }
     }
 }
 

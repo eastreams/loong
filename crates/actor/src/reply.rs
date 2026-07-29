@@ -1,10 +1,17 @@
-//! Explicit reply scheduling constructors.
+//! Reply scheduling strategies.
 //!
-//! A [`Handler`](crate::Handler) synchronously selects one of the strategies in
-//! this module. [`ready`] completes in that dispatch call. [`owned`],
+//! A [`Handler`](crate::Handler) synchronously selects one of the strategies
+//! described here. [`ready`] completes in that dispatch call. A bare [`Future`],
 //! [`interleaved`], and [`exclusive`] instead register one active reply, which
 //! occupies a [`max_in_flight`](crate::SpawnOptions::max_in_flight) slot until it
 //! completes or is dropped.
+//!
+//! Returning a bare `Future<Output = M::Reply> + Send + 'static` selects owned
+//! scheduling. The future cannot retain the handler call's actor or scope
+//! borrows; clone or move owned handles into it and construct borrowed views
+//! inside the future. The actor task polls it directly without `tokio::spawn`.
+//! While it is pending, mailbox and actor-aware work may progress fairly, and it
+//! continues to receive poll opportunities while an exclusive reply is active.
 //!
 //! Asynchronous replies are polled by the actor task; the runtime does not spawn
 //! each one as an independent Tokio task. Without an exclusive reply, eligible
@@ -54,20 +61,6 @@ pub fn ready<R>(value: R) -> Ready<R> {
     Ready { value }
 }
 
-/// Creates an asynchronous reply that owns everything it uses.
-///
-/// The future must be `Send + 'static` when returned from a handler, so it cannot
-/// retain that call's actor or scope borrows. Clone or move owned handles into it
-/// and construct any borrowed view inside the future.
-///
-/// The actor task polls this future directly; this constructor does not call
-/// `tokio::spawn`. While it is pending, mailbox dispatch and actor-aware work may
-/// progress fairly. An already-dispatched owned reply also continues to receive
-/// poll opportunities while an [`exclusive`] reply is active.
-pub fn owned<F>(future: F) -> Owned<F> {
-    Owned { future }
-}
-
 /// Creates an actor-aware reply that yields actor access between polls.
 ///
 /// Its [`ActorFuture`] receives fresh temporary actor and scope borrows on each
@@ -84,7 +77,7 @@ pub fn interleaved<F>(future: F) -> Interleaved<F> {
 /// borrows for each poll and cannot retain them across `Pending`. Unlike
 /// `interleaved`, the runtime does not dispatch mailbox messages, poll
 /// interleaved replies, or run direct-child exit hooks while this reply exists.
-/// Already-dispatched [`owned`] replies continue to make progress, and Kill can
+/// Already-dispatched owned futures continue to make progress, and Kill can
 /// still drop the exclusive reply after its current poll returns.
 pub fn exclusive<F>(future: F) -> Exclusive<F> {
     Exclusive { future }
@@ -97,15 +90,6 @@ pub fn exclusive<F>(future: F) -> Exclusive<F> {
 #[must_use = "a reply must be returned from a handler"]
 pub struct Ready<R> {
     value: R,
-}
-
-/// An actor-independent reply created by [`owned`].
-///
-/// See [`owned`] for its ownership and scheduling behavior.
-#[derive(Debug)]
-#[must_use = "a reply must be returned from a handler"]
-pub struct Owned<F> {
-    future: F,
 }
 
 /// An interleaved actor-aware reply created by [`interleaved`].
@@ -144,7 +128,8 @@ pub enum Either<L, R> {
 ///
 /// This trait is sealed so reply senders and lifecycle error construction stay
 /// private to the runtime. Use this trait as an opaque handler return bound and
-/// construct values with [`ready`], [`owned`], [`interleaved`], or [`exclusive`].
+/// construct values with [`ready`], a bare [`Future`], [`interleaved`], or
+/// [`exclusive`].
 ///
 /// Downstream crates cannot add reply strategies:
 ///
@@ -195,14 +180,14 @@ pub(crate) mod sealed {
         }
     }
 
-    impl<A, M, F> HandleReply<A, M> for Owned<F>
+    impl<A, M, F> HandleReply<A, M> for F
     where
         A: Actor,
         M: Message,
         F: Future<Output = M::Reply> + Send + 'static,
     {
         fn handle(self, scheduler: &mut ReplyScheduler<A>, reply: DispatchReply<M::Reply>) {
-            scheduler.push_owned(CompleteOwnedReply::new(self.future, reply));
+            scheduler.push_owned(CompleteOwnedReply::new(self, reply));
         }
     }
 

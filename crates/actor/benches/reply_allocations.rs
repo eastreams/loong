@@ -51,7 +51,7 @@ impl Handler<Owned> for ReplyActor {
     ) -> impl IntoReply<Self, Owned> + use<> {
         // Match the actor-aware modes' concrete base future so byte counts
         // reflect reply wrappers and scheduler ownership, not payload layout.
-        reply::owned(std::future::ready(1))
+        std::future::ready(1)
     }
 }
 

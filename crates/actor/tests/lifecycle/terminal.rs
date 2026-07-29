@@ -224,11 +224,11 @@ impl Handler<PanicAfterBarrier> for PanicActor {
         message: PanicAfterBarrier,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, PanicAfterBarrier> + use<> {
-        reply::owned(async move {
+        async move {
             let _ = message.entered.send(());
             message.barrier.wait();
             panic!("panic loses to an already committed Kill");
-        })
+        }
     }
 }
 
