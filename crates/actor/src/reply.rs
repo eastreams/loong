@@ -213,7 +213,7 @@ pub(crate) mod sealed {
         F: Future<Output = M::Reply> + Send + 'static,
     {
         fn handle(self, scheduler: &mut ReplyScheduler<A>, reply: DispatchReply<M::Reply>) {
-            scheduler.push_owned(CompleteOwnedReply::new(self, reply));
+            scheduler.push_owned(CompleteReply::new(self, reply));
         }
     }
 
@@ -256,16 +256,15 @@ pub(crate) mod sealed {
 }
 
 pin_project! {
-    struct CompleteOwnedReply<F, R> {
-        // The guard is declared first so cancellation reports the lifecycle
-        // error before running an arbitrary user future's Drop implementation.
+    struct CompleteReply<F, R> {
+        // Report cancellation before running the user future's Drop.
         reply: Option<DispatchReply<R>>,
         #[pin]
         future: F,
     }
 }
 
-impl<F, R> CompleteOwnedReply<F, R> {
+impl<F, R> CompleteReply<F, R> {
     fn new(future: F, reply: DispatchReply<R>) -> Self {
         Self {
             reply: Some(reply),
@@ -274,7 +273,7 @@ impl<F, R> CompleteOwnedReply<F, R> {
     }
 }
 
-impl<F, R> Future for CompleteOwnedReply<F, R>
+impl<F, R> Future for CompleteReply<F, R>
 where
     F: Future<Output = R>,
 {
@@ -288,24 +287,6 @@ where
             .expect("reply completion runs exactly once")
             .complete(value);
         Poll::Ready(())
-    }
-}
-
-pin_project! {
-    struct CompleteReply<F, R> {
-        // See CompleteOwnedReply: lifecycle publication precedes user Drop.
-        reply: Option<DispatchReply<R>>,
-        #[pin]
-        future: F,
-    }
-}
-
-impl<F, R> CompleteReply<F, R> {
-    fn new(future: F, reply: DispatchReply<R>) -> Self {
-        Self {
-            reply: Some(reply),
-            future,
-        }
     }
 }
 
