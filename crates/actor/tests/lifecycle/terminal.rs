@@ -10,8 +10,8 @@ use std::{
 };
 
 use loong_actor::{
-    Actor, ActorOwner, ActorScope, CallError, ExitReason, Handler, Message, Shutdown,
-    ShutdownStatus, reply, spawn,
+    Actor, ActorOwner, ActorScope, CallError, ExitReason, Handler, Message, ReplyExt, Shutdown,
+    ShutdownStatus, spawn,
 };
 use tokio::sync::oneshot;
 
@@ -192,7 +192,7 @@ impl Handler<PanicNow> for PanicActor {
     ) -> impl loong_actor::IntoReply<Self, PanicNow> + use<> {
         panic!("intentional handler panic");
         #[allow(unreachable_code)]
-        reply::ready(())
+        ().ready()
     }
 }
 

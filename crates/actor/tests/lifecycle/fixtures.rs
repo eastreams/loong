@@ -4,8 +4,8 @@ use std::{
 };
 
 use loong_actor::{
-    Actor, ActorFutureExt, ActorScope, ExitReason, Handler, IntoActorFuture, Message, SpawnOptions,
-    reply, spawn_with,
+    Actor, ActorFutureExt, ActorScope, ExitReason, Handler, IntoActorFuture, Message, ReplyExt,
+    SpawnOptions, spawn_with,
 };
 use tokio::sync::oneshot;
 
@@ -48,22 +48,21 @@ impl Handler<Step> for LifecycleActor {
         mut message: Step,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, Step> + use<> {
-        reply::exclusive(
-            async move {
-                if let Some(entered) = message.entered.take() {
-                    let _ = entered.send(());
-                }
-                if let Some(release) = message.release.take() {
-                    let _ = release.await;
-                }
-                message.id
+        async move {
+            if let Some(entered) = message.entered.take() {
+                let _ = entered.send(());
             }
-            .into_actor()
-            .map(|id, actor: &mut Self, _scope| {
-                lock(&actor.handled).push(id);
-                id
-            }),
-        )
+            if let Some(release) = message.release.take() {
+                let _ = release.await;
+            }
+            message.id
+        }
+        .into_actor()
+        .map(|id, actor: &mut Self, _scope| {
+            lock(&actor.handled).push(id);
+            id
+        })
+        .exclusive()
     }
 }
 

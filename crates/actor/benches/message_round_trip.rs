@@ -1,7 +1,9 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use loong_actor::{Actor, ActorScope, Handler, IntoActorFuture, Message, Shutdown, reply, spawn};
+use loong_actor::{
+    Actor, ActorScope, Handler, IntoActorFuture, Message, ReplyExt, Shutdown, spawn,
+};
 
 struct ReplyActor;
 
@@ -19,7 +21,7 @@ impl Handler<Ready> for ReplyActor {
         _message: Ready,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, Ready> + use<> {
-        reply::ready(1)
+        1.ready()
     }
 }
 
@@ -51,7 +53,7 @@ impl Handler<Interleaved> for ReplyActor {
         _message: Interleaved,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, Interleaved> + use<> {
-        reply::interleaved(std::future::ready(1).into_actor())
+        std::future::ready(1).into_actor().interleaved()
     }
 }
 
@@ -67,7 +69,7 @@ impl Handler<Exclusive> for ReplyActor {
         _message: Exclusive,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, Exclusive> + use<> {
-        reply::exclusive(std::future::ready(1).into_actor())
+        std::future::ready(1).into_actor().exclusive()
     }
 }
 

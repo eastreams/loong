@@ -6,7 +6,8 @@ use std::{
 };
 
 use loong_actor::{
-    Actor, ActorFuture, ActorScope, ExitReason, Handler, IntoReply, Message, Shutdown, reply, spawn,
+    Actor, ActorFuture, ActorScope, ExitReason, Handler, IntoReply, Message, ReplyExt, Shutdown,
+    spawn,
 };
 
 use support::watchdog;
@@ -59,7 +60,7 @@ impl Handler<Read> for FirstActor {
         _message: Read,
         _scope: &mut ActorScope<Self>,
     ) -> impl IntoReply<Self, Read> + use<> {
-        reply::interleaved(SharedFuture)
+        SharedFuture.interleaved()
     }
 }
 
@@ -69,7 +70,7 @@ impl Handler<Read> for SecondActor {
         _message: Read,
         _scope: &mut ActorScope<Self>,
     ) -> impl IntoReply<Self, Read> + use<> {
-        reply::interleaved(SharedFuture)
+        SharedFuture.interleaved()
     }
 }
 

@@ -596,6 +596,8 @@ mod tests {
         time::Duration,
     };
 
+    use crate::ReplyExt;
+
     use super::*;
 
     struct TestActor;
@@ -636,7 +638,7 @@ mod tests {
             _message: RecoverMessage,
             _scope: &mut ActorScope<Self>,
         ) -> impl crate::IntoReply<Self, RecoverMessage> + use<> {
-            crate::reply::ready(())
+            ().ready()
         }
     }
 

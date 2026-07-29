@@ -42,7 +42,7 @@ pub enum CallError {
     ///
     /// Synchronous handler work and earlier future polls may already have caused
     /// effects. This error is therefore not proof that retrying is safe, even for
-    /// a handler that selected [`reply::ready`](crate::reply::ready).
+    /// a handler that selected [`ReplyExt::ready`](crate::ReplyExt::ready).
     #[error("the actor exited during dispatch: {0}")]
     DuringDispatch(ExitReason),
 

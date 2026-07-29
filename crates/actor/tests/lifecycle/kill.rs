@@ -1,6 +1,6 @@
 use loong_actor::{
-    ActorScope, CallError, ExitReason, Handler, IntoActorFuture, Message, Shutdown, ShutdownStatus,
-    reply,
+    ActorScope, CallError, ExitReason, Handler, IntoActorFuture, Message, ReplyExt, Shutdown,
+    ShutdownStatus,
 };
 use tokio::sync::oneshot;
 
@@ -25,14 +25,13 @@ impl Handler<Interruptible> for LifecycleActor {
         message: Interruptible,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, Interruptible> + use<> {
-        reply::exclusive(
-            async move {
-                let _dropped = message.dropped;
-                let _ = message.entered.send(());
-                let _ = message.release.await;
-            }
-            .into_actor(),
-        )
+        async move {
+            let _dropped = message.dropped;
+            let _ = message.entered.send(());
+            let _ = message.release.await;
+        }
+        .into_actor()
+        .exclusive()
     }
 }
 
@@ -52,7 +51,7 @@ impl Handler<KillBeforeReady> for LifecycleActor {
             scope.request_shutdown(Shutdown::Kill),
             ShutdownStatus::Requested
         );
-        reply::ready(())
+        ().ready()
     }
 }
 

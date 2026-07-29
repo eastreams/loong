@@ -2,7 +2,7 @@ use std::num::NonZeroUsize;
 
 use loong_actor::{
     Actor, ActorFutureExt, ActorScope, CallError, ExitReason, Handler, IntoActorFuture, Message,
-    Shutdown, ShutdownStatus, SpawnOptions, TryCallErrorKind, reply, spawn_with,
+    ReplyExt, Shutdown, ShutdownStatus, SpawnOptions, TryCallErrorKind, spawn_with,
 };
 use tokio::sync::oneshot;
 
@@ -23,12 +23,15 @@ impl Handler<StopFromExclusive> for LifecycleActor {
         _message: StopFromExclusive,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, StopFromExclusive> + use<> {
-        reply::exclusive(async {}.into_actor().map(|(), _actor: &mut Self, scope| {
-            assert_eq!(
-                scope.request_shutdown(Shutdown::Stop),
-                ShutdownStatus::Requested
-            );
-        }))
+        async {}
+            .into_actor()
+            .map(|(), _actor: &mut Self, scope| {
+                assert_eq!(
+                    scope.request_shutdown(Shutdown::Stop),
+                    ShutdownStatus::Requested
+                );
+            })
+            .exclusive()
     }
 }
 

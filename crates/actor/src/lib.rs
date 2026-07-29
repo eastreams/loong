@@ -7,8 +7,8 @@
 //! Implement [`Actor`] and a typed [`Handler`] for each accepted [`Message`].
 //! A handler chooses reply scheduling before it returns.
 //! Bare [`Future`] values use owned scheduling.
-//! The [`reply`] module provides ready and actor-aware strategies.
-//! It documents borrowing, fairness, capacity, panic, and Kill behavior.
+//! Use [`ReplyExt`] for ready and actor-aware strategies.
+//! The [`reply`] module documents their runtime behavior.
 //!
 //! Use [`ActorRef::call`] for a typed response and [`ActorRef::send`] for
 //! admission-only one-way delivery. Their `try_` variants attempt immediate
@@ -48,7 +48,7 @@ pub use error::{
     TrySendErrorKind,
 };
 pub use future::{ActorFuture, ActorFutureExt, FutureActor, IntoActorFuture, Map, Then};
-pub use reply::IntoReply;
+pub use reply::{IntoReply, ReplyExt};
 pub use runtime::{ActorOwner, ActorScope, SpawnOptions, spawn, spawn_with};
 pub use supervision::{Child, ChildExit, ChildId, ExitReason, Shutdown, ShutdownStatus};
 
@@ -60,7 +60,7 @@ pub use supervision::{Child, ChildExit, ChildId, ExitReason, Shutdown, ShutdownS
 pub mod prelude {
     pub use crate::{
         Actor, ActorFuture, ActorFutureExt, ActorScope, Handler, IntoActorFuture, IntoReply,
-        Message, reply,
+        Message, ReplyExt, reply,
     };
 }
 

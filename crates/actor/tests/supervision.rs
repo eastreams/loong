@@ -8,7 +8,7 @@ use std::task::Poll;
 
 use loong_actor::{
     Actor, ActorRef, ActorScope, CallError, ChildExit, ExitReason, Handler, IntoActorFuture,
-    Message, Shutdown, reply, spawn,
+    Message, ReplyExt, Shutdown, spawn,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -31,7 +31,7 @@ impl Handler<StopSelf> for ChildActor {
         scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, StopSelf> + use<> {
         scope.request_shutdown(Shutdown::Stop);
-        reply::ready(())
+        ().ready()
     }
 }
 
@@ -49,7 +49,7 @@ impl Handler<PanicSelf> for ChildActor {
     ) -> impl loong_actor::IntoReply<Self, PanicSelf> + use<> {
         panic!("intentional child panic");
         #[allow(unreachable_code)]
-        reply::ready(())
+        ().ready()
     }
 }
 
@@ -87,7 +87,7 @@ impl Handler<Observed> for Supervisor {
         _message: Observed,
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, Observed> + use<> {
-        reply::ready(self.observed.load(Ordering::SeqCst))
+        self.observed.load(Ordering::SeqCst).ready()
     }
 }
 
@@ -104,18 +104,17 @@ impl Handler<ChildExitBarrier> for Supervisor {
         _scope: &mut ActorScope<Self>,
     ) -> impl loong_actor::IntoReply<Self, ChildExitBarrier> + use<> {
         let mut yielded = false;
-        reply::interleaved(
-            std::future::poll_fn(move |task| {
-                if yielded {
-                    Poll::Ready(())
-                } else {
-                    yielded = true;
-                    task.waker().wake_by_ref();
-                    Poll::Pending
-                }
-            })
-            .into_actor(),
-        )
+        std::future::poll_fn(move |task| {
+            if yielded {
+                Poll::Ready(())
+            } else {
+                yielded = true;
+                task.waker().wake_by_ref();
+                Poll::Pending
+            }
+        })
+        .into_actor()
+        .interleaved()
     }
 }
 
