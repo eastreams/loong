@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     num::NonZeroUsize,
     pin::Pin,
     sync::{
@@ -32,7 +33,7 @@ pub(crate) enum InterleavedPoll {
 
 /// Polls replies that require temporary actor access.
 pub(crate) struct ReplyScheduler<A: Actor> {
-    interleaved: Vec<ErasedActorFuture<A>>,
+    interleaved: VecDeque<ErasedActorFuture<A>>,
     exclusive: Option<ErasedActorFuture<A>>,
     interleaved_sweep: SweepState,
     max_interleaved: NonZeroUsize,
@@ -41,7 +42,7 @@ pub(crate) struct ReplyScheduler<A: Actor> {
 impl<A: Actor> ReplyScheduler<A> {
     pub(crate) fn new(max_interleaved: NonZeroUsize) -> Self {
         Self {
-            interleaved: Vec::new(),
+            interleaved: VecDeque::new(),
             exclusive: None,
             interleaved_sweep: SweepState::default(),
             max_interleaved,
@@ -68,7 +69,7 @@ impl<A: Actor> ReplyScheduler<A> {
     where
         F: ActorFuture<A, Output = ()> + Send + 'static,
     {
-        self.interleaved.push(Box::pin(future));
+        self.interleaved.push_back(Box::pin(future));
         self.interleaved_sweep.restart();
         debug_assert!(self.interleaved.len() <= self.max_interleaved.get());
     }
@@ -89,13 +90,13 @@ impl<A: Actor> ReplyScheduler<A> {
         expected_mode: Mode,
         task: &mut Context<'_>,
     ) -> InterleavedPoll {
-        poll_collection(
+        poll_round_robin(
             &mut self.interleaved,
             &mut self.interleaved_sweep,
             control,
             expected_mode,
             task,
-            |future, task| future.as_mut().poll(actor, scope, task).is_ready(),
+            |future, task| future.as_mut().poll(actor, scope, task),
         )
     }
 
@@ -171,7 +172,6 @@ impl<A: Actor> ReplyScheduler<A> {
 /// Persistent recovery point for one collection's logical round-robin sweep.
 #[derive(Default)]
 struct SweepState {
-    cursor: usize,
     remaining: usize,
     generation: usize,
     wake: Arc<SweepWaker>,
@@ -184,7 +184,6 @@ impl SweepState {
 
     fn clear(&mut self) {
         self.wake.clear();
-        self.cursor = 0;
         self.remaining = 0;
         self.generation = 0;
     }
@@ -246,10 +245,12 @@ impl Wake for SweepWaker {
     }
 }
 
+// The deque front is the persistent round-robin cursor.
+// Pending work rotates back. Completed work leaves from the front.
 // An idle state starts one circular sweep.
 // Each call polls at most ACTIVE_POLL_BUDGET items.
 // A truncated sweep self-wakes and returns BudgetExhausted.
-// `remaining` and `cursor` preserve its recovery point.
+// The deque front and `remaining` preserve its recovery point.
 // One user poll may still run without returning.
 //
 // Every item receives the same proxy waker.
@@ -259,13 +260,13 @@ impl Wake for SweepWaker {
 //
 // Progress reports completion or lifecycle change.
 // Pending means no work completed and no budget cutoff remains.
-fn poll_collection<T>(
-    items: &mut Vec<T>,
+fn poll_round_robin<T>(
+    items: &mut VecDeque<T>,
     sweep: &mut SweepState,
     control: &Control,
     expected_mode: Mode,
     task: &mut Context<'_>,
-    mut poll: impl FnMut(&mut T, &mut Context<'_>) -> bool,
+    mut poll: impl FnMut(&mut T, &mut Context<'_>) -> Poll<()>,
 ) -> InterleavedPoll {
     if items.is_empty() {
         sweep.clear();
@@ -290,20 +291,14 @@ fn poll_collection<T>(
         if control.mode() != expected_mode {
             break;
         }
-        if sweep.cursor >= items.len() {
-            sweep.cursor = 0;
-        }
-        if poll(&mut items[sweep.cursor], &mut item_task) {
-            // Preserve the circular scan order. `swap_remove` can move an
-            // already-polled tail item onto the cursor and leave the one
-            // remaining unpolled item asleep after the sweep finishes.
-            items.remove(sweep.cursor);
-            completed = true;
-            if sweep.cursor >= items.len() {
-                sweep.cursor = 0;
+        // Poll before removal. Panic cleanup must retain scheduler ownership.
+        match poll(&mut items[0], &mut item_task) {
+            Poll::Ready(()) => {
+                let completed_item = items.pop_front().expect("the front item was just polled");
+                drop(completed_item);
+                completed = true;
             }
-        } else {
-            sweep.cursor = (sweep.cursor + 1) % items.len();
+            Poll::Pending => items.rotate_left(1),
         }
         polled += 1;
     }
@@ -443,6 +438,27 @@ mod tests {
         }
     }
 
+    struct PanicOnPoll {
+        dropped: Arc<AtomicBool>,
+        dropped_while_unwinding: Arc<AtomicBool>,
+    }
+
+    impl Future for PanicOnPoll {
+        type Output = ();
+
+        fn poll(self: Pin<&mut Self>, _task: &mut Context<'_>) -> Poll<Self::Output> {
+            panic!("intentional future poll panic")
+        }
+    }
+
+    impl Drop for PanicOnPoll {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::SeqCst);
+            self.dropped_while_unwinding
+                .store(std::thread::panicking(), Ordering::SeqCst);
+        }
+    }
+
     struct KillOnPoll {
         control: Arc<Control>,
         polls: Arc<AtomicUsize>,
@@ -462,18 +478,18 @@ mod tests {
 
     // Tests the shared sweep without constructing an actor scope.
     fn poll_futures(
-        items: &mut Vec<TestFuture>,
+        items: &mut VecDeque<TestFuture>,
         sweep: &mut SweepState,
         control: &Control,
         task: &mut Context<'_>,
     ) -> InterleavedPoll {
-        poll_collection(
+        poll_round_robin(
             items,
             sweep,
             control,
             Mode::Running,
             task,
-            |future, task| future.as_mut().poll(task).is_ready(),
+            |future, task| future.as_mut().poll(task),
         )
     }
 
@@ -481,7 +497,7 @@ mod tests {
     fn budgeted_scan_resumes_at_the_unpolled_tail() {
         let control = Control::new();
         let polls: Vec<_> = (0..20).map(|_| Arc::new(AtomicUsize::new(0))).collect();
-        let mut items: Vec<TestFuture> = polls
+        let mut items: VecDeque<TestFuture> = polls
             .iter()
             .map(|count| Box::pin(PollCounter(Arc::clone(count))) as TestFuture)
             .collect();
@@ -511,7 +527,7 @@ mod tests {
             poll_futures(&mut items, &mut sweep, &control, &mut task),
             InterleavedPoll::Pending
         );
-        assert!(polls.iter().all(|count| count.load(Ordering::SeqCst) > 0));
+        assert!(polls.iter().all(|count| count.load(Ordering::SeqCst) == 1));
         assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
     }
 
@@ -520,12 +536,12 @@ mod tests {
         let control = Control::new();
         let first_polls = Arc::new(AtomicUsize::new(0));
         let first_waker = Arc::new(Mutex::new(None));
-        let mut items: Vec<TestFuture> = vec![Box::pin(CaptureWaker {
+        let mut items = VecDeque::from([Box::pin(CaptureWaker {
             polls: Arc::clone(&first_polls),
             waker: Arc::clone(&first_waker),
-        })];
+        }) as TestFuture]);
         for _ in 1..20 {
-            items.push(Box::pin(std::future::pending()));
+            items.push_back(Box::pin(std::future::pending()));
         }
         let mut sweep = SweepState::default();
 
@@ -554,13 +570,13 @@ mod tests {
     }
 
     // The completion sits at the first budget's final position.
-    // Ready would let run_actor consume the next budget immediately.
-    // Pending must yield while the cursor retains the unpolled tail.
+    // Progress would let run_actor consume the next budget immediately.
+    // BudgetExhausted must yield while retaining the unpolled tail.
     #[test]
     fn completion_at_budget_cut_yields_before_resuming_tail() {
         let control = Control::new();
         let polls = Arc::new((0..17).map(|_| AtomicUsize::new(0)).collect::<Vec<_>>());
-        let mut items: Vec<TestFuture> = (0..17)
+        let mut items: VecDeque<TestFuture> = (0..17)
             .map(|index| {
                 Box::pin(IndexedPoll {
                     index,
@@ -569,10 +585,8 @@ mod tests {
                 }) as TestFuture
             })
             .collect();
-        let mut sweep = SweepState {
-            cursor: 2,
-            ..SweepState::default()
-        };
+        items.rotate_left(2);
+        let mut sweep = SweepState::default();
 
         let wakes = Arc::new(WakeCounter(AtomicUsize::new(0)));
         let waker = Waker::from(Arc::clone(&wakes));
@@ -590,18 +604,45 @@ mod tests {
         assert!(polls.iter().all(|count| count.load(Ordering::SeqCst) == 1));
     }
 
+    // Polling must not move the future out of scheduler ownership.
+    // Otherwise its destructor may panic during the poll unwind.
+    // Containment must finish before later cleanup drops the future.
+    #[test]
+    fn poll_panic_retains_the_future_for_contained_cleanup() {
+        let control = Control::new();
+        let dropped = Arc::new(AtomicBool::new(false));
+        let dropped_while_unwinding = Arc::new(AtomicBool::new(false));
+        let mut items = VecDeque::from([Box::pin(PanicOnPoll {
+            dropped: Arc::clone(&dropped),
+            dropped_while_unwinding: Arc::clone(&dropped_while_unwinding),
+        }) as TestFuture]);
+        let mut sweep = SweepState::default();
+        let mut task = Context::from_waker(Waker::noop());
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            poll_futures(&mut items, &mut sweep, &control, &mut task)
+        }));
+        assert!(result.is_err());
+        assert!(!dropped.load(Ordering::SeqCst));
+
+        drop(result);
+        control.drop_user_value(items.pop_front().expect("the failed future stays owned"));
+        assert!(dropped.load(Ordering::SeqCst));
+        assert!(!dropped_while_unwinding.load(Ordering::SeqCst));
+    }
+
     #[test]
     fn kill_committed_by_one_reply_prevents_polling_the_next_reply() {
         let control = Control::new();
         let first_polls = Arc::new(AtomicUsize::new(0));
         let second_polls = Arc::new(AtomicUsize::new(0));
-        let mut items: Vec<TestFuture> = vec![
+        let mut items = VecDeque::from([
             Box::pin(KillOnPoll {
                 control: Arc::clone(&control),
                 polls: Arc::clone(&first_polls),
-            }),
-            Box::pin(PollCounter(Arc::clone(&second_polls))),
-        ];
+            }) as TestFuture,
+            Box::pin(PollCounter(Arc::clone(&second_polls))) as TestFuture,
+        ]);
         let mut sweep = SweepState::default();
 
         let wakes = Arc::new(WakeCounter(AtomicUsize::new(0)));
