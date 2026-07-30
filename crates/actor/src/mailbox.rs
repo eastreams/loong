@@ -297,10 +297,22 @@ impl Control {
         Self::discard_panic(payload);
     }
 
-    /// Contains user destruction and external notification callbacks.
-    fn contain(&self, action: impl FnOnce()) {
-        if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(action)) {
+    /// Drops one actor-owned user value without unwinding through the runtime.
+    fn drop_user_value<T>(&self, value: T) {
+        if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| drop(value))) {
             self.contain_panic(payload);
+        }
+    }
+
+    /// Notifies one response observer without blaming its Waker on the actor.
+    ///
+    /// A rejected value remains actor-owned. Its destructor may still fail the
+    /// actor through the separate user Drop boundary.
+    fn notify_response<T>(&self, reply: oneshot::Sender<T>, value: T) {
+        match panic::catch_unwind(AssertUnwindSafe(|| reply.send(value))) {
+            Ok(Ok(())) => {}
+            Ok(Err(value)) => self.drop_user_value(value),
+            Err(payload) => Self::discard_panic(payload),
         }
     }
 
@@ -381,7 +393,7 @@ impl DispatchPermit {
 
     /// Commits handler failure before making its dispatch error observable.
     fn fail(&self) -> CallError {
-        self.control.contain(|| self.control.begin_failure());
+        self.control.begin_failure();
         self.control.call_failure(CallPhase::Dispatching)
     }
 }
@@ -539,10 +551,8 @@ where
         let permit = match control.begin_dispatch() {
             Ok(permit) => permit,
             Err(error) => {
-                control.contain(|| {
-                    let _ = reply.send(Err(error));
-                });
-                control.contain(|| drop(message));
+                control.notify_response(reply, Err(error));
+                control.drop_user_value(message);
                 return;
             }
         };
@@ -566,10 +576,8 @@ impl<M: Message> Drop for CallEnvelope<M> {
         };
 
         let error = control.call_failure(CallPhase::Queued);
-        control.contain(|| {
-            let _ = reply.send(Err(error));
-        });
-        control.contain(|| drop(message));
+        control.notify_response(reply, Err(error));
+        control.drop_user_value(message);
     }
 }
 
@@ -650,18 +658,14 @@ impl<R> DispatchReply<R> {
 
         match (state, outcome) {
             (DispatchReplyState::Caller(reply), Ok(CompletionPermit)) => {
-                self.permit.control.contain(|| {
-                    let _ = reply.send(Ok(response));
-                });
+                self.permit.control.notify_response(reply, Ok(response));
             }
             (DispatchReplyState::Caller(reply), Err(error)) => {
-                self.permit.control.contain(|| {
-                    let _ = reply.send(Err(error));
-                });
-                self.permit.control.contain(|| drop(response));
+                self.permit.control.notify_response(reply, Err(error));
+                self.permit.control.drop_user_value(response);
             }
             (DispatchReplyState::OneWay, Ok(CompletionPermit) | Err(_)) => {
-                self.permit.control.contain(|| drop(response));
+                self.permit.control.drop_user_value(response);
             }
             (DispatchReplyState::Completed, _) => {
                 panic!("a dispatch reply completes at most once")
@@ -689,9 +693,7 @@ impl<R> Drop for DispatchReply<R> {
         };
         let error = self.permit.fail();
         if let Some(reply) = reply {
-            self.permit.control.contain(|| {
-                let _ = reply.send(Err(error));
-            });
+            self.permit.control.notify_response(reply, Err(error));
         }
     }
 }
@@ -1083,6 +1085,53 @@ mod tests {
         assert_eq!(control.request(Shutdown::Kill), ShutdownStatus::Requested);
 
         assert_eq!(receiver.await, Ok(Ok(7)));
+    }
+
+    // The response value commits before its observer is notified.
+    // A panicking observer is not actor code.
+    // Its panic must not fail an otherwise healthy actor.
+    #[test]
+    fn response_waker_panic_does_not_fail_the_actor() {
+        let control = Control::new();
+        let permit = control.begin_dispatch().expect("dispatch wins the gate");
+        let (sender, response) = oneshot::channel();
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let waker = Waker::from(Arc::new(PanicWake(Arc::clone(&wakes))));
+        let mut task = Context::from_waker(&waker);
+        let mut response = Box::pin(response);
+        assert!(response.as_mut().poll(&mut task).is_pending());
+
+        DispatchReply::new(sender, permit).complete(7_u8);
+
+        assert_eq!(wakes.load(Ordering::SeqCst), 1);
+        assert_eq!(response.as_mut().get_mut().try_recv(), Ok(Ok(7)));
+        assert_eq!(control.mode(), Mode::Running);
+    }
+
+    struct PanicDropReply(Arc<AtomicBool>);
+
+    impl Drop for PanicDropReply {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+            panic!("intentional response drop panic");
+        }
+    }
+
+    // A closed receiver leaves the response owned by the actor.
+    // Its destructor panic must remain contained.
+    // The actor must still record that user-code failure.
+    #[test]
+    fn undelivered_response_drop_panic_fails_the_actor() {
+        let control = Control::new();
+        let permit = control.begin_dispatch().expect("dispatch wins the gate");
+        let (sender, response) = oneshot::channel();
+        let dropped = Arc::new(AtomicBool::new(false));
+        drop(response);
+
+        DispatchReply::new(sender, permit).complete(PanicDropReply(Arc::clone(&dropped)));
+
+        assert!(dropped.load(Ordering::SeqCst));
+        assert_eq!(control.mode(), Mode::Failing);
     }
 
     #[tokio::test]
