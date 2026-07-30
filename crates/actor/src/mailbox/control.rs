@@ -34,7 +34,7 @@ pub(crate) async fn mode_changed(
     .await
 }
 
-pub(super) struct PanicSafeWake(pub(super) Waker);
+struct PanicSafeWake(Waker);
 
 impl PanicSafeWake {
     fn forward(&self) {
@@ -403,3 +403,6 @@ impl DispatchPermit {
         &self.control
     }
 }
+
+#[cfg(test)]
+mod tests;
