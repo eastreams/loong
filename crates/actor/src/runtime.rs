@@ -18,7 +18,7 @@ use crate::{
     ShutdownStatus, SpawnChildError, SubtreeStatus,
     mailbox::{ActorMailbox, Control, DynEnvelope, HookEntryPermit, Mode},
     owned::OwnedTasks,
-    scheduler::ReplyScheduler,
+    scheduler::{InterleavedPoll, ReplyScheduler},
 };
 
 /// Configuration applied when one actor is spawned.
@@ -804,12 +804,17 @@ async fn actor_turn<A: Actor>(
                         Poll::Pending => None,
                     }
                 }
-                1 if scheduler.has_interleaved()
-                    && scheduler
-                        .poll_interleaved(actor, scope, control, expected_mode, task)
-                        .is_ready() =>
-                {
-                    Some(Turn::ReplyProgress)
+                1 if scheduler.has_interleaved() => {
+                    match scheduler.poll_interleaved(actor, scope, control, expected_mode, task) {
+                        InterleavedPoll::Pending => None,
+                        InterleavedPoll::Progress => Some(Turn::ReplyProgress),
+                        InterleavedPoll::BudgetExhausted => {
+                            // Continue from the next lane after Tokio repolls us.
+                            // The scheduler already preserved and woke its sweep.
+                            cursor.ordinary = (class + 1) % 3;
+                            return Poll::Pending;
+                        }
+                    }
                 }
                 2 => match supervisor_rx.poll_recv(task) {
                     Poll::Ready(Some(event)) => Some(Turn::Child(event)),

@@ -857,6 +857,72 @@ async fn ordinary_cursor_visits_each_actor_source_before_repeating_mailbox() {
     assert_eq!(inbox.len(), 4);
 }
 
+// A truncated reply sweep must yield before polling another ready lane.
+// Otherwise ready mailbox traffic can erase the cooperative boundary.
+#[test]
+fn truncated_reply_sweep_yields_before_ready_mailbox() {
+    // Seventeen ready replies equal the poll budget plus one.
+    const REPLIES: usize = 17;
+
+    let mailbox_dispatches = Arc::new(AtomicUsize::new(0));
+    let replies_polled = Arc::new(AtomicUsize::new(0));
+    let (mailbox, mut inbox) = ActorMailbox::<TestActor>::channel(1);
+    mailbox
+        .sender
+        .try_send(
+            Box::new(CountEnvelope(Arc::clone(&mailbox_dispatches))) as DynEnvelope<TestActor>
+        )
+        .unwrap();
+
+    let control = Arc::clone(&mailbox.control);
+    let actor_ref = ActorRef::new(Arc::downgrade(&mailbox), control.subscribe_mode());
+    let (supervisor_tx, mut supervisor_rx) = mpsc::unbounded_channel();
+    let mut scope = ActorScope {
+        actor_ref,
+        control: Arc::clone(&control),
+        children: ChildSet::default(),
+        accepts_children: true,
+        supervisor_tx,
+    };
+    let owned = OwnedTasks::new(Arc::clone(&control));
+    let mut scheduler = ReplyScheduler::new(NonZeroUsize::new(REPLIES).unwrap());
+    for _ in 0..REPLIES {
+        let replies_polled = Arc::clone(&replies_polled);
+        scheduler.push_interleaved(
+            async move {
+                replies_polled.fetch_add(1, Ordering::SeqCst);
+            }
+            .into_actor(),
+        );
+    }
+    let mut actor = TestActor;
+    // Start at replies. The old path continued to the ready mailbox.
+    let mut cursor = TurnCursor { ordinary: 1 };
+    let mut task = Context::from_waker(Waker::noop());
+
+    {
+        let mut turn = std::pin::pin!(actor_turn(
+            &mut actor,
+            &mut scope,
+            &mut inbox,
+            &mut supervisor_rx,
+            &control,
+            &owned,
+            &mut scheduler,
+            true,
+            Mode::Running,
+            &mut cursor,
+        ));
+        assert!(turn.as_mut().poll(&mut task).is_pending());
+    }
+
+    let replies_polled = replies_polled.load(Ordering::SeqCst);
+    assert!(0 < replies_polled && replies_polled < REPLIES);
+    assert_eq!(mailbox_dispatches.load(Ordering::SeqCst), 0);
+    assert_eq!(inbox.len(), 1);
+    assert!(scheduler.has_interleaved());
+}
+
 // Drain must absorb queued child exits before its completion barrier.
 // Otherwise cleanup skips events already accepted by supervision.
 #[tokio::test]

@@ -17,6 +17,19 @@ const ACTIVE_POLL_BUDGET: usize = 16;
 
 type ErasedActorFuture<A> = Pin<Box<dyn ActorFuture<A, Output = ()> + Send + 'static>>;
 
+/// Outcome of one interleaved collection poll.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum InterleavedPoll {
+    /// No reply completed, and no budget cutoff remains.
+    Pending,
+    /// A reply completed or lifecycle changed.
+    Progress,
+    /// The budget ended before the current sweep finished.
+    ///
+    /// The caller must stop polling ready lanes and return `Pending`.
+    BudgetExhausted,
+}
+
 /// Polls replies that require temporary actor access.
 pub(crate) struct ReplyScheduler<A: Actor> {
     interleaved: Vec<ErasedActorFuture<A>>,
@@ -75,7 +88,7 @@ impl<A: Actor> ReplyScheduler<A> {
         control: &Control,
         expected_mode: Mode,
         task: &mut Context<'_>,
-    ) -> Poll<()> {
+    ) -> InterleavedPoll {
         poll_collection(
             &mut self.interleaved,
             &mut self.interleaved_sweep,
@@ -117,10 +130,12 @@ impl<A: Actor> ReplyScheduler<A> {
         Poll::Ready(())
     }
 
-    /// Polls the eligible actor-aware lane.
+    /// Polls the eligible actor-aware lane while finishing replies.
     ///
-    /// Ready reports reply progress or a lifecycle change, not that every active
-    /// reply has completed.
+    /// This method polls no mailbox or child work.
+    /// Inactivity and budget exhaustion both return `Poll::Pending` here.
+    /// Normal turns call `poll_interleaved` to preserve that distinction.
+    /// `Poll::Ready` reports progress or a lifecycle change.
     pub(crate) fn poll_active(
         &mut self,
         actor: &mut A,
@@ -132,7 +147,10 @@ impl<A: Actor> ReplyScheduler<A> {
         if self.has_exclusive() {
             self.poll_exclusive(actor, scope, control, expected_mode, task)
         } else {
-            self.poll_interleaved(actor, scope, control, expected_mode, task)
+            match self.poll_interleaved(actor, scope, control, expected_mode, task) {
+                InterleavedPoll::Pending | InterleavedPoll::BudgetExhausted => Poll::Pending,
+                InterleavedPoll::Progress => Poll::Ready(()),
+            }
         }
     }
 
@@ -228,16 +246,19 @@ impl Wake for SweepWaker {
     }
 }
 
-// When no sweep is in progress, polling starts one logical circular pass over
-// the eligible collection. The per-visit budget bounds how many items are polled
-// before returning to other actor work; it cannot bound the
-// duration of an individual user poll. `remaining` and `cursor` preserve the
-// recovery point and, while the collection remains eligible, self-wake until the
-// sweep is complete. Each collection gets one proxy waker whose generation
-// distinguishes future notifications from budget continuation wakes, so a
-// coalesced external wake triggers a confirmation sweep without making an
-// all-pending collection spin. Ready means an item completed or lifecycle
-// changed, not that the collection is empty.
+// An idle state starts one circular sweep.
+// Each call polls at most ACTIVE_POLL_BUDGET items.
+// A truncated sweep self-wakes and returns BudgetExhausted.
+// `remaining` and `cursor` preserve its recovery point.
+// One user poll may still run without returning.
+//
+// Every item receives the same proxy waker.
+// Its generation separates future notifications from continuation wakes.
+// A coalesced notification starts one confirmation sweep.
+// This prevents an all-pending collection from spinning.
+//
+// Progress reports completion or lifecycle change.
+// Pending means no work completed and no budget cutoff remains.
 fn poll_collection<T>(
     items: &mut Vec<T>,
     sweep: &mut SweepState,
@@ -245,10 +266,10 @@ fn poll_collection<T>(
     expected_mode: Mode,
     task: &mut Context<'_>,
     mut poll: impl FnMut(&mut T, &mut Context<'_>) -> bool,
-) -> Poll<()> {
+) -> InterleavedPoll {
     if items.is_empty() {
         sweep.clear();
-        return Poll::Pending;
+        return InterleavedPoll::Pending;
     }
 
     sweep.wake.register(task.waker());
@@ -289,18 +310,21 @@ fn poll_collection<T>(
 
     sweep.remaining -= polled;
     if control.mode() != expected_mode {
-        return Poll::Ready(());
+        return InterleavedPoll::Progress;
     }
     if items.is_empty() {
         sweep.clear();
-    } else if sweep.remaining > 0 || sweep.wake.generation() != sweep.generation {
+    } else if sweep.remaining > 0 {
+        task.waker().wake_by_ref();
+        return InterleavedPoll::BudgetExhausted;
+    } else if sweep.wake.generation() != sweep.generation {
         task.waker().wake_by_ref();
     }
 
     if completed {
-        Poll::Ready(())
+        InterleavedPoll::Progress
     } else {
-        Poll::Pending
+        InterleavedPoll::Pending
     }
 }
 
@@ -442,7 +466,7 @@ mod tests {
         sweep: &mut SweepState,
         control: &Control,
         task: &mut Context<'_>,
-    ) -> Poll<()> {
+    ) -> InterleavedPoll {
         poll_collection(
             items,
             sweep,
@@ -467,7 +491,10 @@ mod tests {
         let waker = Waker::from(Arc::clone(&wakes));
         let mut task = Context::from_waker(&waker);
 
-        assert!(poll_futures(&mut items, &mut sweep, &control, &mut task).is_pending());
+        assert_eq!(
+            poll_futures(&mut items, &mut sweep, &control, &mut task),
+            InterleavedPoll::BudgetExhausted
+        );
         assert!(
             polls[..ACTIVE_POLL_BUDGET]
                 .iter()
@@ -480,7 +507,10 @@ mod tests {
         );
         assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
 
-        assert!(poll_futures(&mut items, &mut sweep, &control, &mut task).is_pending());
+        assert_eq!(
+            poll_futures(&mut items, &mut sweep, &control, &mut task),
+            InterleavedPoll::Pending
+        );
         assert!(polls.iter().all(|count| count.load(Ordering::SeqCst) > 0));
         assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
     }
@@ -503,19 +533,31 @@ mod tests {
         let waker = Waker::from(Arc::clone(&notified));
         let mut task = Context::from_waker(&waker);
 
-        assert!(poll_futures(&mut items, &mut sweep, &control, &mut task).is_pending());
+        assert_eq!(
+            poll_futures(&mut items, &mut sweep, &control, &mut task),
+            InterleavedPoll::BudgetExhausted
+        );
         first_waker.lock().unwrap().as_ref().unwrap().wake_by_ref();
         assert!(notified.0.swap(false, Ordering::SeqCst));
 
-        assert!(poll_futures(&mut items, &mut sweep, &control, &mut task).is_pending());
+        assert_eq!(
+            poll_futures(&mut items, &mut sweep, &control, &mut task),
+            InterleavedPoll::Pending
+        );
         assert!(notified.0.swap(false, Ordering::SeqCst));
 
-        assert!(poll_futures(&mut items, &mut sweep, &control, &mut task).is_pending());
+        assert_eq!(
+            poll_futures(&mut items, &mut sweep, &control, &mut task),
+            InterleavedPoll::BudgetExhausted
+        );
         assert_eq!(first_polls.load(Ordering::SeqCst), 2);
     }
 
+    // The completion sits at the first budget's final position.
+    // Ready would let run_actor consume the next budget immediately.
+    // Pending must yield while the cursor retains the unpolled tail.
     #[test]
-    fn completion_does_not_skip_the_unpolled_item_after_cursor_wraps() {
+    fn completion_at_budget_cut_yields_before_resuming_tail() {
         let control = Control::new();
         let polls = Arc::new((0..17).map(|_| AtomicUsize::new(0)).collect::<Vec<_>>());
         let mut items: Vec<TestFuture> = (0..17)
@@ -536,8 +578,15 @@ mod tests {
         let waker = Waker::from(Arc::clone(&wakes));
         let mut task = Context::from_waker(&waker);
 
-        assert!(poll_futures(&mut items, &mut sweep, &control, &mut task).is_ready());
-        assert!(poll_futures(&mut items, &mut sweep, &control, &mut task).is_pending());
+        assert_eq!(
+            poll_futures(&mut items, &mut sweep, &control, &mut task),
+            InterleavedPoll::BudgetExhausted
+        );
+        assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            poll_futures(&mut items, &mut sweep, &control, &mut task),
+            InterleavedPoll::Pending
+        );
         assert!(polls.iter().all(|count| count.load(Ordering::SeqCst) == 1));
     }
 
@@ -559,7 +608,10 @@ mod tests {
         let waker = Waker::from(wakes);
         let mut task = Context::from_waker(&waker);
 
-        assert!(poll_futures(&mut items, &mut sweep, &control, &mut task).is_ready());
+        assert_eq!(
+            poll_futures(&mut items, &mut sweep, &control, &mut task),
+            InterleavedPoll::Progress
+        );
         assert_eq!(first_polls.load(Ordering::SeqCst), 1);
         assert_eq!(second_polls.load(Ordering::SeqCst), 0);
         assert_eq!(control.mode(), Mode::Killing);
