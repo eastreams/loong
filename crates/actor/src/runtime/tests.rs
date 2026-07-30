@@ -1,5 +1,6 @@
 use std::{
     future::Future,
+    marker::PhantomPinned,
     num::NonZeroUsize,
     panic,
     pin::Pin,
@@ -22,9 +23,9 @@ use crate::{
 };
 
 use super::{
-    ActorTask, ChildSet, DiscardOutcome, ExitGuard, OwnedActor, TEARDOWN_DROP_BUDGET, Turn,
-    TurnCursor, Work, actor_turn, await_actor_work, close_and_discard, graceful_finish,
-    handle_child_exit, kill_actor, run_actor, spawn_actor,
+    ActorTask, ActorWorkGuard, ActorWorkState, ChildSet, DiscardOutcome, ExitGuard, OwnedActor,
+    TEARDOWN_DROP_BUDGET, Turn, TurnCursor, Work, actor_turn, await_actor_work, close_and_discard,
+    graceful_finish, handle_child_exit, kill_actor, run_actor, spawn_actor,
 };
 
 struct TestActor;
@@ -60,6 +61,37 @@ impl Drop for ActorFrameDropProbe {
     fn drop(&mut self) {
         self.dropped.store(true, Ordering::SeqCst);
         panic!("intentional actor frame drop panic");
+    }
+}
+
+struct ActorWorkDropProbe {
+    kill: Option<Arc<Control>>,
+    panic_on_poll: bool,
+    polled: Arc<AtomicBool>,
+    dropped: Arc<AtomicBool>,
+    _pin: PhantomPinned,
+}
+
+impl Future for ActorWorkDropProbe {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, _task: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.as_ref().get_ref();
+        this.polled.store(true, Ordering::SeqCst);
+        assert!(!this.panic_on_poll, "intentional actor work poll panic");
+        if let Some(control) = &this.kill {
+            control.request(Shutdown::Kill);
+            Poll::Pending
+        } else {
+            Poll::Ready(())
+        }
+    }
+}
+
+impl Drop for ActorWorkDropProbe {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::SeqCst);
+        panic!("intentional actor work drop panic");
     }
 }
 
@@ -208,6 +240,82 @@ async fn actor_work_contains_panic_payload_destruction() {
     assert_eq!(control.mode(), Mode::Failing);
 }
 
+// Ready Drop is checked in every graceful mode.
+// Kill after entry locks hard-cutoff ordering.
+// Poll panic proves polling and Drop use separate boundaries.
+// The !Unpin probe rejects move-based cleanup.
+#[tokio::test]
+async fn actor_work_contains_future_drop_panics() {
+    for (initial, kill_on_poll, panic_on_poll, expected_work, expected_mode) in [
+        (None, false, false, Work::Panicked, Mode::Failing),
+        (
+            Some(Shutdown::Stop),
+            false,
+            false,
+            Work::Panicked,
+            Mode::Failing,
+        ),
+        (
+            Some(Shutdown::Drain),
+            false,
+            false,
+            Work::Panicked,
+            Mode::Failing,
+        ),
+        (None, true, false, Work::Killed, Mode::Killing),
+        (None, false, true, Work::Panicked, Mode::Failing),
+    ] {
+        let control = Control::new();
+        if let Some(shutdown) = initial {
+            assert_eq!(control.request(shutdown), ShutdownStatus::Requested);
+        }
+        let polled = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicBool::new(false));
+
+        let work = await_actor_work(
+            ActorWorkDropProbe {
+                kill: kill_on_poll.then(|| Arc::clone(&control)),
+                panic_on_poll,
+                polled: Arc::clone(&polled),
+                dropped: Arc::clone(&dropped),
+                _pin: PhantomPinned,
+            },
+            &control,
+        )
+        .await;
+
+        assert_eq!(work, expected_work);
+        assert!(polled.load(Ordering::SeqCst));
+        assert!(dropped.load(Ordering::SeqCst));
+        assert_eq!(control.mode(), expected_mode);
+    }
+}
+
+// Polling after Ready is a runtime contract violation, not an actor panic.
+// The invariant check must remain outside the user future panic boundary.
+#[test]
+fn completed_actor_work_repoll_exposes_the_runtime_bug() {
+    let control = Control::new();
+    let mut task = Context::from_waker(Waker::noop());
+    let mut guarded = std::pin::pin!(ActorWorkGuard {
+        state: ActorWorkState::Running {
+            future: std::future::ready(()),
+        },
+        control: &control,
+    });
+    assert_eq!(
+        guarded.as_mut().poll(&mut task),
+        Poll::Ready(Work::Complete)
+    );
+
+    let repoll = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+        let _ = guarded.as_mut().poll(&mut task);
+    }));
+
+    assert!(repoll.is_err());
+    assert_eq!(control.mode(), Mode::Running);
+}
+
 // Tokio retains an escaped task payload inside JoinError.
 // Waiting must consume that payload without another unwind.
 #[tokio::test]
@@ -313,7 +421,7 @@ async fn graceful_cutoff_absorbs_a_dequeued_child_exit() {
                 &control,
             )
             .await,
-            Work::Complete(())
+            Work::Complete
         ));
         assert_eq!(observed.load(Ordering::SeqCst), 0);
         assert_eq!(scope.children.len(), 0);
@@ -375,7 +483,7 @@ async fn admitted_child_exit_hook_finishes_across_graceful_cutoff() {
         .await
         .expect("an admitted hook must remain live across graceful cutoff");
 
-        assert!(matches!(work, Work::Complete(())));
+        assert!(matches!(work, Work::Complete));
         completed_rx.await.unwrap();
         assert_eq!(scope.children.len(), 0);
     }

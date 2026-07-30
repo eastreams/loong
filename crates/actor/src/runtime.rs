@@ -3,13 +3,14 @@ use std::{
     fmt,
     future::Future,
     num::NonZeroUsize,
-    panic::AssertUnwindSafe,
+    panic::{self, AssertUnwindSafe},
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
 };
 
 use futures_util::FutureExt;
+use pin_project_lite::pin_project;
 use tokio::{sync::mpsc, task::JoinHandle};
 
 use crate::{
@@ -488,17 +489,100 @@ impl Drop for ActorTask {
     }
 }
 
-enum Work<T = ()> {
-    Complete(T),
+#[derive(Debug, Eq, PartialEq)]
+enum Work {
+    Complete,
     Killed,
     Panicked,
 }
 
-async fn await_actor_work<F, T>(future: F, control: &Control) -> Work<T>
+pin_project! {
+    // `project_replace` leaves `Done` if future Drop panics.
+    // `PinnedDrop` therefore cannot drop the future twice.
+    // Separate state keeps replacement independent from guard destruction.
+    #[project = ActorWorkStateProj]
+    #[project_replace = ActorWorkStateProjReplace]
+    enum ActorWorkState<F> {
+        Running {
+            #[pin]
+            future: F,
+        },
+        Done,
+    }
+}
+
+pin_project! {
+    /// Contains polling and destruction for one pinned lifecycle future.
+    struct ActorWorkGuard<'a, F> {
+        #[pin]
+        state: ActorWorkState<F>,
+        control: &'a Control,
+    }
+
+    impl<F> PinnedDrop for ActorWorkGuard<'_, F> {
+        fn drop(this: Pin<&mut Self>) {
+            let _ = this.drop_future_panicked();
+        }
+    }
+}
+
+impl<'a, F> ActorWorkGuard<'a, F> {
+    /// Retires the pinned future and reports a contained Drop panic.
+    fn drop_future_panicked(mut self: Pin<&mut Self>) -> bool {
+        let this = self.as_mut().project();
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+            let _ = this.state.project_replace(ActorWorkState::Done);
+        }));
+        if let Err(payload) = result {
+            this.control.contain_panic(payload);
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl<F> Future for ActorWorkGuard<'_, F>
 where
-    F: Future<Output = T> + Send,
+    F: Future<Output = ()>,
 {
-    let guarded = AssertUnwindSafe(future).catch_unwind();
+    type Output = Work;
+
+    fn poll(mut self: Pin<&mut Self>, task: &mut Context<'_>) -> Poll<Self::Output> {
+        let result = {
+            let this = self.as_mut().project();
+            let ActorWorkStateProj::Running { future } = this.state.project() else {
+                unreachable!("completed actor work cannot be polled");
+            };
+            panic::catch_unwind(AssertUnwindSafe(|| future.poll(task)))
+        };
+
+        match result {
+            Ok(Poll::Pending) => Poll::Pending,
+            Ok(Poll::Ready(())) => {
+                if self.as_mut().drop_future_panicked() {
+                    Poll::Ready(Work::Panicked)
+                } else {
+                    Poll::Ready(Work::Complete)
+                }
+            }
+            Err(payload) => {
+                self.as_mut().project().control.contain_panic(payload);
+                let _ = self.as_mut().drop_future_panicked();
+                Poll::Ready(Work::Panicked)
+            }
+        }
+    }
+}
+
+async fn await_actor_work<F>(future: F, control: &Control) -> Work
+where
+    F: Future<Output = ()> + Send,
+{
+    let guarded = ActorWorkGuard {
+        state: ActorWorkState::Running { future },
+        control,
+    };
     tokio::pin!(guarded);
 
     loop {
@@ -512,13 +596,7 @@ where
         tokio::select! {
             biased;
             () = control.actor_notified() => {}
-            result = &mut guarded => return match result {
-                Ok(value) => Work::Complete(value),
-                Err(payload) => {
-                    control.contain_panic(payload);
-                    Work::Panicked
-                }
-            },
+            result = &mut guarded => return result,
         }
     }
 }
@@ -537,7 +615,7 @@ async fn run_actor<A: Actor>(
     let mut turn_cursor = TurnCursor::default();
 
     match await_actor_work(async { actor.on_start(&mut scope).await }, &control).await {
-        Work::Complete(()) => {}
+        Work::Complete => {}
         Work::Killed => return kill_actor(&mut scope, &mut inbox, &owned, &mut scheduler).await,
         Work::Panicked => return fail_actor(&mut scope, &mut inbox, &owned, &mut scheduler).await,
     }
@@ -609,7 +687,7 @@ async fn run_actor<A: Actor>(
             }
             Turn::Child(event) => {
                 match handle_child_exit(&mut actor, &mut scope, event, &control).await {
-                    Work::Complete(()) => {}
+                    Work::Complete => {}
                     Work::Killed => {
                         return kill_actor(&mut scope, &mut inbox, &owned, &mut scheduler).await;
                     }
@@ -741,11 +819,11 @@ async fn handle_child_exit<A: Actor>(
     control: &Control,
 ) -> Work {
     if !scope.children.remove(event.child()) {
-        return Work::Complete(());
+        return Work::Complete;
     }
 
     let Some(permit) = scope.control.begin_child_hook() else {
-        return Work::Complete(());
+        return Work::Complete;
     };
 
     run_child_exit_hook(actor, scope, event, control, permit).await
@@ -783,13 +861,13 @@ async fn stop_actor<A: Actor>(
     }
     owned.close();
     match finish_replies(actor, scope, control, owned, scheduler).await {
-        Work::Complete(()) => {}
+        Work::Complete => {}
         Work::Killed => return kill_actor(scope, inbox, owned, scheduler).await,
         Work::Panicked => return fail_actor(scope, inbox, owned, scheduler).await,
     }
 
     match graceful_finish(actor, scope, control, Shutdown::Stop, ExitReason::Stopped).await {
-        Work::Complete(()) => ExitReason::Stopped,
+        Work::Complete => ExitReason::Stopped,
         Work::Killed => kill_actor(scope, inbox, owned, scheduler).await,
         Work::Panicked => fail_actor(scope, inbox, owned, scheduler).await,
     }
@@ -862,7 +940,7 @@ async fn drain_actor<A: Actor>(
             Turn::Mode | Turn::ReplyProgress => {}
             Turn::RepliesFinished => break,
             Turn::Child(event) => match handle_child_exit(actor, scope, event, control).await {
-                Work::Complete(()) => {}
+                Work::Complete => {}
                 Work::Killed => {
                     return kill_actor(scope, inbox, owned, scheduler).await;
                 }
@@ -880,7 +958,7 @@ async fn drain_actor<A: Actor>(
     }
 
     match graceful_finish(actor, scope, control, Shutdown::Drain, ExitReason::Drained).await {
-        Work::Complete(()) => ExitReason::Drained,
+        Work::Complete => ExitReason::Drained,
         Work::Killed => kill_actor(scope, inbox, owned, scheduler).await,
         Work::Panicked => fail_actor(scope, inbox, owned, scheduler).await,
     }
@@ -938,7 +1016,7 @@ async fn finish_replies<A: Actor>(
         .await;
 
         match result {
-            Ok(true) => return Work::Complete(()),
+            Ok(true) => return Work::Complete,
             Ok(false) => {}
             Err(payload) => {
                 control.contain_panic(payload);
@@ -971,7 +1049,7 @@ async fn graceful_finish<A: Actor>(
     )
     .await
     {
-        Work::Complete(()) => {}
+        Work::Complete => {}
         Work::Killed => return Work::Killed,
         Work::Panicked => return Work::Panicked,
     }
