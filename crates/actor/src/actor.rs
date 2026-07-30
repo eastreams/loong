@@ -8,11 +8,12 @@ use crate::{
 /// State that can be run as an actor.
 ///
 /// Lifecycle hooks are awaited inside the actor's serial execution context.
-/// While a hook is pending, the runtime does not dispatch handlers, poll active
-/// replies, or enter another hook for this actor. Stop and Drain wait for an
-/// entered hook to finish. Kill may drop it between polls; neither Kill nor
-/// executor teardown can interrupt a poll call or user `Drop` code that does not
-/// return.
+/// While a hook is pending, handlers and actor-aware replies pause.
+/// Another hook cannot enter for this actor.
+/// Owned replies continue in independent Tokio tasks.
+/// Stop and Drain wait for an entered hook.
+/// Kill may drop it between polls.
+/// Kill and executor teardown cannot interrupt a poll or user `Drop`.
 ///
 /// Unlike a [`Handler`] reply, a hook future may retain its `&mut self` and
 /// `&mut ActorScope<Self>` borrows across `await` for the method's `'a` lifetime;
