@@ -977,7 +977,7 @@ async fn kill_actor<A: Actor>(
     inbox.close();
     scope.children.request_all(Shutdown::Kill);
     owned.close();
-    scheduler.clear();
+    scheduler.clear(&scope.control);
     let mut expected_mode = Mode::Killing;
     loop {
         match close_and_discard(inbox, &scope.control, expected_mode).await {
@@ -1007,7 +1007,7 @@ async fn fail_actor<A: Actor>(
     inbox.close();
     scope.children.request_all(Shutdown::Kill);
     owned.close();
-    scheduler.clear();
+    scheduler.clear(&control);
     let mut expected_mode = control.mode();
     loop {
         match close_and_discard(inbox, &control, expected_mode).await {
@@ -1050,7 +1050,7 @@ async fn close_and_discard<A: Actor>(
         let Ok(envelope) = inbox.try_recv() else {
             return DiscardOutcome::Complete;
         };
-        drop(envelope);
+        control.drop_user_value(envelope);
 
         if control.mode() != expected_mode {
             return DiscardOutcome::ModeChanged;

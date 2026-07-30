@@ -136,9 +136,16 @@ impl<A: Actor> ReplyScheduler<A> {
         }
     }
 
-    pub(crate) fn clear(&mut self) {
-        self.exclusive = None;
-        self.interleaved.clear();
+    /// Drops every retained reply through an independent panic boundary.
+    ///
+    /// One user destructor cannot skip another ownership slot.
+    pub(crate) fn clear(&mut self, control: &Control) {
+        if let Some(exclusive) = self.exclusive.take() {
+            control.drop_user_value(exclusive);
+        }
+        for interleaved in self.interleaved.drain(..) {
+            control.drop_user_value(interleaved);
+        }
         self.interleaved_sweep.clear();
     }
 }
@@ -310,6 +317,38 @@ mod tests {
     };
 
     use super::*;
+
+    struct TestActor;
+
+    impl Actor for TestActor {}
+
+    struct DropProbe {
+        dropped: Arc<AtomicBool>,
+        dropped_while_unwinding: Arc<AtomicBool>,
+        panic: bool,
+    }
+
+    impl ActorFuture<TestActor> for DropProbe {
+        type Output = ();
+
+        fn poll(
+            self: Pin<&mut Self>,
+            _actor: &mut TestActor,
+            _scope: &mut ActorScope<TestActor>,
+            _task: &mut Context<'_>,
+        ) -> Poll<Self::Output> {
+            Poll::Pending
+        }
+    }
+
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::SeqCst);
+            self.dropped_while_unwinding
+                .store(std::thread::panicking(), Ordering::SeqCst);
+            assert!(!self.panic, "intentional actor future drop panic");
+        }
+    }
 
     struct PollCounter(Arc<AtomicUsize>);
 
@@ -524,5 +563,56 @@ mod tests {
         assert_eq!(first_polls.load(Ordering::SeqCst), 1);
         assert_eq!(second_polls.load(Ordering::SeqCst), 0);
         assert_eq!(control.mode(), Mode::Killing);
+    }
+
+    // Exclusive Drop runs before the interleaved collection is cleared.
+    // Each boundary must catch panic before the next destructor runs.
+    // The two cases use one panic each to avoid double-panic aborts.
+    #[test]
+    fn clear_contains_each_actor_future_drop() {
+        let control = Control::new();
+        let exclusive_dropped = Arc::new(AtomicBool::new(false));
+        let exclusive_tail_dropped = Arc::new(AtomicBool::new(false));
+        let dropped_while_unwinding = Arc::new(AtomicBool::new(false));
+        let mut scheduler = ReplyScheduler::new(NonZeroUsize::MIN);
+        scheduler.push_exclusive(DropProbe {
+            dropped: Arc::clone(&exclusive_dropped),
+            dropped_while_unwinding: Arc::clone(&dropped_while_unwinding),
+            panic: true,
+        });
+        scheduler.push_interleaved(DropProbe {
+            dropped: Arc::clone(&exclusive_tail_dropped),
+            dropped_while_unwinding: Arc::clone(&dropped_while_unwinding),
+            panic: false,
+        });
+
+        scheduler.clear(&control);
+        assert!(exclusive_dropped.load(Ordering::SeqCst));
+        assert!(exclusive_tail_dropped.load(Ordering::SeqCst));
+        assert!(!dropped_while_unwinding.load(Ordering::SeqCst));
+        assert!(scheduler.is_empty());
+        assert_eq!(control.mode(), Mode::Failing);
+
+        let control = Control::new();
+        let interleaved_panicked = Arc::new(AtomicBool::new(false));
+        let tail_dropped = Arc::new(AtomicBool::new(false));
+        let mut scheduler = ReplyScheduler::new(NonZeroUsize::new(2).unwrap());
+        scheduler.push_interleaved(DropProbe {
+            dropped: Arc::clone(&interleaved_panicked),
+            dropped_while_unwinding: Arc::clone(&dropped_while_unwinding),
+            panic: true,
+        });
+        scheduler.push_interleaved(DropProbe {
+            dropped: Arc::clone(&tail_dropped),
+            dropped_while_unwinding: Arc::clone(&dropped_while_unwinding),
+            panic: false,
+        });
+
+        scheduler.clear(&control);
+        assert!(interleaved_panicked.load(Ordering::SeqCst));
+        assert!(tail_dropped.load(Ordering::SeqCst));
+        assert!(!dropped_while_unwinding.load(Ordering::SeqCst));
+        assert!(scheduler.is_empty());
+        assert_eq!(control.mode(), Mode::Failing);
     }
 }

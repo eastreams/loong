@@ -298,7 +298,7 @@ impl Control {
     }
 
     /// Drops one actor-owned user value without unwinding through the runtime.
-    fn drop_user_value<T>(&self, value: T) {
+    pub(crate) fn drop_user_value<T>(&self, value: T) {
         if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| drop(value))) {
             self.contain_panic(payload);
         }

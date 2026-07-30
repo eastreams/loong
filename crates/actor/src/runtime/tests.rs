@@ -110,18 +110,34 @@ impl Envelope<TestActor> for ChildKillDropProbe {
 
 enum TeardownEnvelope {
     Noop,
+    Panic(Arc<AtomicBool>),
     RequestKill(Arc<Control>),
     MarkDropped(Arc<AtomicBool>),
+    TrackDrop {
+        dropped: Arc<AtomicBool>,
+        dropped_while_unwinding: Arc<AtomicBool>,
+    },
 }
 
 impl Drop for TeardownEnvelope {
     fn drop(&mut self) {
         match self {
             Self::Noop => {}
+            Self::Panic(observed) => {
+                observed.store(true, Ordering::SeqCst);
+                panic!("intentional envelope drop panic");
+            }
             Self::RequestKill(control) => {
                 control.request(Shutdown::Kill);
             }
             Self::MarkDropped(observed) => observed.store(true, Ordering::SeqCst),
+            Self::TrackDrop {
+                dropped,
+                dropped_while_unwinding,
+            } => {
+                dropped.store(true, Ordering::SeqCst);
+                dropped_while_unwinding.store(std::thread::panicking(), Ordering::SeqCst);
+            }
         }
     }
 }
@@ -618,4 +634,41 @@ async fn queued_discard_yields_after_its_fixed_drop_budget() {
         Poll::Ready(DiscardOutcome::Complete)
     );
     assert!(last_dropped.load(Ordering::SeqCst));
+}
+
+// A queued destructor panic must not unwind from hard teardown.
+// The next accepted envelope must still be destroyed.
+// Its unwind state rejects one aggregate panic boundary.
+#[tokio::test]
+async fn queued_discard_contains_each_envelope_drop() {
+    let (mailbox, mut inbox) = ActorMailbox::<TestActor>::channel(2);
+    let panic_dropped = Arc::new(AtomicBool::new(false));
+    let tail_dropped = Arc::new(AtomicBool::new(false));
+    let tail_dropped_while_unwinding = Arc::new(AtomicBool::new(false));
+    mailbox
+        .sender
+        .try_send(Box::new(TeardownEnvelope::Panic(Arc::clone(
+            &panic_dropped,
+        ))))
+        .unwrap();
+    mailbox
+        .sender
+        .try_send(Box::new(TeardownEnvelope::TrackDrop {
+            dropped: Arc::clone(&tail_dropped),
+            dropped_while_unwinding: Arc::clone(&tail_dropped_while_unwinding),
+        }))
+        .unwrap();
+    assert_eq!(
+        mailbox.control.request(Shutdown::Kill),
+        ShutdownStatus::Requested
+    );
+
+    assert_eq!(
+        close_and_discard(&mut inbox, &mailbox.control, Mode::Killing).await,
+        DiscardOutcome::Complete
+    );
+    assert!(panic_dropped.load(Ordering::SeqCst));
+    assert!(tail_dropped.load(Ordering::SeqCst));
+    assert!(!tail_dropped_while_unwinding.load(Ordering::SeqCst));
+    assert_eq!(mailbox.control.mode(), Mode::Killing);
 }
