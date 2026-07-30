@@ -460,26 +460,31 @@ impl Future for ActorTask {
             return Poll::Pending;
         };
 
-        // Drop actor state and its ChildSet before publishing this actor's exit.
-        drop(this.future.take());
-        let reason = this
-            .exit
+        // Frame destruction can fail before terminal publication.
+        // The lifecycle gate preserves any Kill that already committed.
+        let exit = this.exit.take().expect("an actor task owns one exit guard");
+        let future = this
+            .future
             .take()
-            .expect("an actor task owns one exit guard")
-            .complete(reason);
+            .expect("a ready actor task owns one final frame");
+        exit.control.drop_user_value(future);
+        let reason = exit.complete(reason);
         Poll::Ready(reason)
     }
 }
 
 impl Drop for ActorTask {
     fn drop(&mut self) {
-        if let Some(exit) = &self.exit {
-            exit.prepare_abort();
+        let Some(exit) = self.exit.take() else {
+            return;
+        };
+        // Aborting weakens the reason before opaque frame destruction.
+        // The guard publishes only after contained cleanup returns.
+        exit.prepare_abort();
+        if let Some(future) = self.future.take() {
+            exit.control.drop_user_value(future);
         }
-        // Explicit ordering preserves the tree invariant on executor abort:
-        // child owners are dropped before the parent exit is published.
-        drop(self.future.take());
-        drop(self.exit.take());
+        drop(exit);
     }
 }
 

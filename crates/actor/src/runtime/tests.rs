@@ -22,9 +22,9 @@ use crate::{
 };
 
 use super::{
-    ChildSet, DiscardOutcome, OwnedActor, TEARDOWN_DROP_BUDGET, Turn, TurnCursor, Work, actor_turn,
-    await_actor_work, close_and_discard, graceful_finish, handle_child_exit, kill_actor, run_actor,
-    spawn_actor,
+    ActorTask, ChildSet, DiscardOutcome, ExitGuard, OwnedActor, TEARDOWN_DROP_BUDGET, Turn,
+    TurnCursor, Work, actor_turn, await_actor_work, close_and_discard, graceful_finish,
+    handle_child_exit, kill_actor, run_actor, spawn_actor,
 };
 
 struct TestActor;
@@ -37,6 +37,29 @@ impl Drop for CascadingPanicPayload {
     fn drop(&mut self) {
         self.0.store(true, Ordering::SeqCst);
         panic!("intentional panic payload drop panic");
+    }
+}
+
+struct ActorFrameDropProbe {
+    reason: Option<ExitReason>,
+    dropped: Arc<AtomicBool>,
+}
+
+impl Future for ActorFrameDropProbe {
+    type Output = ExitReason;
+
+    fn poll(self: Pin<&mut Self>, _task: &mut Context<'_>) -> Poll<Self::Output> {
+        match self.reason {
+            Some(reason) => Poll::Ready(reason),
+            None => Poll::Pending,
+        }
+    }
+}
+
+impl Drop for ActorFrameDropProbe {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::SeqCst);
+        panic!("intentional actor frame drop panic");
     }
 }
 
@@ -202,6 +225,54 @@ async fn owned_actor_wait_contains_join_panic_payload_destruction() {
 
     assert_eq!(actor.wait().await, ExitReason::Aborted);
     assert!(payload_dropped.load(Ordering::SeqCst));
+}
+
+// Final frame Drop occurs before terminal publication.
+// Its panic loses only when a committed Kill already won.
+#[test]
+fn actor_task_contains_final_frame_drop_panic() {
+    for (shutdown, expected) in [
+        (None, ExitReason::Panicked),
+        (Some(Shutdown::Kill), ExitReason::Killed),
+    ] {
+        let control = Control::new();
+        if let Some(shutdown) = shutdown {
+            assert_eq!(control.request(shutdown), ShutdownStatus::Requested);
+        }
+        let dropped = Arc::new(AtomicBool::new(false));
+        let mut actor_task = Box::pin(ActorTask::new(
+            Box::pin(ActorFrameDropProbe {
+                reason: Some(ExitReason::Stopped),
+                dropped: Arc::clone(&dropped),
+            }),
+            ExitGuard::new(Arc::clone(&control), None),
+        ));
+        let mut task = Context::from_waker(Waker::noop());
+
+        assert_eq!(actor_task.as_mut().poll(&mut task), Poll::Ready(expected));
+        assert!(dropped.load(Ordering::SeqCst));
+        assert_eq!(control.mode(), Mode::Exited(expected));
+    }
+}
+
+// Executor teardown commits Aborting before dropping the frame.
+// A contained Drop panic cannot escape or strengthen Aborted.
+#[test]
+fn actor_task_contains_aborted_frame_drop_panic() {
+    let control = Control::new();
+    let dropped = Arc::new(AtomicBool::new(false));
+    let actor_task = ActorTask::new(
+        Box::pin(ActorFrameDropProbe {
+            reason: None,
+            dropped: Arc::clone(&dropped),
+        }),
+        ExitGuard::new(Arc::clone(&control), None),
+    );
+
+    drop(actor_task);
+
+    assert!(dropped.load(Ordering::SeqCst));
+    assert_eq!(control.mode(), Mode::Exited(ExitReason::Aborted));
 }
 
 // This recreates the original race window after actor_turn has dequeued a
