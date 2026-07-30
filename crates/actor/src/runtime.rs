@@ -177,8 +177,8 @@ impl<A: Actor> fmt::Debug for ActorOwner<A> {
 ///
 /// The scope owns child lifecycles on behalf of the actor. Actor state may keep
 /// a returned [`Child`] or [`ActorRef`], but those values do not own the child.
-/// Graceful parent shutdown waits for the owned subtree before the parent's
-/// cleanup hook and terminal event.
+/// Graceful shutdown waits for every retained child actor.
+/// A weak descendant result propagates to the parent's terminal reason.
 pub struct ActorScope<A: Actor> {
     actor_ref: ActorRef<A>,
     control: Arc<Control>,
@@ -312,6 +312,8 @@ impl Drop for OwnedActor {
 #[derive(Default)]
 struct ChildSet {
     actors: HashMap<ChildId, OwnedActor>,
+    // ChildExit removal cannot erase a lost subtree guarantee.
+    subtree_aborted: bool,
 }
 
 impl ChildSet {
@@ -324,8 +326,12 @@ impl ChildSet {
         debug_assert!(previous.is_none(), "child identities are allocation-unique");
     }
 
-    fn remove(&mut self, id: &ChildId) -> bool {
-        self.actors.remove(id).is_some()
+    fn remove(&mut self, event: &ChildExit) -> bool {
+        if self.actors.remove(event.child()).is_none() {
+            return false;
+        }
+        self.subtree_aborted |= event.reason() == ExitReason::Aborted;
+        true
     }
 
     fn request_all(&self, shutdown: Shutdown) {
@@ -335,10 +341,25 @@ impl ChildSet {
     }
 
     async fn wait_all(&mut self) {
-        for actor in self.actors.values_mut() {
-            actor.wait().await;
+        // Persist each weak result before another await can be cancelled.
+        let Self {
+            actors,
+            subtree_aborted,
+        } = self;
+        for actor in actors.values_mut() {
+            *subtree_aborted |= actor.wait().await == ExitReason::Aborted;
         }
-        self.actors.clear();
+        actors.clear();
+    }
+
+    /// Downgrades a strong reason after any descendant abort.
+    /// The published result applies the same rule at its parent.
+    fn terminal_reason(&self, strong: ExitReason) -> ExitReason {
+        if self.subtree_aborted {
+            ExitReason::Aborted
+        } else {
+            strong
+        }
     }
 }
 
@@ -818,7 +839,7 @@ async fn handle_child_exit<A: Actor>(
     event: ChildExit,
     control: &Control,
 ) -> Work {
-    if !scope.children.remove(event.child()) {
+    if !scope.children.remove(&event) {
         return Work::Complete;
     }
 
@@ -867,7 +888,7 @@ async fn stop_actor<A: Actor>(
     }
 
     match graceful_finish(actor, scope, control, Shutdown::Stop, ExitReason::Stopped).await {
-        Work::Complete => ExitReason::Stopped,
+        Work::Complete => scope.children.terminal_reason(ExitReason::Stopped),
         Work::Killed => kill_actor(scope, inbox, owned, scheduler).await,
         Work::Panicked => fail_actor(scope, inbox, owned, scheduler).await,
     }
@@ -958,7 +979,7 @@ async fn drain_actor<A: Actor>(
     }
 
     match graceful_finish(actor, scope, control, Shutdown::Drain, ExitReason::Drained).await {
-        Work::Complete => ExitReason::Drained,
+        Work::Complete => scope.children.terminal_reason(ExitReason::Drained),
         Work::Killed => kill_actor(scope, inbox, owned, scheduler).await,
         Work::Panicked => fail_actor(scope, inbox, owned, scheduler).await,
     }
@@ -1078,7 +1099,7 @@ async fn kill_actor<A: Actor>(
     }
     owned.wait().await;
     scope.children.wait_all().await;
-    ExitReason::Killed
+    scope.children.terminal_reason(ExitReason::Killed)
 }
 
 async fn fail_actor<A: Actor>(
@@ -1108,7 +1129,7 @@ async fn fail_actor<A: Actor>(
     }
     owned.wait().await;
     scope.children.wait_all().await;
-    reason
+    scope.children.terminal_reason(reason)
 }
 
 const TEARDOWN_DROP_BUDGET: usize = 16;

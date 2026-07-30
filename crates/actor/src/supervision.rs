@@ -8,7 +8,7 @@ use crate::{Actor, ActorRef};
 /// are graceful, first-wins peers; Kill may upgrade either one. Graceful
 /// shutdown proceeds post-order through the owned actor tree, while Kill skips
 /// actor cleanup but still waits for descendants before publishing a normal
-/// terminal event.
+/// terminal event. An aborted descendant propagates [`ExitReason::Aborted`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum Shutdown {
@@ -24,15 +24,14 @@ pub enum Shutdown {
     /// The actor then requests Drain from its children, waits for their terminal
     /// events, and runs [`Actor::on_stop`] with [`ExitReason::Drained`].
     Drain,
-    /// Cancels cooperative actor work without running [`Actor::on_stop`] and
-    /// waits for the owned subtree to terminate.
+    /// Cancels cooperative actor work without running [`Actor::on_stop`].
+    /// It waits for every retained child actor.
     ///
     /// If Kill interrupts an entered lifecycle hook, that hook is first dropped
     /// to release its mutable scope borrow. Once the scope is available, Kill is
     /// submitted to children before active replies and queued messages are
     /// dropped, allowing descendants to begin termination ahead of arbitrary
-    /// user destructors. The terminal event is published only after the subtree
-    /// exits.
+    /// user destructors. A normal terminal event requires confirmed subtree exit.
     ///
     /// Kill takes effect between polls. It cannot interrupt a synchronous
     /// handler, a poll call that does not return, or user `Drop` code.
@@ -76,10 +75,10 @@ pub enum ExitReason {
     Killed,
     /// Actor code panicked and the panic was contained by the runtime.
     Panicked,
-    /// The executor dropped the actor task outside its normal lifecycle.
+    /// The executor dropped this actor or an owned descendant.
     ///
-    /// Descendant Kill has been initiated, but asynchronous subtree termination
-    /// cannot be confirmed from the task's synchronous drop path.
+    /// A dropped actor initiated Kill for its descendants.
+    /// Ancestors cannot confirm their asynchronous subtree termination.
     Aborted,
 }
 

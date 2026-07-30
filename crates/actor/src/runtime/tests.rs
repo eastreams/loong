@@ -137,6 +137,20 @@ impl Envelope<TestActor> for CountEnvelope {
     }
 }
 
+struct PanicEnvelope;
+
+impl Envelope<TestActor> for PanicEnvelope {
+    fn dispatch(
+        self: Box<Self>,
+        _actor: &mut TestActor,
+        _scope: &mut ActorScope<TestActor>,
+        _owned: &OwnedTasks,
+        _scheduler: &mut ReplyScheduler<TestActor>,
+    ) {
+        panic!("intentional dispatch panic");
+    }
+}
+
 struct ChildKillDropProbe {
     child: Arc<Control>,
     observed_kill: Arc<AtomicBool>,
@@ -383,12 +397,81 @@ fn actor_task_contains_aborted_frame_drop_panic() {
     assert_eq!(control.mode(), Mode::Exited(ExitReason::Aborted));
 }
 
+// Every strong parent reason claims its owned subtree terminated.
+// A retained weak child must downgrade every normal terminal path.
+#[tokio::test]
+async fn retained_aborted_child_weakens_every_parent_exit() {
+    enum ParentExit {
+        Shutdown(Shutdown),
+        Panic,
+    }
+
+    for exit in [
+        ParentExit::Shutdown(Shutdown::Stop),
+        ParentExit::Shutdown(Shutdown::Drain),
+        ParentExit::Shutdown(Shutdown::Kill),
+        ParentExit::Panic,
+    ] {
+        let (_child_ref, child) = spawn_actor(TestActor, SpawnOptions::default(), None);
+        child
+            .join
+            .as_ref()
+            .expect("a spawned child owns its task")
+            .abort();
+        let mut children = ChildSet::default();
+        children.insert(ChildId::new(), child);
+
+        let (mailbox, inbox) = ActorMailbox::<TestActor>::channel(1);
+        let control = Arc::clone(&mailbox.control);
+        let actor_ref = ActorRef::new(Arc::downgrade(&mailbox), control.subscribe_mode());
+        let (supervisor_tx, supervisor_rx) = mpsc::unbounded_channel();
+        let scope = ActorScope {
+            actor_ref,
+            control: Arc::clone(&control),
+            children,
+            accepts_children: true,
+            supervisor_tx,
+        };
+
+        match exit {
+            ParentExit::Shutdown(shutdown) => {
+                assert_eq!(control.request(shutdown), ShutdownStatus::Requested);
+            }
+            ParentExit::Panic => mailbox.sender.try_send(Box::new(PanicEnvelope)).unwrap(),
+        }
+
+        let task = ActorTask::new(
+            Box::pin(run_actor(
+                TestActor,
+                scope,
+                inbox,
+                supervisor_rx,
+                mailbox,
+                NonZeroUsize::MIN,
+            )),
+            ExitGuard::new(Arc::clone(&control), None),
+        );
+        let reason = tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("parent teardown must finish");
+
+        assert_eq!(reason, ExitReason::Aborted);
+        assert_eq!(control.exit_reason(), Some(ExitReason::Aborted));
+    }
+}
+
 // This recreates the original race window after actor_turn has dequeued a
 // valid event. A graceful cutoff that commits in that window must retire the
 // child without entering user code, for both graceful modes.
+// An absorbed Aborted event must still weaken the parent guarantee.
 #[tokio::test]
 async fn graceful_cutoff_absorbs_a_dequeued_child_exit() {
     for shutdown in [Shutdown::Stop, Shutdown::Drain] {
+        let strong = match shutdown {
+            Shutdown::Stop => ExitReason::Stopped,
+            Shutdown::Drain => ExitReason::Drained,
+            Shutdown::Kill => unreachable!("the test uses graceful modes"),
+        };
         let observed = Arc::new(AtomicUsize::new(0));
         let child_id = ChildId::new();
         let mut children = ChildSet::default();
@@ -417,7 +500,7 @@ async fn graceful_cutoff_absorbs_a_dequeued_child_exit() {
             handle_child_exit(
                 &mut actor,
                 &mut scope,
-                ChildExit::new(child_id, ExitReason::Stopped),
+                ChildExit::new(child_id, ExitReason::Aborted),
                 &control,
             )
             .await,
@@ -425,6 +508,7 @@ async fn graceful_cutoff_absorbs_a_dequeued_child_exit() {
         ));
         assert_eq!(observed.load(Ordering::SeqCst), 0);
         assert_eq!(scope.children.len(), 0);
+        assert_eq!(scope.children.terminal_reason(strong), ExitReason::Aborted);
     }
 }
 

@@ -228,17 +228,16 @@ impl Control {
 
     /// Publishes exactly one terminal mode and returns the reason that won.
     ///
-    /// The proposed task result is accepted only when no stronger state won.
+    /// Aborted always downgrades an unpublished subtree guarantee.
+    /// Otherwise, a committed Kill or failure keeps precedence.
     pub(crate) fn finish(&self, proposed: ExitReason) -> ExitReason {
         self.transact(|mode| {
-            // Finalization shares the lifecycle gate with Kill. Whichever
-            // commits first determines graceful completion versus escalation.
-            let reason = match mode {
-                Mode::Killing => ExitReason::Killed,
-                Mode::Failing => ExitReason::Panicked,
-                Mode::Aborting => ExitReason::Aborted,
-                Mode::Running | Mode::Draining | Mode::Stopping => proposed,
-                Mode::Exited(reason) => return (mode, reason),
+            let reason = match (mode, proposed) {
+                (Mode::Exited(reason), _) => return (mode, reason),
+                (_, ExitReason::Aborted) | (Mode::Aborting, _) => ExitReason::Aborted,
+                (Mode::Killing, _) => ExitReason::Killed,
+                (Mode::Failing, _) => ExitReason::Panicked,
+                (Mode::Running | Mode::Draining | Mode::Stopping, reason) => reason,
             };
             (Mode::Exited(reason), reason)
         })
@@ -1237,6 +1236,23 @@ mod tests {
             Ok(Err(CallError::DuringDispatch(ExitReason::Killed)))
         ));
         assert!(reentered.load(Ordering::SeqCst));
+    }
+
+    // Kill and panic normally win publication races.
+    // They cannot upgrade a weak subtree result into a strong terminal reason.
+    #[test]
+    fn aborted_result_downgrades_unpublished_hard_modes() {
+        let killing = Control::new();
+        assert_eq!(killing.request(Shutdown::Kill), ShutdownStatus::Requested);
+        assert_eq!(killing.finish(ExitReason::Aborted), ExitReason::Aborted);
+
+        let failing = Control::new();
+        failing.begin_failure();
+        assert_eq!(failing.finish(ExitReason::Aborted), ExitReason::Aborted);
+
+        let exited = Control::new();
+        assert_eq!(exited.finish(ExitReason::Killed), ExitReason::Killed);
+        assert_eq!(exited.finish(ExitReason::Aborted), ExitReason::Killed);
     }
 
     #[test]
