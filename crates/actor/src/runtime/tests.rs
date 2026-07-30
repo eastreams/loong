@@ -1,6 +1,7 @@
 use std::{
     future::Future,
     num::NonZeroUsize,
+    panic,
     pin::Pin,
     sync::{
         Arc,
@@ -22,12 +23,22 @@ use crate::{
 
 use super::{
     ChildSet, DiscardOutcome, OwnedActor, TEARDOWN_DROP_BUDGET, Turn, TurnCursor, Work, actor_turn,
-    close_and_discard, graceful_finish, handle_child_exit, kill_actor, run_actor, spawn_actor,
+    await_actor_work, close_and_discard, graceful_finish, handle_child_exit, kill_actor, run_actor,
+    spawn_actor,
 };
 
 struct TestActor;
 
 impl Actor for TestActor {}
+
+struct CascadingPanicPayload(Arc<AtomicBool>);
+
+impl Drop for CascadingPanicPayload {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+        panic!("intentional panic payload drop panic");
+    }
+}
 
 struct CountChildExit(Arc<AtomicUsize>);
 
@@ -152,6 +163,45 @@ impl Envelope<TestActor> for TeardownEnvelope {
     ) {
         unreachable!("teardown discards queued envelopes")
     }
+}
+
+// A catch owns its panic payload after the first unwind ends.
+// Payload destruction must not start a second runtime unwind.
+#[tokio::test]
+async fn actor_work_contains_panic_payload_destruction() {
+    let control = Control::new();
+    let payload_dropped = Arc::new(AtomicBool::new(false));
+
+    let work = await_actor_work(
+        async {
+            panic::panic_any(CascadingPanicPayload(Arc::clone(&payload_dropped)));
+        },
+        &control,
+    )
+    .await;
+
+    assert!(matches!(work, Work::Panicked));
+    assert!(payload_dropped.load(Ordering::SeqCst));
+    assert_eq!(control.mode(), Mode::Failing);
+}
+
+// Tokio retains an escaped task payload inside JoinError.
+// Waiting must consume that payload without another unwind.
+#[tokio::test]
+async fn owned_actor_wait_contains_join_panic_payload_destruction() {
+    let control = Control::new();
+    assert_eq!(control.finish(ExitReason::Aborted), ExitReason::Aborted);
+    let payload_dropped = Arc::new(AtomicBool::new(false));
+    let task_payload_dropped = Arc::clone(&payload_dropped);
+    let mut actor = OwnedActor {
+        control,
+        join: Some(tokio::spawn(async move {
+            panic::panic_any(CascadingPanicPayload(task_payload_dropped))
+        })),
+    };
+
+    assert_eq!(actor.wait().await, ExitReason::Aborted);
+    assert!(payload_dropped.load(Ordering::SeqCst));
 }
 
 // This recreates the original race window after actor_turn has dequeued a

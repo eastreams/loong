@@ -288,7 +288,12 @@ impl OwnedActor {
         self.join = None;
         match joined {
             Ok(reason) => reason,
-            Err(_) => self.control.wait_for_exit().await,
+            Err(error) => {
+                if let Ok(payload) = error.try_into_panic() {
+                    self.control.contain_panic(payload);
+                }
+                self.control.wait_for_exit().await
+            }
         }
     }
 }
@@ -504,7 +509,10 @@ where
             () = control.actor_notified() => {}
             result = &mut guarded => return match result {
                 Ok(value) => Work::Complete(value),
-                Err(_) => Work::Panicked,
+                Err(payload) => {
+                    control.contain_panic(payload);
+                    Work::Panicked
+                }
             },
         }
     }
@@ -583,8 +591,8 @@ async fn run_actor<A: Actor>(
 
         let turn = match turn {
             Ok(turn) => turn,
-            Err(_) => {
-                scope.control.begin_failure();
+            Err(payload) => {
+                control.contain_panic(payload);
                 return fail_actor(&mut scope, &mut inbox, &owned, &mut scheduler).await;
             }
         };
@@ -839,8 +847,8 @@ async fn drain_actor<A: Actor>(
 
         let turn = match turn {
             Ok(turn) => turn,
-            Err(_) => {
-                scope.control.begin_failure();
+            Err(payload) => {
+                control.contain_panic(payload);
                 return fail_actor(scope, inbox, owned, scheduler).await;
             }
         };
@@ -900,8 +908,8 @@ async fn finish_replies<A: Actor>(
         .catch_unwind()
         .await;
 
-        if result.is_err() {
-            scope.control.begin_failure();
+        if let Err(payload) = result {
+            control.contain_panic(payload);
             return Work::Panicked;
         }
     }
@@ -927,8 +935,8 @@ async fn finish_replies<A: Actor>(
         match result {
             Ok(true) => return Work::Complete(()),
             Ok(false) => {}
-            Err(_) => {
-                scope.control.begin_failure();
+            Err(payload) => {
+                control.contain_panic(payload);
                 return Work::Panicked;
             }
         }
