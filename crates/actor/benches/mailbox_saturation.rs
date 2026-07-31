@@ -99,7 +99,10 @@ async fn measure_saturated_try_call_full(iters: u64, capacity: usize) -> Duratio
     let measured = started.elapsed();
 
     drain(queued).await;
-    assert_eq!(owner.shutdown(Shutdown::Kill).await, ExitReason::Killed);
+    assert_eq!(
+        owner.shutdown(Shutdown::Kill).await.reason(),
+        ExitReason::Killed
+    );
     measured
 }
 
@@ -116,7 +119,10 @@ async fn measure_saturated_ready_drain(iters: u64, capacity: usize) -> Duration 
         measured += started.elapsed();
     }
 
-    assert_eq!(owner.shutdown(Shutdown::Kill).await, ExitReason::Killed);
+    assert_eq!(
+        owner.shutdown(Shutdown::Kill).await.reason(),
+        ExitReason::Killed
+    );
     measured
 }
 

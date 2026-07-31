@@ -14,8 +14,8 @@ use pin_project_lite::pin_project;
 use tokio::{sync::mpsc, task::JoinHandle};
 
 use crate::{
-    Actor, ActorRef, Child, ChildExit, ChildId, ErasedFuture, ExitReason, Shutdown, ShutdownStatus,
-    SpawnChildError,
+    Actor, ActorRef, Child, ChildExit, ChildId, ErasedFuture, ExitReason, ExitStatus, Shutdown,
+    ShutdownStatus, SpawnChildError, SubtreeStatus,
     mailbox::{ActorMailbox, Control, DynEnvelope, HookEntryPermit, Mode},
     owned::OwnedTasks,
     scheduler::ReplyScheduler,
@@ -102,8 +102,8 @@ pub fn spawn_with<A: Actor>(actor: A, options: SpawnOptions) -> ActorOwner<A> {
 /// This type is deliberately not cloneable. Dropping it requests a best-effort
 /// Kill but cannot synchronously wait from `Drop`; use [`shutdown`](
 /// Self::shutdown) or [`wait`](Self::wait) when confirmed normal-path subtree
-/// termination matters. [`ExitReason::Aborted`] explicitly carries a weaker
-/// executor-teardown guarantee.
+/// termination matters. [`ExitStatus`] separates the actor's reason from its
+/// subtree guarantee.
 #[must_use = "dropping an actor owner requests Kill"]
 pub struct ActorOwner<A: Actor> {
     actor_ref: ActorRef<A>,
@@ -126,30 +126,26 @@ impl<A: Actor> ActorOwner<A> {
         self.owned.control.request(shutdown)
     }
 
-    /// Returns the terminal reason if the actor has already exited.
-    ///
-    /// The reason carries the strong or weak subtree guarantee documented by
-    /// [`ExitReason`].
-    pub fn exit_reason(&self) -> Option<ExitReason> {
-        self.owned.control.exit_reason()
+    /// Returns the terminal status if the actor has already exited.
+    pub fn exit_status(&self) -> Option<ExitStatus> {
+        self.owned.control.exit_status()
     }
 
     /// Waits for the actor to publish its terminal event.
     ///
     /// This method does not initiate shutdown. Keeping `&mut self` allows a
-    /// caller to apply an external deadline and upgrade to Kill afterward. All
-    /// normal exit reasons confirm subtree termination; [`ExitReason::Aborted`]
-    /// only confirms that descendant Kill was initiated during task teardown.
-    pub async fn wait(&mut self) -> ExitReason {
+    /// caller to apply an external deadline and upgrade to Kill afterward.
+    /// The status's reason describes only this actor.
+    /// Its subtree status reports the runtime's termination guarantee.
+    pub async fn wait(&mut self) -> ExitStatus {
         self.owned.wait().await
     }
 
     /// Requests shutdown and waits for the terminal event described by
-    /// [`wait`](Self::wait), including its weaker Aborted guarantee.
+    /// [`wait`](Self::wait), including its subtree guarantee.
     ///
-    /// The returned reason is the actor's final outcome, which can differ from
-    /// the requested mode after a concurrent request, Kill upgrade, panic, or
-    /// executor teardown.
+    /// The local reason can differ from the requested mode.
+    /// Concurrent shutdown, panic, or executor teardown may win.
     ///
     /// This future owns the actor owner. Cancelling it before terminal
     /// publication therefore drops the owner and requests best-effort Kill. If
@@ -157,7 +153,7 @@ impl<A: Actor> ActorOwner<A> {
     /// was never polled, the graceful request never committed. To retain control
     /// after cancelling a wait, call [`request_shutdown`](Self::request_shutdown)
     /// and apply the deadline to [`wait`](Self::wait) instead.
-    pub async fn shutdown(mut self, shutdown: Shutdown) -> ExitReason {
+    pub async fn shutdown(mut self, shutdown: Shutdown) -> ExitStatus {
         self.request_shutdown(shutdown);
         self.wait().await
     }
@@ -168,7 +164,7 @@ impl<A: Actor> fmt::Debug for ActorOwner<A> {
         formatter
             .debug_struct("ActorOwner")
             .field("actor_ref", &self.actor_ref)
-            .field("exit_reason", &self.exit_reason())
+            .field("exit_status", &self.exit_status())
             .finish_non_exhaustive()
     }
 }
@@ -178,7 +174,7 @@ impl<A: Actor> fmt::Debug for ActorOwner<A> {
 /// The scope owns child lifecycles on behalf of the actor. Actor state may keep
 /// a returned [`Child`] or [`ActorRef`], but those values do not own the child.
 /// Graceful shutdown waits for every retained child actor.
-/// A weak descendant result propagates to the parent's terminal reason.
+/// An unconfirmed descendant remains unconfirmed in the parent's final status.
 pub struct ActorScope<A: Actor> {
     actor_ref: ActorRef<A>,
     control: Arc<Control>,
@@ -275,11 +271,11 @@ struct ParentLink {
 
 struct OwnedActor {
     control: Arc<Control>,
-    join: Option<JoinHandle<ExitReason>>,
+    join: Option<JoinHandle<ExitStatus>>,
 }
 
 impl OwnedActor {
-    async fn wait(&mut self) -> ExitReason {
+    async fn wait(&mut self) -> ExitStatus {
         // This bypasses shared lifecycle notification.
         // Cancellation retains the JoinHandle for another wait.
         let joined = match &mut self.join {
@@ -301,7 +297,7 @@ impl OwnedActor {
 
 impl Drop for OwnedActor {
     fn drop(&mut self) {
-        if self.control.exit_reason().is_none() {
+        if self.control.exit_status().is_none() {
             self.control.request(Shutdown::Kill);
         }
         // Dropping a JoinHandle detaches the task. The Kill request, rather
@@ -309,11 +305,19 @@ impl Drop for OwnedActor {
     }
 }
 
-#[derive(Default)]
 struct ChildSet {
     actors: HashMap<ChildId, OwnedActor>,
-    // ChildExit removal cannot erase a lost subtree guarantee.
-    subtree_aborted: bool,
+    // Removed children cannot erase a lost subtree guarantee.
+    subtree: SubtreeStatus,
+}
+
+impl Default for ChildSet {
+    fn default() -> Self {
+        Self {
+            actors: HashMap::new(),
+            subtree: SubtreeStatus::Terminated,
+        }
+    }
 }
 
 impl ChildSet {
@@ -330,7 +334,9 @@ impl ChildSet {
         if self.actors.remove(event.child()).is_none() {
             return false;
         }
-        self.subtree_aborted |= event.reason() == ExitReason::Aborted;
+        if event.status().subtree() == SubtreeStatus::Unconfirmed {
+            self.subtree = SubtreeStatus::Unconfirmed;
+        }
         true
     }
 
@@ -341,25 +347,19 @@ impl ChildSet {
     }
 
     async fn wait_all(&mut self) {
-        // Persist each weak result before another await can be cancelled.
-        let Self {
-            actors,
-            subtree_aborted,
-        } = self;
+        // Persist each unconfirmed result before another cancellation point.
+        let Self { actors, subtree } = self;
         for actor in actors.values_mut() {
-            *subtree_aborted |= actor.wait().await == ExitReason::Aborted;
+            if actor.wait().await.subtree() == SubtreeStatus::Unconfirmed {
+                *subtree = SubtreeStatus::Unconfirmed;
+            }
         }
         actors.clear();
     }
 
-    /// Downgrades a strong reason after any descendant abort.
-    /// The published result applies the same rule at its parent.
-    fn terminal_reason(&self, strong: ExitReason) -> ExitReason {
-        if self.subtree_aborted {
-            ExitReason::Aborted
-        } else {
-            strong
-        }
+    /// Combines this actor's reason with the retained subtree guarantee.
+    fn terminal_status(&self, reason: ExitReason) -> ExitStatus {
+        ExitStatus::new(reason, self.subtree)
     }
 }
 
@@ -421,44 +421,47 @@ impl ExitGuard {
         self.control.begin_abort();
     }
 
-    fn complete(mut self, reason: ExitReason) -> ExitReason {
-        self.publish(reason)
+    fn complete(mut self, status: ExitStatus) -> ExitStatus {
+        self.publish(status)
     }
 
-    fn publish(&mut self, proposed: ExitReason) -> ExitReason {
+    fn publish(&mut self, proposed: ExitStatus) -> ExitStatus {
         if self.finished {
             return self
                 .control
-                .exit_reason()
-                .expect("a finished guard published an exit reason");
+                .exit_status()
+                .expect("a finished guard published an exit status");
         }
         self.finished = true;
-        let reason = self.control.finish(proposed);
+        let status = self.control.finish(proposed);
         if let Some(parent) = &self.parent {
             let _ = parent
                 .events
-                .send(ChildExit::new(parent.id.clone(), reason));
+                .send(ChildExit::new(parent.id.clone(), status));
         }
-        reason
+        status
     }
 }
 
 impl Drop for ExitGuard {
     fn drop(&mut self) {
         if !self.finished {
-            let reason = self.control.fallback_exit_reason();
-            let _ = self.publish(reason);
+            // An unfinished guard means ActorTask did not complete publication.
+            // Mark abort before publishing its conservative status.
+            self.prepare_abort();
+            let status = ExitStatus::new(ExitReason::Aborted, SubtreeStatus::Unconfirmed);
+            let _ = self.publish(status);
         }
     }
 }
 
 struct ActorTask {
-    future: Option<ErasedFuture<'static, ExitReason>>,
+    future: Option<ErasedFuture<'static, ExitStatus>>,
     exit: Option<ExitGuard>,
 }
 
 impl ActorTask {
-    fn new(future: ErasedFuture<'static, ExitReason>, exit: ExitGuard) -> Self {
+    fn new(future: ErasedFuture<'static, ExitStatus>, exit: ExitGuard) -> Self {
         Self {
             future: Some(future),
             exit: Some(exit),
@@ -467,7 +470,7 @@ impl ActorTask {
 }
 
 impl Future for ActorTask {
-    type Output = ExitReason;
+    type Output = ExitStatus;
 
     fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
@@ -478,7 +481,7 @@ impl Future for ActorTask {
             .as_mut()
             .poll(context);
 
-        let Poll::Ready(reason) = result else {
+        let Poll::Ready(status) = result else {
             return Poll::Pending;
         };
 
@@ -490,8 +493,8 @@ impl Future for ActorTask {
             .take()
             .expect("a ready actor task owns one final frame");
         exit.control.drop_user_value(future);
-        let reason = exit.complete(reason);
-        Poll::Ready(reason)
+        let status = exit.complete(status);
+        Poll::Ready(status)
     }
 }
 
@@ -500,7 +503,7 @@ impl Drop for ActorTask {
         let Some(exit) = self.exit.take() else {
             return;
         };
-        // Aborting weakens the reason before opaque frame destruction.
+        // Aborting records a local abort before frame destruction.
         // The guard publishes only after contained cleanup returns.
         exit.prepare_abort();
         if let Some(future) = self.future.take() {
@@ -629,7 +632,7 @@ async fn run_actor<A: Actor>(
     mut supervisor_rx: mpsc::UnboundedReceiver<ChildExit>,
     _mailbox: Arc<ActorMailbox<A>>,
     max_in_flight: NonZeroUsize,
-) -> ExitReason {
+) -> ExitStatus {
     let control = Arc::clone(&scope.control);
     let owned = OwnedTasks::new(Arc::clone(&scope.control));
     let mut scheduler = ReplyScheduler::new(max_in_flight);
@@ -674,8 +677,10 @@ async fn run_actor<A: Actor>(
             Mode::Failing => {
                 return fail_actor(&mut scope, &mut inbox, &owned, &mut scheduler).await;
             }
-            Mode::Exited(reason) => return reason,
-            Mode::Aborting => return ExitReason::Aborted,
+            Mode::Exited(status) => return status,
+            Mode::Aborting => {
+                return ExitStatus::new(ExitReason::Aborted, SubtreeStatus::Unconfirmed);
+            }
         }
 
         let turn = AssertUnwindSafe(actor_turn(
@@ -868,7 +873,7 @@ async fn stop_actor<A: Actor>(
     control: &Control,
     owned: &OwnedTasks,
     scheduler: &mut ReplyScheduler<A>,
-) -> ExitReason {
+) -> ExitStatus {
     match close_and_discard(inbox, &scope.control, Mode::Stopping).await {
         DiscardOutcome::Complete => {}
         DiscardOutcome::ModeChanged => match scope.control.mode() {
@@ -888,7 +893,7 @@ async fn stop_actor<A: Actor>(
     }
 
     match graceful_finish(actor, scope, control, Shutdown::Stop, ExitReason::Stopped).await {
-        Work::Complete => scope.children.terminal_reason(ExitReason::Stopped),
+        Work::Complete => scope.children.terminal_status(ExitReason::Stopped),
         Work::Killed => kill_actor(scope, inbox, owned, scheduler).await,
         Work::Panicked => fail_actor(scope, inbox, owned, scheduler).await,
     }
@@ -907,7 +912,7 @@ async fn drain_actor<A: Actor>(
     owned: &OwnedTasks,
     scheduler: &mut ReplyScheduler<A>,
     turn_cursor: &mut TurnCursor,
-) -> ExitReason {
+) -> ExitStatus {
     // Admission physically enqueues under the lifecycle transaction, so this
     // queue is stable once Drain commits. Capacity permits that never reached
     // admission are not accepted work and must not extend graceful shutdown.
@@ -925,8 +930,10 @@ async fn drain_actor<A: Actor>(
                 return fail_actor(scope, inbox, owned, scheduler).await;
             }
             Mode::Running | Mode::Draining | Mode::Stopping => {}
-            Mode::Exited(reason) => return reason,
-            Mode::Aborting => return ExitReason::Aborted,
+            Mode::Exited(status) => return status,
+            Mode::Aborting => {
+                return ExitStatus::new(ExitReason::Aborted, SubtreeStatus::Unconfirmed);
+            }
         }
 
         if !inbox_drained && inbox.is_empty() {
@@ -979,7 +986,7 @@ async fn drain_actor<A: Actor>(
     }
 
     match graceful_finish(actor, scope, control, Shutdown::Drain, ExitReason::Drained).await {
-        Work::Complete => scope.children.terminal_reason(ExitReason::Drained),
+        Work::Complete => scope.children.terminal_status(ExitReason::Drained),
         Work::Killed => kill_actor(scope, inbox, owned, scheduler).await,
         Work::Panicked => fail_actor(scope, inbox, owned, scheduler).await,
     }
@@ -1083,7 +1090,7 @@ async fn kill_actor<A: Actor>(
     inbox: &mut mpsc::Receiver<DynEnvelope<A>>,
     owned: &OwnedTasks,
     scheduler: &mut ReplyScheduler<A>,
-) -> ExitReason {
+) -> ExitStatus {
     // Commit subtree cancellation before running arbitrary Drop code from actor
     // work. Children can then begin terminating even if a destructor is slow.
     inbox.close();
@@ -1099,7 +1106,7 @@ async fn kill_actor<A: Actor>(
     }
     owned.wait().await;
     scope.children.wait_all().await;
-    scope.children.terminal_reason(ExitReason::Killed)
+    scope.children.terminal_status(ExitReason::Killed)
 }
 
 async fn fail_actor<A: Actor>(
@@ -1107,13 +1114,13 @@ async fn fail_actor<A: Actor>(
     inbox: &mut mpsc::Receiver<DynEnvelope<A>>,
     owned: &OwnedTasks,
     scheduler: &mut ReplyScheduler<A>,
-) -> ExitReason {
+) -> ExitStatus {
     let control = Arc::clone(&scope.control);
     control.begin_failure();
     let reason = match control.mode() {
         Mode::Killing => ExitReason::Killed,
         Mode::Aborting => ExitReason::Aborted,
-        Mode::Exited(reason) => reason,
+        Mode::Exited(status) => return status,
         Mode::Running | Mode::Draining | Mode::Stopping | Mode::Failing => ExitReason::Panicked,
     };
     inbox.close();
@@ -1129,7 +1136,7 @@ async fn fail_actor<A: Actor>(
     }
     owned.wait().await;
     scope.children.wait_all().await;
-    scope.children.terminal_reason(reason)
+    scope.children.terminal_status(reason)
 }
 
 const TEARDOWN_DROP_BUDGET: usize = 16;

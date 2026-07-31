@@ -3,7 +3,7 @@ use std::{fmt, future::Future, pin::Pin, sync::Weak, task};
 use tokio::sync::{mpsc, watch};
 
 use crate::{
-    Actor, CallError, ExitReason, Handler, Message, SendError, TryCallError, TryCallErrorKind,
+    Actor, CallError, ExitStatus, Handler, Message, SendError, TryCallError, TryCallErrorKind,
     TrySendError, TrySendErrorKind,
     mailbox::{ActorMailbox, CallEnvelope, Mode, ReplyReceiver, SendEnvelope, mode_changed},
 };
@@ -255,13 +255,13 @@ impl<A: Actor> ActorRef<A> {
         }
     }
 
-    /// Returns a non-waiting snapshot of the actor's terminal reason.
+    /// Returns a non-waiting snapshot of the actor's terminal status.
     ///
     /// `None` includes both a running actor and an actor still completing
     /// shutdown. Use [`closed`](Self::closed) to wait for terminal publication.
-    pub fn exit_reason(&self) -> Option<ExitReason> {
+    pub fn exit_status(&self) -> Option<ExitStatus> {
         match *self.mode.borrow() {
-            Mode::Exited(reason) => Some(reason),
+            Mode::Exited(status) => Some(status),
             _ => None,
         }
     }
@@ -271,20 +271,18 @@ impl<A: Actor> ActorRef<A> {
     /// This method observes lifecycle state and does not initiate shutdown.
     /// Dropping the returned future does not affect the actor.
     ///
-    /// Stop, Drain, Kill, and contained panic publish only after the owned
-    /// subtree terminates. [`ExitReason::Aborted`] is weaker: executor teardown
-    /// cannot await from `Drop`, so descendants have received Kill but may still
-    /// be terminating.
-    pub async fn closed(&self) -> ExitReason {
+    /// The status's reason describes only this actor.
+    /// Its subtree status reports the runtime's termination guarantee.
+    pub async fn closed(&self) -> ExitStatus {
         let mut mode = self.mode.clone();
         loop {
-            if let Mode::Exited(reason) = *mode.borrow_and_update() {
-                return reason;
+            if let Mode::Exited(status) = *mode.borrow_and_update() {
+                return status;
             }
 
             mode_changed(&mut mode)
                 .await
-                .expect("the actor task publishes an exit reason before closing");
+                .expect("the actor task publishes an exit status before closing");
         }
     }
 }
@@ -302,7 +300,7 @@ impl<A: Actor> fmt::Debug for ActorRef<A> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ActorRef")
-            .field("exit_reason", &self.exit_reason())
+            .field("exit_status", &self.exit_status())
             .finish_non_exhaustive()
     }
 }

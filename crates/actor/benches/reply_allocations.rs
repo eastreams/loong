@@ -158,7 +158,7 @@ fn main() {
     }
 
     assert_eq!(
-        runtime.block_on(owner.shutdown(Shutdown::Kill)),
+        runtime.block_on(owner.shutdown(Shutdown::Kill)).reason(),
         ExitReason::Killed
     );
 }

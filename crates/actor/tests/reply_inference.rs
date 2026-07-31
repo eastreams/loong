@@ -93,6 +93,6 @@ async fn handler_context_selects_the_actor_future_implementation() {
         watchdog(first_owner.shutdown(Shutdown::Stop)),
         watchdog(second_owner.shutdown(Shutdown::Stop)),
     );
-    assert_eq!(first_exit, ExitReason::Stopped);
-    assert_eq!(second_exit, ExitReason::Stopped);
+    assert_eq!(first_exit.reason(), ExitReason::Stopped);
+    assert_eq!(second_exit.reason(), ExitReason::Stopped);
 }

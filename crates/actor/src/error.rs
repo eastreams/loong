@@ -20,6 +20,10 @@ use crate::ExitReason;
 /// receives `Ok`. Otherwise the error identifies whether interruption happened
 /// before or during dispatch. [`ResponseLost`](Self::ResponseLost) is the
 /// fallback when no precise lifecycle phase reaches the response channel.
+///
+/// Lifecycle variants carry the interruption reason observed at cutoff.
+/// That value is not a terminal snapshot.
+/// Subtree confirmation may not exist yet.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 #[non_exhaustive]
 pub enum CallError {
@@ -34,7 +38,7 @@ pub enum CallError {
 
     /// The message was accepted, but lifecycle shutdown or failure discarded it
     /// before its handler was invoked.
-    #[error("the actor exited before dispatch: {0}")]
+    #[error("the request was discarded before dispatch: {0}")]
     BeforeDispatch(ExitReason),
 
     /// The handler began, but interruption committed before successful reply
@@ -43,7 +47,7 @@ pub enum CallError {
     /// Synchronous handler work and earlier future polls may already have caused
     /// effects. This error is therefore not proof that retrying is safe, even for
     /// a handler that selected [`ReplyExt::ready`](crate::ReplyExt::ready).
-    #[error("the actor exited during dispatch: {0}")]
+    #[error("the request was interrupted during dispatch: {0}")]
     DuringDispatch(ExitReason),
 
     /// The response channel vanished without the runtime reporting a phase.

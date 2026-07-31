@@ -49,7 +49,7 @@ async fn sync_handler_mutates_actor_and_replies_immediately() {
     assert_eq!(watchdog(actor.call(Increment)).await, Ok(1));
     assert_eq!(watchdog(actor.call(Increment)).await, Ok(2));
     assert_eq!(
-        watchdog(owner.shutdown(Shutdown::Stop)).await,
+        watchdog(owner.shutdown(Shutdown::Stop)).await.reason(),
         ExitReason::Stopped
     );
 }
@@ -82,7 +82,7 @@ async fn either_selects_between_reply_strategies_without_boxing() {
     assert_eq!(watchdog(actor.call(ChooseReply(true))).await, Ok(1));
     assert_eq!(watchdog(actor.call(ChooseReply(false))).await, Ok(2));
     assert_eq!(
-        watchdog(owner.shutdown(Shutdown::Stop)).await,
+        watchdog(owner.shutdown(Shutdown::Stop)).await.reason(),
         ExitReason::Stopped
     );
 }
@@ -227,7 +227,7 @@ async fn owned_does_not_block_mailbox_and_interleaved_reborrows_actor() {
     );
 
     assert_eq!(
-        watchdog(owner.shutdown(Shutdown::Stop)).await,
+        watchdog(owner.shutdown(Shutdown::Stop)).await.reason(),
         ExitReason::Stopped
     );
 }
@@ -396,7 +396,7 @@ async fn exclusive_blocks_actor_work_but_owned_continues() {
     let (marked_tx, marked_rx) = oneshot::channel();
     let mut later_message = Box::pin(actor.try_call(Mark(marked_tx)).unwrap());
     assert_eq!(watchdog(child.call(StopChild)).await, Ok(()));
-    assert_eq!(watchdog(child.closed()).await, ExitReason::Stopped);
+    assert_eq!(watchdog(child.closed()).await.reason(), ExitReason::Stopped);
 
     interleaved_release_tx.send(()).unwrap();
     owned_release_tx.send(()).unwrap();
@@ -414,7 +414,7 @@ async fn exclusive_blocks_actor_work_but_owned_continues() {
     watchdog(child_hooks_rx.recv()).await.unwrap();
 
     assert_eq!(
-        watchdog(owner.shutdown(Shutdown::Stop)).await,
+        watchdog(owner.shutdown(Shutdown::Stop)).await.reason(),
         ExitReason::Stopped
     );
 }
@@ -496,7 +496,7 @@ async fn owned_replies_ignore_max_in_flight_and_graceful_shutdown_waits() {
                 assert!(poll_once(stopped.as_mut()).await.is_pending());
             }
         }
-        assert_eq!(watchdog(stopped).await, expected);
+        assert_eq!(watchdog(stopped).await.reason(), expected);
     }
 }
 
@@ -612,7 +612,7 @@ async fn reply_panic_fails_sibling_in_flight_work() {
         watchdog(sibling).await,
         Err(CallError::DuringDispatch(ExitReason::Panicked))
     );
-    assert_eq!(watchdog(owner.wait()).await, ExitReason::Panicked);
+    assert_eq!(watchdog(owner.wait()).await.reason(), ExitReason::Panicked);
 }
 
 // Reply completion consumes its lifecycle gate first.
@@ -623,7 +623,7 @@ async fn owned_task_panic_after_reply_completion_still_fails_the_actor() {
     let actor = owner.actor_ref();
 
     assert_eq!(watchdog(actor.call(PanicAfterReady)).await, Ok(()));
-    assert_eq!(watchdog(owner.wait()).await, ExitReason::Panicked);
+    assert_eq!(watchdog(owner.wait()).await.reason(), ExitReason::Panicked);
 }
 
 struct SelfCaller;
@@ -743,7 +743,7 @@ async fn nonexclusive_self_calls_progress_but_exclusive_self_call_waits() {
         watchdog(observed).await,
         Err(CallError::BeforeDispatch(ExitReason::Killed))
     );
-    assert_eq!(watchdog(owner.wait()).await, ExitReason::Killed);
+    assert_eq!(watchdog(owner.wait()).await.reason(), ExitReason::Killed);
 }
 
 #[tokio::test]
@@ -758,7 +758,7 @@ async fn owned_self_call_progresses_with_one_interleaved_slot() {
 
     assert_eq!(watchdog(actor.call(OwnedSelfCall(1))).await, Ok(1));
     assert_eq!(
-        watchdog(owner.shutdown(Shutdown::Stop)).await,
+        watchdog(owner.shutdown(Shutdown::Stop)).await.reason(),
         ExitReason::Stopped
     );
 }
@@ -843,7 +843,7 @@ async fn owned_reply_runs_in_a_distinct_tokio_task() {
     let actor = owner.actor_ref();
     assert_eq!(watchdog(actor.call(OwnedTaskIdentity)).await, Ok(true));
     assert_eq!(
-        watchdog(owner.shutdown(Shutdown::Stop)).await,
+        watchdog(owner.shutdown(Shutdown::Stop)).await.reason(),
         ExitReason::Stopped
     );
 }
@@ -887,7 +887,7 @@ async fn ready_mailbox_input_does_not_starve_woken_interleaved_reply() {
     }
     assert_eq!(handled.load(Ordering::SeqCst), 32);
     assert_eq!(
-        watchdog(owner.shutdown(Shutdown::Stop)).await,
+        watchdog(owner.shutdown(Shutdown::Stop)).await.reason(),
         ExitReason::Stopped
     );
 }
@@ -1002,7 +1002,7 @@ async fn queued_child_exit_progresses_before_ready_mailbox_is_exhausted() {
     assert_eq!(watchdog(child.call(StopChild)).await, Ok(()));
     // On the current-thread runtime the child publishes its supervisor event
     // before this task resumes; exclusive keeps the parent from consuming it.
-    assert_eq!(watchdog(child.closed()).await, ExitReason::Stopped);
+    assert_eq!(watchdog(child.closed()).await.reason(), ExitReason::Stopped);
     let mut hook_completed = Box::pin(hook_completed_rx);
     assert!(poll_once(hook_completed.as_mut()).await.is_pending());
 
@@ -1021,7 +1021,7 @@ async fn queued_child_exit_progresses_before_ready_mailbox_is_exhausted() {
     }
     assert_eq!(handled.load(Ordering::SeqCst), 32);
     assert_eq!(
-        watchdog(owner.shutdown(Shutdown::Stop)).await,
+        watchdog(owner.shutdown(Shutdown::Stop)).await.reason(),
         ExitReason::Stopped
     );
 }

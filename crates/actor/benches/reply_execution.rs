@@ -360,7 +360,10 @@ async fn measure_complete_all(iters: u64, active: usize, execution: ReplyExecuti
         measured += started.elapsed();
     }
 
-    assert_eq!(owner.shutdown(Shutdown::Kill).await, ExitReason::Killed);
+    assert_eq!(
+        owner.shutdown(Shutdown::Kill).await.reason(),
+        ExitReason::Killed
+    );
     measured
 }
 
@@ -391,7 +394,10 @@ async fn measure_single_wake_to_target_poll(
         index = (index + 1) % active;
     }
 
-    assert_eq!(owner.shutdown(Shutdown::Kill).await, ExitReason::Killed);
+    assert_eq!(
+        owner.shutdown(Shutdown::Kill).await.reason(),
+        ExitReason::Killed
+    );
     drop(commands);
     drop(responses);
     measured
@@ -470,7 +476,10 @@ async fn measure_mailbox_turn_to_target_poll_under_backlog(
         }
     }
 
-    assert_eq!(owner.shutdown(Shutdown::Kill).await, ExitReason::Killed);
+    assert_eq!(
+        owner.shutdown(Shutdown::Kill).await.reason(),
+        ExitReason::Killed
+    );
     drop(commands);
     drop(probe_responses);
     measured

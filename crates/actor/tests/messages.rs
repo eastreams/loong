@@ -62,7 +62,7 @@ async fn one_actor_handles_multiple_typed_message_replies() {
     assert_eq!(watchdog(actor.call(Add(4))).await.unwrap(), 7);
     assert_eq!(watchdog(actor.call(Describe)).await.unwrap(), "count=7");
     assert_eq!(
-        watchdog(owner.shutdown(Shutdown::Drain)).await,
+        watchdog(owner.shutdown(Shutdown::Drain)).await.reason(),
         ExitReason::Drained
     );
 }
@@ -96,7 +96,7 @@ async fn a_stream_handle_is_an_ordinary_typed_reply() {
     assert_eq!(watchdog(events.recv()).await, Some(2));
     assert_eq!(watchdog(events.recv()).await, None);
     assert_eq!(
-        watchdog(owner.shutdown(Shutdown::Drain)).await,
+        watchdog(owner.shutdown(Shutdown::Drain)).await.reason(),
         ExitReason::Drained
     );
 }
@@ -212,7 +212,7 @@ async fn try_call_returns_the_original_message_when_mailbox_is_full() {
     assert_eq!(watchdog(current).await.unwrap(), Ok(()));
     assert_eq!(watchdog(queued).await, Ok(1));
     assert_eq!(
-        watchdog(owner.shutdown(Shutdown::Drain)).await,
+        watchdog(owner.shutdown(Shutdown::Drain)).await.reason(),
         ExitReason::Drained
     );
 }
@@ -246,7 +246,7 @@ async fn abandoning_a_queued_response_skips_its_handler() {
         Vec::<u8>::new()
     );
     assert_eq!(
-        watchdog(owner.shutdown(Shutdown::Drain)).await,
+        watchdog(owner.shutdown(Shutdown::Drain)).await.reason(),
         ExitReason::Drained
     );
 }
@@ -291,7 +291,7 @@ async fn admitted_one_way_message_cannot_be_abandoned_by_its_sender() {
     assert_eq!(watchdog(current).await.unwrap(), Ok(()));
     watchdog(waiting).await.unwrap();
     assert_eq!(
-        watchdog(owner.shutdown(Shutdown::Drain)).await,
+        watchdog(owner.shutdown(Shutdown::Drain)).await.reason(),
         ExitReason::Drained
     );
     assert_eq!(*lock(&committed), vec![7, 8]);
@@ -336,7 +336,7 @@ async fn cancelling_a_waiting_send_discards_the_uncommitted_message() {
     assert_eq!(watchdog(current).await.unwrap(), Ok(()));
     assert_eq!(watchdog(actor.call(Snapshot)).await.unwrap(), vec![1]);
     assert_eq!(
-        watchdog(owner.shutdown(Shutdown::Drain)).await,
+        watchdog(owner.shutdown(Shutdown::Drain)).await.reason(),
         ExitReason::Drained
     );
 }
@@ -377,7 +377,7 @@ async fn try_send_recovers_messages_rejected_as_full_or_closed() {
 
     release_tx.send(()).unwrap();
     assert_eq!(watchdog(current).await.unwrap(), Ok(()));
-    assert_eq!(watchdog(actor.closed()).await, ExitReason::Stopped);
+    assert_eq!(watchdog(actor.closed()).await.reason(), ExitReason::Stopped);
 }
 
 // A blocked send owns its message until admission commits, so shutdown must
@@ -416,7 +416,7 @@ async fn send_recovers_a_message_when_shutdown_wins_admission() {
 
     release_tx.send(()).unwrap();
     assert_eq!(watchdog(current).await.unwrap(), Ok(()));
-    assert_eq!(watchdog(actor.closed()).await, ExitReason::Stopped);
+    assert_eq!(watchdog(actor.closed()).await.reason(), ExitReason::Stopped);
 }
 
 struct CommitAfterRelease {
@@ -474,7 +474,7 @@ async fn abandoning_an_in_flight_call_does_not_cancel_handler_effects() {
 
     assert_eq!(watchdog(actor.call(Snapshot)).await.unwrap(), vec![9]);
     assert_eq!(
-        watchdog(owner.shutdown(Shutdown::Drain)).await,
+        watchdog(owner.shutdown(Shutdown::Drain)).await.reason(),
         ExitReason::Drained
     );
 }
@@ -520,5 +520,5 @@ async fn a_capacity_waiter_wakes_when_stop_closes_admission() {
         watchdog(queued).await,
         Err(CallError::BeforeDispatch(ExitReason::Stopped))
     );
-    assert_eq!(watchdog(actor.closed()).await, ExitReason::Stopped);
+    assert_eq!(watchdog(actor.closed()).await.reason(), ExitReason::Stopped);
 }

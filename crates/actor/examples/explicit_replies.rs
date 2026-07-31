@@ -40,6 +40,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     assert_eq!(store.call(Lookup("cached".to_owned())).await?, 21);
     assert_eq!(store.call(Lookup("uncached".to_owned())).await?, 8);
-    assert_eq!(owner.shutdown(Shutdown::Drain).await, ExitReason::Drained);
+    assert_eq!(
+        owner.shutdown(Shutdown::Drain).await.reason(),
+        ExitReason::Drained
+    );
     Ok(())
 }

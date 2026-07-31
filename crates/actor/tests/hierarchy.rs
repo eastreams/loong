@@ -8,7 +8,7 @@ use std::{
 
 use loong_actor::{
     Actor, ActorRef, ActorScope, CallError, ExitReason, Handler, IntoActorFuture, Message,
-    ReplyExt, Shutdown, ShutdownStatus, spawn,
+    ReplyExt, Shutdown, ShutdownStatus, SubtreeStatus, spawn,
 };
 use tokio::sync::oneshot;
 
@@ -66,11 +66,11 @@ async fn parent_stop_cleans_up_children_before_the_parent() {
         loong_actor::TryCallErrorKind::Closed
     ));
     assert_eq!(
-        watchdog(owner.shutdown(Shutdown::Stop)).await,
+        watchdog(owner.shutdown(Shutdown::Stop)).await.reason(),
         ExitReason::Stopped
     );
 
-    assert_eq!(child.exit_reason(), Some(ExitReason::Stopped));
+    assert_eq!(child.exit_status().unwrap().reason(), ExitReason::Stopped);
     assert_eq!(*lock(&log), vec!["child-stop", "parent-stop"]);
 }
 
@@ -222,8 +222,8 @@ async fn parent_drain_finishes_parent_queue_before_draining_children() {
 
     assert_eq!(watchdog(current).await.unwrap(), Ok(()));
     assert_eq!(watchdog(forwarded).await, Ok(Ok(7)));
-    assert_eq!(watchdog(owner.wait()).await, ExitReason::Drained);
-    assert_eq!(worker.exit_reason(), Some(ExitReason::Drained));
+    assert_eq!(watchdog(owner.wait()).await.reason(), ExitReason::Drained);
+    assert_eq!(worker.exit_status().unwrap().reason(), ExitReason::Drained);
     assert_eq!(*lock(&log), vec!["work-7", "worker-stop", "parent-stop"]);
 }
 
@@ -358,10 +358,16 @@ async fn parent_panic_kills_descendants_before_parent_exit() {
     assert!(first_poll.is_pending());
 
     leaf_drop_release_tx.send(()).unwrap();
-    assert_eq!(watchdog(parent_exit).await, ExitReason::Panicked);
+    let parent_status = watchdog(parent_exit).await;
+    assert_eq!(parent_status.reason(), ExitReason::Panicked);
+    assert_eq!(parent_status.subtree(), SubtreeStatus::Terminated);
 
-    assert_eq!(branch.exit_reason(), Some(ExitReason::Killed));
-    assert_eq!(leaf.exit_reason(), Some(ExitReason::Killed));
+    let branch_status = branch.exit_status().unwrap();
+    assert_eq!(branch_status.reason(), ExitReason::Killed);
+    assert_eq!(branch_status.subtree(), SubtreeStatus::Terminated);
+    let leaf_status = leaf.exit_status().unwrap();
+    assert_eq!(leaf_status.reason(), ExitReason::Killed);
+    assert_eq!(leaf_status.subtree(), SubtreeStatus::Terminated);
     watchdog(branch_dropped_rx).await.unwrap();
     watchdog(leaf_dropped_rx).await.unwrap();
 }
@@ -417,7 +423,7 @@ async fn cleanup_cannot_spawn_a_child_after_post_order_shutdown() {
     });
 
     assert_eq!(
-        watchdog(owner.shutdown(Shutdown::Stop)).await,
+        watchdog(owner.shutdown(Shutdown::Stop)).await.reason(),
         ExitReason::Stopped
     );
     assert!(watchdog(result_rx).await.unwrap());

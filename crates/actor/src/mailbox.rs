@@ -10,8 +10,8 @@ use tokio::sync::{Notify, mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    Actor, ActorScope, CallError, ExitReason, Handler, Message, Shutdown, ShutdownStatus,
-    owned::OwnedTasks, reply::sealed::HandleReply, scheduler::ReplyScheduler,
+    Actor, ActorScope, CallError, ExitReason, ExitStatus, Handler, Message, Shutdown,
+    ShutdownStatus, owned::OwnedTasks, reply::sealed::HandleReply, scheduler::ReplyScheduler,
 };
 
 pub(crate) type ReplyReceiver<R> = oneshot::Receiver<Result<R, CallError>>;
@@ -87,8 +87,8 @@ pub(crate) enum Mode {
     Failing,
     /// The executor dropped the actor task without awaitable teardown.
     Aborting,
-    /// Terminal state and its atomically published reason.
-    Exited(ExitReason),
+    /// Terminal state and its atomically published status.
+    Exited(ExitStatus),
 }
 
 /// Owns the actor's authoritative lifecycle state.
@@ -125,9 +125,9 @@ impl Control {
         self.mode() == Mode::Running
     }
 
-    pub(crate) fn exit_reason(&self) -> Option<ExitReason> {
+    pub(crate) fn exit_status(&self) -> Option<ExitStatus> {
         match self.mode() {
-            Mode::Exited(reason) => Some(reason),
+            Mode::Exited(status) => Some(status),
             _ => None,
         }
     }
@@ -183,10 +183,10 @@ impl Control {
     /// Commits the first shutdown mode and permits only a later Kill upgrade.
     ///
     /// Repeated and losing requests observe the already committed behavior;
-    /// final actors return their published reason.
+    /// final actors return their published status.
     pub(crate) fn request(&self, shutdown: Shutdown) -> ShutdownStatus {
         self.transact(|mode| match (mode, shutdown) {
-            (Mode::Exited(reason), _) => (mode, ShutdownStatus::Exited(reason)),
+            (Mode::Exited(status), _) => (mode, ShutdownStatus::Exited(status)),
             (Mode::Running, Shutdown::Stop) => (Mode::Stopping, ShutdownStatus::Requested),
             (Mode::Running, Shutdown::Drain) => (Mode::Draining, ShutdownStatus::Requested),
             (Mode::Running, Shutdown::Kill) | (Mode::Draining | Mode::Stopping, Shutdown::Kill) => {
@@ -213,9 +213,9 @@ impl Control {
     }
 
     pub(crate) fn begin_abort(&self) {
-        // ActorTask::drop cannot await descendant teardown. Even an earlier Kill
-        // is therefore downgraded to the explicitly weaker Aborted guarantee
-        // unless normal task completion already published the terminal state.
+        // ActorTask::drop cannot await descendant teardown.
+        // It changes only this actor's reason to Aborted.
+        // The final subtree status is always Unconfirmed.
         self.transact(|mode| {
             let next = if matches!(mode, Mode::Exited(_)) {
                 mode
@@ -226,43 +226,36 @@ impl Control {
         });
     }
 
-    /// Publishes exactly one terminal mode and returns the reason that won.
+    /// Publishes exactly one terminal mode and returns the status that won.
     ///
-    /// Aborted always downgrades an unpublished subtree guarantee.
-    /// Otherwise, a committed Kill or failure keeps precedence.
-    pub(crate) fn finish(&self, proposed: ExitReason) -> ExitReason {
+    /// Kill or failure may replace only the proposed local reason.
+    /// Both preserve the proposed subtree status.
+    /// Abort instead forces [`SubtreeStatus::Unconfirmed`](crate::SubtreeStatus::Unconfirmed).
+    pub(crate) fn finish(&self, proposed: ExitStatus) -> ExitStatus {
         self.transact(|mode| {
-            let reason = match (mode, proposed) {
-                (Mode::Exited(reason), _) => return (mode, reason),
+            let reason = match (mode, proposed.reason()) {
+                (Mode::Exited(status), _) => return (mode, status),
                 (_, ExitReason::Aborted) | (Mode::Aborting, _) => ExitReason::Aborted,
                 (Mode::Killing, _) => ExitReason::Killed,
                 (Mode::Failing, _) => ExitReason::Panicked,
                 (Mode::Running | Mode::Draining | Mode::Stopping, reason) => reason,
             };
-            (Mode::Exited(reason), reason)
+            let status = ExitStatus::new(reason, proposed.subtree());
+            (Mode::Exited(status), status)
         })
     }
 
-    pub(crate) fn fallback_exit_reason(&self) -> ExitReason {
-        match self.mode() {
-            Mode::Killing => ExitReason::Killed,
-            Mode::Failing => ExitReason::Panicked,
-            Mode::Exited(reason) => reason,
-            Mode::Running | Mode::Draining | Mode::Stopping | Mode::Aborting => ExitReason::Aborted,
-        }
-    }
-
-    /// Waits on the lifecycle state stream until its terminal reason appears.
-    pub(crate) async fn wait_for_exit(&self) -> ExitReason {
+    /// Waits until the lifecycle stream publishes its terminal status.
+    pub(crate) async fn wait_for_exit(&self) -> ExitStatus {
         let mut mode = self.subscribe_mode();
         loop {
-            if let Mode::Exited(reason) = *mode.borrow_and_update() {
-                return reason;
+            if let Mode::Exited(status) = *mode.borrow_and_update() {
+                return status;
             }
 
             mode_changed(&mut mode)
                 .await
-                .expect("the exit publisher lives until it publishes a reason");
+                .expect("the exit publisher lives until it publishes a status");
         }
     }
 
@@ -276,7 +269,7 @@ impl Control {
             Mode::Killing => ExitReason::Killed,
             Mode::Failing => ExitReason::Panicked,
             Mode::Aborting => ExitReason::Aborted,
-            Mode::Exited(reason) => reason,
+            Mode::Exited(status) => status.reason(),
             Mode::Running | Mode::Draining | Mode::Stopping => ExitReason::Panicked,
         };
 
@@ -710,7 +703,7 @@ mod tests {
         time::Duration,
     };
 
-    use crate::ReplyExt;
+    use crate::{ReplyExt, SubtreeStatus};
 
     use super::*;
 
@@ -1238,41 +1231,62 @@ mod tests {
         assert!(reentered.load(Ordering::SeqCst));
     }
 
-    // Kill and panic normally win publication races.
-    // They cannot upgrade a weak subtree result into a strong terminal reason.
+    // Kill and panic decide only this actor's local reason.
+    // Neither may erase an Unconfirmed descendant guarantee.
     #[test]
-    fn aborted_result_downgrades_unpublished_hard_modes() {
+    fn hard_mode_precedence_preserves_unconfirmed_subtree() {
+        let proposed = ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Unconfirmed);
+
         let killing = Control::new();
         assert_eq!(killing.request(Shutdown::Kill), ShutdownStatus::Requested);
-        assert_eq!(killing.finish(ExitReason::Aborted), ExitReason::Aborted);
+        assert_eq!(
+            killing.finish(proposed),
+            ExitStatus::new(ExitReason::Killed, SubtreeStatus::Unconfirmed)
+        );
 
         let failing = Control::new();
         failing.begin_failure();
-        assert_eq!(failing.finish(ExitReason::Aborted), ExitReason::Aborted);
+        assert_eq!(
+            failing.finish(proposed),
+            ExitStatus::new(ExitReason::Panicked, SubtreeStatus::Unconfirmed)
+        );
 
         let exited = Control::new();
-        assert_eq!(exited.finish(ExitReason::Killed), ExitReason::Killed);
-        assert_eq!(exited.finish(ExitReason::Aborted), ExitReason::Killed);
+        let terminal = ExitStatus::new(ExitReason::Killed, SubtreeStatus::Terminated);
+        assert_eq!(exited.finish(terminal), terminal);
+        assert_eq!(
+            exited.finish(ExitStatus::new(
+                ExitReason::Aborted,
+                SubtreeStatus::Unconfirmed,
+            )),
+            terminal
+        );
     }
 
+    // Abort replaces an unfinished Kill or panic publication.
+    // It also removes any claimed descendant confirmation.
     #[test]
-    fn unfinished_task_teardown_uses_the_weaker_aborted_guarantee() {
+    fn abort_publication_replaces_unfinished_hard_modes() {
+        let aborted = ExitStatus::new(ExitReason::Aborted, SubtreeStatus::Unconfirmed);
+        let proposed = ExitStatus::new(ExitReason::Killed, SubtreeStatus::Terminated);
+
         let killing = Control::new();
         assert_eq!(killing.request(Shutdown::Kill), ShutdownStatus::Requested);
         killing.begin_abort();
         assert_eq!(killing.mode(), Mode::Aborting);
-        assert_eq!(killing.fallback_exit_reason(), ExitReason::Aborted);
+        assert_eq!(killing.finish(proposed), aborted);
 
         let failing = Control::new();
         failing.begin_failure();
         failing.begin_abort();
         assert_eq!(failing.mode(), Mode::Aborting);
-        assert_eq!(failing.fallback_exit_reason(), ExitReason::Aborted);
+        assert_eq!(failing.finish(proposed), aborted);
 
         let exited = Control::new();
-        assert_eq!(exited.finish(ExitReason::Stopped), ExitReason::Stopped);
+        let terminal = ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Terminated);
+        assert_eq!(exited.finish(terminal), terminal);
         exited.begin_abort();
-        assert_eq!(exited.mode(), Mode::Exited(ExitReason::Stopped));
-        assert_eq!(exited.exit_reason(), Some(ExitReason::Stopped));
+        assert_eq!(exited.mode(), Mode::Exited(terminal));
+        assert_eq!(exited.exit_status(), Some(terminal));
     }
 }

@@ -86,6 +86,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(addition.await?, 15);
     assert_eq!(read.await?, 15);
 
-    assert_eq!(owner.shutdown(Shutdown::Drain).await, ExitReason::Drained);
+    assert_eq!(
+        owner.shutdown(Shutdown::Drain).await.reason(),
+        ExitReason::Drained
+    );
     Ok(())
 }

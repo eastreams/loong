@@ -50,7 +50,7 @@
 //! Successful `try_call` returns a [`Response`] future.
 //!
 //! ```
-//! use loong_actor::{ExitReason, Shutdown, prelude::*, spawn};
+//! use loong_actor::{ExitReason, Shutdown, SubtreeStatus, prelude::*, spawn};
 //!
 //! struct Counter(u64);
 //!
@@ -79,10 +79,9 @@
 //!     let counter = owner.actor_ref();
 //!
 //!     assert_eq!(counter.call(Add(2)).await, Ok(2));
-//!     assert_eq!(
-//!         owner.shutdown(Shutdown::Drain).await,
-//!         ExitReason::Drained
-//!     );
+//!     let status = owner.shutdown(Shutdown::Drain).await;
+//!     assert_eq!(status.reason(), ExitReason::Drained);
+//!     assert_eq!(status.subtree(), SubtreeStatus::Terminated);
 //! }
 //! ```
 //!
@@ -113,7 +112,8 @@
 //! A [`Child`] is a non-owning child actor handle.
 //! Cloned [`ActorRef`] values never keep actors alive.
 //! Parent shutdown requests shutdown from every owned child actor.
-//! Strong [`ExitReason`] values appear after descendants exit.
+//! [`ExitReason`] describes only one actor.
+//! [`ExitStatus`] also reports the runtime's subtree guarantee.
 //!
 //! Every shutdown mode closes new message admission.
 //! [`Shutdown::Stop`] lets dispatched replies finish.
@@ -129,7 +129,7 @@
 //!
 //! Dropping [`ActorOwner`] requests Kill without waiting.
 //! Dropping an [`ActorRef`] only drops that address.
-//! [`ExitReason`] describes why an actor ended.
+//! [`ExitStatus`] separates local reason and subtree confirmation.
 //! [`ActorOwner::wait`] retains ownership while waiting.
 //! [`ActorRef::closed`] only observes actor termination.
 //! Either wait may remain pending indefinitely.
@@ -175,7 +175,9 @@ pub use future::{ActorFuture, ActorFutureExt, FutureActor, IntoActorFuture, Map,
 pub use loong_actor_macros::Message;
 pub use reply::{IntoReply, ReplyExt};
 pub use runtime::{ActorOwner, ActorScope, SpawnOptions, spawn, spawn_with};
-pub use supervision::{Child, ChildExit, ChildId, ExitReason, Shutdown, ShutdownStatus};
+pub use supervision::{
+    Child, ChildExit, ChildId, ExitReason, ExitStatus, Shutdown, ShutdownStatus, SubtreeStatus,
+};
 
 /// Common traits and types for defining actors and handlers.
 ///

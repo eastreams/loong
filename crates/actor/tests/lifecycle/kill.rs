@@ -103,7 +103,7 @@ async fn kill_before_ready_completion_reports_the_dispatching_phase() {
         watchdog(actor.call(KillBeforeReady)).await,
         Err(CallError::DuringDispatch(ExitReason::Killed))
     );
-    assert_eq!(watchdog(owner.wait()).await, ExitReason::Killed);
+    assert_eq!(watchdog(owner.wait()).await.reason(), ExitReason::Killed);
 }
 
 #[tokio::test]
@@ -141,7 +141,7 @@ async fn kill_drops_current_and_queued_work_without_cleanup() {
         watchdog(queued).await,
         Err(CallError::BeforeDispatch(ExitReason::Killed))
     );
-    assert_eq!(watchdog(owner.wait()).await, ExitReason::Killed);
+    assert_eq!(watchdog(owner.wait()).await.reason(), ExitReason::Killed);
     assert!(lock(&handled).is_empty());
     assert!(lock(&cleanup).is_empty());
 }
@@ -177,7 +177,7 @@ async fn kill_joins_owned_reply_cancellation_before_publishing_exit() {
     drop_release_tx.send(()).unwrap();
 
     assert!(early.is_err());
-    assert_eq!(watchdog(wait).await, ExitReason::Killed);
+    assert_eq!(watchdog(wait).await.reason(), ExitReason::Killed);
     assert_eq!(
         watchdog(response).await,
         Err(CallError::DuringDispatch(ExitReason::Killed))
@@ -222,6 +222,6 @@ async fn graceful_mode_is_first_wins_and_kill_can_upgrade_it() {
         watchdog(current).await,
         Err(CallError::DuringDispatch(ExitReason::Killed))
     );
-    assert_eq!(watchdog(owner.wait()).await, ExitReason::Killed);
+    assert_eq!(watchdog(owner.wait()).await.reason(), ExitReason::Killed);
     assert!(lock(&cleanup).is_empty());
 }

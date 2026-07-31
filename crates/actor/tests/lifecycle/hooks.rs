@@ -69,8 +69,8 @@ async fn stop_and_drain_wait_for_an_entered_lifecycle_hook() {
         // Observe the lifecycle-driven repoll before releasing the hook, so the
         // test cannot pass merely because shutdown and release become ready together.
         watchdog(repolled_rx).await.unwrap();
-        assert_eq!(owner.exit_reason(), None);
-        assert_eq!(actor.exit_reason(), None);
+        assert_eq!(owner.exit_status(), None);
+        assert_eq!(actor.exit_status(), None);
         assert_eq!(
             owner.request_shutdown(shutdown),
             ShutdownStatus::InProgress(shutdown)
@@ -78,8 +78,8 @@ async fn stop_and_drain_wait_for_an_entered_lifecycle_hook() {
 
         release_tx.send(()).unwrap();
         watchdog(completed_rx).await.unwrap();
-        assert_eq!(watchdog(owner.wait()).await, expected_reason);
-        assert_eq!(actor.exit_reason(), Some(expected_reason));
+        assert_eq!(watchdog(owner.wait()).await.reason(), expected_reason);
+        assert_eq!(actor.exit_status().unwrap().reason(), expected_reason);
     }
 }
 
@@ -108,8 +108,8 @@ async fn kill_cancels_a_pending_lifecycle_hook() {
     // DropSignal proves the pending hook was cancelled instead of completing normally.
     watchdog(dropped_rx).await.unwrap();
     assert!(watchdog(completed_rx).await.is_err());
-    assert_eq!(watchdog(owner.wait()).await, ExitReason::Killed);
-    assert_eq!(actor.exit_reason(), Some(ExitReason::Killed));
+    assert_eq!(watchdog(owner.wait()).await.reason(), ExitReason::Killed);
+    assert_eq!(actor.exit_status().unwrap().reason(), ExitReason::Killed);
 }
 
 struct PanicOnStart;
@@ -125,6 +125,6 @@ async fn lifecycle_hook_panics_are_contained_and_reported() {
     let mut owner = spawn(PanicOnStart);
     let actor = owner.actor_ref();
 
-    assert_eq!(watchdog(owner.wait()).await, ExitReason::Panicked);
-    assert_eq!(actor.exit_reason(), Some(ExitReason::Panicked));
+    assert_eq!(watchdog(owner.wait()).await.reason(), ExitReason::Panicked);
+    assert_eq!(actor.exit_status().unwrap().reason(), ExitReason::Panicked);
 }

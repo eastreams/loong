@@ -22,8 +22,9 @@ use crate::{
 /// A hook panic is contained by the runtime.
 /// It normally produces [`ExitReason::Panicked`].
 /// A committed Kill instead produces [`ExitReason::Killed`].
-/// An inherited [`ExitReason::Aborted`] remains weak.
 /// Remaining children receive Kill before parent publication.
+/// Their confirmation appears in
+/// [`ExitStatus::subtree`](crate::ExitStatus::subtree).
 pub trait Actor: Send + Sized + 'static {
     /// Runs once before the actor performs its first handler dispatch.
     ///
@@ -45,8 +46,8 @@ pub trait Actor: Send + Sized + 'static {
     /// Observes the terminal event of a direct child while the parent is active.
     ///
     /// The child has already terminated when this hook begins. A direct child
-    /// contributes at most one event, and its exit reason does not by itself stop
-    /// the parent. [`ExitReason::Aborted`] still weakens the eventual reason.
+    /// contributes at most one event. Its local reason does not stop the parent.
+    /// An unconfirmed subtree remains sticky for the parent.
     /// Hook entry is linearized with Stop and Drain: an entry that
     /// commits first is allowed to finish before graceful shutdown proceeds,
     /// while an event whose hook loses that cutoff is absorbed without calling
@@ -75,14 +76,16 @@ pub trait Actor: Send + Sized + 'static {
     /// [`ExitReason::Stopped`] or [`ExitReason::Drained`], and attempts to spawn
     /// another child are rejected.
     ///
-    /// A prior aborted child does not skip this hook.
-    /// The published parent reason becomes [`ExitReason::Aborted`].
+    /// An unconfirmed child subtree does not skip this hook.
+    /// The parent keeps its local graceful reason.
+    /// Its final subtree becomes
+    /// [`SubtreeStatus::Unconfirmed`](crate::SubtreeStatus::Unconfirmed).
     ///
     /// Stop and Drain wait for this future. Kill may drop it between polls.
-    /// A strong result then becomes [`ExitReason::Killed`]. A panic changes a
-    /// strong result to [`ExitReason::Panicked`] unless Kill already committed.
-    /// An inherited [`ExitReason::Aborted`] remains weak. This hook is never
-    /// entered for a prior Kill, panic, or executor cancellation.
+    /// Kill then sets the local reason to [`ExitReason::Killed`].
+    /// A panic sets it to [`ExitReason::Panicked`].
+    /// An earlier Kill keeps precedence.
+    /// This hook never runs after Kill, panic, or executor cancellation.
     fn on_stop<'a>(
         &'a mut self,
         _reason: ExitReason,

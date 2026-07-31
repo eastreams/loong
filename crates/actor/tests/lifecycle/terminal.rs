@@ -11,7 +11,7 @@ use std::{
 
 use loong_actor::{
     Actor, ActorOwner, ActorScope, CallError, ExitReason, Handler, Message, ReplyExt, Shutdown,
-    ShutdownStatus, spawn,
+    ShutdownStatus, SubtreeStatus, spawn,
 };
 use tokio::sync::oneshot;
 
@@ -22,7 +22,7 @@ struct ExitedActor;
 impl Actor for ExitedActor {}
 
 #[tokio::test]
-async fn shutdown_requests_after_exit_report_the_published_reason() {
+async fn shutdown_requests_after_exit_report_the_published_status() {
     for (initial, expected_reason) in [
         (Shutdown::Stop, ExitReason::Stopped),
         (Shutdown::Drain, ExitReason::Drained),
@@ -30,12 +30,14 @@ async fn shutdown_requests_after_exit_report_the_published_reason() {
     ] {
         let mut owner = spawn(ExitedActor);
         assert_eq!(owner.request_shutdown(initial), ShutdownStatus::Requested);
-        assert_eq!(watchdog(owner.wait()).await, expected_reason);
+        let status = watchdog(owner.wait()).await;
+        assert_eq!(status.reason(), expected_reason);
+        assert_eq!(status.subtree(), SubtreeStatus::Terminated);
 
         for requested in [Shutdown::Stop, Shutdown::Drain, Shutdown::Kill] {
             assert_eq!(
                 owner.request_shutdown(requested),
-                ShutdownStatus::Exited(expected_reason)
+                ShutdownStatus::Exited(status)
             );
         }
     }
@@ -62,9 +64,12 @@ async fn actor_refs_do_not_keep_an_actor_alive() {
 
     drop(owner);
 
-    assert_eq!(watchdog(actor.closed()).await, ExitReason::Killed);
+    assert_eq!(watchdog(actor.closed()).await.reason(), ExitReason::Killed);
     watchdog(dropped_rx).await.unwrap();
-    assert_eq!(another_ref.exit_reason(), Some(ExitReason::Killed));
+    assert_eq!(
+        another_ref.exit_status().unwrap().reason(),
+        ExitReason::Killed
+    );
 }
 
 struct ReentrantShutdownWaker {
@@ -137,7 +142,7 @@ async fn lifecycle_notification_allows_reentrant_shutdown_from_a_safe_waker() {
     drop(waker);
     drop(probe);
     drop(owner);
-    assert_eq!(watchdog(actor.closed()).await, ExitReason::Killed);
+    assert_eq!(watchdog(actor.closed()).await.reason(), ExitReason::Killed);
 }
 
 struct PendingStart {
@@ -153,8 +158,10 @@ impl Actor for PendingStart {
     }
 }
 
+// Even a childless local abort loses subtree confirmation.
+// Synchronous task teardown cannot publish a positive proof.
 #[test]
-fn executor_teardown_after_kill_reports_the_weaker_aborted_reason() {
+fn executor_teardown_reports_aborted_with_an_unconfirmed_subtree() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
         .unwrap();
@@ -171,7 +178,11 @@ fn executor_teardown_after_kill_reports_the_weaker_aborted_reason() {
     drop(owner);
     drop(runtime);
 
-    assert_eq!(actor.exit_reason(), Some(ExitReason::Aborted));
+    let status = actor
+        .exit_status()
+        .expect("actor teardown publishes a status");
+    assert_eq!(status.reason(), ExitReason::Aborted);
+    assert_eq!(status.subtree(), SubtreeStatus::Unconfirmed);
 }
 
 struct PanicActor;
@@ -205,8 +216,8 @@ async fn handler_panics_are_contained_and_reported() {
         watchdog(actor.call(PanicNow)).await,
         Err(CallError::DuringDispatch(ExitReason::Panicked))
     );
-    assert_eq!(watchdog(owner.wait()).await, ExitReason::Panicked);
-    assert_eq!(actor.exit_reason(), Some(ExitReason::Panicked));
+    assert_eq!(watchdog(owner.wait()).await.reason(), ExitReason::Panicked);
+    assert_eq!(actor.exit_status().unwrap().reason(), ExitReason::Panicked);
 }
 
 struct PanicAfterBarrier {
@@ -256,7 +267,7 @@ async fn kill_committed_during_a_handler_poll_wins_over_panic() {
         watchdog(response).await,
         Err(CallError::DuringDispatch(ExitReason::Killed))
     );
-    assert_eq!(watchdog(owner.wait()).await, ExitReason::Killed);
+    assert_eq!(watchdog(owner.wait()).await.reason(), ExitReason::Killed);
 }
 
 struct KillOnStop;
@@ -275,7 +286,7 @@ async fn kill_requested_at_graceful_finalization_wins_atomically() {
     let owner = spawn(KillOnStop);
 
     assert_eq!(
-        watchdog(owner.shutdown(Shutdown::Stop)).await,
+        watchdog(owner.shutdown(Shutdown::Stop)).await.reason(),
         ExitReason::Killed
     );
 }

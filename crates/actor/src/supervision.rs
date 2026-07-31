@@ -6,9 +6,9 @@ use crate::{Actor, ActorRef};
 ///
 /// Every mode closes admission as soon as the request commits. Stop and Drain
 /// are graceful, first-wins peers; Kill may upgrade either one. Graceful
-/// shutdown proceeds post-order through the owned actor tree, while Kill skips
-/// actor cleanup but still waits for descendants before publishing a normal
-/// terminal event. An aborted descendant propagates [`ExitReason::Aborted`].
+/// shutdown proceeds post-order through the owned actor tree. Kill skips actor
+/// cleanup but still waits for descendants when possible. See [`ExitStatus`]
+/// for the final local reason and subtree guarantee.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum Shutdown {
@@ -31,7 +31,7 @@ pub enum Shutdown {
     /// to release its mutable scope borrow. Once the scope is available, Kill is
     /// submitted to children before active replies and queued messages are
     /// dropped, allowing descendants to begin termination ahead of arbitrary
-    /// user destructors. A normal terminal event requires confirmed subtree exit.
+    /// user destructors. The final status reports subtree confirmation.
     ///
     /// Kill takes effect between polls. It cannot interrupt a synchronous
     /// handler, a poll call that does not return, or user `Drop` code.
@@ -51,19 +51,16 @@ pub enum ShutdownStatus {
     ///
     /// Stop or Drain identifies the graceful mode that already won. Kill either
     /// identifies an active Kill or reports that panic/executor teardown has made
-    /// graceful shutdown impossible; inspect the eventual [`ExitReason`] for the
-    /// terminal guarantee.
+    /// graceful shutdown impossible. Inspect the eventual [`ExitStatus`].
     InProgress(Shutdown),
-    /// The actor has already published its terminal reason.
-    Exited(ExitReason),
+    /// The actor has already published its terminal status.
+    Exited(ExitStatus),
 }
 
 /// Why an actor terminated.
 ///
-/// Stopped, Drained, Killed, and Panicked are strong terminal events: the
-/// actor's owned descendants have terminated before the reason is published.
-/// Aborted is deliberately weaker because synchronous executor teardown cannot
-/// wait for descendants.
+/// This value describes only the actor itself.
+/// [`ExitStatus::subtree`] reports the runtime's descendant guarantee.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ExitReason {
@@ -75,10 +72,7 @@ pub enum ExitReason {
     Killed,
     /// Actor code panicked and the panic was contained by the runtime.
     Panicked,
-    /// The executor dropped this actor or an owned descendant.
-    ///
-    /// A dropped actor initiated Kill for its descendants.
-    /// Ancestors cannot confirm their asynchronous subtree termination.
+    /// The executor dropped this actor's task.
     Aborted,
 }
 
@@ -92,6 +86,62 @@ impl fmt::Display for ExitReason {
             Self::Aborted => "aborted",
         };
         formatter.write_str(text)
+    }
+}
+
+/// Whether the runtime confirmed every owned descendant terminated.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum SubtreeStatus {
+    /// The runtime confirmed termination before status publication.
+    Terminated,
+    /// An abort path prevented termination confirmation.
+    ///
+    /// An aborted actor requests Kill from children it still owns.
+    /// Its synchronous teardown cannot await their termination.
+    /// `Unconfirmed` means positive proof is unavailable.
+    /// It does not prove any descendant remains alive.
+    /// This status does not stop a running parent.
+    /// It remains unconfirmed through every ancestor.
+    Unconfirmed,
+}
+
+/// The final outcome of one actor and its owned subtree.
+///
+/// [`reason`](Self::reason) describes only this actor.
+/// [`subtree`](Self::subtree) reports the runtime's guarantee.
+/// Descendant status never replaces the parent's local reason.
+/// A parent may stop normally after a descendant aborts.
+/// That produces `Stopped` with [`SubtreeStatus::Unconfirmed`].
+/// `Panicked` may retain `Terminated` after asynchronous cleanup.
+/// Local `Aborted` happens during synchronous task destruction.
+/// It therefore always forces `Unconfirmed`.
+///
+/// The runtime publishes this value once.
+/// Later lifecycle requests cannot change it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExitStatus {
+    reason: ExitReason,
+    subtree: SubtreeStatus,
+}
+
+impl ExitStatus {
+    pub(crate) const fn new(reason: ExitReason, subtree: SubtreeStatus) -> Self {
+        let subtree = match reason {
+            ExitReason::Aborted => SubtreeStatus::Unconfirmed,
+            _ => subtree,
+        };
+        Self { reason, subtree }
+    }
+
+    /// Returns why this actor terminated.
+    pub const fn reason(self) -> ExitReason {
+        self.reason
+    }
+
+    /// Returns the runtime's subtree termination guarantee.
+    pub const fn subtree(self) -> SubtreeStatus {
+        self.subtree
     }
 }
 
@@ -142,12 +192,12 @@ impl hash::Hash for ChildId {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChildExit {
     child: ChildId,
-    reason: ExitReason,
+    status: ExitStatus,
 }
 
 impl ChildExit {
-    pub(crate) const fn new(child: ChildId, reason: ExitReason) -> Self {
-        Self { child, reason }
+    pub(crate) const fn new(child: ChildId, status: ExitStatus) -> Self {
+        Self { child, status }
     }
 
     /// Returns the child that exited.
@@ -155,9 +205,9 @@ impl ChildExit {
         &self.child
     }
 
-    /// Returns the child's terminal reason.
-    pub const fn reason(&self) -> ExitReason {
-        self.reason
+    /// Returns the child actor's terminal status.
+    pub const fn status(&self) -> ExitStatus {
+        self.status
     }
 }
 

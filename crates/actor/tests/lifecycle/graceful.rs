@@ -43,7 +43,7 @@ async fn exclusive_completion_can_commit_graceful_shutdown_without_repoll() {
     let actor = owner.actor_ref();
 
     assert_eq!(watchdog(actor.call(StopFromExclusive)).await, Ok(()));
-    assert_eq!(watchdog(owner.wait()).await, ExitReason::Stopped);
+    assert_eq!(watchdog(owner.wait()).await.reason(), ExitReason::Stopped);
     assert_eq!(*lock(&cleanup), vec![ExitReason::Stopped]);
 }
 
@@ -87,7 +87,7 @@ async fn stop_finishes_current_and_cancels_queued_messages() {
         watchdog(queued).await,
         Err(CallError::BeforeDispatch(ExitReason::Stopped))
     );
-    assert_eq!(watchdog(owner.wait()).await, ExitReason::Stopped);
+    assert_eq!(watchdog(owner.wait()).await.reason(), ExitReason::Stopped);
     assert_eq!(*lock(&handled), vec![1]);
     assert_eq!(*lock(&cleanup), vec![ExitReason::Stopped]);
 }
@@ -131,7 +131,7 @@ async fn drain_runs_the_fixed_accepted_queue_in_order() {
     assert_eq!(watchdog(current).await.unwrap(), Ok(1));
     assert_eq!(watchdog(second).await, Ok(2));
     assert_eq!(watchdog(third).await, Ok(3));
-    assert_eq!(watchdog(owner.wait()).await, ExitReason::Drained);
+    assert_eq!(watchdog(owner.wait()).await.reason(), ExitReason::Drained);
     assert_eq!(*lock(&handled), vec![1, 2, 3]);
     assert_eq!(*lock(&cleanup), vec![ExitReason::Drained]);
 }
@@ -235,5 +235,5 @@ async fn drain_respects_max_in_flight_for_the_fixed_interleaved_queue() {
     assert_eq!(watchdog(first).await, Ok(1));
     assert_eq!(watchdog(second).await, Ok(2));
     assert_eq!(watchdog(third).await, Ok(3));
-    assert_eq!(watchdog(owner.wait()).await, ExitReason::Drained);
+    assert_eq!(watchdog(owner.wait()).await.reason(), ExitReason::Drained);
 }

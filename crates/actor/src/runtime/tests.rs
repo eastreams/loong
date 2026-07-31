@@ -15,11 +15,12 @@ use std::{
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
-    Actor, ActorRef, ActorScope, ChildExit, ChildId, ExitReason, IntoActorFuture, Shutdown,
-    ShutdownStatus, SpawnOptions,
+    Actor, ActorRef, ActorScope, ChildExit, ChildId, ExitReason, ExitStatus, IntoActorFuture,
+    Message, Shutdown, ShutdownStatus, SpawnOptions, SubtreeStatus, SyncHandler,
     mailbox::{ActorMailbox, Control, DynEnvelope, Envelope, Mode},
     owned::OwnedTasks,
     scheduler::ReplyScheduler,
+    spawn,
 };
 
 use super::{
@@ -42,16 +43,16 @@ impl Drop for CascadingPanicPayload {
 }
 
 struct ActorFrameDropProbe {
-    reason: Option<ExitReason>,
+    status: Option<ExitStatus>,
     dropped: Arc<AtomicBool>,
 }
 
 impl Future for ActorFrameDropProbe {
-    type Output = ExitReason;
+    type Output = ExitStatus;
 
     fn poll(self: Pin<&mut Self>, _task: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.reason {
-            Some(reason) => Poll::Ready(reason),
+        match self.status {
+            Some(status) => Poll::Ready(status),
             None => Poll::Pending,
         }
     }
@@ -101,6 +102,43 @@ impl Actor for CountChildExit {
     async fn on_child_exit(&mut self, _event: ChildExit, _scope: &mut ActorScope<Self>) {
         self.0.fetch_add(1, Ordering::SeqCst);
     }
+}
+
+struct AbortChildParent {
+    child_exit: Option<oneshot::Sender<ExitStatus>>,
+}
+
+impl Actor for AbortChildParent {
+    async fn on_start(&mut self, scope: &mut ActorScope<Self>) {
+        let child = scope
+            .spawn_child(TestActor)
+            .expect("a running parent accepts a child");
+        scope
+            .children
+            .actors
+            .get(child.id())
+            .expect("the scope owns its returned child")
+            .join
+            .as_ref()
+            .expect("a spawned child owns its task")
+            .abort();
+    }
+
+    async fn on_child_exit(&mut self, event: ChildExit, _scope: &mut ActorScope<Self>) {
+        if let Some(child_exit) = self.child_exit.take() {
+            let _ = child_exit.send(event.status());
+        }
+    }
+}
+
+struct Ping;
+
+impl Message for Ping {
+    type Reply = ();
+}
+
+impl SyncHandler<Ping> for AbortChildParent {
+    fn handle(&mut self, _message: Ping, _scope: &mut ActorScope<Self>) {}
 }
 
 struct ControlledChildExit {
@@ -166,11 +204,13 @@ impl Future for ChildKillDropProbe {
 
 impl Drop for ChildKillDropProbe {
     fn drop(&mut self) {
+        let mode = self.child.mode();
         self.observed_kill.store(
-            matches!(
-                self.child.mode(),
-                Mode::Killing | Mode::Exited(ExitReason::Killed)
-            ),
+            mode == Mode::Killing
+                || matches!(
+                    mode,
+                    Mode::Exited(status) if status.reason() == ExitReason::Killed
+                ),
             Ordering::SeqCst,
         );
     }
@@ -335,7 +375,8 @@ fn completed_actor_work_repoll_exposes_the_runtime_bug() {
 #[tokio::test]
 async fn owned_actor_wait_contains_join_panic_payload_destruction() {
     let control = Control::new();
-    assert_eq!(control.finish(ExitReason::Aborted), ExitReason::Aborted);
+    let aborted = ExitStatus::new(ExitReason::Aborted, SubtreeStatus::Unconfirmed);
+    assert_eq!(control.finish(aborted), aborted);
     let payload_dropped = Arc::new(AtomicBool::new(false));
     let task_payload_dropped = Arc::clone(&payload_dropped);
     let mut actor = OwnedActor {
@@ -345,7 +386,7 @@ async fn owned_actor_wait_contains_join_panic_payload_destruction() {
         })),
     };
 
-    assert_eq!(actor.wait().await, ExitReason::Aborted);
+    assert_eq!(actor.wait().await, aborted);
     assert!(payload_dropped.load(Ordering::SeqCst));
 }
 
@@ -353,7 +394,7 @@ async fn owned_actor_wait_contains_join_panic_payload_destruction() {
 // Its panic loses only when a committed Kill already won.
 #[test]
 fn actor_task_contains_final_frame_drop_panic() {
-    for (shutdown, expected) in [
+    for (shutdown, expected_reason) in [
         (None, ExitReason::Panicked),
         (Some(Shutdown::Kill), ExitReason::Killed),
     ] {
@@ -364,12 +405,16 @@ fn actor_task_contains_final_frame_drop_panic() {
         let dropped = Arc::new(AtomicBool::new(false));
         let mut actor_task = Box::pin(ActorTask::new(
             Box::pin(ActorFrameDropProbe {
-                reason: Some(ExitReason::Stopped),
+                status: Some(ExitStatus::new(
+                    ExitReason::Stopped,
+                    SubtreeStatus::Terminated,
+                )),
                 dropped: Arc::clone(&dropped),
             }),
             ExitGuard::new(Arc::clone(&control), None),
         ));
         let mut task = Context::from_waker(Waker::noop());
+        let expected = ExitStatus::new(expected_reason, SubtreeStatus::Terminated);
 
         assert_eq!(actor_task.as_mut().poll(&mut task), Poll::Ready(expected));
         assert!(dropped.load(Ordering::SeqCst));
@@ -385,7 +430,7 @@ fn actor_task_contains_aborted_frame_drop_panic() {
     let dropped = Arc::new(AtomicBool::new(false));
     let actor_task = ActorTask::new(
         Box::pin(ActorFrameDropProbe {
-            reason: None,
+            status: None,
             dropped: Arc::clone(&dropped),
         }),
         ExitGuard::new(Arc::clone(&control), None),
@@ -394,23 +439,78 @@ fn actor_task_contains_aborted_frame_drop_panic() {
     drop(actor_task);
 
     assert!(dropped.load(Ordering::SeqCst));
-    assert_eq!(control.mode(), Mode::Exited(ExitReason::Aborted));
+    assert_eq!(
+        control.mode(),
+        Mode::Exited(ExitStatus::new(
+            ExitReason::Aborted,
+            SubtreeStatus::Unconfirmed,
+        ))
+    );
 }
 
-// Every strong parent reason claims its owned subtree terminated.
-// A retained weak child must downgrade every normal terminal path.
+// An unfinished guard means terminal publication never completed.
+// Its fallback must override any tentative hard mode.
+#[test]
+fn unfinished_exit_guard_overrides_tentative_hard_mode() {
+    let expected = ExitStatus::new(ExitReason::Aborted, SubtreeStatus::Unconfirmed);
+
+    let killing = Control::new();
+    assert_eq!(killing.request(Shutdown::Kill), ShutdownStatus::Requested);
+    drop(ExitGuard::new(Arc::clone(&killing), None));
+    assert_eq!(killing.exit_status(), Some(expected));
+
+    let failing = Control::new();
+    failing.begin_failure();
+    drop(ExitGuard::new(Arc::clone(&failing), None));
+    assert_eq!(failing.exit_status(), Some(expected));
+}
+
+// An aborted child reports uncertainty without stopping a running parent.
+// The parent must still dispatch messages before a later Stop.
 #[tokio::test]
-async fn retained_aborted_child_weakens_every_parent_exit() {
+async fn aborted_child_does_not_stop_running_parent() {
+    let (child_exit_tx, child_exit_rx) = oneshot::channel();
+    let owner = spawn(AbortChildParent {
+        child_exit: Some(child_exit_tx),
+    });
+    let actor = owner.actor_ref();
+
+    let child_status = tokio::time::timeout(Duration::from_secs(1), child_exit_rx)
+        .await
+        .expect("the running parent must consume the child event")
+        .expect("the child hook must complete");
+    assert_eq!(child_status.reason(), ExitReason::Aborted);
+    assert_eq!(child_status.subtree(), SubtreeStatus::Unconfirmed);
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(1), actor.call(Ping))
+            .await
+            .expect("the parent must still dispatch mailbox work"),
+        Ok(())
+    );
+
+    let status = tokio::time::timeout(Duration::from_secs(1), owner.shutdown(Shutdown::Stop))
+        .await
+        .expect("parent Stop must finish");
+    assert_eq!(
+        status,
+        ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Unconfirmed)
+    );
+}
+
+// A descendant abort weakens only the parent's subtree guarantee.
+// The parent's own shutdown or panic reason must remain intact.
+#[tokio::test]
+async fn aborted_descendant_only_weakens_parent_subtree_status() {
     enum ParentExit {
         Shutdown(Shutdown),
         Panic,
     }
 
-    for exit in [
-        ParentExit::Shutdown(Shutdown::Stop),
-        ParentExit::Shutdown(Shutdown::Drain),
-        ParentExit::Shutdown(Shutdown::Kill),
-        ParentExit::Panic,
+    for (exit, expected_reason) in [
+        (ParentExit::Shutdown(Shutdown::Stop), ExitReason::Stopped),
+        (ParentExit::Shutdown(Shutdown::Drain), ExitReason::Drained),
+        (ParentExit::Shutdown(Shutdown::Kill), ExitReason::Killed),
+        (ParentExit::Panic, ExitReason::Panicked),
     ] {
         let (_child_ref, child) = spawn_actor(TestActor, SpawnOptions::default(), None);
         child
@@ -451,19 +551,20 @@ async fn retained_aborted_child_weakens_every_parent_exit() {
             )),
             ExitGuard::new(Arc::clone(&control), None),
         );
-        let reason = tokio::time::timeout(Duration::from_secs(1), task)
+        let status = tokio::time::timeout(Duration::from_secs(1), task)
             .await
             .expect("parent teardown must finish");
+        let expected = ExitStatus::new(expected_reason, SubtreeStatus::Unconfirmed);
 
-        assert_eq!(reason, ExitReason::Aborted);
-        assert_eq!(control.exit_reason(), Some(ExitReason::Aborted));
+        assert_eq!(status, expected);
+        assert_eq!(control.exit_status(), Some(expected));
     }
 }
 
 // This recreates the original race window after actor_turn has dequeued a
 // valid event. A graceful cutoff that commits in that window must retire the
 // child without entering user code, for both graceful modes.
-// An absorbed Aborted event must still weaken the parent guarantee.
+// A weak grandchild status must survive a normal direct-child reason.
 #[tokio::test]
 async fn graceful_cutoff_absorbs_a_dequeued_child_exit() {
     for shutdown in [Shutdown::Stop, Shutdown::Drain] {
@@ -500,7 +601,10 @@ async fn graceful_cutoff_absorbs_a_dequeued_child_exit() {
             handle_child_exit(
                 &mut actor,
                 &mut scope,
-                ChildExit::new(child_id, ExitReason::Aborted),
+                ChildExit::new(
+                    child_id,
+                    ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Unconfirmed),
+                ),
                 &control,
             )
             .await,
@@ -508,7 +612,10 @@ async fn graceful_cutoff_absorbs_a_dequeued_child_exit() {
         ));
         assert_eq!(observed.load(Ordering::SeqCst), 0);
         assert_eq!(scope.children.len(), 0);
-        assert_eq!(scope.children.terminal_reason(strong), ExitReason::Aborted);
+        assert_eq!(
+            scope.children.terminal_status(strong),
+            ExitStatus::new(strong, SubtreeStatus::Unconfirmed)
+        );
     }
 }
 
@@ -554,7 +661,10 @@ async fn admitted_child_exit_hook_finishes_across_graceful_cutoff() {
                 handle_child_exit(
                     &mut actor,
                     &mut scope,
-                    ChildExit::new(child_id, ExitReason::Stopped),
+                    ChildExit::new(
+                        child_id,
+                        ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Terminated),
+                    ),
                     &control,
                 ),
                 async move {
@@ -597,7 +707,7 @@ async fn unadmitted_mailbox_permit_does_not_extend_drain() {
     };
     assert_eq!(control.request(Shutdown::Drain), ShutdownStatus::Requested);
 
-    let reason = tokio::time::timeout(
+    let status = tokio::time::timeout(
         Duration::from_secs(1),
         run_actor(
             TestActor,
@@ -611,7 +721,10 @@ async fn unadmitted_mailbox_permit_does_not_extend_drain() {
     .await
     .expect("an unadmitted capacity permit must not hold Drain open");
 
-    assert_eq!(reason, ExitReason::Drained);
+    assert_eq!(
+        status,
+        ExitStatus::new(ExitReason::Drained, SubtreeStatus::Terminated)
+    );
     drop(permit);
 }
 
@@ -683,7 +796,10 @@ async fn ordinary_cursor_visits_each_actor_source_before_repeating_mailbox() {
         supervisor_tx: supervisor_tx.clone(),
     };
     supervisor_tx
-        .send(ChildExit::new(ChildId::new(), ExitReason::Stopped))
+        .send(ChildExit::new(
+            ChildId::new(),
+            ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Terminated),
+        ))
         .unwrap();
 
     let interleaved_completed = Arc::new(AtomicBool::new(false));
@@ -721,7 +837,10 @@ async fn ordinary_cursor_visits_each_actor_source_before_repeating_mailbox() {
             Turn::Message => mailbox_turns += 1,
             Turn::ReplyProgress => reply_turns += 1,
             Turn::Child(event) => {
-                assert_eq!(event.reason(), ExitReason::Stopped);
+                assert_eq!(
+                    event.status(),
+                    ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Terminated)
+                );
                 child_turns += 1;
             }
             Turn::Mode => panic!("the lifecycle mode changed unexpectedly"),
@@ -758,7 +877,10 @@ async fn drain_absorbs_ready_child_exit_before_owned_completion() {
     };
     let child = ChildId::new();
     supervisor_tx
-        .send(ChildExit::new(child.clone(), ExitReason::Stopped))
+        .send(ChildExit::new(
+            child.clone(),
+            ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Terminated),
+        ))
         .unwrap();
 
     let owned = OwnedTasks::new(Arc::clone(&control));
@@ -820,7 +942,10 @@ async fn cancelled_owned_actor_wait_retains_its_join_handle() {
         owned.control.request(Shutdown::Kill),
         ShutdownStatus::Requested
     );
-    assert_eq!(owned.wait().await, ExitReason::Killed);
+    assert_eq!(
+        owned.wait().await,
+        ExitStatus::new(ExitReason::Killed, SubtreeStatus::Terminated)
+    );
 }
 
 #[tokio::test]
@@ -866,7 +991,7 @@ async fn child_kill_commits_before_actor_work_is_dropped() {
 
     assert_eq!(
         kill_actor(&mut scope, &mut inbox, &owned, &mut scheduler).await,
-        ExitReason::Killed
+        ExitStatus::new(ExitReason::Killed, SubtreeStatus::Terminated)
     );
     assert!(active_observed_kill.load(Ordering::SeqCst));
     assert!(queued_observed_kill.load(Ordering::SeqCst));

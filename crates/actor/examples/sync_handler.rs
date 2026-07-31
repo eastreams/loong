@@ -40,6 +40,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     counter.send(Reset).await?;
     assert_eq!(counter.call(Add(4)).await?, 4);
 
-    assert_eq!(owner.shutdown(Shutdown::Drain).await, ExitReason::Drained);
+    assert_eq!(
+        owner.shutdown(Shutdown::Drain).await.reason(),
+        ExitReason::Drained
+    );
     Ok(())
 }

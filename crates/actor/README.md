@@ -13,13 +13,14 @@ The crate is an early MVP. Its current contract is deliberately narrow:
 - `ActorRef` values communicate but do not own actor lifetimes;
 - the unique `ActorOwner` controls root lifetime;
 - child actors are owned by their parent's runtime scope;
+- exit status separates local reason from subtree confirmation;
 - Stop, Drain, and Kill use a control plane separate from the mailbox;
 - mailbox FIFO determines dispatch order, not reply completion order;
 - Kill can interrupt cooperative async work between polls, but cannot interrupt
   a running synchronous handler, a poll call that never returns, or user `Drop`.
 
 ```rust
-use loong_actor::{ExitReason, Shutdown, prelude::*, spawn};
+use loong_actor::{ExitReason, Shutdown, SubtreeStatus, prelude::*, spawn};
 
 struct Counter(u64);
 
@@ -47,10 +48,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     assert_eq!(counter.call(Add(2)).await?, 2);
     assert_eq!(counter.call(Add(3)).await?, 5);
-    assert_eq!(owner.shutdown(Shutdown::Drain).await, ExitReason::Drained);
+    let status = owner.shutdown(Shutdown::Drain).await;
+    assert_eq!(status.reason(), ExitReason::Drained);
+    assert_eq!(status.subtree(), SubtreeStatus::Terminated);
     Ok(())
 }
 ```
+
+`ExitStatus::reason` describes only that actor. `ExitStatus::subtree` reports
+whether the runtime confirmed all owned descendants terminated. An unconfirmed
+child does not automatically stop its parent. The missing guarantee remains
+sticky. `Unconfirmed` means proof is unavailable. It does not prove liveness.
 
 Streaming does not require a runtime-specific message kind: a message reply may
 be a bounded channel receiver or another application-defined stream handle.

@@ -116,7 +116,7 @@ fn message_round_trip(criterion: &mut Criterion) {
 
     group.finish();
     let reason = runtime.block_on(owner.shutdown(Shutdown::Kill));
-    assert_eq!(reason, loong_actor::ExitReason::Killed);
+    assert_eq!(reason.reason(), loong_actor::ExitReason::Killed);
 }
 
 criterion_group!(benches, message_round_trip);

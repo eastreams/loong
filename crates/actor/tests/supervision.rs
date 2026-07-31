@@ -8,7 +8,7 @@ use std::task::Poll;
 
 use loong_actor::{
     Actor, ActorRef, ActorScope, CallError, ChildExit, ExitReason, Handler, IntoActorFuture,
-    Message, ReplyExt, Shutdown, spawn,
+    Message, ReplyExt, Shutdown, SubtreeStatus, spawn,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -141,8 +141,8 @@ async fn clean_child_exit_is_reported_exactly_once() {
 
     assert_eq!(watchdog(child.call(StopSelf)).await, Ok(()));
     let event = watchdog(events.recv()).await.unwrap();
-    assert_eq!(event.reason(), ExitReason::Stopped);
-    assert_eq!(watchdog(child.closed()).await, ExitReason::Stopped);
+    assert_eq!(event.status().reason(), ExitReason::Stopped);
+    assert_eq!(watchdog(child.closed()).await.reason(), ExitReason::Stopped);
 
     // The barrier remains pending across a child-exit scheduling opportunity, so
     // a duplicate queued behind the first hook cannot hide behind mailbox work.
@@ -150,7 +150,7 @@ async fn clean_child_exit_is_reported_exactly_once() {
     assert_eq!(watchdog(supervisor.call(Observed)).await.unwrap(), 1);
     assert!(events.try_recv().is_err());
     assert_eq!(
-        watchdog(owner.shutdown(Shutdown::Stop)).await,
+        watchdog(owner.shutdown(Shutdown::Stop)).await.reason(),
         ExitReason::Stopped
     );
 }
@@ -166,11 +166,13 @@ async fn child_panic_is_reported_without_stopping_the_parent() {
         Err(CallError::DuringDispatch(ExitReason::Panicked))
     );
     let event = watchdog(events.recv()).await.unwrap();
-    assert_eq!(event.reason(), ExitReason::Panicked);
+    let child_status = event.status();
+    assert_eq!(child_status.reason(), ExitReason::Panicked);
+    assert_eq!(child_status.subtree(), SubtreeStatus::Terminated);
+    assert_eq!(watchdog(child.closed()).await, child_status);
     assert_eq!(watchdog(supervisor.call(Observed)).await.unwrap(), 1);
 
-    assert_eq!(
-        watchdog(owner.shutdown(Shutdown::Stop)).await,
-        ExitReason::Stopped
-    );
+    let parent_status = watchdog(owner.shutdown(Shutdown::Stop)).await;
+    assert_eq!(parent_status.reason(), ExitReason::Stopped);
+    assert_eq!(parent_status.subtree(), SubtreeStatus::Terminated);
 }
