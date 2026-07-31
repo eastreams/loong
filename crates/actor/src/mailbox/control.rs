@@ -337,24 +337,30 @@ impl Control {
 }
 
 impl<A: Actor> ActorMailbox<A> {
-    /// Materializes one prebuilt envelope at the admission commit point.
+    /// Commits a reserved mailbox slot while admission remains open.
     ///
-    /// The fixed operation makes running arbitrary code under the lifecycle
-    /// transaction impossible. The private inbox is polled exclusively by the
-    /// Tokio-spawned ActorTask, so its wake cannot invoke a user waker. Rejected
-    /// permits and envelopes leave through the transaction result and are
-    /// returned untouched for lock-free recovery and destruction.
-    pub(crate) fn admit<E>(
+    /// `Ok(())` means the envelope entered the mailbox.
+    /// Later shutdown may still discard it.
+    ///
+    /// Closed admission returns the permit and original envelope unchanged.
+    /// The caller then releases capacity and recovers the message.
+    /// Both actions happen after the transaction ends.
+    ///
+    /// Only [`mpsc::Permit::send`] runs inside the transaction.
+    /// It can wake only the private actor task.
+    /// No user callback or destructor runs inside it.
+    pub(crate) fn admit<'a, E>(
         &self,
-        permit: mpsc::OwnedPermit<DynEnvelope<A>>,
+        permit: mpsc::Permit<'a, DynEnvelope<A>>,
         envelope: Box<E>,
-    ) -> Result<mpsc::Sender<DynEnvelope<A>>, RejectedAdmission<A, E>>
+    ) -> Result<(), RejectedAdmission<'a, A, E>>
     where
         E: Envelope<A> + 'static,
     {
         self.control.transact(move |mode| {
             if mode == Mode::Running {
-                (mode, Ok(permit.send(envelope as DynEnvelope<A>)))
+                permit.send(envelope as DynEnvelope<A>);
+                (mode, Ok(()))
             } else {
                 (mode, Err((permit, envelope)))
             }

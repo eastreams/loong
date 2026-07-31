@@ -64,8 +64,7 @@ async fn shutdown_wins_over_an_acquired_but_uncommitted_permit() {
     let (mailbox, mut receiver) = ActorMailbox::<TestActor>::channel(1);
     let permit = mailbox
         .sender
-        .clone()
-        .reserve_owned()
+        .reserve()
         .await
         .expect("the test mailbox is open");
 
@@ -93,16 +92,14 @@ async fn committed_send_is_part_of_the_fixed_drain_queue() {
     let (mailbox, mut receiver) = ActorMailbox::<TestActor>::channel(1);
     let permit = mailbox
         .sender
-        .clone()
-        .reserve_owned()
+        .reserve()
         .await
         .expect("the test mailbox is open");
 
     let committed = mailbox.admit(permit, Box::new(NoopEnvelope));
-    let Ok(sender) = committed else {
+    let Ok(()) = committed else {
         panic!("the commit must win admission");
     };
-    drop(sender);
     assert_eq!(
         mailbox.control.request(Shutdown::Drain),
         ShutdownStatus::Requested
@@ -122,8 +119,7 @@ async fn rejected_call_admission_recovers_its_message_without_a_reply() {
     let (mailbox, mut receiver) = ActorMailbox::<TestActor>::channel(1);
     let permit = mailbox
         .sender
-        .clone()
-        .reserve_owned()
+        .reserve()
         .await
         .expect("the test mailbox is open");
     let drops = Arc::new(AtomicUsize::new(0));
@@ -236,16 +232,14 @@ fn mailbox_admission_does_not_wake_lifecycle_observers() {
     let mut task = Context::from_waker(&waker);
     let permit = mailbox
         .sender
-        .clone()
-        .try_reserve_owned()
+        .try_reserve()
         .expect("the test mailbox has capacity");
 
     assert!(matches!(changed.as_mut().poll(&mut task), Poll::Pending));
     let admitted = mailbox.admit(permit, Box::new(NoopEnvelope));
-    let Ok(sender) = admitted else {
+    let Ok(()) = admitted else {
         panic!("Running must admit the envelope");
     };
-    drop(sender);
     assert_eq!(wakes.0.load(Ordering::SeqCst), 0);
     assert!(matches!(changed.as_mut().poll(&mut task), Poll::Pending));
 

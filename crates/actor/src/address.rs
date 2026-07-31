@@ -51,14 +51,13 @@ impl<A: Actor> ActorRef<A> {
         M: Message,
     {
         let mailbox = self.mailbox.upgrade().ok_or(CallError::Closed)?;
-        let sender = mailbox.sender.clone();
         let mut mode = mailbox.control.subscribe_mode();
 
         if !mailbox.control.is_running() {
             return Err(CallError::Closed);
         }
 
-        let reserve = sender.reserve_owned();
+        let reserve = mailbox.sender.reserve();
         tokio::pin!(reserve);
 
         let permit = loop {
@@ -76,9 +75,8 @@ impl<A: Actor> ActorRef<A> {
         };
 
         let (envelope, response) = CallEnvelope::new(message, mailbox.control.clone());
-        let admission = mailbox.admit(permit, Box::new(envelope));
-        match admission {
-            Ok(sender) => drop(sender),
+        match mailbox.admit(permit, Box::new(envelope)) {
+            Ok(()) => {}
             Err((permit, envelope)) => {
                 drop(permit);
                 drop(response);
@@ -115,14 +113,13 @@ impl<A: Actor> ActorRef<A> {
         let Some(mailbox) = self.mailbox.upgrade() else {
             return Err(SendError::new(message));
         };
-        let sender = mailbox.sender.clone();
         let mut mode = mailbox.control.subscribe_mode();
 
         if !mailbox.control.is_running() {
             return Err(SendError::new(message));
         }
 
-        let reserve = sender.reserve_owned();
+        let reserve = mailbox.sender.reserve();
         tokio::pin!(reserve);
 
         let permit = loop {
@@ -144,10 +141,7 @@ impl<A: Actor> ActorRef<A> {
 
         let envelope = Box::new(SendEnvelope::new(message, mailbox.control.clone()));
         match mailbox.admit(permit, envelope) {
-            Ok(sender) => {
-                drop(sender);
-                Ok(())
-            }
+            Ok(()) => Ok(()),
             Err((permit, envelope)) => {
                 drop(permit);
                 Err(SendError::new((*envelope).into_message()))
@@ -173,7 +167,7 @@ impl<A: Actor> ActorRef<A> {
             return Err(TryCallError::new(TryCallErrorKind::Closed, message));
         };
 
-        let permit = match mailbox.sender.clone().try_reserve_owned() {
+        let permit = match mailbox.sender.try_reserve() {
             Ok(permit) => permit,
             Err(mpsc::error::TrySendError::Full(_)) => {
                 let kind = if mailbox.control.is_running() {
@@ -190,10 +184,7 @@ impl<A: Actor> ActorRef<A> {
 
         let (envelope, response) = CallEnvelope::new(message, mailbox.control.clone());
         match mailbox.admit(permit, Box::new(envelope)) {
-            Ok(sender) => {
-                drop(sender);
-                Ok(Response::new(response))
-            }
+            Ok(()) => Ok(Response::new(response)),
             Err((permit, envelope)) => {
                 drop(permit);
                 drop(response);
@@ -224,7 +215,7 @@ impl<A: Actor> ActorRef<A> {
             return Err(TrySendError::new(TrySendErrorKind::Closed, message));
         };
 
-        let permit = match mailbox.sender.clone().try_reserve_owned() {
+        let permit = match mailbox.sender.try_reserve() {
             Ok(permit) => permit,
             Err(mpsc::error::TrySendError::Full(_)) => {
                 let kind = if mailbox.control.is_running() {
@@ -241,10 +232,7 @@ impl<A: Actor> ActorRef<A> {
 
         let envelope = Box::new(SendEnvelope::new(message, mailbox.control.clone()));
         match mailbox.admit(permit, envelope) {
-            Ok(sender) => {
-                drop(sender);
-                Ok(())
-            }
+            Ok(()) => Ok(()),
             Err((permit, envelope)) => {
                 drop(permit);
                 Err(TrySendError::new(

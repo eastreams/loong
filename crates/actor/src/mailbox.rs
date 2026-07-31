@@ -27,7 +27,7 @@ pub(crate) type ReplyReceiver<R> = oneshot::Receiver<Result<R, CallError>>;
 pub(crate) type DynEnvelope<A> = Box<dyn Envelope<A>>;
 
 /// Capacity and the concrete envelope remain recoverable when admission loses.
-pub(crate) type RejectedAdmission<A, E> = (mpsc::OwnedPermit<DynEnvelope<A>>, Box<E>);
+pub(crate) type RejectedAdmission<'a, A, E> = (mpsc::Permit<'a, DynEnvelope<A>>, Box<E>);
 
 /// Notifies one response observer without blaming its Waker on the actor.
 ///
