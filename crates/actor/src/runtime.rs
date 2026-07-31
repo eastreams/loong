@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     fmt,
     future::Future,
     num::NonZeroUsize,
@@ -11,6 +10,7 @@ use std::{
 
 use futures_util::FutureExt;
 use pin_project_lite::pin_project;
+use slotmap::{DefaultKey, SlotMap};
 use tokio::{sync::mpsc, task::JoinHandle};
 
 use crate::{
@@ -243,14 +243,9 @@ impl<A: Actor> ActorScope<A> {
             return Err(SpawnChildError::new(child));
         }
 
-        let id = ChildId::new();
-        let parent = ParentLink {
-            id: id.clone(),
-            events: self.supervisor_tx.clone(),
-        };
-        let (actor_ref, owned) = spawn_actor(child, options, Some(parent));
-        self.children.insert(id.clone(), owned);
-        Ok(Child::new(id, actor_ref))
+        Ok(self
+            .children
+            .spawn(child, options, self.supervisor_tx.clone()))
     }
 }
 
@@ -269,12 +264,35 @@ struct ParentLink {
     events: mpsc::UnboundedSender<ChildExit>,
 }
 
+/// Builds actor communication state without scheduling actor code.
+///
+/// A child must receive its parent-issued key before its task can exit.
+/// Preparation keeps that ordering explicit without placeholder state.
+struct PreparedActor<A: Actor> {
+    actor_ref: ActorRef<A>,
+    control: Arc<Control>,
+    future: ErasedFuture<'static, ExitStatus>,
+}
+
 struct OwnedActor {
     control: Arc<Control>,
     join: Option<JoinHandle<ExitStatus>>,
 }
 
 impl OwnedActor {
+    /// Starts prepared work with its complete parent link.
+    fn start(
+        control: Arc<Control>,
+        future: ErasedFuture<'static, ExitStatus>,
+        parent: Option<ParentLink>,
+    ) -> Self {
+        let task = ActorTask::new(future, ExitGuard::new(Arc::clone(&control), parent));
+        Self {
+            control,
+            join: Some(tokio::spawn(task)),
+        }
+    }
+
     async fn wait(&mut self) -> ExitStatus {
         // This bypasses shared lifecycle notification.
         // Cancellation retains the JoinHandle for another wait.
@@ -306,7 +324,7 @@ impl Drop for OwnedActor {
 }
 
 struct ChildSet {
-    actors: HashMap<ChildId, OwnedActor>,
+    actors: SlotMap<DefaultKey, OwnedActor>,
     // Removed children cannot erase a lost subtree guarantee.
     subtree: SubtreeStatus,
 }
@@ -314,7 +332,7 @@ struct ChildSet {
 impl Default for ChildSet {
     fn default() -> Self {
         Self {
-            actors: HashMap::new(),
+            actors: SlotMap::new(),
             subtree: SubtreeStatus::Terminated,
         }
     }
@@ -325,13 +343,37 @@ impl ChildSet {
         self.actors.len()
     }
 
-    fn insert(&mut self, id: ChildId, actor: OwnedActor) {
-        let previous = self.actors.insert(id, actor);
-        debug_assert!(previous.is_none(), "child identities are allocation-unique");
+    /// Issues the storage key before constructing the child's parent link.
+    /// The parent cannot consume an exit until this insertion returns.
+    fn spawn<A: Actor>(
+        &mut self,
+        actor: A,
+        options: SpawnOptions,
+        events: mpsc::UnboundedSender<ChildExit>,
+    ) -> Child<A> {
+        let PreparedActor {
+            actor_ref,
+            control,
+            future,
+        } = PreparedActor::new(actor, options);
+        let key = self.actors.insert_with_key(|key| {
+            let parent = ParentLink {
+                id: ChildId::from_key(key),
+                events,
+            };
+            OwnedActor::start(control, future, Some(parent))
+        });
+        Child::new(ChildId::from_key(key), actor_ref)
+    }
+
+    #[cfg(test)]
+    /// Installs an already-started fixture without a parent notification link.
+    fn insert(&mut self, actor: OwnedActor) -> ChildId {
+        ChildId::from_key(self.actors.insert(actor))
     }
 
     fn remove(&mut self, event: &ChildExit) -> bool {
-        if self.actors.remove(event.child()).is_none() {
+        if self.actors.remove(event.child().key()).is_none() {
             return false;
         }
         if event.status().subtree() == SubtreeStatus::Unconfirmed {
@@ -363,43 +405,51 @@ impl ChildSet {
     }
 }
 
+impl<A: Actor> PreparedActor<A> {
+    fn new(actor: A, options: SpawnOptions) -> Self {
+        let (mailbox, inbox) = ActorMailbox::channel(options.mailbox_capacity().get());
+        let actor_ref = ActorRef::new(Arc::downgrade(&mailbox), mailbox.control.subscribe_mode());
+
+        // Each actor receives terminal events from its direct children.
+        // The nonblocking channel prevents child teardown from awaiting parent work.
+        let (supervisor_tx, supervisor_rx) = mpsc::unbounded_channel();
+        let scope = ActorScope {
+            actor_ref: actor_ref.clone(),
+            control: mailbox.control.clone(),
+            children: ChildSet::default(),
+            accepts_children: true,
+            supervisor_tx,
+        };
+        let control = mailbox.control.clone();
+        let future = Box::pin(run_actor(
+            actor,
+            scope,
+            inbox,
+            supervisor_rx,
+            mailbox,
+            options.max_in_flight(),
+        ));
+
+        Self {
+            actor_ref,
+            control,
+            future,
+        }
+    }
+}
+
 fn spawn_actor<A: Actor>(
     actor: A,
     options: SpawnOptions,
     parent: Option<ParentLink>,
 ) -> (ActorRef<A>, OwnedActor) {
-    let (mailbox, inbox) = ActorMailbox::channel(options.mailbox_capacity().get());
-    let actor_ref = ActorRef::new(Arc::downgrade(&mailbox), mailbox.control.subscribe_mode());
-
-    // Each child emits exactly one terminal event. A nonblocking signal plane
-    // avoids teardown deadlocks and is bounded by the parent's owned children.
-    let (supervisor_tx, supervisor_rx) = mpsc::unbounded_channel();
-    let scope = ActorScope {
-        actor_ref: actor_ref.clone(),
-        control: mailbox.control.clone(),
-        children: ChildSet::default(),
-        accepts_children: true,
-        supervisor_tx,
-    };
-    let control = mailbox.control.clone();
-    let future = Box::pin(run_actor(
-        actor,
-        scope,
-        inbox,
-        supervisor_rx,
-        mailbox,
-        options.max_in_flight(),
-    ));
-    let task = ActorTask::new(future, ExitGuard::new(control.clone(), parent));
-    let join = tokio::spawn(task);
-
-    (
+    let PreparedActor {
         actor_ref,
-        OwnedActor {
-            control,
-            join: Some(join),
-        },
-    )
+        control,
+        future,
+    } = PreparedActor::new(actor, options);
+    let owned = OwnedActor::start(control, future, parent);
+    (actor_ref, owned)
 }
 
 struct ExitGuard {
@@ -435,9 +485,7 @@ impl ExitGuard {
         self.finished = true;
         let status = self.control.finish(proposed);
         if let Some(parent) = &self.parent {
-            let _ = parent
-                .events
-                .send(ChildExit::new(parent.id.clone(), status));
+            let _ = parent.events.send(ChildExit::new(parent.id, status));
         }
         status
     }

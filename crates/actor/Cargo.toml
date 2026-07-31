@@ -14,6 +14,7 @@ categories = ["asynchronous", "concurrency"]
 futures-util = { version = "0.3.31", default-features = false, features = ["std"] }
 loong-actor-macros = { version = "0.1.0", path = "../actor-macros" }
 pin-project-lite = "0.2.16"
+slotmap = { version = "1.1.1", default-features = false }
 thiserror = "2.0.19"
 tokio = { version = "1.53.1", features = ["macros", "rt", "sync"] }
 tokio-util = { version = "0.7.19", features = ["rt"] }

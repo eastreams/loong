@@ -1,4 +1,6 @@
-use std::{fmt, hash, sync::Arc};
+use std::fmt;
+
+use slotmap::DefaultKey;
 
 use crate::{Actor, ActorRef};
 
@@ -145,21 +147,29 @@ impl ExitStatus {
     }
 }
 
-#[derive(Debug)]
-struct ChildIdentity {
-    _private: u8,
-}
-
-/// Opaque, allocation-backed identity of one direct child.
+/// Opaque identity of one direct-child registration.
 ///
-/// Identity is local to the runtime tree; it is not a registry key or a
-/// process-wide scalar identifier.
-#[derive(Clone)]
-pub struct ChildId(Arc<ChildIdentity>);
+/// Compare identities only within one parent actor.
+/// IDs from different parents may compare equal.
+///
+/// The generation rejects stale IDs when storage slots are reused. It can wrap
+/// after 2^31 reuses of one slot. This is not a registry key.
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+pub struct ChildId(DefaultKey);
 
 impl ChildId {
-    pub(crate) fn new() -> Self {
-        Self(Arc::new(ChildIdentity { _private: 0 }))
+    pub(crate) const fn from_key(key: DefaultKey) -> Self {
+        Self(key)
+    }
+
+    pub(crate) const fn key(self) -> DefaultKey {
+        self.0
+    }
+
+    #[cfg(test)]
+    /// Creates an invalid ID for tests that only schedule an event.
+    pub(crate) fn invalid_for_test() -> Self {
+        Self(DefaultKey::default())
     }
 }
 
@@ -169,26 +179,13 @@ impl fmt::Debug for ChildId {
     }
 }
 
-impl PartialEq for ChildId {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-impl Eq for ChildId {}
-
-impl hash::Hash for ChildId {
-    fn hash<H: hash::Hasher>(&self, state: &mut H) {
-        Arc::as_ptr(&self.0).hash(state);
-    }
-}
-
 /// The terminal event of a direct child actor.
 ///
 /// While the parent is active, the runtime delivers this value serially to
 /// [`Actor::on_child_exit`]. Hook entry and graceful cutoff share one lifecycle
 /// gate: an event that loses the cutoff is absorbed, while a hook admitted first
 /// is allowed to finish before parent cleanup proceeds.
+/// Event equality is meaningful only within one direct parent.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChildExit {
     child: ChildId,
@@ -200,7 +197,9 @@ impl ChildExit {
         Self { child, status }
     }
 
-    /// Returns the child that exited.
+    /// Returns the identity assigned by the direct parent.
+    ///
+    /// Compare it only with children spawned by that parent.
     pub const fn child(&self) -> &ChildId {
         &self.child
     }
@@ -213,7 +212,7 @@ impl ChildExit {
 
 /// A typed, non-owning reference to a child registered in its parent's tree.
 ///
-/// The parent [`crate::ActorScope`] retains lifecycle ownership. Cloning or
+/// The parent [`ActorScope`](crate::ActorScope) retains lifecycle ownership. Cloning or
 /// dropping a `Child` does not keep the child alive or initiate shutdown.
 pub struct Child<A: Actor> {
     id: ChildId,
@@ -225,7 +224,9 @@ impl<A: Actor> Child<A> {
         Self { id, actor_ref }
     }
 
-    /// Returns the child's tree identity.
+    /// Returns the identity assigned by the direct parent.
+    ///
+    /// Compare it only with events observed by that parent.
     pub const fn id(&self) -> &ChildId {
         &self.id
     }
@@ -244,7 +245,7 @@ impl<A: Actor> Child<A> {
 impl<A: Actor> Clone for Child<A> {
     fn clone(&self) -> Self {
         Self {
-            id: self.id.clone(),
+            id: self.id,
             actor_ref: self.actor_ref.clone(),
         }
     }

@@ -116,7 +116,7 @@ impl Actor for AbortChildParent {
         scope
             .children
             .actors
-            .get(child.id())
+            .get(child.id().key())
             .expect("the scope owns its returned child")
             .join
             .as_ref()
@@ -519,7 +519,7 @@ async fn aborted_descendant_only_weakens_parent_subtree_status() {
             .expect("a spawned child owns its task")
             .abort();
         let mut children = ChildSet::default();
-        children.insert(ChildId::new(), child);
+        children.insert(child);
 
         let (mailbox, inbox) = ActorMailbox::<TestActor>::channel(1);
         let control = Arc::clone(&mailbox.control);
@@ -561,6 +561,32 @@ async fn aborted_descendant_only_weakens_parent_subtree_status() {
     }
 }
 
+// The generation is why ChildSet uses SlotMap instead of Slab.
+// A stale exit must not remove a later child reusing the same slot.
+#[test]
+fn stale_child_exit_cannot_remove_a_reused_slot() {
+    let mut children = ChildSet::default();
+    let first = children.insert(OwnedActor {
+        control: Control::new(),
+        join: None,
+    });
+    assert!(children.remove(&ChildExit::new(
+        first,
+        ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Terminated),
+    )));
+
+    let second = children.insert(OwnedActor {
+        control: Control::new(),
+        join: None,
+    });
+    assert_ne!(first, second);
+    assert!(!children.remove(&ChildExit::new(
+        first,
+        ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Terminated),
+    )));
+    assert_eq!(children.len(), 1);
+}
+
 // This recreates the original race window after actor_turn has dequeued a
 // valid event. A graceful cutoff that commits in that window must retire the
 // child without entering user code, for both graceful modes.
@@ -574,15 +600,11 @@ async fn graceful_cutoff_absorbs_a_dequeued_child_exit() {
             Shutdown::Kill => unreachable!("the test uses graceful modes"),
         };
         let observed = Arc::new(AtomicUsize::new(0));
-        let child_id = ChildId::new();
         let mut children = ChildSet::default();
-        children.insert(
-            child_id.clone(),
-            OwnedActor {
-                control: Control::new(),
-                join: None,
-            },
-        );
+        let child_id = children.insert(OwnedActor {
+            control: Control::new(),
+            join: None,
+        });
 
         let (mailbox, _inbox) = ActorMailbox::<CountChildExit>::channel(1);
         let control = Arc::clone(&mailbox.control);
@@ -628,15 +650,11 @@ async fn admitted_child_exit_hook_finishes_across_graceful_cutoff() {
         let (entered_tx, entered_rx) = oneshot::channel();
         let (release_tx, release_rx) = oneshot::channel();
         let (completed_tx, completed_rx) = oneshot::channel();
-        let child_id = ChildId::new();
         let mut children = ChildSet::default();
-        children.insert(
-            child_id.clone(),
-            OwnedActor {
-                control: Control::new(),
-                join: None,
-            },
-        );
+        let child_id = children.insert(OwnedActor {
+            control: Control::new(),
+            join: None,
+        });
 
         let (mailbox, _inbox) = ActorMailbox::<ControlledChildExit>::channel(1);
         let control = Arc::clone(&mailbox.control);
@@ -735,13 +753,10 @@ async fn committed_kill_prevents_a_graceful_child_request() {
     // Stop before graceful_finish could return Work::Killed.
     let child_control = Control::new();
     let mut children = ChildSet::default();
-    children.insert(
-        ChildId::new(),
-        OwnedActor {
-            control: Arc::clone(&child_control),
-            join: None,
-        },
-    );
+    children.insert(OwnedActor {
+        control: Arc::clone(&child_control),
+        join: None,
+    });
 
     let (mailbox, _inbox) = ActorMailbox::<TestActor>::channel(1);
     let control = Arc::clone(&mailbox.control);
@@ -797,7 +812,7 @@ async fn ordinary_cursor_visits_each_actor_source_before_repeating_mailbox() {
     };
     supervisor_tx
         .send(ChildExit::new(
-            ChildId::new(),
+            ChildId::invalid_for_test(),
             ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Terminated),
         ))
         .unwrap();
@@ -941,10 +956,10 @@ async fn drain_absorbs_ready_child_exit_before_owned_completion() {
         accepts_children: true,
         supervisor_tx: supervisor_tx.clone(),
     };
-    let child = ChildId::new();
+    let child = ChildId::invalid_for_test();
     supervisor_tx
         .send(ChildExit::new(
-            child.clone(),
+            child,
             ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Terminated),
         ))
         .unwrap();
@@ -1022,7 +1037,7 @@ async fn child_kill_commits_before_actor_work_is_dropped() {
     let (_child_ref, child) = spawn_actor(TestActor, SpawnOptions::default(), None);
     let child_control = Arc::clone(&child.control);
     let mut children = ChildSet::default();
-    children.insert(ChildId::new(), child);
+    children.insert(child);
 
     let active_observed_kill = Arc::new(AtomicBool::new(false));
     let queued_observed_kill = Arc::new(AtomicBool::new(false));
