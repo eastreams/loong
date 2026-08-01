@@ -1,75 +1,97 @@
-//! Uses one root actor to own two child workers.
-//! Choose this topology when one coordinator owns worker lifetimes.
-//! The coordinator's bare future uses owned reply scheduling.
+//! Runs a coordinator-owned multi-agent team.
+//! Each agent is a child actor.
+//! Choose independent roots for independently owned agents.
 
 use loong_actor::{ActorRef, CallError, ExitReason, Shutdown, SubtreeStatus, prelude::*, spawn};
 
-struct Worker(u64);
+#[derive(Debug, PartialEq, Eq)]
+struct Report {
+    agent: &'static str,
+    subject: &'static str,
+}
 
-impl Actor for Worker {}
+struct Agent(&'static str);
+
+impl Actor for Agent {}
 
 #[derive(Message)]
-#[message(reply = u64)]
-struct Multiply(u64);
+#[message(reply = Report)]
+struct Review(&'static str);
 
-impl SyncHandler<Multiply> for Worker {
-    fn handle(&mut self, message: Multiply, _scope: &mut ActorScope<Self>) -> u64 {
-        self.0 * message.0
+impl SyncHandler<Review> for Agent {
+    fn handle(&mut self, message: Review, _scope: &mut ActorScope<Self>) -> Report {
+        Report {
+            agent: self.0,
+            subject: message.0,
+        }
     }
 }
 
-struct Coordinator {
-    workers: Option<[ActorRef<Worker>; 2]>,
+struct Team {
+    agents: Option<[ActorRef<Agent>; 2]>,
 }
 
-impl Actor for Coordinator {
+impl Actor for Team {
     async fn on_start(&mut self, scope: &mut ActorScope<Self>) {
-        let double = scope
-            .spawn_child(Worker(2))
+        let correctness = scope
+            .spawn_child(Agent("correctness"))
             .expect("on_start accepts children")
             .into_actor_ref();
-        let triple = scope
-            .spawn_child(Worker(3))
+        let readability = scope
+            .spawn_child(Agent("readability"))
             .expect("on_start accepts children")
             .into_actor_ref();
 
         // ActorScope owns both lifecycles. State retains only message addresses.
-        self.workers = Some([double, triple]);
+        self.agents = Some([correctness, readability]);
     }
 }
 
 #[derive(Message)]
-#[message(reply = Result<[u64; 2], CallError>)]
-struct Compute(u64);
+#[message(reply = Result<[Report; 2], CallError>)]
+struct ReviewTask(&'static str);
 
-impl Handler<Compute> for Coordinator {
+impl Handler<ReviewTask> for Team {
     fn handle(
         &mut self,
-        message: Compute,
+        message: ReviewTask,
         _scope: &mut ActorScope<Self>,
-    ) -> impl IntoReply<Self, Compute> + use<> {
-        let [double, triple] = self
-            .workers
+    ) -> impl IntoReply<Self, ReviewTask> + use<> {
+        let [correctness, readability] = self
+            .agents
             .clone()
             .expect("on_start runs before message dispatch");
 
         async move {
-            let (doubled, tripled) = tokio::try_join!(
-                double.call(Multiply(message.0)),
-                triple.call(Multiply(message.0)),
+            let (correctness, readability) = tokio::try_join!(
+                correctness.call(Review(message.0)),
+                readability.call(Review(message.0)),
             )?;
-            Ok([doubled, tripled])
+            Ok([correctness, readability])
         }
     }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let owner = spawn(Coordinator { workers: None });
-    let coordinator = owner.actor_ref();
+    let owner = spawn(Team { agents: None });
+    let team = owner.actor_ref();
 
-    let worker_results = coordinator.call(Compute(7)).await?;
-    assert_eq!(worker_results?, [14, 21]);
+    let reports = team.call(ReviewTask("actor runtime")).await?;
+    let reports = reports?;
+    assert_eq!(
+        reports,
+        [
+            Report {
+                agent: "correctness",
+                subject: "actor runtime",
+            },
+            Report {
+                agent: "readability",
+                subject: "actor runtime",
+            },
+        ]
+    );
 
     let status = owner.shutdown(Shutdown::Drain).await;
     assert_eq!(status.reason(), ExitReason::Drained);
