@@ -7,42 +7,44 @@ use crate::{
 
 /// State that can be run as an actor.
 ///
-/// Lifecycle hooks are awaited inside the actor's serial execution context.
-/// While a hook is pending, handlers and actor-aware replies pause.
+/// Initialization and lifecycle hooks run in the serial actor context.
+/// While they are pending, handlers and actor-aware replies pause.
 /// Another hook cannot enter for this actor.
 /// Owned replies continue in independent Tokio tasks.
-/// Stop and Drain wait for an entered hook.
-/// Kill may drop it between polls.
+/// Stop and Drain wait for initialization and entered hooks.
+/// Kill may cancel current serial work between polls.
 /// Kill and executor teardown cannot interrupt a poll or user `Drop`.
 ///
 /// Unlike a [`Handler`] reply, a hook may retain `&mut self` across `await`.
-/// Startup and child hooks may also retain [`ActorScope`].
+/// Initialization and child hooks may retain [`ActorScope`].
 /// The stop hook may retain [`StopScope`].
 /// Serial execution makes these borrows valid.
 ///
-/// A hook panic is contained by the runtime.
-/// It normally produces [`ExitReason::Panicked`].
+/// Initialization and hook panics are contained by the runtime.
+/// A contained panic normally produces [`ExitReason::Panicked`].
 /// A committed Kill instead produces [`ExitReason::Killed`].
 /// Remaining children receive Kill before parent publication.
 /// Their confirmation appears in
 /// [`ExitStatus::subtree`](crate::ExitStatus::subtree).
 pub trait Actor: Send + Sized + 'static {
-    /// Runs once before the actor performs its first handler dispatch.
+    /// Owned input used to construct this actor.
+    type SpawnArgs: Send + 'static;
+
+    /// Constructs the actor before its first handler dispatch.
     ///
-    /// Calls may enter the bounded mailbox while this future is pending, but no
-    /// handler runs until it completes. Stop and Drain close admission and wait
-    /// for startup to finish; Kill may cancel startup between polls.
+    /// Initialization alone does not close mailbox admission.
+    /// No handler runs before it returns `Self`.
+    /// Stop and Drain close admission, then wait.
+    /// Kill may prevent entry or cancel between polls.
     ///
-    /// Awaiting a call to this same actor cannot make progress because startup
-    /// itself blocks dispatch. If this hook panics, queued calls are discarded
-    /// with [`crate::CallError::BeforeDispatch`], children are killed, and
-    /// [`on_stop`](Self::on_stop) is skipped.
-    fn on_start<'a>(
-        &'a mut self,
-        _scope: &'a mut ActorScope<'_, Self>,
-    ) -> impl Future<Output = ()> + Send + 'a {
-        std::future::ready(())
-    }
+    /// A self-call cannot progress during initialization.
+    /// Initialization itself blocks every handler dispatch.
+    /// A panic discards queued calls before dispatch.
+    /// It also kills children and skips [`on_stop`](Self::on_stop).
+    fn init<'a>(
+        args: Self::SpawnArgs,
+        scope: &'a mut ActorScope<'_, Self>,
+    ) -> impl Future<Output = Self> + Send + 'a;
 
     /// Observes the terminal event of a direct child while the parent is active.
     ///
@@ -91,20 +93,32 @@ pub trait Actor: Send + Sized + 'static {
     /// Child spawning is unavailable during cleanup:
     ///
     /// ```compile_fail
-    /// use loong_actor::{Actor, ExitReason, StopScope};
+    /// use loong_actor::{Actor, ActorScope, ExitReason, StopScope};
     ///
     /// struct Parent;
     /// struct ChildActor;
     ///
-    /// impl Actor for ChildActor {}
+    /// impl Actor for ChildActor {
+    ///     type SpawnArgs = Self;
+    ///
+    ///     async fn init(actor: Self, _scope: &mut ActorScope<'_, Self>) -> Self {
+    ///         actor
+    ///     }
+    /// }
     ///
     /// impl Actor for Parent {
+    ///     type SpawnArgs = Self;
+    ///
+    ///     async fn init(actor: Self, _scope: &mut ActorScope<'_, Self>) -> Self {
+    ///         actor
+    ///     }
+    ///
     ///     async fn on_stop(
     ///         &mut self,
     ///         _reason: ExitReason,
     ///         scope: &mut StopScope<'_, Self>,
     ///     ) {
-    ///         scope.spawn_child(ChildActor);
+    ///         scope.spawn_child::<ChildActor>(ChildActor);
     ///     }
     /// }
     /// ```
@@ -148,7 +162,13 @@ pub trait Message: Send + 'static {
 ///     notifications: usize,
 /// }
 ///
-/// impl Actor for Worker {}
+/// impl Actor for Worker {
+///     type SpawnArgs = Self;
+///
+///     async fn init(actor: Self, _scope: &mut ActorScope<'_, Self>) -> Self {
+///         actor
+///     }
+/// }
 ///
 /// struct Notify;
 ///

@@ -20,7 +20,13 @@ use super::{PanicWake, WakeCounter};
 
 struct TestActor;
 
-impl Actor for TestActor {}
+impl Actor for TestActor {
+    type SpawnArgs = ();
+
+    async fn init(_args: (), _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self
+    }
+}
 
 struct NoopEnvelope;
 

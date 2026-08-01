@@ -7,7 +7,13 @@ struct Worker {
     factor: u64,
 }
 
-impl Actor for Worker {}
+impl Actor for Worker {
+    type SpawnArgs = u64;
+
+    async fn init(factor: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self { factor }
+    }
+}
 
 #[derive(Message)]
 #[message(reply = u64)]
@@ -21,8 +27,8 @@ impl SyncHandler<Multiply> for Worker {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let first_owner = spawn(Worker { factor: 2 });
-    let second_owner = spawn(Worker { factor: 3 });
+    let first_owner = spawn::<Worker>(2);
+    let second_owner = spawn::<Worker>(3);
     let first = first_owner.actor_ref();
     let second = second_owner.actor_ref();
 

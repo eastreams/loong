@@ -26,7 +26,13 @@ async fn poll_once<F: Future>(mut future: Pin<&mut F>) -> Poll<F::Output> {
 
 struct Counter(u8);
 
-impl Actor for Counter {}
+impl Actor for Counter {
+    type SpawnArgs = u8;
+
+    async fn init(value: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self(value)
+    }
+}
 
 struct Increment;
 
@@ -43,7 +49,7 @@ impl SyncHandler<Increment> for Counter {
 
 #[tokio::test]
 async fn sync_handler_mutates_actor_and_replies_immediately() {
-    let owner = spawn(Counter(0));
+    let owner = spawn::<Counter>(0);
     let actor = owner.actor_ref();
 
     assert_eq!(watchdog(actor.call(Increment)).await, Ok(1));
@@ -76,7 +82,7 @@ impl Handler<ChooseReply> for Counter {
 
 #[tokio::test]
 async fn either_selects_between_reply_strategies_without_boxing() {
-    let owner = spawn(Counter(0));
+    let owner = spawn::<Counter>(0);
     let actor = owner.actor_ref();
 
     assert_eq!(watchdog(actor.call(ChooseReply(true))).await, Ok(1));
@@ -91,7 +97,13 @@ struct ProgressActor {
     log: Arc<Mutex<Vec<&'static str>>>,
 }
 
-impl Actor for ProgressActor {}
+impl Actor for ProgressActor {
+    type SpawnArgs = Arc<Mutex<Vec<&'static str>>>;
+
+    async fn init(log: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self { log }
+    }
+}
 
 struct PendingOwned {
     entered: oneshot::Sender<()>,
@@ -185,7 +197,7 @@ impl Handler<InterleavedSequence> for ProgressActor {
 #[tokio::test]
 async fn owned_does_not_block_mailbox_and_interleaved_reborrows_actor() {
     let log = Arc::new(Mutex::new(Vec::new()));
-    let owner = spawn(ProgressActor { log: log.clone() });
+    let owner = spawn::<ProgressActor>(log.clone());
     let actor = owner.actor_ref();
 
     let (owned_entered_tx, owned_entered_rx) = oneshot::channel();
@@ -234,7 +246,13 @@ async fn owned_does_not_block_mailbox_and_interleaved_reborrows_actor() {
 
 struct HookChild;
 
-impl Actor for HookChild {}
+impl Actor for HookChild {
+    type SpawnArgs = ();
+
+    async fn init(_args: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self
+    }
+}
 
 struct StopChild;
 
@@ -253,16 +271,23 @@ impl Handler<StopChild> for HookChild {
     }
 }
 
+struct ExclusiveActorArgs {
+    child_started: oneshot::Sender<ActorRef<HookChild>>,
+    child_hooks: mpsc::UnboundedSender<()>,
+}
+
 struct ExclusiveActor {
-    child_started: Option<oneshot::Sender<ActorRef<HookChild>>>,
     child_hooks: mpsc::UnboundedSender<()>,
 }
 
 impl Actor for ExclusiveActor {
-    async fn on_start(&mut self, scope: &mut ActorScope<'_, Self>) {
-        let child = scope.spawn_child(HookChild).into_actor_ref();
-        if let Some(started) = self.child_started.take() {
-            let _ = started.send(child);
+    type SpawnArgs = ExclusiveActorArgs;
+
+    async fn init(args: Self::SpawnArgs, scope: &mut ActorScope<'_, Self>) -> Self {
+        let child = scope.spawn_child::<HookChild>(()).into_actor_ref();
+        let _ = args.child_started.send(child);
+        Self {
+            child_hooks: args.child_hooks,
         }
     }
 
@@ -351,8 +376,8 @@ impl Handler<Mark> for ExclusiveActor {
 async fn exclusive_blocks_actor_work_but_owned_continues() {
     let (child_started_tx, child_started_rx) = oneshot::channel();
     let (child_hooks_tx, mut child_hooks_rx) = mpsc::unbounded_channel();
-    let owner = spawn(ExclusiveActor {
-        child_started: Some(child_started_tx),
+    let owner = spawn::<ExclusiveActor>(ExclusiveActorArgs {
+        child_started: child_started_tx,
         child_hooks: child_hooks_tx,
     });
     let actor = owner.actor_ref();
@@ -418,7 +443,13 @@ async fn exclusive_blocks_actor_work_but_owned_continues() {
 
 struct StopActor;
 
-impl Actor for StopActor {}
+impl Actor for StopActor {
+    type SpawnArgs = ();
+
+    async fn init(_args: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self
+    }
+}
 
 struct StopOwned {
     entered: oneshot::Sender<()>,
@@ -454,7 +485,7 @@ async fn owned_replies_ignore_max_in_flight_and_graceful_shutdown_waits() {
         let options = SpawnOptions::default()
             .with_mailbox_capacity(NonZeroUsize::new(4).unwrap())
             .with_max_in_flight(NonZeroUsize::new(1).unwrap());
-        let mut owner = spawn_with(StopActor, options);
+        let mut owner = spawn_with::<StopActor>((), options);
         let actor = owner.actor_ref();
         let mut entered = Vec::new();
         let mut releases = Vec::new();
@@ -499,7 +530,13 @@ async fn owned_replies_ignore_max_in_flight_and_graceful_shutdown_waits() {
 
 struct PanicActor;
 
-impl Actor for PanicActor {}
+impl Actor for PanicActor {
+    type SpawnArgs = ();
+
+    async fn init(_args: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self
+    }
+}
 
 struct PendingSibling {
     entered: oneshot::Sender<()>,
@@ -578,7 +615,7 @@ impl Handler<PanicReply> for PanicActor {
 
 #[tokio::test]
 async fn reply_panic_fails_sibling_in_flight_work() {
-    let mut owner = spawn(PanicActor);
+    let mut owner = spawn::<PanicActor>(());
     let actor = owner.actor_ref();
     let (sibling_entered_tx, sibling_entered_rx) = oneshot::channel();
     let (_sibling_release_tx, sibling_release_rx) = oneshot::channel();
@@ -616,7 +653,7 @@ async fn reply_panic_fails_sibling_in_flight_work() {
 // A later future Drop panic must still fail the actor.
 #[tokio::test]
 async fn owned_task_panic_after_reply_completion_still_fails_the_actor() {
-    let mut owner = spawn(PanicActor);
+    let mut owner = spawn::<PanicActor>(());
     let actor = owner.actor_ref();
 
     assert_eq!(watchdog(actor.call(PanicAfterReady)).await, Ok(()));
@@ -625,7 +662,13 @@ async fn owned_task_panic_after_reply_completion_still_fails_the_actor() {
 
 struct SelfCaller;
 
-impl Actor for SelfCaller {}
+impl Actor for SelfCaller {
+    type SpawnArgs = ();
+
+    async fn init(_args: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self
+    }
+}
 
 struct Echo(u8);
 
@@ -711,7 +754,7 @@ async fn nonexclusive_self_calls_progress_but_exclusive_self_call_waits() {
     let options = SpawnOptions::default()
         .with_mailbox_capacity(NonZeroUsize::new(8).unwrap())
         .with_max_in_flight(NonZeroUsize::new(4).unwrap());
-    let mut owner = spawn_with(SelfCaller, options);
+    let mut owner = spawn_with::<SelfCaller>((), options);
     let actor = owner.actor_ref();
 
     assert_eq!(watchdog(actor.call(OwnedSelfCall(3))).await, Ok(3));
@@ -750,7 +793,7 @@ async fn owned_self_call_progresses_with_one_interleaved_slot() {
     let options = SpawnOptions::default()
         .with_mailbox_capacity(NonZeroUsize::new(2).unwrap())
         .with_max_in_flight(NonZeroUsize::new(1).unwrap());
-    let owner = spawn_with(SelfCaller, options);
+    let owner = spawn_with::<SelfCaller>((), options);
     let actor = owner.actor_ref();
 
     assert_eq!(watchdog(actor.call(OwnedSelfCall(1))).await, Ok(1));
@@ -764,7 +807,13 @@ struct FairActor {
     handled: Arc<AtomicUsize>,
 }
 
-impl Actor for FairActor {}
+impl Actor for FairActor {
+    type SpawnArgs = Arc<AtomicUsize>;
+
+    async fn init(handled: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self { handled }
+    }
+}
 
 struct OwnedTaskIdentity;
 
@@ -834,9 +883,7 @@ impl Handler<ReadyWork> for FairActor {
 #[tokio::test]
 async fn owned_reply_runs_in_a_distinct_tokio_task() {
     let handled = Arc::new(AtomicUsize::new(0));
-    let owner = spawn(FairActor {
-        handled: handled.clone(),
-    });
+    let owner = spawn::<FairActor>(handled.clone());
     let actor = owner.actor_ref();
     assert_eq!(watchdog(actor.call(OwnedTaskIdentity)).await, Ok(true));
     assert_eq!(
@@ -851,12 +898,7 @@ async fn ready_mailbox_input_does_not_starve_woken_interleaved_reply() {
     let options = SpawnOptions::default()
         .with_mailbox_capacity(NonZeroUsize::new(64).unwrap())
         .with_max_in_flight(NonZeroUsize::new(4).unwrap());
-    let owner = spawn_with(
-        FairActor {
-            handled: handled.clone(),
-        },
-        options,
-    );
+    let owner = spawn_with::<FairActor>(handled.clone(), options);
     let actor = owner.actor_ref();
     let completed_at = Arc::new(AtomicUsize::new(usize::MAX));
     let (entered_tx, entered_rx) = oneshot::channel();
@@ -889,18 +931,29 @@ async fn ready_mailbox_input_does_not_starve_woken_interleaved_reply() {
     );
 }
 
+struct FairChildExitArgs {
+    child_started: oneshot::Sender<ActorRef<HookChild>>,
+    handled: Arc<AtomicUsize>,
+    hook_completed_at: Arc<AtomicUsize>,
+    hook_completed: oneshot::Sender<()>,
+}
+
 struct FairChildExitActor {
-    child_started: Option<oneshot::Sender<ActorRef<HookChild>>>,
     handled: Arc<AtomicUsize>,
     hook_completed_at: Arc<AtomicUsize>,
     hook_completed: Option<oneshot::Sender<()>>,
 }
 
 impl Actor for FairChildExitActor {
-    async fn on_start(&mut self, scope: &mut ActorScope<'_, Self>) {
-        let child = scope.spawn_child(HookChild).into_actor_ref();
-        if let Some(started) = self.child_started.take() {
-            let _ = started.send(child);
+    type SpawnArgs = FairChildExitArgs;
+
+    async fn init(args: Self::SpawnArgs, scope: &mut ActorScope<'_, Self>) -> Self {
+        let child = scope.spawn_child::<HookChild>(()).into_actor_ref();
+        let _ = args.child_started.send(child);
+        Self {
+            handled: args.handled,
+            hook_completed_at: args.hook_completed_at,
+            hook_completed: Some(args.hook_completed),
         }
     }
 
@@ -961,12 +1014,12 @@ async fn queued_child_exit_progresses_before_ready_mailbox_is_exhausted() {
     let options = SpawnOptions::default()
         .with_mailbox_capacity(NonZeroUsize::new(64).unwrap())
         .with_max_in_flight(NonZeroUsize::new(4).unwrap());
-    let owner = spawn_with(
-        FairChildExitActor {
-            child_started: Some(child_started_tx),
+    let owner = spawn_with::<FairChildExitActor>(
+        FairChildExitArgs {
+            child_started: child_started_tx,
             handled: handled.clone(),
             hook_completed_at: hook_completed_at.clone(),
-            hook_completed: Some(hook_completed_tx),
+            hook_completed: hook_completed_tx,
         },
         options,
     );

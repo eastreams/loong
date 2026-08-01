@@ -3,7 +3,13 @@ use tokio::sync::oneshot;
 
 struct Counter(u64);
 
-impl Actor for Counter {}
+impl Actor for Counter {
+    type SpawnArgs = u64;
+
+    async fn init(value: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self(value)
+    }
+}
 
 struct AddAfter {
     amount: u64,
@@ -54,7 +60,7 @@ impl Handler<Read> for Counter {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let owner = spawn(Counter(10));
+    let owner = spawn::<Counter>(10);
     let counter = owner.actor_ref();
     let (resume_tx, resume_rx) = oneshot::channel();
 

@@ -36,8 +36,8 @@ pub enum CallError {
     #[error("the actor is closed to new messages")]
     Closed,
 
-    /// The message was accepted, but lifecycle shutdown or failure discarded it
-    /// before its handler was invoked.
+    /// The message was accepted, but never reached its handler.
+    /// Initialization failure, shutdown, or actor failure may cause this result.
     #[error("the request was discarded before dispatch: {0}")]
     BeforeDispatch(ExitReason),
 

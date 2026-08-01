@@ -24,7 +24,13 @@ use loong_actor::{ExitReason, Shutdown, SubtreeStatus, prelude::*, spawn};
 
 struct Counter(u64);
 
-impl Actor for Counter {}
+impl Actor for Counter {
+    type SpawnArgs = u64;
+
+    async fn init(value: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self(value)
+    }
+}
 
 #[derive(Message)]
 #[message(reply = u64)]
@@ -43,7 +49,7 @@ impl SyncHandler<Add> for Counter {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let owner = spawn(Counter(0));
+    let owner = spawn::<Counter>(0);
     let counter = owner.actor_ref();
 
     assert_eq!(counter.call(Add(2)).await?, 2);
@@ -66,9 +72,10 @@ be a bounded channel receiver or another application-defined stream handle.
 Owned replies consume no `max_in_flight` slot. Their self-calls can progress
 while an interleaved slot remains available. Interleaved replies need another
 slot for mailbox re-entry. An exclusive reply blocks its queued self-call.
-`on_start` and `on_child_exit` also block dispatch while running. Admission is
-closed in `on_stop`, so a new self-call returns `Closed`. Prefer
-`ActorFutureExt::map` or `then` for consecutive actor work. Address cycles can
-still deadlock when every participant waits.
+`init` completes before dispatch starts. `on_child_exit` blocks dispatch while
+running. `spawn` returns before `init`; sends may admit while calls await
+dispatch. Admission is closed in `on_stop`, so a new self-call returns
+`Closed`. Prefer `ActorFutureExt::map` or `then` for consecutive actor work.
+Address cycles can still deadlock when every participant waits.
 
 Licensed under the MIT License.

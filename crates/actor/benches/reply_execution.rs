@@ -99,7 +99,13 @@ impl ReplyExecution {
 
 struct ReplyActor;
 
-impl Actor for ReplyActor {}
+impl Actor for ReplyActor {
+    type SpawnArgs = ();
+
+    async fn init(_args: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self
+    }
+}
 
 struct OwnedReply {
     started: oneshot::Sender<()>,
@@ -282,8 +288,8 @@ impl Handler<StageMailboxBacklog> for ReplyActor {
 
 fn spawn_benchmark_actor(active: usize, max_interleaved: NonZeroUsize) -> ActorOwner<ReplyActor> {
     let capacity = NonZeroUsize::new(active).expect("active reply counts are non-zero");
-    spawn_with(
-        ReplyActor,
+    spawn_with::<ReplyActor>(
+        (),
         SpawnOptions::default()
             .with_mailbox_capacity(capacity)
             .with_max_in_flight(max_interleaved),
@@ -412,8 +418,8 @@ async fn measure_mailbox_turn_to_target_poll_under_backlog(
         .checked_sub(1)
         .expect("mailbox backlog counts include a trigger message");
     let mailbox_capacity = NonZeroUsize::new(backlog).expect("mailbox backlog counts are non-zero");
-    let owner = spawn_with(
-        ReplyActor,
+    let owner = spawn_with::<ReplyActor>(
+        (),
         SpawnOptions::default()
             .with_mailbox_capacity(mailbox_capacity)
             // A pending probe needs capacity for staging dispatch.

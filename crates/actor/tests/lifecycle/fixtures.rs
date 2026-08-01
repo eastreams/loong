@@ -16,7 +16,21 @@ pub(super) struct LifecycleActor {
     cleanup: Arc<Mutex<Vec<ExitReason>>>,
 }
 
+pub(super) struct LifecycleArgs {
+    handled: Arc<Mutex<Vec<u8>>>,
+    cleanup: Arc<Mutex<Vec<ExitReason>>>,
+}
+
 impl Actor for LifecycleActor {
+    type SpawnArgs = LifecycleArgs;
+
+    async fn init(args: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self {
+            handled: args.handled,
+            cleanup: args.cleanup,
+        }
+    }
+
     async fn on_stop(&mut self, reason: ExitReason, _scope: &mut StopScope<'_, Self>) {
         lock(&self.cleanup).push(reason);
     }
@@ -46,7 +60,7 @@ impl Handler<Step> for LifecycleActor {
     fn handle(
         &mut self,
         mut message: Step,
-        _scope: &mut ActorScope<Self>,
+        _scope: &mut ActorScope<'_, Self>,
     ) -> impl loong_actor::IntoReply<Self, Step> + use<> {
         async move {
             if let Some(entered) = message.entered.take() {
@@ -75,12 +89,12 @@ pub(super) struct LifecycleHarness {
 pub(super) fn actor_with_capacity(capacity: usize) -> LifecycleHarness {
     let handled = Arc::new(Mutex::new(Vec::new()));
     let cleanup = Arc::new(Mutex::new(Vec::new()));
-    let actor = LifecycleActor {
+    let args = LifecycleArgs {
         handled: handled.clone(),
         cleanup: cleanup.clone(),
     };
-    let owner = spawn_with(
-        actor,
+    let owner = spawn_with::<LifecycleActor>(
+        args,
         SpawnOptions::default()
             .with_mailbox_capacity(NonZeroUsize::new(capacity).expect("test capacity is non-zero"))
             .with_max_in_flight(NonZeroUsize::new(1).expect("one is non-zero")),

@@ -20,11 +20,23 @@ impl Message for Read {
 
 struct FirstActor(u8);
 
-impl Actor for FirstActor {}
+impl Actor for FirstActor {
+    type SpawnArgs = u8;
+
+    async fn init(value: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self(value)
+    }
+}
 
 struct SecondActor(u8);
 
-impl Actor for SecondActor {}
+impl Actor for SecondActor {
+    type SpawnArgs = u8;
+
+    async fn init(value: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self(value)
+    }
+}
 
 struct SharedFuture;
 
@@ -79,8 +91,8 @@ async fn handler_context_selects_the_actor_future_implementation() {
     // One concrete future implements ActorFuture for both actors. Driving both
     // handlers in one expression ensures each IntoReply context selects its
     // actor-specific implementation without an explicit type annotation.
-    let first_owner = spawn(FirstActor(1));
-    let second_owner = spawn(SecondActor(2));
+    let first_owner = spawn::<FirstActor>(1);
+    let second_owner = spawn::<SecondActor>(2);
     let first = first_owner.actor_ref();
     let second = second_owner.actor_ref();
 

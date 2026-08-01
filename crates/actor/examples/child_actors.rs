@@ -12,7 +12,13 @@ struct Report {
 
 struct Agent(&'static str);
 
-impl Actor for Agent {}
+impl Actor for Agent {
+    type SpawnArgs = &'static str;
+
+    async fn init(name: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self(name)
+    }
+}
 
 #[derive(Message)]
 #[message(reply = Report)]
@@ -28,16 +34,20 @@ impl SyncHandler<Review> for Agent {
 }
 
 struct Team {
-    agents: Option<[ActorRef<Agent>; 2]>,
+    agents: [ActorRef<Agent>; 2],
 }
 
 impl Actor for Team {
-    async fn on_start(&mut self, scope: &mut ActorScope<'_, Self>) {
-        let correctness = scope.spawn_child(Agent("correctness")).into_actor_ref();
-        let readability = scope.spawn_child(Agent("readability")).into_actor_ref();
+    type SpawnArgs = ();
+
+    async fn init(_args: Self::SpawnArgs, scope: &mut ActorScope<'_, Self>) -> Self {
+        let correctness = scope.spawn_child::<Agent>("correctness").into_actor_ref();
+        let readability = scope.spawn_child::<Agent>("readability").into_actor_ref();
 
         // The parent runtime owns both lifecycles. State keeps only addresses.
-        self.agents = Some([correctness, readability]);
+        Self {
+            agents: [correctness, readability],
+        }
     }
 }
 
@@ -51,10 +61,7 @@ impl Handler<ReviewTask> for Team {
         message: ReviewTask,
         _scope: &mut ActorScope<Self>,
     ) -> impl IntoReply<Self, ReviewTask> + use<> {
-        let [correctness, readability] = self
-            .agents
-            .clone()
-            .expect("on_start runs before message dispatch");
+        let [correctness, readability] = self.agents.clone();
 
         async move {
             let (correctness, readability) = tokio::try_join!(
@@ -68,7 +75,7 @@ impl Handler<ReviewTask> for Team {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let owner = spawn(Team { agents: None });
+    let owner = spawn::<Team>(());
     let team = owner.actor_ref();
 
     let reports = team.call(ReviewTask("actor runtime")).await?;

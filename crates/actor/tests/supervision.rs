@@ -14,15 +14,16 @@ use tokio::sync::{mpsc, oneshot};
 
 use support::watchdog;
 
-struct ChildActor {
-    exits_on_start: bool,
-}
+struct ChildActor;
 
 impl Actor for ChildActor {
-    async fn on_start(&mut self, scope: &mut ActorScope<'_, Self>) {
-        if self.exits_on_start {
+    type SpawnArgs = bool;
+
+    async fn init(exits_during_init: Self::SpawnArgs, scope: &mut ActorScope<'_, Self>) -> Self {
+        if exits_during_init {
             scope.request_shutdown(Shutdown::Stop);
         }
+        Self
     }
 }
 
@@ -36,7 +37,7 @@ impl Handler<StopSelf> for ChildActor {
     fn handle(
         &mut self,
         _message: StopSelf,
-        scope: &mut ActorScope<Self>,
+        scope: &mut ActorScope<'_, Self>,
     ) -> impl loong_actor::IntoReply<Self, StopSelf> + use<> {
         scope.request_shutdown(Shutdown::Stop);
         ().ready()
@@ -53,7 +54,7 @@ impl Handler<PanicSelf> for ChildActor {
     fn handle(
         &mut self,
         _message: PanicSelf,
-        _scope: &mut ActorScope<Self>,
+        _scope: &mut ActorScope<'_, Self>,
     ) -> impl loong_actor::IntoReply<Self, PanicSelf> + use<> {
         panic!("intentional child panic");
         #[allow(unreachable_code)]
@@ -62,19 +63,26 @@ impl Handler<PanicSelf> for ChildActor {
 }
 
 struct Supervisor {
-    child_started: Option<oneshot::Sender<Child<ChildActor>>>,
     events: mpsc::UnboundedSender<ChildExit>,
     observed: Arc<AtomicUsize>,
-    child_exits_on_start: bool,
+}
+
+struct SupervisorArgs {
+    child_started: oneshot::Sender<Child<ChildActor>>,
+    events: mpsc::UnboundedSender<ChildExit>,
+    observed: Arc<AtomicUsize>,
+    child_exits_during_init: bool,
 }
 
 impl Actor for Supervisor {
-    async fn on_start<'a>(&'a mut self, scope: &'a mut ActorScope<'_, Self>) {
-        let child = scope.spawn_child(ChildActor {
-            exits_on_start: self.child_exits_on_start,
-        });
-        if let Some(started) = self.child_started.take() {
-            let _ = started.send(child);
+    type SpawnArgs = SupervisorArgs;
+
+    async fn init(args: Self::SpawnArgs, scope: &mut ActorScope<'_, Self>) -> Self {
+        let child = scope.spawn_child::<ChildActor>(args.child_exits_during_init);
+        let _ = args.child_started.send(child);
+        Self {
+            events: args.events,
+            observed: args.observed,
         }
     }
 
@@ -98,7 +106,7 @@ impl Handler<Observed> for Supervisor {
     fn handle(
         &mut self,
         _message: Observed,
-        _scope: &mut ActorScope<Self>,
+        _scope: &mut ActorScope<'_, Self>,
     ) -> impl loong_actor::IntoReply<Self, Observed> + use<> {
         self.observed.load(Ordering::SeqCst).ready()
     }
@@ -114,7 +122,7 @@ impl Handler<ChildExitBarrier> for Supervisor {
     fn handle(
         &mut self,
         _message: ChildExitBarrier,
-        _scope: &mut ActorScope<Self>,
+        _scope: &mut ActorScope<'_, Self>,
     ) -> impl loong_actor::IntoReply<Self, ChildExitBarrier> + use<> {
         let mut yielded = false;
         std::future::poll_fn(move |task| {
@@ -132,7 +140,7 @@ impl Handler<ChildExitBarrier> for Supervisor {
 }
 
 fn spawn_supervisor(
-    child_exits_on_start: bool,
+    child_exits_during_init: bool,
 ) -> (
     loong_actor::ActorOwner<Supervisor>,
     oneshot::Receiver<Child<ChildActor>>,
@@ -140,11 +148,11 @@ fn spawn_supervisor(
 ) {
     let (child_tx, child_rx) = oneshot::channel();
     let (events_tx, events_rx) = mpsc::unbounded_channel();
-    let owner = spawn(Supervisor {
-        child_started: Some(child_tx),
+    let owner = spawn::<Supervisor>(SupervisorArgs {
+        child_started: child_tx,
         events: events_tx,
         observed: Arc::new(AtomicUsize::new(0)),
-        child_exits_on_start,
+        child_exits_during_init,
     });
     (owner, child_rx, events_rx)
 }
@@ -177,9 +185,9 @@ async fn clean_child_exit_is_reported_exactly_once() {
 }
 
 // The earliest normal exit path must preserve identity correlation.
-// Multiple workers permit startup before the parent delivers the receipt.
+// Multiple workers permit child exit before the receipt arrives.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn child_exiting_on_start_keeps_its_registered_identity() {
+async fn child_exiting_during_init_keeps_its_registered_identity() {
     let (owner, child_rx, mut events) = spawn_supervisor(true);
     let child = watchdog(child_rx).await.unwrap();
     let event = watchdog(events.recv()).await.unwrap();

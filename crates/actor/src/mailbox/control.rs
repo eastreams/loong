@@ -177,6 +177,18 @@ impl Control {
         })
     }
 
+    /// Commits initialization entry against hard lifecycle cutoff.
+    ///
+    /// Graceful shutdown retains initialization.
+    /// A hard mode winning this transaction skips entry.
+    pub(crate) fn begin_initialization(&self) -> Option<InitEntryPermit> {
+        self.transact(|mode| {
+            let permit = matches!(mode, Mode::Running | Mode::Draining | Mode::Stopping)
+                .then_some(InitEntryPermit(()));
+            (mode, permit)
+        })
+    }
+
     /// Commits the first shutdown mode and permits only a later Kill upgrade.
     ///
     /// Repeated and losing requests observe the already committed behavior;
@@ -384,6 +396,9 @@ enum CallPhase {
 pub(super) struct DispatchPermit {
     control: Arc<Control>,
 }
+
+/// Proves initialization entry won against hard cutoff.
+pub(crate) struct InitEntryPermit(());
 
 pub(crate) struct HookEntryPermit(());
 

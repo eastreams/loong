@@ -4,7 +4,13 @@ use loong_actor::{ExitReason, Shutdown, prelude::*, spawn};
 
 struct Counter(u64);
 
-impl Actor for Counter {}
+impl Actor for Counter {
+    type SpawnArgs = u64;
+
+    async fn init(value: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self(value)
+    }
+}
 
 struct Add(u64);
 
@@ -33,7 +39,7 @@ impl SyncHandler<Reset> for Counter {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let owner = spawn(Counter(1));
+    let owner = spawn::<Counter>(1);
     let counter = owner.actor_ref();
 
     assert_eq!(counter.call(Add(2)).await?, 3);

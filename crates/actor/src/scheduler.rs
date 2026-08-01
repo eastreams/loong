@@ -339,7 +339,13 @@ mod tests {
 
     struct TestActor;
 
-    impl Actor for TestActor {}
+    impl Actor for TestActor {
+        type SpawnArgs = ();
+
+        async fn init(_args: (), _scope: &mut ActorScope<'_, Self>) -> Self {
+            Self
+        }
+    }
 
     struct DropProbe {
         dropped: Arc<AtomicBool>,

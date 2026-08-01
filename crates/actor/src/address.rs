@@ -30,11 +30,11 @@ impl<A: Actor> ActorRef<A> {
     /// invoked. Unlike [`try_call`](Self::try_call), this method does not return
     /// the message when admission fails.
     ///
-    /// After admission, the request waits in mailbox order until in-flight
-    /// capacity and reply scheduling permit dispatch. Dropping this future while
-    /// the request is still queued permits the runtime to skip its handler. Once
-    /// dispatch begins, dropping the future abandons only the result; synchronous
-    /// handler effects and its selected reply continue.
+    /// After admission, the request waits for actor initialization.
+    /// It then waits in mailbox order for dispatch capacity.
+    /// Dropping this future while queued may skip its handler.
+    /// After dispatch, dropping it abandons only the result.
+    /// Handler effects and selected reply work continue.
     ///
     /// After dispatch, successful completion and lifecycle interruption also
     /// have one commit point. Completion first returns `Ok`, even if Kill follows
@@ -90,11 +90,12 @@ impl<A: Actor> ActorRef<A> {
 
     /// Sends a one-way message, waiting for bounded mailbox capacity if needed.
     ///
-    /// `Ok(())` means admission committed; it does not wait for the handler or
-    /// its selected reply work to run. Once accepted, the runtime owns the
-    /// message and executes it under the same dispatch, scheduling, and
-    /// lifecycle rules as [`call`](Self::call). In particular, Stop or Kill may
-    /// still discard queued work after this method returns.
+    /// `Ok(())` means admission committed.
+    /// It may return while actor initialization remains pending.
+    /// It does not wait for handler or reply work.
+    /// Once accepted, the runtime owns the message.
+    /// It then follows [`call`](Self::call) dispatch rules.
+    /// Stop or Kill may still discard queued work.
     ///
     /// Unlike dropping a queued [`Response`], returning from this method cannot
     /// abandon the message: one-way envelopes have no response receiver. If
@@ -296,6 +297,7 @@ impl<A: Actor> fmt::Debug for ActorRef<A> {
 /// The typed reply of an accepted [`ActorRef::try_call`] request.
 ///
 /// The message has committed to the mailbox, but its handler may not have run.
+/// It may remain queued while initialization is pending.
 /// Dropping a queued response permits the runtime to skip that handler. Once
 /// dispatch starts, dropping the response only abandons the result; handler and
 /// reply effects continue.

@@ -58,7 +58,13 @@ struct LoongActor {
     handled: u64,
 }
 
-impl Actor for LoongActor {}
+impl Actor for LoongActor {
+    type SpawnArgs = ();
+
+    async fn init(_args: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self { handled: 0 }
+    }
+}
 
 impl SyncHandler<Ready> for LoongActor {
     fn handle(&mut self, _message: Ready, _scope: &mut ActorScope<Self>) -> u64 {
@@ -197,8 +203,8 @@ impl RuntimePair {
         let mailbox_capacity =
             NonZeroUsize::new(MAILBOX_CAPACITY).expect("the benchmark capacity is non-zero");
         let loong_owner = loong_runtime.block_on(async {
-            spawn_with(
-                LoongActor { handled: 0 },
+            spawn_with::<LoongActor>(
+                (),
                 SpawnOptions::default().with_mailbox_capacity(mailbox_capacity),
             )
         });

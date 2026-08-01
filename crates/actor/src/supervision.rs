@@ -17,23 +17,28 @@ pub enum Shutdown {
     /// Finishes dispatched replies and discards messages still queued for
     /// dispatch.
     ///
+    /// Pending actor initialization finishes first.
     /// The actor then requests Stop from its children, waits for their terminal
     /// events, and runs [`Actor::on_stop`] with [`ExitReason::Stopped`].
     Stop,
     /// Dispatches the fixed queue accepted before Drain committed and finishes
     /// all resulting replies.
     ///
+    /// Pending actor initialization finishes first.
     /// The actor then requests Drain from its children, waits for their terminal
     /// events, and runs [`Actor::on_stop`] with [`ExitReason::Drained`].
     Drain,
     /// Cancels cooperative actor work without running [`Actor::on_stop`].
     /// It waits for every retained child actor.
     ///
-    /// If Kill interrupts an entered lifecycle hook, that hook is first dropped
-    /// to release its mutable scope borrow. Once the scope is available, Kill is
-    /// submitted to children before active replies and queued messages are
-    /// dropped, allowing descendants to begin termination ahead of arbitrary
-    /// user destructors. The final status reports subtree confirmation.
+    /// This may prevent [`Actor::init`] or cancel it between polls.
+    /// The runtime installs no actor value before initialization returns.
+    ///
+    /// Kill first drops interrupted initialization or an entered hook.
+    /// This releases its mutable scope borrow.
+    /// Kill then reaches children before active replies and queued messages are dropped.
+    /// Descendants can begin termination before those destructors.
+    /// The final status reports subtree confirmation.
     ///
     /// Kill takes effect between polls. It cannot interrupt a synchronous
     /// handler, a poll call that does not return, or user `Drop` code.
@@ -212,6 +217,8 @@ impl ChildExit {
 
 /// A typed, non-owning reference to a child registered in its parent's tree.
 ///
+/// Registration is complete when this value is returned.
+/// Child initialization may still be pending.
 /// The parent runtime retains lifecycle ownership. Cloning or dropping a
 /// `Child` does not keep the child alive or initiate shutdown.
 pub struct Child<A: Actor> {

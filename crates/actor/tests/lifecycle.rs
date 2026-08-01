@@ -2,8 +2,10 @@
 mod fixtures;
 #[path = "lifecycle/graceful.rs"]
 mod graceful;
-#[path = "lifecycle/hooks.rs"]
-mod hooks;
+#[path = "lifecycle/init_failures.rs"]
+mod init_failures;
+#[path = "lifecycle/initialization.rs"]
+mod initialization;
 #[path = "lifecycle/kill.rs"]
 mod kill;
 mod support;

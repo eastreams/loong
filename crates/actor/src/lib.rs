@@ -13,6 +13,8 @@
 //! # Define an actor
 //!
 //! Implement [`Actor`] for state owned by one actor.
+//! [`Actor::SpawnArgs`] owns its construction inputs.
+//! [`Actor::init`] asynchronously builds the complete state.
 //! Implement [`Message`] for every message type.
 //! Its [`Message::Reply`] type defines a successful call result.
 //! Implement [`SyncHandler<M>`](SyncHandler) for an immediate reply.
@@ -22,6 +24,10 @@
 //!
 //! Call [`spawn`] inside a Tokio runtime.
 //! It returns the root actor's unique [`ActorOwner`].
+//! It returns before initialization completes.
+//! The actor task then awaits [`Actor::init`].
+//! Mailbox admission is already open during initialization.
+//! Handler dispatch starts only after initialization succeeds.
 //! Obtain an [`ActorRef`] through [`ActorOwner::actor_ref`].
 //! Actor references send messages.
 //! An actor reference does not own lifecycle.
@@ -54,7 +60,16 @@
 //!
 //! struct Counter(u64);
 //!
-//! impl Actor for Counter {}
+//! impl Actor for Counter {
+//!     type SpawnArgs = u64;
+//!
+//!     async fn init(
+//!         initial: u64,
+//!         _scope: &mut ActorScope<'_, Self>,
+//!     ) -> Self {
+//!         Self(initial)
+//!     }
+//! }
 //!
 //! struct Add(u64);
 //!
@@ -75,7 +90,7 @@
 //!
 //! #[tokio::main]
 //! async fn main() {
-//!     let owner = spawn(Counter(0));
+//!     let owner = spawn::<Counter>(0);
 //!     let counter = owner.actor_ref();
 //!
 //!     assert_eq!(counter.call(Add(2)).await, Ok(2));
@@ -141,6 +156,8 @@
 //! Addresses may cross supervision-tree boundaries.
 //! They may also form cycles.
 //! Cyclic calls may wait indefinitely.
+//! Initialization blocks dispatch.
+//! A call to the same actor cannot complete inside [`Actor::init`].
 //! Actor-local continuations avoid another mailbox call.
 //! Build them with [`ActorFutureExt::map`] or [`ActorFutureExt::then`].
 //!

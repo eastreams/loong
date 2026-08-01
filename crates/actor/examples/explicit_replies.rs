@@ -6,7 +6,13 @@ struct Store {
     cache: HashMap<String, u64>,
 }
 
-impl Actor for Store {}
+impl Actor for Store {
+    type SpawnArgs = HashMap<String, u64>;
+
+    async fn init(cache: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self { cache }
+    }
+}
 
 #[derive(Message)]
 #[message(reply = u64)]
@@ -33,9 +39,7 @@ async fn load_value(key: String) -> u64 {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let owner = spawn(Store {
-        cache: HashMap::from([("cached".to_owned(), 21)]),
-    });
+    let owner = spawn::<Store>(HashMap::from([("cached".to_owned(), 21)]));
     let store = owner.actor_ref();
 
     assert_eq!(store.call(Lookup("cached".to_owned())).await?, 21);

@@ -21,7 +21,13 @@ const MAILBOX_CAPACITIES: [usize; 3] = [1, 32, 256];
 
 struct MailboxActor;
 
-impl Actor for MailboxActor {}
+impl Actor for MailboxActor {
+    type SpawnArgs = ();
+
+    async fn init(_args: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self
+    }
+}
 
 struct ReadyTraffic;
 
@@ -43,8 +49,8 @@ impl Handler<ReadyTraffic> for MailboxActor {
 /// The fixed limit leaves mailbox capacity as the only variable.
 fn spawn_benchmark_actor(capacity: usize) -> ActorOwner<MailboxActor> {
     let capacity = NonZeroUsize::new(capacity).expect("mailbox capacities are non-zero");
-    spawn_with(
-        MailboxActor,
+    spawn_with::<MailboxActor>(
+        (),
         SpawnOptions::default()
             .with_mailbox_capacity(capacity)
             .with_max_in_flight(NonZeroUsize::MIN),

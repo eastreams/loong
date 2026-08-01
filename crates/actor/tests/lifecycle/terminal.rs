@@ -19,7 +19,13 @@ use super::support::watchdog;
 
 struct ExitedActor;
 
-impl Actor for ExitedActor {}
+impl Actor for ExitedActor {
+    type SpawnArgs = ();
+
+    async fn init(_args: (), _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self
+    }
+}
 
 #[tokio::test]
 async fn shutdown_requests_after_exit_report_the_published_status() {
@@ -28,7 +34,7 @@ async fn shutdown_requests_after_exit_report_the_published_status() {
         (Shutdown::Drain, ExitReason::Drained),
         (Shutdown::Kill, ExitReason::Killed),
     ] {
-        let mut owner = spawn(ExitedActor);
+        let mut owner = spawn::<ExitedActor>(());
         assert_eq!(owner.request_shutdown(initial), ShutdownStatus::Requested);
         let status = watchdog(owner.wait()).await;
         assert_eq!(status.reason(), expected_reason);
@@ -45,7 +51,19 @@ async fn shutdown_requests_after_exit_report_the_published_status() {
 
 struct StateDrop(Option<oneshot::Sender<()>>);
 
-impl Actor for StateDrop {}
+struct StateDropArgs {
+    initialized: oneshot::Sender<()>,
+    dropped: oneshot::Sender<()>,
+}
+
+impl Actor for StateDrop {
+    type SpawnArgs = StateDropArgs;
+
+    async fn init(args: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
+        let _ = args.initialized.send(());
+        Self(Some(args.dropped))
+    }
+}
 
 impl Drop for StateDrop {
     fn drop(&mut self) {
@@ -57,11 +75,16 @@ impl Drop for StateDrop {
 
 #[tokio::test]
 async fn actor_refs_do_not_keep_an_actor_alive() {
+    let (initialized_tx, initialized_rx) = oneshot::channel();
     let (dropped_tx, dropped_rx) = oneshot::channel();
-    let owner = spawn(StateDrop(Some(dropped_tx)));
+    let owner = spawn::<StateDrop>(StateDropArgs {
+        initialized: initialized_tx,
+        dropped: dropped_tx,
+    });
     let actor = owner.actor_ref();
     let another_ref = actor.clone();
 
+    watchdog(initialized_rx).await.unwrap();
     drop(owner);
 
     assert_eq!(watchdog(actor.closed()).await.reason(), ExitReason::Killed);
@@ -103,7 +126,7 @@ impl Wake for ReentrantShutdownWaker {
 // to freeze this current-thread runtime or hide behind an async timeout.
 #[tokio::test(flavor = "current_thread")]
 async fn lifecycle_notification_allows_reentrant_shutdown_from_a_safe_waker() {
-    let owner = Arc::new(spawn(ExitedActor));
+    let owner = Arc::new(spawn::<ExitedActor>(()));
     let actor = owner.actor_ref();
     let (kill_tx, kill_rx) = mpsc::sync_channel(1);
     let probe = Arc::new(ReentrantShutdownWaker {
@@ -145,16 +168,14 @@ async fn lifecycle_notification_allows_reentrant_shutdown_from_a_safe_waker() {
     assert_eq!(watchdog(actor.closed()).await.reason(), ExitReason::Killed);
 }
 
-struct PendingStart {
-    entered: Option<oneshot::Sender<()>>,
-}
+struct PendingInit;
 
-impl Actor for PendingStart {
-    async fn on_start(&mut self, _scope: &mut ActorScope<'_, Self>) {
-        if let Some(entered) = self.entered.take() {
-            let _ = entered.send(());
-        }
-        std::future::pending().await
+impl Actor for PendingInit {
+    type SpawnArgs = oneshot::Sender<()>;
+
+    async fn init(entered: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
+        let _ = entered.send(());
+        std::future::pending::<Self>().await
     }
 }
 
@@ -167,9 +188,7 @@ fn executor_teardown_reports_aborted_with_an_unconfirmed_subtree() {
         .unwrap();
     let (entered_tx, entered_rx) = oneshot::channel();
     let owner = runtime.block_on(async {
-        let owner = spawn(PendingStart {
-            entered: Some(entered_tx),
-        });
+        let owner = spawn::<PendingInit>(entered_tx);
         entered_rx.await.unwrap();
         owner
     });
@@ -187,7 +206,13 @@ fn executor_teardown_reports_aborted_with_an_unconfirmed_subtree() {
 
 struct PanicActor;
 
-impl Actor for PanicActor {}
+impl Actor for PanicActor {
+    type SpawnArgs = ();
+
+    async fn init(_args: (), _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self
+    }
+}
 
 struct PanicNow;
 
@@ -199,7 +224,7 @@ impl Handler<PanicNow> for PanicActor {
     fn handle(
         &mut self,
         _message: PanicNow,
-        _scope: &mut ActorScope<Self>,
+        _scope: &mut ActorScope<'_, Self>,
     ) -> impl loong_actor::IntoReply<Self, PanicNow> + use<> {
         panic!("intentional handler panic");
         #[allow(unreachable_code)]
@@ -209,7 +234,7 @@ impl Handler<PanicNow> for PanicActor {
 
 #[tokio::test]
 async fn handler_panics_are_contained_and_reported() {
-    let mut owner = spawn(PanicActor);
+    let mut owner = spawn::<PanicActor>(());
     let actor = owner.actor_ref();
 
     assert_eq!(
@@ -233,7 +258,7 @@ impl Handler<PanicAfterBarrier> for PanicActor {
     fn handle(
         &mut self,
         message: PanicAfterBarrier,
-        _scope: &mut ActorScope<Self>,
+        _scope: &mut ActorScope<'_, Self>,
     ) -> impl loong_actor::IntoReply<Self, PanicAfterBarrier> + use<> {
         async move {
             let _ = message.entered.send(());
@@ -245,7 +270,7 @@ impl Handler<PanicAfterBarrier> for PanicActor {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn kill_committed_during_a_handler_poll_wins_over_panic() {
-    let mut owner = spawn(PanicActor);
+    let mut owner = spawn::<PanicActor>(());
     let actor = owner.actor_ref();
     let barrier = Arc::new(Barrier::new(2));
     let (entered_tx, entered_rx) = oneshot::channel();
@@ -273,6 +298,12 @@ async fn kill_committed_during_a_handler_poll_wins_over_panic() {
 struct KillOnStop;
 
 impl Actor for KillOnStop {
+    type SpawnArgs = ();
+
+    async fn init(_args: (), _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self
+    }
+
     async fn on_stop(&mut self, _reason: ExitReason, scope: &mut StopScope<'_, Self>) {
         assert_eq!(
             scope.request_shutdown(Shutdown::Kill),
@@ -283,7 +314,7 @@ impl Actor for KillOnStop {
 
 #[tokio::test]
 async fn kill_requested_at_graceful_finalization_wins_atomically() {
-    let owner = spawn(KillOnStop);
+    let owner = spawn::<KillOnStop>(());
 
     assert_eq!(
         watchdog(owner.shutdown(Shutdown::Stop)).await.reason(),

@@ -20,7 +20,13 @@ const MEASURED_CALLS: usize = 10_000;
 
 struct ReplyActor;
 
-impl Actor for ReplyActor {}
+impl Actor for ReplyActor {
+    type SpawnArgs = ();
+
+    async fn init(_args: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self
+    }
+}
 
 struct Ready;
 
@@ -124,7 +130,7 @@ fn main() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
         .expect("the benchmark runtime builds");
-    let owner = runtime.block_on(async { spawn(ReplyActor) });
+    let owner = runtime.block_on(async { spawn::<ReplyActor>(()) });
     let actor = owner.actor_ref();
 
     run_calls(&runtime, &actor, WARMUP_CALLS, || Ready);

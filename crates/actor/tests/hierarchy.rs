@@ -19,6 +19,12 @@ struct LogChild {
 }
 
 impl Actor for LogChild {
+    type SpawnArgs = Arc<Mutex<Vec<&'static str>>>;
+
+    async fn init(log: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self { log }
+    }
+
     async fn on_stop<'a>(&'a mut self, _reason: ExitReason, _scope: &'a mut StopScope<'_, Self>) {
         lock(&self.log).push("child-stop");
     }
@@ -26,17 +32,22 @@ impl Actor for LogChild {
 
 struct LogParent {
     log: Arc<Mutex<Vec<&'static str>>>,
-    child_started: Option<oneshot::Sender<ActorRef<LogChild>>>,
+}
+
+struct LogParentArgs {
+    log: Arc<Mutex<Vec<&'static str>>>,
+    child_started: oneshot::Sender<ActorRef<LogChild>>,
 }
 
 impl Actor for LogParent {
-    async fn on_start<'a>(&'a mut self, scope: &'a mut ActorScope<'_, Self>) {
-        let child = scope.spawn_child(LogChild {
-            log: self.log.clone(),
-        });
-        if let Some(started) = self.child_started.take() {
-            let _ = started.send(child.into_actor_ref());
-        }
+    type SpawnArgs = LogParentArgs;
+
+    async fn init(args: Self::SpawnArgs, scope: &mut ActorScope<'_, Self>) -> Self {
+        let child = scope
+            .spawn_child::<LogChild>(Arc::clone(&args.log))
+            .into_actor_ref();
+        let _ = args.child_started.send(child);
+        Self { log: args.log }
     }
 
     async fn on_stop<'a>(&'a mut self, _reason: ExitReason, _scope: &'a mut StopScope<'_, Self>) {
@@ -48,9 +59,9 @@ impl Actor for LogParent {
 async fn parent_stop_cleans_up_children_before_the_parent() {
     let log = Arc::new(Mutex::new(Vec::new()));
     let (child_tx, child_rx) = oneshot::channel();
-    let owner = spawn(LogParent {
+    let owner = spawn::<LogParent>(LogParentArgs {
         log: log.clone(),
-        child_started: Some(child_tx),
+        child_started: child_tx,
     });
     let parent = owner.actor_ref();
     let child = watchdog(child_rx).await.unwrap();
@@ -82,7 +93,7 @@ impl Handler<ParentPing> for LogParent {
     fn handle(
         &mut self,
         _message: ParentPing,
-        _scope: &mut ActorScope<Self>,
+        _scope: &mut ActorScope<'_, Self>,
     ) -> impl loong_actor::IntoReply<Self, ParentPing> + use<> {
         ().ready()
     }
@@ -93,6 +104,12 @@ struct Worker {
 }
 
 impl Actor for Worker {
+    type SpawnArgs = Arc<Mutex<Vec<String>>>;
+
+    async fn init(log: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self { log }
+    }
+
     async fn on_stop<'a>(&'a mut self, _reason: ExitReason, _scope: &'a mut StopScope<'_, Self>) {
         lock(&self.log).push("worker-stop".to_owned());
     }
@@ -108,7 +125,7 @@ impl Handler<Work> for Worker {
     fn handle(
         &mut self,
         message: Work,
-        _scope: &mut ActorScope<Self>,
+        _scope: &mut ActorScope<'_, Self>,
     ) -> impl loong_actor::IntoReply<Self, Work> + use<> {
         lock(&self.log).push(format!("work-{}", message.0));
         message.0.ready()
@@ -117,20 +134,25 @@ impl Handler<Work> for Worker {
 
 struct DrainParent {
     log: Arc<Mutex<Vec<String>>>,
-    worker: Option<ActorRef<Worker>>,
-    worker_started: Option<oneshot::Sender<ActorRef<Worker>>>,
+    worker: ActorRef<Worker>,
+}
+
+struct DrainParentArgs {
+    log: Arc<Mutex<Vec<String>>>,
+    worker_started: oneshot::Sender<ActorRef<Worker>>,
 }
 
 impl Actor for DrainParent {
-    async fn on_start<'a>(&'a mut self, scope: &'a mut ActorScope<'_, Self>) {
+    type SpawnArgs = DrainParentArgs;
+
+    async fn init(args: Self::SpawnArgs, scope: &mut ActorScope<'_, Self>) -> Self {
         let worker = scope
-            .spawn_child(Worker {
-                log: self.log.clone(),
-            })
+            .spawn_child::<Worker>(Arc::clone(&args.log))
             .into_actor_ref();
-        self.worker = Some(worker.clone());
-        if let Some(started) = self.worker_started.take() {
-            let _ = started.send(worker);
+        let _ = args.worker_started.send(worker.clone());
+        Self {
+            log: args.log,
+            worker,
         }
     }
 
@@ -152,7 +174,7 @@ impl Handler<ParentBlock> for DrainParent {
     fn handle(
         &mut self,
         message: ParentBlock,
-        _scope: &mut ActorScope<Self>,
+        _scope: &mut ActorScope<'_, Self>,
     ) -> impl loong_actor::IntoReply<Self, ParentBlock> + use<> {
         async move {
             let _ = message.entered.send(());
@@ -173,13 +195,9 @@ impl Handler<Forward> for DrainParent {
     fn handle(
         &mut self,
         message: Forward,
-        _scope: &mut ActorScope<Self>,
+        _scope: &mut ActorScope<'_, Self>,
     ) -> impl loong_actor::IntoReply<Self, Forward> + use<> {
-        let worker = self
-            .worker
-            .as_ref()
-            .expect("on_start installs the worker")
-            .clone();
+        let worker = self.worker.clone();
         async move { worker.call(Work(message.0)).await }
     }
 }
@@ -188,10 +206,9 @@ impl Handler<Forward> for DrainParent {
 async fn parent_drain_finishes_parent_queue_before_draining_children() {
     let log = Arc::new(Mutex::new(Vec::new()));
     let (worker_tx, worker_rx) = oneshot::channel();
-    let mut owner = spawn(DrainParent {
+    let mut owner = spawn::<DrainParent>(DrainParentArgs {
         log: log.clone(),
-        worker: None,
-        worker_started: Some(worker_tx),
+        worker_started: worker_tx,
     });
     let parent = owner.actor_ref();
     let worker = watchdog(worker_rx).await.unwrap();
@@ -230,7 +247,23 @@ struct Leaf {
     dropped: Option<oneshot::Sender<()>>,
 }
 
-impl Actor for Leaf {}
+struct LeafArgs {
+    drop_entered: oneshot::Sender<()>,
+    drop_release: sync_mpsc::Receiver<()>,
+    dropped: oneshot::Sender<()>,
+}
+
+impl Actor for Leaf {
+    type SpawnArgs = LeafArgs;
+
+    async fn init(args: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self {
+            drop_entered: Some(args.drop_entered),
+            drop_release: Some(args.drop_release),
+            dropped: Some(args.dropped),
+        }
+    }
+}
 
 impl Drop for Leaf {
     fn drop(&mut self) {
@@ -247,24 +280,31 @@ impl Drop for Leaf {
 }
 
 struct Branch {
-    leaf_started: Option<oneshot::Sender<ActorRef<Leaf>>>,
-    leaf_drop_entered: Option<oneshot::Sender<()>>,
-    leaf_drop_release: Option<sync_mpsc::Receiver<()>>,
-    leaf_dropped: Option<oneshot::Sender<()>>,
     dropped: Option<oneshot::Sender<()>>,
 }
 
+struct BranchArgs {
+    leaf_started: oneshot::Sender<ActorRef<Leaf>>,
+    leaf_drop_entered: oneshot::Sender<()>,
+    leaf_drop_release: sync_mpsc::Receiver<()>,
+    leaf_dropped: oneshot::Sender<()>,
+    dropped: oneshot::Sender<()>,
+}
+
 impl Actor for Branch {
-    async fn on_start<'a>(&'a mut self, scope: &'a mut ActorScope<'_, Self>) {
+    type SpawnArgs = BranchArgs;
+
+    async fn init(args: Self::SpawnArgs, scope: &mut ActorScope<'_, Self>) -> Self {
         let leaf = scope
-            .spawn_child(Leaf {
-                drop_entered: self.leaf_drop_entered.take(),
-                drop_release: self.leaf_drop_release.take(),
-                dropped: self.leaf_dropped.take(),
+            .spawn_child::<Leaf>(LeafArgs {
+                drop_entered: args.leaf_drop_entered,
+                drop_release: args.leaf_drop_release,
+                dropped: args.leaf_dropped,
             })
             .into_actor_ref();
-        if let Some(started) = self.leaf_started.take() {
-            let _ = started.send(leaf);
+        let _ = args.leaf_started.send(leaf);
+        Self {
+            dropped: Some(args.dropped),
         }
     }
 }
@@ -277,29 +317,32 @@ impl Drop for Branch {
     }
 }
 
-struct PanicParent {
-    branch_started: Option<oneshot::Sender<ActorRef<Branch>>>,
-    leaf_started: Option<oneshot::Sender<ActorRef<Leaf>>>,
-    leaf_drop_entered: Option<oneshot::Sender<()>>,
-    leaf_drop_release: Option<sync_mpsc::Receiver<()>>,
-    branch_dropped: Option<oneshot::Sender<()>>,
-    leaf_dropped: Option<oneshot::Sender<()>>,
+struct PanicParent;
+
+struct PanicParentArgs {
+    branch_started: oneshot::Sender<ActorRef<Branch>>,
+    leaf_started: oneshot::Sender<ActorRef<Leaf>>,
+    leaf_drop_entered: oneshot::Sender<()>,
+    leaf_drop_release: sync_mpsc::Receiver<()>,
+    branch_dropped: oneshot::Sender<()>,
+    leaf_dropped: oneshot::Sender<()>,
 }
 
 impl Actor for PanicParent {
-    async fn on_start<'a>(&'a mut self, scope: &'a mut ActorScope<'_, Self>) {
+    type SpawnArgs = PanicParentArgs;
+
+    async fn init(args: Self::SpawnArgs, scope: &mut ActorScope<'_, Self>) -> Self {
         let branch = scope
-            .spawn_child(Branch {
-                leaf_started: self.leaf_started.take(),
-                leaf_drop_entered: self.leaf_drop_entered.take(),
-                leaf_drop_release: self.leaf_drop_release.take(),
-                leaf_dropped: self.leaf_dropped.take(),
-                dropped: self.branch_dropped.take(),
+            .spawn_child::<Branch>(BranchArgs {
+                leaf_started: args.leaf_started,
+                leaf_drop_entered: args.leaf_drop_entered,
+                leaf_drop_release: args.leaf_drop_release,
+                leaf_dropped: args.leaf_dropped,
+                dropped: args.branch_dropped,
             })
             .into_actor_ref();
-        if let Some(started) = self.branch_started.take() {
-            let _ = started.send(branch);
-        }
+        let _ = args.branch_started.send(branch);
+        Self
     }
 }
 
@@ -313,7 +356,7 @@ impl Handler<PanicTree> for PanicParent {
     fn handle(
         &mut self,
         _message: PanicTree,
-        _scope: &mut ActorScope<Self>,
+        _scope: &mut ActorScope<'_, Self>,
     ) -> impl loong_actor::IntoReply<Self, PanicTree> + use<> {
         panic!("intentional parent panic");
         #[allow(unreachable_code)]
@@ -329,13 +372,13 @@ async fn parent_panic_kills_descendants_before_parent_exit() {
     let (leaf_drop_release_tx, leaf_drop_release_rx) = sync_mpsc::channel();
     let (branch_dropped_tx, branch_dropped_rx) = oneshot::channel();
     let (leaf_dropped_tx, leaf_dropped_rx) = oneshot::channel();
-    let mut owner = spawn(PanicParent {
-        branch_started: Some(branch_tx),
-        leaf_started: Some(leaf_tx),
-        leaf_drop_entered: Some(leaf_drop_entered_tx),
-        leaf_drop_release: Some(leaf_drop_release_rx),
-        branch_dropped: Some(branch_dropped_tx),
-        leaf_dropped: Some(leaf_dropped_tx),
+    let mut owner = spawn::<PanicParent>(PanicParentArgs {
+        branch_started: branch_tx,
+        leaf_started: leaf_tx,
+        leaf_drop_entered: leaf_drop_entered_tx,
+        leaf_drop_release: leaf_drop_release_rx,
+        branch_dropped: branch_dropped_tx,
+        leaf_dropped: leaf_dropped_tx,
     });
     let parent = owner.actor_ref();
     let branch = watchdog(branch_rx).await.unwrap();
@@ -369,37 +412,43 @@ async fn parent_panic_kills_descendants_before_parent_exit() {
 
 struct LateChild;
 
-impl Actor for LateChild {}
+impl Actor for LateChild {
+    type SpawnArgs = ();
 
-struct SpawnDuringStartup {
-    entered: Option<oneshot::Sender<()>>,
-    release: Option<oneshot::Receiver<()>>,
-    spawned: Option<oneshot::Sender<ActorRef<LateChild>>>,
-}
-
-impl Actor for SpawnDuringStartup {
-    async fn on_start(&mut self, scope: &mut ActorScope<'_, Self>) {
-        if let Some(entered) = self.entered.take() {
-            let _ = entered.send(());
-        }
-        if let Some(release) = self.release.take() {
-            let _ = release.await;
-        }
-        let child = scope.spawn_child(LateChild).into_actor_ref();
-        if let Some(spawned) = self.spawned.take() {
-            let _ = spawned.send(child);
-        }
+    async fn init(_args: (), _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self
     }
 }
 
-async fn assert_startup_child_joins_graceful_shutdown(shutdown: Shutdown, reason: ExitReason) {
+struct SpawnDuringInit;
+
+struct SpawnDuringInitArgs {
+    entered: oneshot::Sender<()>,
+    release: oneshot::Receiver<()>,
+    spawned: oneshot::Sender<ActorRef<LateChild>>,
+}
+
+impl Actor for SpawnDuringInit {
+    type SpawnArgs = SpawnDuringInitArgs;
+
+    async fn init(args: Self::SpawnArgs, scope: &mut ActorScope<'_, Self>) -> Self {
+        let _ = args.entered.send(());
+        let _ = args.release.await;
+        let child = scope.spawn_child::<LateChild>(()).into_actor_ref();
+        let _ = args.spawned.send(child);
+        Self
+    }
+}
+
+// Shared setup keeps both graceful observations identical.
+async fn assert_init_child_joins_graceful_shutdown(shutdown: Shutdown, reason: ExitReason) {
     let (entered_tx, entered_rx) = oneshot::channel();
     let (release_tx, release_rx) = oneshot::channel();
     let (spawned_tx, spawned_rx) = oneshot::channel();
-    let mut owner = spawn(SpawnDuringStartup {
-        entered: Some(entered_tx),
-        release: Some(release_rx),
-        spawned: Some(spawned_tx),
+    let mut owner = spawn::<SpawnDuringInit>(SpawnDuringInitArgs {
+        entered: entered_tx,
+        release: release_rx,
+        spawned: spawned_tx,
     });
 
     watchdog(entered_rx).await.unwrap();
@@ -413,32 +462,31 @@ async fn assert_startup_child_joins_graceful_shutdown(shutdown: Shutdown, reason
     assert_eq!(child.exit_status().unwrap().reason(), reason);
 }
 
-// Drain retains entered startup. Its late child must join Drain cleanup.
+// Drain retains entered init. Its late child joins cleanup.
 #[tokio::test]
-async fn drain_includes_children_spawned_by_retained_work() {
-    assert_startup_child_joins_graceful_shutdown(Shutdown::Drain, ExitReason::Drained).await;
+async fn drain_includes_children_spawned_during_init() {
+    assert_init_child_joins_graceful_shutdown(Shutdown::Drain, ExitReason::Drained).await;
 }
 
-// Stop also retains entered startup. Its late child must join Stop cleanup.
+// Stop retains entered init. Its late child joins cleanup.
 #[tokio::test]
-async fn stop_includes_children_spawned_by_retained_work() {
-    assert_startup_child_joins_graceful_shutdown(Shutdown::Stop, ExitReason::Stopped).await;
+async fn stop_includes_children_spawned_during_init() {
+    assert_init_child_joins_graceful_shutdown(Shutdown::Stop, ExitReason::Stopped).await;
 }
 
-struct SpawnAfterKill {
-    spawned: Option<oneshot::Sender<ActorRef<LateChild>>>,
-}
+struct SpawnAfterKill;
 
 impl Actor for SpawnAfterKill {
-    async fn on_start(&mut self, scope: &mut ActorScope<'_, Self>) {
+    type SpawnArgs = oneshot::Sender<ActorRef<LateChild>>;
+
+    async fn init(spawned: Self::SpawnArgs, scope: &mut ActorScope<'_, Self>) -> Self {
         assert_eq!(
             scope.request_shutdown(Shutdown::Kill),
             ShutdownStatus::Requested
         );
-        let child = scope.spawn_child(LateChild).into_actor_ref();
-        if let Some(spawned) = self.spawned.take() {
-            let _ = spawned.send(child);
-        }
+        let child = scope.spawn_child::<LateChild>(()).into_actor_ref();
+        let _ = spawned.send(child);
+        Self
     }
 }
 
@@ -446,9 +494,7 @@ impl Actor for SpawnAfterKill {
 #[tokio::test]
 async fn kill_includes_children_spawned_before_the_current_poll_returns() {
     let (spawned_tx, spawned_rx) = oneshot::channel();
-    let mut owner = spawn(SpawnAfterKill {
-        spawned: Some(spawned_tx),
-    });
+    let mut owner = spawn::<SpawnAfterKill>(spawned_tx);
 
     let child = watchdog(spawned_rx).await.unwrap();
     let status = watchdog(owner.wait()).await;

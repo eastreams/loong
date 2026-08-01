@@ -32,7 +32,13 @@ use super::{
 
 struct TestActor;
 
-impl Actor for TestActor {}
+impl Actor for TestActor {
+    type SpawnArgs = ();
+
+    async fn init(_args: (), _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self
+    }
+}
 
 struct CascadingPanicPayload(Arc<AtomicBool>);
 
@@ -97,9 +103,52 @@ impl Drop for ActorWorkDropProbe {
     }
 }
 
+struct ActorWorkOutputDropProbe {
+    dropped: Arc<AtomicBool>,
+    panic_on_drop: bool,
+}
+
+impl Drop for ActorWorkOutputDropProbe {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::SeqCst);
+        assert!(!self.panic_on_drop, "intentional output drop panic");
+    }
+}
+
+struct ReadyActorWorkFrame {
+    output: Option<ActorWorkOutputDropProbe>,
+    dropped: Arc<AtomicBool>,
+    panic_on_drop: bool,
+}
+
+impl Future for ReadyActorWorkFrame {
+    type Output = ActorWorkOutputDropProbe;
+
+    fn poll(mut self: Pin<&mut Self>, _task: &mut Context<'_>) -> Poll<Self::Output> {
+        Poll::Ready(
+            self.output
+                .take()
+                .expect("a ready frame produces its output once"),
+        )
+    }
+}
+
+impl Drop for ReadyActorWorkFrame {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::SeqCst);
+        assert!(!self.panic_on_drop, "intentional ready frame drop panic");
+    }
+}
+
 struct CountChildExit(Arc<AtomicUsize>);
 
 impl Actor for CountChildExit {
+    type SpawnArgs = Arc<AtomicUsize>;
+
+    async fn init(observed: Arc<AtomicUsize>, _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self(observed)
+    }
+
     async fn on_child_exit(&mut self, _event: ChildExit, _scope: &mut ActorScope<'_, Self>) {
         self.0.fetch_add(1, Ordering::SeqCst);
     }
@@ -110,8 +159,13 @@ struct AbortChildParent {
 }
 
 impl Actor for AbortChildParent {
-    async fn on_start(&mut self, scope: &mut ActorScope<'_, Self>) {
-        let child = scope.spawn_child(TestActor);
+    type SpawnArgs = oneshot::Sender<ExitStatus>;
+
+    async fn init(
+        child_exit: oneshot::Sender<ExitStatus>,
+        scope: &mut ActorScope<'_, Self>,
+    ) -> Self {
+        let child = scope.spawn_child::<TestActor>(());
         scope
             .state
             .children
@@ -122,6 +176,10 @@ impl Actor for AbortChildParent {
             .as_ref()
             .expect("a spawned child owns its task")
             .abort();
+
+        Self {
+            child_exit: Some(child_exit),
+        }
     }
 
     async fn on_child_exit(&mut self, event: ChildExit, _scope: &mut ActorScope<'_, Self>) {
@@ -148,6 +206,12 @@ struct ControlledChildExit {
 }
 
 impl Actor for ControlledChildExit {
+    type SpawnArgs = Self;
+
+    async fn init(actor: Self, _scope: &mut ActorScope<'_, Self>) -> Self {
+        actor
+    }
+
     async fn on_child_exit(&mut self, _event: ChildExit, _scope: &mut ActorScope<'_, Self>) {
         if let Some(entered) = self.entered.take() {
             let _ = entered.send(());
@@ -301,19 +365,19 @@ async fn actor_work_contains_panic_payload_destruction() {
 #[tokio::test]
 async fn actor_work_contains_future_drop_panics() {
     for (initial, kill_on_poll, panic_on_poll, expected_work, expected_mode) in [
-        (None, false, false, Work::Panicked, Mode::Failing),
+        (None, false, false, Work::DropPanicked(()), Mode::Failing),
         (
             Some(Shutdown::Stop),
             false,
             false,
-            Work::Panicked,
+            Work::DropPanicked(()),
             Mode::Failing,
         ),
         (
             Some(Shutdown::Drain),
             false,
             false,
-            Work::Panicked,
+            Work::DropPanicked(()),
             Mode::Failing,
         ),
         (None, true, false, Work::Killed, Mode::Killing),
@@ -345,6 +409,72 @@ async fn actor_work_contains_future_drop_panics() {
     }
 }
 
+// Output may leave containment only after its ready frame is retired.
+// Returning first would leave user frame cleanup pending after delivery.
+#[test]
+fn actor_work_retires_ready_frame_before_delivering_output() {
+    let control = Control::new();
+    let frame_dropped = Arc::new(AtomicBool::new(false));
+    let output_dropped = Arc::new(AtomicBool::new(false));
+    let mut task = Context::from_waker(Waker::noop());
+    let mut guarded = std::pin::pin!(ActorWorkGuard {
+        state: ActorWorkState::Running {
+            future: ReadyActorWorkFrame {
+                output: Some(ActorWorkOutputDropProbe {
+                    dropped: Arc::clone(&output_dropped),
+                    panic_on_drop: false,
+                }),
+                dropped: Arc::clone(&frame_dropped),
+                panic_on_drop: false,
+            },
+        },
+        control: &control,
+    });
+
+    let Poll::Ready(Work::Complete(output)) = guarded.as_mut().poll(&mut task) else {
+        panic!("ready work must deliver its output");
+    };
+
+    assert!(frame_dropped.load(Ordering::SeqCst));
+    assert!(!output_dropped.load(Ordering::SeqCst));
+    assert_eq!(control.mode(), Mode::Running);
+    drop(output);
+    assert!(output_dropped.load(Ordering::SeqCst));
+}
+
+// A frame Drop panic invalidates its ready output.
+// The lifecycle owner retains that output for ordered teardown.
+#[test]
+fn actor_work_retains_invalidated_ready_output_for_ordered_drop() {
+    let control = Control::new();
+    let frame_dropped = Arc::new(AtomicBool::new(false));
+    let output_dropped = Arc::new(AtomicBool::new(false));
+    let mut task = Context::from_waker(Waker::noop());
+    let mut guarded = std::pin::pin!(ActorWorkGuard {
+        state: ActorWorkState::Running {
+            future: ReadyActorWorkFrame {
+                output: Some(ActorWorkOutputDropProbe {
+                    dropped: Arc::clone(&output_dropped),
+                    panic_on_drop: true,
+                }),
+                dropped: Arc::clone(&frame_dropped),
+                panic_on_drop: true,
+            },
+        },
+        control: &control,
+    });
+
+    let Poll::Ready(Work::DropPanicked(output)) = guarded.as_mut().poll(&mut task) else {
+        panic!("frame Drop failure must retain its ready output");
+    };
+    assert!(frame_dropped.load(Ordering::SeqCst));
+    assert!(!output_dropped.load(Ordering::SeqCst));
+    assert_eq!(control.mode(), Mode::Failing);
+
+    control.drop_user_value(output);
+    assert!(output_dropped.load(Ordering::SeqCst));
+}
+
 // Polling after Ready is a runtime contract violation, not an actor panic.
 // The invariant check must remain outside the user future panic boundary.
 #[test]
@@ -359,7 +489,7 @@ fn completed_actor_work_repoll_exposes_the_runtime_bug() {
     });
     assert_eq!(
         guarded.as_mut().poll(&mut task),
-        Poll::Ready(Work::Complete)
+        Poll::Ready(Work::Complete(()))
     );
 
     let repoll = panic::catch_unwind(panic::AssertUnwindSafe(|| {
@@ -470,9 +600,7 @@ fn unfinished_exit_guard_overrides_tentative_hard_mode() {
 #[tokio::test]
 async fn aborted_child_does_not_stop_running_parent() {
     let (child_exit_tx, child_exit_rx) = oneshot::channel();
-    let owner = spawn(AbortChildParent {
-        child_exit: Some(child_exit_tx),
-    });
+    let owner = spawn::<AbortChildParent>(child_exit_tx);
     let actor = owner.actor_ref();
 
     let child_status = tokio::time::timeout(Duration::from_secs(1), child_exit_rx)
@@ -512,7 +640,7 @@ async fn aborted_descendant_only_weakens_parent_subtree_status() {
         (ParentExit::Shutdown(Shutdown::Kill), ExitReason::Killed),
         (ParentExit::Panic, ExitReason::Panicked),
     ] {
-        let (_child_ref, child) = spawn_actor(TestActor, SpawnOptions::default(), None);
+        let (_child_ref, child) = spawn_actor::<TestActor>((), SpawnOptions::default(), None);
         child
             .join
             .as_ref()
@@ -540,8 +668,8 @@ async fn aborted_descendant_only_weakens_parent_subtree_status() {
         }
 
         let task = ActorTask::new(
-            Box::pin(run_actor(
-                TestActor,
+            Box::pin(run_actor::<TestActor>(
+                (),
                 scope,
                 inbox,
                 supervisor_rx,
@@ -628,7 +756,7 @@ async fn graceful_cutoff_absorbs_a_dequeued_child_exit() {
                 &control,
             )
             .await,
-            Work::Complete
+            Work::Complete(())
         ));
         assert_eq!(observed.load(Ordering::SeqCst), 0);
         assert_eq!(scope.children.len(), 0);
@@ -692,7 +820,7 @@ async fn admitted_child_exit_hook_finishes_across_graceful_cutoff() {
         .await
         .expect("an admitted hook must remain live across graceful cutoff");
 
-        assert!(matches!(work, Work::Complete));
+        assert!(matches!(work, Work::Complete(())));
         completed_rx.await.unwrap();
         assert_eq!(scope.children.len(), 0);
     }
@@ -723,8 +851,8 @@ async fn unadmitted_mailbox_permit_does_not_extend_drain() {
 
     let status = tokio::time::timeout(
         Duration::from_secs(1),
-        run_actor(
-            TestActor,
+        run_actor::<TestActor>(
+            (),
             scope,
             inbox,
             supervisor_rx,
@@ -1047,7 +1175,7 @@ async fn drain_absorbs_ready_child_exit_before_owned_completion() {
 // The second wait must reuse the same JoinHandle.
 #[tokio::test]
 async fn cancelled_owned_actor_wait_retains_its_join_handle() {
-    let (_actor_ref, mut owned) = spawn_actor(TestActor, SpawnOptions::default(), None);
+    let (_actor_ref, mut owned) = spawn_actor::<TestActor>((), SpawnOptions::default(), None);
     {
         let mut wait = Box::pin(owned.wait());
         let mut task = Context::from_waker(Waker::noop());
@@ -1070,7 +1198,7 @@ async fn child_kill_commits_before_actor_work_is_dropped() {
     // Active replies and queued envelopes may both run arbitrary destructors.
     // Observing the child mode from each Drop rejects any teardown that merely
     // waits for children after clearing local work instead of cancelling first.
-    let (_child_ref, child) = spawn_actor(TestActor, SpawnOptions::default(), None);
+    let (_child_ref, child) = spawn_actor::<TestActor>((), SpawnOptions::default(), None);
     let child_control = Arc::clone(&child.control);
     let mut children = ChildSet::default();
     children.insert(child);

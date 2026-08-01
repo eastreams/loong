@@ -21,7 +21,7 @@ impl Handler<StopFromExclusive> for LifecycleActor {
     fn handle(
         &mut self,
         _message: StopFromExclusive,
-        _scope: &mut ActorScope<Self>,
+        _scope: &mut ActorScope<'_, Self>,
     ) -> impl loong_actor::IntoReply<Self, StopFromExclusive> + use<> {
         async {}
             .into_actor()
@@ -138,7 +138,13 @@ async fn drain_runs_the_fixed_accepted_queue_in_order() {
 
 struct InterleavedDrainActor;
 
-impl Actor for InterleavedDrainActor {}
+impl Actor for InterleavedDrainActor {
+    type SpawnArgs = ();
+
+    async fn init(_args: (), _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self
+    }
+}
 
 struct InterleavedDrainStep {
     id: u8,
@@ -154,7 +160,7 @@ impl Handler<InterleavedDrainStep> for InterleavedDrainActor {
     fn handle(
         &mut self,
         message: InterleavedDrainStep,
-        _scope: &mut ActorScope<Self>,
+        _scope: &mut ActorScope<'_, Self>,
     ) -> impl loong_actor::IntoReply<Self, InterleavedDrainStep> + use<> {
         async move {
             let _ = message.entered.send(());
@@ -171,7 +177,7 @@ async fn drain_respects_max_in_flight_for_the_fixed_interleaved_queue() {
     let options = SpawnOptions::default()
         .with_mailbox_capacity(NonZeroUsize::new(3).unwrap())
         .with_max_in_flight(NonZeroUsize::new(2).unwrap());
-    let mut owner = spawn_with(InterleavedDrainActor, options);
+    let mut owner = spawn_with::<InterleavedDrainActor>((), options);
     let actor = owner.actor_ref();
 
     let (first_entered_tx, first_entered_rx) = oneshot::channel();

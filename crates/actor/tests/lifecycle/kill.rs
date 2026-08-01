@@ -25,7 +25,7 @@ impl Handler<Interruptible> for LifecycleActor {
     fn handle(
         &mut self,
         message: Interruptible,
-        _scope: &mut ActorScope<Self>,
+        _scope: &mut ActorScope<'_, Self>,
     ) -> impl loong_actor::IntoReply<Self, Interruptible> + use<> {
         async move {
             let _dropped = message.dropped;
@@ -64,7 +64,7 @@ impl Handler<OwnedInterruptible> for LifecycleActor {
     fn handle(
         &mut self,
         message: OwnedInterruptible,
-        _scope: &mut ActorScope<Self>,
+        _scope: &mut ActorScope<'_, Self>,
     ) -> impl loong_actor::IntoReply<Self, OwnedInterruptible> + use<> {
         async move {
             let _drop_barrier = message.drop_barrier;
@@ -84,7 +84,7 @@ impl Handler<KillBeforeReady> for LifecycleActor {
     fn handle(
         &mut self,
         _message: KillBeforeReady,
-        scope: &mut ActorScope<Self>,
+        scope: &mut ActorScope<'_, Self>,
     ) -> impl loong_actor::IntoReply<Self, KillBeforeReady> + use<> {
         assert_eq!(
             scope.request_shutdown(Shutdown::Kill),

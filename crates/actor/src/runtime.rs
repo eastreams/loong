@@ -78,22 +78,26 @@ impl Default for SpawnOptions {
 
 /// Spawns a root actor with [`SpawnOptions::default`].
 ///
-/// The returned [`ActorOwner`] uniquely owns the actor lifecycle. The actor runs
-/// [`Actor::on_start`] before dispatching its first message. This function must
-/// be called from a Tokio runtime.
+/// This schedules [`Actor::init`] and returns immediately.
+/// Mailbox admission opens before initialization completes.
+/// Calls wait for initialization before dispatch.
+/// One-way sends only wait for admission.
+///
+/// The returned [`ActorOwner`] owns the actor lifecycle.
+/// This function requires an active Tokio runtime.
 #[must_use = "dropping the returned owner requests Kill"]
-pub fn spawn<A: Actor>(actor: A) -> ActorOwner<A> {
-    spawn_with(actor, SpawnOptions::default())
+pub fn spawn<A: Actor>(args: A::SpawnArgs) -> ActorOwner<A> {
+    spawn_with::<A>(args, SpawnOptions::default())
 }
 
 /// Spawns a root actor with explicit options.
 ///
-/// The returned [`ActorOwner`] uniquely owns the actor lifecycle. The actor runs
-/// [`Actor::on_start`] before dispatching its first message. This function must
-/// be called from a Tokio runtime.
+/// Initialization and admission follow [`spawn`].
+/// The returned [`ActorOwner`] owns the actor lifecycle.
+/// This function requires an active Tokio runtime.
 #[must_use = "dropping the returned owner requests Kill"]
-pub fn spawn_with<A: Actor>(actor: A, options: SpawnOptions) -> ActorOwner<A> {
-    let (actor_ref, owned) = spawn_actor(actor, options, None);
+pub fn spawn_with<A: Actor>(args: A::SpawnArgs, options: SpawnOptions) -> ActorOwner<A> {
+    let (actor_ref, owned) = spawn_actor::<A>(args, options, None);
     ActorOwner { actor_ref, owned }
 }
 
@@ -241,7 +245,7 @@ impl<A: Actor> fmt::Debug for StopScope<'_, A> {
 /// The runtime constructs this borrowed view for user actor work.
 /// Handlers use it only during dispatch.
 /// Actor futures receive a fresh view for each poll.
-/// Lifecycle hooks may keep their view across `await`.
+/// Initialization and lifecycle hooks may retain it across `await`.
 pub struct ActorScope<'a, A: Actor> {
     state: &'a mut ScopeState<A>,
 }
@@ -255,7 +259,7 @@ impl<A: Actor> ActorScope<'_, A> {
     /// An exclusive reply blocks its queued self-call until it ends.
     ///
     /// A serial lifecycle hook also blocks dispatch. While admission is still
-    /// open, as in `on_start` or a running actor's `on_child_exit`, awaiting an
+    /// open, as in `init` or a running actor's `on_child_exit`, awaiting an
     /// accepted self-call likewise waits until Kill or executor teardown. Once
     /// shutdown closes admission, [`ActorRef::call`] returns
     /// [`CallError::Closed`](crate::CallError::Closed) and
@@ -281,22 +285,32 @@ impl<A: Actor> ActorScope<'_, A> {
 
     /// Spawns and owns one direct child actor.
     ///
-    /// The returned [`Child`] does not own lifecycle.
-    /// Retained graceful work keeps this capability.
-    /// A concurrent Kill cannot interrupt the current poll.
-    pub fn spawn_child<C: Actor>(&mut self, child: C) -> Child<C> {
-        self.spawn_child_with(child, SpawnOptions::default())
-    }
-
-    /// Spawns and owns one direct child actor with explicit options.
+    /// Child registration commits synchronously.
+    /// Child initialization then runs asynchronously.
+    /// Its mailbox accepts before initialization finishes.
     ///
     /// The returned [`Child`] does not own lifecycle.
     /// Retained graceful work keeps this capability.
     /// A concurrent Kill cannot interrupt the current poll.
-    pub fn spawn_child_with<C: Actor>(&mut self, child: C, options: SpawnOptions) -> Child<C> {
+    pub fn spawn_child<C: Actor>(&mut self, args: C::SpawnArgs) -> Child<C> {
+        self.spawn_child_with::<C>(args, SpawnOptions::default())
+    }
+
+    /// Spawns and owns one direct child actor with explicit options.
+    ///
+    /// Registration and initialization follow [`spawn_child`](Self::spawn_child).
+    ///
+    /// The returned [`Child`] does not own lifecycle.
+    /// Retained graceful work keeps this capability.
+    /// A concurrent Kill cannot interrupt the current poll.
+    pub fn spawn_child_with<C: Actor>(
+        &mut self,
+        args: C::SpawnArgs,
+        options: SpawnOptions,
+    ) -> Child<C> {
         self.state
             .children
-            .spawn(child, options, self.state.supervisor_tx.clone())
+            .spawn::<C>(args, options, self.state.supervisor_tx.clone())
     }
 }
 
@@ -398,7 +412,7 @@ impl ChildSet {
     /// The parent cannot consume an exit until this insertion returns.
     fn spawn<A: Actor>(
         &mut self,
-        actor: A,
+        args: A::SpawnArgs,
         options: SpawnOptions,
         events: mpsc::UnboundedSender<ChildExit>,
     ) -> Child<A> {
@@ -406,7 +420,7 @@ impl ChildSet {
             actor_ref,
             control,
             future,
-        } = PreparedActor::new(actor, options);
+        } = PreparedActor::new(args, options);
         let key = self.actors.insert_with_key(|key| {
             let parent = ParentLink {
                 id: ChildId::from_key(key),
@@ -457,7 +471,7 @@ impl ChildSet {
 }
 
 impl<A: Actor> PreparedActor<A> {
-    fn new(actor: A, options: SpawnOptions) -> Self {
+    fn new(args: A::SpawnArgs, options: SpawnOptions) -> Self {
         let (mailbox, inbox) = ActorMailbox::channel(options.mailbox_capacity().get());
         let actor_ref = ActorRef::new(Arc::downgrade(&mailbox), mailbox.control.subscribe_mode());
 
@@ -472,7 +486,7 @@ impl<A: Actor> PreparedActor<A> {
         };
         let control = mailbox.control.clone();
         let future = Box::pin(run_actor(
-            actor,
+            args,
             state,
             inbox,
             supervisor_rx,
@@ -489,7 +503,7 @@ impl<A: Actor> PreparedActor<A> {
 }
 
 fn spawn_actor<A: Actor>(
-    actor: A,
+    args: A::SpawnArgs,
     options: SpawnOptions,
     parent: Option<ParentLink>,
 ) -> (ActorRef<A>, OwnedActor) {
@@ -497,7 +511,7 @@ fn spawn_actor<A: Actor>(
         actor_ref,
         control,
         future,
-    } = PreparedActor::new(actor, options);
+    } = PreparedActor::new(args, options);
     let owned = OwnedActor::start(control, future, parent);
     (actor_ref, owned)
 }
@@ -612,10 +626,13 @@ impl Drop for ActorTask {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-enum Work {
-    Complete,
+enum Work<T = ()> {
+    Complete(T),
     Killed,
     Panicked,
+    // The ready output still belongs to the lifecycle owner.
+    // It may require child-first teardown before being dropped.
+    DropPanicked(T),
 }
 
 pin_project! {
@@ -664,11 +681,11 @@ impl<'a, F> ActorWorkGuard<'a, F> {
     }
 }
 
-impl<F> Future for ActorWorkGuard<'_, F>
+impl<F, T> Future for ActorWorkGuard<'_, F>
 where
-    F: Future<Output = ()>,
+    F: Future<Output = T>,
 {
-    type Output = Work;
+    type Output = Work<T>;
 
     fn poll(mut self: Pin<&mut Self>, task: &mut Context<'_>) -> Poll<Self::Output> {
         let result = {
@@ -681,11 +698,11 @@ where
 
         match result {
             Ok(Poll::Pending) => Poll::Pending,
-            Ok(Poll::Ready(())) => {
+            Ok(Poll::Ready(output)) => {
                 if self.as_mut().drop_future_panicked() {
-                    Poll::Ready(Work::Panicked)
+                    Poll::Ready(Work::DropPanicked(output))
                 } else {
-                    Poll::Ready(Work::Complete)
+                    Poll::Ready(Work::Complete(output))
                 }
             }
             Err(payload) => {
@@ -697,9 +714,9 @@ where
     }
 }
 
-async fn await_actor_work<F>(future: F, control: &Control) -> Work
+async fn await_actor_work<F>(future: F, control: &Control) -> Work<F::Output>
 where
-    F: Future<Output = ()> + Send,
+    F: Future + Send,
 {
     let guarded = ActorWorkGuard {
         state: ActorWorkState::Running { future },
@@ -724,7 +741,7 @@ where
 }
 
 async fn run_actor<A: Actor>(
-    mut actor: A,
+    args: A::SpawnArgs,
     mut state: ScopeState<A>,
     mut inbox: mpsc::Receiver<DynEnvelope<A>>,
     mut supervisor_rx: mpsc::UnboundedReceiver<ChildExit>,
@@ -736,19 +753,32 @@ async fn run_actor<A: Actor>(
     let mut scheduler = ReplyScheduler::new(max_in_flight);
     let mut turn_cursor = TurnCursor::default();
 
-    match await_actor_work(
-        async {
-            let mut scope = state.actor_scope();
-            actor.on_start(&mut scope).await;
-        },
-        &control,
-    )
-    .await
-    {
-        Work::Complete => {}
+    let initialized = if let Some(_permit) = control.begin_initialization() {
+        let mut scope = state.actor_scope();
+        match panic::catch_unwind(AssertUnwindSafe(|| A::init(args, &mut scope))) {
+            Ok(init) => await_actor_work(init, &control).await,
+            Err(payload) => {
+                control.contain_panic(payload);
+                Work::Panicked
+            }
+        }
+    } else {
+        control.drop_user_value(args);
+        Work::Killed
+    };
+
+    let mut actor = match initialized {
+        Work::Complete(actor) => actor,
         Work::Killed => return kill_actor(&mut state, &mut inbox, &owned, &mut scheduler).await,
         Work::Panicked => return fail_actor(&mut state, &mut inbox, &owned, &mut scheduler).await,
-    }
+        Work::DropPanicked(actor) => {
+            // The init frame failed after producing actor state.
+            // Descendant cancellation must precede arbitrary actor Drop code.
+            state.children.request_all(Shutdown::Kill);
+            control.drop_user_value(actor);
+            return fail_actor(&mut state, &mut inbox, &owned, &mut scheduler).await;
+        }
+    };
 
     loop {
         match state.control.mode() {
@@ -819,11 +849,11 @@ async fn run_actor<A: Actor>(
             }
             Turn::Child(event) => {
                 match handle_child_exit(&mut actor, &mut state, event, &control).await {
-                    Work::Complete => {}
+                    Work::Complete(()) => {}
                     Work::Killed => {
                         return kill_actor(&mut state, &mut inbox, &owned, &mut scheduler).await;
                     }
-                    Work::Panicked => {
+                    Work::Panicked | Work::DropPanicked(()) => {
                         state.control.begin_failure();
                         return fail_actor(&mut state, &mut inbox, &owned, &mut scheduler).await;
                     }
@@ -994,11 +1024,11 @@ async fn handle_child_exit<A: Actor>(
     control: &Control,
 ) -> Work {
     if !state.children.remove(&event) {
-        return Work::Complete;
+        return Work::Complete(());
     }
 
     let Some(permit) = state.control.begin_child_hook() else {
-        return Work::Complete;
+        return Work::Complete(());
     };
 
     run_child_exit_hook(actor, state, event, control, permit).await
@@ -1043,15 +1073,17 @@ async fn stop_actor<A: Actor>(
     }
     owned.close();
     match finish_replies(actor, state, control, owned, scheduler).await {
-        Work::Complete => {}
+        Work::Complete(()) => {}
         Work::Killed => return kill_actor(state, inbox, owned, scheduler).await,
-        Work::Panicked => return fail_actor(state, inbox, owned, scheduler).await,
+        Work::Panicked | Work::DropPanicked(()) => {
+            return fail_actor(state, inbox, owned, scheduler).await;
+        }
     }
 
     match graceful_finish(actor, state, control, Shutdown::Stop, ExitReason::Stopped).await {
-        Work::Complete => state.children.terminal_status(ExitReason::Stopped),
+        Work::Complete(()) => state.children.terminal_status(ExitReason::Stopped),
         Work::Killed => kill_actor(state, inbox, owned, scheduler).await,
-        Work::Panicked => fail_actor(state, inbox, owned, scheduler).await,
+        Work::Panicked | Work::DropPanicked(()) => fail_actor(state, inbox, owned, scheduler).await,
     }
 }
 
@@ -1124,11 +1156,11 @@ async fn drain_actor<A: Actor>(
             Turn::LifecycleHint | Turn::ReplyProgress => {}
             Turn::RepliesFinished => break,
             Turn::Child(event) => match handle_child_exit(actor, state, event, control).await {
-                Work::Complete => {}
+                Work::Complete(()) => {}
                 Work::Killed => {
                     return kill_actor(state, inbox, owned, scheduler).await;
                 }
-                Work::Panicked => {
+                Work::Panicked | Work::DropPanicked(()) => {
                     state.control.begin_failure();
                     return fail_actor(state, inbox, owned, scheduler).await;
                 }
@@ -1142,9 +1174,9 @@ async fn drain_actor<A: Actor>(
     }
 
     match graceful_finish(actor, state, control, Shutdown::Drain, ExitReason::Drained).await {
-        Work::Complete => state.children.terminal_status(ExitReason::Drained),
+        Work::Complete(()) => state.children.terminal_status(ExitReason::Drained),
         Work::Killed => kill_actor(state, inbox, owned, scheduler).await,
-        Work::Panicked => fail_actor(state, inbox, owned, scheduler).await,
+        Work::Panicked | Work::DropPanicked(()) => fail_actor(state, inbox, owned, scheduler).await,
     }
 }
 
@@ -1201,7 +1233,7 @@ async fn finish_replies<A: Actor>(
         .await;
 
         match result {
-            Ok(true) => return Work::Complete,
+            Ok(true) => return Work::Complete(()),
             Ok(false) => {}
             Err(payload) => {
                 control.contain_panic(payload);
@@ -1231,9 +1263,10 @@ async fn graceful_finish<A: Actor>(
     )
     .await
     {
-        Work::Complete => {}
+        Work::Complete(()) => {}
         Work::Killed => return Work::Killed,
         Work::Panicked => return Work::Panicked,
+        Work::DropPanicked(()) => return Work::DropPanicked(()),
     }
 
     await_actor_work(

@@ -165,10 +165,16 @@ pub enum Either<L, R> {
 /// Downstream crates cannot add reply strategies:
 ///
 /// ```compile_fail,E0277
-/// use loong_actor::{Actor, IntoReply, Message};
+/// use loong_actor::{Actor, ActorScope, IntoReply, Message};
 ///
 /// struct MyActor;
-/// impl Actor for MyActor {}
+/// impl Actor for MyActor {
+///     type SpawnArgs = Self;
+///
+///     async fn init(actor: Self, _scope: &mut ActorScope<'_, Self>) -> Self {
+///         actor
+///     }
+/// }
 ///
 /// struct MyMessage;
 /// impl Message for MyMessage {
