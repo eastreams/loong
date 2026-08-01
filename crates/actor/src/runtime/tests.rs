@@ -24,9 +24,9 @@ use crate::{
 };
 
 use super::{
-    ActorTask, ActorWorkGuard, ActorWorkState, ChildSet, DiscardOutcome, ExitGuard, OwnedActor,
-    TEARDOWN_DROP_BUDGET, Turn, TurnCursor, Work, actor_turn, await_actor_work, close_and_discard,
-    graceful_finish, handle_child_exit, kill_actor, run_actor, spawn_actor,
+    ActorTask, ActorWorkGuard, ActorWorkState, ChildSet, DiscardOutcome, ExitGuard, OrdinaryLane,
+    OwnedActor, TEARDOWN_DROP_BUDGET, Turn, TurnCursor, Work, actor_turn, await_actor_work,
+    close_and_discard, graceful_finish, handle_child_exit, kill_actor, run_actor, spawn_actor,
 };
 
 struct TestActor;
@@ -829,7 +829,9 @@ async fn ordinary_cursor_visits_each_actor_source_before_repeating_mailbox() {
     });
     let mut actor = TestActor;
     // Start at child work to prove the cursor wraps across all sources.
-    let mut cursor = TurnCursor { ordinary: 2 };
+    let mut cursor = TurnCursor {
+        next_ordinary: OrdinaryLane::ChildExit,
+    };
     let mut mailbox_turns = 0;
     let mut reply_turns = 0;
     let mut child_turns = 0;
@@ -858,7 +860,7 @@ async fn ordinary_cursor_visits_each_actor_source_before_repeating_mailbox() {
                 );
                 child_turns += 1;
             }
-            Turn::Mode => panic!("the lifecycle mode changed unexpectedly"),
+            Turn::LifecycleHint => panic!("the lifecycle mode changed unexpectedly"),
             Turn::RepliesFinished => panic!("running work cannot finish reply scheduling"),
             Turn::InboxClosed => panic!("the mailbox closed unexpectedly"),
         }
@@ -912,7 +914,9 @@ fn truncated_reply_sweep_yields_before_ready_mailbox() {
     }
     let mut actor = TestActor;
     // Start at replies. The old path continued to the ready mailbox.
-    let mut cursor = TurnCursor { ordinary: 1 };
+    let mut cursor = TurnCursor {
+        next_ordinary: OrdinaryLane::Interleaved,
+    };
     let mut task = Context::from_waker(Waker::noop());
 
     {
@@ -936,6 +940,47 @@ fn truncated_reply_sweep_yields_before_ready_mailbox() {
     assert_eq!(mailbox_dispatches.load(Ordering::SeqCst), 0);
     assert_eq!(inbox.len(), 1);
     assert!(scheduler.has_interleaved());
+    assert_eq!(cursor.next_ordinary, OrdinaryLane::ChildExit);
+}
+
+// The runtime keeps this receiver open while ActorScope is active.
+// Treat early closure as corruption; a hint would spin forever.
+#[tokio::test]
+#[should_panic(expected = "child-exit receiver closed while ActorScope was alive")]
+async fn closed_child_exit_channel_is_an_invariant_failure() {
+    let (mailbox, mut inbox) = ActorMailbox::<TestActor>::channel(1);
+    let control = Arc::clone(&mailbox.control);
+    let actor_ref = ActorRef::new(Arc::downgrade(&mailbox), control.subscribe_mode());
+    let (supervisor_tx, mut supervisor_rx) = mpsc::unbounded_channel();
+    let mut scope = ActorScope {
+        actor_ref,
+        control: Arc::clone(&control),
+        children: ChildSet::default(),
+        accepts_children: true,
+        supervisor_tx,
+    };
+    supervisor_rx.close();
+
+    let owned = OwnedTasks::new(Arc::clone(&control));
+    let mut scheduler = ReplyScheduler::new(NonZeroUsize::MIN);
+    let mut actor = TestActor;
+    let mut cursor = TurnCursor {
+        next_ordinary: OrdinaryLane::ChildExit,
+    };
+
+    actor_turn(
+        &mut actor,
+        &mut scope,
+        &mut inbox,
+        &mut supervisor_rx,
+        &control,
+        &owned,
+        &mut scheduler,
+        true,
+        Mode::Running,
+        &mut cursor,
+    )
+    .await;
 }
 
 // Drain must absorb queued child exits before its completion barrier.

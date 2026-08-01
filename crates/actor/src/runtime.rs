@@ -755,7 +755,7 @@ async fn run_actor<A: Actor>(
         };
 
         match turn {
-            Turn::Mode | Turn::ReplyProgress => {}
+            Turn::LifecycleHint | Turn::ReplyProgress => {}
             Turn::RepliesFinished => {
                 unreachable!("a running actor cannot finish reply scheduling")
             }
@@ -781,7 +781,8 @@ async fn run_actor<A: Actor>(
 }
 
 enum Turn {
-    Mode,
+    // Notification or mismatch; the caller re-reads Control.
+    LifecycleHint,
     ReplyProgress,
     // Drain handles child exits while awaiting this barrier.
     RepliesFinished,
@@ -790,9 +791,28 @@ enum Turn {
     InboxClosed,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum OrdinaryLane {
+    #[default]
+    Mailbox,
+    Interleaved,
+    ChildExit,
+}
+
+impl OrdinaryLane {
+    /// Defines the fixed cycle shared by ordinary actor work.
+    const fn next(self) -> Self {
+        match self {
+            Self::Mailbox => Self::Interleaved,
+            Self::Interleaved => Self::ChildExit,
+            Self::ChildExit => Self::Mailbox,
+        }
+    }
+}
+
 #[derive(Default)]
 struct TurnCursor {
-    ordinary: usize,
+    next_ordinary: OrdinaryLane,
 }
 
 #[expect(
@@ -818,7 +838,7 @@ async fn actor_turn<A: Actor>(
     let wait_for_owned = !receive_messages && scheduler.is_empty();
     let fair_turn = std::future::poll_fn(|task| {
         if control.mode() != expected_mode {
-            return Poll::Ready(Turn::Mode);
+            return Poll::Ready(Turn::LifecycleHint);
         }
 
         if scheduler.has_exclusive() {
@@ -826,7 +846,7 @@ async fn actor_turn<A: Actor>(
                 .poll_exclusive(actor, scope, control, expected_mode, task)
                 .is_ready();
             if control.mode() != expected_mode {
-                return Poll::Ready(Turn::Mode);
+                return Poll::Ready(Turn::LifecycleHint);
             }
             return if ready {
                 Poll::Ready(Turn::ReplyProgress)
@@ -835,14 +855,14 @@ async fn actor_turn<A: Actor>(
             };
         }
 
-        let start = cursor.ordinary;
-        for offset in 0..3 {
+        let start = cursor.next_ordinary;
+        let mut lane = start;
+        loop {
             if control.mode() != expected_mode {
-                return Poll::Ready(Turn::Mode);
+                return Poll::Ready(Turn::LifecycleHint);
             }
-            let class = (start + offset) % 3;
-            let selected = match class {
-                0 if receive_messages && scheduler.has_dispatch_capacity() => {
+            let selected = match lane {
+                OrdinaryLane::Mailbox if receive_messages && scheduler.has_dispatch_capacity() => {
                     match inbox.poll_recv(task) {
                         Poll::Ready(Some(envelope)) => {
                             envelope.dispatch(actor, scope, owned, scheduler);
@@ -852,40 +872,49 @@ async fn actor_turn<A: Actor>(
                         Poll::Pending => None,
                     }
                 }
-                1 if scheduler.has_interleaved() => {
+                OrdinaryLane::Interleaved if scheduler.has_interleaved() => {
                     match scheduler.poll_interleaved(actor, scope, control, expected_mode, task) {
                         InterleavedPoll::Pending => None,
                         InterleavedPoll::Progress => Some(Turn::ReplyProgress),
                         InterleavedPoll::BudgetExhausted => {
                             // Continue from the next lane after Tokio repolls us.
                             // The scheduler already preserved and woke its sweep.
-                            cursor.ordinary = (class + 1) % 3;
+                            cursor.next_ordinary = lane.next();
                             return Poll::Pending;
                         }
                     }
                 }
-                2 => match supervisor_rx.poll_recv(task) {
+                OrdinaryLane::ChildExit => match supervisor_rx.poll_recv(task) {
                     Poll::Ready(Some(event)) => Some(Turn::Child(event)),
-                    Poll::Ready(None) => Some(Turn::Mode),
+                    Poll::Ready(None) => {
+                        // The runtime keeps this receiver open while scope lives.
+                        // ActorScope also retains its paired sender.
+                        unreachable!("child-exit receiver closed while ActorScope was alive")
+                    }
                     Poll::Pending => None,
                 },
                 _ => None,
             };
 
             if let Some(turn) = selected {
-                cursor.ordinary = (class + 1) % 3;
+                cursor.next_ordinary = lane.next();
                 return Poll::Ready(turn);
+            }
+
+            lane = lane.next();
+            if lane == start {
+                break;
             }
         }
 
-        cursor.ordinary = (start + 1) % 3;
+        cursor.next_ordinary = start.next();
         Poll::Pending
     });
 
     // Lifecycle always gets first poll rights, especially Kill.
     tokio::select! {
         biased;
-        () = control.actor_notified() => Turn::Mode,
+        () = control.actor_notified() => Turn::LifecycleHint,
         turn = fair_turn => turn,
         () = owned.wait(), if wait_for_owned => Turn::RepliesFinished,
     }
@@ -1018,7 +1047,7 @@ async fn drain_actor<A: Actor>(
         };
 
         match turn {
-            Turn::Mode | Turn::ReplyProgress => {}
+            Turn::LifecycleHint | Turn::ReplyProgress => {}
             Turn::RepliesFinished => break,
             Turn::Child(event) => match handle_child_exit(actor, scope, event, control).await {
                 Work::Complete => {}
