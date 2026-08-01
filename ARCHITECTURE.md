@@ -79,6 +79,19 @@ owner of each root actor tree, and how that ownership relates to product session
 lifecycle, remain open questions; migration must not hide those gaps behind a
 compatibility facade. See [Open Architecture Questions](docs/open-questions.md).
 
+### Actor Handle Boundary
+
+`ActorRef<A>` holds one typed `Arc<ActorInner<A>>`. The inner value contains
+the mailbox sender and lifecycle control. `ActorOwner<A>` adds RAII ownership
+without another allocation. `ChildSet` stores `Arc<dyn ErasedActor>`. That
+pointer shares the typed inner allocation. Dynamic dispatch stays on cold
+ownership paths.
+
+Queued calls retain only `Weak<ActorInner<A>>`. A strong edge would make the
+queue own its sender. That creates a cycle. Dispatch creates a strong typed
+permit only after dequeue. `Mode` remains the lifecycle authority. A private
+`Notify` only wakes the actor task.
+
 ## Open Questions
 
 Session, turn and step semantics, active cancellation and supervision,

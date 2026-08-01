@@ -128,6 +128,8 @@
 //! Supervision links a child actor's lifecycle to its parent.
 //! A [`Child`] is a non-owning child actor handle.
 //! Cloned [`ActorRef`] values never keep actors alive.
+//! Any [`ActorRef`] may request shutdown.
+//! Only [`ActorOwner`] requests Kill when dropped.
 //! Parent shutdown requests shutdown from every owned child actor.
 //! [`ExitReason`] describes only one actor.
 //! [`ExitStatus`] also reports the runtime's subtree guarantee.

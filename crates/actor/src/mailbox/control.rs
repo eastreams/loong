@@ -16,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{Actor, CallError, ExitReason, ExitStatus, Shutdown, ShutdownStatus};
 
-use super::{ActorMailbox, DynEnvelope, Envelope, RejectedAdmission};
+use super::{ActorInner, DynEnvelope, Envelope, RejectedAdmission};
 
 /// Waits without registering an external waker in Tokio's fanout.
 ///
@@ -92,19 +92,21 @@ pub(crate) enum Mode {
 #[derive(Debug)]
 pub(crate) struct Control {
     mode: watch::Sender<Mode>,
+    // Mode remains authoritative.
+    // This hint keeps each actor turn off watch::changed().
     actor_wake: Notify,
     owned_cancellation: CancellationToken,
 }
 
 impl Control {
-    pub(crate) fn new() -> Arc<Self> {
+    pub(crate) fn new() -> Self {
         let (mode, _) = watch::channel(Mode::Running);
 
-        Arc::new(Self {
+        Self {
             mode,
             actor_wake: Notify::new(),
             owned_cancellation: CancellationToken::new(),
-        })
+        }
     }
 
     pub(crate) fn mode(&self) -> Mode {
@@ -138,30 +140,6 @@ impl Control {
     /// The actor task must reread [`Mode`] after waking.
     pub(crate) async fn actor_notified(&self) {
         self.actor_wake.notified().await;
-    }
-
-    /// Linearizes handler dispatch with graceful cutoff and Kill.
-    ///
-    /// The returned permit proves dispatch committed before a later lifecycle
-    /// transition. No user code or user-owned value is touched under the gate.
-    /// Success moves the envelope's lifecycle control into the permit.
-    /// Rejection returns it with the queued-phase error.
-    pub(super) fn begin_dispatch(
-        self: Arc<Self>,
-    ) -> Result<DispatchPermit, (Arc<Self>, CallError)> {
-        let result = self.transact(|mode| {
-            let result = if matches!(mode, Mode::Running | Mode::Draining) {
-                Ok(())
-            } else {
-                Err(Self::call_failure_for(mode, CallPhase::Queued))
-            };
-            (mode, result)
-        });
-
-        match result {
-            Ok(()) => Ok(DispatchPermit { control: self }),
-            Err(error) => Err((self, error)),
-        }
     }
 
     /// Linearizes a child-exit hook's first entry with lifecycle cutoff.
@@ -355,7 +333,24 @@ impl Control {
     }
 }
 
-impl<A: Actor> ActorMailbox<A> {
+impl<A: Actor> ActorInner<A> {
+    /// Linearizes handler dispatch with graceful cutoff and Kill.
+    ///
+    /// A queued envelope never strong-owns its mailbox.
+    /// Dispatch creates the strong edge only after dequeue.
+    pub(super) fn begin_dispatch(self: &Arc<Self>) -> Result<DispatchPermit<A>, CallError> {
+        self.control.transact(|mode| {
+            let result = if matches!(mode, Mode::Running | Mode::Draining) {
+                Ok(DispatchPermit {
+                    actor: Arc::clone(self),
+                })
+            } else {
+                Err(Control::call_failure_for(mode, CallPhase::Queued))
+            };
+            (mode, result)
+        })
+    }
+
     /// Commits a reserved mailbox slot while admission remains open.
     ///
     /// `Ok(())` means the envelope entered the mailbox.
@@ -393,8 +388,8 @@ enum CallPhase {
     Dispatching,
 }
 
-pub(super) struct DispatchPermit {
-    control: Arc<Control>,
+pub(super) struct DispatchPermit<A: Actor> {
+    actor: Arc<ActorInner<A>>,
 }
 
 /// Proves initialization entry won against hard cutoff.
@@ -404,12 +399,12 @@ pub(crate) struct HookEntryPermit(());
 
 pub(super) struct CompletionPermit(());
 
-impl DispatchPermit {
+impl<A: Actor> DispatchPermit<A> {
     /// Linearizes successful completion with Kill/failure. The unit permit
     /// carries the decision beyond the transaction without exposing lifecycle
     /// state.
     pub(super) fn begin_completion(&self) -> Result<CompletionPermit, CallError> {
-        self.control.transact(|mode| {
+        self.actor.control.transact(|mode| {
             let result = match mode {
                 Mode::Running | Mode::Draining | Mode::Stopping => Ok(CompletionPermit(())),
                 Mode::Killing | Mode::Failing | Mode::Aborting | Mode::Exited(_) => {
@@ -422,13 +417,13 @@ impl DispatchPermit {
 
     /// Commits handler failure before making its dispatch error observable.
     pub(super) fn fail(&self) -> CallError {
-        self.control.begin_failure();
-        self.control.call_failure(CallPhase::Dispatching)
+        self.actor.control.begin_failure();
+        self.actor.control.call_failure(CallPhase::Dispatching)
     }
 
     /// Borrows the gate retained by this unforgeable dispatch proof.
     pub(super) fn control(&self) -> &Control {
-        &self.control
+        &self.actor.control
     }
 }
 

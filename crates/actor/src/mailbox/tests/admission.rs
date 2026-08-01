@@ -15,7 +15,7 @@ use crate::{
     owned::OwnedTasks, scheduler::ReplyScheduler,
 };
 
-use super::super::{ActorMailbox, CallEnvelope, Control, Envelope, Mode};
+use super::super::{ActorInner, CallEnvelope, Envelope, Mode};
 use super::{PanicWake, WakeCounter};
 
 struct TestActor;
@@ -35,8 +35,9 @@ impl Envelope<TestActor> for NoopEnvelope {
         self: Box<Self>,
         _actor: &mut TestActor,
         _scope: &mut ActorScope<TestActor>,
-        _owned: &OwnedTasks,
+        _owned: &OwnedTasks<TestActor>,
         _scheduler: &mut ReplyScheduler<TestActor>,
+        _inner: &Arc<ActorInner<TestActor>>,
     ) {
     }
 }
@@ -67,18 +68,18 @@ impl Handler<RecoverMessage> for TestActor {
 // transaction, the reserved slot must be returned without entering inbox.
 #[tokio::test]
 async fn shutdown_wins_over_an_acquired_but_uncommitted_permit() {
-    let (mailbox, mut receiver) = ActorMailbox::<TestActor>::channel(1);
-    let permit = mailbox
+    let (inner, mut receiver) = ActorInner::<TestActor>::channel(1);
+    let permit = inner
         .sender
         .reserve()
         .await
         .expect("the test mailbox is open");
 
     assert_eq!(
-        mailbox.control.request(Shutdown::Drain),
+        inner.control.request(Shutdown::Drain),
         ShutdownStatus::Requested
     );
-    let committed = mailbox.admit(permit, Box::new(NoopEnvelope));
+    let committed = inner.admit(permit, Box::new(NoopEnvelope));
 
     let Err((permit, envelope)) = committed else {
         panic!("shutdown must reject the uncommitted envelope");
@@ -95,19 +96,19 @@ async fn shutdown_wins_over_an_acquired_but_uncommitted_permit() {
 async fn committed_send_is_part_of_the_fixed_drain_queue() {
     // Observe the inbox directly to isolate the admission/Drain ordering:
     // once admission wins the shared gate, Drain must retain that envelope.
-    let (mailbox, mut receiver) = ActorMailbox::<TestActor>::channel(1);
-    let permit = mailbox
+    let (inner, mut receiver) = ActorInner::<TestActor>::channel(1);
+    let permit = inner
         .sender
         .reserve()
         .await
         .expect("the test mailbox is open");
 
-    let committed = mailbox.admit(permit, Box::new(NoopEnvelope));
+    let committed = inner.admit(permit, Box::new(NoopEnvelope));
     let Ok(()) = committed else {
         panic!("the commit must win admission");
     };
     assert_eq!(
-        mailbox.control.request(Shutdown::Drain),
+        inner.control.request(Shutdown::Drain),
         ShutdownStatus::Requested
     );
 
@@ -122,23 +123,20 @@ async fn committed_send_is_part_of_the_fixed_drain_queue() {
 // than dropping CallEnvelope and publishing a fabricated queued failure.
 #[tokio::test]
 async fn rejected_call_admission_recovers_its_message_without_a_reply() {
-    let (mailbox, mut receiver) = ActorMailbox::<TestActor>::channel(1);
-    let permit = mailbox
+    let (inner, mut receiver) = ActorInner::<TestActor>::channel(1);
+    let permit = inner
         .sender
         .reserve()
         .await
         .expect("the test mailbox is open");
     let drops = Arc::new(AtomicUsize::new(0));
-    let (envelope, mut response) = CallEnvelope::new(
-        RecoverMessage(Arc::clone(&drops)),
-        Arc::clone(&mailbox.control),
-    );
+    let (envelope, mut response) = CallEnvelope::new(RecoverMessage(Arc::clone(&drops)), &inner);
     assert_eq!(
-        mailbox.control.request(Shutdown::Stop),
+        inner.control.request(Shutdown::Stop),
         ShutdownStatus::Requested
     );
 
-    let rejected = mailbox.admit(permit, Box::new(envelope));
+    let rejected = inner.admit(permit, Box::new(envelope));
     let Err((permit, envelope)) = rejected else {
         panic!("shutdown must reject the call envelope");
     };
@@ -163,12 +161,10 @@ async fn rejected_call_admission_recovers_its_message_without_a_reply() {
 // Uncommitted work must not fail the actor.
 #[test]
 fn call_recovery_contains_response_waker_panic() {
-    let control = Control::new();
+    let (actor, _inbox) = ActorInner::<TestActor>::channel(1);
     let message_drops = Arc::new(AtomicUsize::new(0));
-    let (envelope, response) = CallEnvelope::new(
-        RecoverMessage(Arc::clone(&message_drops)),
-        Arc::clone(&control),
-    );
+    let (envelope, response) =
+        CallEnvelope::new(RecoverMessage(Arc::clone(&message_drops)), &actor);
     let wakes = Arc::new(AtomicUsize::new(0));
     let waker = Waker::from(Arc::new(PanicWake(Arc::clone(&wakes))));
     let mut task = Context::from_waker(&waker);
@@ -180,7 +176,7 @@ fn call_recovery_contains_response_waker_panic() {
     assert!(recovered.is_ok());
     assert_eq!(wakes.load(Ordering::SeqCst), 1);
     assert_eq!(message_drops.load(Ordering::SeqCst), 0);
-    assert_eq!(control.mode(), Mode::Running);
+    assert_eq!(actor.control.mode(), Mode::Running);
     drop(recovered.unwrap());
     assert_eq!(message_drops.load(Ordering::SeqCst), 1);
 }
@@ -202,12 +198,10 @@ impl Drop for PanicDropMessage {
 // Both callbacks may panic and must remain separate containment boundaries.
 #[test]
 fn queued_call_drop_contains_notification_and_message_drop_panics() {
-    let control = Control::new();
+    let (actor, _inbox) = ActorInner::<TestActor>::channel(1);
     let message_dropped = Arc::new(AtomicBool::new(false));
-    let (envelope, response) = CallEnvelope::new(
-        PanicDropMessage(Arc::clone(&message_dropped)),
-        Arc::clone(&control),
-    );
+    let (envelope, response) =
+        CallEnvelope::new(PanicDropMessage(Arc::clone(&message_dropped)), &actor);
     let wakes = Arc::new(AtomicUsize::new(0));
     let waker = Waker::from(Arc::new(PanicWake(Arc::clone(&wakes))));
     let mut task = Context::from_waker(&waker);
@@ -219,7 +213,7 @@ fn queued_call_drop_contains_notification_and_message_drop_panics() {
     assert!(dropped.is_ok());
     assert!(message_dropped.load(Ordering::SeqCst));
     assert_eq!(wakes.load(Ordering::SeqCst), 1);
-    assert_eq!(control.mode(), Mode::Failing);
+    assert_eq!(actor.control.mode(), Mode::Failing);
     assert!(matches!(
         response.as_mut().get_mut().try_recv(),
         Ok(Err(CallError::BeforeDispatch(ExitReason::Panicked)))
@@ -230,19 +224,19 @@ fn queued_call_drop_contains_notification_and_message_drop_panics() {
 // gate without publishing a fake lifecycle change to every closed() waiter.
 #[test]
 fn mailbox_admission_does_not_wake_lifecycle_observers() {
-    let (mailbox, mut receiver) = ActorMailbox::<TestActor>::channel(1);
-    let mut mode = mailbox.control.subscribe_mode();
+    let (inner, mut receiver) = ActorInner::<TestActor>::channel(1);
+    let mut mode = inner.control.subscribe_mode();
     let mut changed = Box::pin(mode.changed());
     let wakes = Arc::new(WakeCounter(AtomicUsize::new(0)));
     let waker = Waker::from(Arc::clone(&wakes));
     let mut task = Context::from_waker(&waker);
-    let permit = mailbox
+    let permit = inner
         .sender
         .try_reserve()
         .expect("the test mailbox has capacity");
 
     assert!(matches!(changed.as_mut().poll(&mut task), Poll::Pending));
-    let admitted = mailbox.admit(permit, Box::new(NoopEnvelope));
+    let admitted = inner.admit(permit, Box::new(NoopEnvelope));
     let Ok(()) = admitted else {
         panic!("Running must admit the envelope");
     };

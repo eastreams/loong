@@ -8,9 +8,22 @@ use std::{
     task::{Context, Wake, Waker},
 };
 
-use crate::{CallError, ExitReason, ExitStatus, Shutdown, ShutdownStatus, SubtreeStatus};
+use crate::{
+    Actor, ActorScope, CallError, ExitReason, ExitStatus, Shutdown, ShutdownStatus, SubtreeStatus,
+};
 
 use super::*;
+use crate::mailbox::ActorInner;
+
+struct TestActor;
+
+impl Actor for TestActor {
+    type SpawnArgs = ();
+
+    async fn init(_args: (), _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self
+    }
+}
 
 struct WakeCounter(AtomicUsize);
 
@@ -123,12 +136,15 @@ fn public_notification_panic_preserves_every_other_waiter() {
 
 #[test]
 fn kill_before_dispatch_rejects_the_queued_phase() {
-    let control = Control::new();
-    assert_eq!(control.request(Shutdown::Kill), ShutdownStatus::Requested);
+    let (actor, _inbox) = ActorInner::<TestActor>::channel(1);
+    assert_eq!(
+        actor.control.request(Shutdown::Kill),
+        ShutdownStatus::Requested
+    );
 
     assert!(matches!(
-        control.begin_dispatch(),
-        Err((_, CallError::BeforeDispatch(ExitReason::Killed)))
+        actor.begin_dispatch(),
+        Err(CallError::BeforeDispatch(ExitReason::Killed))
     ));
 }
 

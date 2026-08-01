@@ -206,9 +206,9 @@ pub(crate) mod sealed {
     pub trait HandleReply<A: Actor, M: Message> {
         fn handle(
             self,
-            owned: &OwnedTasks,
+            owned: &OwnedTasks<A>,
             scheduler: &mut ReplyScheduler<A>,
-            reply: DispatchReply<M::Reply>,
+            reply: DispatchReply<A, M::Reply>,
         );
     }
 
@@ -219,9 +219,9 @@ pub(crate) mod sealed {
     {
         fn handle(
             self,
-            _owned: &OwnedTasks,
+            _owned: &OwnedTasks<A>,
             _scheduler: &mut ReplyScheduler<A>,
-            reply: DispatchReply<M::Reply>,
+            reply: DispatchReply<A, M::Reply>,
         ) {
             reply.complete(self.value);
         }
@@ -235,9 +235,9 @@ pub(crate) mod sealed {
     {
         fn handle(
             self,
-            owned: &OwnedTasks,
+            owned: &OwnedTasks<A>,
             _scheduler: &mut ReplyScheduler<A>,
-            reply: DispatchReply<M::Reply>,
+            reply: DispatchReply<A, M::Reply>,
         ) {
             owned.spawn(CompleteReply::new(self, reply));
         }
@@ -251,9 +251,9 @@ pub(crate) mod sealed {
     {
         fn handle(
             self,
-            _owned: &OwnedTasks,
+            _owned: &OwnedTasks<A>,
             scheduler: &mut ReplyScheduler<A>,
-            reply: DispatchReply<M::Reply>,
+            reply: DispatchReply<A, M::Reply>,
         ) {
             scheduler.push_interleaved(CompleteReply::new(self.future, reply));
         }
@@ -267,9 +267,9 @@ pub(crate) mod sealed {
     {
         fn handle(
             self,
-            _owned: &OwnedTasks,
+            _owned: &OwnedTasks<A>,
             scheduler: &mut ReplyScheduler<A>,
-            reply: DispatchReply<M::Reply>,
+            reply: DispatchReply<A, M::Reply>,
         ) {
             scheduler.push_exclusive(CompleteReply::new(self.future, reply));
         }
@@ -284,9 +284,9 @@ pub(crate) mod sealed {
     {
         fn handle(
             self,
-            owned: &OwnedTasks,
+            owned: &OwnedTasks<A>,
             scheduler: &mut ReplyScheduler<A>,
-            reply: DispatchReply<M::Reply>,
+            reply: DispatchReply<A, M::Reply>,
         ) {
             match self {
                 Either::Left(left) => left.handle(owned, scheduler, reply),
@@ -297,16 +297,16 @@ pub(crate) mod sealed {
 }
 
 pin_project! {
-    struct CompleteReply<F, R> {
+    struct CompleteReply<A: Actor, F, R> {
         // Report cancellation before running the user future's Drop.
-        reply: Option<DispatchReply<R>>,
+        reply: Option<DispatchReply<A, R>>,
         #[pin]
         future: F,
     }
 }
 
-impl<F, R> CompleteReply<F, R> {
-    fn new(future: F, reply: DispatchReply<R>) -> Self {
+impl<A: Actor, F, R> CompleteReply<A, F, R> {
+    fn new(future: F, reply: DispatchReply<A, R>) -> Self {
         Self {
             reply: Some(reply),
             future,
@@ -314,8 +314,9 @@ impl<F, R> CompleteReply<F, R> {
     }
 }
 
-impl<F, R> Future for CompleteReply<F, R>
+impl<A, F, R> Future for CompleteReply<A, F, R>
 where
+    A: Actor,
     F: Future<Output = R>,
 {
     type Output = ();
@@ -331,7 +332,7 @@ where
     }
 }
 
-impl<A, F, R> ActorFuture<A> for CompleteReply<F, R>
+impl<A, F, R> ActorFuture<A> for CompleteReply<A, F, R>
 where
     A: Actor,
     F: ActorFuture<A, Output = R>,

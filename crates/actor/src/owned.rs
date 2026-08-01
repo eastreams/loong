@@ -9,7 +9,10 @@ use std::{
 use pin_project_lite::pin_project;
 use tokio_util::{sync::WaitForCancellationFutureOwned, task::TaskTracker};
 
-use crate::mailbox::{Control, Mode};
+use crate::{
+    Actor,
+    mailbox::{ActorInner, Mode},
+};
 
 /// Tracks spawned Tokio tasks for borrow-free replies.
 ///
@@ -17,16 +20,16 @@ use crate::mailbox::{Control, Mode};
 /// Closing enables its shutdown barrier.
 /// It does not reject later spawns.
 /// Dispatch must therefore end before closing.
-pub(crate) struct OwnedTasks {
-    control: Arc<Control>,
+pub(crate) struct OwnedTasks<A: Actor> {
+    actor: Arc<ActorInner<A>>,
     tasks: TaskTracker,
 }
 
-impl OwnedTasks {
+impl<A: Actor> OwnedTasks<A> {
     /// Creates an open tracker for one actor.
-    pub(crate) fn new(control: Arc<Control>) -> Self {
+    pub(crate) fn new(actor: Arc<ActorInner<A>>) -> Self {
         Self {
-            control,
+            actor,
             tasks: TaskTracker::new(),
         }
     }
@@ -38,8 +41,8 @@ impl OwnedTasks {
     {
         let task = OwnedTask {
             state: OwnedTaskState::Running { future },
-            cancellation: self.control.owned_cancellation().cancelled_owned(),
-            control: Arc::clone(&self.control),
+            cancellation: self.actor.control.owned_cancellation().cancelled_owned(),
+            actor: Arc::clone(&self.actor),
         };
         // The tracker supplies one barrier; no task-specific handle escapes.
         drop(self.tasks.spawn(task));
@@ -71,22 +74,22 @@ pin_project! {
 
 pin_project! {
     /// Contains polling and destruction for one borrow-free reply.
-    struct OwnedTask<F> {
+    struct OwnedTask<A: Actor, F> {
         #[pin]
         state: OwnedTaskState<F>,
         #[pin]
         cancellation: WaitForCancellationFutureOwned,
-        control: Arc<Control>,
+        actor: Arc<ActorInner<A>>,
     }
 
-    impl<F> PinnedDrop for OwnedTask<F> {
+    impl<A: Actor, F> PinnedDrop for OwnedTask<A, F> {
         fn drop(this: Pin<&mut Self>) {
             this.drop_future();
         }
     }
 }
 
-impl<F> OwnedTask<F> {
+impl<A: Actor, F> OwnedTask<A, F> {
     /// Replaces the pinned future before its destructor can unwind.
     fn drop_future(mut self: Pin<&mut Self>) {
         let this = self.as_mut().project();
@@ -94,13 +97,14 @@ impl<F> OwnedTask<F> {
             let _ = this.state.project_replace(OwnedTaskState::Done);
         }));
         if let Err(payload) = result {
-            this.control.contain_panic(payload);
+            this.actor.control.contain_panic(payload);
         }
     }
 }
 
-impl<F> Future for OwnedTask<F>
+impl<A, F> Future for OwnedTask<A, F>
 where
+    A: Actor,
     F: Future<Output = ()>,
 {
     type Output = ();
@@ -112,7 +116,7 @@ where
             // Mode remains the sole cancellation decision.
             let _ = this.cancellation.poll(task);
             !matches!(
-                this.control.mode(),
+                this.actor.control.mode(),
                 Mode::Running | Mode::Draining | Mode::Stopping
             )
         };
@@ -135,7 +139,7 @@ where
                 Poll::Ready(())
             }
             Err(payload) => {
-                self.as_mut().project().control.contain_panic(payload);
+                self.as_mut().project().actor.control.contain_panic(payload);
                 self.as_mut().drop_future();
                 Poll::Ready(())
             }
@@ -157,6 +161,20 @@ mod tests {
     };
 
     use super::*;
+
+    struct TestActor;
+
+    impl Actor for TestActor {
+        type SpawnArgs = ();
+
+        async fn init(_args: Self::SpawnArgs, _scope: &mut crate::ActorScope<'_, Self>) -> Self {
+            Self
+        }
+    }
+
+    fn test_actor_inner() -> Arc<ActorInner<TestActor>> {
+        ActorInner::channel(1).0
+    }
 
     struct PollCounter(Arc<AtomicUsize>);
 
@@ -212,12 +230,12 @@ mod tests {
     // The task must observe that cutoff before entering user code.
     #[tokio::test(flavor = "current_thread")]
     async fn owned_task_does_not_poll_after_kill() {
-        let control = Control::new();
+        let actor = test_actor_inner();
         let polls = Arc::new(AtomicUsize::new(0));
-        let owned = OwnedTasks::new(Arc::clone(&control));
+        let owned = OwnedTasks::new(Arc::clone(&actor));
 
         owned.spawn(PollCounter(Arc::clone(&polls)));
-        control.request(crate::Shutdown::Kill);
+        actor.control.request(crate::Shutdown::Kill);
         owned.close();
         owned.wait().await;
 
@@ -228,15 +246,15 @@ mod tests {
     // Containment must prevent them from combining into process abort.
     #[tokio::test]
     async fn owned_task_contains_cascading_panics() {
-        let control = Control::new();
-        let mut mode = control.subscribe_mode();
+        let actor = test_actor_inner();
+        let mut mode = actor.control.subscribe_mode();
         let mut changed = Box::pin(mode.changed());
         let waker = Waker::from(Arc::new(PanicWake));
         let mut task = Context::from_waker(&waker);
         assert!(changed.as_mut().poll(&mut task).is_pending());
 
         let payload_dropped = Arc::new(AtomicBool::new(false));
-        let owned = OwnedTasks::new(Arc::clone(&control));
+        let owned = OwnedTasks::new(Arc::clone(&actor));
         owned.spawn(CascadingPanicFuture {
             payload_dropped: Arc::clone(&payload_dropped),
         });
@@ -244,6 +262,6 @@ mod tests {
         owned.wait().await;
 
         assert!(payload_dropped.load(Ordering::SeqCst));
-        assert_eq!(control.mode(), Mode::Failing);
+        assert_eq!(actor.control.mode(), Mode::Failing);
     }
 }

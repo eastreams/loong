@@ -1,26 +1,23 @@
-use std::{fmt, future::Future, pin::Pin, sync::Weak, task};
+use std::{fmt, future::Future, pin::Pin, sync::Arc, task};
 
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 
 use crate::{
-    Actor, CallError, ExitStatus, Handler, Message, SendError, TryCallError, TryCallErrorKind,
-    TrySendError, TrySendErrorKind,
-    mailbox::{ActorMailbox, CallEnvelope, Mode, ReplyReceiver, SendEnvelope, mode_changed},
+    Actor, CallError, ExitStatus, Handler, Message, SendError, Shutdown, ShutdownStatus,
+    TryCallError, TryCallErrorKind, TrySendError, TrySendErrorKind,
+    mailbox::{ActorInner, CallEnvelope, Mode, ReplyReceiver, SendEnvelope, mode_changed},
 };
 
-/// A cloneable address that can communicate with, but does not own, an actor.
+/// A cloneable address for messaging, shutdown, and terminal observation.
 ///
-/// Keeping any number of addresses alive does not delay owner-initiated
-/// shutdown. Admission waits are woken as soon as shutdown closes admission.
-/// Requests accepted by cloned addresses share the same bounded mailbox.
-pub struct ActorRef<A: Actor> {
-    mailbox: Weak<ActorMailbox<A>>,
-    mode: watch::Receiver<Mode>,
-}
+/// An address does not own the actor lifecycle. Keeping addresses alive does
+/// not delay owner-initiated shutdown. Requests accepted by cloned addresses
+/// share one bounded mailbox.
+pub struct ActorRef<A: Actor>(pub(crate) Arc<ActorInner<A>>);
 
 impl<A: Actor> ActorRef<A> {
-    pub(crate) fn new(mailbox: Weak<ActorMailbox<A>>, mode: watch::Receiver<Mode>) -> Self {
-        Self { mailbox, mode }
+    pub(crate) fn new(inner: Arc<ActorInner<A>>) -> Self {
+        Self(inner)
     }
 
     /// Sends a typed request, waiting for bounded mailbox capacity if needed.
@@ -50,14 +47,14 @@ impl<A: Actor> ActorRef<A> {
         A: Handler<M>,
         M: Message,
     {
-        let mailbox = self.mailbox.upgrade().ok_or(CallError::Closed)?;
-        let mut mode = mailbox.control.subscribe_mode();
+        let inner = &self.0;
+        let mut mode = inner.control.subscribe_mode();
 
-        if !mailbox.control.is_running() {
+        if !inner.control.is_running() {
             return Err(CallError::Closed);
         }
 
-        let reserve = mailbox.sender.reserve();
+        let reserve = inner.sender.reserve();
         tokio::pin!(reserve);
 
         let permit = loop {
@@ -67,15 +64,15 @@ impl<A: Actor> ActorRef<A> {
                     break reserved.map_err(|_| CallError::Closed)?;
                 }
                 changed = mode_changed(&mut mode) => {
-                    if changed.is_err() || !mailbox.control.is_running() {
+                    if changed.is_err() || !inner.control.is_running() {
                         return Err(CallError::Closed);
                     }
                 }
             }
         };
 
-        let (envelope, response) = CallEnvelope::new(message, mailbox.control.clone());
-        match mailbox.admit(permit, Box::new(envelope)) {
+        let (envelope, response) = CallEnvelope::new(message, inner);
+        match inner.admit(permit, Box::new(envelope)) {
             Ok(()) => {}
             Err((permit, envelope)) => {
                 drop(permit);
@@ -111,16 +108,14 @@ impl<A: Actor> ActorRef<A> {
         A: Handler<M>,
         M: Message<Reply = ()>,
     {
-        let Some(mailbox) = self.mailbox.upgrade() else {
-            return Err(SendError::new(message));
-        };
-        let mut mode = mailbox.control.subscribe_mode();
+        let inner = &self.0;
+        let mut mode = inner.control.subscribe_mode();
 
-        if !mailbox.control.is_running() {
+        if !inner.control.is_running() {
             return Err(SendError::new(message));
         }
 
-        let reserve = mailbox.sender.reserve();
+        let reserve = inner.sender.reserve();
         tokio::pin!(reserve);
 
         let permit = loop {
@@ -133,15 +128,15 @@ impl<A: Actor> ActorRef<A> {
                     }
                 }
                 changed = mode_changed(&mut mode) => {
-                    if changed.is_err() || !mailbox.control.is_running() {
+                    if changed.is_err() || !inner.control.is_running() {
                         return Err(SendError::new(message));
                     }
                 }
             }
         };
 
-        let envelope = Box::new(SendEnvelope::new(message, mailbox.control.clone()));
-        match mailbox.admit(permit, envelope) {
+        let envelope = Box::new(SendEnvelope::new(message));
+        match inner.admit(permit, envelope) {
             Ok(()) => Ok(()),
             Err((permit, envelope)) => {
                 drop(permit);
@@ -164,14 +159,12 @@ impl<A: Actor> ActorRef<A> {
         A: Handler<M>,
         M: Message,
     {
-        let Some(mailbox) = self.mailbox.upgrade() else {
-            return Err(TryCallError::new(TryCallErrorKind::Closed, message));
-        };
+        let inner = &self.0;
 
-        let permit = match mailbox.sender.try_reserve() {
+        let permit = match inner.sender.try_reserve() {
             Ok(permit) => permit,
             Err(mpsc::error::TrySendError::Full(_)) => {
-                let kind = if mailbox.control.is_running() {
+                let kind = if inner.control.is_running() {
                     TryCallErrorKind::Full
                 } else {
                     TryCallErrorKind::Closed
@@ -183,8 +176,8 @@ impl<A: Actor> ActorRef<A> {
             }
         };
 
-        let (envelope, response) = CallEnvelope::new(message, mailbox.control.clone());
-        match mailbox.admit(permit, Box::new(envelope)) {
+        let (envelope, response) = CallEnvelope::new(message, inner);
+        match inner.admit(permit, Box::new(envelope)) {
             Ok(()) => Ok(Response::new(response)),
             Err((permit, envelope)) => {
                 drop(permit);
@@ -212,14 +205,12 @@ impl<A: Actor> ActorRef<A> {
         A: Handler<M>,
         M: Message<Reply = ()>,
     {
-        let Some(mailbox) = self.mailbox.upgrade() else {
-            return Err(TrySendError::new(TrySendErrorKind::Closed, message));
-        };
+        let inner = &self.0;
 
-        let permit = match mailbox.sender.try_reserve() {
+        let permit = match inner.sender.try_reserve() {
             Ok(permit) => permit,
             Err(mpsc::error::TrySendError::Full(_)) => {
-                let kind = if mailbox.control.is_running() {
+                let kind = if inner.control.is_running() {
                     TrySendErrorKind::Full
                 } else {
                     TrySendErrorKind::Closed
@@ -231,8 +222,8 @@ impl<A: Actor> ActorRef<A> {
             }
         };
 
-        let envelope = Box::new(SendEnvelope::new(message, mailbox.control.clone()));
-        match mailbox.admit(permit, envelope) {
+        let envelope = Box::new(SendEnvelope::new(message));
+        match inner.admit(permit, envelope) {
             Ok(()) => Ok(()),
             Err((permit, envelope)) => {
                 drop(permit);
@@ -244,15 +235,20 @@ impl<A: Actor> ActorRef<A> {
         }
     }
 
+    /// Requests Stop, Drain, or Kill without taking lifecycle ownership.
+    ///
+    /// The unique owner still requests Kill when dropped.
+    /// Any address may submit an earlier lifecycle decision.
+    pub fn request_shutdown(&self, shutdown: Shutdown) -> ShutdownStatus {
+        self.0.control.request(shutdown)
+    }
+
     /// Returns a non-waiting snapshot of the actor's terminal status.
     ///
     /// `None` includes both a running actor and an actor still completing
     /// shutdown. Use [`closed`](Self::closed) to wait for terminal publication.
     pub fn exit_status(&self) -> Option<ExitStatus> {
-        match *self.mode.borrow() {
-            Mode::Exited(status) => Some(status),
-            _ => None,
-        }
+        self.0.control.exit_status()
     }
 
     /// Waits until the actor publishes its terminal event.
@@ -263,7 +259,7 @@ impl<A: Actor> ActorRef<A> {
     /// The status's reason describes only this actor.
     /// Its subtree status reports the runtime's termination guarantee.
     pub async fn closed(&self) -> ExitStatus {
-        let mut mode = self.mode.clone();
+        let mut mode = self.0.control.subscribe_mode();
         loop {
             if let Mode::Exited(status) = *mode.borrow_and_update() {
                 return status;
@@ -278,10 +274,7 @@ impl<A: Actor> ActorRef<A> {
 
 impl<A: Actor> Clone for ActorRef<A> {
     fn clone(&self) -> Self {
-        Self {
-            mailbox: self.mailbox.clone(),
-            mode: self.mode.clone(),
-        }
+        Self(Arc::clone(&self.0))
     }
 }
 

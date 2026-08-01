@@ -11,12 +11,12 @@ use std::{
 use futures_util::FutureExt;
 use pin_project_lite::pin_project;
 use slotmap::{DefaultKey, SlotMap};
-use tokio::{sync::mpsc, task::JoinHandle};
+use tokio::sync::mpsc;
 
 use crate::{
     Actor, ActorRef, Child, ChildExit, ChildId, ErasedFuture, ExitReason, ExitStatus, Shutdown,
     ShutdownStatus, SubtreeStatus,
-    mailbox::{ActorMailbox, Control, DynEnvelope, HookEntryPermit, Mode},
+    mailbox::{ActorInner, Control, DynEnvelope, HookEntryPermit, Mode},
     owned::OwnedTasks,
     scheduler::{InterleavedPoll, ReplyScheduler},
 };
@@ -97,13 +97,7 @@ pub fn spawn<A: Actor>(args: A::SpawnArgs) -> ActorOwner<A> {
 /// This function requires an active Tokio runtime.
 #[must_use = "dropping the returned owner requests Kill"]
 pub fn spawn_with<A: Actor>(args: A::SpawnArgs, options: SpawnOptions) -> ActorOwner<A> {
-    let PreparedActor {
-        actor_ref,
-        control,
-        future,
-    } = PreparedActor::new(args, options);
-    let owned = OwnedActor::start(control, future, None);
-    ActorOwner { actor_ref, owned }
+    ActorOwner(PreparedActor::new(args, options).start(None))
 }
 
 /// The unique lifecycle owner of a root actor.
@@ -114,15 +108,12 @@ pub fn spawn_with<A: Actor>(args: A::SpawnArgs, options: SpawnOptions) -> ActorO
 /// termination matters. [`ExitStatus`] separates the actor's reason from its
 /// subtree guarantee.
 #[must_use = "dropping an actor owner requests Kill"]
-pub struct ActorOwner<A: Actor> {
-    actor_ref: ActorRef<A>,
-    owned: OwnedActor,
-}
+pub struct ActorOwner<A: Actor>(ActorRef<A>);
 
 impl<A: Actor> ActorOwner<A> {
     /// Returns a cloneable, non-owning address.
     pub fn actor_ref(&self) -> ActorRef<A> {
-        self.actor_ref.clone()
+        self.0.clone()
     }
 
     /// Requests Stop, Drain, or Kill without waiting for completion.
@@ -132,12 +123,12 @@ impl<A: Actor> ActorOwner<A> {
     /// [`Shutdown`] for retained work and cleanup behavior, and
     /// [`ShutdownStatus`] for the meaning of the immediate result.
     pub fn request_shutdown(&self, shutdown: Shutdown) -> ShutdownStatus {
-        self.owned.control.request(shutdown)
+        self.0.request_shutdown(shutdown)
     }
 
     /// Returns the terminal status if the actor has already exited.
     pub fn exit_status(&self) -> Option<ExitStatus> {
-        self.owned.control.exit_status()
+        self.0.exit_status()
     }
 
     /// Waits for the actor to publish its terminal event.
@@ -147,7 +138,7 @@ impl<A: Actor> ActorOwner<A> {
     /// The status's reason describes only this actor.
     /// Its subtree status reports the runtime's termination guarantee.
     pub async fn wait(&mut self) -> ExitStatus {
-        self.owned.wait().await
+        self.0.closed().await
     }
 
     /// Requests shutdown and waits for the terminal event described by
@@ -168,11 +159,17 @@ impl<A: Actor> ActorOwner<A> {
     }
 }
 
+impl<A: Actor> Drop for ActorOwner<A> {
+    fn drop(&mut self) {
+        self.0.request_shutdown(Shutdown::Kill);
+    }
+}
+
 impl<A: Actor> fmt::Debug for ActorOwner<A> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ActorOwner")
-            .field("actor_ref", &self.actor_ref)
+            .field("actor_ref", &self.0)
             .field("exit_status", &self.exit_status())
             .finish_non_exhaustive()
     }
@@ -182,7 +179,6 @@ impl<A: Actor> fmt::Debug for ActorOwner<A> {
 // Public scope views expose only phase-valid capabilities.
 struct ScopeState<A: Actor> {
     actor_ref: ActorRef<A>,
-    control: Arc<Control>,
     children: ChildSet,
     supervisor_tx: mpsc::UnboundedSender<ChildExit>,
 }
@@ -197,7 +193,6 @@ impl<A: Actor> ScopeState<A> {
     fn stop_scope(&self) -> StopScope<'_, A> {
         StopScope {
             actor_ref: &self.actor_ref,
-            control: self.control.as_ref(),
         }
     }
 }
@@ -210,7 +205,6 @@ impl<A: Actor> ScopeState<A> {
 /// The stop hook may keep it across `await`.
 pub struct StopScope<'a, A: Actor> {
     actor_ref: &'a ActorRef<A>,
-    control: &'a Control,
 }
 
 impl<A: Actor> StopScope<'_, A> {
@@ -226,7 +220,7 @@ impl<A: Actor> StopScope<'_, A> {
     /// Stop or Drain has already committed at this stage.
     /// Kill may still upgrade either mode.
     pub fn request_shutdown(&self, shutdown: Shutdown) -> ShutdownStatus {
-        self.control.request(shutdown)
+        self.actor_ref.request_shutdown(shutdown)
     }
 }
 
@@ -285,7 +279,7 @@ impl<A: Actor> ActorScope<'_, A> {
     /// completion instead commit through the same lifecycle gate, so whichever
     /// commits first determines the caller's result.
     pub fn request_shutdown(&self, shutdown: Shutdown) -> ShutdownStatus {
-        self.state.control.request(shutdown)
+        self.state.actor_ref.request_shutdown(shutdown)
     }
 
     /// Spawns and owns one direct child actor.
@@ -340,61 +334,47 @@ struct ParentLink {
 /// Preparation keeps that ordering explicit without placeholder state.
 struct PreparedActor<A: Actor> {
     actor_ref: ActorRef<A>,
-    control: Arc<Control>,
     future: ErasedFuture<'static, ExitStatus>,
 }
 
-struct OwnedActor {
-    control: Arc<Control>,
-    join: Option<JoinHandle<ExitStatus>>,
+/// Cold ownership operations for heterogeneous child storage.
+///
+/// The trait object points at the same allocation as its typed ActorRef.
+/// It exposes no message capability to ChildSet.
+trait ErasedActor: Send + Sync {
+    fn control(&self) -> &Control;
 }
 
-impl OwnedActor {
-    /// Starts prepared work with its complete parent link.
-    fn start(
-        control: Arc<Control>,
-        future: ErasedFuture<'static, ExitStatus>,
-        parent: Option<ParentLink>,
-    ) -> Self {
-        let task = ActorTask::new(future, ExitGuard::new(Arc::clone(&control), parent));
-        Self {
-            control,
-            join: Some(tokio::spawn(task)),
-        }
-    }
-
-    async fn wait(&mut self) -> ExitStatus {
-        // This bypasses shared lifecycle notification.
-        // Cancellation retains the JoinHandle for another wait.
-        let joined = match &mut self.join {
-            Some(join) => join.await,
-            None => return self.control.wait_for_exit().await,
-        };
-        self.join = None;
-        match joined {
-            Ok(reason) => reason,
-            Err(error) => {
-                if let Ok(payload) = error.try_into_panic() {
-                    self.control.contain_panic(payload);
-                }
-                self.control.wait_for_exit().await
-            }
-        }
+impl<A: Actor> ErasedActor for ActorInner<A> {
+    fn control(&self) -> &Control {
+        &self.control
     }
 }
 
-impl Drop for OwnedActor {
+struct ErasedActorOwner(Arc<dyn ErasedActor>);
+
+impl ErasedActorOwner {
+    fn new<A: Actor>(actor_ref: &ActorRef<A>) -> Self {
+        Self(Arc::clone(&actor_ref.0) as Arc<dyn ErasedActor>)
+    }
+
+    fn control(&self) -> &Control {
+        self.0.control()
+    }
+
+    async fn wait(&self) -> ExitStatus {
+        self.control().wait_for_exit().await
+    }
+}
+
+impl Drop for ErasedActorOwner {
     fn drop(&mut self) {
-        if self.control.exit_status().is_none() {
-            self.control.request(Shutdown::Kill);
-        }
-        // Dropping a JoinHandle detaches the task. The Kill request, rather
-        // than address liveness, drives cooperative teardown of the subtree.
+        self.control().request(Shutdown::Kill);
     }
 }
 
 struct ChildSet {
-    actors: SlotMap<DefaultKey, OwnedActor>,
+    actors: SlotMap<DefaultKey, ErasedActorOwner>,
     // Removed children cannot erase a lost subtree guarantee.
     subtree: SubtreeStatus,
 }
@@ -421,24 +401,23 @@ impl ChildSet {
         options: SpawnOptions,
         events: mpsc::UnboundedSender<ChildExit>,
     ) -> Child<A> {
-        let PreparedActor {
-            actor_ref,
-            control,
-            future,
-        } = PreparedActor::new(args, options);
-        let key = self.actors.insert_with_key(|key| {
+        let PreparedActor { actor_ref, future } = PreparedActor::new(args, options);
+        let child_ref = actor_ref.clone();
+        let key = self.actors.insert_with_key(move |key| {
             let parent = ParentLink {
                 id: ChildId::from_key(key),
                 events,
             };
-            OwnedActor::start(control, future, Some(parent))
+            let exit = ExitGuard::new(Arc::clone(&actor_ref.0), Some(parent));
+            drop(tokio::spawn(ActorTask::new(future, exit)));
+            ErasedActorOwner::new(&actor_ref)
         });
-        Child::new(ChildId::from_key(key), actor_ref)
+        Child::new(ChildId::from_key(key), child_ref)
     }
 
     #[cfg(test)]
     /// Installs an already-started fixture without a parent notification link.
-    fn insert(&mut self, actor: OwnedActor) -> ChildId {
+    fn insert(&mut self, actor: ErasedActorOwner) -> ChildId {
         ChildId::from_key(self.actors.insert(actor))
     }
 
@@ -454,14 +433,14 @@ impl ChildSet {
 
     fn request_all(&self, shutdown: Shutdown) {
         for actor in self.actors.values() {
-            actor.control.request(shutdown);
+            actor.control().request(shutdown);
         }
     }
 
     async fn wait_all(&mut self) {
         // Persist each unconfirmed result before another cancellation point.
         let Self { actors, subtree } = self;
-        for actor in actors.values_mut() {
+        for actor in actors.values() {
             if actor.wait().await.subtree() == SubtreeStatus::Unconfirmed {
                 *subtree = SubtreeStatus::Unconfirmed;
             }
@@ -477,53 +456,54 @@ impl ChildSet {
 
 impl<A: Actor> PreparedActor<A> {
     fn new(args: A::SpawnArgs, options: SpawnOptions) -> Self {
-        let (mailbox, inbox) = ActorMailbox::channel(options.mailbox_capacity().get());
-        let actor_ref = ActorRef::new(Arc::downgrade(&mailbox), mailbox.control.subscribe_mode());
+        let (inner, inbox) = ActorInner::channel(options.mailbox_capacity().get());
+        let actor_ref = ActorRef::new(inner);
 
         // Each actor receives terminal events from its direct children.
         // The nonblocking channel prevents child teardown from awaiting parent work.
         let (supervisor_tx, supervisor_rx) = mpsc::unbounded_channel();
         let state = ScopeState {
             actor_ref: actor_ref.clone(),
-            control: mailbox.control.clone(),
             children: ChildSet::default(),
             supervisor_tx,
         };
-        let control = mailbox.control.clone();
         let future = Box::pin(run_actor(
             args,
             state,
             inbox,
             supervisor_rx,
-            mailbox,
             options.max_in_flight(),
         ));
 
-        Self {
-            actor_ref,
-            control,
-            future,
-        }
+        Self { actor_ref, future }
+    }
+
+    /// Starts the detached task after its complete parent link exists.
+    fn start(self, parent: Option<ParentLink>) -> ActorRef<A> {
+        let Self { actor_ref, future } = self;
+        let exit = ExitGuard::new(Arc::clone(&actor_ref.0), parent);
+        drop(tokio::spawn(ActorTask::new(future, exit)));
+        actor_ref
     }
 }
 
-struct ExitGuard {
-    control: Arc<Control>,
+struct ExitGuard<A: Actor> {
+    actor: Arc<ActorInner<A>>,
     parent: Option<ParentLink>,
     finished: bool,
 }
 
-impl ExitGuard {
-    fn new(control: Arc<Control>, parent: Option<ParentLink>) -> Self {
+impl<A: Actor> ExitGuard<A> {
+    fn new(actor: Arc<ActorInner<A>>, parent: Option<ParentLink>) -> Self {
         Self {
-            control,
+            actor,
             parent,
             finished: false,
         }
     }
 
     fn prepare_abort(&self) {
-        self.control.begin_abort();
+        self.actor.control.begin_abort();
     }
 
     fn complete(mut self, status: ExitStatus) -> ExitStatus {
@@ -533,12 +513,13 @@ impl ExitGuard {
     fn publish(&mut self, proposed: ExitStatus) -> ExitStatus {
         if self.finished {
             return self
+                .actor
                 .control
                 .exit_status()
                 .expect("a finished guard published an exit status");
         }
         self.finished = true;
-        let status = self.control.finish(proposed);
+        let status = self.actor.control.finish(proposed);
         if let Some(parent) = &self.parent {
             let _ = parent.events.send(ChildExit::new(parent.id, status));
         }
@@ -546,7 +527,7 @@ impl ExitGuard {
     }
 }
 
-impl Drop for ExitGuard {
+impl<A: Actor> Drop for ExitGuard<A> {
     fn drop(&mut self) {
         if !self.finished {
             // An unfinished guard means ActorTask did not complete publication.
@@ -558,13 +539,13 @@ impl Drop for ExitGuard {
     }
 }
 
-struct ActorTask {
+struct ActorTask<A: Actor> {
     future: Option<ErasedFuture<'static, ExitStatus>>,
-    exit: Option<ExitGuard>,
+    exit: Option<ExitGuard<A>>,
 }
 
-impl ActorTask {
-    fn new(future: ErasedFuture<'static, ExitStatus>, exit: ExitGuard) -> Self {
+impl<A: Actor> ActorTask<A> {
+    fn new(future: ErasedFuture<'static, ExitStatus>, exit: ExitGuard<A>) -> Self {
         Self {
             future: Some(future),
             exit: Some(exit),
@@ -572,7 +553,7 @@ impl ActorTask {
     }
 }
 
-impl Future for ActorTask {
+impl<A: Actor> Future for ActorTask<A> {
     type Output = ExitStatus;
 
     fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
@@ -595,13 +576,13 @@ impl Future for ActorTask {
             .future
             .take()
             .expect("a ready actor task owns one final frame");
-        exit.control.drop_user_value(future);
+        exit.actor.control.drop_user_value(future);
         let status = exit.complete(status);
         Poll::Ready(status)
     }
 }
 
-impl Drop for ActorTask {
+impl<A: Actor> Drop for ActorTask<A> {
     fn drop(&mut self) {
         let Some(exit) = self.exit.take() else {
             return;
@@ -610,7 +591,7 @@ impl Drop for ActorTask {
         // The guard publishes only after contained cleanup returns.
         exit.prepare_abort();
         if let Some(future) = self.future.take() {
-            exit.control.drop_user_value(future);
+            exit.actor.control.drop_user_value(future);
         }
         drop(exit);
     }
@@ -736,18 +717,18 @@ async fn run_actor<A: Actor>(
     mut state: ScopeState<A>,
     mut inbox: mpsc::Receiver<DynEnvelope<A>>,
     mut supervisor_rx: mpsc::UnboundedReceiver<ChildExit>,
-    _mailbox: Arc<ActorMailbox<A>>,
     max_in_flight: NonZeroUsize,
 ) -> ExitStatus {
-    let control = Arc::clone(&state.control);
-    let owned = OwnedTasks::new(Arc::clone(&state.control));
+    let inner = Arc::clone(&state.actor_ref.0);
+    let control = &inner.control;
+    let owned = OwnedTasks::new(Arc::clone(&inner));
     let mut scheduler = ReplyScheduler::new(max_in_flight);
     let mut turn_cursor = TurnCursor::default();
 
     let initialized = if let Some(_permit) = control.begin_initialization() {
         let mut scope = state.actor_scope();
         match panic::catch_unwind(AssertUnwindSafe(|| A::init(args, &mut scope))) {
-            Ok(init) => await_actor_work(init, &control).await,
+            Ok(init) => await_actor_work(init, control).await,
             Err(payload) => {
                 control.contain_panic(payload);
                 Work::Panicked
@@ -772,7 +753,7 @@ async fn run_actor<A: Actor>(
     };
 
     loop {
-        match state.control.mode() {
+        match control.mode() {
             Mode::Running => {}
             Mode::Draining => {
                 return drain_actor(
@@ -780,7 +761,7 @@ async fn run_actor<A: Actor>(
                     &mut state,
                     &mut inbox,
                     &mut supervisor_rx,
-                    &control,
+                    &inner,
                     &owned,
                     &mut scheduler,
                     &mut turn_cursor,
@@ -792,7 +773,7 @@ async fn run_actor<A: Actor>(
                     &mut actor,
                     &mut state,
                     &mut inbox,
-                    &control,
+                    control,
                     &owned,
                     &mut scheduler,
                 )
@@ -815,7 +796,7 @@ async fn run_actor<A: Actor>(
             &mut state,
             &mut inbox,
             &mut supervisor_rx,
-            &control,
+            &inner,
             &owned,
             &mut scheduler,
             true,
@@ -839,20 +820,20 @@ async fn run_actor<A: Actor>(
                 unreachable!("a running actor cannot finish reply scheduling")
             }
             Turn::Child(event) => {
-                match handle_child_exit(&mut actor, &mut state, event, &control).await {
+                match handle_child_exit(&mut actor, &mut state, event, control).await {
                     Work::Complete(()) => {}
                     Work::Killed => {
                         return kill_actor(&mut state, &mut inbox, &owned, &mut scheduler).await;
                     }
                     Work::Panicked | Work::DropPanicked(()) => {
-                        state.control.begin_failure();
+                        control.begin_failure();
                         return fail_actor(&mut state, &mut inbox, &owned, &mut scheduler).await;
                     }
                 }
             }
             Turn::Message => {}
             Turn::InboxClosed => {
-                state.control.begin_failure();
+                control.begin_failure();
                 return fail_actor(&mut state, &mut inbox, &owned, &mut scheduler).await;
             }
         }
@@ -907,13 +888,14 @@ async fn actor_turn<A: Actor>(
     state: &mut ScopeState<A>,
     inbox: &mut mpsc::Receiver<DynEnvelope<A>>,
     supervisor_rx: &mut mpsc::UnboundedReceiver<ChildExit>,
-    control: &Control,
-    owned: &OwnedTasks,
+    inner: &Arc<ActorInner<A>>,
+    owned: &OwnedTasks<A>,
     scheduler: &mut ReplyScheduler<A>,
     receive_messages: bool,
     expected_mode: Mode,
     cursor: &mut TurnCursor,
 ) -> Turn {
+    let control = &inner.control;
     let wait_for_owned = !receive_messages && scheduler.is_empty();
     let fair_turn = std::future::poll_fn(|task| {
         if control.mode() != expected_mode {
@@ -946,7 +928,7 @@ async fn actor_turn<A: Actor>(
                     match inbox.poll_recv(task) {
                         Poll::Ready(Some(envelope)) => {
                             let mut scope = state.actor_scope();
-                            envelope.dispatch(actor, &mut scope, owned, scheduler);
+                            envelope.dispatch(actor, &mut scope, owned, scheduler, inner);
                             Some(Turn::Message)
                         }
                         Poll::Ready(None) => Some(Turn::InboxClosed),
@@ -1018,7 +1000,7 @@ async fn handle_child_exit<A: Actor>(
         return Work::Complete(());
     }
 
-    let Some(permit) = state.control.begin_child_hook() else {
+    let Some(permit) = state.actor_ref.0.control.begin_child_hook() else {
         return Work::Complete(());
     };
 
@@ -1048,12 +1030,12 @@ async fn stop_actor<A: Actor>(
     state: &mut ScopeState<A>,
     inbox: &mut mpsc::Receiver<DynEnvelope<A>>,
     control: &Control,
-    owned: &OwnedTasks,
+    owned: &OwnedTasks<A>,
     scheduler: &mut ReplyScheduler<A>,
 ) -> ExitStatus {
-    match close_and_discard(inbox, &state.control, Mode::Stopping).await {
+    match close_and_discard(inbox, &state.actor_ref.0.control, Mode::Stopping).await {
         DiscardOutcome::Complete => {}
-        DiscardOutcome::ModeChanged => match state.control.mode() {
+        DiscardOutcome::ModeChanged => match state.actor_ref.0.control.mode() {
             Mode::Killing => return kill_actor(state, inbox, owned, scheduler).await,
             Mode::Failing => return fail_actor(state, inbox, owned, scheduler).await,
             // Lifecycle cannot return to a graceful mode. Aborting and Exited
@@ -1087,11 +1069,12 @@ async fn drain_actor<A: Actor>(
     state: &mut ScopeState<A>,
     inbox: &mut mpsc::Receiver<DynEnvelope<A>>,
     supervisor_rx: &mut mpsc::UnboundedReceiver<ChildExit>,
-    control: &Control,
-    owned: &OwnedTasks,
+    inner: &Arc<ActorInner<A>>,
+    owned: &OwnedTasks<A>,
     scheduler: &mut ReplyScheduler<A>,
     turn_cursor: &mut TurnCursor,
 ) -> ExitStatus {
+    let control = &inner.control;
     // Admission physically enqueues under the lifecycle transaction, so this
     // queue is stable once Drain commits. Capacity permits that never reached
     // admission are not accepted work and must not extend graceful shutdown.
@@ -1101,7 +1084,7 @@ async fn drain_actor<A: Actor>(
         owned.close();
     }
     loop {
-        match state.control.mode() {
+        match control.mode() {
             Mode::Killing => {
                 return kill_actor(state, inbox, owned, scheduler).await;
             }
@@ -1125,7 +1108,7 @@ async fn drain_actor<A: Actor>(
             state,
             inbox,
             supervisor_rx,
-            control,
+            inner,
             owned,
             scheduler,
             !inbox_drained,
@@ -1152,7 +1135,7 @@ async fn drain_actor<A: Actor>(
                     return kill_actor(state, inbox, owned, scheduler).await;
                 }
                 Work::Panicked | Work::DropPanicked(()) => {
-                    state.control.begin_failure();
+                    control.begin_failure();
                     return fail_actor(state, inbox, owned, scheduler).await;
                 }
             },
@@ -1175,11 +1158,11 @@ async fn finish_replies<A: Actor>(
     actor: &mut A,
     state: &mut ScopeState<A>,
     control: &Control,
-    owned: &OwnedTasks,
+    owned: &OwnedTasks<A>,
     scheduler: &mut ReplyScheduler<A>,
 ) -> Work {
     while !scheduler.is_empty() {
-        match state.control.mode() {
+        match control.mode() {
             Mode::Killing => return Work::Killed,
             Mode::Failing => return Work::Panicked,
             Mode::Running | Mode::Draining | Mode::Stopping => {}
@@ -1206,7 +1189,7 @@ async fn finish_replies<A: Actor>(
     }
 
     loop {
-        match state.control.mode() {
+        match control.mode() {
             Mode::Killing => return Work::Killed,
             Mode::Failing => return Work::Panicked,
             Mode::Running | Mode::Draining | Mode::Stopping => {}
@@ -1273,20 +1256,22 @@ async fn graceful_finish<A: Actor>(
 async fn kill_actor<A: Actor>(
     state: &mut ScopeState<A>,
     inbox: &mut mpsc::Receiver<DynEnvelope<A>>,
-    owned: &OwnedTasks,
+    owned: &OwnedTasks<A>,
     scheduler: &mut ReplyScheduler<A>,
 ) -> ExitStatus {
+    let inner = Arc::clone(&state.actor_ref.0);
+    let control = &inner.control;
     // Commit subtree cancellation before running arbitrary Drop code from actor
     // work. Children can then begin terminating even if a destructor is slow.
     inbox.close();
     state.children.request_all(Shutdown::Kill);
     owned.close();
-    scheduler.clear(&state.control);
+    scheduler.clear(control);
     let mut expected_mode = Mode::Killing;
     loop {
-        match close_and_discard(inbox, &state.control, expected_mode).await {
+        match close_and_discard(inbox, control, expected_mode).await {
             DiscardOutcome::Complete => break,
-            DiscardOutcome::ModeChanged => expected_mode = state.control.mode(),
+            DiscardOutcome::ModeChanged => expected_mode = control.mode(),
         }
     }
     owned.wait().await;
@@ -1297,10 +1282,11 @@ async fn kill_actor<A: Actor>(
 async fn fail_actor<A: Actor>(
     state: &mut ScopeState<A>,
     inbox: &mut mpsc::Receiver<DynEnvelope<A>>,
-    owned: &OwnedTasks,
+    owned: &OwnedTasks<A>,
     scheduler: &mut ReplyScheduler<A>,
 ) -> ExitStatus {
-    let control = Arc::clone(&state.control);
+    let inner = Arc::clone(&state.actor_ref.0);
+    let control = &inner.control;
     control.begin_failure();
     let reason = match control.mode() {
         Mode::Killing => ExitReason::Killed,
@@ -1311,10 +1297,10 @@ async fn fail_actor<A: Actor>(
     inbox.close();
     state.children.request_all(Shutdown::Kill);
     owned.close();
-    scheduler.clear(&control);
+    scheduler.clear(control);
     let mut expected_mode = control.mode();
     loop {
-        match close_and_discard(inbox, &control, expected_mode).await {
+        match close_and_discard(inbox, control, expected_mode).await {
             DiscardOutcome::Complete => break,
             DiscardOutcome::ModeChanged => expected_mode = control.mode(),
         }

@@ -336,6 +336,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::mailbox::ActorInner;
 
     struct TestActor;
 
@@ -345,6 +346,10 @@ mod tests {
         async fn init(_args: (), _scope: &mut ActorScope<'_, Self>) -> Self {
             Self
         }
+    }
+
+    fn test_actor_inner() -> Arc<ActorInner<TestActor>> {
+        ActorInner::channel(1).0
     }
 
     struct DropProbe {
@@ -466,7 +471,7 @@ mod tests {
     }
 
     struct KillOnPoll {
-        control: Arc<Control>,
+        actor: Arc<ActorInner<TestActor>>,
         polls: Arc<AtomicUsize>,
     }
 
@@ -475,7 +480,7 @@ mod tests {
 
         fn poll(self: Pin<&mut Self>, _task: &mut Context<'_>) -> Poll<Self::Output> {
             self.polls.fetch_add(1, Ordering::SeqCst);
-            self.control.request(crate::Shutdown::Kill);
+            self.actor.control.request(crate::Shutdown::Kill);
             Poll::Pending
         }
     }
@@ -501,7 +506,7 @@ mod tests {
 
     #[test]
     fn budgeted_scan_resumes_at_the_unpolled_tail() {
-        let control = Control::new();
+        let actor = test_actor_inner();
         let polls: Vec<_> = (0..20).map(|_| Arc::new(AtomicUsize::new(0))).collect();
         let mut items: VecDeque<TestFuture> = polls
             .iter()
@@ -514,7 +519,7 @@ mod tests {
         let mut task = Context::from_waker(&waker);
 
         assert_eq!(
-            poll_futures(&mut items, &mut sweep, &control, &mut task),
+            poll_futures(&mut items, &mut sweep, &actor.control, &mut task),
             InterleavedPoll::BudgetExhausted
         );
         assert!(
@@ -530,7 +535,7 @@ mod tests {
         assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
 
         assert_eq!(
-            poll_futures(&mut items, &mut sweep, &control, &mut task),
+            poll_futures(&mut items, &mut sweep, &actor.control, &mut task),
             InterleavedPoll::Pending
         );
         assert!(polls.iter().all(|count| count.load(Ordering::SeqCst) == 1));
@@ -539,7 +544,7 @@ mod tests {
 
     #[test]
     fn future_wake_coalesced_with_continuation_starts_another_sweep() {
-        let control = Control::new();
+        let actor = test_actor_inner();
         let first_polls = Arc::new(AtomicUsize::new(0));
         let first_waker = Arc::new(Mutex::new(None));
         let mut items = VecDeque::from([Box::pin(CaptureWaker {
@@ -556,20 +561,20 @@ mod tests {
         let mut task = Context::from_waker(&waker);
 
         assert_eq!(
-            poll_futures(&mut items, &mut sweep, &control, &mut task),
+            poll_futures(&mut items, &mut sweep, &actor.control, &mut task),
             InterleavedPoll::BudgetExhausted
         );
         first_waker.lock().unwrap().as_ref().unwrap().wake_by_ref();
         assert!(notified.0.swap(false, Ordering::SeqCst));
 
         assert_eq!(
-            poll_futures(&mut items, &mut sweep, &control, &mut task),
+            poll_futures(&mut items, &mut sweep, &actor.control, &mut task),
             InterleavedPoll::Pending
         );
         assert!(notified.0.swap(false, Ordering::SeqCst));
 
         assert_eq!(
-            poll_futures(&mut items, &mut sweep, &control, &mut task),
+            poll_futures(&mut items, &mut sweep, &actor.control, &mut task),
             InterleavedPoll::BudgetExhausted
         );
         assert_eq!(first_polls.load(Ordering::SeqCst), 2);
@@ -580,7 +585,7 @@ mod tests {
     // BudgetExhausted must yield while retaining the unpolled tail.
     #[test]
     fn completion_at_budget_cut_yields_before_resuming_tail() {
-        let control = Control::new();
+        let actor = test_actor_inner();
         let polls = Arc::new((0..17).map(|_| AtomicUsize::new(0)).collect::<Vec<_>>());
         let mut items: VecDeque<TestFuture> = (0..17)
             .map(|index| {
@@ -599,12 +604,12 @@ mod tests {
         let mut task = Context::from_waker(&waker);
 
         assert_eq!(
-            poll_futures(&mut items, &mut sweep, &control, &mut task),
+            poll_futures(&mut items, &mut sweep, &actor.control, &mut task),
             InterleavedPoll::BudgetExhausted
         );
         assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
         assert_eq!(
-            poll_futures(&mut items, &mut sweep, &control, &mut task),
+            poll_futures(&mut items, &mut sweep, &actor.control, &mut task),
             InterleavedPoll::Pending
         );
         assert!(polls.iter().all(|count| count.load(Ordering::SeqCst) == 1));
@@ -615,7 +620,7 @@ mod tests {
     // Containment must finish before later cleanup drops the future.
     #[test]
     fn poll_panic_retains_the_future_for_contained_cleanup() {
-        let control = Control::new();
+        let actor = test_actor_inner();
         let dropped = Arc::new(AtomicBool::new(false));
         let dropped_while_unwinding = Arc::new(AtomicBool::new(false));
         let mut items = VecDeque::from([Box::pin(PanicOnPoll {
@@ -626,25 +631,27 @@ mod tests {
         let mut task = Context::from_waker(Waker::noop());
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            poll_futures(&mut items, &mut sweep, &control, &mut task)
+            poll_futures(&mut items, &mut sweep, &actor.control, &mut task)
         }));
         assert!(result.is_err());
         assert!(!dropped.load(Ordering::SeqCst));
 
         drop(result);
-        control.drop_user_value(items.pop_front().expect("the failed future stays owned"));
+        actor
+            .control
+            .drop_user_value(items.pop_front().expect("the failed future stays owned"));
         assert!(dropped.load(Ordering::SeqCst));
         assert!(!dropped_while_unwinding.load(Ordering::SeqCst));
     }
 
     #[test]
     fn kill_committed_by_one_reply_prevents_polling_the_next_reply() {
-        let control = Control::new();
+        let actor = test_actor_inner();
         let first_polls = Arc::new(AtomicUsize::new(0));
         let second_polls = Arc::new(AtomicUsize::new(0));
         let mut items = VecDeque::from([
             Box::pin(KillOnPoll {
-                control: Arc::clone(&control),
+                actor: Arc::clone(&actor),
                 polls: Arc::clone(&first_polls),
             }) as TestFuture,
             Box::pin(PollCounter(Arc::clone(&second_polls))) as TestFuture,
@@ -656,12 +663,12 @@ mod tests {
         let mut task = Context::from_waker(&waker);
 
         assert_eq!(
-            poll_futures(&mut items, &mut sweep, &control, &mut task),
+            poll_futures(&mut items, &mut sweep, &actor.control, &mut task),
             InterleavedPoll::Progress
         );
         assert_eq!(first_polls.load(Ordering::SeqCst), 1);
         assert_eq!(second_polls.load(Ordering::SeqCst), 0);
-        assert_eq!(control.mode(), Mode::Killing);
+        assert_eq!(actor.control.mode(), Mode::Killing);
     }
 
     // Exclusive Drop runs before the interleaved collection is cleared.
@@ -669,7 +676,7 @@ mod tests {
     // The two cases use one panic each to avoid double-panic aborts.
     #[test]
     fn clear_contains_each_actor_future_drop() {
-        let control = Control::new();
+        let actor = test_actor_inner();
         let exclusive_dropped = Arc::new(AtomicBool::new(false));
         let exclusive_tail_dropped = Arc::new(AtomicBool::new(false));
         let dropped_while_unwinding = Arc::new(AtomicBool::new(false));
@@ -685,14 +692,14 @@ mod tests {
             panic: false,
         });
 
-        scheduler.clear(&control);
+        scheduler.clear(&actor.control);
         assert!(exclusive_dropped.load(Ordering::SeqCst));
         assert!(exclusive_tail_dropped.load(Ordering::SeqCst));
         assert!(!dropped_while_unwinding.load(Ordering::SeqCst));
         assert!(scheduler.is_empty());
-        assert_eq!(control.mode(), Mode::Failing);
+        assert_eq!(actor.control.mode(), Mode::Failing);
 
-        let control = Control::new();
+        let actor = test_actor_inner();
         let interleaved_panicked = Arc::new(AtomicBool::new(false));
         let tail_dropped = Arc::new(AtomicBool::new(false));
         let mut scheduler = ReplyScheduler::new(NonZeroUsize::new(2).unwrap());
@@ -707,11 +714,11 @@ mod tests {
             panic: false,
         });
 
-        scheduler.clear(&control);
+        scheduler.clear(&actor.control);
         assert!(interleaved_panicked.load(Ordering::SeqCst));
         assert!(tail_dropped.load(Ordering::SeqCst));
         assert!(!dropped_while_unwinding.load(Ordering::SeqCst));
         assert!(scheduler.is_empty());
-        assert_eq!(control.mode(), Mode::Failing);
+        assert_eq!(actor.control.mode(), Mode::Failing);
     }
 }

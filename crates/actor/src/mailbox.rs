@@ -1,6 +1,6 @@
 use std::{
     panic::{self, AssertUnwindSafe},
-    sync::Arc,
+    sync::{Arc, Weak},
 };
 
 use tokio::sync::{mpsc, oneshot};
@@ -41,13 +41,17 @@ fn notify_response<T>(control: &Control, reply: oneshot::Sender<T>, value: T) {
     }
 }
 
-pub(crate) struct ActorMailbox<A: Actor> {
+/// Shared state behind typed and erased actor handles.
+///
+/// The mailbox sender and lifecycle state share one allocation.
+/// Queued envelopes must not strong-own this value.
+pub(crate) struct ActorInner<A: Actor> {
     pub(crate) sender: mpsc::Sender<DynEnvelope<A>>,
-    pub(crate) control: Arc<Control>,
+    pub(crate) control: Control,
 }
 
 // `admit` lives in control.rs, keeping raw gate access private.
-impl<A: Actor> ActorMailbox<A> {
+impl<A: Actor> ActorInner<A> {
     pub(crate) fn channel(capacity: usize) -> (Arc<Self>, mpsc::Receiver<DynEnvelope<A>>) {
         let (sender, receiver) = mpsc::channel(capacity);
         let control = Control::new();
@@ -73,20 +77,21 @@ pub(crate) trait Envelope<A: Actor>: Send {
         self: Box<Self>,
         actor: &mut A,
         scope: &mut ActorScope<'_, A>,
-        owned: &OwnedTasks,
+        owned: &OwnedTasks<A>,
         scheduler: &mut ReplyScheduler<A>,
+        inner: &Arc<ActorInner<A>>,
     );
 }
 
 /// Coupled ownership of a two-way call before it leaves the queued phase.
-struct QueuedCall<M: Message> {
+struct QueuedCall<A: Actor, M: Message> {
     message: M,
     reply: oneshot::Sender<Result<M::Reply, CallError>>,
-    control: Arc<Control>,
+    actor: Weak<ActorInner<A>>,
 }
 
-enum CallEnvelopeState<M: Message> {
-    Queued(QueuedCall<M>),
+enum CallEnvelopeState<A: Actor, M: Message> {
+    Queued(QueuedCall<A, M>),
     /// Tombstone installed after queued ownership leaves the envelope, making
     /// its subsequent `Drop` a no-op.
     Consumed,
@@ -98,20 +103,20 @@ enum CallEnvelopeState<M: Message> {
 /// dropping the entry reports a phase-aware queued failure to a remaining
 /// caller. Dispatch consumes the queued state and transfers reply ownership to
 /// [`DispatchReply`].
-pub(crate) struct CallEnvelope<M: Message> {
-    state: CallEnvelopeState<M>,
+pub(crate) struct CallEnvelope<A: Actor, M: Message> {
+    state: CallEnvelopeState<A, M>,
 }
 
-impl<M: Message> CallEnvelope<M> {
+impl<A: Actor, M: Message> CallEnvelope<A, M> {
     /// Creates the queued entry and the response endpoint retained by its caller.
-    pub(crate) fn new(message: M, control: Arc<Control>) -> (Self, ReplyReceiver<M::Reply>) {
+    pub(crate) fn new(message: M, actor: &Arc<ActorInner<A>>) -> (Self, ReplyReceiver<M::Reply>) {
         let (reply, response) = oneshot::channel();
         (
             Self {
                 state: CallEnvelopeState::Queued(QueuedCall {
                     message,
                     reply,
-                    control,
+                    actor: Arc::downgrade(actor),
                 }),
             },
             response,
@@ -123,17 +128,17 @@ impl<M: Message> CallEnvelope<M> {
         let QueuedCall {
             message,
             reply,
-            control,
+            actor,
         } = self.take_queued();
         if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| drop(reply))) {
             Control::discard_panic(payload);
         }
-        drop(control);
+        drop(actor);
         message
     }
 
     /// Moves the coupled queued state out while disarming queued-failure Drop.
-    fn take_queued(&mut self) -> QueuedCall<M> {
+    fn take_queued(&mut self) -> QueuedCall<A, M> {
         match std::mem::replace(&mut self.state, CallEnvelopeState::Consumed) {
             CallEnvelopeState::Queued(queued) => queued,
             CallEnvelopeState::Consumed => panic!("a call envelope is consumed at most once"),
@@ -141,7 +146,7 @@ impl<M: Message> CallEnvelope<M> {
     }
 }
 
-impl<A, M> Envelope<A> for CallEnvelope<M>
+impl<A, M> Envelope<A> for CallEnvelope<A, M>
 where
     A: Handler<M>,
     M: Message,
@@ -150,8 +155,9 @@ where
         mut self: Box<Self>,
         actor: &mut A,
         scope: &mut ActorScope<'_, A>,
-        owned: &OwnedTasks,
+        owned: &OwnedTasks<A>,
         scheduler: &mut ReplyScheduler<A>,
+        inner: &Arc<ActorInner<A>>,
     ) {
         // Only calls can be abandoned; one-way envelopes have no receiver.
         match &self.state {
@@ -165,14 +171,15 @@ where
         let QueuedCall {
             message,
             reply,
-            control,
+            actor: queued_actor,
         } = self.take_queued();
+        drop(queued_actor);
 
-        let permit = match control.begin_dispatch() {
+        let permit = match inner.begin_dispatch() {
             Ok(permit) => permit,
-            Err((control, error)) => {
-                notify_response(&control, reply, Err(error));
-                control.drop_user_value(message);
+            Err(error) => {
+                notify_response(&inner.control, reply, Err(error));
+                inner.control.drop_user_value(message);
                 return;
             }
         };
@@ -184,20 +191,31 @@ where
     }
 }
 
-impl<M: Message> Drop for CallEnvelope<M> {
+impl<A: Actor, M: Message> Drop for CallEnvelope<A, M> {
     fn drop(&mut self) {
         let CallEnvelopeState::Queued(QueuedCall {
             message,
             reply,
-            control,
+            actor,
         }) = std::mem::replace(&mut self.state, CallEnvelopeState::Consumed)
         else {
             return;
         };
 
-        let error = control.queued_failure();
-        notify_response(&control, reply, Err(error));
-        control.drop_user_value(message);
+        let Some(actor) = actor.upgrade() else {
+            // ExitGuard retains the actor through receiver cleanup.
+            // This fallback handles malformed internal fixtures.
+            if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| drop(reply))) {
+                Control::discard_panic(payload);
+            }
+            if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| drop(message))) {
+                Control::discard_panic(payload);
+            }
+            return;
+        };
+        let error = actor.control.queued_failure();
+        notify_response(&actor.control, reply, Err(error));
+        actor.control.drop_user_value(message);
     }
 }
 
@@ -208,12 +226,11 @@ impl<M: Message> Drop for CallEnvelope<M> {
 /// abandoned call and does not allocate a dummy channel.
 pub(crate) struct SendEnvelope<M: Message<Reply = ()>> {
     message: M,
-    control: Arc<Control>,
 }
 
 impl<M: Message<Reply = ()>> SendEnvelope<M> {
-    pub(crate) fn new(message: M, control: Arc<Control>) -> Self {
-        Self { message, control }
+    pub(crate) fn new(message: M) -> Self {
+        Self { message }
     }
 
     /// Recovers a message whose envelope lost admission before dispatch.
@@ -231,11 +248,12 @@ where
         self: Box<Self>,
         actor: &mut A,
         scope: &mut ActorScope<'_, A>,
-        owned: &OwnedTasks,
+        owned: &OwnedTasks<A>,
         scheduler: &mut ReplyScheduler<A>,
+        inner: &Arc<ActorInner<A>>,
     ) {
-        let Self { message, control } = *self;
-        let permit = match control.begin_dispatch() {
+        let Self { message } = *self;
+        let permit = match inner.begin_dispatch() {
             Ok(permit) => permit,
             Err(_) => return,
         };
@@ -253,13 +271,13 @@ enum DispatchReplyState<R> {
     Completed,
 }
 
-pub(crate) struct DispatchReply<R> {
+pub(crate) struct DispatchReply<A: Actor, R> {
     state: DispatchReplyState<R>,
-    permit: DispatchPermit,
+    permit: DispatchPermit<A>,
 }
 
-impl<R> DispatchReply<R> {
-    fn new(reply: oneshot::Sender<Result<R, CallError>>, permit: DispatchPermit) -> Self {
+impl<A: Actor, R> DispatchReply<A, R> {
+    fn new(reply: oneshot::Sender<Result<R, CallError>>, permit: DispatchPermit<A>) -> Self {
         Self {
             state: DispatchReplyState::Caller(reply),
             permit,
@@ -294,8 +312,8 @@ impl<R> DispatchReply<R> {
     }
 }
 
-impl DispatchReply<()> {
-    fn one_way(permit: DispatchPermit) -> Self {
+impl<A: Actor> DispatchReply<A, ()> {
+    fn one_way(permit: DispatchPermit<A>) -> Self {
         Self {
             state: DispatchReplyState::OneWay,
             permit,
@@ -303,7 +321,7 @@ impl DispatchReply<()> {
     }
 }
 
-impl<R> Drop for DispatchReply<R> {
+impl<A: Actor, R> Drop for DispatchReply<A, R> {
     fn drop(&mut self) {
         let state = std::mem::replace(&mut self.state, DispatchReplyState::Completed);
         let reply = match state {

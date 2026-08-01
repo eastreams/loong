@@ -10,8 +10,8 @@ The crate is an early MVP. Its current contract is deliberately narrow:
 - bare `Future` values use owned scheduling;
 - `.interleaved()` and `.exclusive()` select actor-aware scheduling;
 - interleaved work has a separate bound; owned tasks are unbounded;
-- `ActorRef` values communicate but do not own actor lifetimes;
-- the unique `ActorOwner` controls root lifetime;
+- `ActorRef` values communicate and may request shutdown;
+- the unique `ActorOwner` owns root lifetime;
 - child actors are owned by their parent runtime;
 - exit status separates local reason from subtree confirmation;
 - Stop, Drain, and Kill use a control plane separate from the mailbox;
