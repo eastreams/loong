@@ -16,7 +16,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::{
     Actor, ActorRef, ActorScope, ChildExit, ChildId, ExitReason, ExitStatus, IntoActorFuture,
-    Message, Shutdown, ShutdownStatus, SpawnOptions, SubtreeStatus, SyncHandler,
+    Message, Shutdown, ShutdownStatus, SubtreeStatus, SyncHandler,
     mailbox::{ActorMailbox, Control, DynEnvelope, Envelope, Mode},
     owned::OwnedTasks,
     scheduler::ReplyScheduler,
@@ -24,10 +24,9 @@ use crate::{
 };
 
 use super::{
-    ActorTask, ActorWorkGuard, ActorWorkState, ChildSet, DiscardOutcome, ExitGuard, OrdinaryLane,
-    OwnedActor, ScopeState, TEARDOWN_DROP_BUDGET, Turn, TurnCursor, Work, actor_turn,
+    ActorOwner, ActorTask, ActorWorkGuard, ActorWorkState, ChildSet, DiscardOutcome, ExitGuard,
+    OrdinaryLane, OwnedActor, ScopeState, TEARDOWN_DROP_BUDGET, Turn, TurnCursor, Work, actor_turn,
     await_actor_work, close_and_discard, graceful_finish, handle_child_exit, kill_actor, run_actor,
-    spawn_actor,
 };
 
 struct TestActor;
@@ -640,7 +639,10 @@ async fn aborted_descendant_only_weakens_parent_subtree_status() {
         (ParentExit::Shutdown(Shutdown::Kill), ExitReason::Killed),
         (ParentExit::Panic, ExitReason::Panicked),
     ] {
-        let (_child_ref, child) = spawn_actor::<TestActor>((), SpawnOptions::default(), None);
+        let ActorOwner {
+            actor_ref: _child_ref,
+            owned: child,
+        } = spawn::<TestActor>(());
         child
             .join
             .as_ref()
@@ -1175,7 +1177,10 @@ async fn drain_absorbs_ready_child_exit_before_owned_completion() {
 // The second wait must reuse the same JoinHandle.
 #[tokio::test]
 async fn cancelled_owned_actor_wait_retains_its_join_handle() {
-    let (_actor_ref, mut owned) = spawn_actor::<TestActor>((), SpawnOptions::default(), None);
+    let ActorOwner {
+        actor_ref: _actor_ref,
+        mut owned,
+    } = spawn::<TestActor>(());
     {
         let mut wait = Box::pin(owned.wait());
         let mut task = Context::from_waker(Waker::noop());
@@ -1198,7 +1203,10 @@ async fn child_kill_commits_before_actor_work_is_dropped() {
     // Active replies and queued envelopes may both run arbitrary destructors.
     // Observing the child mode from each Drop rejects any teardown that merely
     // waits for children after clearing local work instead of cancelling first.
-    let (_child_ref, child) = spawn_actor::<TestActor>((), SpawnOptions::default(), None);
+    let ActorOwner {
+        actor_ref: _child_ref,
+        owned: child,
+    } = spawn::<TestActor>(());
     let child_control = Arc::clone(&child.control);
     let mut children = ChildSet::default();
     children.insert(child);

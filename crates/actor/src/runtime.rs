@@ -97,7 +97,12 @@ pub fn spawn<A: Actor>(args: A::SpawnArgs) -> ActorOwner<A> {
 /// This function requires an active Tokio runtime.
 #[must_use = "dropping the returned owner requests Kill"]
 pub fn spawn_with<A: Actor>(args: A::SpawnArgs, options: SpawnOptions) -> ActorOwner<A> {
-    let (actor_ref, owned) = spawn_actor::<A>(args, options, None);
+    let PreparedActor {
+        actor_ref,
+        control,
+        future,
+    } = PreparedActor::new(args, options);
+    let owned = OwnedActor::start(control, future, None);
     ActorOwner { actor_ref, owned }
 }
 
@@ -500,20 +505,6 @@ impl<A: Actor> PreparedActor<A> {
             future,
         }
     }
-}
-
-fn spawn_actor<A: Actor>(
-    args: A::SpawnArgs,
-    options: SpawnOptions,
-    parent: Option<ParentLink>,
-) -> (ActorRef<A>, OwnedActor) {
-    let PreparedActor {
-        actor_ref,
-        control,
-        future,
-    } = PreparedActor::new(args, options);
-    let owned = OwnedActor::start(control, future, parent);
-    (actor_ref, owned)
 }
 
 struct ExitGuard {
