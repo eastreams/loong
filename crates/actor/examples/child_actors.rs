@@ -32,17 +32,11 @@ struct Team {
 }
 
 impl Actor for Team {
-    async fn on_start(&mut self, scope: &mut ActorScope<Self>) {
-        let correctness = scope
-            .spawn_child(Agent("correctness"))
-            .expect("on_start accepts children")
-            .into_actor_ref();
-        let readability = scope
-            .spawn_child(Agent("readability"))
-            .expect("on_start accepts children")
-            .into_actor_ref();
+    async fn on_start(&mut self, scope: &mut ActorScope<'_, Self>) {
+        let correctness = scope.spawn_child(Agent("correctness")).into_actor_ref();
+        let readability = scope.spawn_child(Agent("readability")).into_actor_ref();
 
-        // ActorScope owns both lifecycles. State retains only message addresses.
+        // The parent runtime owns both lifecycles. State keeps only addresses.
         self.agents = Some([correctness, readability]);
     }
 }

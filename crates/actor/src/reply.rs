@@ -336,7 +336,7 @@ where
     fn poll(
         self: Pin<&mut Self>,
         actor: &mut A,
-        scope: &mut ActorScope<A>,
+        scope: &mut ActorScope<'_, A>,
         task: &mut Context<'_>,
     ) -> Poll<Self::Output> {
         let this = self.project();

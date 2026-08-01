@@ -19,7 +19,7 @@ struct ChildActor {
 }
 
 impl Actor for ChildActor {
-    async fn on_start(&mut self, scope: &mut ActorScope<Self>) {
+    async fn on_start(&mut self, scope: &mut ActorScope<'_, Self>) {
         if self.exits_on_start {
             scope.request_shutdown(Shutdown::Stop);
         }
@@ -69,18 +69,20 @@ struct Supervisor {
 }
 
 impl Actor for Supervisor {
-    async fn on_start<'a>(&'a mut self, scope: &'a mut ActorScope<Self>) {
-        let child = scope
-            .spawn_child(ChildActor {
-                exits_on_start: self.child_exits_on_start,
-            })
-            .expect("on_start accepts children");
+    async fn on_start<'a>(&'a mut self, scope: &'a mut ActorScope<'_, Self>) {
+        let child = scope.spawn_child(ChildActor {
+            exits_on_start: self.child_exits_on_start,
+        });
         if let Some(started) = self.child_started.take() {
             let _ = started.send(child);
         }
     }
 
-    async fn on_child_exit<'a>(&'a mut self, event: ChildExit, _scope: &'a mut ActorScope<Self>) {
+    async fn on_child_exit<'a>(
+        &'a mut self,
+        event: ChildExit,
+        _scope: &'a mut ActorScope<'_, Self>,
+    ) {
         self.observed.fetch_add(1, Ordering::SeqCst);
         let _ = self.events.send(event);
     }

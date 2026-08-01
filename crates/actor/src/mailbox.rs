@@ -72,7 +72,7 @@ pub(crate) trait Envelope<A: Actor>: Send {
     fn dispatch(
         self: Box<Self>,
         actor: &mut A,
-        scope: &mut ActorScope<A>,
+        scope: &mut ActorScope<'_, A>,
         owned: &OwnedTasks,
         scheduler: &mut ReplyScheduler<A>,
     );
@@ -149,7 +149,7 @@ where
     fn dispatch(
         mut self: Box<Self>,
         actor: &mut A,
-        scope: &mut ActorScope<A>,
+        scope: &mut ActorScope<'_, A>,
         owned: &OwnedTasks,
         scheduler: &mut ReplyScheduler<A>,
     ) {
@@ -230,7 +230,7 @@ where
     fn dispatch(
         self: Box<Self>,
         actor: &mut A,
-        scope: &mut ActorScope<A>,
+        scope: &mut ActorScope<'_, A>,
         owned: &OwnedTasks,
         scheduler: &mut ReplyScheduler<A>,
     ) {

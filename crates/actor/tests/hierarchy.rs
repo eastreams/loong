@@ -8,7 +8,7 @@ use std::{
 
 use loong_actor::{
     Actor, ActorRef, ActorScope, CallError, ExitReason, Handler, IntoActorFuture, Message,
-    ReplyExt, Shutdown, ShutdownStatus, SubtreeStatus, spawn,
+    ReplyExt, Shutdown, ShutdownStatus, StopScope, SubtreeStatus, spawn,
 };
 use tokio::sync::oneshot;
 
@@ -19,7 +19,7 @@ struct LogChild {
 }
 
 impl Actor for LogChild {
-    async fn on_stop<'a>(&'a mut self, _reason: ExitReason, _scope: &'a mut ActorScope<Self>) {
+    async fn on_stop<'a>(&'a mut self, _reason: ExitReason, _scope: &'a mut StopScope<'_, Self>) {
         lock(&self.log).push("child-stop");
     }
 }
@@ -30,18 +30,16 @@ struct LogParent {
 }
 
 impl Actor for LogParent {
-    async fn on_start<'a>(&'a mut self, scope: &'a mut ActorScope<Self>) {
-        let child = scope
-            .spawn_child(LogChild {
-                log: self.log.clone(),
-            })
-            .expect("on_start accepts children");
+    async fn on_start<'a>(&'a mut self, scope: &'a mut ActorScope<'_, Self>) {
+        let child = scope.spawn_child(LogChild {
+            log: self.log.clone(),
+        });
         if let Some(started) = self.child_started.take() {
             let _ = started.send(child.into_actor_ref());
         }
     }
 
-    async fn on_stop<'a>(&'a mut self, _reason: ExitReason, _scope: &'a mut ActorScope<Self>) {
+    async fn on_stop<'a>(&'a mut self, _reason: ExitReason, _scope: &'a mut StopScope<'_, Self>) {
         lock(&self.log).push("parent-stop");
     }
 }
@@ -95,7 +93,7 @@ struct Worker {
 }
 
 impl Actor for Worker {
-    async fn on_stop<'a>(&'a mut self, _reason: ExitReason, _scope: &'a mut ActorScope<Self>) {
+    async fn on_stop<'a>(&'a mut self, _reason: ExitReason, _scope: &'a mut StopScope<'_, Self>) {
         lock(&self.log).push("worker-stop".to_owned());
     }
 }
@@ -124,12 +122,11 @@ struct DrainParent {
 }
 
 impl Actor for DrainParent {
-    async fn on_start<'a>(&'a mut self, scope: &'a mut ActorScope<Self>) {
+    async fn on_start<'a>(&'a mut self, scope: &'a mut ActorScope<'_, Self>) {
         let worker = scope
             .spawn_child(Worker {
                 log: self.log.clone(),
             })
-            .expect("on_start accepts children")
             .into_actor_ref();
         self.worker = Some(worker.clone());
         if let Some(started) = self.worker_started.take() {
@@ -137,7 +134,7 @@ impl Actor for DrainParent {
         }
     }
 
-    async fn on_stop<'a>(&'a mut self, _reason: ExitReason, _scope: &'a mut ActorScope<Self>) {
+    async fn on_stop<'a>(&'a mut self, _reason: ExitReason, _scope: &'a mut StopScope<'_, Self>) {
         lock(&self.log).push("parent-stop".to_owned());
     }
 }
@@ -258,14 +255,13 @@ struct Branch {
 }
 
 impl Actor for Branch {
-    async fn on_start<'a>(&'a mut self, scope: &'a mut ActorScope<Self>) {
+    async fn on_start<'a>(&'a mut self, scope: &'a mut ActorScope<'_, Self>) {
         let leaf = scope
             .spawn_child(Leaf {
                 drop_entered: self.leaf_drop_entered.take(),
                 drop_release: self.leaf_drop_release.take(),
                 dropped: self.leaf_dropped.take(),
             })
-            .expect("on_start accepts children")
             .into_actor_ref();
         if let Some(started) = self.leaf_started.take() {
             let _ = started.send(leaf);
@@ -291,7 +287,7 @@ struct PanicParent {
 }
 
 impl Actor for PanicParent {
-    async fn on_start<'a>(&'a mut self, scope: &'a mut ActorScope<Self>) {
+    async fn on_start<'a>(&'a mut self, scope: &'a mut ActorScope<'_, Self>) {
         let branch = scope
             .spawn_child(Branch {
                 leaf_started: self.leaf_started.take(),
@@ -300,7 +296,6 @@ impl Actor for PanicParent {
                 leaf_dropped: self.leaf_dropped.take(),
                 dropped: self.branch_dropped.take(),
             })
-            .expect("on_start accepts children")
             .into_actor_ref();
         if let Some(started) = self.branch_started.take() {
             let _ = started.send(branch);
@@ -372,60 +367,92 @@ async fn parent_panic_kills_descendants_before_parent_exit() {
     watchdog(leaf_dropped_rx).await.unwrap();
 }
 
-struct RejectedChild {
-    dropped: Option<oneshot::Sender<()>>,
+struct LateChild;
+
+impl Actor for LateChild {}
+
+struct SpawnDuringStartup {
+    entered: Option<oneshot::Sender<()>>,
+    release: Option<oneshot::Receiver<()>>,
+    spawned: Option<oneshot::Sender<ActorRef<LateChild>>>,
 }
 
-impl Actor for RejectedChild {}
-
-impl Drop for RejectedChild {
-    fn drop(&mut self) {
-        if let Some(dropped) = self.dropped.take() {
-            let _ = dropped.send(());
+impl Actor for SpawnDuringStartup {
+    async fn on_start(&mut self, scope: &mut ActorScope<'_, Self>) {
+        if let Some(entered) = self.entered.take() {
+            let _ = entered.send(());
+        }
+        if let Some(release) = self.release.take() {
+            let _ = release.await;
+        }
+        let child = scope.spawn_child(LateChild).into_actor_ref();
+        if let Some(spawned) = self.spawned.take() {
+            let _ = spawned.send(child);
         }
     }
 }
 
-struct SpawnDuringCleanup {
-    child: Option<RejectedChild>,
-    result: Option<oneshot::Sender<bool>>,
-}
-
-impl Actor for SpawnDuringCleanup {
-    async fn on_stop<'a>(&'a mut self, _reason: ExitReason, scope: &'a mut ActorScope<Self>) {
-        let result = scope.spawn_child(
-            self.child
-                .take()
-                .expect("the cleanup hook runs at most once"),
-        );
-        let rejected = match result {
-            Ok(_) => false,
-            Err(error) => {
-                drop(error.into_actor());
-                true
-            }
-        };
-        if let Some(report) = self.result.take() {
-            let _ = report.send(rejected);
-        }
-    }
-}
-
-#[tokio::test]
-async fn cleanup_cannot_spawn_a_child_after_post_order_shutdown() {
-    let (dropped_tx, dropped_rx) = oneshot::channel();
-    let (result_tx, result_rx) = oneshot::channel();
-    let owner = spawn(SpawnDuringCleanup {
-        child: Some(RejectedChild {
-            dropped: Some(dropped_tx),
-        }),
-        result: Some(result_tx),
+async fn assert_startup_child_joins_graceful_shutdown(shutdown: Shutdown, reason: ExitReason) {
+    let (entered_tx, entered_rx) = oneshot::channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    let (spawned_tx, spawned_rx) = oneshot::channel();
+    let mut owner = spawn(SpawnDuringStartup {
+        entered: Some(entered_tx),
+        release: Some(release_rx),
+        spawned: Some(spawned_tx),
     });
 
-    assert_eq!(
-        watchdog(owner.shutdown(Shutdown::Stop)).await.reason(),
-        ExitReason::Stopped
-    );
-    assert!(watchdog(result_rx).await.unwrap());
-    watchdog(dropped_rx).await.unwrap();
+    watchdog(entered_rx).await.unwrap();
+    assert_eq!(owner.request_shutdown(shutdown), ShutdownStatus::Requested);
+    release_tx.send(()).unwrap();
+    let child = watchdog(spawned_rx).await.unwrap();
+
+    let status = watchdog(owner.wait()).await;
+    assert_eq!(status.reason(), reason);
+    assert_eq!(status.subtree(), SubtreeStatus::Terminated);
+    assert_eq!(child.exit_status().unwrap().reason(), reason);
+}
+
+// Drain retains entered startup. Its late child must join Drain cleanup.
+#[tokio::test]
+async fn drain_includes_children_spawned_by_retained_work() {
+    assert_startup_child_joins_graceful_shutdown(Shutdown::Drain, ExitReason::Drained).await;
+}
+
+// Stop also retains entered startup. Its late child must join Stop cleanup.
+#[tokio::test]
+async fn stop_includes_children_spawned_by_retained_work() {
+    assert_startup_child_joins_graceful_shutdown(Shutdown::Stop, ExitReason::Stopped).await;
+}
+
+struct SpawnAfterKill {
+    spawned: Option<oneshot::Sender<ActorRef<LateChild>>>,
+}
+
+impl Actor for SpawnAfterKill {
+    async fn on_start(&mut self, scope: &mut ActorScope<'_, Self>) {
+        assert_eq!(
+            scope.request_shutdown(Shutdown::Kill),
+            ShutdownStatus::Requested
+        );
+        let child = scope.spawn_child(LateChild).into_actor_ref();
+        if let Some(spawned) = self.spawned.take() {
+            let _ = spawned.send(child);
+        }
+    }
+}
+
+// Kill cannot interrupt a poll. Its new child must not escape cleanup.
+#[tokio::test]
+async fn kill_includes_children_spawned_before_the_current_poll_returns() {
+    let (spawned_tx, spawned_rx) = oneshot::channel();
+    let mut owner = spawn(SpawnAfterKill {
+        spawned: Some(spawned_tx),
+    });
+
+    let child = watchdog(spawned_rx).await.unwrap();
+    let status = watchdog(owner.wait()).await;
+    assert_eq!(status.reason(), ExitReason::Killed);
+    assert_eq!(status.subtree(), SubtreeStatus::Terminated);
+    assert_eq!(child.exit_status().unwrap().reason(), ExitReason::Killed);
 }

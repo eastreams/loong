@@ -41,7 +41,7 @@ pub trait ActorFuture<A: Actor>: Send + 'static {
     fn poll(
         self: Pin<&mut Self>,
         actor: &mut A,
-        scope: &mut ActorScope<A>,
+        scope: &mut ActorScope<'_, A>,
         task: &mut Context<'_>,
     ) -> Poll<Self::Output>;
 }
@@ -66,7 +66,7 @@ pub trait ActorFutureExt<A: Actor>: ActorFuture<A> {
     fn map<F, U>(self, f: F) -> Map<Self, F>
     where
         Self: Sized,
-        F: FnOnce(Self::Output, &mut A, &mut ActorScope<A>) -> U + Send + 'static,
+        F: FnOnce(Self::Output, &mut A, &mut ActorScope<'_, A>) -> U + Send + 'static,
     {
         Map::new(self, f)
     }
@@ -86,7 +86,7 @@ pub trait ActorFutureExt<A: Actor>: ActorFuture<A> {
     fn then<F, Fut>(self, f: F) -> Then<Self, Fut, F>
     where
         Self: Sized,
-        F: FnOnce(Self::Output, &mut A, &mut ActorScope<A>) -> Fut + Send + 'static,
+        F: FnOnce(Self::Output, &mut A, &mut ActorScope<'_, A>) -> Fut + Send + 'static,
         Fut: ActorFuture<A>,
     {
         Then::new(self, f)
@@ -155,7 +155,7 @@ where
     fn poll(
         self: Pin<&mut Self>,
         _actor: &mut A,
-        _scope: &mut ActorScope<A>,
+        _scope: &mut ActorScope<'_, A>,
         task: &mut Context<'_>,
     ) -> Poll<Self::Output> {
         self.project().future.poll(task)
@@ -202,14 +202,14 @@ impl<A, Fut, F, U> ActorFuture<A> for Map<Fut, F>
 where
     A: Actor,
     Fut: ActorFuture<A>,
-    F: FnOnce(Fut::Output, &mut A, &mut ActorScope<A>) -> U + Send + 'static,
+    F: FnOnce(Fut::Output, &mut A, &mut ActorScope<'_, A>) -> U + Send + 'static,
 {
     type Output = U;
 
     fn poll(
         mut self: Pin<&mut Self>,
         actor: &mut A,
-        scope: &mut ActorScope<A>,
+        scope: &mut ActorScope<'_, A>,
         task: &mut Context<'_>,
     ) -> Poll<Self::Output> {
         let mut this = self.as_mut().project();
@@ -274,14 +274,14 @@ where
     A: Actor,
     First: ActorFuture<A>,
     Second: ActorFuture<A>,
-    F: FnOnce(First::Output, &mut A, &mut ActorScope<A>) -> Second + Send + 'static,
+    F: FnOnce(First::Output, &mut A, &mut ActorScope<'_, A>) -> Second + Send + 'static,
 {
     type Output = Second::Output;
 
     fn poll(
         mut self: Pin<&mut Self>,
         actor: &mut A,
-        scope: &mut ActorScope<A>,
+        scope: &mut ActorScope<'_, A>,
         task: &mut Context<'_>,
     ) -> Poll<Self::Output> {
         loop {

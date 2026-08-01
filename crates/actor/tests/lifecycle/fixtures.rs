@@ -5,7 +5,7 @@ use std::{
 
 use loong_actor::{
     Actor, ActorFutureExt, ActorScope, ExitReason, Handler, IntoActorFuture, Message, ReplyExt,
-    SpawnOptions, spawn_with,
+    SpawnOptions, StopScope, spawn_with,
 };
 use tokio::sync::oneshot;
 
@@ -17,7 +17,7 @@ pub(super) struct LifecycleActor {
 }
 
 impl Actor for LifecycleActor {
-    async fn on_stop(&mut self, reason: ExitReason, _scope: &mut ActorScope<Self>) {
+    async fn on_stop(&mut self, reason: ExitReason, _scope: &mut StopScope<'_, Self>) {
         lock(&self.cleanup).push(reason);
     }
 }

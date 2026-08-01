@@ -259,17 +259,14 @@ struct ExclusiveActor {
 }
 
 impl Actor for ExclusiveActor {
-    async fn on_start(&mut self, scope: &mut ActorScope<Self>) {
-        let child = scope
-            .spawn_child(HookChild)
-            .expect("on_start accepts children")
-            .into_actor_ref();
+    async fn on_start(&mut self, scope: &mut ActorScope<'_, Self>) {
+        let child = scope.spawn_child(HookChild).into_actor_ref();
         if let Some(started) = self.child_started.take() {
             let _ = started.send(child);
         }
     }
 
-    async fn on_child_exit(&mut self, _event: ChildExit, _scope: &mut ActorScope<Self>) {
+    async fn on_child_exit(&mut self, _event: ChildExit, _scope: &mut ActorScope<'_, Self>) {
         let _ = self.child_hooks.send(());
     }
 }
@@ -900,17 +897,14 @@ struct FairChildExitActor {
 }
 
 impl Actor for FairChildExitActor {
-    async fn on_start(&mut self, scope: &mut ActorScope<Self>) {
-        let child = scope
-            .spawn_child(HookChild)
-            .expect("on_start accepts children")
-            .into_actor_ref();
+    async fn on_start(&mut self, scope: &mut ActorScope<'_, Self>) {
+        let child = scope.spawn_child(HookChild).into_actor_ref();
         if let Some(started) = self.child_started.take() {
             let _ = started.send(child);
         }
     }
 
-    async fn on_child_exit(&mut self, _event: ChildExit, _scope: &mut ActorScope<Self>) {
+    async fn on_child_exit(&mut self, _event: ChildExit, _scope: &mut ActorScope<'_, Self>) {
         self.hook_completed_at
             .store(self.handled.load(Ordering::SeqCst), Ordering::SeqCst);
         if let Some(completed) = self.hook_completed.take() {

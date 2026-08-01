@@ -85,7 +85,7 @@ impl<A: Actor> ReplyScheduler<A> {
     pub(crate) fn poll_interleaved(
         &mut self,
         actor: &mut A,
-        scope: &mut ActorScope<A>,
+        scope: &mut ActorScope<'_, A>,
         control: &Control,
         expected_mode: Mode,
         task: &mut Context<'_>,
@@ -103,7 +103,7 @@ impl<A: Actor> ReplyScheduler<A> {
     pub(crate) fn poll_exclusive(
         &mut self,
         actor: &mut A,
-        scope: &mut ActorScope<A>,
+        scope: &mut ActorScope<'_, A>,
         control: &Control,
         expected_mode: Mode,
         task: &mut Context<'_>,
@@ -140,7 +140,7 @@ impl<A: Actor> ReplyScheduler<A> {
     pub(crate) fn poll_active(
         &mut self,
         actor: &mut A,
-        scope: &mut ActorScope<A>,
+        scope: &mut ActorScope<'_, A>,
         control: &Control,
         expected_mode: Mode,
         task: &mut Context<'_>,
@@ -353,7 +353,7 @@ mod tests {
         fn poll(
             self: Pin<&mut Self>,
             _actor: &mut TestActor,
-            _scope: &mut ActorScope<TestActor>,
+            _scope: &mut ActorScope<'_, TestActor>,
             _task: &mut Context<'_>,
         ) -> Poll<Self::Output> {
             Poll::Pending

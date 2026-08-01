@@ -11,7 +11,7 @@ use std::{
 
 use loong_actor::{
     Actor, ActorOwner, ActorScope, CallError, ExitReason, Handler, Message, ReplyExt, Shutdown,
-    ShutdownStatus, SubtreeStatus, spawn,
+    ShutdownStatus, StopScope, SubtreeStatus, spawn,
 };
 use tokio::sync::oneshot;
 
@@ -150,7 +150,7 @@ struct PendingStart {
 }
 
 impl Actor for PendingStart {
-    async fn on_start(&mut self, _scope: &mut ActorScope<Self>) {
+    async fn on_start(&mut self, _scope: &mut ActorScope<'_, Self>) {
         if let Some(entered) = self.entered.take() {
             let _ = entered.send(());
         }
@@ -273,7 +273,7 @@ async fn kill_committed_during_a_handler_poll_wins_over_panic() {
 struct KillOnStop;
 
 impl Actor for KillOnStop {
-    async fn on_stop(&mut self, _reason: ExitReason, scope: &mut ActorScope<Self>) {
+    async fn on_stop(&mut self, _reason: ExitReason, scope: &mut StopScope<'_, Self>) {
         assert_eq!(
             scope.request_shutdown(Shutdown::Kill),
             ShutdownStatus::Requested

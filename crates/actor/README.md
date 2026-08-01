@@ -12,7 +12,7 @@ The crate is an early MVP. Its current contract is deliberately narrow:
 - interleaved work has a separate bound; owned tasks are unbounded;
 - `ActorRef` values communicate but do not own actor lifetimes;
 - the unique `ActorOwner` controls root lifetime;
-- child actors are owned by their parent's runtime scope;
+- child actors are owned by their parent runtime;
 - exit status separates local reason from subtree confirmation;
 - Stop, Drain, and Kill use a control plane separate from the mailbox;
 - mailbox FIFO determines dispatch order, not reply completion order;
@@ -34,7 +34,7 @@ impl SyncHandler<Add> for Counter {
     fn handle(
         &mut self,
         message: Add,
-        _scope: &mut ActorScope<Self>,
+        _scope: &mut ActorScope<'_, Self>,
     ) -> u64 {
         self.0 += message.0;
         self.0

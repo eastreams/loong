@@ -66,7 +66,7 @@
 //!     fn handle(
 //!         &mut self,
 //!         message: Add,
-//!         _scope: &mut ActorScope<Self>,
+//!         _scope: &mut ActorScope<'_, Self>,
 //!     ) -> u64 {
 //!         self.0 += message.0;
 //!         self.0
@@ -106,7 +106,9 @@
 //!
 //! Message addresses and lifecycle ownership are separate.
 //! Each root actor has one [`ActorOwner`].
-//! Each [`ActorScope`] retains its direct child actors.
+//! [`ActorScope::spawn_child`] registers direct child actors.
+//! The parent runtime retains their lifecycle ownership.
+//! After child cleanup, [`Actor::on_stop`] receives [`StopScope`].
 //! This parent-child ownership forms the supervision tree.
 //! Supervision links a child actor's lifecycle to its parent.
 //! A [`Child`] is a non-owning child actor handle.
@@ -168,13 +170,12 @@ mod supervision;
 pub use actor::{Actor, Handler, Message, SyncHandler};
 pub use address::{ActorRef, Response};
 pub use error::{
-    CallError, SendError, SpawnChildError, TryCallError, TryCallErrorKind, TrySendError,
-    TrySendErrorKind,
+    CallError, SendError, TryCallError, TryCallErrorKind, TrySendError, TrySendErrorKind,
 };
 pub use future::{ActorFuture, ActorFutureExt, FutureActor, IntoActorFuture, Map, Then};
 pub use loong_actor_macros::Message;
 pub use reply::{IntoReply, ReplyExt};
-pub use runtime::{ActorOwner, ActorScope, SpawnOptions, spawn, spawn_with};
+pub use runtime::{ActorOwner, ActorScope, SpawnOptions, StopScope, spawn, spawn_with};
 pub use supervision::{
     Child, ChildExit, ChildId, ExitReason, ExitStatus, Shutdown, ShutdownStatus, SubtreeStatus,
 };
@@ -187,7 +188,7 @@ pub use supervision::{
 pub mod prelude {
     pub use crate::{
         Actor, ActorFuture, ActorFutureExt, ActorScope, Handler, IntoActorFuture, IntoReply,
-        Message, ReplyExt, SyncHandler, reply,
+        Message, ReplyExt, StopScope, SyncHandler, reply,
     };
 }
 

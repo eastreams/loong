@@ -14,7 +14,7 @@ struct ControlledStart {
 }
 
 impl Actor for ControlledStart {
-    async fn on_start(&mut self, _scope: &mut ActorScope<Self>) {
+    async fn on_start(&mut self, _scope: &mut ActorScope<'_, Self>) {
         let release = self.release.take();
         let mut repolled = self.repolled.take();
         let completed = self.completed.take();
@@ -115,7 +115,7 @@ async fn kill_cancels_a_pending_lifecycle_hook() {
 struct PanicOnStart;
 
 impl Actor for PanicOnStart {
-    async fn on_start(&mut self, _scope: &mut ActorScope<Self>) {
+    async fn on_start(&mut self, _scope: &mut ActorScope<'_, Self>) {
         panic!("intentional lifecycle hook panic");
     }
 }

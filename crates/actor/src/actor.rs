@@ -1,7 +1,7 @@
 use std::future::Future;
 
 use crate::{
-    ActorScope, ChildExit, ExitReason,
+    ActorScope, ChildExit, ExitReason, StopScope,
     reply::{IntoReply, ReplyExt},
 };
 
@@ -15,9 +15,10 @@ use crate::{
 /// Kill may drop it between polls.
 /// Kill and executor teardown cannot interrupt a poll or user `Drop`.
 ///
-/// Unlike a [`Handler`] reply, a hook future may retain its `&mut self` and
-/// `&mut ActorScope<Self>` borrows across `await` for the method's `'a` lifetime;
-/// the serial execution rule is what makes that exclusive borrow valid.
+/// Unlike a [`Handler`] reply, a hook may retain `&mut self` across `await`.
+/// Startup and child hooks may also retain [`ActorScope`].
+/// The stop hook may retain [`StopScope`].
+/// Serial execution makes these borrows valid.
 ///
 /// A hook panic is contained by the runtime.
 /// It normally produces [`ExitReason::Panicked`].
@@ -38,7 +39,7 @@ pub trait Actor: Send + Sized + 'static {
     /// [`on_stop`](Self::on_stop) is skipped.
     fn on_start<'a>(
         &'a mut self,
-        _scope: &'a mut ActorScope<Self>,
+        _scope: &'a mut ActorScope<'_, Self>,
     ) -> impl Future<Output = ()> + Send + 'a {
         std::future::ready(())
     }
@@ -61,7 +62,7 @@ pub trait Actor: Send + Sized + 'static {
     fn on_child_exit<'a>(
         &'a mut self,
         _event: ChildExit,
-        _scope: &'a mut ActorScope<Self>,
+        _scope: &'a mut ActorScope<'_, Self>,
     ) -> impl Future<Output = ()> + Send + 'a {
         std::future::ready(())
     }
@@ -70,11 +71,11 @@ pub trait Actor: Send + Sized + 'static {
     ///
     /// The runtime enters this hook only after work retained by the selected mode
     /// has finished, queued work has been discarded where Stop requires it,
-    /// child admission has closed, and every direct child has terminated. It
+    /// child spawning has ended, and every direct child has terminated. It
     /// requests the same graceful mode from remaining children, but a child may
     /// already be terminating for another reason. `reason` is therefore
-    /// [`ExitReason::Stopped`] or [`ExitReason::Drained`], and attempts to spawn
-    /// another child are rejected.
+    /// [`ExitReason::Stopped`] or [`ExitReason::Drained`]. [`StopScope`] cannot
+    /// change child topology.
     ///
     /// An unconfirmed child subtree does not skip this hook.
     /// The parent keeps its local graceful reason.
@@ -86,10 +87,31 @@ pub trait Actor: Send + Sized + 'static {
     /// A panic sets it to [`ExitReason::Panicked`].
     /// An earlier Kill keeps precedence.
     /// This hook never runs after Kill, panic, or executor cancellation.
+    ///
+    /// Child spawning is unavailable during cleanup:
+    ///
+    /// ```compile_fail
+    /// use loong_actor::{Actor, ExitReason, StopScope};
+    ///
+    /// struct Parent;
+    /// struct ChildActor;
+    ///
+    /// impl Actor for ChildActor {}
+    ///
+    /// impl Actor for Parent {
+    ///     async fn on_stop(
+    ///         &mut self,
+    ///         _reason: ExitReason,
+    ///         scope: &mut StopScope<'_, Self>,
+    ///     ) {
+    ///         scope.spawn_child(ChildActor);
+    ///     }
+    /// }
+    /// ```
     fn on_stop<'a>(
         &'a mut self,
         _reason: ExitReason,
-        _scope: &'a mut ActorScope<Self>,
+        _scope: &'a mut StopScope<'_, Self>,
     ) -> impl Future<Output = ()> + Send + 'a {
         std::future::ready(())
     }
@@ -135,7 +157,7 @@ pub trait Message: Send + 'static {
 /// }
 ///
 /// impl SyncHandler<Notify> for Worker {
-///     fn handle(&mut self, _message: Notify, _scope: &mut ActorScope<Self>) {
+///     fn handle(&mut self, _message: Notify, _scope: &mut ActorScope<'_, Self>) {
 ///         self.notifications += 1;
 ///     }
 /// }
@@ -145,7 +167,7 @@ pub trait Message: Send + 'static {
 /// ```
 pub trait SyncHandler<M: Message>: Actor {
     /// Processes `message` and returns its completed reply value.
-    fn handle(&mut self, message: M, scope: &mut ActorScope<Self>) -> M::Reply;
+    fn handle(&mut self, message: M, scope: &mut ActorScope<'_, Self>) -> M::Reply;
 }
 
 /// Handles one message type for an [`Actor`].
@@ -184,7 +206,7 @@ pub trait Handler<M: Message>: Actor {
     /// fn detach_reply<A, M>(
     ///     actor: &mut A,
     ///     message: M,
-    ///     scope: &mut ActorScope<A>,
+    ///     scope: &mut ActorScope<'_, A>,
     /// ) -> impl IntoReply<A, M> + use<A, M>
     /// where
     ///     A: Handler<M>,
@@ -196,7 +218,7 @@ pub trait Handler<M: Message>: Actor {
     fn handle(
         &mut self,
         message: M,
-        scope: &mut ActorScope<Self>,
+        scope: &mut ActorScope<'_, Self>,
     ) -> impl IntoReply<Self, M> + use<Self, M>;
 }
 
@@ -208,7 +230,7 @@ where
     fn handle(
         &mut self,
         message: M,
-        scope: &mut ActorScope<Self>,
+        scope: &mut ActorScope<'_, Self>,
     ) -> impl IntoReply<Self, M> + use<A, M> {
         <A as SyncHandler<M>>::handle(self, message, scope).ready()
     }

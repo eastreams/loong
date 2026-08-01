@@ -212,8 +212,8 @@ impl ChildExit {
 
 /// A typed, non-owning reference to a child registered in its parent's tree.
 ///
-/// The parent [`ActorScope`](crate::ActorScope) retains lifecycle ownership. Cloning or
-/// dropping a `Child` does not keep the child alive or initiate shutdown.
+/// The parent runtime retains lifecycle ownership. Cloning or dropping a
+/// `Child` does not keep the child alive or initiate shutdown.
 pub struct Child<A: Actor> {
     id: ChildId,
     actor_ref: ActorRef<A>,

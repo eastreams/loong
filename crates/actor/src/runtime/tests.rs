@@ -25,8 +25,9 @@ use crate::{
 
 use super::{
     ActorTask, ActorWorkGuard, ActorWorkState, ChildSet, DiscardOutcome, ExitGuard, OrdinaryLane,
-    OwnedActor, TEARDOWN_DROP_BUDGET, Turn, TurnCursor, Work, actor_turn, await_actor_work,
-    close_and_discard, graceful_finish, handle_child_exit, kill_actor, run_actor, spawn_actor,
+    OwnedActor, ScopeState, TEARDOWN_DROP_BUDGET, Turn, TurnCursor, Work, actor_turn,
+    await_actor_work, close_and_discard, graceful_finish, handle_child_exit, kill_actor, run_actor,
+    spawn_actor,
 };
 
 struct TestActor;
@@ -99,7 +100,7 @@ impl Drop for ActorWorkDropProbe {
 struct CountChildExit(Arc<AtomicUsize>);
 
 impl Actor for CountChildExit {
-    async fn on_child_exit(&mut self, _event: ChildExit, _scope: &mut ActorScope<Self>) {
+    async fn on_child_exit(&mut self, _event: ChildExit, _scope: &mut ActorScope<'_, Self>) {
         self.0.fetch_add(1, Ordering::SeqCst);
     }
 }
@@ -109,22 +110,21 @@ struct AbortChildParent {
 }
 
 impl Actor for AbortChildParent {
-    async fn on_start(&mut self, scope: &mut ActorScope<Self>) {
-        let child = scope
-            .spawn_child(TestActor)
-            .expect("a running parent accepts a child");
+    async fn on_start(&mut self, scope: &mut ActorScope<'_, Self>) {
+        let child = scope.spawn_child(TestActor);
         scope
+            .state
             .children
             .actors
             .get(child.id().key())
-            .expect("the scope owns its returned child")
+            .expect("the parent state owns its returned child")
             .join
             .as_ref()
             .expect("a spawned child owns its task")
             .abort();
     }
 
-    async fn on_child_exit(&mut self, event: ChildExit, _scope: &mut ActorScope<Self>) {
+    async fn on_child_exit(&mut self, event: ChildExit, _scope: &mut ActorScope<'_, Self>) {
         if let Some(child_exit) = self.child_exit.take() {
             let _ = child_exit.send(event.status());
         }
@@ -148,7 +148,7 @@ struct ControlledChildExit {
 }
 
 impl Actor for ControlledChildExit {
-    async fn on_child_exit(&mut self, _event: ChildExit, _scope: &mut ActorScope<Self>) {
+    async fn on_child_exit(&mut self, _event: ChildExit, _scope: &mut ActorScope<'_, Self>) {
         if let Some(entered) = self.entered.take() {
             let _ = entered.send(());
         }
@@ -525,11 +525,10 @@ async fn aborted_descendant_only_weakens_parent_subtree_status() {
         let control = Arc::clone(&mailbox.control);
         let actor_ref = ActorRef::new(Arc::downgrade(&mailbox), control.subscribe_mode());
         let (supervisor_tx, supervisor_rx) = mpsc::unbounded_channel();
-        let scope = ActorScope {
+        let scope = ScopeState {
             actor_ref,
             control: Arc::clone(&control),
             children,
-            accepts_children: true,
             supervisor_tx,
         };
 
@@ -610,11 +609,10 @@ async fn graceful_cutoff_absorbs_a_dequeued_child_exit() {
         let control = Arc::clone(&mailbox.control);
         let actor_ref = ActorRef::new(Arc::downgrade(&mailbox), control.subscribe_mode());
         let (supervisor_tx, _supervisor_rx) = mpsc::unbounded_channel();
-        let mut scope = ActorScope {
+        let mut scope = ScopeState {
             actor_ref,
             control: Arc::clone(&control),
             children,
-            accepts_children: true,
             supervisor_tx,
         };
         let mut actor = CountChildExit(Arc::clone(&observed));
@@ -660,11 +658,10 @@ async fn admitted_child_exit_hook_finishes_across_graceful_cutoff() {
         let control = Arc::clone(&mailbox.control);
         let actor_ref = ActorRef::new(Arc::downgrade(&mailbox), control.subscribe_mode());
         let (supervisor_tx, _supervisor_rx) = mpsc::unbounded_channel();
-        let mut scope = ActorScope {
+        let mut scope = ScopeState {
             actor_ref,
             control: Arc::clone(&control),
             children,
-            accepts_children: true,
             supervisor_tx,
         };
         let mut actor = ControlledChildExit {
@@ -716,11 +713,10 @@ async fn unadmitted_mailbox_permit_does_not_extend_drain() {
     let control = Arc::clone(&mailbox.control);
     let actor_ref = ActorRef::new(Arc::downgrade(&mailbox), control.subscribe_mode());
     let (supervisor_tx, supervisor_rx) = mpsc::unbounded_channel();
-    let scope = ActorScope {
+    let scope = ScopeState {
         actor_ref,
         control: Arc::clone(&control),
         children: ChildSet::default(),
-        accepts_children: true,
         supervisor_tx,
     };
     assert_eq!(control.request(Shutdown::Drain), ShutdownStatus::Requested);
@@ -762,11 +758,10 @@ async fn committed_kill_prevents_a_graceful_child_request() {
     let control = Arc::clone(&mailbox.control);
     let actor_ref = ActorRef::new(Arc::downgrade(&mailbox), control.subscribe_mode());
     let (supervisor_tx, _supervisor_rx) = mpsc::unbounded_channel();
-    let mut scope = ActorScope {
+    let mut scope = ScopeState {
         actor_ref,
         control: Arc::clone(&control),
         children,
-        accepts_children: true,
         supervisor_tx,
     };
     let mut actor = TestActor;
@@ -803,11 +798,10 @@ async fn ordinary_cursor_visits_each_actor_source_before_repeating_mailbox() {
     let control = Arc::clone(&mailbox.control);
     let actor_ref = ActorRef::new(Arc::downgrade(&mailbox), control.subscribe_mode());
     let (supervisor_tx, mut supervisor_rx) = mpsc::unbounded_channel();
-    let mut scope = ActorScope {
+    let mut scope = ScopeState {
         actor_ref,
         control: Arc::clone(&control),
         children: ChildSet::default(),
-        accepts_children: true,
         supervisor_tx: supervisor_tx.clone(),
     };
     supervisor_tx
@@ -894,11 +888,10 @@ fn truncated_reply_sweep_yields_before_ready_mailbox() {
     let control = Arc::clone(&mailbox.control);
     let actor_ref = ActorRef::new(Arc::downgrade(&mailbox), control.subscribe_mode());
     let (supervisor_tx, mut supervisor_rx) = mpsc::unbounded_channel();
-    let mut scope = ActorScope {
+    let mut scope = ScopeState {
         actor_ref,
         control: Arc::clone(&control),
         children: ChildSet::default(),
-        accepts_children: true,
         supervisor_tx,
     };
     let owned = OwnedTasks::new(Arc::clone(&control));
@@ -943,20 +936,19 @@ fn truncated_reply_sweep_yields_before_ready_mailbox() {
     assert_eq!(cursor.next_ordinary, OrdinaryLane::ChildExit);
 }
 
-// The runtime keeps this receiver open while ActorScope is active.
+// Parent runtime state keeps this receiver open.
 // Treat early closure as corruption; a hint would spin forever.
 #[tokio::test]
-#[should_panic(expected = "child-exit receiver closed while ActorScope was alive")]
+#[should_panic(expected = "child-exit receiver closed while parent runtime was alive")]
 async fn closed_child_exit_channel_is_an_invariant_failure() {
     let (mailbox, mut inbox) = ActorMailbox::<TestActor>::channel(1);
     let control = Arc::clone(&mailbox.control);
     let actor_ref = ActorRef::new(Arc::downgrade(&mailbox), control.subscribe_mode());
     let (supervisor_tx, mut supervisor_rx) = mpsc::unbounded_channel();
-    let mut scope = ActorScope {
+    let mut scope = ScopeState {
         actor_ref,
         control: Arc::clone(&control),
         children: ChildSet::default(),
-        accepts_children: true,
         supervisor_tx,
     };
     supervisor_rx.close();
@@ -994,11 +986,10 @@ async fn drain_absorbs_ready_child_exit_before_owned_completion() {
 
     let actor_ref = ActorRef::new(Arc::downgrade(&mailbox), control.subscribe_mode());
     let (supervisor_tx, mut supervisor_rx) = mpsc::unbounded_channel();
-    let mut scope = ActorScope {
+    let mut scope = ScopeState {
         actor_ref,
         control: Arc::clone(&control),
         children: ChildSet::default(),
-        accepts_children: true,
         supervisor_tx: supervisor_tx.clone(),
     };
     let child = ChildId::invalid_for_test();
@@ -1101,11 +1092,10 @@ async fn child_kill_commits_before_actor_work_is_dropped() {
 
     let actor_ref = ActorRef::new(Arc::downgrade(&mailbox), mailbox.control.subscribe_mode());
     let (supervisor_tx, _supervisor_rx) = mpsc::unbounded_channel();
-    let mut scope = ActorScope {
+    let mut scope = ScopeState {
         actor_ref,
         control: Arc::clone(&mailbox.control),
         children,
-        accepts_children: true,
         supervisor_tx,
     };
     let owned = OwnedTasks::new(Arc::clone(&scope.control));

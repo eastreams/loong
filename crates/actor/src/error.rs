@@ -196,33 +196,3 @@ impl<M> fmt::Display for TryCallError<M> {
 }
 
 impl<M> Error for TryCallError<M> {}
-
-/// A child actor rejected because its parent entered lifecycle cleanup.
-///
-/// The actor value was never spawned and can be recovered with
-/// [`into_actor`](Self::into_actor).
-#[derive(thiserror::Error)]
-#[error("the parent no longer accepts child actors")]
-pub struct SpawnChildError<A> {
-    actor: A,
-}
-
-impl<A> SpawnChildError<A> {
-    pub(crate) const fn new(actor: A) -> Self {
-        Self { actor }
-    }
-
-    /// Returns the actor value that was not spawned.
-    pub fn into_actor(self) -> A {
-        self.actor
-    }
-}
-
-impl<A> fmt::Debug for SpawnChildError<A> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("SpawnChildError")
-            .field("actor", &"<actor>")
-            .finish()
-    }
-}
