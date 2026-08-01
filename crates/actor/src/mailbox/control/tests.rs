@@ -128,7 +128,7 @@ fn kill_before_dispatch_rejects_the_queued_phase() {
 
     assert!(matches!(
         control.begin_dispatch(),
-        Err(CallError::BeforeDispatch(ExitReason::Killed))
+        Err((_, CallError::BeforeDispatch(ExitReason::Killed)))
     ));
 }
 

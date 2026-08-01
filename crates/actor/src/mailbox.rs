@@ -170,7 +170,7 @@ where
 
         let permit = match control.begin_dispatch() {
             Ok(permit) => permit,
-            Err(error) => {
+            Err((control, error)) => {
                 notify_response(&control, reply, Err(error));
                 control.drop_user_value(message);
                 return;

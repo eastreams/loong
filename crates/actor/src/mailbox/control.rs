@@ -144,17 +144,24 @@ impl Control {
     ///
     /// The returned permit proves dispatch committed before a later lifecycle
     /// transition. No user code or user-owned value is touched under the gate.
-    pub(super) fn begin_dispatch(self: &Arc<Self>) -> Result<DispatchPermit, CallError> {
-        self.transact(|mode| {
+    /// Success moves the envelope's lifecycle control into the permit.
+    /// Rejection returns it with the queued-phase error.
+    pub(super) fn begin_dispatch(
+        self: Arc<Self>,
+    ) -> Result<DispatchPermit, (Arc<Self>, CallError)> {
+        let result = self.transact(|mode| {
             let result = if matches!(mode, Mode::Running | Mode::Draining) {
-                Ok(DispatchPermit {
-                    control: Arc::clone(self),
-                })
+                Ok(())
             } else {
                 Err(Self::call_failure_for(mode, CallPhase::Queued))
             };
             (mode, result)
-        })
+        });
+
+        match result {
+            Ok(()) => Ok(DispatchPermit { control: self }),
+            Err(error) => Err((self, error)),
+        }
     }
 
     /// Linearizes a child-exit hook's first entry with lifecycle cutoff.

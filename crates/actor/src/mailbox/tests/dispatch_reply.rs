@@ -20,7 +20,9 @@ use super::PanicWake;
 #[tokio::test]
 async fn completion_before_kill_delivers_the_response() {
     let control = Control::new();
-    let permit = control.begin_dispatch().expect("dispatch wins the gate");
+    let permit = Arc::clone(&control)
+        .begin_dispatch()
+        .expect("dispatch wins the gate");
     let (sender, receiver) = oneshot::channel();
 
     DispatchReply::new(sender, permit).complete(7_u8);
@@ -35,7 +37,9 @@ async fn completion_before_kill_delivers_the_response() {
 #[test]
 fn response_waker_panic_does_not_fail_the_actor() {
     let control = Control::new();
-    let permit = control.begin_dispatch().expect("dispatch wins the gate");
+    let permit = Arc::clone(&control)
+        .begin_dispatch()
+        .expect("dispatch wins the gate");
     let (sender, response) = oneshot::channel();
     let wakes = Arc::new(AtomicUsize::new(0));
     let waker = Waker::from(Arc::new(PanicWake(Arc::clone(&wakes))));
@@ -65,7 +69,9 @@ impl Drop for PanicDropReply {
 #[test]
 fn undelivered_response_drop_panic_fails_the_actor() {
     let control = Control::new();
-    let permit = control.begin_dispatch().expect("dispatch wins the gate");
+    let permit = Arc::clone(&control)
+        .begin_dispatch()
+        .expect("dispatch wins the gate");
     let (sender, response) = oneshot::channel();
     let dropped = Arc::new(AtomicBool::new(false));
     drop(response);
@@ -79,7 +85,9 @@ fn undelivered_response_drop_panic_fails_the_actor() {
 #[tokio::test]
 async fn kill_before_completion_reports_the_dispatching_phase() {
     let control = Control::new();
-    let permit = control.begin_dispatch().expect("dispatch wins the gate");
+    let permit = Arc::clone(&control)
+        .begin_dispatch()
+        .expect("dispatch wins the gate");
     let (sender, receiver) = oneshot::channel();
     assert_eq!(control.request(Shutdown::Kill), ShutdownStatus::Requested);
 
@@ -94,7 +102,9 @@ async fn kill_before_completion_reports_the_dispatching_phase() {
 #[tokio::test]
 async fn dropped_dispatch_reply_closes_admission_before_publishing_failure() {
     let control = Control::new();
-    let permit = control.begin_dispatch().expect("dispatch wins the gate");
+    let permit = Arc::clone(&control)
+        .begin_dispatch()
+        .expect("dispatch wins the gate");
     let (sender, receiver) = oneshot::channel();
 
     drop(DispatchReply::<()>::new(sender, permit));
@@ -112,7 +122,9 @@ async fn dropped_dispatch_reply_closes_admission_before_publishing_failure() {
 #[test]
 fn dispatch_reply_drop_contains_notification_panics() {
     let control = Control::new();
-    let permit = control.begin_dispatch().expect("dispatch wins the gate");
+    let permit = Arc::clone(&control)
+        .begin_dispatch()
+        .expect("dispatch wins the gate");
     let (sender, response) = oneshot::channel();
     let wakes = Arc::new(AtomicUsize::new(0));
     let waker = Waker::from(Arc::new(PanicWake(Arc::clone(&wakes))));
@@ -155,7 +167,9 @@ impl Drop for GateDropProbe {
 #[tokio::test]
 async fn rejected_response_is_dropped_outside_the_lifecycle_gate() {
     let control = Control::new();
-    let permit = control.begin_dispatch().expect("dispatch wins the gate");
+    let permit = Arc::clone(&control)
+        .begin_dispatch()
+        .expect("dispatch wins the gate");
     let (sender, receiver) = oneshot::channel();
     let reentered = Arc::new(AtomicBool::new(false));
     assert_eq!(control.request(Shutdown::Kill), ShutdownStatus::Requested);
