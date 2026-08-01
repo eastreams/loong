@@ -71,8 +71,7 @@ authorize execution, and it is not a second proof.
 bounded mailbox admission, an independent `max_in_flight` limit, separate
 `ActorRef` and `ActorOwner` roles, actor-owned child lifecycles,
 ready/owned/interleaved/exclusive reply scheduling, and Stop/Drain/Kill
-termination. This settles actor-local ownership and scheduling, not product
-`Session` ownership or `Turn`/`Step` semantics.
+termination. This settles actor-local ownership and scheduling.
 
 [`loong-kernel`](crates/kernel/src/lib.rs) still contains an Actix prototype that
 has not migrated to this runtime. It is not a second supported actor model. The
