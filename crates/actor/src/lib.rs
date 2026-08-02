@@ -177,6 +177,7 @@ use std::{future::Future, pin::Pin};
 
 mod actor;
 mod address;
+mod config;
 mod error;
 mod future;
 mod mailbox;
@@ -188,16 +189,27 @@ mod supervision;
 
 pub use actor::{Actor, Handler, Message, SyncHandler};
 pub use address::{ActorRef, Response};
+pub use config::ActorConfig;
 pub use error::{
     CallError, SendError, TryCallError, TryCallErrorKind, TrySendError, TrySendErrorKind,
 };
 pub use future::{ActorFuture, ActorFutureExt, FutureActor, IntoActorFuture, Map, Then};
-pub use loong_actor_macros::Message;
+pub use loong_actor_macros::{Message, actor};
 pub use reply::{IntoReply, ReplyExt};
 pub use runtime::{ActorOwner, ActorScope, SpawnOptions, StopScope, spawn, spawn_with};
 pub use supervision::{
     Child, ChildExit, ChildId, ExitReason, ExitStatus, Shutdown, ShutdownStatus, SubtreeStatus,
 };
+
+/// Implementation details used by generated actor configuration.
+#[doc(hidden)]
+pub mod __private {
+    pub use crate::config::{
+        Children, DynamicChildren, DynamicInterleaving, DynamicMailbox, Interleaving,
+        InterleavingConfig, Mailbox, MessagingConfig, NoChildren, NoInterleaving, NoMessaging,
+        SupervisionConfig, UnboundedChildren, UnboundedInterleaving, UnboundedMailbox,
+    };
+}
 
 /// Common traits and types for defining actors and handlers.
 ///
@@ -207,7 +219,7 @@ pub use supervision::{
 pub mod prelude {
     pub use crate::{
         Actor, ActorFuture, ActorFutureExt, ActorScope, Handler, IntoActorFuture, IntoReply,
-        Message, ReplyExt, StopScope, SyncHandler, reply,
+        Message, ReplyExt, StopScope, SyncHandler, actor, reply,
     };
 }
 

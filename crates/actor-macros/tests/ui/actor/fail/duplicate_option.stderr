@@ -1,0 +1,5 @@
+error: duplicate `mailbox` option
+ --> tests/ui/actor/fail/duplicate_option.rs:4:41
+  |
+4 | #[actor_api::actor(mailbox = unbounded, mailbox = 8)]
+  |                                         ^^^^^^^

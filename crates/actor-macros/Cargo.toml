@@ -4,7 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 rust-version = "1.97.1"
 license.workspace = true
-description = "Derive macros for loong-actor"
+description = "Procedural macros for loong-actor"
 repository = "https://github.com/eastreams/loong"
 
 [lib]
@@ -14,7 +14,7 @@ proc-macro = true
 proc-macro-crate = "3.5.0"
 proc-macro2 = "1.0.107"
 quote = "1.0.47"
-syn = "3.0.3"
+syn = { version = "3.0.3", features = ["full"] }
 
 [dev-dependencies]
 actor-api = { package = "loong-actor", path = "../actor" }

@@ -1,0 +1,5 @@
+error: capacity must be greater than zero
+ --> tests/ui/actor/fail/zero_capacity.rs:4:30
+  |
+4 | #[actor_api::actor(mailbox = 0)]
+  |                              ^

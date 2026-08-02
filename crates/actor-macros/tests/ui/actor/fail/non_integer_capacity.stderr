@@ -1,0 +1,5 @@
+error: expected a const expression, `unbounded`, `dynamic`, or `dynamic(N)`
+ --> tests/ui/actor/fail/non_integer_capacity.rs:3:30
+  |
+3 | #[actor_api::actor(mailbox = "8")]
+  |                              ^^^
