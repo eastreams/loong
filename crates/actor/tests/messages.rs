@@ -420,6 +420,25 @@ async fn send_recovers_a_message_when_shutdown_wins_admission() {
     assert_eq!(watchdog(actor.closed()).await.reason(), ExitReason::Stopped);
 }
 
+// A ready capacity permit does not prove lifecycle admission.
+// Both async APIs must still pass through the shared gate.
+#[tokio::test]
+async fn ready_capacity_does_not_bypass_closed_admission() {
+    let committed = Arc::default();
+    let mut owner = spawn::<SerialActor>(Arc::clone(&committed));
+    let actor = owner.actor_ref();
+
+    assert!(matches!(
+        owner.request_shutdown(Shutdown::Stop),
+        loong_actor::ShutdownStatus::Requested
+    ));
+    let rejected = actor.send(Notify(1)).await.unwrap_err();
+    assert_eq!(rejected.into_message().0, 1);
+    assert_eq!(actor.call(Record(2)).await, Err(CallError::Closed));
+    assert!(lock(&committed).is_empty());
+    assert_eq!(watchdog(owner.wait()).await.reason(), ExitReason::Stopped);
+}
+
 struct CommitAfterRelease {
     value: u8,
     entered: oneshot::Sender<()>,

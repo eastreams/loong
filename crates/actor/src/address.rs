@@ -5,7 +5,9 @@ use tokio::sync::mpsc;
 use crate::{
     Actor, CallError, ExitStatus, Handler, Message, SendError, Shutdown, ShutdownStatus,
     TryCallError, TryCallErrorKind, TrySendError, TrySendErrorKind,
-    mailbox::{ActorInner, CallEnvelope, Mode, ReplyReceiver, SendEnvelope, mode_changed},
+    mailbox::{
+        ActorInner, CallEnvelope, DynEnvelope, Mode, ReplyReceiver, SendEnvelope, mode_changed,
+    },
 };
 
 /// A cloneable address for messaging, shutdown, and terminal observation.
@@ -48,27 +50,8 @@ impl<A: Actor> ActorRef<A> {
         M: Message,
     {
         let inner = &self.0;
-        let mut mode = inner.control.subscribe_mode();
-
-        if !inner.control.is_running() {
+        let Some(permit) = reserve_capacity(inner).await else {
             return Err(CallError::Closed);
-        }
-
-        let reserve = inner.sender.reserve();
-        tokio::pin!(reserve);
-
-        let permit = loop {
-            tokio::select! {
-                biased;
-                reserved = &mut reserve => {
-                    break reserved.map_err(|_| CallError::Closed)?;
-                }
-                changed = mode_changed(&mut mode) => {
-                    if changed.is_err() || !inner.control.is_running() {
-                        return Err(CallError::Closed);
-                    }
-                }
-            }
         };
 
         let (envelope, response) = CallEnvelope::new(message, inner);
@@ -109,30 +92,8 @@ impl<A: Actor> ActorRef<A> {
         M: Message<Reply = ()>,
     {
         let inner = &self.0;
-        let mut mode = inner.control.subscribe_mode();
-
-        if !inner.control.is_running() {
+        let Some(permit) = reserve_capacity(inner).await else {
             return Err(SendError::new(message));
-        }
-
-        let reserve = inner.sender.reserve();
-        tokio::pin!(reserve);
-
-        let permit = loop {
-            tokio::select! {
-                biased;
-                reserved = &mut reserve => {
-                    match reserved {
-                        Ok(permit) => break permit,
-                        Err(_) => return Err(SendError::new(message)),
-                    }
-                }
-                changed = mode_changed(&mut mode) => {
-                    if changed.is_err() || !inner.control.is_running() {
-                        return Err(SendError::new(message));
-                    }
-                }
-            }
         };
 
         let envelope = Box::new(SendEnvelope::new(message));
@@ -269,6 +230,32 @@ impl<A: Actor> ActorRef<A> {
                 .await
                 .expect("the actor task publishes an exit status before closing");
         }
+    }
+}
+
+/// Reserves mailbox capacity without committing lifecycle admission.
+///
+/// Ready capacity avoids lifecycle subscription.
+/// While full, shutdown cancels the wait.
+/// [`ActorInner::admit`] remains the commit point.
+async fn reserve_capacity<A: Actor>(
+    inner: &ActorInner<A>,
+) -> Option<mpsc::Permit<'_, DynEnvelope<A>>> {
+    match inner.sender.try_reserve() {
+        Ok(permit) => return Some(permit),
+        Err(mpsc::error::TrySendError::Closed(_)) => return None,
+        Err(mpsc::error::TrySendError::Full(_)) => {}
+    }
+
+    let mut mode = inner.control.subscribe_mode();
+    if !inner.control.is_running() {
+        return None;
+    }
+
+    tokio::select! {
+        biased;
+        reserved = inner.sender.reserve() => reserved.ok(),
+        _ = mode_changed(&mut mode) => None,
     }
 }
 
