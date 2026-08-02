@@ -5,6 +5,7 @@
 
 use std::{
     any::Any,
+    borrow::Cow,
     future::{Future, poll_fn},
     panic::{self, AssertUnwindSafe},
     sync::Arc,
@@ -337,17 +338,20 @@ impl<A: Actor> ActorInner<A> {
     /// Linearizes handler dispatch with graceful cutoff and Kill.
     ///
     /// A queued envelope never strong-owns its mailbox.
-    /// Dispatch creates the strong edge only after dequeue.
-    pub(super) fn begin_dispatch(self: &Arc<Self>) -> Result<DispatchPermit<A>, CallError> {
+    /// Stack-bound dispatch borrows the actor's existing strong edge.
+    /// Only reply work that escapes dispatch promotes the permit to ownership.
+    pub(super) fn begin_dispatch(self: &Arc<Self>) -> Result<DispatchPermit<'_, A>, CallError> {
         self.control.transact(|mode| {
             let result = if matches!(mode, Mode::Running | Mode::Draining) {
-                Ok(DispatchPermit {
-                    actor: Arc::clone(self),
-                })
+                Ok(())
             } else {
                 Err(Control::call_failure_for(mode, CallPhase::Queued))
             };
             (mode, result)
+        })?;
+
+        Ok(DispatchPermit {
+            actor: Cow::Borrowed(self),
         })
     }
 
@@ -388,8 +392,8 @@ enum CallPhase {
     Dispatching,
 }
 
-pub(super) struct DispatchPermit<A: Actor> {
-    actor: Arc<ActorInner<A>>,
+pub(super) struct DispatchPermit<'a, A: Actor> {
+    actor: Cow<'a, Arc<ActorInner<A>>>,
 }
 
 /// Proves initialization entry won against hard cutoff.
@@ -399,12 +403,19 @@ pub(crate) struct HookEntryPermit(());
 
 pub(super) struct CompletionPermit(());
 
-impl<A: Actor> DispatchPermit<A> {
+impl<A: Actor> DispatchPermit<'_, A> {
+    /// Pays for shared ownership only when reply work escapes dispatch.
+    pub(super) fn into_owned(self) -> DispatchPermit<'static, A> {
+        DispatchPermit {
+            actor: Cow::Owned(self.actor.into_owned()),
+        }
+    }
+
     /// Linearizes successful completion with Kill/failure. The unit permit
     /// carries the decision beyond the transaction without exposing lifecycle
     /// state.
     pub(super) fn begin_completion(&self) -> Result<CompletionPermit, CallError> {
-        self.actor.control.transact(|mode| {
+        self.control().transact(|mode| {
             let result = match mode {
                 Mode::Running | Mode::Draining | Mode::Stopping => Ok(CompletionPermit(())),
                 Mode::Killing | Mode::Failing | Mode::Aborting | Mode::Exited(_) => {
@@ -417,8 +428,8 @@ impl<A: Actor> DispatchPermit<A> {
 
     /// Commits handler failure before making its dispatch error observable.
     pub(super) fn fail(&self) -> CallError {
-        self.actor.control.begin_failure();
-        self.actor.control.call_failure(CallPhase::Dispatching)
+        self.control().begin_failure();
+        self.control().call_failure(CallPhase::Dispatching)
     }
 
     /// Borrows the gate retained by this unforgeable dispatch proof.

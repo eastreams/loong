@@ -1,5 +1,6 @@
 use std::{
-    future::Future,
+    future::{Future, Pending},
+    num::NonZeroUsize,
     panic::{self, AssertUnwindSafe},
     sync::{
         Arc,
@@ -12,7 +13,13 @@ use std::{
 
 use tokio::sync::oneshot;
 
-use crate::{Actor, ActorScope, CallError, ExitReason, Shutdown, ShutdownStatus};
+use crate::{
+    Actor, ActorScope, CallError, ExitReason, FutureActor, IntoActorFuture, Message, ReplyExt,
+    Shutdown, ShutdownStatus,
+    owned::OwnedTasks,
+    reply::{Either, Interleaved, Ready, sealed::HandleReply},
+    scheduler::ReplyScheduler,
+};
 
 use super::super::{ActorInner, DispatchReply, Mode};
 use super::PanicWake;
@@ -27,9 +34,86 @@ impl Actor for TestActor {
     }
 }
 
+struct TestMessage;
+
+impl Message for TestMessage {
+    type Reply = u8;
+}
+
 // Reply tests need lifecycle state without running an actor task.
 fn actor_inner() -> Arc<ActorInner<TestActor>> {
     ActorInner::channel(1).0
+}
+
+// Stack-bound completion borrows the actor retained by its runtime.
+// Ready replies must not touch the shared strong count.
+#[test]
+fn stack_bound_dispatch_does_not_clone_the_actor() {
+    let inner = actor_inner();
+    let strong = Arc::strong_count(&inner);
+    let permit = inner.begin_dispatch().expect("dispatch wins the gate");
+    let (sender, mut receiver) = oneshot::channel();
+
+    assert_eq!(Arc::strong_count(&inner), strong);
+    DispatchReply::new(sender, permit).complete(7_u8);
+
+    assert_eq!(receiver.try_recv(), Ok(Ok(7)));
+    assert_eq!(Arc::strong_count(&inner), strong);
+}
+
+// Escaping work must retain lifecycle state beyond the dispatch stack.
+#[test]
+fn owned_dispatch_promotion_retains_the_actor() {
+    let inner = actor_inner();
+    let weak = Arc::downgrade(&inner);
+    let permit = inner.begin_dispatch().expect("dispatch wins the gate");
+    let (sender, mut receiver) = oneshot::channel();
+    let reply = DispatchReply::new(sender, permit).into_owned();
+
+    drop(inner);
+    reply.complete(7_u8);
+
+    assert_eq!(receiver.try_recv(), Ok(Ok(7)));
+    assert!(weak.upgrade().is_none());
+}
+
+// Either selects first. Only scheduled work may retain the actor.
+#[test]
+fn either_promotes_only_the_escaping_branch() {
+    type Branch = Either<Ready<u8>, Interleaved<FutureActor<TestActor, Pending<u8>>>>;
+
+    let inner = actor_inner();
+    let owned = OwnedTasks::new(Arc::clone(&inner));
+    let mut scheduler = ReplyScheduler::new(NonZeroUsize::MIN);
+    let strong = Arc::strong_count(&inner);
+
+    let permit = inner.begin_dispatch().expect("dispatch wins the gate");
+    let (sender, mut receiver) = oneshot::channel();
+    let left = Branch::Left(7.ready());
+    <Branch as HandleReply<TestActor, TestMessage>>::handle(
+        left,
+        &owned,
+        &mut scheduler,
+        DispatchReply::new(sender, permit),
+    );
+
+    assert_eq!(receiver.try_recv(), Ok(Ok(7)));
+    assert_eq!(Arc::strong_count(&inner), strong);
+    assert!(scheduler.is_empty());
+
+    let permit = inner.begin_dispatch().expect("dispatch wins the gate");
+    let (sender, _receiver) = oneshot::channel();
+    let pending: FutureActor<TestActor, _> = std::future::pending::<u8>().into_actor();
+    let right = Branch::Right(pending.interleaved());
+    <Branch as HandleReply<TestActor, TestMessage>>::handle(
+        right,
+        &owned,
+        &mut scheduler,
+        DispatchReply::new(sender, permit),
+    );
+
+    assert_eq!(Arc::strong_count(&inner), strong + 1);
+    assert!(scheduler.has_interleaved());
 }
 
 #[tokio::test]
@@ -184,7 +268,7 @@ async fn rejected_response_is_dropped_outside_the_lifecycle_gate() {
         ShutdownStatus::Requested
     );
 
-    let reply = DispatchReply::new(sender, permit);
+    let reply = DispatchReply::new(sender, permit).into_owned();
     let (done_tx, done_rx) = std_mpsc::sync_channel(1);
     let completion = std::thread::spawn({
         let reentered = Arc::clone(&reentered);

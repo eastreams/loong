@@ -265,23 +265,44 @@ where
     }
 }
 
-enum DispatchReplyState<R> {
-    Caller(oneshot::Sender<Result<R, CallError>>),
-    OneWay,
+enum DispatchReplyState<'a, A: Actor, R> {
+    Caller {
+        reply: oneshot::Sender<Result<R, CallError>>,
+        permit: DispatchPermit<'a, A>,
+    },
+    OneWay {
+        permit: DispatchPermit<'a, A>,
+    },
     Completed,
 }
 
-pub(crate) struct DispatchReply<A: Actor, R> {
-    state: DispatchReplyState<R>,
-    permit: DispatchPermit<A>,
+pub(crate) struct DispatchReply<'a, A: Actor, R> {
+    state: DispatchReplyState<'a, A, R>,
 }
 
-impl<A: Actor, R> DispatchReply<A, R> {
-    fn new(reply: oneshot::Sender<Result<R, CallError>>, permit: DispatchPermit<A>) -> Self {
+impl<'a, A: Actor, R> DispatchReply<'a, A, R> {
+    fn new(reply: oneshot::Sender<Result<R, CallError>>, permit: DispatchPermit<'a, A>) -> Self {
         Self {
-            state: DispatchReplyState::Caller(reply),
-            permit,
+            state: DispatchReplyState::Caller { reply, permit },
         }
+    }
+
+    /// Promotes stack-bound dispatch only when reply work escapes this call.
+    pub(crate) fn into_owned(mut self) -> DispatchReply<'static, A, R> {
+        let state = std::mem::replace(&mut self.state, DispatchReplyState::Completed);
+        let state = match state {
+            DispatchReplyState::Caller { reply, permit } => DispatchReplyState::Caller {
+                reply,
+                permit: permit.into_owned(),
+            },
+            DispatchReplyState::OneWay { permit } => DispatchReplyState::OneWay {
+                permit: permit.into_owned(),
+            },
+            DispatchReplyState::Completed => {
+                panic!("a completed dispatch reply cannot escape dispatch")
+            }
+        };
+        DispatchReply { state }
     }
 
     /// Completes dispatched work only if completion commits before Kill,
@@ -291,47 +312,47 @@ impl<A: Actor, R> DispatchReply<A, R> {
     /// rejected reply value happen after the watch transaction is released.
     /// One-way work follows the same gate without creating a response channel.
     pub(crate) fn complete(mut self, response: R) {
-        let outcome = self.permit.begin_completion();
         let state = std::mem::replace(&mut self.state, DispatchReplyState::Completed);
 
-        match (state, outcome) {
-            (DispatchReplyState::Caller(reply), Ok(_)) => {
-                notify_response(self.permit.control(), reply, Ok(response));
+        match state {
+            DispatchReplyState::Caller { reply, permit } => match permit.begin_completion() {
+                Ok(_) => notify_response(permit.control(), reply, Ok(response)),
+                Err(error) => {
+                    notify_response(permit.control(), reply, Err(error));
+                    permit.control().drop_user_value(response);
+                }
+            },
+            DispatchReplyState::OneWay { permit } => {
+                let _ = permit.begin_completion();
+                permit.control().drop_user_value(response);
             }
-            (DispatchReplyState::Caller(reply), Err(error)) => {
-                notify_response(self.permit.control(), reply, Err(error));
-                self.permit.control().drop_user_value(response);
-            }
-            (DispatchReplyState::OneWay, Ok(_) | Err(_)) => {
-                self.permit.control().drop_user_value(response);
-            }
-            (DispatchReplyState::Completed, _) => {
+            DispatchReplyState::Completed => {
                 panic!("a dispatch reply completes at most once")
             }
         }
     }
 }
 
-impl<A: Actor> DispatchReply<A, ()> {
-    fn one_way(permit: DispatchPermit<A>) -> Self {
+impl<'a, A: Actor> DispatchReply<'a, A, ()> {
+    fn one_way(permit: DispatchPermit<'a, A>) -> Self {
         Self {
-            state: DispatchReplyState::OneWay,
-            permit,
+            state: DispatchReplyState::OneWay { permit },
         }
     }
 }
 
-impl<A: Actor, R> Drop for DispatchReply<A, R> {
+impl<A: Actor, R> Drop for DispatchReply<'_, A, R> {
     fn drop(&mut self) {
         let state = std::mem::replace(&mut self.state, DispatchReplyState::Completed);
-        let reply = match state {
-            DispatchReplyState::Caller(reply) => Some(reply),
-            DispatchReplyState::OneWay => None,
-            DispatchReplyState::Completed => return,
-        };
-        let error = self.permit.fail();
-        if let Some(reply) = reply {
-            notify_response(self.permit.control(), reply, Err(error));
+        match state {
+            DispatchReplyState::Caller { reply, permit } => {
+                let error = permit.fail();
+                notify_response(permit.control(), reply, Err(error));
+            }
+            DispatchReplyState::OneWay { permit } => {
+                let _ = permit.fail();
+            }
+            DispatchReplyState::Completed => {}
         }
     }
 }
