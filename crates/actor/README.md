@@ -61,6 +61,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+See the [examples index](examples/README.md) for runnable guides.
+
 `ExitStatus::reason` describes only that actor. `ExitStatus::subtree` reports
 whether the runtime confirmed all owned descendants terminated. An unconfirmed
 child does not automatically stop its parent. The missing guarantee remains
