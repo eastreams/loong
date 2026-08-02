@@ -6,6 +6,7 @@ struct Store {
     cache: HashMap<String, u64>,
 }
 
+#[actor(mailbox)]
 impl Actor for Store {
     type SpawnArgs = HashMap<String, u64>;
 

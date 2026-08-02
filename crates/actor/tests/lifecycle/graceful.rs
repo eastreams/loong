@@ -2,7 +2,7 @@ use std::num::NonZeroUsize;
 
 use loong_actor::{
     Actor, ActorFutureExt, ActorScope, CallError, ExitReason, Handler, IntoActorFuture, Message,
-    ReplyExt, Shutdown, ShutdownStatus, SpawnOptions, TryCallErrorKind, spawn_with,
+    ReplyExt, Shutdown, ShutdownStatus, SpawnOptions, TryCallErrorKind, actor, spawn_with,
 };
 use tokio::sync::oneshot;
 
@@ -135,6 +135,7 @@ async fn drain_runs_the_fixed_accepted_queue_in_order() {
 
 struct InterleavedDrainActor;
 
+#[actor(mailbox, interleaved = 2)]
 impl Actor for InterleavedDrainActor {
     type SpawnArgs = ();
 

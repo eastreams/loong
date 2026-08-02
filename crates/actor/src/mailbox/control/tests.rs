@@ -17,6 +17,7 @@ use crate::mailbox::ActorInner;
 
 struct TestActor;
 
+#[crate::actor(mailbox = 1)]
 impl Actor for TestActor {
     type SpawnArgs = ();
 

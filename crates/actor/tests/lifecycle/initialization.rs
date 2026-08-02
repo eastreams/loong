@@ -10,7 +10,7 @@ use std::{
 
 use loong_actor::{
     Actor, ActorScope, CallError, ExitReason, Handler, Message, ReplyExt, Shutdown, ShutdownStatus,
-    SpawnOptions, StopScope, TrySendErrorKind, spawn, spawn_with,
+    SpawnOptions, StopScope, TrySendErrorKind, actor, spawn, spawn_with,
 };
 use tokio::sync::oneshot;
 
@@ -28,6 +28,7 @@ struct AdmissionActor {
     handled: Arc<AtomicUsize>,
 }
 
+#[actor(mailbox = 2)]
 impl Actor for AdmissionActor {
     type SpawnArgs = AdmissionArgs;
 
@@ -127,6 +128,7 @@ struct ControlledInit {
     cleanup: Arc<Mutex<Vec<ExitReason>>>,
 }
 
+#[actor(mailbox)]
 impl Actor for ControlledInit {
     type SpawnArgs = ControlledInitArgs;
 

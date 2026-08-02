@@ -13,8 +13,8 @@ use std::{
 
 use loong_actor::{
     Actor, ActorFutureExt, ActorRef, ActorScope, CallError, ChildExit, ExitReason, Handler,
-    IntoActorFuture, Message, ReplyExt, Response, Shutdown, SpawnOptions, SyncHandler, reply,
-    spawn, spawn_with,
+    IntoActorFuture, Message, ReplyExt, Response, Shutdown, SpawnOptions, SyncHandler, actor,
+    reply, spawn, spawn_with,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -26,6 +26,7 @@ async fn poll_once<F: Future>(mut future: Pin<&mut F>) -> Poll<F::Output> {
 
 struct Counter(u8);
 
+#[actor(mailbox)]
 impl Actor for Counter {
     type SpawnArgs = u8;
 
@@ -93,6 +94,7 @@ struct ProgressActor {
     log: Arc<Mutex<Vec<&'static str>>>,
 }
 
+#[actor(mailbox, interleaved)]
 impl Actor for ProgressActor {
     type SpawnArgs = Arc<Mutex<Vec<&'static str>>>;
 
@@ -231,6 +233,7 @@ async fn owned_does_not_block_mailbox_and_interleaved_reborrows_actor() {
 
 struct HookChild;
 
+#[actor(mailbox)]
 impl Actor for HookChild {
     type SpawnArgs = ();
 
@@ -262,6 +265,7 @@ struct ExclusiveActor {
     child_hooks: mpsc::UnboundedSender<()>,
 }
 
+#[actor(mailbox, children = unbounded, interleaved)]
 impl Actor for ExclusiveActor {
     type SpawnArgs = ExclusiveActorArgs;
 
@@ -416,6 +420,7 @@ async fn exclusive_blocks_actor_work_but_owned_continues() {
 
 struct StopActor;
 
+#[actor(mailbox)]
 impl Actor for StopActor {
     type SpawnArgs = ();
 
@@ -500,6 +505,7 @@ async fn owned_replies_ignore_max_in_flight_and_graceful_shutdown_waits() {
 
 struct PanicActor;
 
+#[actor(mailbox)]
 impl Actor for PanicActor {
     type SpawnArgs = ();
 
@@ -623,6 +629,7 @@ async fn owned_task_panic_after_reply_completion_still_fails_the_actor() {
 
 struct SelfCaller;
 
+#[actor(mailbox, interleaved = dynamic)]
 impl Actor for SelfCaller {
     type SpawnArgs = ();
 
@@ -759,6 +766,7 @@ struct FairActor {
     handled: Arc<AtomicUsize>,
 }
 
+#[actor(mailbox, interleaved)]
 impl Actor for FairActor {
     type SpawnArgs = Arc<AtomicUsize>;
 
@@ -888,6 +896,7 @@ struct FairChildExitActor {
     hook_completed: Option<oneshot::Sender<()>>,
 }
 
+#[actor(mailbox, children = unbounded)]
 impl Actor for FairChildExitActor {
     type SpawnArgs = FairChildExitArgs;
 

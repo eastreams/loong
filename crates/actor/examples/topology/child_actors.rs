@@ -12,6 +12,7 @@ struct Report {
 
 struct Agent(&'static str);
 
+#[actor(mailbox)]
 impl Actor for Agent {
     type SpawnArgs = &'static str;
 
@@ -37,6 +38,7 @@ struct Team {
     agents: [ActorRef<Agent>; 2],
 }
 
+#[actor(mailbox, children = unbounded)]
 impl Actor for Team {
     type SpawnArgs = ();
 

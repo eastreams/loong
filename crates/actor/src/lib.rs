@@ -13,6 +13,8 @@
 //! # Define an actor
 //!
 //! Implement [`Actor`] for state owned by one actor.
+//! Apply `#[actor(...)]` to that implementation.
+//! Its options declare the actor's runtime capabilities.
 //! [`Actor::SpawnArgs`] owns its construction inputs.
 //! [`Actor::init`] asynchronously builds the complete state.
 //! Derive [`Message`] for every message type.
@@ -62,6 +64,7 @@
 //!
 //! struct Counter(u64);
 //!
+//! #[actor(mailbox)]
 //! impl Actor for Counter {
 //!     type SpawnArgs = u64;
 //!

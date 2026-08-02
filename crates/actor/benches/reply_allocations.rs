@@ -20,6 +20,7 @@ const MEASURED_CALLS: usize = 10_000;
 
 struct ReplyActor;
 
+#[loong_actor::actor(mailbox = 1, interleaved = 1)]
 impl Actor for ReplyActor {
     type SpawnArgs = ();
 

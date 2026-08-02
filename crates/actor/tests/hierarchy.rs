@@ -8,7 +8,7 @@ use std::{
 
 use loong_actor::{
     Actor, ActorRef, ActorScope, CallError, ExitReason, Handler, IntoActorFuture, Message,
-    ReplyExt, Shutdown, ShutdownStatus, StopScope, SubtreeStatus, spawn,
+    ReplyExt, Shutdown, ShutdownStatus, StopScope, SubtreeStatus, actor, spawn,
 };
 use tokio::sync::oneshot;
 
@@ -18,6 +18,7 @@ struct LogChild {
     log: Arc<Mutex<Vec<&'static str>>>,
 }
 
+#[actor]
 impl Actor for LogChild {
     type SpawnArgs = Arc<Mutex<Vec<&'static str>>>;
 
@@ -39,6 +40,7 @@ struct LogParentArgs {
     child_started: oneshot::Sender<ActorRef<LogChild>>,
 }
 
+#[actor(mailbox, children = unbounded)]
 impl Actor for LogParent {
     type SpawnArgs = LogParentArgs;
 
@@ -100,6 +102,7 @@ struct Worker {
     log: Arc<Mutex<Vec<String>>>,
 }
 
+#[actor(mailbox)]
 impl Actor for Worker {
     type SpawnArgs = Arc<Mutex<Vec<String>>>;
 
@@ -137,6 +140,7 @@ struct DrainParentArgs {
     worker_started: oneshot::Sender<ActorRef<Worker>>,
 }
 
+#[actor(mailbox, children = unbounded)]
 impl Actor for DrainParent {
     type SpawnArgs = DrainParentArgs;
 
@@ -243,6 +247,7 @@ struct LeafArgs {
     dropped: oneshot::Sender<()>,
 }
 
+#[actor]
 impl Actor for Leaf {
     type SpawnArgs = LeafArgs;
 
@@ -281,6 +286,7 @@ struct BranchArgs {
     dropped: oneshot::Sender<()>,
 }
 
+#[actor(children = unbounded)]
 impl Actor for Branch {
     type SpawnArgs = BranchArgs;
 
@@ -318,6 +324,7 @@ struct PanicParentArgs {
     leaf_dropped: oneshot::Sender<()>,
 }
 
+#[actor(mailbox, children = unbounded)]
 impl Actor for PanicParent {
     type SpawnArgs = PanicParentArgs;
 
@@ -399,6 +406,7 @@ async fn parent_panic_kills_descendants_before_parent_exit() {
 
 struct LateChild;
 
+#[actor]
 impl Actor for LateChild {
     type SpawnArgs = ();
 
@@ -415,6 +423,7 @@ struct SpawnDuringInitArgs {
     spawned: oneshot::Sender<ActorRef<LateChild>>,
 }
 
+#[actor(children = unbounded)]
 impl Actor for SpawnDuringInit {
     type SpawnArgs = SpawnDuringInitArgs;
 
@@ -463,6 +472,7 @@ async fn stop_includes_children_spawned_during_init() {
 
 struct SpawnAfterKill;
 
+#[actor(children = unbounded)]
 impl Actor for SpawnAfterKill {
     type SpawnArgs = oneshot::Sender<ActorRef<LateChild>>;
 

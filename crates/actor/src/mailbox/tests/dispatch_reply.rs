@@ -26,6 +26,7 @@ use super::PanicWake;
 
 struct TestActor;
 
+#[crate::actor(mailbox = 1, interleaved = 1)]
 impl Actor for TestActor {
     type SpawnArgs = ();
 

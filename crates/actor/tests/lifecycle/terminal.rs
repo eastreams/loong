@@ -11,7 +11,7 @@ use std::{
 
 use loong_actor::{
     Actor, ActorOwner, ActorScope, CallError, ExitReason, Handler, Message, ReplyExt, Shutdown,
-    ShutdownStatus, StopScope, SubtreeStatus, spawn,
+    ShutdownStatus, StopScope, SubtreeStatus, actor, spawn,
 };
 use tokio::sync::oneshot;
 
@@ -19,6 +19,7 @@ use super::support::watchdog;
 
 struct ExitedActor;
 
+#[actor]
 impl Actor for ExitedActor {
     type SpawnArgs = ();
 
@@ -56,6 +57,7 @@ struct StateDropArgs {
     dropped: oneshot::Sender<()>,
 }
 
+#[actor]
 impl Actor for StateDrop {
     type SpawnArgs = StateDropArgs;
 
@@ -170,6 +172,7 @@ async fn lifecycle_notification_allows_reentrant_shutdown_from_a_safe_waker() {
 
 struct PendingInit;
 
+#[actor(mailbox)]
 impl Actor for PendingInit {
     type SpawnArgs = oneshot::Sender<()>;
 
@@ -272,6 +275,7 @@ fn executor_teardown_discards_each_accepted_message() {
 
 struct PanicActor;
 
+#[actor(mailbox)]
 impl Actor for PanicActor {
     type SpawnArgs = ();
 
@@ -357,6 +361,7 @@ async fn kill_committed_during_a_handler_poll_wins_over_panic() {
 
 struct KillOnStop;
 
+#[actor]
 impl Actor for KillOnStop {
     type SpawnArgs = ();
 

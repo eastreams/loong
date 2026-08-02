@@ -8,7 +8,7 @@ use std::task::Poll;
 
 use loong_actor::{
     Actor, ActorScope, CallError, Child, ChildExit, ExitReason, Handler, IntoActorFuture, Message,
-    ReplyExt, Shutdown, SubtreeStatus, spawn,
+    ReplyExt, Shutdown, SubtreeStatus, actor, spawn,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -16,6 +16,7 @@ use support::watchdog;
 
 struct ChildActor;
 
+#[actor(mailbox)]
 impl Actor for ChildActor {
     type SpawnArgs = bool;
 
@@ -68,6 +69,7 @@ struct SupervisorArgs {
     child_exits_during_init: bool,
 }
 
+#[actor(mailbox, children = unbounded, interleaved)]
 impl Actor for Supervisor {
     type SpawnArgs = SupervisorArgs;
 

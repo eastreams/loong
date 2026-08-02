@@ -51,6 +51,7 @@ struct LoongActor {
     handled: u64,
 }
 
+#[loong_actor::actor(mailbox = MAILBOX_CAPACITY)]
 impl Actor for LoongActor {
     type SpawnArgs = ();
 

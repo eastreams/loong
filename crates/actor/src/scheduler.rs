@@ -340,6 +340,7 @@ mod tests {
 
     struct TestActor;
 
+    #[crate::actor(mailbox = 1, interleaved = dynamic(2))]
     impl Actor for TestActor {
         type SpawnArgs = ();
 

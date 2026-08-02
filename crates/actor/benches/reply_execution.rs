@@ -99,6 +99,7 @@ impl ReplyExecution {
 
 struct ReplyActor;
 
+#[loong_actor::actor(mailbox = dynamic, interleaved = dynamic)]
 impl Actor for ReplyActor {
     type SpawnArgs = ();
 

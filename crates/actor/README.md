@@ -6,6 +6,7 @@ and a Ractor-style supervision tree.
 
 The crate is an early MVP. Its current contract is deliberately narrow:
 
+- every `Actor` implementation uses `#[actor(...)]`;
 - `SyncHandler` returns immediate reply values;
 - bare `Future` values use owned scheduling;
 - `.interleaved()` and `.exclusive()` select actor-aware scheduling;
@@ -24,6 +25,7 @@ use loong_actor::{ExitReason, Shutdown, SubtreeStatus, prelude::*, spawn};
 
 struct Counter(u64);
 
+#[actor(mailbox)]
 impl Actor for Counter {
     type SpawnArgs = u64;
 

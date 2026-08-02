@@ -11,8 +11,8 @@ use std::{
 
 use loong_actor::{
     Actor, ActorFutureExt, ActorScope, CallError, ExitReason, Handler, IntoActorFuture, Message,
-    ReplyExt, Shutdown, SpawnOptions, SyncHandler, TryCallErrorKind, TrySendErrorKind, spawn,
-    spawn_with,
+    ReplyExt, Shutdown, SpawnOptions, SyncHandler, TryCallErrorKind, TrySendErrorKind, actor,
+    spawn, spawn_with,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -20,6 +20,7 @@ use support::{lock, watchdog};
 
 struct Calculator(u64);
 
+#[actor(mailbox)]
 impl Actor for Calculator {
     type SpawnArgs = u64;
 
@@ -107,6 +108,7 @@ struct SerialActor {
     committed: Arc<Mutex<Vec<u8>>>,
 }
 
+#[actor(mailbox = dynamic)]
 impl Actor for SerialActor {
     type SpawnArgs = Arc<Mutex<Vec<u8>>>;
 

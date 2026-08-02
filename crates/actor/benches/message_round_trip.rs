@@ -7,6 +7,7 @@ use loong_actor::{
 
 struct ReplyActor;
 
+#[loong_actor::actor(mailbox = 1, interleaved = 1)]
 impl Actor for ReplyActor {
     type SpawnArgs = ();
 

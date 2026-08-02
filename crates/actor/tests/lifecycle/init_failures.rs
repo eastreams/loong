@@ -10,7 +10,7 @@ use std::{
 
 use loong_actor::{
     Actor, ActorScope, CallError, ExitReason, Handler, Message, ReplyExt, Shutdown, ShutdownStatus,
-    StopScope, SubtreeStatus, TryCallErrorKind, spawn,
+    StopScope, SubtreeStatus, TryCallErrorKind, actor, spawn,
 };
 use tokio::sync::oneshot;
 
@@ -29,6 +29,7 @@ struct NeverReadyInit {
     actor_drops: Arc<AtomicUsize>,
 }
 
+#[actor(mailbox)]
 impl Actor for NeverReadyInit {
     type SpawnArgs = NeverReadyArgs;
 
@@ -74,6 +75,7 @@ impl Drop for PreKilledArgs {
 
 struct PreKilledActor;
 
+#[actor]
 impl Actor for PreKilledActor {
     type SpawnArgs = PreKilledArgs;
 
@@ -142,6 +144,7 @@ async fn kill_cancels_never_ready_init_before_actor_construction() {
 
 struct InitChild;
 
+#[actor(mailbox)]
 impl Actor for InitChild {
     type SpawnArgs = ();
 
@@ -205,6 +208,7 @@ impl Drop for ReadyThenDropPanic {
     }
 }
 
+#[actor(children = unbounded)]
 impl Actor for ReadyDropActor {
     type SpawnArgs = ReadyDropArgs;
 
@@ -252,6 +256,7 @@ struct PanicInit {
     cleanup: Arc<AtomicUsize>,
 }
 
+#[actor(mailbox, children = unbounded)]
 impl Actor for PanicInit {
     type SpawnArgs = PanicInitArgs;
 

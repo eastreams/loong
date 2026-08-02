@@ -7,6 +7,7 @@ struct Worker {
     factor: u64,
 }
 
+#[actor(mailbox)]
 impl Actor for Worker {
     type SpawnArgs = u64;
 

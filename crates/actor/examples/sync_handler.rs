@@ -4,6 +4,7 @@ use loong_actor::{ExitReason, Shutdown, prelude::*, spawn};
 
 struct Counter(u64);
 
+#[actor(mailbox)]
 impl Actor for Counter {
     type SpawnArgs = u64;
 

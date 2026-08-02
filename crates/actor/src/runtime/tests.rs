@@ -31,6 +31,7 @@ use super::{
 
 struct TestActor;
 
+#[crate::actor(mailbox = dynamic, interleaved = dynamic, children = 1)]
 impl Actor for TestActor {
     type SpawnArgs = ();
 
@@ -161,6 +162,7 @@ impl Drop for ReadyActorWorkFrame {
 
 struct CountChildExit(Arc<AtomicUsize>);
 
+#[crate::actor(children = 1)]
 impl Actor for CountChildExit {
     type SpawnArgs = Arc<AtomicUsize>;
 
@@ -177,6 +179,7 @@ struct AbortChildParent {
     child_exit: Option<oneshot::Sender<ExitStatus>>,
 }
 
+#[crate::actor(mailbox = 1, children = 1)]
 impl Actor for AbortChildParent {
     type SpawnArgs = oneshot::Sender<ExitStatus>;
 
@@ -222,6 +225,7 @@ struct ControlledChildExit {
     completed: Option<oneshot::Sender<()>>,
 }
 
+#[crate::actor(children = 1)]
 impl Actor for ControlledChildExit {
     type SpawnArgs = Self;
 

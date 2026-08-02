@@ -5,7 +5,7 @@ use std::{
 
 use loong_actor::{
     Actor, ActorFutureExt, ActorScope, ExitReason, Handler, IntoActorFuture, Message, ReplyExt,
-    SpawnOptions, StopScope, spawn_with,
+    SpawnOptions, StopScope, actor, spawn_with,
 };
 use tokio::sync::oneshot;
 
@@ -21,6 +21,7 @@ pub(super) struct LifecycleArgs {
     cleanup: Arc<Mutex<Vec<ExitReason>>>,
 }
 
+#[actor(mailbox = dynamic)]
 impl Actor for LifecycleActor {
     type SpawnArgs = LifecycleArgs;
 

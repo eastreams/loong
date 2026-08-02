@@ -9,6 +9,7 @@ struct Parent {
     completed: Option<oneshot::Sender<()>>,
 }
 
+#[actor(mailbox, children = unbounded)]
 impl Actor for Parent {
     type SpawnArgs = oneshot::Sender<()>;
 
@@ -28,6 +29,7 @@ struct Child {
     parent: ActorRef<Parent>,
 }
 
+#[actor(mailbox)]
 impl Actor for Child {
     type SpawnArgs = ActorRef<Parent>;
 

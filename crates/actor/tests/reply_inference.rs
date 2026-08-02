@@ -7,7 +7,7 @@ use std::{
 
 use loong_actor::{
     Actor, ActorFuture, ActorScope, ExitReason, Handler, IntoReply, Message, ReplyExt, Shutdown,
-    spawn,
+    actor, spawn,
 };
 
 use support::watchdog;
@@ -18,6 +18,7 @@ struct Read;
 
 struct FirstActor(u8);
 
+#[actor(mailbox, interleaved)]
 impl Actor for FirstActor {
     type SpawnArgs = u8;
 
@@ -28,6 +29,7 @@ impl Actor for FirstActor {
 
 struct SecondActor(u8);
 
+#[actor(mailbox, interleaved)]
 impl Actor for SecondActor {
     type SpawnArgs = u8;
 

@@ -1,11 +1,14 @@
 use std::future::Future;
 
 use crate::{
-    ActorScope, ChildExit, ExitReason, StopScope,
+    ActorConfig, ActorScope, ChildExit, ExitReason, StopScope,
     reply::{IntoReply, ReplyExt},
 };
 
 /// State that can be run as an actor.
+///
+/// Apply `#[actor(...)]` to every implementation.
+/// Its options declare the actor's runtime capabilities.
 ///
 /// Initialization and lifecycle hooks run in the serial actor context.
 /// While they are pending, handlers and actor-aware replies pause.
@@ -26,7 +29,7 @@ use crate::{
 /// Remaining children receive Kill before parent publication.
 /// Their confirmation appears in
 /// [`ExitStatus::subtree`](crate::ExitStatus::subtree).
-pub trait Actor: Send + Sized + 'static {
+pub trait Actor: ActorConfig + Send + Sized + 'static {
     /// Owned input used to construct this actor.
     type SpawnArgs: Send + 'static;
 
@@ -95,11 +98,12 @@ pub trait Actor: Send + Sized + 'static {
     /// Child spawning is unavailable during cleanup:
     ///
     /// ```compile_fail
-    /// use loong_actor::{Actor, ActorScope, ExitReason, StopScope};
+    /// use loong_actor::{Actor, ActorScope, ExitReason, StopScope, actor};
     ///
     /// struct Parent;
     /// struct ChildActor;
     ///
+    /// #[actor]
     /// impl Actor for ChildActor {
     ///     type SpawnArgs = Self;
     ///
@@ -108,6 +112,7 @@ pub trait Actor: Send + Sized + 'static {
     ///     }
     /// }
     ///
+    /// #[actor(children = unbounded)]
     /// impl Actor for Parent {
     ///     type SpawnArgs = Self;
     ///
@@ -164,12 +169,13 @@ pub trait Message: Send + 'static {
 /// A unit reply needs no explicit return expression:
 ///
 /// ```
-/// use loong_actor::{Actor, ActorScope, Handler, Message, SyncHandler};
+/// use loong_actor::{Actor, ActorScope, Handler, Message, SyncHandler, actor};
 ///
 /// struct Worker {
 ///     notifications: usize,
 /// }
 ///
+/// #[actor(mailbox)]
 /// impl Actor for Worker {
 ///     type SpawnArgs = Self;
 ///

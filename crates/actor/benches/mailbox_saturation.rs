@@ -21,6 +21,7 @@ const MAILBOX_CAPACITIES: [usize; 3] = [1, 32, 256];
 
 struct MailboxActor;
 
+#[loong_actor::actor(mailbox = dynamic)]
 impl Actor for MailboxActor {
     type SpawnArgs = ();
 
