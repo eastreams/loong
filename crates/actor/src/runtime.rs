@@ -401,15 +401,14 @@ impl ChildSet {
         options: SpawnOptions,
         events: mpsc::UnboundedSender<ChildExit>,
     ) -> Child<A> {
-        let PreparedActor { actor_ref, future } = PreparedActor::new(args, options);
-        let child_ref = actor_ref.clone();
+        let prepared = PreparedActor::new(args, options);
+        let child_ref = prepared.actor_ref.clone();
         let key = self.actors.insert_with_key(move |key| {
             let parent = ParentLink {
                 id: ChildId::from_key(key),
                 events,
             };
-            let exit = ExitGuard::new(Arc::clone(&actor_ref.0), Some(parent));
-            drop(tokio::spawn(ActorTask::new(future, exit)));
+            let actor_ref = prepared.start(Some(parent));
             ErasedActorOwner::new(&actor_ref)
         });
         Child::new(ChildId::from_key(key), child_ref)
