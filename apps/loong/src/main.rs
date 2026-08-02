@@ -1,6 +1,7 @@
 //! The `loong` command entrypoint.
 //!
-//! Keep this crate to final wiring and startup. Domain logic, authorization
-//! rules, and the runtime or session model belong elsewhere.
+//! This crate contains no domain logic or authorization rules.
+//! Runtime and session models also belong elsewhere.
+//! It only handles final wiring and startup.
 
 fn main() {}
