@@ -63,9 +63,11 @@ pub trait Actor: Send + Sized + 'static {
     /// parent and kills its remaining children.
     fn on_child_exit<'a>(
         &'a mut self,
-        _event: ChildExit,
-        _scope: &'a mut ActorScope<'_, Self>,
+        event: ChildExit,
+        scope: &'a mut ActorScope<'_, Self>,
     ) -> impl Future<Output = ()> + Send + 'a {
+        let _ = event;
+        let _ = scope;
         std::future::ready(())
     }
 
@@ -124,9 +126,11 @@ pub trait Actor: Send + Sized + 'static {
     /// ```
     fn on_stop<'a>(
         &'a mut self,
-        _reason: ExitReason,
-        _scope: &'a mut StopScope<'_, Self>,
+        reason: ExitReason,
+        scope: &'a mut StopScope<'_, Self>,
     ) -> impl Future<Output = ()> + Send + 'a {
+        let _ = reason;
+        let _ = scope;
         std::future::ready(())
     }
 }
