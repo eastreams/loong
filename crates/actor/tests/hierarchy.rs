@@ -83,11 +83,8 @@ async fn parent_stop_cleans_up_children_before_the_parent() {
     assert_eq!(*lock(&log), vec!["child-stop", "parent-stop"]);
 }
 
+#[derive(Message)]
 struct ParentPing;
-
-impl Message for ParentPing {
-    type Reply = ();
-}
 
 impl Handler<ParentPing> for LogParent {
     fn handle(
@@ -115,11 +112,9 @@ impl Actor for Worker {
     }
 }
 
+#[derive(Message)]
+#[message(reply = u8)]
 struct Work(u8);
-
-impl Message for Work {
-    type Reply = u8;
-}
 
 impl Handler<Work> for Worker {
     fn handle(
@@ -161,13 +156,10 @@ impl Actor for DrainParent {
     }
 }
 
+#[derive(Message)]
 struct ParentBlock {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
-}
-
-impl Message for ParentBlock {
-    type Reply = ();
 }
 
 impl Handler<ParentBlock> for DrainParent {
@@ -185,11 +177,9 @@ impl Handler<ParentBlock> for DrainParent {
     }
 }
 
+#[derive(Message)]
+#[message(reply = Result<u8, CallError>)]
 struct Forward(u8);
-
-impl Message for Forward {
-    type Reply = Result<u8, CallError>;
-}
 
 impl Handler<Forward> for DrainParent {
     fn handle(
@@ -346,11 +336,8 @@ impl Actor for PanicParent {
     }
 }
 
+#[derive(Message)]
 struct PanicTree;
-
-impl Message for PanicTree {
-    type Reply = ();
-}
 
 impl Handler<PanicTree> for PanicParent {
     fn handle(

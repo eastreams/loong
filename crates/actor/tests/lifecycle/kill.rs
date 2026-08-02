@@ -11,14 +11,11 @@ use super::{
     support::{lock, watchdog},
 };
 
+#[derive(Message)]
 struct Interruptible {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
     dropped: DropSignal,
-}
-
-impl Message for Interruptible {
-    type Reply = ();
 }
 
 impl Handler<Interruptible> for LifecycleActor {
@@ -37,6 +34,7 @@ impl Handler<Interruptible> for LifecycleActor {
     }
 }
 
+#[derive(Message)]
 struct OwnedInterruptible {
     entered: oneshot::Sender<()>,
     drop_barrier: DropBarrier,
@@ -56,10 +54,6 @@ impl Drop for DropBarrier {
     }
 }
 
-impl Message for OwnedInterruptible {
-    type Reply = ();
-}
-
 impl Handler<OwnedInterruptible> for LifecycleActor {
     fn handle(
         &mut self,
@@ -74,11 +68,8 @@ impl Handler<OwnedInterruptible> for LifecycleActor {
     }
 }
 
+#[derive(Message)]
 struct KillBeforeReady;
-
-impl Message for KillBeforeReady {
-    type Reply = ();
-}
 
 impl Handler<KillBeforeReady> for LifecycleActor {
     fn handle(

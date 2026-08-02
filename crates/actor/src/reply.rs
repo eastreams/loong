@@ -176,10 +176,8 @@ pub enum Either<L, R> {
 ///     }
 /// }
 ///
+/// #[derive(Message)]
 /// struct MyMessage;
-/// impl Message for MyMessage {
-///     type Reply = ();
-/// }
 ///
 /// struct ForeignReply;
 /// impl IntoReply<MyActor, MyMessage> for ForeignReply {}

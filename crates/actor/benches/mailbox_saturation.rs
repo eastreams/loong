@@ -29,11 +29,8 @@ impl Actor for MailboxActor {
     }
 }
 
+#[derive(Message)]
 struct ReadyTraffic;
-
-impl Message for ReadyTraffic {
-    type Reply = ();
-}
 
 impl Handler<ReadyTraffic> for MailboxActor {
     fn handle(

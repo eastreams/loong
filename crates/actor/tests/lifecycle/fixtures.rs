@@ -36,6 +36,8 @@ impl Actor for LifecycleActor {
     }
 }
 
+#[derive(Message)]
+#[message(reply = u8)]
 pub(super) struct Step {
     pub(super) id: u8,
     pub(super) entered: Option<oneshot::Sender<()>>,
@@ -50,10 +52,6 @@ impl Step {
             release: None,
         }
     }
-}
-
-impl Message for Step {
-    type Reply = u8;
 }
 
 impl Handler<Step> for LifecycleActor {

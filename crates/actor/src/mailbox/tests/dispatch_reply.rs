@@ -34,11 +34,9 @@ impl Actor for TestActor {
     }
 }
 
+#[derive(Message)]
+#[message(reply = u8)]
 struct TestMessage;
-
-impl Message for TestMessage {
-    type Reply = u8;
-}
 
 // Reply tests need lifecycle state without running an actor task.
 fn actor_inner() -> Arc<ActorInner<TestActor>> {

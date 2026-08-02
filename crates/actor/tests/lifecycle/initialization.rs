@@ -42,11 +42,8 @@ impl Actor for AdmissionActor {
     }
 }
 
+#[derive(Message)]
 struct Notify(u8);
-
-impl Message for Notify {
-    type Reply = ();
-}
 
 impl Handler<Notify> for AdmissionActor {
     fn handle(
@@ -60,11 +57,9 @@ impl Handler<Notify> for AdmissionActor {
     }
 }
 
+#[derive(Message)]
+#[message(reply = (u8, usize))]
 struct Read;
-
-impl Message for Read {
-    type Reply = (u8, usize);
-}
 
 impl Handler<Read> for AdmissionActor {
     fn handle(
@@ -167,11 +162,8 @@ impl Actor for ControlledInit {
     }
 }
 
+#[derive(Message)]
 struct InitPing;
-
-impl Message for InitPing {
-    type Reply = ();
-}
 
 impl Handler<InitPing> for ControlledInit {
     fn handle(

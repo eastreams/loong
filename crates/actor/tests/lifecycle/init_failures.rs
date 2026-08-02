@@ -16,11 +16,8 @@ use tokio::sync::oneshot;
 
 use super::{fixtures::DropSignal, support::watchdog};
 
+#[derive(Message)]
 struct InitPing;
-
-impl Message for InitPing {
-    type Reply = ();
-}
 
 struct NeverReadyArgs {
     entered: oneshot::Sender<()>,

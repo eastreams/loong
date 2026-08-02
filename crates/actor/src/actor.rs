@@ -136,6 +136,10 @@ pub trait Actor: Send + Sized + 'static {
 }
 
 /// A typed request accepted by an actor.
+///
+/// Declare one with `#[derive(Message)]`.
+/// The derive defaults its reply type to `()`.
+/// Use `#[message(reply = Type)]` to select another type.
 pub trait Message: Send + 'static {
     /// The typed value eventually returned to the caller.
     ///
@@ -174,11 +178,8 @@ pub trait Message: Send + 'static {
 ///     }
 /// }
 ///
+/// #[derive(Message)]
 /// struct Notify;
-///
-/// impl Message for Notify {
-///     type Reply = ();
-/// }
 ///
 /// impl SyncHandler<Notify> for Worker {
 ///     fn handle(&mut self, _message: Notify, _scope: &mut ActorScope<'_, Self>) {

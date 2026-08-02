@@ -24,31 +24,24 @@ const BOOTSTRAP_RESAMPLES: usize = 100_000;
 const BOOTSTRAP_SEED: u64 = 0x100a_2026;
 const CONFIDENCE_LEVEL: f64 = 0.95;
 
+#[derive(Message)]
+#[message(reply = u64)]
 struct Ready;
-
-impl Message for Ready {
-    type Reply = u64;
-}
 
 impl actix::Message for Ready {
     type Result = u64;
 }
 
+#[derive(Message)]
 struct Notify;
-
-impl Message for Notify {
-    type Reply = ();
-}
 
 impl actix::Message for Notify {
     type Result = ();
 }
 
+#[derive(Message)]
+#[message(reply = u64)]
 struct Barrier;
-
-impl Message for Barrier {
-    type Reply = u64;
-}
 
 impl actix::Message for Barrier {
     type Result = u64;

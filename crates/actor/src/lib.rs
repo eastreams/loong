@@ -15,8 +15,10 @@
 //! Implement [`Actor`] for state owned by one actor.
 //! [`Actor::SpawnArgs`] owns its construction inputs.
 //! [`Actor::init`] asynchronously builds the complete state.
-//! Implement [`Message`] for every message type.
-//! Its [`Message::Reply`] type defines a successful call result.
+//! Derive [`Message`] for every message type.
+//! [`Message::Reply`] defines its successful call result.
+//! The derive defaults that type to `()`.
+//! Use `#[message(reply = Type)]` to select another type.
 //! Implement [`SyncHandler<M>`](SyncHandler) for an immediate reply.
 //! Implement [`Handler<M>`](Handler) for other reply strategies.
 //!
@@ -71,11 +73,9 @@
 //!     }
 //! }
 //!
+//! #[derive(Message)]
+//! #[message(reply = u64)]
 //! struct Add(u64);
-//!
-//! impl Message for Add {
-//!     type Reply = u64;
-//! }
 //!
 //! impl SyncHandler<Add> for Counter {
 //!     fn handle(

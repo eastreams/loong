@@ -28,11 +28,9 @@ impl Actor for ReplyActor {
     }
 }
 
+#[derive(Message)]
+#[message(reply = u64)]
 struct Ready;
-
-impl Message for Ready {
-    type Reply = u64;
-}
 
 impl Handler<Ready> for ReplyActor {
     fn handle(
@@ -44,11 +42,9 @@ impl Handler<Ready> for ReplyActor {
     }
 }
 
+#[derive(Message)]
+#[message(reply = u64)]
 struct Owned;
-
-impl Message for Owned {
-    type Reply = u64;
-}
 
 impl Handler<Owned> for ReplyActor {
     fn handle(
@@ -62,11 +58,9 @@ impl Handler<Owned> for ReplyActor {
     }
 }
 
+#[derive(Message)]
+#[message(reply = u64)]
 struct Interleaved;
-
-impl Message for Interleaved {
-    type Reply = u64;
-}
 
 impl Handler<Interleaved> for ReplyActor {
     fn handle(
@@ -78,11 +72,9 @@ impl Handler<Interleaved> for ReplyActor {
     }
 }
 
+#[derive(Message)]
+#[message(reply = u64)]
 struct Exclusive;
-
-impl Message for Exclusive {
-    type Reply = u64;
-}
 
 impl Handler<Exclusive> for ReplyActor {
     fn handle(

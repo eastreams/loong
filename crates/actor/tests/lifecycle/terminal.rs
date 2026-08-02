@@ -179,14 +179,11 @@ impl Actor for PendingInit {
     }
 }
 
+#[derive(Message)]
 struct QueuedDrop {
     dropped: Arc<AtomicBool>,
     dropped_while_unwinding: Arc<AtomicBool>,
     panic: bool,
-}
-
-impl Message for QueuedDrop {
-    type Reply = ();
 }
 
 impl Drop for QueuedDrop {
@@ -283,11 +280,8 @@ impl Actor for PanicActor {
     }
 }
 
+#[derive(Message)]
 struct PanicNow;
-
-impl Message for PanicNow {
-    type Reply = ();
-}
 
 impl Handler<PanicNow> for PanicActor {
     fn handle(
@@ -314,13 +308,10 @@ async fn handler_panics_are_contained_and_reported() {
     assert_eq!(actor.exit_status().unwrap().reason(), ExitReason::Panicked);
 }
 
+#[derive(Message)]
 struct PanicAfterBarrier {
     entered: oneshot::Sender<()>,
     barrier: Arc<Barrier>,
-}
-
-impl Message for PanicAfterBarrier {
-    type Reply = ();
 }
 
 impl Handler<PanicAfterBarrier> for PanicActor {

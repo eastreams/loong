@@ -107,13 +107,10 @@ impl Actor for ReplyActor {
     }
 }
 
+#[derive(Message)]
 struct OwnedReply {
     started: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
-}
-
-impl Message for OwnedReply {
-    type Reply = ();
 }
 
 impl Handler<OwnedReply> for ReplyActor {
@@ -129,13 +126,10 @@ impl Handler<OwnedReply> for ReplyActor {
     }
 }
 
+#[derive(Message)]
 struct InterleavedReply {
     started: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
-}
-
-impl Message for InterleavedReply {
-    type Reply = ();
 }
 
 impl Handler<InterleavedReply> for ReplyActor {
@@ -182,11 +176,8 @@ impl Future for WakeProbe {
     }
 }
 
+#[derive(Message)]
 struct OwnedWakeProbe(WakeProbe);
-
-impl Message for OwnedWakeProbe {
-    type Reply = ();
-}
 
 impl Handler<OwnedWakeProbe> for ReplyActor {
     fn handle(
@@ -198,11 +189,8 @@ impl Handler<OwnedWakeProbe> for ReplyActor {
     }
 }
 
+#[derive(Message)]
 struct InterleavedWakeProbe(WakeProbe);
-
-impl Message for InterleavedWakeProbe {
-    type Reply = ();
-}
 
 impl Handler<InterleavedWakeProbe> for ReplyActor {
     fn handle(
@@ -214,11 +202,8 @@ impl Handler<InterleavedWakeProbe> for ReplyActor {
     }
 }
 
+#[derive(Message)]
 struct MailboxBacklog;
-
-impl Message for MailboxBacklog {
-    type Reply = ();
-}
 
 impl Handler<MailboxBacklog> for ReplyActor {
     fn handle(
@@ -230,13 +215,10 @@ impl Handler<MailboxBacklog> for ReplyActor {
     }
 }
 
+#[derive(Message)]
 struct MailboxTurnTrigger {
     commands: mpsc::Sender<WakeCommand>,
     completed: oneshot::Sender<Duration>,
-}
-
-impl Message for MailboxTurnTrigger {
-    type Reply = ();
 }
 
 impl Handler<MailboxTurnTrigger> for ReplyActor {
@@ -259,13 +241,10 @@ impl Handler<MailboxTurnTrigger> for ReplyActor {
     }
 }
 
+#[derive(Message)]
 struct StageMailboxBacklog {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
-}
-
-impl Message for StageMailboxBacklog {
-    type Reply = ();
 }
 
 impl Handler<StageMailboxBacklog> for ReplyActor {

@@ -12,11 +12,9 @@ use loong_actor::{
 
 use support::watchdog;
 
+#[derive(Message)]
+#[message(reply = u8)]
 struct Read;
-
-impl Message for Read {
-    type Reply = u8;
-}
 
 struct FirstActor(u8);
 

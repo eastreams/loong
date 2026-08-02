@@ -27,11 +27,8 @@ impl Actor for ChildActor {
     }
 }
 
+#[derive(Message)]
 struct StopSelf;
-
-impl Message for StopSelf {
-    type Reply = ();
-}
 
 impl Handler<StopSelf> for ChildActor {
     fn handle(
@@ -44,11 +41,8 @@ impl Handler<StopSelf> for ChildActor {
     }
 }
 
+#[derive(Message)]
 struct PanicSelf;
-
-impl Message for PanicSelf {
-    type Reply = ();
-}
 
 impl Handler<PanicSelf> for ChildActor {
     fn handle(
@@ -96,11 +90,9 @@ impl Actor for Supervisor {
     }
 }
 
+#[derive(Message)]
+#[message(reply = usize)]
 struct Observed;
-
-impl Message for Observed {
-    type Reply = usize;
-}
 
 impl Handler<Observed> for Supervisor {
     fn handle(
@@ -112,11 +104,8 @@ impl Handler<Observed> for Supervisor {
     }
 }
 
+#[derive(Message)]
 struct ChildExitBarrier;
-
-impl Message for ChildExitBarrier {
-    type Reply = ();
-}
 
 impl Handler<ChildExitBarrier> for Supervisor {
     fn handle(

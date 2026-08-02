@@ -12,11 +12,9 @@ impl Actor for Counter {
     }
 }
 
+#[derive(Message)]
+#[message(reply = u64)]
 struct Add(u64);
-
-impl Message for Add {
-    type Reply = u64;
-}
 
 impl SyncHandler<Add> for Counter {
     fn handle(&mut self, message: Add, _scope: &mut ActorScope<Self>) -> u64 {
@@ -25,11 +23,8 @@ impl SyncHandler<Add> for Counter {
     }
 }
 
+#[derive(Message)]
 struct Reset;
-
-impl Message for Reset {
-    type Reply = ();
-}
 
 impl SyncHandler<Reset> for Counter {
     fn handle(&mut self, _message: Reset, _scope: &mut ActorScope<Self>) {

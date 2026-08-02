@@ -34,11 +34,9 @@ impl Actor for Counter {
     }
 }
 
+#[derive(Message)]
+#[message(reply = u8)]
 struct Increment;
-
-impl Message for Increment {
-    type Reply = u8;
-}
 
 impl SyncHandler<Increment> for Counter {
     fn handle(&mut self, _message: Increment, _scope: &mut ActorScope<Self>) -> u8 {
@@ -60,11 +58,9 @@ async fn sync_handler_mutates_actor_and_replies_immediately() {
     );
 }
 
+#[derive(Message)]
+#[message(reply = u8)]
 struct ChooseReply(bool);
-
-impl Message for ChooseReply {
-    type Reply = u8;
-}
 
 impl Handler<ChooseReply> for Counter {
     fn handle(
@@ -105,13 +101,10 @@ impl Actor for ProgressActor {
     }
 }
 
+#[derive(Message)]
 struct PendingOwned {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
-}
-
-impl Message for PendingOwned {
-    type Reply = ();
 }
 
 impl Handler<PendingOwned> for ProgressActor {
@@ -127,11 +120,8 @@ impl Handler<PendingOwned> for ProgressActor {
     }
 }
 
+#[derive(Message)]
 struct Record(&'static str);
-
-impl Message for Record {
-    type Reply = ();
-}
 
 impl Handler<Record> for ProgressActor {
     fn handle(
@@ -144,16 +134,15 @@ impl Handler<Record> for ProgressActor {
     }
 }
 
+#[derive(Message)]
 struct InterleavedSequence {
     started: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
 }
 
+#[derive(Message)]
+#[message(reply = u8)]
 struct ThenSequence;
-
-impl Message for ThenSequence {
-    type Reply = u8;
-}
 
 impl Handler<ThenSequence> for ProgressActor {
     fn handle(
@@ -169,10 +158,6 @@ impl Handler<ThenSequence> for ProgressActor {
             })
             .interleaved()
     }
-}
-
-impl Message for InterleavedSequence {
-    type Reply = ();
 }
 
 impl Handler<InterleavedSequence> for ProgressActor {
@@ -254,11 +239,8 @@ impl Actor for HookChild {
     }
 }
 
+#[derive(Message)]
 struct StopChild;
-
-impl Message for StopChild {
-    type Reply = ();
-}
 
 impl Handler<StopChild> for HookChild {
     fn handle(
@@ -309,13 +291,10 @@ impl Handler<PendingOwned> for ExclusiveActor {
     }
 }
 
+#[derive(Message)]
 struct InterleavedGate {
     dispatched: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
-}
-
-impl Message for InterleavedGate {
-    type Reply = ();
 }
 
 impl Handler<InterleavedGate> for ExclusiveActor {
@@ -331,13 +310,10 @@ impl Handler<InterleavedGate> for ExclusiveActor {
     }
 }
 
+#[derive(Message)]
 struct ExclusiveGate {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
-}
-
-impl Message for ExclusiveGate {
-    type Reply = ();
 }
 
 impl Handler<ExclusiveGate> for ExclusiveActor {
@@ -355,11 +331,8 @@ impl Handler<ExclusiveGate> for ExclusiveActor {
     }
 }
 
+#[derive(Message)]
 struct Mark(oneshot::Sender<()>);
-
-impl Message for Mark {
-    type Reply = ();
-}
 
 impl Handler<Mark> for ExclusiveActor {
     fn handle(
@@ -451,13 +424,10 @@ impl Actor for StopActor {
     }
 }
 
+#[derive(Message)]
 struct StopOwned {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
-}
-
-impl Message for StopOwned {
-    type Reply = ();
 }
 
 impl Handler<StopOwned> for StopActor {
@@ -538,13 +508,10 @@ impl Actor for PanicActor {
     }
 }
 
+#[derive(Message)]
 struct PendingSibling {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
-}
-
-impl Message for PendingSibling {
-    type Reply = ();
 }
 
 impl Handler<PendingSibling> for PanicActor {
@@ -560,16 +527,14 @@ impl Handler<PendingSibling> for PanicActor {
     }
 }
 
+#[derive(Message)]
 struct PanicReply {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
 }
 
+#[derive(Message)]
 struct PanicAfterReady;
-
-impl Message for PanicAfterReady {
-    type Reply = ();
-}
 
 impl Future for PanicAfterReady {
     type Output = ();
@@ -593,10 +558,6 @@ impl Handler<PanicAfterReady> for PanicActor {
     ) -> impl loong_actor::IntoReply<Self, PanicAfterReady> + use<> {
         message
     }
-}
-
-impl Message for PanicReply {
-    type Reply = ();
 }
 
 impl Handler<PanicReply> for PanicActor {
@@ -670,11 +631,9 @@ impl Actor for SelfCaller {
     }
 }
 
+#[derive(Message)]
+#[message(reply = u8)]
 struct Echo(u8);
-
-impl Message for Echo {
-    type Reply = u8;
-}
 
 impl Handler<Echo> for SelfCaller {
     fn handle(
@@ -686,11 +645,9 @@ impl Handler<Echo> for SelfCaller {
     }
 }
 
+#[derive(Message)]
+#[message(reply = u8)]
 struct OwnedSelfCall(u8);
-
-impl Message for OwnedSelfCall {
-    type Reply = u8;
-}
 
 impl Handler<OwnedSelfCall> for SelfCaller {
     fn handle(
@@ -703,11 +660,9 @@ impl Handler<OwnedSelfCall> for SelfCaller {
     }
 }
 
+#[derive(Message)]
+#[message(reply = u8)]
 struct InterleavedSelfCall(u8);
-
-impl Message for InterleavedSelfCall {
-    type Reply = u8;
-}
 
 impl Handler<InterleavedSelfCall> for SelfCaller {
     fn handle(
@@ -722,13 +677,10 @@ impl Handler<InterleavedSelfCall> for SelfCaller {
     }
 }
 
+#[derive(Message)]
 struct ExclusiveSelfCall {
     observed: oneshot::Sender<Response<u8>>,
     polled: oneshot::Sender<()>,
-}
-
-impl Message for ExclusiveSelfCall {
-    type Reply = ();
 }
 
 impl Handler<ExclusiveSelfCall> for SelfCaller {
@@ -815,11 +767,9 @@ impl Actor for FairActor {
     }
 }
 
+#[derive(Message)]
+#[message(reply = bool)]
 struct OwnedTaskIdentity;
-
-impl Message for OwnedTaskIdentity {
-    type Reply = bool;
-}
 
 impl Handler<OwnedTaskIdentity> for FairActor {
     fn handle(
@@ -832,14 +782,11 @@ impl Handler<OwnedTaskIdentity> for FairActor {
     }
 }
 
+#[derive(Message)]
 struct ActiveInterleavedReply {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
     completed_at: Arc<AtomicUsize>,
-}
-
-impl Message for ActiveInterleavedReply {
-    type Reply = ();
 }
 
 impl Handler<ActiveInterleavedReply> for FairActor {
@@ -861,11 +808,8 @@ impl Handler<ActiveInterleavedReply> for FairActor {
     }
 }
 
+#[derive(Message)]
 struct ReadyWork;
-
-impl Message for ReadyWork {
-    type Reply = ();
-}
 
 impl Handler<ReadyWork> for FairActor {
     fn handle(

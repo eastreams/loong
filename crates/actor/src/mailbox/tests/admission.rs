@@ -42,16 +42,13 @@ impl Envelope<TestActor> for NoopEnvelope {
     }
 }
 
+#[derive(Message)]
 struct RecoverMessage(Arc<AtomicUsize>);
 
 impl Drop for RecoverMessage {
     fn drop(&mut self) {
         self.0.fetch_add(1, Ordering::SeqCst);
     }
-}
-
-impl Message for RecoverMessage {
-    type Reply = ();
 }
 
 impl Handler<RecoverMessage> for TestActor {
@@ -172,11 +169,8 @@ fn call_recovery_contains_response_waker_panic() {
     assert_eq!(message_drops.load(Ordering::SeqCst), 1);
 }
 
+#[derive(Message)]
 struct PanicDropMessage(Arc<AtomicBool>);
-
-impl Message for PanicDropMessage {
-    type Reply = ();
-}
 
 impl Drop for PanicDropMessage {
     fn drop(&mut self) {

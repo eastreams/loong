@@ -11,11 +11,8 @@ use super::{
     support::{lock, watchdog},
 };
 
+#[derive(Message)]
 struct StopFromExclusive;
-
-impl Message for StopFromExclusive {
-    type Reply = ();
-}
 
 impl Handler<StopFromExclusive> for LifecycleActor {
     fn handle(
@@ -146,14 +143,12 @@ impl Actor for InterleavedDrainActor {
     }
 }
 
+#[derive(Message)]
+#[message(reply = u8)]
 struct InterleavedDrainStep {
     id: u8,
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
-}
-
-impl Message for InterleavedDrainStep {
-    type Reply = u8;
 }
 
 impl Handler<InterleavedDrainStep> for InterleavedDrainActor {

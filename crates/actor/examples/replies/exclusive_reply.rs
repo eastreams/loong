@@ -13,14 +13,12 @@ impl Actor for Counter {
     }
 }
 
+#[derive(Message)]
+#[message(reply = u64)]
 struct AddAfter {
     amount: u64,
     started: oneshot::Sender<()>,
     resume: oneshot::Receiver<()>,
-}
-
-impl Message for AddAfter {
-    type Reply = u64;
 }
 
 impl Handler<AddAfter> for Counter {
@@ -49,11 +47,9 @@ impl Handler<AddAfter> for Counter {
     }
 }
 
+#[derive(Message)]
+#[message(reply = u64)]
 struct Read;
-
-impl Message for Read {
-    type Reply = u64;
-}
 
 impl Handler<Read> for Counter {
     fn handle(

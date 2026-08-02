@@ -209,11 +209,8 @@ impl Actor for AbortChildParent {
     }
 }
 
+#[derive(Message)]
 struct Ping;
-
-impl Message for Ping {
-    type Reply = ();
-}
 
 impl SyncHandler<Ping> for AbortChildParent {
     fn handle(&mut self, _message: Ping, _scope: &mut ActorScope<Self>) {}

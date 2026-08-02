@@ -28,11 +28,9 @@ impl Actor for Calculator {
     }
 }
 
+#[derive(Message)]
+#[message(reply = u64)]
 struct Add(u64);
-
-impl Message for Add {
-    type Reply = u64;
-}
 
 impl Handler<Add> for Calculator {
     fn handle(
@@ -45,11 +43,9 @@ impl Handler<Add> for Calculator {
     }
 }
 
+#[derive(Message)]
+#[message(reply = String)]
 struct Describe;
-
-impl Message for Describe {
-    type Reply = String;
-}
 
 impl Handler<Describe> for Calculator {
     fn handle(
@@ -75,11 +71,9 @@ async fn one_actor_handles_multiple_typed_message_replies() {
     );
 }
 
+#[derive(Message)]
+#[message(reply = mpsc::Receiver<u8>)]
 struct Events;
-
-impl Message for Events {
-    type Reply = mpsc::Receiver<u8>;
-}
 
 impl Handler<Events> for Calculator {
     fn handle(
@@ -121,13 +115,10 @@ impl Actor for SerialActor {
     }
 }
 
+#[derive(Message)]
 struct Block {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
-}
-
-impl Message for Block {
-    type Reply = ();
 }
 
 impl Handler<Block> for SerialActor {
@@ -145,11 +136,9 @@ impl Handler<Block> for SerialActor {
     }
 }
 
+#[derive(Message)]
+#[message(reply = u8)]
 struct Record(u8);
-
-impl Message for Record {
-    type Reply = u8;
-}
 
 impl Handler<Record> for SerialActor {
     fn handle(
@@ -162,11 +151,9 @@ impl Handler<Record> for SerialActor {
     }
 }
 
+#[derive(Message)]
+#[message(reply = Vec<u8>)]
 struct Snapshot;
-
-impl Message for Snapshot {
-    type Reply = Vec<u8>;
-}
 
 impl Handler<Snapshot> for SerialActor {
     fn handle(
@@ -178,11 +165,8 @@ impl Handler<Snapshot> for SerialActor {
     }
 }
 
+#[derive(Message)]
 struct Notify(u8);
-
-impl Message for Notify {
-    type Reply = ();
-}
 
 impl SyncHandler<Notify> for SerialActor {
     fn handle(&mut self, message: Notify, _scope: &mut ActorScope<Self>) {
@@ -441,14 +425,11 @@ async fn ready_capacity_does_not_bypass_closed_admission() {
     assert_eq!(watchdog(owner.wait()).await.reason(), ExitReason::Stopped);
 }
 
+#[derive(Message)]
 struct CommitAfterRelease {
     value: u8,
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
-}
-
-impl Message for CommitAfterRelease {
-    type Reply = ();
 }
 
 impl Handler<CommitAfterRelease> for SerialActor {
