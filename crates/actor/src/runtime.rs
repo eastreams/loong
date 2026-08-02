@@ -16,7 +16,7 @@ use tokio::sync::mpsc;
 use crate::{
     Actor, ActorRef, Child, ChildExit, ChildId, ErasedFuture, ExitReason, ExitStatus, Shutdown,
     ShutdownStatus, SubtreeStatus,
-    mailbox::{ActorInner, Control, DynEnvelope, HookEntryPermit, Mode},
+    mailbox::{ActorInbox, ActorInner, Control, HookEntryPermit, Mode},
     owned::OwnedTasks,
     scheduler::{InterleavedPoll, ReplyScheduler},
 };
@@ -715,7 +715,7 @@ where
 async fn run_actor<A: Actor>(
     args: A::SpawnArgs,
     mut state: ScopeState<A>,
-    mut inbox: mpsc::Receiver<DynEnvelope<A>>,
+    mut inbox: ActorInbox<A>,
     mut supervisor_rx: mpsc::UnboundedReceiver<ChildExit>,
     max_in_flight: NonZeroUsize,
 ) -> ExitStatus {
@@ -886,7 +886,7 @@ struct TurnCursor {
 async fn actor_turn<A: Actor>(
     actor: &mut A,
     state: &mut ScopeState<A>,
-    inbox: &mut mpsc::Receiver<DynEnvelope<A>>,
+    inbox: &mut ActorInbox<A>,
     supervisor_rx: &mut mpsc::UnboundedReceiver<ChildExit>,
     inner: &Arc<ActorInner<A>>,
     owned: &OwnedTasks<A>,
@@ -1028,7 +1028,7 @@ async fn run_child_exit_hook<A: Actor>(
 async fn stop_actor<A: Actor>(
     actor: &mut A,
     state: &mut ScopeState<A>,
-    inbox: &mut mpsc::Receiver<DynEnvelope<A>>,
+    inbox: &mut ActorInbox<A>,
     control: &Control,
     owned: &OwnedTasks<A>,
     scheduler: &mut ReplyScheduler<A>,
@@ -1067,7 +1067,7 @@ async fn stop_actor<A: Actor>(
 async fn drain_actor<A: Actor>(
     actor: &mut A,
     state: &mut ScopeState<A>,
-    inbox: &mut mpsc::Receiver<DynEnvelope<A>>,
+    inbox: &mut ActorInbox<A>,
     supervisor_rx: &mut mpsc::UnboundedReceiver<ChildExit>,
     inner: &Arc<ActorInner<A>>,
     owned: &OwnedTasks<A>,
@@ -1255,7 +1255,7 @@ async fn graceful_finish<A: Actor>(
 
 async fn kill_actor<A: Actor>(
     state: &mut ScopeState<A>,
-    inbox: &mut mpsc::Receiver<DynEnvelope<A>>,
+    inbox: &mut ActorInbox<A>,
     owned: &OwnedTasks<A>,
     scheduler: &mut ReplyScheduler<A>,
 ) -> ExitStatus {
@@ -1281,7 +1281,7 @@ async fn kill_actor<A: Actor>(
 
 async fn fail_actor<A: Actor>(
     state: &mut ScopeState<A>,
-    inbox: &mut mpsc::Receiver<DynEnvelope<A>>,
+    inbox: &mut ActorInbox<A>,
     owned: &OwnedTasks<A>,
     scheduler: &mut ReplyScheduler<A>,
 ) -> ExitStatus {
@@ -1326,7 +1326,7 @@ enum DiscardOutcome {
 /// Every uninterrupted mode pass yields after [`TEARDOWN_DROP_BUDGET`] drops so
 /// a large accepted queue cannot monopolize a current-thread executor.
 async fn close_and_discard<A: Actor>(
-    inbox: &mut mpsc::Receiver<DynEnvelope<A>>,
+    inbox: &mut ActorInbox<A>,
     control: &Control,
     expected_mode: Mode,
 ) -> DiscardOutcome {
@@ -1337,10 +1337,9 @@ async fn close_and_discard<A: Actor>(
             return DiscardOutcome::ModeChanged;
         }
 
-        let Ok(envelope) = inbox.try_recv() else {
+        if !inbox.try_discard() {
             return DiscardOutcome::Complete;
-        };
-        control.drop_user_value(envelope);
+        }
 
         if control.mode() != expected_mode {
             return DiscardOutcome::ModeChanged;

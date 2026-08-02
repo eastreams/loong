@@ -8,7 +8,7 @@ use std::{
         Arc, Weak,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
-    task::{Context, Poll, Waker},
+    task::{Context, Poll, Wake, Waker},
     time::Duration,
 };
 
@@ -1008,7 +1008,6 @@ async fn ordinary_cursor_visits_each_actor_source_before_repeating_mailbox() {
     assert_eq!(child_turns, 1);
     assert!(interleaved_completed.load(Ordering::SeqCst));
     assert_eq!(mailbox_dispatches.load(Ordering::SeqCst), 1);
-    assert_eq!(inbox.len(), 4);
 }
 
 // A truncated reply sweep must yield before polling another ready lane.
@@ -1066,7 +1065,6 @@ fn truncated_reply_sweep_yields_before_ready_mailbox() {
     let replies_polled = replies_polled.load(Ordering::SeqCst);
     assert!(0 < replies_polled && replies_polled < REPLIES);
     assert_eq!(mailbox_dispatches.load(Ordering::SeqCst), 0);
-    assert_eq!(inbox.len(), 1);
     assert!(scheduler.has_interleaved());
     assert_eq!(cursor.next_ordinary, OrdinaryLane::ChildExit);
 }
@@ -1236,7 +1234,6 @@ async fn stop_discard_observes_kill_from_each_envelope_drop() {
     );
     assert_eq!(inner.control.mode(), Mode::Killing);
     assert!(!second_dropped.load(Ordering::SeqCst));
-    assert_eq!(inbox.len(), 1);
 
     assert_eq!(
         close_and_discard(&mut inbox, &inner.control, Mode::Killing).await,
@@ -1283,12 +1280,21 @@ async fn queued_discard_yields_after_its_fixed_drop_budget() {
     assert!(last_dropped.load(Ordering::SeqCst));
 }
 
-// A queued destructor panic must not unwind from hard teardown.
-// The next accepted envelope must still be destroyed.
-// Its unwind state rejects one aggregate panic boundary.
-#[tokio::test]
-async fn queued_discard_contains_each_envelope_drop() {
-    let (inner, mut inbox) = ActorInner::<TestActor>::channel(2);
+struct CapacityPanicWake(AtomicUsize);
+
+impl Wake for CapacityPanicWake {
+    fn wake(self: Arc<Self>) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        panic!("intentional capacity notification panic");
+    }
+}
+
+// Tokio wakes capacity waiters while closing its receiver.
+// ActorInbox contains that panic before discarding accepted envelopes.
+// Each envelope then receives its own containment boundary.
+#[test]
+fn inbox_drop_contains_each_envelope_drop() {
+    let (inner, inbox) = ActorInner::<TestActor>::channel(2);
     let panic_dropped = Arc::new(AtomicBool::new(false));
     let tail_dropped = Arc::new(AtomicBool::new(false));
     let tail_dropped_while_unwinding = Arc::new(AtomicBool::new(false));
@@ -1305,17 +1311,20 @@ async fn queued_discard_contains_each_envelope_drop() {
             dropped_while_unwinding: Arc::clone(&tail_dropped_while_unwinding),
         }))
         .unwrap();
+    let wakes = Arc::new(CapacityPanicWake(AtomicUsize::new(0)));
+    let waker = Waker::from(Arc::clone(&wakes));
+    let mut task = Context::from_waker(&waker);
+    let mut reserve = Box::pin(inner.sender.reserve());
+    assert!(matches!(reserve.as_mut().poll(&mut task), Poll::Pending));
     assert_eq!(
         inner.control.request(Shutdown::Kill),
         ShutdownStatus::Requested
     );
 
-    assert_eq!(
-        close_and_discard(&mut inbox, &inner.control, Mode::Killing).await,
-        DiscardOutcome::Complete
-    );
+    drop(inbox);
     assert!(panic_dropped.load(Ordering::SeqCst));
     assert!(tail_dropped.load(Ordering::SeqCst));
     assert!(!tail_dropped_while_unwinding.load(Ordering::SeqCst));
+    assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
     assert_eq!(inner.control.mode(), Mode::Killing);
 }

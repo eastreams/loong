@@ -8,7 +8,7 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 
 use crate::{
     Actor, ActorScope, CallError, ExitReason, Handler, Message, ReplyExt, Shutdown, ShutdownStatus,
@@ -68,7 +68,7 @@ impl Handler<RecoverMessage> for TestActor {
 // transaction, the reserved slot must be returned without entering inbox.
 #[tokio::test]
 async fn shutdown_wins_over_an_acquired_but_uncommitted_permit() {
-    let (inner, mut receiver) = ActorInner::<TestActor>::channel(1);
+    let (inner, inbox) = ActorInner::<TestActor>::channel(1);
     let permit = inner
         .sender
         .reserve()
@@ -86,17 +86,14 @@ async fn shutdown_wins_over_an_acquired_but_uncommitted_permit() {
     };
     drop(permit);
     drop(envelope);
-    assert!(matches!(
-        receiver.try_recv(),
-        Err(mpsc::error::TryRecvError::Empty)
-    ));
+    assert!(inbox.is_empty());
 }
 
 #[tokio::test]
 async fn committed_send_is_part_of_the_fixed_drain_queue() {
     // Observe the inbox directly to isolate the admission/Drain ordering:
     // once admission wins the shared gate, Drain must retain that envelope.
-    let (inner, mut receiver) = ActorInner::<TestActor>::channel(1);
+    let (inner, mut inbox) = ActorInner::<TestActor>::channel(1);
     let permit = inner
         .sender
         .reserve()
@@ -112,18 +109,15 @@ async fn committed_send_is_part_of_the_fixed_drain_queue() {
         ShutdownStatus::Requested
     );
 
-    assert!(receiver.try_recv().is_ok());
-    assert!(matches!(
-        receiver.try_recv(),
-        Err(mpsc::error::TryRecvError::Empty)
-    ));
+    assert!(inbox.try_discard());
+    assert!(inbox.is_empty());
 }
 
 // The typed rejected path must recover the concrete call message rather
 // than dropping CallEnvelope and publishing a fabricated queued failure.
 #[tokio::test]
 async fn rejected_call_admission_recovers_its_message_without_a_reply() {
-    let (inner, mut receiver) = ActorInner::<TestActor>::channel(1);
+    let (inner, inbox) = ActorInner::<TestActor>::channel(1);
     let permit = inner
         .sender
         .reserve()
@@ -150,10 +144,7 @@ async fn rejected_call_admission_recovers_its_message_without_a_reply() {
     assert_eq!(drops.load(Ordering::SeqCst), 0);
     drop(message);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
-    assert!(matches!(
-        receiver.try_recv(),
-        Err(mpsc::error::TryRecvError::Empty)
-    ));
+    assert!(inbox.is_empty());
 }
 
 // Admission recovery notifies a still-live response receiver.
@@ -224,7 +215,7 @@ fn queued_call_drop_contains_notification_and_message_drop_panics() {
 // gate without publishing a fake lifecycle change to every closed() waiter.
 #[test]
 fn mailbox_admission_does_not_wake_lifecycle_observers() {
-    let (inner, mut receiver) = ActorInner::<TestActor>::channel(1);
+    let (inner, mut inbox) = ActorInner::<TestActor>::channel(1);
     let mut mode = inner.control.subscribe_mode();
     let mut changed = Box::pin(mode.changed());
     let wakes = Arc::new(WakeCounter(AtomicUsize::new(0)));
@@ -249,5 +240,5 @@ fn mailbox_admission_does_not_wake_lifecycle_observers() {
             .has_changed()
             .expect("the control still owns its sender")
     );
-    drop(receiver.try_recv().expect("admission physically enqueues"));
+    assert!(inbox.try_discard());
 }

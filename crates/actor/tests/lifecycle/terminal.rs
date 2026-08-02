@@ -179,29 +179,98 @@ impl Actor for PendingInit {
     }
 }
 
-// Even a childless local abort loses subtree confirmation.
-// Synchronous task teardown cannot publish a positive proof.
+struct QueuedDrop {
+    dropped: Arc<AtomicBool>,
+    dropped_while_unwinding: Arc<AtomicBool>,
+    panic: bool,
+}
+
+impl Message for QueuedDrop {
+    type Reply = ();
+}
+
+impl Drop for QueuedDrop {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::SeqCst);
+        self.dropped_while_unwinding
+            .store(std::thread::panicking(), Ordering::SeqCst);
+        assert!(!self.panic, "intentional queued message drop panic");
+    }
+}
+
+impl Handler<QueuedDrop> for PendingInit {
+    fn handle(
+        &mut self,
+        _message: QueuedDrop,
+        _scope: &mut ActorScope<'_, Self>,
+    ) -> impl loong_actor::IntoReply<Self, QueuedDrop> + use<> {
+        unreachable!("pending initialization prevents dispatch");
+        #[allow(unreachable_code)]
+        ().ready()
+    }
+}
+
+// Executor teardown must use the accepted-envelope cleanup boundary.
+// Earlier panics cannot skip later messages or unwind their destructors.
+// Synchronous abort also loses subtree confirmation.
 #[test]
-fn executor_teardown_reports_aborted_with_an_unconfirmed_subtree() {
+fn executor_teardown_discards_each_accepted_message() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
         .unwrap();
     let (entered_tx, entered_rx) = oneshot::channel();
-    let owner = runtime.block_on(async {
+    let call_dropped = Arc::new(AtomicBool::new(false));
+    let send_dropped = Arc::new(AtomicBool::new(false));
+    let tail_dropped = Arc::new(AtomicBool::new(false));
+    let tail_unwinding = Arc::new(AtomicBool::new(false));
+
+    let (owner, response) = runtime.block_on(async {
         let owner = spawn::<PendingInit>(entered_tx);
         entered_rx.await.unwrap();
-        owner
+        let actor = owner.actor_ref();
+        let response = actor
+            .try_call(QueuedDrop {
+                dropped: Arc::clone(&call_dropped),
+                dropped_while_unwinding: Arc::new(AtomicBool::new(false)),
+                panic: true,
+            })
+            .unwrap();
+        actor
+            .try_send(QueuedDrop {
+                dropped: Arc::clone(&send_dropped),
+                dropped_while_unwinding: Arc::new(AtomicBool::new(false)),
+                panic: true,
+            })
+            .unwrap();
+        actor
+            .try_send(QueuedDrop {
+                dropped: Arc::clone(&tail_dropped),
+                dropped_while_unwinding: Arc::clone(&tail_unwinding),
+                panic: false,
+            })
+            .unwrap();
+        (owner, response)
     });
     let actor = owner.actor_ref();
 
-    drop(owner);
     drop(runtime);
 
+    assert!(call_dropped.load(Ordering::SeqCst));
+    assert!(send_dropped.load(Ordering::SeqCst));
+    assert!(tail_dropped.load(Ordering::SeqCst));
+    assert!(!tail_unwinding.load(Ordering::SeqCst));
+    let mut response = Box::pin(response);
+    let mut task = Context::from_waker(Waker::noop());
+    assert_eq!(
+        response.as_mut().poll(&mut task),
+        Poll::Ready(Err(CallError::BeforeDispatch(ExitReason::Aborted)))
+    );
     let status = actor
         .exit_status()
         .expect("actor teardown publishes a status");
     assert_eq!(status.reason(), ExitReason::Aborted);
     assert_eq!(status.subtree(), SubtreeStatus::Unconfirmed);
+    drop(owner);
 }
 
 struct PanicActor;

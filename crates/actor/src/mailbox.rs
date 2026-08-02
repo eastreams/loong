@@ -1,6 +1,7 @@
 use std::{
     panic::{self, AssertUnwindSafe},
     sync::{Arc, Weak},
+    task::{Context, Poll},
 };
 
 use tokio::sync::{mpsc, oneshot};
@@ -52,10 +53,59 @@ pub(crate) struct ActorInner<A: Actor> {
 
 // `admit` lives in control.rs, keeping raw gate access private.
 impl<A: Actor> ActorInner<A> {
-    pub(crate) fn channel(capacity: usize) -> (Arc<Self>, mpsc::Receiver<DynEnvelope<A>>) {
+    pub(crate) fn channel(capacity: usize) -> (Arc<Self>, ActorInbox<A>) {
         let (sender, receiver) = mpsc::channel(capacity);
         let control = Control::new();
-        (Arc::new(Self { sender, control }), receiver)
+        let actor = Arc::new(Self { sender, control });
+        let inbox = ActorInbox {
+            receiver,
+            inner: Arc::clone(&actor),
+        };
+        (actor, inbox)
+    }
+}
+
+/// Owns accepted messages and their lifecycle cleanup context.
+///
+/// Tokio drops a receiver's queue under one unwind boundary.
+/// This wrapper contains each envelope destructor independently.
+pub(crate) struct ActorInbox<A: Actor> {
+    receiver: mpsc::Receiver<DynEnvelope<A>>,
+    inner: Arc<ActorInner<A>>,
+}
+
+impl<A: Actor> ActorInbox<A> {
+    /// Closes the receiver without exposing capacity-waiter wake panics.
+    pub(crate) fn close(&mut self) {
+        if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| self.receiver.close())) {
+            Control::discard_panic(payload);
+        }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.receiver.is_empty()
+    }
+
+    pub(crate) fn poll_recv(&mut self, task: &mut Context<'_>) -> Poll<Option<DynEnvelope<A>>> {
+        self.receiver.poll_recv(task)
+    }
+
+    /// Discards one accepted envelope through its lifecycle boundary.
+    pub(crate) fn try_discard(&mut self) -> bool {
+        let Ok(envelope) = self.receiver.try_recv() else {
+            return false;
+        };
+        self.inner.control.drop_user_value(envelope);
+        true
+    }
+}
+
+impl<A: Actor> Drop for ActorInbox<A> {
+    fn drop(&mut self) {
+        // Runtime teardown closes lifecycle admission first.
+        // Outstanding permits therefore cannot refill this queue.
+        self.close();
+        while self.try_discard() {}
     }
 }
 
