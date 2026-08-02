@@ -1,3 +1,5 @@
+#[path = "messages/capacity_wakers.rs"]
+mod capacity_wakers;
 mod support;
 
 use std::{

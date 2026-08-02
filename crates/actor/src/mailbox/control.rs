@@ -19,18 +19,20 @@ use crate::{Actor, CallError, ExitReason, ExitStatus, Shutdown, ShutdownStatus};
 
 use super::{ActorInner, DynEnvelope, Envelope, RejectedAdmission};
 
-/// Waits without registering an external waker in Tokio's fanout.
+/// Polls a future without registering the task Waker directly.
 ///
-/// One observer may panic while waking.
-/// The proxy contains that panic before Tokio continues fanout.
-pub(crate) async fn mode_changed(
-    mode: &mut watch::Receiver<Mode>,
-) -> Result<(), watch::error::RecvError> {
-    let mut changed = std::pin::pin!(mode.changed());
+/// Tokio may invoke registered Wakers synchronously.
+/// The proxy contains panics from those calls.
+/// Future polling panics remain visible.
+pub(crate) async fn poll_with_panic_safe_waker<F>(future: F) -> F::Output
+where
+    F: Future,
+{
+    let mut future = std::pin::pin!(future);
     poll_fn(|task| {
         let waker = Waker::from(Arc::new(PanicSafeWake(task.waker().clone())));
         let mut task = Context::from_waker(&waker);
-        changed.as_mut().poll(&mut task)
+        future.as_mut().poll(&mut task)
     })
     .await
 }
@@ -241,7 +243,7 @@ impl Control {
                 return status;
             }
 
-            mode_changed(&mut mode)
+            poll_with_panic_safe_waker(mode.changed())
                 .await
                 .expect("the exit publisher lives until it publishes a status");
         }

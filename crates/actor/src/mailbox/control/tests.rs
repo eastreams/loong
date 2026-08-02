@@ -84,15 +84,22 @@ impl Drop for PanicWakeDrop {
     }
 }
 
-// Tokio consumes proxy Wakers during fanout.
-// Their inner Waker may also panic while dropping.
+// Cancellation drops Wakers retained by the wrapped future.
+// Their destructors must not unwind through cancellation.
 #[test]
-fn lifecycle_waker_proxy_contains_external_drop_panic() {
+fn panic_safe_poll_contains_external_waker_drop_on_cancellation() {
+    let control = Control::new();
+    let mut mode = control.subscribe_mode();
     let dropped = Arc::new(AtomicBool::new(false));
-    let external = Waker::from(Arc::new(PanicWakeDrop(Arc::clone(&dropped))));
-    let proxy = Waker::from(Arc::new(PanicSafeWake(external)));
+    let waker = Waker::from(Arc::new(PanicWakeDrop(Arc::clone(&dropped))));
+    let mut changed = Box::pin(poll_with_panic_safe_waker(mode.changed()));
+    {
+        let mut task = Context::from_waker(&waker);
+        assert!(changed.as_mut().poll(&mut task).is_pending());
+    }
+    drop(waker);
 
-    let result = panic::catch_unwind(AssertUnwindSafe(|| proxy.wake()));
+    let result = panic::catch_unwind(AssertUnwindSafe(|| drop(changed)));
 
     assert!(result.is_ok());
     assert!(dropped.load(Ordering::SeqCst));
@@ -108,14 +115,14 @@ fn public_notification_panic_preserves_every_other_waiter() {
     let public_waker = Waker::from(Arc::new(PanicWake(Arc::clone(&public_wakes))));
     let mut public_task = Context::from_waker(&public_waker);
     let mut public_mode = control.subscribe_mode();
-    let mut public_changed = Box::pin(mode_changed(&mut public_mode));
+    let mut public_changed = Box::pin(poll_with_panic_safe_waker(public_mode.changed()));
     assert!(public_changed.as_mut().poll(&mut public_task).is_pending());
 
     let other_wakes = Arc::new(WakeCounter(AtomicUsize::new(0)));
     let other_waker = Waker::from(Arc::clone(&other_wakes));
     let mut other_task = Context::from_waker(&other_waker);
     let mut other_mode = control.subscribe_mode();
-    let mut other_changed = Box::pin(mode_changed(&mut other_mode));
+    let mut other_changed = Box::pin(poll_with_panic_safe_waker(other_mode.changed()));
     assert!(other_changed.as_mut().poll(&mut other_task).is_pending());
 
     let actor_wakes = Arc::new(WakeCounter(AtomicUsize::new(0)));

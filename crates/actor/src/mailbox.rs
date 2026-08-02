@@ -14,7 +14,7 @@ use crate::{
 mod control;
 
 use control::DispatchPermit;
-pub(crate) use control::{Control, HookEntryPermit, Mode, mode_changed};
+pub(crate) use control::{Control, HookEntryPermit, Mode, poll_with_panic_safe_waker};
 
 pub(crate) type ReplyReceiver<R> = oneshot::Receiver<Result<R, CallError>>;
 

@@ -6,7 +6,8 @@ use crate::{
     Actor, CallError, ExitStatus, Handler, Message, SendError, Shutdown, ShutdownStatus,
     TryCallError, TryCallErrorKind, TrySendError, TrySendErrorKind,
     mailbox::{
-        ActorInner, CallEnvelope, DynEnvelope, Mode, ReplyReceiver, SendEnvelope, mode_changed,
+        ActorInner, CallEnvelope, DynEnvelope, Mode, ReplyReceiver, SendEnvelope,
+        poll_with_panic_safe_waker,
     },
 };
 
@@ -226,7 +227,7 @@ impl<A: Actor> ActorRef<A> {
                 return status;
             }
 
-            mode_changed(&mut mode)
+            poll_with_panic_safe_waker(mode.changed())
                 .await
                 .expect("the actor task publishes an exit status before closing");
         }
@@ -235,7 +236,7 @@ impl<A: Actor> ActorRef<A> {
 
 /// Reserves mailbox capacity without committing lifecycle admission.
 ///
-/// Ready capacity avoids lifecycle subscription.
+/// Ready capacity avoids subscription and Waker allocation.
 /// While full, shutdown cancels the wait.
 /// [`ActorInner::admit`] remains the commit point.
 async fn reserve_capacity<A: Actor>(
@@ -252,11 +253,14 @@ async fn reserve_capacity<A: Actor>(
         return None;
     }
 
-    tokio::select! {
-        biased;
-        reserved = inner.sender.reserve() => reserved.ok(),
-        _ = mode_changed(&mut mode) => None,
-    }
+    poll_with_panic_safe_waker(async {
+        tokio::select! {
+            biased;
+            reserved = inner.sender.reserve() => reserved.ok(),
+            _ = mode.changed() => None,
+        }
+    })
+    .await
 }
 
 impl<A: Actor> Clone for ActorRef<A> {
