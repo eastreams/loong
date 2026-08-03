@@ -850,10 +850,6 @@ enum Turn {
     InboxClosed,
 }
 
-// A running mailbox turn has a fixed dispatch budget.
-// This bounds delay for interleaved and child work.
-const MAILBOX_DISPATCH_BUDGET: usize = 16;
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum OrdinaryLane {
     #[default]
@@ -900,11 +896,7 @@ async fn actor_turn<A: Actor>(
 ) -> Turn {
     let control = &inner.control;
     let wait_for_owned = !receive_messages && scheduler.is_empty();
-    let mailbox_dispatch_budget = if expected_mode == Mode::Running {
-        MAILBOX_DISPATCH_BUDGET
-    } else {
-        1
-    };
+    let mailbox_dispatch_budget = A::MAILBOX_DISPATCH_BUDGET.get();
     let fair_turn = std::future::poll_fn(|task| {
         if control.mode() != expected_mode {
             return Poll::Ready(Turn::LifecycleHint);

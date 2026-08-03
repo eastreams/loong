@@ -15,7 +15,7 @@ impl Actor for Bare {
 
 struct Messaging;
 
-#[actor_api::actor(mailbox = 8)]
+#[actor_api::actor(mailbox = 8, mailbox_budget = 3)]
 impl Actor for Messaging {
     type SpawnArgs = ();
 
@@ -58,6 +58,7 @@ impl Actor for DefaultCapabilities {
 }
 
 const MAILBOX_CAPACITY: usize = 16;
+const MAILBOX_BUDGET: usize = 5;
 
 mod limits {
     pub const CHILD_CAPACITY: usize = 8;
@@ -67,6 +68,7 @@ struct Combined;
 
 #[actor_api::actor(
     mailbox = MAILBOX_CAPACITY,
+    mailbox_budget = MAILBOX_BUDGET,
     interleaved = 1 << 2,
     children = dynamic(limits::CHILD_CAPACITY),
 )]
@@ -80,7 +82,12 @@ impl Actor for Combined {
 
 struct Generic<T, const N: usize>(T);
 
-#[actor_api::actor(mailbox = N, interleaved = dynamic(N), children = N)]
+#[actor_api::actor(
+    mailbox = N,
+    mailbox_budget = N,
+    interleaved = dynamic(N),
+    children = N,
+)]
 impl<T, const N: usize> Actor for Generic<T, N>
 where
     T: Send + 'static,
@@ -116,4 +123,7 @@ fn main() {
     assert_config::<DefaultCapabilities>();
     assert_config::<Combined>();
     assert_config::<Generic<u8, 6>>();
+    assert_eq!(Messaging::MAILBOX_DISPATCH_BUDGET.get(), 3);
+    assert_eq!(Combined::MAILBOX_DISPATCH_BUDGET.get(), MAILBOX_BUDGET);
+    assert_eq!(Generic::<u8, 6>::MAILBOX_DISPATCH_BUDGET.get(), 6);
 }

@@ -33,7 +33,12 @@ mod actor_turn;
 
 struct TestActor;
 
-#[crate::actor(mailbox = dynamic, interleaved = dynamic, children = 1)]
+#[crate::actor(
+    mailbox = dynamic,
+    mailbox_budget = 3,
+    interleaved = dynamic,
+    children = 1
+)]
 impl Actor for TestActor {
     type SpawnArgs = ();
 

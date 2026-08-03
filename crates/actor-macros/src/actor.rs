@@ -35,6 +35,20 @@ fn expand_actor(implementation: &ItemImpl, args: ActorArgs) -> syn::Result<Token
             "`interleaved` requires a `mailbox` option",
         ));
     }
+    if let (None, Some((name, _))) = (&args.mailbox, &args.mailbox_budget) {
+        return Err(syn::Error::new(
+            name.span(),
+            "`mailbox_budget` requires a `mailbox` option",
+        ));
+    }
+
+    let mailbox_budget = args.mailbox_budget.as_ref().map(|(_, budget)| {
+        quote! {
+            const MAILBOX_DISPATCH_BUDGET: ::core::num::NonZeroUsize =
+                ::core::num::NonZeroUsize::new(#budget)
+                    .expect("mailbox budget must be greater than zero");
+        }
+    });
 
     let messaging = match args.mailbox {
         Some(mailbox) => {
@@ -57,6 +71,7 @@ fn expand_actor(implementation: &ItemImpl, args: ActorArgs) -> syn::Result<Token
         #(#cfg_attrs)*
         #[automatically_derived]
         impl #impl_generics #actor::ActorConfig for #self_ty #where_clause {
+            #mailbox_budget
             type Messaging = #messaging;
             type Supervision = #supervision;
         }
@@ -86,6 +101,7 @@ fn validate_actor_impl(implementation: &ItemImpl) -> syn::Result<()> {
 #[derive(Default)]
 struct ActorArgs {
     mailbox: Option<CapacitySpec>,
+    mailbox_budget: Option<(Ident, Expr)>,
     interleaved: Option<(Ident, CapacitySpec)>,
     children: Option<CapacitySpec>,
 }
@@ -95,35 +111,55 @@ impl Parse for ActorArgs {
         let mut args = Self::default();
         while !input.is_empty() {
             let name: Ident = input.parse()?;
-            let capacity = if input.peek(Token![=]) {
-                input.parse::<Token![=]>()?;
-                input.parse()?
-            } else {
-                CapacitySpec::Default
-            };
-            if name == "mailbox" {
-                if args.mailbox.is_some() {
-                    return Err(syn::Error::new(name.span(), "duplicate `mailbox` option"));
-                }
-                args.mailbox = Some(capacity);
-            } else if name == "interleaved" {
-                if args.interleaved.is_some() {
+
+            if name == "mailbox_budget" {
+                if args.mailbox_budget.is_some() {
                     return Err(syn::Error::new(
                         name.span(),
-                        "duplicate `interleaved` option",
+                        "duplicate `mailbox_budget` option",
                     ));
                 }
-                args.interleaved = Some((name, capacity));
-            } else if name == "children" {
-                if args.children.is_some() {
-                    return Err(syn::Error::new(name.span(), "duplicate `children` option"));
+                if !input.peek(Token![=]) {
+                    return Err(syn::Error::new(
+                        name.span(),
+                        "`mailbox_budget` requires `= <const expression>`",
+                    ));
                 }
-                args.children = Some(capacity);
+                input.parse::<Token![=]>()?;
+                let budget: Expr = input.parse()?;
+                validate_mailbox_budget_expression(&budget)?;
+                args.mailbox_budget = Some((name, budget));
             } else {
-                return Err(syn::Error::new(
-                    name.span(),
-                    "unsupported actor option; expected `mailbox`, `interleaved`, or `children`",
-                ));
+                let capacity = if input.peek(Token![=]) {
+                    input.parse::<Token![=]>()?;
+                    input.parse()?
+                } else {
+                    CapacitySpec::Default
+                };
+                if name == "mailbox" {
+                    if args.mailbox.is_some() {
+                        return Err(syn::Error::new(name.span(), "duplicate `mailbox` option"));
+                    }
+                    args.mailbox = Some(capacity);
+                } else if name == "interleaved" {
+                    if args.interleaved.is_some() {
+                        return Err(syn::Error::new(
+                            name.span(),
+                            "duplicate `interleaved` option",
+                        ));
+                    }
+                    args.interleaved = Some((name, capacity));
+                } else if name == "children" {
+                    if args.children.is_some() {
+                        return Err(syn::Error::new(name.span(), "duplicate `children` option"));
+                    }
+                    args.children = Some(capacity);
+                } else {
+                    return Err(syn::Error::new(
+                        name.span(),
+                        "unsupported actor option; expected `mailbox`, `mailbox_budget`, `interleaved`, or `children`",
+                    ));
+                }
             }
 
             if input.is_empty() {
@@ -267,6 +303,25 @@ fn validate_capacity_expression(capacity: &Expr) -> syn::Result<()> {
         return Err(syn::Error::new(
             capacity.span(),
             "capacity must be greater than zero",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_mailbox_budget_expression(budget: &Expr) -> syn::Result<()> {
+    let Expr::Lit(expression) = budget else {
+        return Ok(());
+    };
+    let syn::Lit::Int(budget) = &expression.lit else {
+        return Err(syn::Error::new_spanned(
+            budget,
+            "expected an integer const expression",
+        ));
+    };
+    if budget.base10_parse::<usize>()? == 0 {
+        return Err(syn::Error::new(
+            budget.span(),
+            "mailbox budget must be greater than zero",
         ));
     }
     Ok(())

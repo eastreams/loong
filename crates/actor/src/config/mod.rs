@@ -2,6 +2,8 @@ mod interleaving;
 mod messaging;
 mod supervision;
 
+use std::num::NonZeroUsize;
+
 #[cfg(test)]
 mod tests;
 
@@ -32,6 +34,14 @@ pub(crate) mod sealed {
 /// Use `#[actor]` on an `Actor` implementation.
 /// Direct implementations are unsupported.
 pub trait ActorConfig {
+    /// Maximum mailbox dispatches before rotating actor-local lanes.
+    ///
+    /// This applies while Running and Draining.
+    /// It does not force a Tokio task yield.
+    #[doc(hidden)]
+    const MAILBOX_DISPATCH_BUDGET: NonZeroUsize =
+        NonZeroUsize::new(16).expect("the default mailbox dispatch budget is nonzero");
+
     /// Selects public messaging and reply scheduling.
     #[doc(hidden)]
     type Messaging: MessagingConfig;

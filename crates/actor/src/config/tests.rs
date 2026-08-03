@@ -66,3 +66,11 @@ fn generated_messaging_policies_project_their_runtime_types() {
     assert_projection::<Dynamic, Option<NonZeroUsize>, DynamicInterleaving>();
     assert_projection::<Unbounded, (), UnboundedInterleaving>();
 }
+
+#[test]
+fn actor_configs_use_the_default_mailbox_budget() {
+    assert_eq!(
+        Dynamic::MAILBOX_DISPATCH_BUDGET,
+        NonZeroUsize::new(16).unwrap()
+    );
+}

@@ -1,4 +1,4 @@
-error: unsupported actor option; expected `mailbox`, `interleaved`, or `children`
+error: unsupported actor option; expected `mailbox`, `mailbox_budget`, `interleaved`, or `children`
  --> tests/ui/actor/fail/unknown_option.rs:4:20
   |
 4 | #[actor_api::actor(queue = unbounded)]

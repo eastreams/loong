@@ -11,16 +11,14 @@ use std::{
 use tokio::sync::mpsc;
 
 use crate::{
-    ActorScope, ChildExit, ChildId, ExitReason, ExitStatus, IntoActorFuture, Shutdown,
+    ActorConfig, ActorScope, ChildExit, ChildId, ExitReason, ExitStatus, IntoActorFuture, Shutdown,
     SubtreeStatus,
     mailbox::{ActorInbox, ActorInner, Envelope, Mode},
     owned::OwnedTasks,
     scheduler::ReplyScheduler,
 };
 
-use super::super::{
-    ChildSet, MAILBOX_DISPATCH_BUDGET, OrdinaryLane, ScopeState, Turn, TurnCursor, actor_turn,
-};
+use super::super::{ChildSet, OrdinaryLane, ScopeState, Turn, TurnCursor, actor_turn};
 use super::{CountEnvelope, TestActor, scope_state};
 
 /// Owns all inputs for focused actor-turn tests.
@@ -129,10 +127,11 @@ impl Envelope<TestActor> for BatchBoundaryEnvelope {
 #[tokio::test]
 async fn ordinary_cursor_visits_each_actor_source_between_mailbox_batches() {
     // Each source must win before another mailbox batch.
+    let mailbox_dispatch_budget = TestActor::MAILBOX_DISPATCH_BUDGET.get();
     let mailbox_dispatches = Arc::new(AtomicUsize::new(0));
     let mut fixture =
-        ActorTurnFixture::new(MAILBOX_DISPATCH_BUDGET + 1, NonZeroUsize::new(2).unwrap());
-    for _ in 0..=MAILBOX_DISPATCH_BUDGET {
+        ActorTurnFixture::new(mailbox_dispatch_budget + 1, NonZeroUsize::new(2).unwrap());
+    for _ in 0..=mailbox_dispatch_budget {
         fixture.enqueue(CountEnvelope(Arc::clone(&mailbox_dispatches)));
     }
 
@@ -180,7 +179,7 @@ async fn ordinary_cursor_visits_each_actor_source_between_mailbox_batches() {
     assert!(interleaved_completed.load(Ordering::SeqCst));
     assert_eq!(
         mailbox_dispatches.load(Ordering::SeqCst),
-        MAILBOX_DISPATCH_BUDGET
+        mailbox_dispatch_budget
     );
     assert!(!fixture.inbox.is_empty());
 }
@@ -208,12 +207,14 @@ fn mailbox_batch_stops_after_dispatch_changes_lifecycle() {
     }
 }
 
-// Drain inherits the running phase's ordinary cursor.
-// Other lanes must win before mailbox dispatch resumes.
+// Drain inherits the running cursor and dispatch budget.
+// Other lanes must win before its mailbox batch resumes.
 #[tokio::test]
-async fn drain_rotates_after_dispatch_changes_lifecycle() {
+async fn drain_rotates_then_uses_the_configured_mailbox_budget() {
+    let mailbox_dispatch_budget = TestActor::MAILBOX_DISPATCH_BUDGET.get();
     let dispatched = Arc::new(AtomicUsize::new(0));
-    let mut fixture = ActorTurnFixture::new(3, NonZeroUsize::new(2).unwrap());
+    let mut fixture =
+        ActorTurnFixture::new(mailbox_dispatch_budget + 2, NonZeroUsize::new(2).unwrap());
     fixture.scheduler.push_interleaved(async {}.into_actor());
     fixture
         .state
@@ -227,8 +228,9 @@ async fn drain_rotates_after_dispatch_changes_lifecycle() {
         dispatched: Arc::clone(&dispatched),
         boundary: BatchBoundary::Shutdown(Shutdown::Drain),
     });
-    fixture.enqueue(CountEnvelope(Arc::clone(&dispatched)));
-    fixture.enqueue(CountEnvelope(Arc::clone(&dispatched)));
+    for _ in 0..=mailbox_dispatch_budget {
+        fixture.enqueue(CountEnvelope(Arc::clone(&dispatched)));
+    }
 
     assert!(matches!(
         fixture.next(Mode::Running).await,
@@ -245,7 +247,10 @@ async fn drain_rotates_after_dispatch_changes_lifecycle() {
         fixture.next(Mode::Draining).await,
         Turn::MailboxProgress
     ));
-    assert_eq!(dispatched.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        dispatched.load(Ordering::SeqCst),
+        mailbox_dispatch_budget + 1
+    );
     assert!(!fixture.inbox.is_empty());
 }
 

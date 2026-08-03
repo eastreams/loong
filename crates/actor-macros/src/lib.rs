@@ -19,12 +19,17 @@ mod message;
 /// Supported options:
 ///
 /// - `mailbox` enables public messaging.
+/// - `mailbox_budget = E` limits consecutive message dispatches.
 /// - `children` enables direct-child ownership.
 /// - `interleaved` enables interleaved replies.
 ///
 /// `interleaved` requires `mailbox`.
+/// `mailbox_budget` also requires `mailbox`.
+/// `mailbox_budget` accepts a nonzero const expression.
+/// `mailbox_budget` defaults to 16.
+/// It does not force a Tokio task yield.
 /// Omit an option to disable its capability.
-/// A key-only option uses fixed capacity 32.
+/// A key-only capacity option uses fixed capacity 32.
 /// Use `option = Policy` to select another policy.
 /// A const expression selects a fixed capacity.
 /// `unbounded` has no finite limit.

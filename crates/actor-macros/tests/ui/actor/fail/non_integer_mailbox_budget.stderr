@@ -1,0 +1,5 @@
+error: expected an integer const expression
+ --> tests/ui/actor/fail/non_integer_mailbox_budget.rs:4:46
+  |
+4 | #[actor_api::actor(mailbox, mailbox_budget = "8")]
+  |                                              ^^^
