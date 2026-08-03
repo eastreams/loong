@@ -2,12 +2,27 @@ mod interleaving;
 mod messaging;
 mod supervision;
 
+#[cfg(test)]
+mod tests;
+
 pub use interleaving::{DynamicInterleaving, Interleaving, NoInterleaving, UnboundedInterleaving};
 pub use messaging::{DynamicMailbox, Mailbox, NoMessaging, UnboundedMailbox};
 pub use supervision::{Children, DynamicChildren, NoChildren, UnboundedChildren};
 
-mod sealed {
-    pub trait Messaging {}
+pub(crate) mod sealed {
+    use super::InterleavingConfig;
+
+    pub trait Messaging {
+        /// Per-spawn values retained by this messaging policy.
+        ///
+        /// Absent, fixed, and unbounded policies need no value.
+        /// Dynamic policies retain an optional capacity override.
+        type Options: Copy + Default;
+
+        /// Reply scheduling selected by this messaging policy.
+        type Interleaving: InterleavingConfig;
+    }
+
     pub trait Supervision {}
     pub trait Interleaving {}
 }
