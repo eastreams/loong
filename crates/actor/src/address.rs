@@ -3,19 +3,20 @@ use std::{fmt, future::Future, pin::Pin, sync::Arc, task};
 use tokio::sync::mpsc;
 
 use crate::{
-    Actor, CallError, ExitStatus, Handler, Message, SendError, Shutdown, ShutdownStatus,
-    TryCallError, TryCallErrorKind, TrySendError, TrySendErrorKind,
+    Actor, CallError, ExitStatus, Handler, Message, MessageActor, SendError, Shutdown,
+    ShutdownStatus, TryCallError, TryCallErrorKind, TrySendError, TrySendErrorKind,
     mailbox::{
         ActorInner, CallEnvelope, DynEnvelope, Mode, ReplyReceiver, SendEnvelope,
         poll_with_panic_safe_waker,
     },
 };
 
-/// A cloneable address for messaging, shutdown, and terminal observation.
+/// A cloneable actor handle.
 ///
-/// An address does not own the actor lifecycle. Keeping addresses alive does
-/// not delay owner-initiated shutdown. Requests accepted by cloned addresses
-/// share one bounded mailbox.
+/// Every handle can request shutdown and observe terminal state.
+/// A [`MessageActor`] handle can also send typed messages.
+/// A handle does not own lifecycle.
+/// Keeping one alive does not delay owner-initiated shutdown.
 pub struct ActorRef<A: Actor>(pub(crate) Arc<ActorInner<A>>);
 
 impl<A: Actor> ActorRef<A> {
@@ -200,7 +201,7 @@ impl<A: Actor> ActorRef<A> {
     /// Requests Stop, Drain, or Kill without taking lifecycle ownership.
     ///
     /// The unique owner still requests Kill when dropped.
-    /// Any address may submit an earlier lifecycle decision.
+    /// Any handle may submit an earlier lifecycle decision.
     pub fn request_shutdown(&self, shutdown: Shutdown) -> ShutdownStatus {
         self.0.control.request(shutdown)
     }
@@ -239,7 +240,7 @@ impl<A: Actor> ActorRef<A> {
 /// Ready capacity avoids subscription and Waker allocation.
 /// While full, shutdown cancels the wait.
 /// [`ActorInner::admit`] remains the commit point.
-async fn reserve_capacity<A: Actor>(
+async fn reserve_capacity<A: MessageActor>(
     inner: &ActorInner<A>,
 ) -> Option<mpsc::Permit<'_, DynEnvelope<A>>> {
     match inner.sender.try_reserve() {

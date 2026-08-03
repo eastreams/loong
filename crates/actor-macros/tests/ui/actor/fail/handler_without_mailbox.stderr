@@ -1,0 +1,16 @@
+error[E0277]: `Bare` cannot receive messages
+  --> tests/ui/actor/fail/handler_without_mailbox.rs:18:24
+   |
+18 | impl Handler<Ping> for Bare {
+   |                        ^^^^ add `mailbox` to its `#[actor(...)]` options
+   |
+help: the trait `MessageActor` is not implemented for `Bare`
+  --> tests/ui/actor/fail/handler_without_mailbox.rs:4:1
+   |
+ 4 | struct Bare;
+   | ^^^^^^^^^^^
+note: required by a bound in `Handler`
+  --> $WORKSPACE/crates/actor/src/actor.rs
+   |
+   | pub trait Handler<M: Message>: MessageActor {
+   |                                ^^^^^^^^^^^^ required by this bound in `Handler`

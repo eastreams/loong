@@ -33,6 +33,7 @@ impl<I: InterleavingConfig, const N: usize> sealed::Messaging for Mailbox<I, N> 
 }
 
 impl<I: InterleavingConfig, const N: usize> MessagingConfig for Mailbox<I, N> {}
+impl<I: InterleavingConfig, const N: usize> sealed::MailboxPolicy for Mailbox<I, N> {}
 
 impl<I: InterleavingConfig, const DEFAULT: usize> sealed::Messaging for DynamicMailbox<I, DEFAULT> {
     type Options = Option<NonZeroUsize>;
@@ -40,6 +41,10 @@ impl<I: InterleavingConfig, const DEFAULT: usize> sealed::Messaging for DynamicM
 }
 
 impl<I: InterleavingConfig, const DEFAULT: usize> MessagingConfig for DynamicMailbox<I, DEFAULT> {}
+impl<I: InterleavingConfig, const DEFAULT: usize> sealed::MailboxPolicy
+    for DynamicMailbox<I, DEFAULT>
+{
+}
 
 impl<I: InterleavingConfig> sealed::Messaging for UnboundedMailbox<I> {
     type Options = ();
@@ -47,3 +52,4 @@ impl<I: InterleavingConfig> sealed::Messaging for UnboundedMailbox<I> {
 }
 
 impl<I: InterleavingConfig> MessagingConfig for UnboundedMailbox<I> {}
+impl<I: InterleavingConfig> sealed::MailboxPolicy for UnboundedMailbox<I> {}

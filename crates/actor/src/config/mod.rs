@@ -25,6 +25,8 @@ pub(crate) mod sealed {
         type Interleaving: InterleavingConfig;
     }
 
+    // Only policies with a public mailbox implement this marker.
+    pub trait MailboxPolicy: Messaging {}
     pub trait Supervision {}
     pub trait Interleaving {}
 }

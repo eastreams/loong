@@ -2,6 +2,7 @@ use std::future::Future;
 
 use crate::{
     ActorConfig, ActorScope, ChildExit, ExitReason, StopScope,
+    config::sealed,
     reply::{IntoReply, ReplyExt},
 };
 
@@ -140,6 +141,32 @@ pub trait Actor: ActorConfig + Send + Sized + 'static {
     }
 }
 
+/// An actor with a public typed mailbox.
+///
+/// `#[actor(mailbox)]` selects this capability automatically.
+/// Fixed, dynamic, and unbounded mailboxes all qualify.
+/// Actors without `mailbox` can still supervise children.
+/// Their [`ActorRef`](crate::ActorRef) values retain lifecycle methods.
+///
+/// This trait is sealed.
+/// Select it through the actor attribute.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` cannot receive messages",
+    label = "add `mailbox` to its `#[actor(...)]` options"
+)]
+pub trait MessageActor: Actor {}
+
+// The private bound reserves all implementations for this crate.
+// Hide it so callers see the public capability diagnostic.
+#[doc(hidden)]
+#[diagnostic::do_not_recommend]
+impl<A> MessageActor for A
+where
+    A: Actor,
+    A::Messaging: sealed::MailboxPolicy,
+{
+}
+
 /// A typed request accepted by an actor.
 ///
 /// Declare one with `#[derive(Message)]`.
@@ -196,7 +223,7 @@ pub trait Message: Send + 'static {
 /// fn accepts_handler<A: Handler<Notify>>() {}
 /// accepts_handler::<Worker>();
 /// ```
-pub trait SyncHandler<M: Message>: Actor {
+pub trait SyncHandler<M: Message>: MessageActor {
     /// Processes `message` and returns its completed reply value.
     fn handle(&mut self, message: M, scope: &mut ActorScope<'_, Self>) -> M::Reply;
 }
@@ -211,7 +238,7 @@ pub trait SyncHandler<M: Message>: Actor {
 /// statically selects one concrete reply representation while keeping its type
 /// opaque. Mailbox FIFO determines the order in which eligible handlers are
 /// dispatched; asynchronous replies may complete in a different order.
-pub trait Handler<M: Message>: Actor {
+pub trait Handler<M: Message>: MessageActor {
     /// Synchronously starts handling `message` and chooses its reply semantics.
     ///
     /// The runtime calls this method only after the request has committed to the

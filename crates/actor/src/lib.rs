@@ -2,12 +2,13 @@
 #![deny(missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
 
-//! Actors own mutable state and process typed messages.
+//! Actors own mutable state and run serial lifecycle work.
+//! A [`MessageActor`] also processes typed messages.
 //!
 //! These actors are local to one process.
 //! Their tasks remain `Send`.
-//! Each actor has a bounded mailbox.
-//! A mailbox stores accepted messages awaiting dispatch.
+//! `#[actor(mailbox)]` adds a public mailbox.
+//! It stores accepted messages awaiting dispatch.
 //! Dispatch starts the matching [`Handler`] implementation.
 //!
 //! # Define an actor
@@ -30,10 +31,10 @@
 //! It returns the root actor's unique [`ActorOwner`].
 //! It returns before initialization completes.
 //! The actor task then awaits [`Actor::init`].
-//! Mailbox admission is already open during initialization.
-//! Handler dispatch starts only after initialization succeeds.
+//! For a message actor, admission opens during initialization.
+//! Its handler dispatch starts only after initialization succeeds.
 //! Obtain an [`ActorRef`] through [`ActorOwner::actor_ref`].
-//! Actor references send messages.
+//! References to [`MessageActor`] types send typed messages.
 //! An actor reference does not own lifecycle.
 //!
 //! # Send messages
@@ -122,7 +123,7 @@
 //!
 //! # Ownership and shutdown
 //!
-//! Message addresses and lifecycle ownership are separate.
+//! Actor handles and lifecycle ownership are separate.
 //! Each root actor has one [`ActorOwner`].
 //! [`ActorScope::spawn_child`] registers direct child actors.
 //! The parent runtime retains their lifecycle ownership.
@@ -150,7 +151,7 @@
 //! See [`Shutdown`] for each mode's complete behavior.
 //!
 //! Dropping [`ActorOwner`] requests Kill without waiting.
-//! Dropping an [`ActorRef`] only drops that address.
+//! Dropping an [`ActorRef`] only drops that handle.
 //! [`ExitStatus`] separates local reason and subtree confirmation.
 //! [`ActorOwner::wait`] retains ownership while waiting.
 //! [`ActorRef::closed`] only observes actor termination.
@@ -158,7 +159,7 @@
 //!
 //! # Communication graph
 //!
-//! Addresses may cross supervision-tree boundaries.
+//! Actor handles may cross supervision-tree boundaries.
 //! They may also form cycles.
 //! Cyclic calls may wait indefinitely.
 //! Initialization blocks dispatch.
@@ -190,7 +191,7 @@ mod runtime;
 mod scheduler;
 mod supervision;
 
-pub use actor::{Actor, Handler, Message, SyncHandler};
+pub use actor::{Actor, Handler, Message, MessageActor, SyncHandler};
 pub use address::{ActorRef, Response};
 pub use config::ActorConfig;
 pub use error::{
@@ -222,7 +223,7 @@ pub mod __private {
 pub mod prelude {
     pub use crate::{
         Actor, ActorFuture, ActorFutureExt, ActorScope, Handler, IntoActorFuture, IntoReply,
-        Message, ReplyExt, StopScope, SyncHandler, actor, reply,
+        Message, MessageActor, ReplyExt, StopScope, SyncHandler, actor, reply,
     };
 }
 

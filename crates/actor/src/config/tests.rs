@@ -1,6 +1,6 @@
 use std::num::NonZeroUsize;
 
-use crate::{Actor, ActorScope, actor};
+use crate::{Actor, ActorScope, MessageActor, actor};
 
 use super::{
     ActorConfig, DynamicInterleaving, Interleaving, NoInterleaving, UnboundedInterleaving, sealed,
@@ -57,6 +57,8 @@ where
 {
 }
 
+fn assert_message_actor<A: MessageActor>() {}
+
 // Each policy retains only its required spawn state.
 // Interleaving remains nested under its messaging policy.
 #[test]
@@ -65,6 +67,10 @@ fn generated_messaging_policies_project_their_runtime_types() {
     assert_projection::<Fixed, (), Interleaving<7>>();
     assert_projection::<Dynamic, Option<NonZeroUsize>, DynamicInterleaving>();
     assert_projection::<Unbounded, (), UnboundedInterleaving>();
+
+    assert_message_actor::<Fixed>();
+    assert_message_actor::<Dynamic>();
+    assert_message_actor::<Unbounded>();
 }
 
 #[test]
