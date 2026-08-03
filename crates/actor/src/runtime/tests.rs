@@ -29,6 +29,8 @@ use super::{
     await_actor_work, close_and_discard, graceful_finish, handle_child_exit, kill_actor, run_actor,
 };
 
+mod actor_turn;
+
 struct TestActor;
 
 #[crate::actor(mailbox = dynamic, interleaved = dynamic, children = 1)]
@@ -930,85 +932,6 @@ async fn committed_kill_prevents_a_graceful_child_request() {
         Work::Killed
     ));
     assert_eq!(child.control.mode(), Mode::Running);
-}
-
-#[tokio::test]
-async fn ordinary_cursor_visits_each_actor_source_before_repeating_mailbox() {
-    // Each actor source must win before mailbox work repeats.
-    let mailbox_dispatches = Arc::new(AtomicUsize::new(0));
-    let (inner, mut inbox) = ActorInner::<TestActor>::channel(5);
-    for _ in 0..5 {
-        inner
-            .sender
-            .try_send(
-                Box::new(CountEnvelope(Arc::clone(&mailbox_dispatches))) as DynEnvelope<TestActor>
-            )
-            .unwrap();
-    }
-
-    let (mut scope, mut supervisor_rx) = scope_state(&inner, ChildSet::default());
-    scope
-        .supervisor_tx
-        .send(ChildExit::new(
-            ChildId::invalid_for_test(),
-            ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Terminated),
-        ))
-        .unwrap();
-
-    let interleaved_completed = Arc::new(AtomicBool::new(false));
-    let owned = OwnedTasks::new(Arc::clone(&inner));
-    let mut scheduler = ReplyScheduler::new(NonZeroUsize::new(2).unwrap());
-    scheduler.push_interleaved({
-        let completed = Arc::clone(&interleaved_completed);
-        async move {
-            completed.store(true, Ordering::SeqCst);
-        }
-        .into_actor()
-    });
-    let mut actor = TestActor;
-    // Start at child work to prove the cursor wraps across all sources.
-    let mut cursor = TurnCursor {
-        next_ordinary: OrdinaryLane::ChildExit,
-    };
-    let mut mailbox_turns = 0;
-    let mut reply_turns = 0;
-    let mut child_turns = 0;
-
-    for _ in 0..3 {
-        match actor_turn(
-            &mut actor,
-            &mut scope,
-            &mut inbox,
-            &mut supervisor_rx,
-            &inner,
-            &owned,
-            &mut scheduler,
-            true,
-            Mode::Running,
-            &mut cursor,
-        )
-        .await
-        {
-            Turn::Message => mailbox_turns += 1,
-            Turn::ReplyProgress => reply_turns += 1,
-            Turn::Child(event) => {
-                assert_eq!(
-                    event.status(),
-                    ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Terminated)
-                );
-                child_turns += 1;
-            }
-            Turn::LifecycleHint => panic!("the lifecycle mode changed unexpectedly"),
-            Turn::RepliesFinished => panic!("running work cannot finish reply scheduling"),
-            Turn::InboxClosed => panic!("the mailbox closed unexpectedly"),
-        }
-    }
-
-    assert_eq!(mailbox_turns, 1);
-    assert_eq!(reply_turns, 1);
-    assert_eq!(child_turns, 1);
-    assert!(interleaved_completed.load(Ordering::SeqCst));
-    assert_eq!(mailbox_dispatches.load(Ordering::SeqCst), 1);
 }
 
 // A truncated reply sweep must yield before polling another ready lane.

@@ -830,7 +830,7 @@ async fn run_actor<A: Actor>(
                     }
                 }
             }
-            Turn::Message => {}
+            Turn::MailboxProgress => {}
             Turn::InboxClosed => {
                 control.begin_failure();
                 return fail_actor(&mut state, &mut inbox, &owned, &mut scheduler).await;
@@ -846,9 +846,13 @@ enum Turn {
     // Drain handles child exits while awaiting this barrier.
     RepliesFinished,
     Child(ChildExit),
-    Message,
+    MailboxProgress,
     InboxClosed,
 }
+
+// A running mailbox turn has a fixed dispatch budget.
+// This bounds delay for interleaved and child work.
+const MAILBOX_DISPATCH_BUDGET: usize = 16;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum OrdinaryLane {
@@ -896,6 +900,11 @@ async fn actor_turn<A: Actor>(
 ) -> Turn {
     let control = &inner.control;
     let wait_for_owned = !receive_messages && scheduler.is_empty();
+    let mailbox_dispatch_budget = if expected_mode == Mode::Running {
+        MAILBOX_DISPATCH_BUDGET
+    } else {
+        1
+    };
     let fair_turn = std::future::poll_fn(|task| {
         if control.mode() != expected_mode {
             return Poll::Ready(Turn::LifecycleHint);
@@ -924,14 +933,36 @@ async fn actor_turn<A: Actor>(
             }
             let selected = match lane {
                 OrdinaryLane::Mailbox if receive_messages && scheduler.has_dispatch_capacity() => {
-                    match inbox.poll_recv(task) {
-                        Poll::Ready(Some(envelope)) => {
-                            let mut scope = state.actor_scope();
-                            envelope.dispatch(actor, &mut scope, owned, scheduler, inner);
-                            Some(Turn::Message)
+                    let mut scope = state.actor_scope();
+                    let mut dispatched = 0;
+                    loop {
+                        match inbox.poll_recv(task) {
+                            Poll::Ready(Some(envelope)) => {
+                                envelope.dispatch(actor, &mut scope, owned, scheduler, inner);
+                                dispatched += 1;
+                            }
+                            Poll::Ready(None) => break Some(Turn::InboxClosed),
+                            Poll::Pending
+                                if dispatched > 0
+                                    && start == OrdinaryLane::Interleaved
+                                    && scheduler.has_interleaved() =>
+                            {
+                                // Dispatch can activate a lane already visited this turn.
+                                // Return progress so the new future gets its first poll.
+                                break Some(Turn::MailboxProgress);
+                            }
+                            Poll::Pending => break None,
                         }
-                        Poll::Ready(None) => Some(Turn::InboxClosed),
-                        Poll::Pending => None,
+
+                        if control.mode() != expected_mode {
+                            cursor.next_ordinary = lane.next();
+                            return Poll::Ready(Turn::LifecycleHint);
+                        }
+                        if dispatched == mailbox_dispatch_budget
+                            || !scheduler.has_dispatch_capacity()
+                        {
+                            break Some(Turn::MailboxProgress);
+                        }
                     }
                 }
                 OrdinaryLane::Interleaved if scheduler.has_interleaved() => {
@@ -1138,7 +1169,7 @@ async fn drain_actor<A: Actor>(
                     return fail_actor(state, inbox, owned, scheduler).await;
                 }
             },
-            Turn::Message => {}
+            Turn::MailboxProgress => {}
             Turn::InboxClosed => {
                 inbox_drained = true;
                 owned.close();
