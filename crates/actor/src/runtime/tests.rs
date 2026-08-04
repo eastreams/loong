@@ -15,12 +15,14 @@ use std::{
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
-    Actor, ActorRef, ActorScope, ChildExit, ChildId, ExitReason, ExitStatus, IntoActorFuture,
-    Message, Shutdown, ShutdownStatus, SubtreeStatus, SyncHandler,
-    mailbox::{ActorInner, Control, DynEnvelope, Envelope, Mode},
+    Actor, ActorConfig, ActorRef, ActorScope, ChildExit, ChildId, ExitReason, ExitStatus,
+    IntoActorFuture, Message, Shutdown, ShutdownStatus, SubtreeStatus, SyncHandler,
+    actor::HasMailbox,
+    mailbox::{ActorInbox, ActorInner, Control, Envelope, Mode},
     owned::OwnedTasks,
     scheduler::ReplyScheduler,
     spawn,
+    transport::MessageSender,
 };
 
 use super::{
@@ -40,6 +42,36 @@ struct TestActor;
     children = 1
 )]
 impl Actor for TestActor {
+    type SpawnArgs = ();
+
+    async fn init(_args: (), _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self
+    }
+}
+
+/// Opens the dynamic test policy with one explicit capacity.
+fn test_actor_inner(capacity: usize) -> (Arc<ActorInner<TestActor>>, ActorInbox<TestActor>) {
+    let capacity = NonZeroUsize::new(capacity).expect("test mailbox capacity is nonzero");
+    let options = <TestActor as ActorConfig>::Options::default().with_mailbox_capacity(capacity);
+    ActorInner::<TestActor>::open(&options)
+}
+
+/// Enqueues one fixture through the same admission boundary as production.
+fn enqueue_test_envelope<A: HasMailbox>(
+    inner: &ActorInner<A>,
+    envelope: impl Envelope<A> + 'static,
+) {
+    let reservation = inner
+        .sender
+        .try_reserve()
+        .expect("the test inbox has capacity");
+    assert!(inner.admit(reservation, Box::new(envelope)).is_ok());
+}
+
+struct UnboundedTestActor;
+
+#[crate::actor(mailbox = unbounded)]
+impl Actor for UnboundedTestActor {
     type SpawnArgs = ();
 
     async fn init(_args: (), _scope: &mut ActorScope<'_, Self>) -> Self {
@@ -77,18 +109,38 @@ impl Drop for CascadingPanicPayload {
 }
 
 struct ActorFrameDropProbe {
-    status: Option<ExitStatus>,
+    status: ExitStatus,
     dropped: Arc<AtomicBool>,
+}
+
+struct AbortedFrameDropProbe {
+    inner: Arc<ActorInner<TestActor>>,
+    saw_aborting: Arc<AtomicBool>,
+}
+
+impl Future for AbortedFrameDropProbe {
+    type Output = ExitStatus;
+
+    fn poll(self: Pin<&mut Self>, _task: &mut Context<'_>) -> Poll<Self::Output> {
+        Poll::Pending
+    }
+}
+
+impl Drop for AbortedFrameDropProbe {
+    fn drop(&mut self) {
+        self.saw_aborting.store(
+            self.inner.control.mode() == Mode::Aborting,
+            Ordering::SeqCst,
+        );
+        panic!("intentional aborted frame drop panic");
+    }
 }
 
 impl Future for ActorFrameDropProbe {
     type Output = ExitStatus;
 
     fn poll(self: Pin<&mut Self>, _task: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.status {
-            Some(status) => Poll::Ready(status),
-            None => Poll::Pending,
-        }
+        Poll::Ready(self.status)
     }
 }
 
@@ -194,7 +246,7 @@ impl Actor for AbortChildParent {
         child_exit: oneshot::Sender<ExitStatus>,
         scope: &mut ActorScope<'_, Self>,
     ) -> Self {
-        let (child, _inbox) = ActorInner::<TestActor>::channel(1);
+        let (child, _inbox) = test_actor_inner(1);
         let child_id = scope.state.children.insert(erased_owner(&child));
         child.control.begin_abort();
         let status = child.control.finish(ExitStatus::new(
@@ -266,6 +318,10 @@ impl Envelope<TestActor> for CountEnvelope {
     ) {
         self.0.fetch_add(1, Ordering::SeqCst);
     }
+
+    fn discard(self: Box<Self>, control: &Control) {
+        control.drop_user_value(self);
+    }
 }
 
 struct PanicEnvelope;
@@ -280,6 +336,10 @@ impl Envelope<TestActor> for PanicEnvelope {
         _inner: &Arc<ActorInner<TestActor>>,
     ) {
         panic!("intentional dispatch panic");
+    }
+
+    fn discard(self: Box<Self>, control: &Control) {
+        control.drop_user_value(self);
     }
 }
 
@@ -321,6 +381,10 @@ impl Envelope<TestActor> for ChildKillDropProbe {
     ) {
         unreachable!("Kill discards queued envelopes")
     }
+
+    fn discard(self: Box<Self>, control: &Control) {
+        control.drop_user_value(self);
+    }
 }
 
 enum TeardownEnvelope {
@@ -361,16 +425,20 @@ impl Drop for TeardownEnvelope {
     }
 }
 
-impl Envelope<TestActor> for TeardownEnvelope {
+impl<A: Actor> Envelope<A> for TeardownEnvelope {
     fn dispatch(
         self: Box<Self>,
-        _actor: &mut TestActor,
-        _scope: &mut ActorScope<TestActor>,
-        _owned: &OwnedTasks<TestActor>,
-        _scheduler: &mut ReplyScheduler<TestActor>,
-        _inner: &Arc<ActorInner<TestActor>>,
+        _actor: &mut A,
+        _scope: &mut ActorScope<A>,
+        _owned: &OwnedTasks<A>,
+        _scheduler: &mut ReplyScheduler<A>,
+        _inner: &Arc<ActorInner<A>>,
     ) {
         unreachable!("teardown discards queued envelopes")
+    }
+
+    fn discard(self: Box<Self>, control: &Control) {
+        control.drop_user_value(self);
     }
 }
 
@@ -544,7 +612,7 @@ fn actor_task_contains_final_frame_drop_panic() {
         (None, ExitReason::Panicked),
         (Some(Shutdown::Kill), ExitReason::Killed),
     ] {
-        let (inner, _inbox) = ActorInner::<TestActor>::channel(1);
+        let (inner, _inbox) = test_actor_inner(1);
         let control = &inner.control;
         if let Some(shutdown) = shutdown {
             assert_eq!(control.request(shutdown), ShutdownStatus::Requested);
@@ -552,10 +620,7 @@ fn actor_task_contains_final_frame_drop_panic() {
         let dropped = Arc::new(AtomicBool::new(false));
         let mut actor_task = Box::pin(ActorTask::new(
             Box::pin(ActorFrameDropProbe {
-                status: Some(ExitStatus::new(
-                    ExitReason::Stopped,
-                    SubtreeStatus::Terminated,
-                )),
+                status: ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Terminated),
                 dropped: Arc::clone(&dropped),
             }),
             ExitGuard::new(Arc::clone(&inner), None),
@@ -573,20 +638,20 @@ fn actor_task_contains_final_frame_drop_panic() {
 // A contained Drop panic cannot escape or strengthen Aborted.
 #[test]
 fn actor_task_contains_aborted_frame_drop_panic() {
-    let (inner, _inbox) = ActorInner::<TestActor>::channel(1);
+    let (inner, _inbox) = test_actor_inner(1);
     let control = &inner.control;
-    let dropped = Arc::new(AtomicBool::new(false));
+    let saw_aborting = Arc::new(AtomicBool::new(false));
     let actor_task = ActorTask::new(
-        Box::pin(ActorFrameDropProbe {
-            status: None,
-            dropped: Arc::clone(&dropped),
+        Box::pin(AbortedFrameDropProbe {
+            inner: Arc::clone(&inner),
+            saw_aborting: Arc::clone(&saw_aborting),
         }),
         ExitGuard::new(Arc::clone(&inner), None),
     );
 
     drop(actor_task);
 
-    assert!(dropped.load(Ordering::SeqCst));
+    assert!(saw_aborting.load(Ordering::SeqCst));
     assert_eq!(
         control.mode(),
         Mode::Exited(ExitStatus::new(
@@ -602,7 +667,7 @@ fn actor_task_contains_aborted_frame_drop_panic() {
 fn unfinished_exit_guard_overrides_tentative_hard_mode() {
     let expected = ExitStatus::new(ExitReason::Aborted, SubtreeStatus::Unconfirmed);
 
-    let (killing, _inbox) = ActorInner::<TestActor>::channel(1);
+    let (killing, _inbox) = test_actor_inner(1);
     assert_eq!(
         killing.control.request(Shutdown::Kill),
         ShutdownStatus::Requested
@@ -610,7 +675,7 @@ fn unfinished_exit_guard_overrides_tentative_hard_mode() {
     drop(ExitGuard::new(Arc::clone(&killing), None));
     assert_eq!(killing.control.exit_status(), Some(expected));
 
-    let (failing, _inbox) = ActorInner::<TestActor>::channel(1);
+    let (failing, _inbox) = test_actor_inner(1);
     failing.control.begin_failure();
     drop(ExitGuard::new(Arc::clone(&failing), None));
     assert_eq!(failing.control.exit_status(), Some(expected));
@@ -661,7 +726,7 @@ async fn aborted_descendant_only_weakens_parent_subtree_status() {
         (ParentExit::Shutdown(Shutdown::Kill), ExitReason::Killed),
         (ParentExit::Panic, ExitReason::Panicked),
     ] {
-        let (child, _child_inbox) = ActorInner::<TestActor>::channel(1);
+        let (child, _child_inbox) = test_actor_inner(1);
         child.control.begin_abort();
         child.control.finish(ExitStatus::new(
             ExitReason::Aborted,
@@ -670,7 +735,7 @@ async fn aborted_descendant_only_weakens_parent_subtree_status() {
         let mut children = ChildSet::default();
         children.insert(erased_owner(&child));
 
-        let (inner, inbox) = ActorInner::<TestActor>::channel(1);
+        let (inner, inbox) = test_actor_inner(1);
         let control = &inner.control;
         let (scope, supervisor_rx) = scope_state(&inner, children);
 
@@ -678,7 +743,7 @@ async fn aborted_descendant_only_weakens_parent_subtree_status() {
             ParentExit::Shutdown(shutdown) => {
                 assert_eq!(control.request(shutdown), ShutdownStatus::Requested);
             }
-            ParentExit::Panic => inner.sender.try_send(Box::new(PanicEnvelope)).unwrap(),
+            ParentExit::Panic => enqueue_test_envelope(&inner, PanicEnvelope),
         }
 
         let task = ActorTask::new(
@@ -706,14 +771,14 @@ async fn aborted_descendant_only_weakens_parent_subtree_status() {
 #[test]
 fn stale_child_exit_cannot_remove_a_reused_slot() {
     let mut children = ChildSet::default();
-    let (first_actor, _first_inbox) = ActorInner::<TestActor>::channel(1);
+    let (first_actor, _first_inbox) = test_actor_inner(1);
     let first = children.insert(erased_owner(&first_actor));
     assert!(children.remove(&ChildExit::new(
         first,
         ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Terminated),
     )));
 
-    let (second_actor, _second_inbox) = ActorInner::<TestActor>::channel(1);
+    let (second_actor, _second_inbox) = test_actor_inner(1);
     let second = children.insert(erased_owner(&second_actor));
     assert_ne!(first, second);
     assert!(!children.remove(&ChildExit::new(
@@ -726,7 +791,7 @@ fn stale_child_exit_cannot_remove_a_reused_slot() {
 // Typed messaging and erased ownership must share one actor allocation.
 #[test]
 fn typed_and_erased_handles_share_one_allocation() {
-    let (inner, _inbox) = ActorInner::<TestActor>::channel(1);
+    let (inner, _inbox) = test_actor_inner(1);
     let actor_ref = ActorRef::new(Arc::clone(&inner));
     let erased = ErasedActorOwner::new(&actor_ref);
 
@@ -739,8 +804,9 @@ fn typed_and_erased_handles_share_one_allocation() {
 // One heterogeneous owner set must retain RAII Kill for every actor type.
 #[test]
 fn heterogeneous_erased_owner_drop_requests_kill() {
-    let (first, _first_inbox) = ActorInner::<TestActor>::channel(1);
-    let (second, _second_inbox) = ActorInner::<CountChildExit>::channel(1);
+    let (first, _first_inbox) = test_actor_inner(1);
+    let options = <CountChildExit as ActorConfig>::Options::default();
+    let (second, _second_inbox) = ActorInner::<CountChildExit>::open(&options);
     let mut children = ChildSet::default();
     children.insert(erased_owner(&first));
     children.insert(erased_owner(&second));
@@ -754,12 +820,13 @@ fn heterogeneous_erased_owner_drop_requests_kill() {
 // Waiting must retain uncertainty before clearing completed child owners.
 #[tokio::test]
 async fn child_set_wait_all_retains_unconfirmed_subtree() {
-    let (uncertain, _uncertain_inbox) = ActorInner::<TestActor>::channel(1);
+    let (uncertain, _uncertain_inbox) = test_actor_inner(1);
     uncertain.control.finish(ExitStatus::new(
         ExitReason::Aborted,
         SubtreeStatus::Unconfirmed,
     ));
-    let (terminated, _terminated_inbox) = ActorInner::<CountChildExit>::channel(1);
+    let options = <CountChildExit as ActorConfig>::Options::default();
+    let (terminated, _terminated_inbox) = ActorInner::<CountChildExit>::open(&options);
     terminated.control.finish(ExitStatus::new(
         ExitReason::Stopped,
         SubtreeStatus::Terminated,
@@ -791,10 +858,11 @@ async fn graceful_cutoff_absorbs_a_dequeued_child_exit() {
         };
         let observed = Arc::new(AtomicUsize::new(0));
         let mut children = ChildSet::default();
-        let (child, _child_inbox) = ActorInner::<TestActor>::channel(1);
+        let (child, _child_inbox) = test_actor_inner(1);
         let child_id = children.insert(erased_owner(&child));
 
-        let (inner, _inbox) = ActorInner::<CountChildExit>::channel(1);
+        let options = <CountChildExit as ActorConfig>::Options::default();
+        let (inner, _inbox) = ActorInner::<CountChildExit>::open(&options);
         let control = &inner.control;
         let (mut scope, _supervisor_rx) = scope_state(&inner, children);
         let mut actor = CountChildExit(Arc::clone(&observed));
@@ -831,10 +899,11 @@ async fn admitted_child_exit_hook_finishes_across_graceful_cutoff() {
         let (release_tx, release_rx) = oneshot::channel();
         let (completed_tx, completed_rx) = oneshot::channel();
         let mut children = ChildSet::default();
-        let (child, _child_inbox) = ActorInner::<TestActor>::channel(1);
+        let (child, _child_inbox) = test_actor_inner(1);
         let child_id = children.insert(erased_owner(&child));
 
-        let (inner, _inbox) = ActorInner::<ControlledChildExit>::channel(1);
+        let options = <ControlledChildExit as ActorConfig>::Options::default();
+        let (inner, _inbox) = ActorInner::<ControlledChildExit>::open(&options);
         let control = &inner.control;
         let (mut scope, _supervisor_rx) = scope_state(&inner, children);
         let mut actor = ControlledChildExit {
@@ -879,10 +948,9 @@ async fn admitted_child_exit_hook_finishes_across_graceful_cutoff() {
 // reporting channel termination.
 #[tokio::test]
 async fn unadmitted_mailbox_permit_does_not_extend_drain() {
-    let (inner, inbox) = ActorInner::<TestActor>::channel(1);
+    let (inner, inbox) = test_actor_inner(1);
     let permit = inner
         .sender
-        .clone()
         .reserve_owned()
         .await
         .expect("the test mailbox is open");
@@ -915,11 +983,11 @@ async fn committed_kill_prevents_a_graceful_child_request() {
     // The child mode distinguishes biased Kill observation from an incorrect
     // first poll of the guarded future: request_all would synchronously commit
     // Stop before graceful_finish could return Work::Killed.
-    let (child, _child_inbox) = ActorInner::<TestActor>::channel(1);
+    let (child, _child_inbox) = test_actor_inner(1);
     let mut children = ChildSet::default();
     children.insert(erased_owner(&child));
 
-    let (inner, _inbox) = ActorInner::<TestActor>::channel(1);
+    let (inner, _inbox) = test_actor_inner(1);
     let control = &inner.control;
     let (mut scope, _supervisor_rx) = scope_state(&inner, children);
     let mut actor = TestActor;
@@ -948,13 +1016,8 @@ fn truncated_reply_sweep_yields_before_ready_mailbox() {
 
     let mailbox_dispatches = Arc::new(AtomicUsize::new(0));
     let replies_polled = Arc::new(AtomicUsize::new(0));
-    let (inner, mut inbox) = ActorInner::<TestActor>::channel(1);
-    inner
-        .sender
-        .try_send(
-            Box::new(CountEnvelope(Arc::clone(&mailbox_dispatches))) as DynEnvelope<TestActor>
-        )
-        .unwrap();
+    let (inner, mut inbox) = test_actor_inner(1);
+    enqueue_test_envelope(&inner, CountEnvelope(Arc::clone(&mailbox_dispatches)));
 
     let (mut scope, mut supervisor_rx) = scope_state(&inner, ChildSet::default());
     let owned = OwnedTasks::new(Arc::clone(&inner));
@@ -1003,7 +1066,7 @@ fn truncated_reply_sweep_yields_before_ready_mailbox() {
 #[tokio::test]
 #[should_panic(expected = "child-exit receiver closed while parent runtime was alive")]
 async fn closed_child_exit_channel_is_an_invariant_failure() {
-    let (inner, mut inbox) = ActorInner::<TestActor>::channel(1);
+    let (inner, mut inbox) = test_actor_inner(1);
     let (mut scope, mut supervisor_rx) = scope_state(&inner, ChildSet::default());
     supervisor_rx.close();
 
@@ -1033,7 +1096,7 @@ async fn closed_child_exit_channel_is_an_invariant_failure() {
 // Otherwise cleanup skips events already accepted by supervision.
 #[tokio::test]
 async fn drain_absorbs_ready_child_exit_before_owned_completion() {
-    let (inner, mut inbox) = ActorInner::<TestActor>::channel(1);
+    let (inner, mut inbox) = test_actor_inner(1);
     let control = &inner.control;
     assert_eq!(control.request(Shutdown::Drain), ShutdownStatus::Requested);
     control.actor_notified().await;
@@ -1103,14 +1166,14 @@ async fn child_kill_commits_before_actor_work_is_dropped() {
 
     let active_observed_kill = Arc::new(AtomicBool::new(false));
     let queued_observed_kill = Arc::new(AtomicBool::new(false));
-    let (inner, mut inbox) = ActorInner::<TestActor>::channel(1);
-    inner
-        .sender
-        .try_send(Box::new(ChildKillDropProbe {
+    let (inner, mut inbox) = test_actor_inner(1);
+    enqueue_test_envelope(
+        &inner,
+        ChildKillDropProbe {
             child: Arc::clone(&child_inner),
             observed_kill: Arc::clone(&queued_observed_kill),
-        }))
-        .unwrap();
+        },
+    );
     assert_eq!(
         inner.control.request(Shutdown::Kill),
         ShutdownStatus::Requested
@@ -1138,20 +1201,16 @@ async fn stop_discard_observes_kill_from_each_envelope_drop() {
     // The first destructor upgrades Stop to Kill. Leaving the second envelope
     // queued proves teardown observes the transition between individual Drops,
     // before hard teardown takes ownership of the remaining work.
-    let (inner, mut inbox) = ActorInner::<TestActor>::channel(2);
+    let (inner, mut inbox) = test_actor_inner(2);
     let second_dropped = Arc::new(AtomicBool::new(false));
-    inner
-        .sender
-        .try_send(Box::new(TeardownEnvelope::RequestKill(Arc::downgrade(
-            &inner,
-        ))))
-        .unwrap();
-    inner
-        .sender
-        .try_send(Box::new(TeardownEnvelope::MarkDropped(Arc::clone(
-            &second_dropped,
-        ))))
-        .unwrap();
+    enqueue_test_envelope(
+        &inner,
+        TeardownEnvelope::RequestKill(Arc::downgrade(&inner)),
+    );
+    enqueue_test_envelope(
+        &inner,
+        TeardownEnvelope::MarkDropped(Arc::clone(&second_dropped)),
+    );
     assert_eq!(
         inner.control.request(Shutdown::Stop),
         ShutdownStatus::Requested
@@ -1176,21 +1235,16 @@ async fn queued_discard_yields_after_its_fixed_drop_budget() {
     // One manual poll must stop before the seventeenth Drop, and the next must
     // complete it. This locks the exact cooperative boundary while rejecting
     // both an unbounded drain and an implementation that yields too frequently.
-    let (inner, mut inbox) = ActorInner::<TestActor>::channel(TEARDOWN_DROP_BUDGET + 1);
+    let (inner, mut inbox) = test_actor_inner(TEARDOWN_DROP_BUDGET + 1);
     for _ in 0..TEARDOWN_DROP_BUDGET {
-        inner
-            .sender
-            .try_send(Box::new(TeardownEnvelope::Noop))
-            .unwrap();
+        enqueue_test_envelope(&inner, TeardownEnvelope::Noop);
     }
 
     let last_dropped = Arc::new(AtomicBool::new(false));
-    inner
-        .sender
-        .try_send(Box::new(TeardownEnvelope::MarkDropped(Arc::clone(
-            &last_dropped,
-        ))))
-        .unwrap();
+    enqueue_test_envelope(
+        &inner,
+        TeardownEnvelope::MarkDropped(Arc::clone(&last_dropped)),
+    );
     assert_eq!(
         inner.control.request(Shutdown::Stop),
         ShutdownStatus::Requested
@@ -1223,27 +1277,22 @@ impl Wake for CapacityPanicWake {
 // Each envelope then receives its own containment boundary.
 #[test]
 fn inbox_drop_contains_each_envelope_drop() {
-    let (inner, inbox) = ActorInner::<TestActor>::channel(2);
+    let (inner, inbox) = test_actor_inner(2);
     let panic_dropped = Arc::new(AtomicBool::new(false));
     let tail_dropped = Arc::new(AtomicBool::new(false));
     let tail_dropped_while_unwinding = Arc::new(AtomicBool::new(false));
-    inner
-        .sender
-        .try_send(Box::new(TeardownEnvelope::Panic(Arc::clone(
-            &panic_dropped,
-        ))))
-        .unwrap();
-    inner
-        .sender
-        .try_send(Box::new(TeardownEnvelope::TrackDrop {
+    enqueue_test_envelope(&inner, TeardownEnvelope::Panic(Arc::clone(&panic_dropped)));
+    enqueue_test_envelope(
+        &inner,
+        TeardownEnvelope::TrackDrop {
             dropped: Arc::clone(&tail_dropped),
             dropped_while_unwinding: Arc::clone(&tail_dropped_while_unwinding),
-        }))
-        .unwrap();
+        },
+    );
     let wakes = Arc::new(CapacityPanicWake(AtomicUsize::new(0)));
     let waker = Waker::from(Arc::clone(&wakes));
     let mut task = Context::from_waker(&waker);
-    let mut reserve = Box::pin(inner.sender.reserve());
+    let mut reserve = Box::pin(inner.sender.reserve_owned());
     assert!(matches!(reserve.as_mut().poll(&mut task), Poll::Pending));
     assert_eq!(
         inner.control.request(Shutdown::Kill),
@@ -1255,5 +1304,32 @@ fn inbox_drop_contains_each_envelope_drop() {
     assert!(tail_dropped.load(Ordering::SeqCst));
     assert!(!tail_dropped_while_unwinding.load(Ordering::SeqCst));
     assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
+    assert_eq!(inner.control.mode(), Mode::Killing);
+}
+
+#[test]
+fn unbounded_inbox_drop_contains_each_envelope_drop() {
+    let options = <UnboundedTestActor as ActorConfig>::Options::default();
+    let (inner, inbox) = ActorInner::<UnboundedTestActor>::open(&options);
+    let panic_dropped = Arc::new(AtomicBool::new(false));
+    let tail_dropped = Arc::new(AtomicBool::new(false));
+    let tail_dropped_while_unwinding = Arc::new(AtomicBool::new(false));
+    enqueue_test_envelope(&inner, TeardownEnvelope::Panic(Arc::clone(&panic_dropped)));
+    enqueue_test_envelope(
+        &inner,
+        TeardownEnvelope::TrackDrop {
+            dropped: Arc::clone(&tail_dropped),
+            dropped_while_unwinding: Arc::clone(&tail_dropped_while_unwinding),
+        },
+    );
+    assert_eq!(
+        inner.control.request(Shutdown::Kill),
+        ShutdownStatus::Requested
+    );
+
+    drop(inbox);
+    assert!(panic_dropped.load(Ordering::SeqCst));
+    assert!(tail_dropped.load(Ordering::SeqCst));
+    assert!(!tail_dropped_while_unwinding.load(Ordering::SeqCst));
     assert_eq!(inner.control.mode(), Mode::Killing);
 }

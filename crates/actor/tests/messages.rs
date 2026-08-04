@@ -1,5 +1,7 @@
 #[path = "messages/capacity_wakers.rs"]
 mod capacity_wakers;
+#[path = "messages/policies.rs"]
+mod policies;
 mod support;
 
 use std::{
@@ -176,9 +178,9 @@ impl SyncHandler<Notify> for SerialActor {
     }
 }
 
-fn single_slot_options() -> SpawnOptions {
+fn single_slot_options() -> SpawnOptions<SerialActor> {
     let one = NonZeroUsize::new(1).expect("one is non-zero");
-    SpawnOptions::default()
+    SpawnOptions::<SerialActor>::default()
         .with_mailbox_capacity(one)
         .with_max_in_flight(one)
 }

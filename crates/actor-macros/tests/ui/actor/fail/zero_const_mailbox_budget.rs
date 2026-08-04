@@ -13,6 +13,6 @@ impl actor_api::Actor for ConstZero {
 }
 
 const _: usize =
-    <ConstZero as actor_api::ActorConfig>::MAILBOX_DISPATCH_BUDGET.get();
+    <ConstZero as actor_api::MessageConfig>::MAILBOX_DISPATCH_BUDGET.get();
 
 fn main() {}

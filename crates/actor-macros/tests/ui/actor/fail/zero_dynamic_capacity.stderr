@@ -1,0 +1,5 @@
+error: capacity must be greater than zero
+ --> tests/ui/actor/fail/zero_dynamic_capacity.rs:4:38
+  |
+4 | #[actor_api::actor(mailbox = dynamic(0))]
+  |                                      ^

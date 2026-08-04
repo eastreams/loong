@@ -14,8 +14,8 @@ use std::{
 use tokio::sync::oneshot;
 
 use crate::{
-    Actor, ActorScope, CallError, ExitReason, FutureActor, IntoActorFuture, Message, ReplyExt,
-    Shutdown, ShutdownStatus,
+    Actor, ActorConfig, ActorScope, CallError, ExitReason, FutureActor, IntoActorFuture, Message,
+    ReplyExt, Shutdown, ShutdownStatus,
     owned::OwnedTasks,
     reply::{Either, Interleaved, Ready, sealed::HandleReply},
     scheduler::ReplyScheduler,
@@ -41,7 +41,8 @@ struct TestMessage;
 
 // Reply tests need lifecycle state without running an actor task.
 fn actor_inner() -> Arc<ActorInner<TestActor>> {
-    ActorInner::channel(1).0
+    let options = <TestActor as ActorConfig>::Options::default();
+    ActorInner::open(&options).0
 }
 
 // Stack-bound completion borrows the actor retained by its runtime.

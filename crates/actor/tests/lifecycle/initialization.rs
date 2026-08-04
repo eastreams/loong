@@ -1,6 +1,5 @@
 use std::{
     future::{Future, poll_fn},
-    num::NonZeroUsize,
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -10,7 +9,7 @@ use std::{
 
 use loong_actor::{
     Actor, ActorScope, CallError, ExitReason, Handler, Message, ReplyExt, Shutdown, ShutdownStatus,
-    SpawnOptions, StopScope, TrySendErrorKind, actor, spawn, spawn_with,
+    StopScope, TrySendErrorKind, actor, spawn,
 };
 use tokio::sync::oneshot;
 
@@ -80,16 +79,12 @@ async fn messages_are_admitted_but_not_dispatched_before_init_ready() {
     let (release_tx, release_rx) = oneshot::channel();
     let constructed = Arc::new(AtomicUsize::new(0));
     let handled = Arc::new(AtomicUsize::new(0));
-    let options = SpawnOptions::default().with_mailbox_capacity(NonZeroUsize::new(2).unwrap());
-    let owner = spawn_with::<AdmissionActor>(
-        AdmissionArgs {
-            entered: entered_tx,
-            release: release_rx,
-            constructed: Arc::clone(&constructed),
-            handled: Arc::clone(&handled),
-        },
-        options,
-    );
+    let owner = spawn::<AdmissionActor>(AdmissionArgs {
+        entered: entered_tx,
+        release: release_rx,
+        constructed: Arc::clone(&constructed),
+        handled: Arc::clone(&handled),
+    });
     let actor = owner.actor_ref();
 
     watchdog(entered_rx).await.unwrap();

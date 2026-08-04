@@ -420,7 +420,7 @@ async fn exclusive_blocks_actor_work_but_owned_continues() {
 
 struct StopActor;
 
-#[actor(mailbox)]
+#[actor(mailbox = 4)]
 impl Actor for StopActor {
     type SpawnArgs = ();
 
@@ -457,9 +457,8 @@ async fn owned_replies_ignore_max_in_flight_and_graceful_shutdown_waits() {
         (Shutdown::Stop, ExitReason::Stopped),
         (Shutdown::Drain, ExitReason::Drained),
     ] {
-        let options = SpawnOptions::default()
-            .with_mailbox_capacity(NonZeroUsize::new(4).unwrap())
-            .with_max_in_flight(NonZeroUsize::new(1).unwrap());
+        let options =
+            SpawnOptions::<StopActor>::default().with_max_in_flight(NonZeroUsize::new(1).unwrap());
         let mut owner = spawn_with::<StopActor>((), options);
         let actor = owner.actor_ref();
         let mut entered = Vec::new();
@@ -629,7 +628,7 @@ async fn owned_task_panic_after_reply_completion_still_fails_the_actor() {
 
 struct SelfCaller;
 
-#[actor(mailbox, interleaved = dynamic)]
+#[actor(mailbox = 8, interleaved = dynamic)]
 impl Actor for SelfCaller {
     type SpawnArgs = ();
 
@@ -710,9 +709,8 @@ impl Handler<ExclusiveSelfCall> for SelfCaller {
 
 #[tokio::test]
 async fn nonexclusive_self_calls_progress_but_exclusive_self_call_waits() {
-    let options = SpawnOptions::default()
-        .with_mailbox_capacity(NonZeroUsize::new(8).unwrap())
-        .with_max_in_flight(NonZeroUsize::new(4).unwrap());
+    let options =
+        SpawnOptions::<SelfCaller>::default().with_max_in_flight(NonZeroUsize::new(4).unwrap());
     let mut owner = spawn_with::<SelfCaller>((), options);
     let actor = owner.actor_ref();
 
@@ -749,9 +747,8 @@ async fn nonexclusive_self_calls_progress_but_exclusive_self_call_waits() {
 async fn owned_self_call_progresses_with_one_interleaved_slot() {
     // Owned tasks consume no interleaved slot.
     // The inner call can use the configured slot.
-    let options = SpawnOptions::default()
-        .with_mailbox_capacity(NonZeroUsize::new(2).unwrap())
-        .with_max_in_flight(NonZeroUsize::new(1).unwrap());
+    let options =
+        SpawnOptions::<SelfCaller>::default().with_max_in_flight(NonZeroUsize::new(1).unwrap());
     let owner = spawn_with::<SelfCaller>((), options);
     let actor = owner.actor_ref();
 
@@ -766,7 +763,7 @@ struct FairActor {
     handled: Arc<AtomicUsize>,
 }
 
-#[actor(mailbox, interleaved)]
+#[actor(mailbox = 64, interleaved)]
 impl Actor for FairActor {
     type SpawnArgs = Arc<AtomicUsize>;
 
@@ -847,9 +844,8 @@ async fn owned_reply_runs_in_a_distinct_tokio_task() {
 #[tokio::test]
 async fn ready_mailbox_input_does_not_starve_woken_interleaved_reply() {
     let handled = Arc::new(AtomicUsize::new(0));
-    let options = SpawnOptions::default()
-        .with_mailbox_capacity(NonZeroUsize::new(64).unwrap())
-        .with_max_in_flight(NonZeroUsize::new(4).unwrap());
+    let options =
+        SpawnOptions::<FairActor>::default().with_max_in_flight(NonZeroUsize::new(4).unwrap());
     let owner = spawn_with::<FairActor>(handled.clone(), options);
     let actor = owner.actor_ref();
     let completed_at = Arc::new(AtomicUsize::new(usize::MAX));
@@ -896,7 +892,7 @@ struct FairChildExitActor {
     hook_completed: Option<oneshot::Sender<()>>,
 }
 
-#[actor(mailbox, children = unbounded)]
+#[actor(mailbox = 64, children = unbounded)]
 impl Actor for FairChildExitActor {
     type SpawnArgs = FairChildExitArgs;
 
@@ -964,8 +960,7 @@ async fn queued_child_exit_progresses_before_ready_mailbox_is_exhausted() {
     let hook_completed_at = Arc::new(AtomicUsize::new(usize::MAX));
     let (child_started_tx, child_started_rx) = oneshot::channel();
     let (hook_completed_tx, hook_completed_rx) = oneshot::channel();
-    let options = SpawnOptions::default()
-        .with_mailbox_capacity(NonZeroUsize::new(64).unwrap())
+    let options = SpawnOptions::<FairChildExitActor>::default()
         .with_max_in_flight(NonZeroUsize::new(4).unwrap());
     let owner = spawn_with::<FairChildExitActor>(
         FairChildExitArgs {

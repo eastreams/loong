@@ -49,7 +49,7 @@ fn spawn_benchmark_actor(capacity: usize) -> ActorOwner<MailboxActor> {
     let capacity = NonZeroUsize::new(capacity).expect("mailbox capacities are non-zero");
     spawn_with::<MailboxActor>(
         (),
-        SpawnOptions::default()
+        SpawnOptions::<MailboxActor>::default()
             .with_mailbox_capacity(capacity)
             .with_max_in_flight(NonZeroUsize::MIN),
     )

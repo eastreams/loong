@@ -3,8 +3,7 @@
 //! A [`Handler`](crate::Handler) chooses one strategy before returning.
 //! [`ReplyExt::ready`] completes during dispatch.
 //! A bare [`Future`] starts an owned Tokio task.
-//! [`ReplyExt::interleaved`] occupies a
-//! [`max_in_flight`](crate::SpawnOptions::max_in_flight) slot.
+//! [`ReplyExt::interleaved`] occupies one [`SpawnOptions`](crate::SpawnOptions) slot.
 //! [`ReplyExt::exclusive`] pauses other actor-aware work.
 //! [`SyncHandler`](crate::SyncHandler) selects ready scheduling automatically.
 //!

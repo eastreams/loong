@@ -350,7 +350,8 @@ mod tests {
     }
 
     fn test_actor_inner() -> Arc<ActorInner<TestActor>> {
-        ActorInner::channel(1).0
+        let options = <TestActor as crate::ActorConfig>::Options::default();
+        ActorInner::open(&options).0
     }
 
     struct DropProbe {

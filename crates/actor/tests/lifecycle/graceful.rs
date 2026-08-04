@@ -135,7 +135,7 @@ async fn drain_runs_the_fixed_accepted_queue_in_order() {
 
 struct InterleavedDrainActor;
 
-#[actor(mailbox, interleaved = 2)]
+#[actor(mailbox = 3, interleaved = 2)]
 impl Actor for InterleavedDrainActor {
     type SpawnArgs = ();
 
@@ -170,8 +170,7 @@ impl Handler<InterleavedDrainStep> for InterleavedDrainActor {
 
 #[tokio::test]
 async fn drain_respects_max_in_flight_for_the_fixed_interleaved_queue() {
-    let options = SpawnOptions::default()
-        .with_mailbox_capacity(NonZeroUsize::new(3).unwrap())
+    let options = SpawnOptions::<InterleavedDrainActor>::default()
         .with_max_in_flight(NonZeroUsize::new(2).unwrap());
     let mut owner = spawn_with::<InterleavedDrainActor>((), options);
     let actor = owner.actor_ref();

@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/ui/actor/fail/mismatched_spawn_options.rs:26:49
+   |
+26 |     let _ = actor_api::spawn_with::<Second>((), options);
+   |             -------------------------------     ^^^^^^^ expected `ActorOptions<Second, FixedMailbox>`, found `ActorOptions<First, FixedMailbox>`
+   |             |
+   |             arguments to this function are incorrect
+   |
+   = note: expected struct `loong_actor::__private::ActorOptions<Second, loong_actor::__private::FixedMailbox>`
+              found struct `loong_actor::__private::ActorOptions<First, loong_actor::__private::FixedMailbox>`
+note: function defined here
+  --> $WORKSPACE/crates/actor/src/runtime.rs
+   |
+   | pub fn spawn_with<A: Actor>(args: A::SpawnArgs, options: SpawnOptions<A>) -> ActorOwner<A> {
+   |        ^^^^^^^^^^

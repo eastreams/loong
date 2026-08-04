@@ -1,14 +1,17 @@
 use std::{
     panic::{self, AssertUnwindSafe},
-    sync::{Arc, Weak},
+    sync::Arc,
     task::{Context, Poll},
 };
 
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 
 use crate::{
-    Actor, ActorScope, CallError, Handler, Message, owned::OwnedTasks, reply::sealed::HandleReply,
+    Actor, ActorScope, CallError, Handler, Message,
+    owned::OwnedTasks,
+    reply::sealed::HandleReply,
     scheduler::ReplyScheduler,
+    transport::{ErasedEnvelope, RuntimeInbox},
 };
 
 mod control;
@@ -17,18 +20,6 @@ use control::DispatchPermit;
 pub(crate) use control::{Control, HookEntryPermit, Mode, poll_with_panic_safe_waker};
 
 pub(crate) type ReplyReceiver<R> = oneshot::Receiver<Result<R, CallError>>;
-
-/// A type-erased mailbox entry for one statically checked message.
-///
-/// Addresses construct a concrete call or one-way envelope only when the actor
-/// implements the corresponding `Handler<M>`. Erasure lets one bounded inbox
-/// hold every message type handled by that actor. Dynamic dispatch ends at
-/// [`Envelope::dispatch`]; the selected handler and reply strategy stay
-/// statically dispatched.
-pub(crate) type DynEnvelope<A> = Box<dyn Envelope<A>>;
-
-/// Capacity and the concrete envelope remain recoverable when admission loses.
-pub(crate) type RejectedAdmission<'a, A, E> = (mpsc::Permit<'a, DynEnvelope<A>>, Box<E>);
 
 /// Notifies one response observer without blaming its Waker on the actor.
 ///
@@ -47,14 +38,14 @@ fn notify_response<T>(control: &Control, reply: oneshot::Sender<T>, value: T) {
 /// The mailbox sender and lifecycle state share one allocation.
 /// Queued envelopes must not strong-own this value.
 pub(crate) struct ActorInner<A: Actor> {
-    pub(crate) sender: mpsc::Sender<DynEnvelope<A>>,
+    pub(crate) sender: A::Sender,
     pub(crate) control: Control,
 }
 
 // `admit` lives in control.rs, keeping raw gate access private.
 impl<A: Actor> ActorInner<A> {
-    pub(crate) fn channel(capacity: usize) -> (Arc<Self>, ActorInbox<A>) {
-        let (sender, receiver) = mpsc::channel(capacity);
+    pub(crate) fn open(options: &A::Options) -> (Arc<Self>, ActorInbox<A>) {
+        let (sender, receiver) = A::open(options);
         let control = Control::new();
         let actor = Arc::new(Self { sender, control });
         let inbox = ActorInbox {
@@ -65,19 +56,20 @@ impl<A: Actor> ActorInner<A> {
     }
 }
 
-/// Owns accepted messages and their lifecycle cleanup context.
+/// Owns receiving storage and its lifecycle cleanup context.
 ///
-/// Tokio drops a receiver's queue under one unwind boundary.
-/// This wrapper contains each envelope destructor independently.
+/// The runtime discards each accepted entry explicitly.
 pub(crate) struct ActorInbox<A: Actor> {
-    receiver: mpsc::Receiver<DynEnvelope<A>>,
+    receiver: A::Inbox,
     inner: Arc<ActorInner<A>>,
 }
 
 impl<A: Actor> ActorInbox<A> {
     /// Closes the receiver without exposing capacity-waiter wake panics.
     pub(crate) fn close(&mut self) {
-        if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| self.receiver.close())) {
+        if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| {
+            self.receiver.close();
+        })) {
             Control::discard_panic(payload);
         }
     }
@@ -86,16 +78,16 @@ impl<A: Actor> ActorInbox<A> {
         self.receiver.is_empty()
     }
 
-    pub(crate) fn poll_recv(&mut self, task: &mut Context<'_>) -> Poll<Option<DynEnvelope<A>>> {
+    pub(crate) fn poll_recv(&mut self, task: &mut Context<'_>) -> Poll<Option<ErasedEnvelope<A>>> {
         self.receiver.poll_recv(task)
     }
 
     /// Discards one accepted envelope through its lifecycle boundary.
     pub(crate) fn try_discard(&mut self) -> bool {
-        let Ok(envelope) = self.receiver.try_recv() else {
+        let Some(envelope) = self.receiver.try_recv() else {
             return false;
         };
-        self.inner.control.drop_user_value(envelope);
+        envelope.discard(&self.inner.control);
         true
     }
 }
@@ -103,6 +95,7 @@ impl<A: Actor> ActorInbox<A> {
 impl<A: Actor> Drop for ActorInbox<A> {
     fn drop(&mut self) {
         // Runtime teardown closes lifecycle admission first.
+        // Bounded reservations rely on this ordering.
         // Outstanding permits therefore cannot refill this queue.
         self.close();
         while self.try_discard() {}
@@ -131,78 +124,68 @@ pub(crate) trait Envelope<A: Actor>: Send {
         scheduler: &mut ReplyScheduler<A>,
         inner: &Arc<ActorInner<A>>,
     );
+
+    /// Rejects one accepted entry without invoking its handler.
+    fn discard(self: Box<Self>, control: &Control);
 }
 
-/// Coupled ownership of a two-way call before it leaves the queued phase.
-struct QueuedCall<A: Actor, M: Message> {
-    message: M,
-    reply: oneshot::Sender<Result<M::Reply, CallError>>,
-    actor: Weak<ActorInner<A>>,
-}
+impl<A: Actor> ErasedEnvelope<A> {
+    pub(crate) fn dispatch(
+        self,
+        actor: &mut A,
+        scope: &mut ActorScope<'_, A>,
+        owned: &OwnedTasks<A>,
+        scheduler: &mut ReplyScheduler<A>,
+        inner: &Arc<ActorInner<A>>,
+    ) {
+        self.into_envelope()
+            .dispatch(actor, scope, owned, scheduler, inner);
+    }
 
-enum CallEnvelopeState<A: Actor, M: Message> {
-    Queued(QueuedCall<A, M>),
-    /// Tombstone installed after queued ownership leaves the envelope, making
-    /// its subsequent `Drop` a no-op.
-    Consumed,
+    pub(crate) fn discard(self, control: &Control) {
+        self.into_envelope().discard(control);
+    }
 }
 
 /// A request-response mailbox entry awaiting dispatch.
 ///
-/// While queued, dropping the caller's response marks the entry abandoned, and
-/// dropping the entry reports a phase-aware queued failure to a remaining
-/// caller. Dispatch consumes the queued state and transfers reply ownership to
-/// [`DispatchReply`].
-pub(crate) struct CallEnvelope<A: Actor, M: Message> {
-    state: CallEnvelopeState<A, M>,
+/// The runtime explicitly dispatches or discards accepted entries.
+/// Raw transport Drop has no lifecycle guarantee.
+pub(crate) struct CallEnvelope<M: Message> {
+    message: M,
+    reply: oneshot::Sender<Result<M::Reply, CallError>>,
 }
 
-impl<A: Actor, M: Message> CallEnvelope<A, M> {
+impl<M: Message> CallEnvelope<M> {
     /// Creates the queued entry and the response endpoint retained by its caller.
-    pub(crate) fn new(message: M, actor: &Arc<ActorInner<A>>) -> (Self, ReplyReceiver<M::Reply>) {
+    pub(crate) fn new(message: M) -> (Self, ReplyReceiver<M::Reply>) {
         let (reply, response) = oneshot::channel();
-        (
-            Self {
-                state: CallEnvelopeState::Queued(QueuedCall {
-                    message,
-                    reply,
-                    actor: Arc::downgrade(actor),
-                }),
-            },
-            response,
-        )
+        (Self { message, reply }, response)
     }
 
     /// Recovers a message whose envelope lost admission before dispatch.
-    pub(crate) fn into_message(mut self) -> M {
-        let QueuedCall {
-            message,
-            reply,
-            actor,
-        } = self.take_queued();
+    pub(crate) fn into_message(self) -> M {
+        let Self { message, reply } = self;
         if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| drop(reply))) {
             Control::discard_panic(payload);
         }
-        drop(actor);
         message
     }
 
-    /// Moves the coupled queued state out while disarming queued-failure Drop.
-    fn take_queued(&mut self) -> QueuedCall<A, M> {
-        match std::mem::replace(&mut self.state, CallEnvelopeState::Consumed) {
-            CallEnvelopeState::Queued(queued) => queued,
-            CallEnvelopeState::Consumed => panic!("a call envelope is consumed at most once"),
-        }
+    fn reject(self, control: &Control, error: CallError) {
+        let Self { message, reply } = self;
+        notify_response(control, reply, Err(error));
+        control.drop_user_value(message);
     }
 }
 
-impl<A, M> Envelope<A> for CallEnvelope<A, M>
+impl<A, M> Envelope<A> for CallEnvelope<M>
 where
     A: Handler<M>,
     M: Message,
 {
     fn dispatch(
-        mut self: Box<Self>,
+        self: Box<Self>,
         actor: &mut A,
         scope: &mut ActorScope<'_, A>,
         owned: &OwnedTasks<A>,
@@ -210,20 +193,12 @@ where
         inner: &Arc<ActorInner<A>>,
     ) {
         // Only calls can be abandoned; one-way envelopes have no receiver.
-        match &self.state {
-            CallEnvelopeState::Queued(queued) if queued.reply.is_closed() => return,
-            CallEnvelopeState::Queued(_) => {}
-            CallEnvelopeState::Consumed => {
-                panic!("a consumed call envelope cannot remain in the mailbox")
-            }
+        if self.reply.is_closed() {
+            (*self).reject(&inner.control, inner.control.queued_failure());
+            return;
         }
 
-        let QueuedCall {
-            message,
-            reply,
-            actor: queued_actor,
-        } = self.take_queued();
-        drop(queued_actor);
+        let Self { message, reply } = *self;
 
         let permit = match inner.begin_dispatch() {
             Ok(permit) => permit,
@@ -239,33 +214,9 @@ where
         let reply = DispatchReply::new(reply, permit);
         HandleReply::handle(actor.handle(message, scope), owned, scheduler, reply);
     }
-}
 
-impl<A: Actor, M: Message> Drop for CallEnvelope<A, M> {
-    fn drop(&mut self) {
-        let CallEnvelopeState::Queued(QueuedCall {
-            message,
-            reply,
-            actor,
-        }) = std::mem::replace(&mut self.state, CallEnvelopeState::Consumed)
-        else {
-            return;
-        };
-
-        let Some(actor) = actor.upgrade() else {
-            // ExitGuard retains the actor through receiver cleanup.
-            // This fallback handles malformed internal fixtures.
-            if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| drop(reply))) {
-                Control::discard_panic(payload);
-            }
-            if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| drop(message))) {
-                Control::discard_panic(payload);
-            }
-            return;
-        };
-        let error = actor.control.queued_failure();
-        notify_response(&actor.control, reply, Err(error));
-        actor.control.drop_user_value(message);
+    fn discard(self: Box<Self>, control: &Control) {
+        (*self).reject(control, control.queued_failure());
     }
 }
 
@@ -305,13 +256,21 @@ where
         let Self { message } = *self;
         let permit = match inner.begin_dispatch() {
             Ok(permit) => permit,
-            Err(_) => return,
+            Err(_) => {
+                inner.control.drop_user_value(message);
+                return;
+            }
         };
 
         // One-way completion still owns a dispatch permit, so panic and Kill
         // use the same state transition as a call even though no result is sent.
         let reply = DispatchReply::one_way(permit);
         HandleReply::handle(actor.handle(message, scope), owned, scheduler, reply);
+    }
+
+    fn discard(self: Box<Self>, control: &Control) {
+        let Self { message } = *self;
+        control.drop_user_value(message);
     }
 }
 

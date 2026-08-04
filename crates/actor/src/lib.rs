@@ -3,7 +3,7 @@
 #![deny(rustdoc::broken_intra_doc_links)]
 
 //! Actors own mutable state and run serial lifecycle work.
-//! A [`MessageActor`] also processes typed messages.
+//! An actor with [`HasMailbox`] also processes typed messages.
 //!
 //! These actors are local to one process.
 //! Their tasks remain `Send`.
@@ -14,8 +14,9 @@
 //! # Define an actor
 //!
 //! Implement [`Actor`] for state owned by one actor.
-//! Apply `#[actor(...)]` to that implementation.
+//! Most implementations use `#[actor(...)]`.
 //! Its options declare the actor's runtime capabilities.
+//! Custom transports implement [`ActorConfig`] and [`MessageConfig`] directly.
 //! [`Actor::SpawnArgs`] owns its construction inputs.
 //! [`Actor::init`] asynchronously builds the complete state.
 //! Derive [`Message`] for every message type.
@@ -34,7 +35,7 @@
 //! For a message actor, admission opens during initialization.
 //! Its handler dispatch starts only after initialization succeeds.
 //! Obtain an [`ActorRef`] through [`ActorOwner::actor_ref`].
-//! References to [`MessageActor`] types send typed messages.
+//! References to actors with [`HasMailbox`] send typed messages.
 //! An actor reference does not own lifecycle.
 //!
 //! # Send messages
@@ -190,10 +191,11 @@ pub mod reply;
 mod runtime;
 mod scheduler;
 mod supervision;
+pub mod transport;
 
-pub use actor::{Actor, Handler, Message, MessageActor, SyncHandler};
+pub use actor::{Actor, Handler, HasMailbox, Message, SyncHandler};
 pub use address::{ActorRef, Response};
-pub use config::ActorConfig;
+pub use config::{ActorConfig, DynamicMailboxOptions, InterleavingConfig};
 pub use error::{
     CallError, SendError, TryCallError, TryCallErrorKind, TrySendError, TrySendErrorKind,
 };
@@ -204,14 +206,17 @@ pub use runtime::{ActorOwner, ActorScope, SpawnOptions, StopScope, spawn, spawn_
 pub use supervision::{
     Child, ChildExit, ChildId, ExitReason, ExitStatus, Shutdown, ShutdownStatus, SubtreeStatus,
 };
+pub use transport::MessageConfig;
 
 /// Implementation details used by generated actor configuration.
 #[doc(hidden)]
 pub mod __private {
     pub use crate::config::{
-        Children, DynamicChildren, DynamicInterleaving, DynamicMailbox, Interleaving,
-        InterleavingConfig, Mailbox, MessagingConfig, NoChildren, NoInterleaving, NoMessaging,
-        SupervisionConfig, UnboundedChildren, UnboundedInterleaving, UnboundedMailbox,
+        ActorOptions, DEFAULT_MAILBOX_CAPACITY, DynamicMailbox, FixedMailbox, NoMailbox,
+        UnboundedMailbox,
+    };
+    pub use crate::transport::{
+        BoundedInbox, BoundedSender, NoInbox, NoSender, UnboundedInbox, UnboundedSender,
     };
 }
 
@@ -222,8 +227,8 @@ pub mod __private {
 /// remain explicit imports so operational behavior stays visible at call sites.
 pub mod prelude {
     pub use crate::{
-        Actor, ActorFuture, ActorFutureExt, ActorScope, Handler, IntoActorFuture, IntoReply,
-        Message, MessageActor, ReplyExt, StopScope, SyncHandler, actor, reply,
+        Actor, ActorFuture, ActorFutureExt, ActorScope, DynamicMailboxOptions, Handler, HasMailbox,
+        IntoActorFuture, IntoReply, Message, ReplyExt, StopScope, SyncHandler, actor, reply,
     };
 }
 

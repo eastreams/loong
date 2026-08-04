@@ -27,7 +27,9 @@ fn expand_actor(implementation: &ItemImpl, args: ActorArgs) -> syn::Result<Token
     let cfg_attrs = implementation
         .attrs
         .iter()
-        .filter(|attr| attr.path().is_ident("cfg") || attr.path().is_ident("cfg_attr"));
+        .filter(|attr| attr.path().is_ident("cfg") || attr.path().is_ident("cfg_attr"))
+        .collect::<Vec<_>>();
+    let config_attrs = &cfg_attrs;
 
     if let (None, Some((name, _))) = (&args.mailbox, &args.interleaved) {
         return Err(syn::Error::new(
@@ -50,30 +52,50 @@ fn expand_actor(implementation: &ItemImpl, args: ActorArgs) -> syn::Result<Token
         }
     });
 
-    let messaging = match args.mailbox {
-        Some(mailbox) => {
-            let interleaving = match args.interleaved {
-                Some((_, capacity)) => capacity.expand_interleaving(&actor),
-                None => quote!(#actor::__private::NoInterleaving),
-            };
-            mailbox.expand_mailbox(&actor, &interleaving)
-        }
-        None => quote!(#actor::__private::NoMessaging),
+    let mailbox = match &args.mailbox {
+        Some(mailbox) => mailbox.expand_mailbox(&actor),
+        None => MailboxExpansion::absent(&actor),
     };
-    let supervision = match args.children {
-        Some(children) => children.expand_children(&actor),
-        None => quote!(#actor::__private::NoChildren),
-    };
+    let MailboxExpansion {
+        options,
+        sender,
+        inbox,
+        open,
+    } = mailbox;
+
+    // Parsing reserves these options for their direct configuration units.
+    // They do not project placeholder policy types in this expansion.
+    let _ = args.interleaved;
+    let _ = args.children;
 
     Ok(quote! {
         #implementation
 
-        #(#cfg_attrs)*
+        #(#config_attrs)*
         #[automatically_derived]
         impl #impl_generics #actor::ActorConfig for #self_ty #where_clause {
+            type Options = #actor::__private::ActorOptions<Self, #options>;
+        }
+
+        #(#config_attrs)*
+        #[automatically_derived]
+        impl #impl_generics #actor::MessageConfig for #self_ty #where_clause {
             #mailbox_budget
-            type Messaging = #messaging;
-            type Supervision = #supervision;
+
+            type Sender = #sender;
+            type Inbox = #inbox;
+
+            fn open(options: &Self::Options) -> (Self::Sender, Self::Inbox) {
+                #open
+            }
+        }
+
+        #(#config_attrs)*
+        #[automatically_derived]
+        impl #impl_generics #actor::InterleavingConfig for #self_ty #where_clause {
+            fn max_in_flight(options: &Self::Options) -> ::core::num::NonZeroUsize {
+                options.max_in_flight()
+            }
         }
     })
 }
@@ -180,53 +202,79 @@ enum CapacitySpec {
 }
 
 impl CapacitySpec {
-    fn expand_mailbox(&self, actor: &TokenStream2, interleaving: &TokenStream2) -> TokenStream2 {
+    fn expand_mailbox(&self, actor: &TokenStream2) -> MailboxExpansion {
         match self {
-            Self::Default => quote!(#actor::__private::Mailbox<#interleaving>),
-            Self::Unbounded => {
-                quote!(#actor::__private::UnboundedMailbox<#interleaving>)
-            }
+            Self::Default => MailboxExpansion::bounded(
+                actor,
+                quote!(#actor::__private::DEFAULT_MAILBOX_CAPACITY),
+            ),
+            Self::Unbounded => MailboxExpansion::unbounded(actor),
             Self::Fixed(capacity) => {
                 let capacity = expand_const_argument(capacity);
-                quote!(#actor::__private::Mailbox<#interleaving, #capacity>)
+                MailboxExpansion::bounded(actor, capacity)
             }
-            Self::Dynamic => quote!(#actor::__private::DynamicMailbox<#interleaving>),
+            Self::Dynamic => MailboxExpansion::dynamic(actor, None),
             Self::DynamicWithDefault(capacity) => {
                 let capacity = expand_const_argument(capacity);
-                quote!(#actor::__private::DynamicMailbox<#interleaving, #capacity>)
+                MailboxExpansion::dynamic(actor, Some(capacity))
             }
         }
     }
+}
 
-    fn expand_children(&self, actor: &TokenStream2) -> TokenStream2 {
-        match self {
-            Self::Default => quote!(#actor::__private::Children),
-            Self::Unbounded => quote!(#actor::__private::UnboundedChildren),
-            Self::Fixed(capacity) => {
-                let capacity = expand_const_argument(capacity);
-                quote!(#actor::__private::Children<#capacity>)
-            }
-            Self::Dynamic => quote!(#actor::__private::DynamicChildren),
-            Self::DynamicWithDefault(capacity) => {
-                let capacity = expand_const_argument(capacity);
-                quote!(#actor::__private::DynamicChildren<#capacity>)
-            }
+struct MailboxExpansion {
+    options: TokenStream2,
+    sender: TokenStream2,
+    inbox: TokenStream2,
+    open: TokenStream2,
+}
+
+impl MailboxExpansion {
+    fn absent(actor: &TokenStream2) -> Self {
+        Self {
+            options: quote!(#actor::__private::NoMailbox),
+            sender: quote!(#actor::__private::NoSender),
+            inbox: quote!(#actor::__private::NoInbox),
+            open: quote!(#actor::__private::NoSender::open()),
         }
     }
 
-    fn expand_interleaving(&self, actor: &TokenStream2) -> TokenStream2 {
-        match self {
-            Self::Default => quote!(#actor::__private::Interleaving),
-            Self::Unbounded => quote!(#actor::__private::UnboundedInterleaving),
-            Self::Fixed(capacity) => {
-                let capacity = expand_const_argument(capacity);
-                quote!(#actor::__private::Interleaving<#capacity>)
-            }
-            Self::Dynamic => quote!(#actor::__private::DynamicInterleaving),
-            Self::DynamicWithDefault(capacity) => {
-                let capacity = expand_const_argument(capacity);
-                quote!(#actor::__private::DynamicInterleaving<#capacity>)
-            }
+    fn bounded(actor: &TokenStream2, capacity: TokenStream2) -> Self {
+        Self {
+            options: quote!(#actor::__private::FixedMailbox),
+            sender: quote!(#actor::__private::BoundedSender<Self>),
+            inbox: quote!(#actor::__private::BoundedInbox<Self>),
+            open: quote! {
+                let capacity = const {
+                    ::core::num::NonZeroUsize::new(#capacity)
+                        .expect("mailbox capacity must be greater than zero")
+                };
+                #actor::__private::BoundedSender::<Self>::open(capacity)
+            },
+        }
+    }
+
+    fn dynamic(actor: &TokenStream2, default: Option<TokenStream2>) -> Self {
+        let options = match default {
+            Some(default) => quote!(#actor::__private::DynamicMailbox<#default>),
+            None => quote!(#actor::__private::DynamicMailbox),
+        };
+        Self {
+            options,
+            sender: quote!(#actor::__private::BoundedSender<Self>),
+            inbox: quote!(#actor::__private::BoundedInbox<Self>),
+            open: quote! {
+                #actor::__private::BoundedSender::<Self>::open(options.mailbox_capacity())
+            },
+        }
+    }
+
+    fn unbounded(actor: &TokenStream2) -> Self {
+        Self {
+            options: quote!(#actor::__private::UnboundedMailbox),
+            sender: quote!(#actor::__private::UnboundedSender<Self>),
+            inbox: quote!(#actor::__private::UnboundedInbox<Self>),
+            open: quote!(#actor::__private::UnboundedSender::<Self>::open()),
         }
     }
 }

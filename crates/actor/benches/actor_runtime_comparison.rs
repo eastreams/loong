@@ -1,14 +1,11 @@
 use std::{
     hint::black_box,
     io::{self, Write},
-    num::NonZeroUsize,
     time::{Duration, Instant},
 };
 
 use actix::Actor as _;
-use loong_actor::{
-    ActorOwner, ActorRef, ExitReason, Shutdown, SpawnOptions, prelude::*, spawn_with,
-};
+use loong_actor::{ActorOwner, ActorRef, ExitReason, Shutdown, prelude::*, spawn};
 use oorandom::Rand64;
 use serde::Serialize;
 
@@ -194,14 +191,7 @@ impl RuntimePair {
         let loong_runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .expect("the Loong benchmark runtime builds");
-        let mailbox_capacity =
-            NonZeroUsize::new(MAILBOX_CAPACITY).expect("the benchmark capacity is non-zero");
-        let loong_owner = loong_runtime.block_on(async {
-            spawn_with::<LoongActor>(
-                (),
-                SpawnOptions::default().with_mailbox_capacity(mailbox_capacity),
-            )
-        });
+        let loong_owner = loong_runtime.block_on(async { spawn::<LoongActor>(()) });
         let loong_actor = loong_owner.actor_ref();
 
         let actix_system = actix::System::with_tokio_rt(|| {

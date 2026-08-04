@@ -1,6 +1,10 @@
 // The runtime dependency uses a Cargo alias.
 // Both attribute forms must resolve that alias.
-use actor_api::{ActorConfig, prelude::*};
+use std::num::NonZeroUsize;
+
+use actor_api::{
+    ActorConfig, DynamicMailboxOptions, InterleavingConfig, MessageConfig, prelude::*,
+};
 
 struct Bare;
 
@@ -83,7 +87,7 @@ impl Actor for Combined {
 struct Generic<T, const N: usize>(T);
 
 #[actor_api::actor(
-    mailbox = N,
+    mailbox = dynamic(N),
     mailbox_budget = N,
     interleaved = dynamic(N),
     children = N,
@@ -103,7 +107,7 @@ where
 #[cfg(any())]
 struct Disabled;
 
-#[actor_api::actor]
+#[actor_api::actor(mailbox = dynamic)]
 #[cfg(any())]
 impl Actor for Disabled {
     type SpawnArgs = ();
@@ -113,7 +117,19 @@ impl Actor for Disabled {
     }
 }
 
-fn assert_config<A: ActorConfig>() {}
+fn assert_config<A>()
+where
+    A: ActorConfig + InterleavingConfig + MessageConfig,
+{
+}
+
+fn override_mailbox_capacity<A>(options: A::Options) -> A::Options
+where
+    A: ActorConfig,
+    A::Options: DynamicMailboxOptions,
+{
+    options.with_mailbox_capacity(NonZeroUsize::MIN)
+}
 
 fn main() {
     assert_config::<Bare>();
@@ -126,4 +142,10 @@ fn main() {
     assert_eq!(Messaging::MAILBOX_DISPATCH_BUDGET.get(), 3);
     assert_eq!(Combined::MAILBOX_DISPATCH_BUDGET.get(), MAILBOX_BUDGET);
     assert_eq!(Generic::<u8, 6>::MAILBOX_DISPATCH_BUDGET.get(), 6);
+
+    let _ = actor_api::SpawnOptions::<DynamicMailbox>::default()
+        .with_mailbox_capacity(NonZeroUsize::MIN);
+    let _ = override_mailbox_capacity::<Generic<u8, 6>>(
+        actor_api::SpawnOptions::<Generic<u8, 6>>::default(),
+    );
 }

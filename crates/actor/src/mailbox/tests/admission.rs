@@ -11,11 +11,11 @@ use std::{
 use tokio::sync::oneshot;
 
 use crate::{
-    Actor, ActorScope, CallError, ExitReason, Handler, Message, ReplyExt, Shutdown, ShutdownStatus,
-    owned::OwnedTasks, scheduler::ReplyScheduler,
+    Actor, ActorConfig, ActorScope, CallError, ExitReason, Handler, Message, ReplyExt, Shutdown,
+    ShutdownStatus, owned::OwnedTasks, scheduler::ReplyScheduler, transport::MessageSender,
 };
 
-use super::super::{ActorInner, CallEnvelope, Envelope, Mode};
+use super::super::{ActorInbox, ActorInner, CallEnvelope, Control, Envelope, Mode};
 use super::{PanicWake, WakeCounter};
 
 struct TestActor;
@@ -29,18 +29,62 @@ impl Actor for TestActor {
     }
 }
 
+struct UnboundedTestActor;
+
+#[crate::actor(mailbox = unbounded)]
+impl Actor for UnboundedTestActor {
+    type SpawnArgs = ();
+
+    async fn init(_args: (), _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self
+    }
+}
+
 struct NoopEnvelope;
 
-impl Envelope<TestActor> for NoopEnvelope {
+impl<A: Actor> Envelope<A> for NoopEnvelope {
     fn dispatch(
         self: Box<Self>,
-        _actor: &mut TestActor,
-        _scope: &mut ActorScope<TestActor>,
-        _owned: &OwnedTasks<TestActor>,
-        _scheduler: &mut ReplyScheduler<TestActor>,
-        _inner: &Arc<ActorInner<TestActor>>,
+        _actor: &mut A,
+        _scope: &mut ActorScope<A>,
+        _owned: &OwnedTasks<A>,
+        _scheduler: &mut ReplyScheduler<A>,
+        _inner: &Arc<ActorInner<A>>,
     ) {
     }
+
+    fn discard(self: Box<Self>, _control: &Control) {}
+}
+
+struct PanicDropEnvelope(Arc<AtomicBool>);
+
+impl Drop for PanicDropEnvelope {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+        panic!("intentional envelope drop panic");
+    }
+}
+
+impl Envelope<UnboundedTestActor> for PanicDropEnvelope {
+    fn dispatch(
+        self: Box<Self>,
+        _actor: &mut UnboundedTestActor,
+        _scope: &mut ActorScope<UnboundedTestActor>,
+        _owned: &OwnedTasks<UnboundedTestActor>,
+        _scheduler: &mut ReplyScheduler<UnboundedTestActor>,
+        _inner: &Arc<ActorInner<UnboundedTestActor>>,
+    ) {
+        unreachable!("the broken backend cannot dispatch its envelope")
+    }
+
+    fn discard(self: Box<Self>, control: &Control) {
+        control.drop_user_value(self);
+    }
+}
+
+fn open<A: Actor>() -> (Arc<ActorInner<A>>, ActorInbox<A>) {
+    let options = <A as ActorConfig>::Options::default();
+    ActorInner::open(&options)
 }
 
 #[derive(Message)]
@@ -64,13 +108,12 @@ impl Handler<RecoverMessage> for TestActor {
 
 // A capacity reservation is not admission. Once Drain wins the lifecycle
 // transaction, the reserved slot must be returned without entering inbox.
-#[tokio::test]
-async fn shutdown_wins_over_an_acquired_but_uncommitted_permit() {
-    let (inner, inbox) = ActorInner::<TestActor>::channel(1);
+#[test]
+fn shutdown_wins_over_an_acquired_but_uncommitted_permit() {
+    let (inner, inbox) = open::<TestActor>();
     let permit = inner
         .sender
-        .reserve()
-        .await
+        .try_reserve()
         .expect("the test mailbox is open");
 
     assert_eq!(
@@ -87,15 +130,14 @@ async fn shutdown_wins_over_an_acquired_but_uncommitted_permit() {
     assert!(inbox.is_empty());
 }
 
-#[tokio::test]
-async fn committed_send_is_part_of_the_fixed_drain_queue() {
+#[test]
+fn committed_send_is_part_of_the_fixed_drain_queue() {
     // Observe the inbox directly to isolate the admission/Drain ordering:
     // once admission wins the shared gate, Drain must retain that envelope.
-    let (inner, mut inbox) = ActorInner::<TestActor>::channel(1);
+    let (inner, mut inbox) = open::<TestActor>();
     let permit = inner
         .sender
-        .reserve()
-        .await
+        .try_reserve()
         .expect("the test mailbox is open");
 
     let committed = inner.admit(permit, Box::new(NoopEnvelope));
@@ -111,18 +153,61 @@ async fn committed_send_is_part_of_the_fixed_drain_queue() {
     assert!(inbox.is_empty());
 }
 
+#[test]
+fn unbounded_reservation_still_uses_lifecycle_admission() {
+    let (inner, inbox) = open::<UnboundedTestActor>();
+    let reservation = inner
+        .sender
+        .try_reserve()
+        .expect("the unbounded inbox is open");
+    assert_eq!(
+        inner.control.request(Shutdown::Drain),
+        ShutdownStatus::Requested
+    );
+
+    let Err((_reservation, envelope)) = inner.admit(reservation, Box::new(NoopEnvelope)) else {
+        panic!("Drain must reject an uncommitted unbounded envelope");
+    };
+    drop(envelope);
+    assert!(inbox.is_empty());
+}
+
+// Running requires every backend receiver to remain open. A violation must
+// contain the erased value, fail the actor, and remain visible as a panic.
+#[test]
+fn transport_closure_during_running_is_a_contained_invariant_failure() {
+    let (inner, mut inbox) = open::<UnboundedTestActor>();
+    let reservation = inner
+        .sender
+        .try_reserve()
+        .expect("the unbounded inbox is initially open");
+    inbox.close();
+    let dropped = Arc::new(AtomicBool::new(false));
+
+    let failure = panic::catch_unwind(AssertUnwindSafe(|| {
+        let _ = inner.admit(
+            reservation,
+            Box::new(PanicDropEnvelope(Arc::clone(&dropped))),
+        );
+    }));
+
+    assert!(failure.is_err());
+    assert!(dropped.load(Ordering::SeqCst));
+    assert_eq!(inner.control.mode(), Mode::Failing);
+    assert!(inbox.is_empty());
+}
+
 // The typed rejected path must recover the concrete call message rather
 // than dropping CallEnvelope and publishing a fabricated queued failure.
-#[tokio::test]
-async fn rejected_call_admission_recovers_its_message_without_a_reply() {
-    let (inner, inbox) = ActorInner::<TestActor>::channel(1);
+#[test]
+fn rejected_call_admission_recovers_its_message_without_a_reply() {
+    let (inner, inbox) = open::<TestActor>();
     let permit = inner
         .sender
-        .reserve()
-        .await
+        .try_reserve()
         .expect("the test mailbox is open");
     let drops = Arc::new(AtomicUsize::new(0));
-    let (envelope, mut response) = CallEnvelope::new(RecoverMessage(Arc::clone(&drops)), &inner);
+    let (envelope, mut response) = CallEnvelope::new(RecoverMessage(Arc::clone(&drops)));
     assert_eq!(
         inner.control.request(Shutdown::Stop),
         ShutdownStatus::Requested
@@ -150,10 +235,9 @@ async fn rejected_call_admission_recovers_its_message_without_a_reply() {
 // Uncommitted work must not fail the actor.
 #[test]
 fn call_recovery_contains_response_waker_panic() {
-    let (actor, _inbox) = ActorInner::<TestActor>::channel(1);
+    let (actor, _inbox) = open::<TestActor>();
     let message_drops = Arc::new(AtomicUsize::new(0));
-    let (envelope, response) =
-        CallEnvelope::new(RecoverMessage(Arc::clone(&message_drops)), &actor);
+    let (envelope, response) = CallEnvelope::new(RecoverMessage(Arc::clone(&message_drops)));
     let wakes = Arc::new(AtomicUsize::new(0));
     let waker = Waker::from(Arc::new(PanicWake(Arc::clone(&wakes))));
     let mut task = Context::from_waker(&waker);
@@ -170,6 +254,25 @@ fn call_recovery_contains_response_waker_panic() {
     assert_eq!(message_drops.load(Ordering::SeqCst), 1);
 }
 
+// A malformed transport may drop its opaque carrier.
+// That violation closes the reply without touching lifecycle state.
+// Conforming transports always return accepted work to the runtime.
+#[test]
+fn raw_call_envelope_drop_has_no_lifecycle_callback() {
+    let (actor, _inbox) = open::<TestActor>();
+    let message_drops = Arc::new(AtomicUsize::new(0));
+    let (envelope, mut response) = CallEnvelope::new(RecoverMessage(Arc::clone(&message_drops)));
+
+    drop(envelope);
+
+    assert_eq!(
+        response.try_recv(),
+        Err(oneshot::error::TryRecvError::Closed)
+    );
+    assert_eq!(message_drops.load(Ordering::SeqCst), 1);
+    assert_eq!(actor.control.mode(), Mode::Running);
+}
+
 #[derive(Message)]
 struct PanicDropMessage(Arc<AtomicBool>);
 
@@ -180,21 +283,35 @@ impl Drop for PanicDropMessage {
     }
 }
 
+impl Handler<PanicDropMessage> for TestActor {
+    fn handle(
+        &mut self,
+        _message: PanicDropMessage,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl crate::IntoReply<Self, PanicDropMessage> + use<> {
+        ().ready()
+    }
+}
+
 // Queued rejection first notifies the caller, then drops its message.
 // Both callbacks may panic and must remain separate containment boundaries.
 #[test]
-fn queued_call_drop_contains_notification_and_message_drop_panics() {
-    let (actor, _inbox) = ActorInner::<TestActor>::channel(1);
+fn queued_call_discard_contains_notification_and_message_drop_panics() {
+    let (actor, _inbox) = open::<TestActor>();
     let message_dropped = Arc::new(AtomicBool::new(false));
-    let (envelope, response) =
-        CallEnvelope::new(PanicDropMessage(Arc::clone(&message_dropped)), &actor);
+    let (envelope, response) = CallEnvelope::new(PanicDropMessage(Arc::clone(&message_dropped)));
     let wakes = Arc::new(AtomicUsize::new(0));
     let waker = Waker::from(Arc::new(PanicWake(Arc::clone(&wakes))));
     let mut task = Context::from_waker(&waker);
     let mut response = Box::pin(response);
     assert!(response.as_mut().poll(&mut task).is_pending());
 
-    let dropped = panic::catch_unwind(AssertUnwindSafe(|| drop(envelope)));
+    let dropped = panic::catch_unwind(AssertUnwindSafe(|| {
+        <CallEnvelope<PanicDropMessage> as Envelope<TestActor>>::discard(
+            Box::new(envelope),
+            &actor.control,
+        );
+    }));
 
     assert!(dropped.is_ok());
     assert!(message_dropped.load(Ordering::SeqCst));
@@ -210,7 +327,7 @@ fn queued_call_drop_contains_notification_and_message_drop_panics() {
 // gate without publishing a fake lifecycle change to every closed() waiter.
 #[test]
 fn mailbox_admission_does_not_wake_lifecycle_observers() {
-    let (inner, mut inbox) = ActorInner::<TestActor>::channel(1);
+    let (inner, mut inbox) = open::<TestActor>();
     let mut mode = inner.control.subscribe_mode();
     let mut changed = Box::pin(mode.changed());
     let wakes = Arc::new(WakeCounter(AtomicUsize::new(0)));

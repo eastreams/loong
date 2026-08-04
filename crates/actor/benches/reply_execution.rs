@@ -270,7 +270,7 @@ fn spawn_benchmark_actor(active: usize, max_interleaved: NonZeroUsize) -> ActorO
     let capacity = NonZeroUsize::new(active).expect("active reply counts are non-zero");
     spawn_with::<ReplyActor>(
         (),
-        SpawnOptions::default()
+        SpawnOptions::<ReplyActor>::default()
             .with_mailbox_capacity(capacity)
             .with_max_in_flight(max_interleaved),
     )
@@ -400,7 +400,7 @@ async fn measure_mailbox_turn_to_target_poll_under_backlog(
     let mailbox_capacity = NonZeroUsize::new(backlog).expect("mailbox backlog counts are non-zero");
     let owner = spawn_with::<ReplyActor>(
         (),
-        SpawnOptions::default()
+        SpawnOptions::<ReplyActor>::default()
             .with_mailbox_capacity(mailbox_capacity)
             // A pending probe needs capacity for staging dispatch.
             .with_max_in_flight(execution.max_interleaved(2)),

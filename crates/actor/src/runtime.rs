@@ -14,69 +14,19 @@ use slotmap::{DefaultKey, SlotMap};
 use tokio::sync::mpsc;
 
 use crate::{
-    Actor, ActorRef, Child, ChildExit, ChildId, ErasedFuture, ExitReason, ExitStatus, Shutdown,
-    ShutdownStatus, SubtreeStatus,
+    Actor, ActorConfig, ActorRef, Child, ChildExit, ChildId, ErasedFuture, ExitReason, ExitStatus,
+    Shutdown, ShutdownStatus, SubtreeStatus,
+    config::InterleavingConfig,
     mailbox::{ActorInbox, ActorInner, Control, HookEntryPermit, Mode},
     owned::OwnedTasks,
     scheduler::{InterleavedPoll, ReplyScheduler},
+    transport::MessageConfig,
 };
 
-/// Configuration applied when one actor is spawned.
-///
-/// Mailbox capacity bounds accepted work waiting for dispatch.
-/// The in-flight limit bounds active interleaved replies.
-/// Both limits default to 32.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SpawnOptions {
-    mailbox_capacity: NonZeroUsize,
-    max_in_flight: NonZeroUsize,
-}
+/// Actor-specific configuration applied to one spawn.
+pub type SpawnOptions<A> = <A as ActorConfig>::Options;
 
-impl SpawnOptions {
-    /// Sets the maximum number of queued, not-yet-dequeued messages.
-    pub const fn with_mailbox_capacity(mut self, mailbox_capacity: NonZeroUsize) -> Self {
-        self.mailbox_capacity = mailbox_capacity;
-        self
-    }
-
-    /// Sets the maximum number of active interleaved replies.
-    ///
-    /// At the limit, new mailbox dispatch pauses.
-    /// This also delays ready or owned handler dispatch.
-    /// The runtime learns the reply mode only after dispatch.
-    /// Owned tasks are unbounded and consume no slot.
-    /// Exclusive work runs alone among actor-aware replies.
-    /// No slot is reserved for self-calls.
-    pub const fn with_max_in_flight(mut self, max_in_flight: NonZeroUsize) -> Self {
-        self.max_in_flight = max_in_flight;
-        self
-    }
-
-    /// Returns the maximum number of queued, not-yet-dequeued messages.
-    pub const fn mailbox_capacity(self) -> NonZeroUsize {
-        self.mailbox_capacity
-    }
-
-    /// Returns the maximum number of active interleaved replies.
-    ///
-    /// See [`with_max_in_flight`](Self::with_max_in_flight) for the dispatch and
-    /// self-call behavior governed by this limit.
-    pub const fn max_in_flight(self) -> NonZeroUsize {
-        self.max_in_flight
-    }
-}
-
-impl Default for SpawnOptions {
-    fn default() -> Self {
-        let default = NonZeroUsize::new(32).expect("the default limits are non-zero");
-        Self {
-            mailbox_capacity: default,
-            max_in_flight: default,
-        }
-    }
-}
-
-/// Spawns a root actor with [`SpawnOptions::default`].
+/// Spawns a root actor with its default [`SpawnOptions`].
 ///
 /// This schedules [`Actor::init`] and returns immediately.
 /// Mailbox admission opens before initialization completes.
@@ -87,7 +37,7 @@ impl Default for SpawnOptions {
 /// This function requires an active Tokio runtime.
 #[must_use = "dropping the returned owner requests Kill"]
 pub fn spawn<A: Actor>(args: A::SpawnArgs) -> ActorOwner<A> {
-    spawn_with::<A>(args, SpawnOptions::default())
+    spawn_with::<A>(args, SpawnOptions::<A>::default())
 }
 
 /// Spawns a root actor with explicit options.
@@ -96,7 +46,7 @@ pub fn spawn<A: Actor>(args: A::SpawnArgs) -> ActorOwner<A> {
 /// The returned [`ActorOwner`] owns the actor lifecycle.
 /// This function requires an active Tokio runtime.
 #[must_use = "dropping the returned owner requests Kill"]
-pub fn spawn_with<A: Actor>(args: A::SpawnArgs, options: SpawnOptions) -> ActorOwner<A> {
+pub fn spawn_with<A: Actor>(args: A::SpawnArgs, options: SpawnOptions<A>) -> ActorOwner<A> {
     ActorOwner(PreparedActor::new(args, options).start(None))
 }
 
@@ -292,7 +242,7 @@ impl<A: Actor> ActorScope<'_, A> {
     /// Retained graceful work keeps this capability.
     /// A concurrent Kill cannot interrupt the current poll.
     pub fn spawn_child<C: Actor>(&mut self, args: C::SpawnArgs) -> Child<C> {
-        self.spawn_child_with::<C>(args, SpawnOptions::default())
+        self.spawn_child_with::<C>(args, SpawnOptions::<C>::default())
     }
 
     /// Spawns and owns one direct child actor with explicit options.
@@ -305,7 +255,7 @@ impl<A: Actor> ActorScope<'_, A> {
     pub fn spawn_child_with<C: Actor>(
         &mut self,
         args: C::SpawnArgs,
-        options: SpawnOptions,
+        options: SpawnOptions<C>,
     ) -> Child<C> {
         self.state
             .children
@@ -398,7 +348,7 @@ impl ChildSet {
     fn spawn<A: Actor>(
         &mut self,
         args: A::SpawnArgs,
-        options: SpawnOptions,
+        options: SpawnOptions<A>,
         events: mpsc::UnboundedSender<ChildExit>,
     ) -> Child<A> {
         let prepared = PreparedActor::new(args, options);
@@ -454,8 +404,10 @@ impl ChildSet {
 }
 
 impl<A: Actor> PreparedActor<A> {
-    fn new(args: A::SpawnArgs, options: SpawnOptions) -> Self {
-        let (inner, inbox) = ActorInner::channel(options.mailbox_capacity().get());
+    fn new(args: A::SpawnArgs, options: SpawnOptions<A>) -> Self {
+        // Resolve borrowed options before any value enters the spawned task.
+        let max_in_flight = <A as InterleavingConfig>::max_in_flight(&options);
+        let (inner, inbox) = ActorInner::open(&options);
         let actor_ref = ActorRef::new(inner);
 
         // Each actor receives terminal events from its direct children.
@@ -466,13 +418,7 @@ impl<A: Actor> PreparedActor<A> {
             children: ChildSet::default(),
             supervisor_tx,
         };
-        let future = Box::pin(run_actor(
-            args,
-            state,
-            inbox,
-            supervisor_rx,
-            options.max_in_flight(),
-        ));
+        let future = Box::pin(run_actor(args, state, inbox, supervisor_rx, max_in_flight));
 
         Self { actor_ref, future }
     }
@@ -896,7 +842,7 @@ async fn actor_turn<A: Actor>(
 ) -> Turn {
     let control = &inner.control;
     let wait_for_owned = !receive_messages && scheduler.is_empty();
-    let mailbox_dispatch_budget = A::MAILBOX_DISPATCH_BUDGET.get();
+    let mailbox_dispatch_budget = <A as MessageConfig>::MAILBOX_DISPATCH_BUDGET.get();
     let fair_turn = std::future::poll_fn(|task| {
         if control.mode() != expected_mode {
             return Poll::Ready(Turn::LifecycleHint);

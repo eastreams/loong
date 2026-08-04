@@ -1,20 +1,19 @@
 use std::{fmt, future::Future, pin::Pin, sync::Arc, task};
 
-use tokio::sync::mpsc;
-
 use crate::{
-    Actor, CallError, ExitStatus, Handler, Message, MessageActor, SendError, Shutdown,
-    ShutdownStatus, TryCallError, TryCallErrorKind, TrySendError, TrySendErrorKind,
+    Actor, CallError, ExitStatus, Handler, Message, SendError, Shutdown, ShutdownStatus,
+    TryCallError, TryCallErrorKind, TrySendError, TrySendErrorKind,
+    actor::HasMailbox,
     mailbox::{
-        ActorInner, CallEnvelope, DynEnvelope, Mode, ReplyReceiver, SendEnvelope,
-        poll_with_panic_safe_waker,
+        ActorInner, CallEnvelope, Mode, ReplyReceiver, SendEnvelope, poll_with_panic_safe_waker,
     },
+    transport::{MessageConfig, MessageReservation, MessageSender, TryReserveError},
 };
 
 /// A cloneable actor handle.
 ///
 /// Every handle can request shutdown and observe terminal state.
-/// A [`MessageActor`] handle can also send typed messages.
+/// A [`HasMailbox`] handle can also send typed messages.
 /// A handle does not own lifecycle.
 /// Keeping one alive does not delay owner-initiated shutdown.
 pub struct ActorRef<A: Actor>(pub(crate) Arc<ActorInner<A>>);
@@ -51,23 +50,28 @@ impl<A: Actor> ActorRef<A> {
         A: Handler<M>,
         M: Message,
     {
-        let inner = &self.0;
-        let Some(permit) = reserve_capacity(inner).await else {
-            return Err(CallError::Closed);
-        };
-
-        let (envelope, response) = CallEnvelope::new(message, inner);
-        match inner.admit(permit, Box::new(envelope)) {
-            Ok(()) => {}
-            Err((permit, envelope)) => {
-                drop(permit);
-                drop(response);
-                drop((*envelope).into_message());
+        let response = match self.try_call(message) {
+            Ok(response) => response,
+            Err(error) if error.kind() == TryCallErrorKind::Closed => {
                 return Err(CallError::Closed);
             }
-        }
+            Err(error) => {
+                let message = error.into_message();
+                let reservation = match reserve_owned_capacity(&self.0).await {
+                    CapacityReservation::Reserved(reservation) => reservation,
+                    CapacityReservation::Closed => return Err(CallError::Closed),
+                    CapacityReservation::TransportClosed => {
+                        self.fail_transport_closed(message);
+                    }
+                };
+                match self.admit_call(reservation, message) {
+                    Ok(response) => response,
+                    Err(_message) => return Err(CallError::Closed),
+                }
+            }
+        };
 
-        Response::new(response).await
+        response.await
     }
 
     /// Sends a one-way message, waiting for bounded mailbox capacity if needed.
@@ -93,22 +97,27 @@ impl<A: Actor> ActorRef<A> {
         A: Handler<M>,
         M: Message<Reply = ()>,
     {
-        let inner = &self.0;
-        let Some(permit) = reserve_capacity(inner).await else {
-            return Err(SendError::new(message));
-        };
-
-        let envelope = Box::new(SendEnvelope::new(message));
-        match inner.admit(permit, envelope) {
+        match self.try_send(message) {
             Ok(()) => Ok(()),
-            Err((permit, envelope)) => {
-                drop(permit);
-                Err(SendError::new((*envelope).into_message()))
+            Err(error) if error.kind() == TrySendErrorKind::Closed => {
+                Err(SendError::new(error.into_message()))
+            }
+            Err(error) => {
+                let message = error.into_message();
+                let reservation = match reserve_owned_capacity(&self.0).await {
+                    CapacityReservation::Reserved(reservation) => reservation,
+                    CapacityReservation::Closed => return Err(SendError::new(message)),
+                    CapacityReservation::TransportClosed => {
+                        self.fail_transport_closed(message);
+                    }
+                };
+                self.admit_send(reservation, message)
+                    .map_err(SendError::new)
             }
         }
     }
 
-    /// Attempts immediate bounded admission without waiting for capacity.
+    /// Attempts immediate admission without waiting for capacity.
     ///
     /// Success means the message was accepted, not that its handler has run. The
     /// returned [`Response`] follows the same queued, dispatch, completion, and
@@ -126,7 +135,7 @@ impl<A: Actor> ActorRef<A> {
 
         let permit = match inner.sender.try_reserve() {
             Ok(permit) => permit,
-            Err(mpsc::error::TrySendError::Full(_)) => {
+            Err(TryReserveError::Full) => {
                 let kind = if inner.control.is_running() {
                     TryCallErrorKind::Full
                 } else {
@@ -134,26 +143,19 @@ impl<A: Actor> ActorRef<A> {
                 };
                 return Err(TryCallError::new(kind, message));
             }
-            Err(mpsc::error::TrySendError::Closed(_)) => {
+            Err(TryReserveError::Closed) => {
+                if inner.control.is_running() {
+                    self.fail_transport_closed(message);
+                }
                 return Err(TryCallError::new(TryCallErrorKind::Closed, message));
             }
         };
 
-        let (envelope, response) = CallEnvelope::new(message, inner);
-        match inner.admit(permit, Box::new(envelope)) {
-            Ok(()) => Ok(Response::new(response)),
-            Err((permit, envelope)) => {
-                drop(permit);
-                drop(response);
-                Err(TryCallError::new(
-                    TryCallErrorKind::Closed,
-                    (*envelope).into_message(),
-                ))
-            }
-        }
+        self.admit_call(permit, message)
+            .map_err(|message| TryCallError::new(TryCallErrorKind::Closed, message))
     }
 
-    /// Attempts immediate bounded admission of a one-way message.
+    /// Attempts immediate admission of a one-way message.
     ///
     /// Success means the message was accepted, not that its handler has run.
     /// Accepted work has no response receiver and therefore cannot be abandoned
@@ -172,7 +174,7 @@ impl<A: Actor> ActorRef<A> {
 
         let permit = match inner.sender.try_reserve() {
             Ok(permit) => permit,
-            Err(mpsc::error::TrySendError::Full(_)) => {
+            Err(TryReserveError::Full) => {
                 let kind = if inner.control.is_running() {
                     TrySendErrorKind::Full
                 } else {
@@ -180,22 +182,16 @@ impl<A: Actor> ActorRef<A> {
                 };
                 return Err(TrySendError::new(kind, message));
             }
-            Err(mpsc::error::TrySendError::Closed(_)) => {
+            Err(TryReserveError::Closed) => {
+                if inner.control.is_running() {
+                    self.fail_transport_closed(message);
+                }
                 return Err(TrySendError::new(TrySendErrorKind::Closed, message));
             }
         };
 
-        let envelope = Box::new(SendEnvelope::new(message));
-        match inner.admit(permit, envelope) {
-            Ok(()) => Ok(()),
-            Err((permit, envelope)) => {
-                drop(permit);
-                Err(TrySendError::new(
-                    TrySendErrorKind::Closed,
-                    (*envelope).into_message(),
-                ))
-            }
-        }
+        self.admit_send(permit, message)
+            .map_err(|message| TrySendError::new(TrySendErrorKind::Closed, message))
     }
 
     /// Requests Stop, Drain, or Kill without taking lifecycle ownership.
@@ -233,35 +229,102 @@ impl<A: Actor> ActorRef<A> {
                 .expect("the actor task publishes an exit status before closing");
         }
     }
+
+    /// Builds and admits a call with either reservation ownership shape.
+    fn admit_call<M, R>(&self, reservation: R, message: M) -> Result<Response<M::Reply>, M>
+    where
+        A: Handler<M>,
+        M: Message,
+        R: MessageReservation<A>,
+    {
+        let (envelope, response) = CallEnvelope::new(message);
+        match self.0.admit(reservation, Box::new(envelope)) {
+            Ok(()) => Ok(Response::new(response)),
+            Err((reservation, envelope)) => {
+                drop(reservation);
+                drop(response);
+                Err((*envelope).into_message())
+            }
+        }
+    }
+
+    /// Builds and admits a one-way envelope with either reservation shape.
+    fn admit_send<M, R>(&self, reservation: R, message: M) -> Result<(), M>
+    where
+        A: Handler<M>,
+        M: Message<Reply = ()>,
+        R: MessageReservation<A>,
+    {
+        let envelope = Box::new(SendEnvelope::new(message));
+        match self.0.admit(reservation, envelope) {
+            Ok(()) => Ok(()),
+            Err((reservation, envelope)) => {
+                drop(reservation);
+                Err((*envelope).into_message())
+            }
+        }
+    }
+
+    /// Contains an unaccepted value before exposing transport failure.
+    fn fail_transport_closed<T>(&self, value: T) -> ! {
+        // The reservation failed, so erasure and admission never began.
+        self.0.control.begin_failure();
+        self.0.control.drop_user_value(value);
+        panic!("message transport closed while actor was running");
+    }
 }
 
-/// Reserves mailbox capacity without committing lifecycle admission.
-///
-/// Ready capacity avoids subscription and Waker allocation.
-/// While full, shutdown cancels the wait.
-/// [`ActorInner::admit`] remains the commit point.
-async fn reserve_capacity<A: MessageActor>(
+enum CapacityReservation<R> {
+    Reserved(R),
+    Closed,
+    TransportClosed,
+}
+
+/// Waits for transport capacity without retaining a borrowed reservation.
+#[expect(
+    clippy::manual_async_fn,
+    reason = "the explicit Send bound closes a generic HRTB gap"
+)]
+fn reserve_owned_capacity<A>(
     inner: &ActorInner<A>,
-) -> Option<mpsc::Permit<'_, DynEnvelope<A>>> {
-    match inner.sender.try_reserve() {
-        Ok(permit) => return Some(permit),
-        Err(mpsc::error::TrySendError::Closed(_)) => return None,
-        Err(mpsc::error::TrySendError::Full(_)) => {}
-    }
-
-    let mut mode = inner.control.subscribe_mode();
-    if !inner.control.is_running() {
-        return None;
-    }
-
-    poll_with_panic_safe_waker(async {
-        tokio::select! {
-            biased;
-            reserved = inner.sender.reserve() => reserved.ok(),
-            _ = mode.changed() => None,
+) -> impl Future<
+    Output = CapacityReservation<
+        <<A as MessageConfig>::Sender as MessageSender<A>>::OwnedReservation,
+    >,
+>
++ Send
++ '_
++ use<'_, A>
+where
+    A: HasMailbox,
+{
+    async move {
+        let mut mode = inner.control.subscribe_mode();
+        if !inner.control.is_running() {
+            return CapacityReservation::Closed;
         }
-    })
-    .await
+
+        let reservation = poll_with_panic_safe_waker(async {
+            tokio::select! {
+                biased;
+                reservation = inner.sender.reserve_owned() => {
+                    match reservation {
+                        Some(reservation) => CapacityReservation::Reserved(reservation),
+                        None => CapacityReservation::TransportClosed,
+                    }
+                },
+                _ = mode.changed() => CapacityReservation::Closed,
+            }
+        })
+        .await;
+
+        match reservation {
+            CapacityReservation::TransportClosed if !inner.control.is_running() => {
+                CapacityReservation::Closed
+            }
+            reservation => reservation,
+        }
+    }
 }
 
 impl<A: Actor> Clone for ActorRef<A> {

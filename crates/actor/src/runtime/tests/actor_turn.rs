@@ -11,15 +11,16 @@ use std::{
 use tokio::sync::mpsc;
 
 use crate::{
-    ActorConfig, ActorScope, ChildExit, ChildId, ExitReason, ExitStatus, IntoActorFuture, Shutdown,
+    ActorScope, ChildExit, ChildId, ExitReason, ExitStatus, IntoActorFuture, Shutdown,
     SubtreeStatus,
-    mailbox::{ActorInbox, ActorInner, Envelope, Mode},
+    mailbox::{ActorInbox, ActorInner, Control, Envelope, Mode},
     owned::OwnedTasks,
     scheduler::ReplyScheduler,
+    transport::MessageConfig,
 };
 
 use super::super::{ChildSet, OrdinaryLane, ScopeState, Turn, TurnCursor, actor_turn};
-use super::{CountEnvelope, TestActor, scope_state};
+use super::{CountEnvelope, TestActor, enqueue_test_envelope, scope_state, test_actor_inner};
 
 /// Owns all inputs for focused actor-turn tests.
 struct ActorTurnFixture {
@@ -35,7 +36,7 @@ struct ActorTurnFixture {
 
 impl ActorTurnFixture {
     fn new(mailbox_capacity: usize, max_interleaved: NonZeroUsize) -> Self {
-        let (inner, inbox) = ActorInner::channel(mailbox_capacity);
+        let (inner, inbox) = test_actor_inner(mailbox_capacity);
         let (state, supervisor_rx) = scope_state(&inner, ChildSet::default());
         let owned = OwnedTasks::new(Arc::clone(&inner));
         Self {
@@ -51,7 +52,7 @@ impl ActorTurnFixture {
     }
 
     fn enqueue(&self, envelope: impl Envelope<TestActor> + 'static) {
-        self.inner.sender.try_send(Box::new(envelope)).unwrap();
+        enqueue_test_envelope(&self.inner, envelope);
     }
 
     async fn next(&mut self, expected_mode: Mode) -> Turn {
@@ -122,12 +123,16 @@ impl Envelope<TestActor> for BatchBoundaryEnvelope {
             }
         }
     }
+
+    fn discard(self: Box<Self>, control: &Control) {
+        control.drop_user_value(self);
+    }
 }
 
 #[tokio::test]
 async fn ordinary_cursor_visits_each_actor_source_between_mailbox_batches() {
     // Each source must win before another mailbox batch.
-    let mailbox_dispatch_budget = TestActor::MAILBOX_DISPATCH_BUDGET.get();
+    let mailbox_dispatch_budget = <TestActor as MessageConfig>::MAILBOX_DISPATCH_BUDGET.get();
     let mailbox_dispatches = Arc::new(AtomicUsize::new(0));
     let mut fixture =
         ActorTurnFixture::new(mailbox_dispatch_budget + 1, NonZeroUsize::new(2).unwrap());
@@ -211,7 +216,7 @@ fn mailbox_batch_stops_after_dispatch_changes_lifecycle() {
 // Other lanes must win before its mailbox batch resumes.
 #[tokio::test]
 async fn drain_rotates_then_uses_the_configured_mailbox_budget() {
-    let mailbox_dispatch_budget = TestActor::MAILBOX_DISPATCH_BUDGET.get();
+    let mailbox_dispatch_budget = <TestActor as MessageConfig>::MAILBOX_DISPATCH_BUDGET.get();
     let dispatched = Arc::new(AtomicUsize::new(0));
     let mut fixture =
         ActorTurnFixture::new(mailbox_dispatch_budget + 2, NonZeroUsize::new(2).unwrap());

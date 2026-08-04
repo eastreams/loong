@@ -12,12 +12,15 @@ use std::{
     task::{Context, Wake, Waker},
 };
 
-use tokio::sync::{Notify, mpsc, watch};
+use tokio::sync::{Notify, watch};
 use tokio_util::sync::CancellationToken;
 
-use crate::{Actor, CallError, ExitReason, ExitStatus, Shutdown, ShutdownStatus};
+use crate::{
+    Actor, CallError, ExitReason, ExitStatus, Shutdown, ShutdownStatus,
+    transport::{ErasedEnvelope, MessageReservation},
+};
 
-use super::{ActorInner, DynEnvelope, Envelope, RejectedAdmission};
+use super::{ActorInner, Envelope};
 
 /// Polls a future without registering the task Waker directly.
 ///
@@ -26,7 +29,7 @@ use super::{ActorInner, DynEnvelope, Envelope, RejectedAdmission};
 /// Future polling panics remain visible.
 pub(crate) async fn poll_with_panic_safe_waker<F>(future: F) -> F::Output
 where
-    F: Future,
+    F: Future + Send,
 {
     let mut future = std::pin::pin!(future);
     poll_fn(|task| {
@@ -336,6 +339,12 @@ impl Control {
     }
 }
 
+enum Admission<R, E, A: Actor> {
+    Accepted,
+    Rejected(R, Box<E>),
+    BackendClosed(ErasedEnvelope<A>),
+}
+
 impl<A: Actor> ActorInner<A> {
     /// Linearizes handler dispatch with graceful cutoff and Kill.
     ///
@@ -366,25 +375,44 @@ impl<A: Actor> ActorInner<A> {
     /// The caller then releases capacity and recovers the message.
     /// Both actions happen after the transaction ends.
     ///
-    /// Only [`mpsc::Permit::send`] runs inside the transaction.
-    /// It can wake only the private actor task.
-    /// No user callback or destructor runs inside it.
-    pub(crate) fn admit<'a, E>(
-        &self,
-        permit: mpsc::Permit<'a, DynEnvelope<A>>,
-        envelope: Box<E>,
-    ) -> Result<(), RejectedAdmission<'a, A, E>>
+    /// Only transport enqueue runs inside the transaction.
+    /// Its contract forbids callbacks and lifecycle reentry.
+    /// It may wake only the private actor task.
+    /// No user destructor runs inside it.
+    /// The actor task leaves Running before inbox destruction.
+    /// Bounded permits rely on this ordering.
+    pub(crate) fn admit<R, E>(&self, permit: R, envelope: Box<E>) -> Result<(), (R, Box<E>)>
     where
+        R: MessageReservation<A>,
         E: Envelope<A> + 'static,
     {
-        self.control.transact(move |mode| {
+        let admission = self.control.transact(move |mode| {
             if mode == Mode::Running {
-                permit.send(envelope as DynEnvelope<A>);
-                (mode, Ok(()))
+                let envelope = ErasedEnvelope::new(envelope);
+                let admission = match permit.enqueue(envelope) {
+                    Ok(()) => Admission::Accepted,
+                    Err(envelope) => Admission::BackendClosed(envelope),
+                };
+                (mode, admission)
             } else {
-                (mode, Err((permit, envelope)))
+                (mode, Admission::Rejected(permit, envelope))
             }
-        })
+        });
+
+        match admission {
+            Admission::Accepted => Ok(()),
+            Admission::Rejected(permit, envelope) => Err((permit, envelope)),
+            Admission::BackendClosed(envelope) => self.fail_transport_closed(envelope),
+        }
+    }
+
+    /// Contains a value before exposing an impossible transport closure.
+    pub(crate) fn fail_transport_closed(&self, envelope: ErasedEnvelope<A>) -> ! {
+        // Running requires the inbox to remain open.
+        // Cleanup stays outside the lifecycle transaction.
+        self.control.begin_failure();
+        envelope.discard(&self.control);
+        panic!("message transport closed while actor was running");
     }
 }
 

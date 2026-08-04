@@ -1,5 +1,5 @@
-// MessageActor is derived from mailbox configuration.
-use actor_api::{Actor, ActorScope, MessageActor};
+// HasMailbox is derived from transport capabilities.
+use actor_api::{Actor, ActorScope, HasMailbox};
 
 struct Bare;
 
@@ -12,6 +12,6 @@ impl Actor for Bare {
     }
 }
 
-impl MessageActor for Bare {}
+impl HasMailbox for Bare {}
 
 fn main() {}
