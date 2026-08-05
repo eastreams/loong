@@ -1,0 +1,9 @@
+error[E0119]: conflicting implementations of trait `HasInterleaving` for type `Interleaved`
+  --> tests/ui/fail/duplicate_has_interleaving.rs:15:1
+   |
+15 | impl HasInterleaving for Interleaved {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: conflicting implementation in crate `loong_actor`:
+           - impl<A> HasInterleaving for A
+             where A: HasMailbox, <A as ReplySchedulingConfig>::Scheduler: InterleavedScheduler<A>, <A as ReplySchedulingConfig>::Scheduler: ?Sized;

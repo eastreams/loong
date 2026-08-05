@@ -1,0 +1,49 @@
+error[E0277]: the trait bound `ForeignScheduler: scheduling::runtime::RuntimeScheduler<ForeignActor>` is not satisfied
+  --> tests/ui/fail/foreign_reply_scheduler.rs:65:6
+   |
+65 | impl Actor for ForeignActor {
+   |      ^^^^^ unsatisfied trait bound
+   |
+help: the trait `scheduling::runtime::SchedulerProfile<ForeignActor>` is not implemented for `ForeignScheduler`
+  --> tests/ui/fail/foreign_reply_scheduler.rs:9:1
+   |
+ 9 | struct ForeignScheduler;
+   | ^^^^^^^^^^^^^^^^^^^^^^^
+help: the following other types implement trait `scheduling::runtime::SchedulerProfile<A>`
+  --> src/scheduling/runtime.rs
+   |
+   | / impl<A> SchedulerProfile<A> for Serial<A>
+   | | where
+   | |     A: Actor + ReplySchedulingConfig<Scheduler = Self>,
+   | |_______________________________________________________^ `Serial<A>`
+...
+   | / impl<A, const N: usize> SchedulerProfile<A> for Fixed<A, N>
+   | | where
+   | |     A: Actor + ReplySchedulingConfig<Scheduler = Self>,
+   | |     A::Sender: MessageSender<A>,
+   | |     A::Inbox: MessageInbox<A>,
+   | |______________________________^ `Fixed<A, N>`
+...
+   | / impl<A> SchedulerProfile<A> for Dynamic<A>
+   | | where
+   | |     A: Actor + ReplySchedulingConfig<Scheduler = Self>,
+   | |     A::Sender: MessageSender<A>,
+   | |     A::Inbox: MessageInbox<A>,
+   | |______________________________^ `Dynamic<A>`
+...
+   | / impl<A> SchedulerProfile<A> for Unbounded<A>
+   | | where
+   | |     A: Actor + ReplySchedulingConfig<Scheduler = Self>,
+   | |     A::Sender: MessageSender<A>,
+   | |     A::Inbox: MessageInbox<A>,
+   | |______________________________^ `loong_actor::scheduling::Unbounded<A>`
+   = note: required for `ForeignScheduler` to implement `scheduling::runtime::RuntimeScheduler<ForeignActor>`
+   = note: required for `<ForeignActor as ReplySchedulingConfig>::Scheduler` to implement `ReplyScheduler<ForeignActor>`
+note: required by a bound in `Actor`
+  --> src/actor.rs
+   |
+   | pub trait Actor:
+   |           ----- required by a bound in this trait
+   |     MessageConfig<Inbox: RuntimeInbox<Self>>
+   |     + ReplySchedulingConfig<Scheduler: ReplyScheduler<Self>>
+   |                                        ^^^^^^^^^^^^^^^^^^^^ required by this bound in `Actor`
