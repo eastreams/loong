@@ -465,6 +465,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-util",
+ "trybuild",
 ]
 
 [[package]]

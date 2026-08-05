@@ -1,9 +1,9 @@
 error[E0599]: no method named `with_max_in_flight` found for struct `loong_actor::__private::ActorOptions<Fixed, loong_actor::__private::FixedMailbox, loong_actor::__private::FixedInterleaving>` in the current scope
-  --> tests/ui/actor/fail/fixed_interleaving_override.rs:16:10
+  --> tests/ui/fail/fixed_interleaving_override.rs:17:10
    |
-15 |       let _ = actor_api::SpawnOptions::<Fixed>::default()
+16 |       let _ = loong_actor::SpawnOptions::<Fixed>::default()
    |  _____________-
-16 | |         .with_max_in_flight(NonZeroUsize::MIN);
+17 | |         .with_max_in_flight(NonZeroUsize::MIN);
    | |         -^^^^^^^^^^^^^^^^^^ method not found in `loong_actor::__private::ActorOptions<Fixed, loong_actor::__private::FixedMailbox, loong_actor::__private::FixedInterleaving>`
    | |_________|
    |

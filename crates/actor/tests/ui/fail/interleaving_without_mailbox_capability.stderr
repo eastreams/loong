@@ -1,11 +1,11 @@
 error[E0277]: the trait bound `loong_actor::transport::NoSender: MessageSender<Manual>` is not satisfied
-  --> tests/ui/actor/fail/interleaving_without_mailbox_capability.rs:33:6
+  --> tests/ui/fail/interleaving_without_mailbox_capability.rs:33:6
    |
 33 | impl Actor for Manual {
    |      ^^^^^ the trait `MessageSender<Manual>` is not implemented for `loong_actor::transport::NoSender`
    |
 help: the following other types implement trait `ReplyScheduler<A>`
-  --> $WORKSPACE/crates/actor/src/scheduling/mod.rs
+  --> src/scheduling/mod.rs
    |
    |   impl<A> ReplyScheduler<A> for Serial<A> where A: Actor + ReplySchedulingConfig<Scheduler = Self> {}
    |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Serial<A>`
@@ -32,7 +32,7 @@ help: the following other types implement trait `ReplyScheduler<A>`
    | |______________________________^ `loong_actor::scheduling::Unbounded<A>`
    = note: required for `Fixed<Manual, 1>` to implement `ReplyScheduler<Manual>`
 note: required by a bound in `Actor`
-  --> $WORKSPACE/crates/actor/src/actor.rs
+  --> src/actor.rs
    |
    | pub trait Actor:
    |           ----- required by a bound in this trait
@@ -41,13 +41,13 @@ note: required by a bound in `Actor`
    |                                        ^^^^^^^^^^^^^^^^^^^^ required by this bound in `Actor`
 
 error[E0277]: the trait bound `loong_actor::transport::NoInbox: MessageInbox<Manual>` is not satisfied
-  --> tests/ui/actor/fail/interleaving_without_mailbox_capability.rs:33:6
+  --> tests/ui/fail/interleaving_without_mailbox_capability.rs:33:6
    |
 33 | impl Actor for Manual {
    |      ^^^^^ the trait `MessageInbox<Manual>` is not implemented for `loong_actor::transport::NoInbox`
    |
 help: the following other types implement trait `ReplyScheduler<A>`
-  --> $WORKSPACE/crates/actor/src/scheduling/mod.rs
+  --> src/scheduling/mod.rs
    |
    |   impl<A> ReplyScheduler<A> for Serial<A> where A: Actor + ReplySchedulingConfig<Scheduler = Self> {}
    |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Serial<A>`
@@ -74,7 +74,7 @@ help: the following other types implement trait `ReplyScheduler<A>`
    | |______________________________^ `loong_actor::scheduling::Unbounded<A>`
    = note: required for `Fixed<Manual, 1>` to implement `ReplyScheduler<Manual>`
 note: required by a bound in `Actor`
-  --> $WORKSPACE/crates/actor/src/actor.rs
+  --> src/actor.rs
    |
    | pub trait Actor:
    |           ----- required by a bound in this trait

@@ -1,25 +1,25 @@
 error[E0277]: the trait bound `loong_actor::transport::NoInbox: MessageInbox<Bare>` is not satisfied
-  --> tests/ui/actor/fail/handler_without_mailbox.rs:18:6
+  --> tests/ui/fail/handler_without_mailbox.rs:18:6
    |
 18 | impl Handler<Ping> for Bare {
    |      ^^^^^^^^^^^^^ the trait `MessageInbox<Bare>` is not implemented for `loong_actor::transport::NoInbox`
    |
    = note: required for `Bare` to implement `HasMailbox`
 note: required by a bound in `Handler`
-  --> $WORKSPACE/crates/actor/src/actor.rs
+  --> src/actor.rs
    |
    | pub trait Handler<M: Message>: HasMailbox {
    |                                ^^^^^^^^^^ required by this bound in `Handler`
 
 error[E0277]: the trait bound `loong_actor::transport::NoSender: MessageSender<Bare>` is not satisfied
-  --> tests/ui/actor/fail/handler_without_mailbox.rs:18:6
+  --> tests/ui/fail/handler_without_mailbox.rs:18:6
    |
 18 | impl Handler<Ping> for Bare {
    |      ^^^^^^^^^^^^^ the trait `MessageSender<Bare>` is not implemented for `loong_actor::transport::NoSender`
    |
    = note: required for `Bare` to implement `HasMailbox`
 note: required by a bound in `Handler`
-  --> $WORKSPACE/crates/actor/src/actor.rs
+  --> src/actor.rs
    |
    | pub trait Handler<M: Message>: HasMailbox {
    |                                ^^^^^^^^^^ required by this bound in `Handler`

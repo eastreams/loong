@@ -1,5 +1,5 @@
 // An active scheduler requires public mailbox operations.
-use actor_api::{
+use loong_actor::{
     Actor, ActorConfig, ActorScope, MessageConfig, ReplySchedulingConfig, scheduling,
     transport::{NoInbox, NoSender},
 };

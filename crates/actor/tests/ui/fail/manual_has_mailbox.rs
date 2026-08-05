@@ -1,9 +1,9 @@
 // HasMailbox is derived from transport capabilities.
-use actor_api::{Actor, ActorScope, HasMailbox};
+use loong_actor::{Actor, ActorScope, HasMailbox};
 
 struct Bare;
 
-#[actor_api::actor]
+#[loong_actor::actor]
 impl Actor for Bare {
     type SpawnArgs = ();
 

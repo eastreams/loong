@@ -1,6 +1,9 @@
 // Serial actors cannot select interleaved scheduling.
-use actor_api::prelude::*;
-use std::{pin::Pin, task::{Context, Poll}};
+use loong_actor::prelude::*;
+use std::{
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 struct Serial;
 
@@ -18,7 +21,7 @@ struct Ping;
 
 struct Pending;
 
-impl actor_api::ActorFuture<Serial> for Pending {
+impl loong_actor::ActorFuture<Serial> for Pending {
     type Output = ();
 
     fn poll(
