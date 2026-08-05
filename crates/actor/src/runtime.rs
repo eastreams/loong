@@ -135,13 +135,17 @@ impl<A: Actor> fmt::Debug for ActorOwner<A> {
 pub(crate) struct ScopeState<A: Actor> {
     actor_ref: ActorRef<A>,
     children: ChildSet,
-    supervisor_tx: mpsc::UnboundedSender<ChildExit>,
 }
 
 impl<A: Actor> ScopeState<A> {
     /// Lends the capabilities valid before child cleanup.
     pub(crate) fn actor_scope(&mut self) -> ActorScope<'_, A> {
         ActorScope { state: self }
+    }
+
+    /// Polls exits without exposing child storage to schedulers.
+    pub(crate) fn poll_child_exit(&mut self, task: &mut Context<'_>) -> Poll<ChildExit> {
+        self.children.poll_exit(task)
     }
 
     /// Lends the restricted cleanup capabilities.
@@ -263,9 +267,7 @@ impl<A: Actor> ActorScope<'_, A> {
         args: C::SpawnArgs,
         options: SpawnOptions<C>,
     ) -> Child<C> {
-        self.state
-            .children
-            .spawn::<C>(args, options, self.state.supervisor_tx.clone())
+        self.state.children.spawn::<C>(args, options)
     }
 }
 
@@ -329,17 +331,25 @@ impl Drop for ErasedActorOwner {
     }
 }
 
+/// Owns direct child registrations and terminal events.
 struct ChildSet {
     actors: SlotMap<DefaultKey, ErasedActorOwner>,
     // Removed children cannot erase a lost subtree guarantee.
     subtree: SubtreeStatus,
+    // Child teardown never waits for parent work.
+    // Owning both endpoints makes early receiver closure invalid.
+    event_tx: mpsc::UnboundedSender<ChildExit>,
+    event_rx: mpsc::UnboundedReceiver<ChildExit>,
 }
 
 impl Default for ChildSet {
     fn default() -> Self {
+        let (event_tx, event_rx) = mpsc::unbounded_channel();
         Self {
             actors: SlotMap::new(),
             subtree: SubtreeStatus::Terminated,
+            event_tx,
+            event_rx,
         }
     }
 }
@@ -351,14 +361,10 @@ impl ChildSet {
 
     /// Issues the storage key before constructing the child's parent link.
     /// The parent cannot consume an exit until this insertion returns.
-    fn spawn<A: Actor>(
-        &mut self,
-        args: A::SpawnArgs,
-        options: SpawnOptions<A>,
-        events: mpsc::UnboundedSender<ChildExit>,
-    ) -> Child<A> {
+    fn spawn<A: Actor>(&mut self, args: A::SpawnArgs, options: SpawnOptions<A>) -> Child<A> {
         let prepared = PreparedActor::new(args, options);
         let child_ref = prepared.actor_ref.clone();
+        let events = self.event_tx.clone();
         let key = self.actors.insert_with_key(move |key| {
             let parent = ParentLink {
                 id: ChildId::from_key(key),
@@ -368,6 +374,16 @@ impl ChildSet {
             ErasedActorOwner::new(&actor_ref)
         });
         Child::new(ChildId::from_key(key), child_ref)
+    }
+
+    fn poll_exit(&mut self, task: &mut Context<'_>) -> Poll<ChildExit> {
+        match self.event_rx.poll_recv(task) {
+            Poll::Ready(Some(event)) => Poll::Ready(event),
+            Poll::Ready(None) => {
+                unreachable!("child-exit receiver closed while parent runtime was alive")
+            }
+            Poll::Pending => Poll::Pending,
+        }
     }
 
     #[cfg(test)]
@@ -394,7 +410,9 @@ impl ChildSet {
 
     async fn wait_all(&mut self) {
         // Persist each unconfirmed result before another cancellation point.
-        let Self { actors, subtree } = self;
+        let Self {
+            actors, subtree, ..
+        } = self;
         for actor in actors.values() {
             if actor.wait().await.subtree() == SubtreeStatus::Unconfirmed {
                 *subtree = SubtreeStatus::Unconfirmed;
@@ -416,15 +434,11 @@ impl<A: Actor> PreparedActor<A> {
         let (inner, inbox) = ActorInner::open(&options);
         let actor_ref = ActorRef::new(inner);
 
-        // Each actor receives terminal events from its direct children.
-        // The nonblocking channel prevents child teardown from awaiting parent work.
-        let (supervisor_tx, supervisor_rx) = mpsc::unbounded_channel();
         let state = ScopeState {
             actor_ref: actor_ref.clone(),
             children: ChildSet::default(),
-            supervisor_tx,
         };
-        let future = Box::pin(run_actor(args, state, inbox, supervisor_rx, scheduler));
+        let future = Box::pin(run_actor(args, state, inbox, scheduler));
 
         Self { actor_ref, future }
     }
@@ -667,7 +681,6 @@ async fn run_actor<A: Actor>(
     args: A::SpawnArgs,
     mut state: ScopeState<A>,
     mut inbox: ActorInbox<A>,
-    mut supervisor_rx: mpsc::UnboundedReceiver<ChildExit>,
     mut scheduler: ActorScheduler<A>,
 ) -> ExitStatus {
     let inner = Arc::clone(&state.actor_ref.0);
@@ -709,7 +722,6 @@ async fn run_actor<A: Actor>(
                     &mut actor,
                     &mut state,
                     &mut inbox,
-                    &mut supervisor_rx,
                     &inner,
                     &owned,
                     &mut scheduler,
@@ -743,7 +755,6 @@ async fn run_actor<A: Actor>(
             &mut actor,
             &mut state,
             &mut inbox,
-            &mut supervisor_rx,
             &inner,
             &owned,
             &mut scheduler,
@@ -793,7 +804,6 @@ async fn actor_turn<A: Actor>(
     actor: &mut A,
     state: &mut ScopeState<A>,
     inbox: &mut ActorInbox<A>,
-    supervisor_rx: &mut mpsc::UnboundedReceiver<ChildExit>,
     inner: &Arc<ActorInner<A>>,
     owned: &OwnedTasks<A>,
     scheduler: &mut ActorScheduler<A>,
@@ -806,7 +816,6 @@ async fn actor_turn<A: Actor>(
             actor,
             state,
             inbox,
-            supervisor_rx,
             inner,
             owned,
             receive_messages,
@@ -828,17 +837,12 @@ enum DrainTurn {
     RepliesFinished,
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "one drain turn borrows each independent actor-task resource"
-)]
 // Scheduler work keeps priority over the owned-task completion barrier.
 // The nested scheduler turn preserves lifecycle-first polling.
 async fn drain_turn<A: Actor>(
     actor: &mut A,
     state: &mut ScopeState<A>,
     inbox: &mut ActorInbox<A>,
-    supervisor_rx: &mut mpsc::UnboundedReceiver<ChildExit>,
     inner: &Arc<ActorInner<A>>,
     owned: &OwnedTasks<A>,
     scheduler: &mut ActorScheduler<A>,
@@ -852,7 +856,6 @@ async fn drain_turn<A: Actor>(
             actor,
             state,
             inbox,
-            supervisor_rx,
             inner,
             owned,
             scheduler,
@@ -937,7 +940,6 @@ async fn drain_actor<A: Actor>(
     actor: &mut A,
     state: &mut ScopeState<A>,
     inbox: &mut ActorInbox<A>,
-    supervisor_rx: &mut mpsc::UnboundedReceiver<ChildExit>,
     inner: &Arc<ActorInner<A>>,
     owned: &OwnedTasks<A>,
     scheduler: &mut ActorScheduler<A>,
@@ -975,7 +977,6 @@ async fn drain_actor<A: Actor>(
             actor,
             state,
             inbox,
-            supervisor_rx,
             inner,
             owned,
             scheduler,

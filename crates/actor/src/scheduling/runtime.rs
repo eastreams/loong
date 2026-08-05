@@ -3,8 +3,6 @@ use std::{
     task::{Context, Poll},
 };
 
-use tokio::sync::mpsc;
-
 use crate::{
     Actor, ActorFuture, ChildExit,
     config::ReplySchedulingConfig,
@@ -38,7 +36,6 @@ pub(crate) struct TurnContext<'a, A: Actor> {
     pub(crate) actor: &'a mut A,
     pub(crate) state: &'a mut ScopeState<A>,
     pub(crate) inbox: &'a mut ActorInbox<A>,
-    pub(crate) supervisor_rx: &'a mut mpsc::UnboundedReceiver<ChildExit>,
     pub(crate) inner: &'a Arc<ActorInner<A>>,
     pub(crate) owned: &'a OwnedTasks<A>,
     pub(crate) receive_messages: bool,
@@ -260,7 +257,7 @@ where
                         }
                     }
                 }
-                SerialLane::ChildExit => poll_child(turn.supervisor_rx, task),
+                SerialLane::ChildExit => poll_child(turn.state, task),
                 _ => None,
             };
 
@@ -396,7 +393,7 @@ where
                         }
                     }
                 }
-                InterleavedLane::ChildExit => poll_child(turn.supervisor_rx, task),
+                InterleavedLane::ChildExit => poll_child(turn.state, task),
                 _ => None,
             };
 
@@ -463,15 +460,12 @@ fn poll_exclusive_turn<A: Actor>(
     }
 }
 
-fn poll_child(
-    receiver: &mut mpsc::UnboundedReceiver<ChildExit>,
+fn poll_child<A: Actor>(
+    state: &mut ScopeState<A>,
     task: &mut Context<'_>,
 ) -> Option<SchedulerTurn> {
-    match receiver.poll_recv(task) {
-        Poll::Ready(Some(event)) => Some(SchedulerTurn::Child(event)),
-        Poll::Ready(None) => {
-            unreachable!("child-exit receiver closed while parent runtime was alive")
-        }
+    match state.poll_child_exit(task) {
+        Poll::Ready(event) => Some(SchedulerTurn::Child(event)),
         Poll::Pending => None,
     }
 }

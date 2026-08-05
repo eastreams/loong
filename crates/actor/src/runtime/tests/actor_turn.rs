@@ -8,8 +8,6 @@ use std::{
     task::{Context, Poll, Wake, Waker},
 };
 
-use tokio::sync::mpsc;
-
 use crate::{
     Actor, ActorConfig, ActorScope, ChildExit, ChildId, ExitReason, ExitStatus, HasMailbox,
     IntoActorFuture, ReplySchedulingConfig, Shutdown, SubtreeStatus,
@@ -30,7 +28,6 @@ struct ActorTurnFixture<A: Actor> {
     actor: A,
     state: ScopeState<A>,
     inbox: ActorInbox<A>,
-    supervisor_rx: mpsc::UnboundedReceiver<ChildExit>,
     inner: Arc<ActorInner<A>>,
     owned: OwnedTasks<A>,
     scheduler: ActorScheduler<A>,
@@ -43,13 +40,12 @@ impl<A: Actor> ActorTurnFixture<A> {
         inbox: ActorInbox<A>,
         scheduler: ActorScheduler<A>,
     ) -> Self {
-        let (state, supervisor_rx) = scope_state(&inner, ChildSet::default());
+        let state = scope_state(&inner, ChildSet::default());
         let owned = OwnedTasks::new(Arc::clone(&inner));
         Self {
             actor,
             state,
             inbox,
-            supervisor_rx,
             inner,
             owned,
             scheduler,
@@ -61,7 +57,6 @@ impl<A: Actor> ActorTurnFixture<A> {
             &mut self.actor,
             &mut self.state,
             &mut self.inbox,
-            &mut self.supervisor_rx,
             &self.inner,
             &self.owned,
             &mut self.scheduler,
@@ -77,7 +72,6 @@ impl<A: Actor> ActorTurnFixture<A> {
             &mut self.actor,
             &mut self.state,
             &mut self.inbox,
-            &mut self.supervisor_rx,
             &self.inner,
             &self.owned,
             &mut self.scheduler,
@@ -231,7 +225,8 @@ async fn ordinary_cursor_visits_each_actor_source_between_mailbox_batches() {
 
     fixture
         .state
-        .supervisor_tx
+        .children
+        .event_tx
         .send(ChildExit::new(
             ChildId::invalid_for_test(),
             ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Terminated),
@@ -329,7 +324,8 @@ async fn drain_rotates_then_uses_the_configured_mailbox_budget() {
     RuntimeInterleavedScheduler::push_interleaved(&mut fixture.scheduler, async {}.into_actor());
     fixture
         .state
-        .supervisor_tx
+        .children
+        .event_tx
         .send(ChildExit::new(
             ChildId::invalid_for_test(),
             ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Terminated),
@@ -379,7 +375,8 @@ async fn serial_drain_inherits_cursor_before_resuming_mailbox() {
     let mut fixture = ActorTurnFixture::<SerialActor>::new_serial(mailbox_dispatch_budget + 2);
     fixture
         .state
-        .supervisor_tx
+        .children
+        .event_tx
         .send(ChildExit::new(
             ChildId::invalid_for_test(),
             ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Terminated),
