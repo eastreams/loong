@@ -22,7 +22,7 @@ use crate::{Actor, ActorScope};
 ///
 /// An actor future does not choose its own scheduling mode. It remains inert
 /// until polled directly or returned through a reply wrapper such as
-/// [`ReplyExt::interleaved`](crate::ReplyExt::interleaved) or
+/// [`InterleavedFutureExt::interleaved`](crate::InterleavedFutureExt::interleaved) or
 /// [`ReplyExt::exclusive`](crate::ReplyExt::exclusive). Both wrappers support
 /// actor futures that are not `Unpin`.
 #[must_use = "actor futures do nothing unless scheduled or polled"]
@@ -48,8 +48,9 @@ pub trait ActorFuture<A: Actor>: Send + 'static {
 
 /// Combinators for sequencing work inside one [`ActorFuture`].
 ///
-/// The combinators do not send messages through the mailbox and do not consume
-/// another in-flight reply slot. They inherit the scheduling and cancellation
+/// The combinators do not send messages through the mailbox.
+/// They consume no additional interleaved-reply slot.
+/// They inherit the scheduling and cancellation
 /// behavior of the reply wrapper around the combined future, and support
 /// component futures that are not `Unpin`.
 #[must_use = "actor future combinators do nothing unless scheduled or polled"]
@@ -58,7 +59,7 @@ pub trait ActorFutureExt<A: Actor>: ActorFuture<A> {
     ///
     /// When the source becomes ready, `f` runs exactly once in that same poll
     /// with the current actor and scope borrows, and its return value completes
-    /// the combined future. There is no mailbox turn, extra in-flight slot, or
+    /// the combined future. There is no mailbox turn, extra interleaved slot, or
     /// cancellation point between source completion and `f`. If the combined
     /// future is cancelled before the source completes, `f` is never called.
     ///
@@ -76,8 +77,8 @@ pub trait ActorFutureExt<A: Actor>: ActorFuture<A> {
     /// When the first future becomes ready, `f` runs exactly once in that same
     /// poll with temporary actor and scope borrows. The returned second future is
     /// installed directly and polled immediately in that outer poll; the
-    /// transition does not pass through the mailbox or consume another in-flight
-    /// slot.
+    /// transition does not pass through the mailbox.
+    /// It consumes no additional interleaved slot.
     ///
     /// Cancellation before the transition drops the first future and the unused
     /// closure. Cancellation after the transition drops the second future; the
@@ -112,7 +113,7 @@ pub trait IntoActorFuture<A: Actor>: Future + Send + Sized + 'static {
     ///
     /// Use [`ActorFutureExt::map`] or [`ActorFutureExt::then`] for a later step
     /// that needs temporary actor access, then return the combined future through
-    /// [`ReplyExt::interleaved`](crate::ReplyExt::interleaved) or
+    /// [`InterleavedFutureExt::interleaved`](crate::InterleavedFutureExt::interleaved) or
     /// [`ReplyExt::exclusive`](crate::ReplyExt::exclusive). This choice controls
     /// how it interacts with other actor work.
     fn into_actor(self) -> FutureActor<A, Self> {

@@ -7,8 +7,8 @@ use std::sync::{
 use std::task::Poll;
 
 use loong_actor::{
-    Actor, ActorScope, CallError, Child, ChildExit, ExitReason, Handler, IntoActorFuture, Message,
-    ReplyExt, Shutdown, SubtreeStatus, actor, spawn,
+    Actor, ActorScope, CallError, Child, ChildExit, ExitReason, Handler, InterleavedFutureExt,
+    IntoActorFuture, Message, ReplyExt, Shutdown, SubtreeStatus, actor, spawn,
 };
 use tokio::sync::{mpsc, oneshot};
 

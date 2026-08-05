@@ -1,0 +1,24 @@
+error[E0599]: the method `interleaved` exists for struct `Pending`, but its trait bounds were not satisfied
+  --> tests/ui/actor/fail/interleaved_without_capability.rs:40:17
+   |
+19 | struct Pending;
+   | -------------- method `interleaved` not found for this struct because it doesn't satisfy `Pending: loong_actor::InterleavedFutureExt<Serial>`
+...
+40 |         Pending.interleaved()
+   |                 ^^^^^^^^^^^ method cannot be called on `Pending` due to unsatisfied trait bounds
+   |
+  ::: $WORKSPACE/crates/actor/src/scheduling/mod.rs
+   |
+   | pub struct Serial<A: Actor> {
+   | --------------------------- doesn't satisfy `_: InterleavedScheduler<Serial>`
+   |
+   = note: the following trait bounds were not satisfied:
+           `loong_actor::scheduling::Serial<Serial>: InterleavedScheduler<Serial>`
+           which is required by `Pending: loong_actor::InterleavedFutureExt<Serial>`
+           `&Pending: ActorFuture<_>`
+           which is required by `&Pending: loong_actor::InterleavedFutureExt<_>`
+           `&mut Pending: ActorFuture<_>`
+           which is required by `&mut Pending: loong_actor::InterleavedFutureExt<_>`
+   = help: items from traits can only be used if the trait is implemented and in scope
+   = note: the following trait defines an item `interleaved`, perhaps you need to implement it:
+           candidate #1: `loong_actor::InterleavedFutureExt`

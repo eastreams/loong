@@ -2,8 +2,9 @@ use std::future::Future;
 
 use crate::{
     ActorScope, ChildExit, ExitReason, StopScope,
-    config::InterleavingConfig,
+    config::ReplySchedulingConfig,
     reply::{IntoReply, ReplyExt},
+    scheduling::{InterleavedScheduler, ReplyScheduler},
     transport::{MessageConfig, MessageInbox, MessageSender, RuntimeInbox},
 };
 
@@ -32,7 +33,11 @@ use crate::{
 /// Their confirmation appears in
 /// [`ExitStatus::subtree`](crate::ExitStatus::subtree).
 pub trait Actor:
-    MessageConfig<Inbox: RuntimeInbox<Self>> + InterleavingConfig + Send + Sized + 'static
+    MessageConfig<Inbox: RuntimeInbox<Self>>
+    + ReplySchedulingConfig<Scheduler: ReplyScheduler<Self>>
+    + Send
+    + Sized
+    + 'static
 {
     /// Owned input used to construct this actor.
     type SpawnArgs: Send + 'static;
@@ -170,6 +175,33 @@ where
 {
 }
 
+/// An actor configured to run interleaved replies.
+///
+/// `#[actor(mailbox, interleaved)]` selects this capability.
+/// Fixed, dynamic, and unbounded limits all qualify.
+/// This capability also requires [`HasMailbox`].
+/// It exposes [`InterleavedFutureExt::interleaved`](crate::InterleavedFutureExt::interleaved).
+/// The selected scheduler provides this capability automatically.
+/// Do not implement this trait directly.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` cannot run interleaved replies",
+    label = "interleaved replies require mailbox and interleaving capabilities"
+)]
+pub trait HasInterleaving:
+    HasMailbox + ReplySchedulingConfig<Scheduler: InterleavedScheduler<Self>>
+{
+}
+
+// The active scheduler profile proves this capability.
+#[doc(hidden)]
+#[diagnostic::do_not_recommend]
+impl<A> HasInterleaving for A
+where
+    A: HasMailbox,
+    A::Scheduler: InterleavedScheduler<A>,
+{
+}
+
 /// A typed request accepted by an actor.
 ///
 /// Declare one with `#[derive(Message)]`.
@@ -244,9 +276,10 @@ pub trait SyncHandler<M: Message>: HasMailbox {
 pub trait Handler<M: Message>: HasMailbox {
     /// Synchronously starts handling `message` and chooses its reply semantics.
     ///
-    /// The runtime calls this method only after the request has committed to the
-    /// dispatch phase, an in-flight slot is available, and no exclusive reply is
-    /// blocking actor work. The function runs to completion inside one actor
+    /// The runtime calls this method after the request commits to dispatch.
+    /// Configured interleaved capacity must also permit dispatch.
+    /// No exclusive reply may block actor work.
+    /// The function runs to completion inside one actor
     /// turn: Kill cannot interrupt it, and abandoning the caller's response does
     /// not roll back effects that occur here. A panic is contained, fails this
     /// actor, and cancels its other active and queued work.

@@ -95,8 +95,7 @@ pub(super) fn actor_with_capacity(capacity: usize) -> LifecycleHarness {
     let owner = spawn_with::<LifecycleActor>(
         args,
         SpawnOptions::<LifecycleActor>::default()
-            .with_mailbox_capacity(NonZeroUsize::new(capacity).expect("test capacity is non-zero"))
-            .with_max_in_flight(NonZeroUsize::new(1).expect("one is non-zero")),
+            .with_mailbox_capacity(NonZeroUsize::new(capacity).expect("test capacity is non-zero")),
     );
     LifecycleHarness {
         owner,

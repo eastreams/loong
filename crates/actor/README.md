@@ -6,11 +6,13 @@ and a Ractor-style supervision tree.
 
 The crate is an early MVP. Its current contract is deliberately narrow:
 
-- every `Actor` implementation uses `#[actor(...)]`;
+- most `Actor` implementations use `#[actor(...)]`;
 - `SyncHandler` returns immediate reply values;
 - bare `Future` values use owned scheduling;
 - `.interleaved()` and `.exclusive()` select actor-aware scheduling;
-- interleaved work has a separate bound; owned tasks are unbounded;
+- interleaved work has its own admission policy;
+- exclusive work needs no interleaving capability;
+- owned tasks are unbounded;
 - `ActorRef` values communicate and may request shutdown;
 - the unique `ActorOwner` owns root lifetime;
 - child actors are owned by their parent runtime;
@@ -65,6 +67,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 See the [examples index](examples/README.md) for runnable guides.
 
+Interleaved replies are opt-in through `#[actor(...)]`:
+
+- `interleaved` uses a fixed limit of 32;
+- `interleaved = N` uses a fixed const limit;
+- `interleaved = dynamic` defaults each spawn to 32;
+- `interleaved = dynamic(N)` changes that default;
+- `interleaved = unbounded` removes the admission limit.
+
+Every finite const limit must exceed zero.
+Only dynamic options expose `with_max_in_flight`.
+Omitting `interleaved` provides no capability or reply queue.
+Unbounded admission can retain arbitrarily many active replies.
+Exclusive replies remain available without interleaved replies.
+A full finite limit pauses dispatch before another handler starts.
+The handler's reply mode remains unknown until dispatch finishes.
+
 `ExitStatus::reason` describes only that actor. `ExitStatus::subtree` reports
 whether the runtime confirmed all owned descendants terminated. An unconfirmed
 child does not automatically stop its parent. The missing guarantee remains
@@ -73,9 +91,9 @@ sticky. `Unconfirmed` means proof is unavailable. It does not prove liveness.
 Streaming does not require a runtime-specific message kind: a message reply may
 be a bounded channel receiver or another application-defined stream handle.
 
-Owned replies consume no `max_in_flight` slot. Their self-calls can progress
-while an interleaved slot remains available. Interleaved replies need another
-slot for mailbox re-entry. An exclusive reply blocks its queued self-call.
+Owned replies consume no `max_in_flight` slot. Their self-calls still require
+scheduler dispatch capacity. Interleaved replies need another slot for mailbox
+re-entry. An exclusive reply blocks its queued self-call.
 `init` completes before dispatch starts. `on_child_exit` blocks dispatch while
 running. `spawn` returns before `init`; sends may admit while calls await
 dispatch. Admission is closed in `on_stop`, so a new self-call returns

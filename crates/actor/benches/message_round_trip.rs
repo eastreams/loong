@@ -1,14 +1,35 @@
-use std::hint::black_box;
+//! Message round-trip and interleaving profile benchmarks.
+//!
+//! `interleaving_profile` keeps at most one reply active.
+//! It isolates fixed and unbounded profile overhead.
+//! It does not measure saturated admission or queue scaling.
+
+use std::{
+    hint::black_box,
+    time::{Duration, Instant},
+};
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use loong_actor::{
-    Actor, ActorScope, Handler, IntoActorFuture, Message, ReplyExt, Shutdown, spawn,
+    Actor, ActorRef, ActorScope, Handler, InterleavedFutureExt, IntoActorFuture, Message, ReplyExt,
+    Shutdown, spawn,
 };
 
 struct ReplyActor;
 
 #[loong_actor::actor(mailbox = 1, interleaved = 1)]
 impl Actor for ReplyActor {
+    type SpawnArgs = ();
+
+    async fn init(_args: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self
+    }
+}
+
+struct UnboundedReplyActor;
+
+#[loong_actor::actor(mailbox = 1, interleaved = unbounded)]
+impl Actor for UnboundedReplyActor {
     type SpawnArgs = ();
 
     async fn init(_args: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
@@ -58,6 +79,16 @@ impl Handler<Interleaved> for ReplyActor {
     }
 }
 
+impl Handler<Interleaved> for UnboundedReplyActor {
+    fn handle(
+        &mut self,
+        _message: Interleaved,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loong_actor::IntoReply<Self, Interleaved> + use<> {
+        std::future::ready(1).into_actor().interleaved()
+    }
+}
+
 #[derive(Message)]
 #[message(reply = u64)]
 struct Exclusive;
@@ -72,12 +103,55 @@ impl Handler<Exclusive> for ReplyActor {
     }
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum MeasuredProfile {
+    Fixed,
+    Unbounded,
+}
+
+async fn measure_round_trip<A>(actor: &ActorRef<A>, measured: bool) -> Duration
+where
+    A: Handler<Interleaved>,
+{
+    let started = Instant::now();
+    let reply = actor
+        .call(Interleaved)
+        .await
+        .expect("the benchmark actor stays alive");
+    let elapsed = started.elapsed();
+    black_box(reply);
+    if measured { elapsed } else { Duration::ZERO }
+}
+
+// Every sample drives both paths. Their order alternates each iteration.
+async fn measure_interleaving_profile(
+    iterations: u64,
+    measured: MeasuredProfile,
+    fixed: ActorRef<ReplyActor>,
+    unbounded: ActorRef<UnboundedReplyActor>,
+) -> Duration {
+    let mut elapsed = Duration::ZERO;
+    for iteration in 0..iterations {
+        let fixed_measured = measured == MeasuredProfile::Fixed;
+        if iteration % 2 == 0 {
+            elapsed += measure_round_trip(&fixed, fixed_measured).await;
+            elapsed += measure_round_trip(&unbounded, !fixed_measured).await;
+        } else {
+            elapsed += measure_round_trip(&unbounded, !fixed_measured).await;
+            elapsed += measure_round_trip(&fixed, fixed_measured).await;
+        }
+    }
+    elapsed
+}
+
 fn message_round_trip(criterion: &mut Criterion) {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
         .expect("the benchmark runtime builds");
     let owner = runtime.block_on(async { spawn::<ReplyActor>(()) });
     let actor = owner.actor_ref();
+    let unbounded_owner = runtime.block_on(async { spawn::<UnboundedReplyActor>(()) });
+    let unbounded_actor = unbounded_owner.actor_ref();
 
     let mut group = criterion.benchmark_group("message_round_trip");
     group.throughput(Throughput::Elements(1));
@@ -114,7 +188,35 @@ fn message_round_trip(criterion: &mut Criterion) {
     });
 
     group.finish();
+
+    // Each result accumulates only its selected round trip.
+    let mut group = criterion.benchmark_group("interleaving_profile");
+    group.throughput(Throughput::Elements(1));
+    group.bench_function("fixed", |bencher| {
+        bencher.to_async(&runtime).iter_custom(|iterations| {
+            measure_interleaving_profile(
+                iterations,
+                MeasuredProfile::Fixed,
+                actor.clone(),
+                unbounded_actor.clone(),
+            )
+        });
+    });
+    group.bench_function("unbounded", |bencher| {
+        bencher.to_async(&runtime).iter_custom(|iterations| {
+            measure_interleaving_profile(
+                iterations,
+                MeasuredProfile::Unbounded,
+                actor.clone(),
+                unbounded_actor.clone(),
+            )
+        });
+    });
+    group.finish();
+
     let reason = runtime.block_on(owner.shutdown(Shutdown::Kill));
+    assert_eq!(reason.reason(), loong_actor::ExitReason::Killed);
+    let reason = runtime.block_on(unbounded_owner.shutdown(Shutdown::Kill));
     assert_eq!(reason.reason(), loong_actor::ExitReason::Killed);
 }
 

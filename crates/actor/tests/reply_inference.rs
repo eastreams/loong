@@ -6,8 +6,8 @@ use std::{
 };
 
 use loong_actor::{
-    Actor, ActorFuture, ActorScope, ExitReason, Handler, IntoReply, Message, ReplyExt, Shutdown,
-    actor, spawn,
+    Actor, ActorFuture, ActorScope, ExitReason, Handler, InterleavedFutureExt, IntoReply, Message,
+    Shutdown, actor, spawn,
 };
 
 use support::watchdog;

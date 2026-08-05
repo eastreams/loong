@@ -2,7 +2,7 @@ use std::{
     future::Future,
     sync::{
         Arc, Barrier,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc,
     },
     task::{Context, Poll, Wake, Waker},
@@ -10,8 +10,9 @@ use std::{
 };
 
 use loong_actor::{
-    Actor, ActorOwner, ActorScope, CallError, ExitReason, Handler, Message, ReplyExt, Shutdown,
-    ShutdownStatus, StopScope, SubtreeStatus, actor, spawn,
+    Actor, ActorFuture, ActorOwner, ActorScope, CallError, ExitReason, Handler,
+    InterleavedFutureExt, Message, ReplyExt, Shutdown, ShutdownStatus, StopScope, SubtreeStatus,
+    actor, spawn,
 };
 use tokio::sync::oneshot;
 
@@ -265,6 +266,113 @@ fn executor_teardown_discards_each_accepted_message() {
         response.as_mut().poll(&mut task),
         Poll::Ready(Err(CallError::BeforeDispatch(ExitReason::Aborted)))
     );
+    let status = actor
+        .exit_status()
+        .expect("actor teardown publishes a status");
+    assert_eq!(status.reason(), ExitReason::Aborted);
+    assert_eq!(status.subtree(), SubtreeStatus::Unconfirmed);
+    drop(owner);
+}
+
+struct PendingInterleavedActor;
+
+#[actor(mailbox = 2, interleaved = 2)]
+impl Actor for PendingInterleavedActor {
+    type SpawnArgs = ();
+
+    async fn init(_: (), _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self
+    }
+}
+
+#[derive(Message)]
+struct PendingInterleavedDrop {
+    entered: Option<oneshot::Sender<()>>,
+    drops: Arc<AtomicUsize>,
+    dropped_while_unwinding: Arc<AtomicBool>,
+}
+
+impl ActorFuture<PendingInterleavedActor> for PendingInterleavedDrop {
+    type Output = ();
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        _actor: &mut PendingInterleavedActor,
+        _scope: &mut ActorScope<'_, PendingInterleavedActor>,
+        _task: &mut Context<'_>,
+    ) -> Poll<()> {
+        if let Some(entered) = self.entered.take() {
+            let _ = entered.send(());
+        }
+        Poll::Pending
+    }
+}
+
+impl Drop for PendingInterleavedDrop {
+    fn drop(&mut self) {
+        self.drops.fetch_add(1, Ordering::SeqCst);
+        self.dropped_while_unwinding
+            .store(std::thread::panicking(), Ordering::SeqCst);
+        panic!("intentional interleaved future drop panic");
+    }
+}
+
+impl Handler<PendingInterleavedDrop> for PendingInterleavedActor {
+    fn handle(
+        &mut self,
+        message: PendingInterleavedDrop,
+        _scope: &mut ActorScope<'_, Self>,
+    ) -> impl loong_actor::IntoReply<Self, PendingInterleavedDrop> + use<> {
+        message.interleaved()
+    }
+}
+
+// Executor teardown drops scheduler entries without lifecycle access.
+// Each entry still needs its own unwind boundary.
+#[test]
+fn executor_teardown_contains_each_interleaved_drop_panic() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let drops = Arc::new(AtomicUsize::new(0));
+    let dropped_while_unwinding = Arc::new(AtomicBool::new(false));
+    let (first_entered_tx, first_entered_rx) = oneshot::channel();
+    let (second_entered_tx, second_entered_rx) = oneshot::channel();
+
+    let (owner, first, second) = runtime.block_on(async {
+        let owner = spawn::<PendingInterleavedActor>(());
+        let actor = owner.actor_ref();
+        let first = actor
+            .try_call(PendingInterleavedDrop {
+                entered: Some(first_entered_tx),
+                drops: Arc::clone(&drops),
+                dropped_while_unwinding: Arc::clone(&dropped_while_unwinding),
+            })
+            .unwrap();
+        let second = actor
+            .try_call(PendingInterleavedDrop {
+                entered: Some(second_entered_tx),
+                drops: Arc::clone(&drops),
+                dropped_while_unwinding: Arc::clone(&dropped_while_unwinding),
+            })
+            .unwrap();
+        first_entered_rx.await.unwrap();
+        second_entered_rx.await.unwrap();
+        (owner, first, second)
+    });
+    let actor = owner.actor_ref();
+
+    drop(runtime);
+
+    assert_eq!(drops.load(Ordering::SeqCst), 2);
+    assert!(!dropped_while_unwinding.load(Ordering::SeqCst));
+    for mut response in [Box::pin(first), Box::pin(second)] {
+        let mut task = Context::from_waker(Waker::noop());
+        assert_eq!(
+            response.as_mut().poll(&mut task),
+            Poll::Ready(Err(CallError::DuringDispatch(ExitReason::Aborted)))
+        );
+    }
     let status = actor
         .exit_status()
         .expect("actor teardown publishes a status");

@@ -1,13 +1,15 @@
-use std::num::NonZeroUsize;
+use std::{mem::size_of, num::NonZeroUsize};
 
 use crate::{
-    Actor, ActorScope, MessageConfig, actor,
+    Actor, ActorScope, HasInterleaving, MessageConfig, actor,
     transport::{MessageSender, TryReserveError},
 };
 
 use super::{
-    ActorConfig, ActorOptions, DEFAULT_MAILBOX_CAPACITY, DynamicMailbox, DynamicMailboxOptions,
-    FixedMailbox, InterleavingConfig, NoMailbox, UnboundedMailbox,
+    ActorConfig, ActorOptions, DEFAULT_MAILBOX_CAPACITY, DEFAULT_MAX_IN_FLIGHT,
+    DynamicInterleaving, DynamicInterleavingOptions, DynamicMailbox, DynamicMailboxOptions,
+    FixedInterleaving, FixedMailbox, NoInterleaving, NoMailbox, ReplySchedulingConfig,
+    UnboundedInterleaving, UnboundedMailbox,
 };
 
 struct Bare;
@@ -54,6 +56,17 @@ impl Actor for Dynamic {
     }
 }
 
+struct CustomDynamic;
+
+#[actor(mailbox = 1, interleaved = dynamic(3))]
+impl Actor for CustomDynamic {
+    type SpawnArgs = ();
+
+    async fn init(_: (), _: &mut ActorScope<'_, Self>) -> Self {
+        Self
+    }
+}
+
 struct Unbounded;
 
 #[actor(mailbox = unbounded, interleaved = unbounded)]
@@ -67,11 +80,12 @@ impl Actor for Unbounded {
 
 fn assert_config<A>()
 where
-    A: ActorConfig + MessageConfig + InterleavingConfig,
+    A: ActorConfig + MessageConfig + ReplySchedulingConfig,
 {
 }
 
 fn assert_send_sync_static<T: Send + Sync + 'static>() {}
+fn assert_has_interleaving<A: HasInterleaving>() {}
 
 #[test]
 fn generated_configs_use_actor_specific_options() {
@@ -79,18 +93,31 @@ fn generated_configs_use_actor_specific_options() {
     assert_config::<DefaultMailbox>();
     assert_config::<Fixed>();
     assert_config::<Dynamic>();
+    assert_config::<CustomDynamic>();
     assert_config::<Unbounded>();
 
-    let _: ActorOptions<Bare, NoMailbox> = Default::default();
-    let _: ActorOptions<DefaultMailbox, FixedMailbox> = Default::default();
-    let _: ActorOptions<Fixed, FixedMailbox> = Default::default();
-    let _: ActorOptions<Dynamic, DynamicMailbox> = Default::default();
-    let _: ActorOptions<Unbounded, UnboundedMailbox> = Default::default();
+    let _: ActorOptions<Bare, NoMailbox, NoInterleaving> = Default::default();
+    let _: ActorOptions<DefaultMailbox, FixedMailbox, NoInterleaving> = Default::default();
+    let _: ActorOptions<Fixed, FixedMailbox, FixedInterleaving> = Default::default();
+    let _: ActorOptions<Dynamic, DynamicMailbox, DynamicInterleaving> = Default::default();
+    let _: ActorOptions<CustomDynamic, FixedMailbox, DynamicInterleaving<3>> = Default::default();
+    let _: ActorOptions<Unbounded, UnboundedMailbox, UnboundedInterleaving> = Default::default();
+
+    assert_has_interleaving::<Fixed>();
+    assert_has_interleaving::<Dynamic>();
+    assert_has_interleaving::<CustomDynamic>();
+    assert_has_interleaving::<Unbounded>();
 
     assert_send_sync_static::<<Bare as ActorConfig>::Options>();
     assert_send_sync_static::<<Fixed as ActorConfig>::Options>();
     assert_send_sync_static::<<Dynamic as ActorConfig>::Options>();
+    assert_send_sync_static::<<CustomDynamic as ActorConfig>::Options>();
     assert_send_sync_static::<<Unbounded as ActorConfig>::Options>();
+}
+
+#[test]
+fn omitted_interleaving_uses_zero_sized_spawn_state() {
+    assert_eq!(size_of::<NoInterleaving>(), 0);
 }
 
 #[test]
@@ -119,11 +146,25 @@ fn default_mailbox_uses_the_shared_capacity() {
 }
 
 #[test]
-fn generated_configs_resolve_runtime_limits() {
-    let max_in_flight = NonZeroUsize::new(5).unwrap();
-    let options = <Fixed as ActorConfig>::Options::default().with_max_in_flight(max_in_flight);
+fn dynamic_interleaving_resolves_default_and_override_limit() {
+    let options = <Dynamic as ActorConfig>::Options::default();
+    assert_eq!(
+        options.max_in_flight(),
+        NonZeroUsize::new(DEFAULT_MAX_IN_FLIGHT).unwrap()
+    );
 
-    assert_eq!(Fixed::max_in_flight(&options), max_in_flight);
+    let max_in_flight = NonZeroUsize::new(5).unwrap();
+    let options = DynamicInterleavingOptions::with_max_in_flight(options, max_in_flight);
+    assert_eq!(options.max_in_flight(), max_in_flight);
+
+    let options = <CustomDynamic as ActorConfig>::Options::default();
+    assert_eq!(options.max_in_flight(), NonZeroUsize::new(3).unwrap());
+    let options = DynamicInterleavingOptions::with_max_in_flight(options, max_in_flight);
+    assert_eq!(options.max_in_flight(), max_in_flight);
+}
+
+#[test]
+fn generated_config_uses_default_mailbox_budget() {
     assert_eq!(
         <Fixed as MessageConfig>::MAILBOX_DISPATCH_BUDGET,
         NonZeroUsize::new(16).unwrap()

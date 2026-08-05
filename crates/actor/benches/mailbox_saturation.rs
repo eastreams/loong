@@ -44,14 +44,11 @@ impl Handler<ReadyTraffic> for MailboxActor {
 }
 
 /// Ready replies leave no interleaved work active.
-/// The fixed limit leaves mailbox capacity as the only variable.
 fn spawn_benchmark_actor(capacity: usize) -> ActorOwner<MailboxActor> {
     let capacity = NonZeroUsize::new(capacity).expect("mailbox capacities are non-zero");
     spawn_with::<MailboxActor>(
         (),
-        SpawnOptions::<MailboxActor>::default()
-            .with_mailbox_capacity(capacity)
-            .with_max_in_flight(NonZeroUsize::MIN),
+        SpawnOptions::<MailboxActor>::default().with_mailbox_capacity(capacity),
     )
 }
 

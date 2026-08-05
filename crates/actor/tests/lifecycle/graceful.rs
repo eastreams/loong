@@ -1,8 +1,6 @@
-use std::num::NonZeroUsize;
-
 use loong_actor::{
-    Actor, ActorFutureExt, ActorScope, CallError, ExitReason, Handler, IntoActorFuture, Message,
-    ReplyExt, Shutdown, ShutdownStatus, SpawnOptions, TryCallErrorKind, actor, spawn_with,
+    Actor, ActorFutureExt, ActorScope, CallError, ExitReason, Handler, InterleavedFutureExt,
+    IntoActorFuture, Message, ReplyExt, Shutdown, ShutdownStatus, TryCallErrorKind, actor, spawn,
 };
 use tokio::sync::oneshot;
 
@@ -170,9 +168,7 @@ impl Handler<InterleavedDrainStep> for InterleavedDrainActor {
 
 #[tokio::test]
 async fn drain_respects_max_in_flight_for_the_fixed_interleaved_queue() {
-    let options = SpawnOptions::<InterleavedDrainActor>::default()
-        .with_max_in_flight(NonZeroUsize::new(2).unwrap());
-    let mut owner = spawn_with::<InterleavedDrainActor>((), options);
+    let mut owner = spawn::<InterleavedDrainActor>(());
     let actor = owner.actor_ref();
 
     let (first_entered_tx, first_entered_rx) = oneshot::channel();

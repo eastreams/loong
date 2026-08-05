@@ -1,0 +1,15 @@
+error[E0080]: evaluation panicked: mailbox capacity must be greater than zero
+ --> tests/ui/actor/fail/zero_dynamic_const_capacity.rs:6:1
+  |
+6 | #[actor_api::actor(mailbox = dynamic(ZERO))]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `<Zero as loong_actor::MessageConfig>::open::{constant#0}` failed here
+  |
+  = note: this error originates in the attribute macro `actor_api::actor` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+note: erroneous constant encountered
+ --> tests/ui/actor/fail/zero_dynamic_const_capacity.rs:6:1
+  |
+6 | #[actor_api::actor(mailbox = dynamic(ZERO))]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this note originates in the attribute macro `actor_api::actor` (in Nightly builds, run with -Z macro-backtrace for more info)

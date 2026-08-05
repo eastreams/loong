@@ -1,4 +1,4 @@
-// Finite capacity cannot represent an unusable zero limit.
+// A fixed mailbox cannot have zero capacity.
 struct Zero;
 
 #[actor_api::actor(mailbox = 0)]

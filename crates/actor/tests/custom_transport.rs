@@ -2,14 +2,14 @@ use std::{
     cell::Cell,
     future::{self, Future},
     marker::PhantomData,
-    num::NonZeroUsize,
     rc::Rc,
     task::{Context, Poll},
 };
 
 use loong_actor::{
-    Actor, ActorConfig, ActorScope, ExitReason, InterleavingConfig, Message, MessageConfig,
-    Shutdown, SyncHandler, spawn_with,
+    Actor, ActorConfig, ActorFuture, ActorFutureExt, ActorScope, ExitReason, Handler,
+    HasInterleaving, InterleavedFutureExt, IntoActorFuture, IntoReply, Message, MessageConfig,
+    ReplySchedulingConfig, Shutdown, SyncHandler, scheduling, spawn_with,
     transport::{
         ErasedEnvelope, MessageInbox, MessageReservation, MessageSender, RuntimeInbox,
         TryReserveError,
@@ -31,41 +31,42 @@ impl Default for ManualOptions {
     }
 }
 
-struct ManualSender(mpsc::UnboundedSender<ErasedEnvelope<ManualActor>>);
+struct ManualSender<A: Actor>(mpsc::UnboundedSender<ErasedEnvelope<A>>);
 
-impl Clone for ManualSender {
+impl<A: Actor> ManualSender<A> {
+    fn open() -> (Self, ManualInbox<A>) {
+        let (sender, inbox) = mpsc::unbounded_channel();
+        (Self(sender), ManualInbox(inbox))
+    }
+}
+
+impl<A: Actor> Clone for ManualSender<A> {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
-struct ManualInbox(mpsc::UnboundedReceiver<ErasedEnvelope<ManualActor>>);
+struct ManualInbox<A: Actor>(mpsc::UnboundedReceiver<ErasedEnvelope<A>>);
 
-struct ManualReservation<'a> {
-    sender: &'a ManualSender,
+struct ManualReservation<'a, A: Actor> {
+    sender: &'a ManualSender<A>,
     _local: PhantomData<Rc<()>>,
 }
 
-impl MessageReservation<ManualActor> for ManualReservation<'_> {
-    fn enqueue(
-        self,
-        envelope: ErasedEnvelope<ManualActor>,
-    ) -> Result<(), ErasedEnvelope<ManualActor>> {
+impl<A: Actor> MessageReservation<A> for ManualReservation<'_, A> {
+    fn enqueue(self, envelope: ErasedEnvelope<A>) -> Result<(), ErasedEnvelope<A>> {
         self.sender.0.send(envelope).map_err(|error| error.0)
     }
 }
 
-impl MessageReservation<ManualActor> for ManualSender {
-    fn enqueue(
-        self,
-        envelope: ErasedEnvelope<ManualActor>,
-    ) -> Result<(), ErasedEnvelope<ManualActor>> {
+impl<A: Actor> MessageReservation<A> for ManualSender<A> {
+    fn enqueue(self, envelope: ErasedEnvelope<A>) -> Result<(), ErasedEnvelope<A>> {
         self.0.send(envelope).map_err(|error| error.0)
     }
 }
 
-impl MessageSender<ManualActor> for ManualSender {
-    type Reservation<'a> = ManualReservation<'a>;
+impl<A: Actor> MessageSender<A> for ManualSender<A> {
+    type Reservation<'a> = ManualReservation<'a, A>;
     type OwnedReservation = Self;
 
     fn try_reserve(&self) -> Result<Self::Reservation<'_>, TryReserveError> {
@@ -79,20 +80,19 @@ impl MessageSender<ManualActor> for ManualSender {
         }
     }
 
-    fn reserve_owned(&self) -> impl Future<Output = Option<Self::OwnedReservation>> + Send + use<> {
+    fn reserve_owned(
+        &self,
+    ) -> impl Future<Output = Option<Self::OwnedReservation>> + Send + use<A> {
         future::ready((!self.0.is_closed()).then(|| self.clone()))
     }
 }
 
-impl RuntimeInbox<ManualActor> for ManualInbox {
-    fn poll_recv(
-        &mut self,
-        context: &mut Context<'_>,
-    ) -> Poll<Option<ErasedEnvelope<ManualActor>>> {
+impl<A: Actor> RuntimeInbox<A> for ManualInbox<A> {
+    fn poll_recv(&mut self, context: &mut Context<'_>) -> Poll<Option<ErasedEnvelope<A>>> {
         self.0.poll_recv(context)
     }
 
-    fn try_recv(&mut self) -> Option<ErasedEnvelope<ManualActor>> {
+    fn try_recv(&mut self) -> Option<ErasedEnvelope<A>> {
         self.0.try_recv().ok()
     }
 
@@ -105,26 +105,27 @@ impl RuntimeInbox<ManualActor> for ManualInbox {
     }
 }
 
-impl MessageInbox<ManualActor> for ManualInbox {}
+impl<A: Actor> MessageInbox<A> for ManualInbox<A> {}
 
 impl ActorConfig for ManualActor {
     type Options = ManualOptions;
 }
 
 impl MessageConfig for ManualActor {
-    type Sender = ManualSender;
-    type Inbox = ManualInbox;
+    type Sender = ManualSender<Self>;
+    type Inbox = ManualInbox<Self>;
 
     fn open(options: &Self::Options) -> (Self::Sender, Self::Inbox) {
         options.opened.set(true);
-        let (sender, inbox) = mpsc::unbounded_channel();
-        (ManualSender(sender), ManualInbox(inbox))
+        ManualSender::open()
     }
 }
 
-impl InterleavingConfig for ManualActor {
-    fn max_in_flight(_options: &Self::Options) -> NonZeroUsize {
-        NonZeroUsize::MIN
+impl ReplySchedulingConfig for ManualActor {
+    type Scheduler = scheduling::Fixed<Self, 1>;
+
+    fn open_scheduler(_options: &Self::Options) -> Self::Scheduler {
+        scheduling::Fixed::new()
     }
 }
 
@@ -136,14 +137,115 @@ impl Actor for ManualActor {
     }
 }
 
+struct ManualSerial;
+
+impl ActorConfig for ManualSerial {
+    type Options = ();
+}
+
+impl MessageConfig for ManualSerial {
+    type Sender = ManualSender<Self>;
+    type Inbox = ManualInbox<Self>;
+
+    fn open(_options: &Self::Options) -> (Self::Sender, Self::Inbox) {
+        ManualSender::open()
+    }
+}
+
+impl ReplySchedulingConfig for ManualSerial {
+    type Scheduler = scheduling::Serial<Self>;
+
+    fn open_scheduler(_options: &Self::Options) -> Self::Scheduler {
+        scheduling::Serial::new()
+    }
+}
+
+impl Actor for ManualSerial {
+    type SpawnArgs = ();
+
+    async fn init(_: (), _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self
+    }
+}
+
+struct ManualDynamic;
+
+impl ActorConfig for ManualDynamic {
+    type Options = ();
+}
+
+impl MessageConfig for ManualDynamic {
+    type Sender = ManualSender<Self>;
+    type Inbox = ManualInbox<Self>;
+
+    fn open(_options: &Self::Options) -> (Self::Sender, Self::Inbox) {
+        ManualSender::open()
+    }
+}
+
+impl ReplySchedulingConfig for ManualDynamic {
+    type Scheduler = scheduling::Dynamic<Self>;
+
+    fn open_scheduler(_options: &Self::Options) -> Self::Scheduler {
+        scheduling::Dynamic::new(std::num::NonZeroUsize::MIN)
+    }
+}
+
+impl Actor for ManualDynamic {
+    type SpawnArgs = ();
+
+    async fn init(_: (), _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self
+    }
+}
+
+struct ManualUnbounded;
+
+impl ActorConfig for ManualUnbounded {
+    type Options = ();
+}
+
+impl MessageConfig for ManualUnbounded {
+    type Sender = ManualSender<Self>;
+    type Inbox = ManualInbox<Self>;
+
+    fn open(_options: &Self::Options) -> (Self::Sender, Self::Inbox) {
+        ManualSender::open()
+    }
+}
+
+impl ReplySchedulingConfig for ManualUnbounded {
+    type Scheduler = scheduling::Unbounded<Self>;
+
+    fn open_scheduler(_options: &Self::Options) -> Self::Scheduler {
+        scheduling::Unbounded::new()
+    }
+}
+
+impl Actor for ManualUnbounded {
+    type SpawnArgs = ();
+
+    async fn init(_: (), _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self
+    }
+}
+
 #[derive(Message)]
 #[message(reply = u64)]
 struct Add(u64);
 
-impl SyncHandler<Add> for ManualActor {
-    fn handle(&mut self, message: Add, _scope: &mut ActorScope<'_, Self>) -> u64 {
-        self.0 += message.0;
-        self.0
+impl Handler<Add> for ManualActor {
+    fn handle(
+        &mut self,
+        message: Add,
+        _scope: &mut ActorScope<'_, Self>,
+    ) -> impl IntoReply<Self, Add> + use<> {
+        generic_interleaved_reply(std::future::ready(message.0).into_actor().map(
+            |amount, actor: &mut Self, _scope| {
+                actor.0 += amount;
+                actor.0
+            },
+        ))
     }
 }
 
@@ -157,11 +259,32 @@ impl SyncHandler<Notify> for ManualActor {
 }
 
 fn assert_send<T: Send>(_: &T) {}
+fn assert_has_interleaving<A: HasInterleaving>() {}
 
-// This proves manual transports use only stable public extension points.
+fn generic_interleaved_reply<A, M, F>(future: F) -> impl IntoReply<A, M>
+where
+    A: HasInterleaving,
+    M: Message,
+    F: ActorFuture<A, Output = M::Reply> + Send + 'static,
+{
+    future.interleaved()
+}
+
+// A manual transport may pair with every built-in scheduler profile.
+#[test]
+fn manual_transport_selects_each_public_scheduler() {
+    let options = ManualOptions::default();
+    let _: scheduling::Fixed<ManualActor, 1> = ManualActor::open_scheduler(&options);
+    let _: scheduling::Serial<ManualSerial> = ManualSerial::open_scheduler(&());
+    let _: scheduling::Dynamic<ManualDynamic> = ManualDynamic::open_scheduler(&());
+    let _: scheduling::Unbounded<ManualUnbounded> = ManualUnbounded::open_scheduler(&());
+}
+
+// This proves manual configs use stable public extension points.
 // The non-Send options must be consumed before Tokio owns the actor task.
 #[tokio::test]
 async fn manual_transport_round_trips_with_local_spawn_options() {
+    assert_has_interleaving::<ManualActor>();
     let options = ManualOptions::default();
     let opened = Rc::clone(&options.opened);
     let owner = spawn_with::<ManualActor>(2, options);

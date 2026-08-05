@@ -10,7 +10,7 @@ use crate::{
     Actor, ActorScope, CallError, Handler, Message,
     owned::OwnedTasks,
     reply::sealed::HandleReply,
-    scheduler::ReplyScheduler,
+    scheduling::ActorScheduler,
     transport::{ErasedEnvelope, RuntimeInbox},
 };
 
@@ -121,7 +121,7 @@ pub(crate) trait Envelope<A: Actor>: Send {
         actor: &mut A,
         scope: &mut ActorScope<'_, A>,
         owned: &OwnedTasks<A>,
-        scheduler: &mut ReplyScheduler<A>,
+        scheduler: &mut ActorScheduler<A>,
         inner: &Arc<ActorInner<A>>,
     );
 
@@ -135,7 +135,7 @@ impl<A: Actor> ErasedEnvelope<A> {
         actor: &mut A,
         scope: &mut ActorScope<'_, A>,
         owned: &OwnedTasks<A>,
-        scheduler: &mut ReplyScheduler<A>,
+        scheduler: &mut ActorScheduler<A>,
         inner: &Arc<ActorInner<A>>,
     ) {
         self.into_envelope()
@@ -189,7 +189,7 @@ where
         actor: &mut A,
         scope: &mut ActorScope<'_, A>,
         owned: &OwnedTasks<A>,
-        scheduler: &mut ReplyScheduler<A>,
+        scheduler: &mut ActorScheduler<A>,
         inner: &Arc<ActorInner<A>>,
     ) {
         // Only calls can be abandoned; one-way envelopes have no receiver.
@@ -250,7 +250,7 @@ where
         actor: &mut A,
         scope: &mut ActorScope<'_, A>,
         owned: &OwnedTasks<A>,
-        scheduler: &mut ReplyScheduler<A>,
+        scheduler: &mut ActorScheduler<A>,
         inner: &Arc<ActorInner<A>>,
     ) {
         let Self { message } = *self;

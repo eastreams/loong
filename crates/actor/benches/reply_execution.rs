@@ -29,8 +29,9 @@ use std::{
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use loong_actor::{
-    Actor, ActorOwner, ActorRef, ActorScope, ExitReason, Handler, IntoActorFuture, Message,
-    ReplyExt, Response, Shutdown, SpawnOptions, TryCallErrorKind, spawn_with,
+    Actor, ActorOwner, ActorRef, ActorScope, ExitReason, Handler, InterleavedFutureExt,
+    IntoActorFuture, Message, ReplyExt, Response, Shutdown, SpawnOptions, TryCallErrorKind,
+    spawn_with,
 };
 use tokio::sync::{mpsc, oneshot};
 

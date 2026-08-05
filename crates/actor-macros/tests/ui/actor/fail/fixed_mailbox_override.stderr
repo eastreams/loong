@@ -1,11 +1,11 @@
-error[E0599]: no method named `with_mailbox_capacity` found for struct `loong_actor::__private::ActorOptions<Fixed, loong_actor::__private::FixedMailbox>` in the current scope
+error[E0599]: no method named `with_mailbox_capacity` found for struct `loong_actor::__private::ActorOptions<Fixed, loong_actor::__private::FixedMailbox, loong_actor::__private::NoInterleaving>` in the current scope
   --> tests/ui/actor/fail/fixed_mailbox_override.rs:17:10
    |
 16 |       let _ = actor_api::SpawnOptions::<Fixed>::default()
    |  _____________-
 17 | |         .with_mailbox_capacity(NonZeroUsize::MIN);
-   | |         -^^^^^^^^^^^^^^^^^^^^^ method not found in `loong_actor::__private::ActorOptions<Fixed, loong_actor::__private::FixedMailbox>`
+   | |         -^^^^^^^^^^^^^^^^^^^^^ method not found in `loong_actor::__private::ActorOptions<Fixed, loong_actor::__private::FixedMailbox, loong_actor::__private::NoInterleaving>`
    | |_________|
    |
    |
-   = note: the method was found for `loong_actor::__private::ActorOptions<A, loong_actor::__private::DynamicMailbox<DEFAULT>>`
+   = note: the method was found for `loong_actor::__private::ActorOptions<A, loong_actor::__private::DynamicMailbox<DEFAULT>, I>`

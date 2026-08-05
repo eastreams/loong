@@ -12,7 +12,7 @@ use tokio::sync::oneshot;
 
 use crate::{
     Actor, ActorConfig, ActorScope, CallError, ExitReason, Handler, Message, ReplyExt, Shutdown,
-    ShutdownStatus, owned::OwnedTasks, scheduler::ReplyScheduler, transport::MessageSender,
+    ShutdownStatus, owned::OwnedTasks, scheduling::ActorScheduler, transport::MessageSender,
 };
 
 use super::super::{ActorInbox, ActorInner, CallEnvelope, Control, Envelope, Mode};
@@ -48,7 +48,7 @@ impl<A: Actor> Envelope<A> for NoopEnvelope {
         _actor: &mut A,
         _scope: &mut ActorScope<A>,
         _owned: &OwnedTasks<A>,
-        _scheduler: &mut ReplyScheduler<A>,
+        _scheduler: &mut ActorScheduler<A>,
         _inner: &Arc<ActorInner<A>>,
     ) {
     }
@@ -71,7 +71,7 @@ impl Envelope<UnboundedTestActor> for PanicDropEnvelope {
         _actor: &mut UnboundedTestActor,
         _scope: &mut ActorScope<UnboundedTestActor>,
         _owned: &OwnedTasks<UnboundedTestActor>,
-        _scheduler: &mut ReplyScheduler<UnboundedTestActor>,
+        _scheduler: &mut ActorScheduler<UnboundedTestActor>,
         _inner: &Arc<ActorInner<UnboundedTestActor>>,
     ) {
         unreachable!("the broken backend cannot dispatch its envelope")

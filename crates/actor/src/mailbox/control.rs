@@ -294,7 +294,7 @@ impl Control {
         }
     }
 
-    pub(super) fn discard_panic(payload: Box<dyn Any + Send>) {
+    pub(crate) fn discard_panic(payload: Box<dyn Any + Send>) {
         if let Err(nested) = panic::catch_unwind(AssertUnwindSafe(|| drop(payload))) {
             // A cascading payload destructor cannot safely leave containment.
             std::mem::forget(nested);

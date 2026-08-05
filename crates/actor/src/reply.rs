@@ -3,8 +3,12 @@
 //! A [`Handler`](crate::Handler) chooses one strategy before returning.
 //! [`ReplyExt::ready`] completes during dispatch.
 //! A bare [`Future`] starts an owned Tokio task.
-//! [`ReplyExt::interleaved`] occupies one [`SpawnOptions`](crate::SpawnOptions) slot.
+//! [`InterleavedFutureExt::interleaved`] requires [`HasInterleaving`].
+//! Actors without that capability allocate no interleaved reply queue.
+//! Fixed and dynamic configurations bound active interleaved replies.
+//! Unbounded configurations may retain arbitrarily many active replies.
 //! [`ReplyExt::exclusive`] pauses other actor-aware work.
+//! Exclusive scheduling needs no interleaving capability.
 //! [`SyncHandler`](crate::SyncHandler) selects ready scheduling automatically.
 //!
 //! A bare `Future<Output = M::Reply> + Send + 'static` selects owned scheduling.
@@ -41,6 +45,7 @@
 
 use std::{
     future::Future,
+    marker::PhantomData,
     pin::Pin,
     task::{Context, Poll},
 };
@@ -48,8 +53,10 @@ use std::{
 use pin_project_lite::pin_project;
 
 use crate::{
-    Actor, ActorFuture, ActorScope, Message, mailbox::DispatchReply, owned::OwnedTasks,
-    scheduler::ReplyScheduler,
+    Actor, ActorFuture, ActorScope, HasInterleaving, Message,
+    mailbox::DispatchReply,
+    owned::OwnedTasks,
+    scheduling::{ActorScheduler, RuntimeInterleavedScheduler, RuntimeScheduler},
 };
 
 /// Extension methods that select explicit reply scheduling strategies.
@@ -62,7 +69,7 @@ pub trait ReplyExt: Sized {
     ///
     /// The value is submitted after its handler returns.
     /// No future remains after this dispatch.
-    /// Dispatch may wait behind full interleaved capacity.
+    /// Dispatch may wait for configured interleaved capacity.
     /// The runtime learns the strategy only after calling the handler.
     ///
     /// Prefer [`SyncHandler`](crate::SyncHandler) when every invocation returns
@@ -85,18 +92,6 @@ pub trait ReplyExt: Sized {
         Ready { value: self }
     }
 
-    /// Creates an actor-aware reply that yields actor access between polls.
-    ///
-    /// The [`ActorFuture`] receives temporary actor and scope borrows each poll.
-    /// Those borrows end whenever the poll returns.
-    /// `Pending` therefore allows eligible mailbox and child-exit work.
-    /// It also allows other interleaved replies.
-    /// An active [`exclusive`](ReplyExt::exclusive) reply pauses these polls.
-    /// Each active interleaved reply consumes one configured slot.
-    fn interleaved(self) -> Interleaved<Self> {
-        Interleaved { future: self }
-    }
-
     /// Creates an actor-aware reply that reserves actor-aware execution until done.
     ///
     /// Its [`ActorFuture`] receives fresh actor and scope borrows each poll.
@@ -105,12 +100,42 @@ pub trait ReplyExt: Sized {
     /// It also pauses interleaved replies and child-exit hooks.
     /// Already-dispatched owned futures continue making progress.
     /// Kill may drop this reply after its current poll.
+    /// This strategy does not require [`HasInterleaving`].
     fn exclusive(self) -> Exclusive<Self> {
         Exclusive { future: self }
     }
 }
 
 impl<T> ReplyExt for T {}
+
+/// Selects interleaved scheduling for a capable actor.
+///
+/// The [`ActorFuture`] receives temporary actor borrows per poll.
+/// Those borrows end whenever the poll returns.
+/// `Pending` allows eligible mailbox and child-exit work.
+/// It also allows other interleaved replies.
+/// An active [`exclusive`](ReplyExt::exclusive) reply pauses these polls.
+/// Each active reply consumes one configured slot.
+/// Unbounded admission may retain arbitrarily many replies.
+pub trait InterleavedFutureExt<A>: ActorFuture<A> + Sized
+where
+    A: HasInterleaving,
+{
+    /// Creates an actor-aware reply that yields between polls.
+    fn interleaved(self) -> Interleaved<A, Self> {
+        Interleaved {
+            actor: PhantomData,
+            future: self,
+        }
+    }
+}
+
+impl<A, F> InterleavedFutureExt<A> for F
+where
+    A: HasInterleaving,
+    F: ActorFuture<A>,
+{
+}
 
 /// An immediately completed reply created by [`ReplyExt::ready`].
 ///
@@ -121,12 +146,13 @@ pub struct Ready<R> {
     value: R,
 }
 
-/// An interleaved actor-aware reply created by [`ReplyExt::interleaved`].
+/// An interleaved reply created by [`InterleavedFutureExt::interleaved`].
 ///
-/// See [`ReplyExt::interleaved`] for its borrowing and scheduling behavior.
+/// See [`InterleavedFutureExt::interleaved`] for scheduling behavior.
 #[derive(Debug)]
 #[must_use = "a reply must be returned from a handler"]
-pub struct Interleaved<F> {
+pub struct Interleaved<A: HasInterleaving, F> {
+    actor: PhantomData<fn() -> A>,
     future: F,
 }
 
@@ -157,9 +183,9 @@ pub enum Either<L, R> {
 /// A crate-controlled reply strategy returned by a handler.
 ///
 /// This trait is sealed so reply senders and lifecycle error construction stay
-/// private to the runtime. Use this trait as an opaque handler return bound and
-/// use [`ReplyExt`] for explicit strategies. Return a bare [`Future`] for owned
-/// scheduling.
+/// private to the runtime. Use this trait as an opaque handler return bound.
+/// Use the extension traits for explicit strategies.
+/// Return a bare [`Future`] for owned scheduling.
 ///
 /// Downstream crates cannot add reply strategies:
 ///
@@ -202,11 +228,11 @@ pub(crate) mod sealed {
     use super::*;
 
     pub trait HandleReply<A: Actor, M: Message> {
-        fn handle<'a>(
+        fn handle(
             self,
             owned: &OwnedTasks<A>,
-            scheduler: &mut ReplyScheduler<A>,
-            reply: DispatchReply<'a, A, M::Reply>,
+            scheduler: &mut ActorScheduler<A>,
+            reply: DispatchReply<'_, A, M::Reply>,
         );
     }
 
@@ -215,11 +241,11 @@ pub(crate) mod sealed {
         A: Actor,
         M: Message,
     {
-        fn handle<'a>(
+        fn handle(
             self,
             _owned: &OwnedTasks<A>,
-            _scheduler: &mut ReplyScheduler<A>,
-            reply: DispatchReply<'a, A, M::Reply>,
+            _scheduler: &mut ActorScheduler<A>,
+            reply: DispatchReply<'_, A, M::Reply>,
         ) {
             reply.complete(self.value);
         }
@@ -231,29 +257,32 @@ pub(crate) mod sealed {
         M: Message,
         F: Future<Output = M::Reply> + Send + 'static,
     {
-        fn handle<'a>(
+        fn handle(
             self,
             owned: &OwnedTasks<A>,
-            _scheduler: &mut ReplyScheduler<A>,
-            reply: DispatchReply<'a, A, M::Reply>,
+            _scheduler: &mut ActorScheduler<A>,
+            reply: DispatchReply<'_, A, M::Reply>,
         ) {
             owned.spawn(CompleteReply::new(self, reply.into_owned()));
         }
     }
 
-    impl<A, M, F> HandleReply<A, M> for Interleaved<F>
+    impl<A, M, F> HandleReply<A, M> for Interleaved<A, F>
     where
-        A: Actor,
+        A: HasInterleaving,
         M: Message,
         F: ActorFuture<A, Output = M::Reply> + Send + 'static,
     {
-        fn handle<'a>(
+        fn handle(
             self,
             _owned: &OwnedTasks<A>,
-            scheduler: &mut ReplyScheduler<A>,
-            reply: DispatchReply<'a, A, M::Reply>,
+            scheduler: &mut ActorScheduler<A>,
+            reply: DispatchReply<'_, A, M::Reply>,
         ) {
-            scheduler.push_interleaved(CompleteReply::new(self.future, reply.into_owned()));
+            RuntimeInterleavedScheduler::push_interleaved(
+                scheduler,
+                CompleteReply::new(self.future, reply.into_owned()),
+            );
         }
     }
 
@@ -263,13 +292,16 @@ pub(crate) mod sealed {
         M: Message,
         F: ActorFuture<A, Output = M::Reply> + Send + 'static,
     {
-        fn handle<'a>(
+        fn handle(
             self,
             _owned: &OwnedTasks<A>,
-            scheduler: &mut ReplyScheduler<A>,
-            reply: DispatchReply<'a, A, M::Reply>,
+            scheduler: &mut ActorScheduler<A>,
+            reply: DispatchReply<'_, A, M::Reply>,
         ) {
-            scheduler.push_exclusive(CompleteReply::new(self.future, reply.into_owned()));
+            RuntimeScheduler::push_exclusive(
+                scheduler,
+                CompleteReply::new(self.future, reply.into_owned()),
+            );
         }
     }
 
@@ -280,11 +312,11 @@ pub(crate) mod sealed {
         L: HandleReply<A, M>,
         R: HandleReply<A, M>,
     {
-        fn handle<'a>(
+        fn handle(
             self,
             owned: &OwnedTasks<A>,
-            scheduler: &mut ReplyScheduler<A>,
-            reply: DispatchReply<'a, A, M::Reply>,
+            scheduler: &mut ActorScheduler<A>,
+            reply: DispatchReply<'_, A, M::Reply>,
         ) {
             match self {
                 Either::Left(left) => left.handle(owned, scheduler, reply),

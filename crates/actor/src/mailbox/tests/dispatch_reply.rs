@@ -1,6 +1,5 @@
 use std::{
     future::{Future, Pending},
-    num::NonZeroUsize,
     panic::{self, AssertUnwindSafe},
     sync::{
         Arc,
@@ -14,11 +13,11 @@ use std::{
 use tokio::sync::oneshot;
 
 use crate::{
-    Actor, ActorConfig, ActorScope, CallError, ExitReason, FutureActor, IntoActorFuture, Message,
-    ReplyExt, Shutdown, ShutdownStatus,
+    Actor, ActorConfig, ActorScope, CallError, ExitReason, FutureActor, InterleavedFutureExt,
+    IntoActorFuture, Message, ReplyExt, ReplySchedulingConfig, Shutdown, ShutdownStatus,
     owned::OwnedTasks,
     reply::{Either, Interleaved, Ready, sealed::HandleReply},
-    scheduler::ReplyScheduler,
+    scheduling::{InterleavedProfile, RuntimeScheduler},
 };
 
 use super::super::{ActorInner, DispatchReply, Mode};
@@ -80,11 +79,12 @@ fn owned_dispatch_promotion_retains_the_actor() {
 // Either selects first. Only scheduled work may retain the actor.
 #[test]
 fn either_promotes_only_the_escaping_branch() {
-    type Branch = Either<Ready<u8>, Interleaved<FutureActor<TestActor, Pending<u8>>>>;
+    type Branch = Either<Ready<u8>, Interleaved<TestActor, FutureActor<TestActor, Pending<u8>>>>;
 
     let inner = actor_inner();
     let owned = OwnedTasks::new(Arc::clone(&inner));
-    let mut scheduler = ReplyScheduler::new(NonZeroUsize::MIN);
+    let options = <TestActor as ActorConfig>::Options::default();
+    let mut scheduler = TestActor::open_scheduler(&options);
     let strong = Arc::strong_count(&inner);
 
     let permit = inner.begin_dispatch().expect("dispatch wins the gate");
@@ -99,7 +99,7 @@ fn either_promotes_only_the_escaping_branch() {
 
     assert_eq!(receiver.try_recv(), Ok(Ok(7)));
     assert_eq!(Arc::strong_count(&inner), strong);
-    assert!(scheduler.is_empty());
+    assert!(RuntimeScheduler::is_idle(&mut scheduler));
 
     let permit = inner.begin_dispatch().expect("dispatch wins the gate");
     let (sender, _receiver) = oneshot::channel();
@@ -113,7 +113,7 @@ fn either_promotes_only_the_escaping_branch() {
     );
 
     assert_eq!(Arc::strong_count(&inner), strong + 1);
-    assert!(scheduler.has_interleaved());
+    assert!(scheduler.state().has_interleaved());
 }
 
 #[tokio::test]

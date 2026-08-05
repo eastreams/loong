@@ -13,8 +13,8 @@ use std::{
 
 use loong_actor::{
     Actor, ActorFutureExt, ActorRef, ActorScope, CallError, ChildExit, ExitReason, Handler,
-    IntoActorFuture, Message, ReplyExt, Response, Shutdown, SpawnOptions, SyncHandler, actor,
-    reply, spawn, spawn_with,
+    InterleavedFutureExt, IntoActorFuture, Message, ReplyExt, Response, Shutdown, SpawnOptions,
+    SyncHandler, actor, reply, spawn, spawn_with,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -449,17 +449,15 @@ impl Handler<StopOwned> for StopActor {
 }
 
 #[tokio::test]
-async fn owned_replies_ignore_max_in_flight_and_graceful_shutdown_waits() {
-    // All three must start with one interleaved slot.
+async fn owned_replies_need_no_interleaving_and_graceful_shutdown_waits() {
+    // All three owned tasks must start concurrently.
     // Each partial release must leave shutdown pending.
     // That proves shutdown waits for every owned task.
     for (shutdown, expected) in [
         (Shutdown::Stop, ExitReason::Stopped),
         (Shutdown::Drain, ExitReason::Drained),
     ] {
-        let options =
-            SpawnOptions::<StopActor>::default().with_max_in_flight(NonZeroUsize::new(1).unwrap());
-        let mut owner = spawn_with::<StopActor>((), options);
+        let mut owner = spawn::<StopActor>(());
         let actor = owner.actor_ref();
         let mut entered = Vec::new();
         let mut releases = Vec::new();
@@ -844,9 +842,7 @@ async fn owned_reply_runs_in_a_distinct_tokio_task() {
 #[tokio::test]
 async fn ready_mailbox_input_does_not_starve_woken_interleaved_reply() {
     let handled = Arc::new(AtomicUsize::new(0));
-    let options =
-        SpawnOptions::<FairActor>::default().with_max_in_flight(NonZeroUsize::new(4).unwrap());
-    let owner = spawn_with::<FairActor>(handled.clone(), options);
+    let owner = spawn::<FairActor>(handled.clone());
     let actor = owner.actor_ref();
     let completed_at = Arc::new(AtomicUsize::new(usize::MAX));
     let (entered_tx, entered_rx) = oneshot::channel();
@@ -960,17 +956,12 @@ async fn queued_child_exit_progresses_before_ready_mailbox_is_exhausted() {
     let hook_completed_at = Arc::new(AtomicUsize::new(usize::MAX));
     let (child_started_tx, child_started_rx) = oneshot::channel();
     let (hook_completed_tx, hook_completed_rx) = oneshot::channel();
-    let options = SpawnOptions::<FairChildExitActor>::default()
-        .with_max_in_flight(NonZeroUsize::new(4).unwrap());
-    let owner = spawn_with::<FairChildExitActor>(
-        FairChildExitArgs {
-            child_started: child_started_tx,
-            handled: handled.clone(),
-            hook_completed_at: hook_completed_at.clone(),
-            hook_completed: hook_completed_tx,
-        },
-        options,
-    );
+    let owner = spawn::<FairChildExitActor>(FairChildExitArgs {
+        child_started: child_started_tx,
+        handled: handled.clone(),
+        hook_completed_at: hook_completed_at.clone(),
+        hook_completed: hook_completed_tx,
+    });
     let actor = owner.actor_ref();
     let child = watchdog(child_started_rx).await.unwrap();
 

@@ -1,4 +1,4 @@
-// A dynamic default cannot represent an unusable zero limit.
+// A dynamic mailbox default cannot have zero capacity.
 struct Zero;
 
 #[actor_api::actor(mailbox = dynamic(0))]

@@ -1,13 +1,12 @@
 mod options;
 
-use std::num::NonZeroUsize;
-
 #[cfg(test)]
 mod tests;
 
 pub use options::{
-    ActorOptions, DEFAULT_MAILBOX_CAPACITY, DynamicMailbox, DynamicMailboxOptions, FixedMailbox,
-    NoMailbox, UnboundedMailbox,
+    ActorOptions, DEFAULT_MAILBOX_CAPACITY, DEFAULT_MAX_IN_FLIGHT, DynamicInterleaving,
+    DynamicInterleavingOptions, DynamicMailbox, DynamicMailboxOptions, FixedInterleaving,
+    FixedMailbox, NoInterleaving, NoMailbox, UnboundedInterleaving, UnboundedMailbox,
 };
 
 /// Spawn configuration selected by one actor type.
@@ -19,10 +18,18 @@ pub trait ActorConfig {
     type Options: Default;
 }
 
-/// Configures interleaved reply admission for one actor.
+/// Configures actor-aware reply scheduling for one actor.
 ///
 /// Custom actor configurations implement this beside [`ActorConfig`].
-pub trait InterleavingConfig: ActorConfig {
-    /// Returns the active interleaved-reply limit.
-    fn max_in_flight(options: &Self::Options) -> NonZeroUsize;
+/// Choose one built-in [`scheduling`] profile.
+/// This trait schedules actor-aware replies only.
+/// Owned replies run in separate Tokio tasks.
+///
+/// [`scheduling`]: crate::scheduling
+pub trait ReplySchedulingConfig: ActorConfig {
+    /// The scheduler selected for this actor.
+    type Scheduler: Send + 'static;
+
+    /// Opens this actor's reply scheduler.
+    fn open_scheduler(options: &Self::Options) -> Self::Scheduler;
 }

@@ -8,7 +8,7 @@ use crate::{
     Actor, ActorScope,
     mailbox::{ActorInner, Control, Envelope},
     owned::OwnedTasks,
-    scheduler::ReplyScheduler,
+    scheduling::ActorScheduler,
 };
 
 use super::{
@@ -38,7 +38,7 @@ impl Envelope<TestActor> for ProbeEnvelope {
         _actor: &mut TestActor,
         _scope: &mut ActorScope<TestActor>,
         _owned: &OwnedTasks<TestActor>,
-        _scheduler: &mut ReplyScheduler<TestActor>,
+        _scheduler: &mut ActorScheduler<TestActor>,
         _inner: &Arc<ActorInner<TestActor>>,
     ) {
         panic!("transport tests never dispatch carriers");

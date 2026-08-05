@@ -16,7 +16,9 @@
 //! Implement [`Actor`] for state owned by one actor.
 //! Most implementations use `#[actor(...)]`.
 //! Its options declare the actor's runtime capabilities.
-//! Custom transports implement [`ActorConfig`] and [`MessageConfig`] directly.
+//! Omitting `interleaved` removes that capability and its queue.
+//! Custom transports implement [`ActorConfig`], [`MessageConfig`], and
+//! [`ReplySchedulingConfig`] directly.
 //! [`Actor::SpawnArgs`] owns its construction inputs.
 //! [`Actor::init`] asynchronously builds the complete state.
 //! Derive [`Message`] for every message type.
@@ -114,8 +116,15 @@
 //! Owned futures receive no actor or scope access.
 //! They can progress alongside other actor work.
 //! [`ActorFuture`] values receive temporary actor access during each poll.
-//! [`ReplyExt::interleaved`] allows other actor work between polls.
+//! [`InterleavedFutureExt::interleaved`] allows other work between polls.
+//! It requires the actor's [`HasInterleaving`] capability.
+//! Fixed and dynamic configurations bound active replies.
+//! A full finite limit pauses dispatch before another handler starts.
+//! The handler's reply mode remains unknown until dispatch finishes.
+//! Dynamic options expose `SpawnOptions::with_max_in_flight`.
+//! Unbounded configurations may retain arbitrarily many active replies.
 //! [`ReplyExt::exclusive`] pauses mailbox dispatch and interleaved replies.
+//! It does not require [`HasInterleaving`].
 //! It also pauses child actor exit hooks.
 //! Already-dispatched owned replies still progress.
 //! Kill can still cancel an exclusive reply between polls.
@@ -189,19 +198,21 @@ mod mailbox;
 mod owned;
 pub mod reply;
 mod runtime;
-mod scheduler;
+pub mod scheduling;
 mod supervision;
 pub mod transport;
 
-pub use actor::{Actor, Handler, HasMailbox, Message, SyncHandler};
+pub use actor::{Actor, Handler, HasInterleaving, HasMailbox, Message, SyncHandler};
 pub use address::{ActorRef, Response};
-pub use config::{ActorConfig, DynamicMailboxOptions, InterleavingConfig};
+pub use config::{
+    ActorConfig, DynamicInterleavingOptions, DynamicMailboxOptions, ReplySchedulingConfig,
+};
 pub use error::{
     CallError, SendError, TryCallError, TryCallErrorKind, TrySendError, TrySendErrorKind,
 };
 pub use future::{ActorFuture, ActorFutureExt, FutureActor, IntoActorFuture, Map, Then};
 pub use loong_actor_macros::{Message, actor};
-pub use reply::{IntoReply, ReplyExt};
+pub use reply::{InterleavedFutureExt, IntoReply, ReplyExt};
 pub use runtime::{ActorOwner, ActorScope, SpawnOptions, StopScope, spawn, spawn_with};
 pub use supervision::{
     Child, ChildExit, ChildId, ExitReason, ExitStatus, Shutdown, ShutdownStatus, SubtreeStatus,
@@ -212,8 +223,9 @@ pub use transport::MessageConfig;
 #[doc(hidden)]
 pub mod __private {
     pub use crate::config::{
-        ActorOptions, DEFAULT_MAILBOX_CAPACITY, DynamicMailbox, FixedMailbox, NoMailbox,
-        UnboundedMailbox,
+        ActorOptions, DEFAULT_MAILBOX_CAPACITY, DEFAULT_MAX_IN_FLIGHT, DynamicInterleaving,
+        DynamicMailbox, FixedInterleaving, FixedMailbox, NoInterleaving, NoMailbox,
+        UnboundedInterleaving, UnboundedMailbox,
     };
     pub use crate::transport::{
         BoundedInbox, BoundedSender, NoInbox, NoSender, UnboundedInbox, UnboundedSender,
@@ -227,7 +239,8 @@ pub mod __private {
 /// remain explicit imports so operational behavior stays visible at call sites.
 pub mod prelude {
     pub use crate::{
-        Actor, ActorFuture, ActorFutureExt, ActorScope, DynamicMailboxOptions, Handler, HasMailbox,
+        Actor, ActorFuture, ActorFutureExt, ActorScope, DynamicInterleavingOptions,
+        DynamicMailboxOptions, Handler, HasInterleaving, HasMailbox, InterleavedFutureExt,
         IntoActorFuture, IntoReply, Message, ReplyExt, StopScope, SyncHandler, actor, reply,
     };
 }

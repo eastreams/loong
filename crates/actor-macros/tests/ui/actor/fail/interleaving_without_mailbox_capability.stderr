@@ -1,0 +1,83 @@
+error[E0277]: the trait bound `loong_actor::transport::NoSender: MessageSender<Manual>` is not satisfied
+  --> tests/ui/actor/fail/interleaving_without_mailbox_capability.rs:33:6
+   |
+33 | impl Actor for Manual {
+   |      ^^^^^ the trait `MessageSender<Manual>` is not implemented for `loong_actor::transport::NoSender`
+   |
+help: the following other types implement trait `ReplyScheduler<A>`
+  --> $WORKSPACE/crates/actor/src/scheduling/mod.rs
+   |
+   |   impl<A> ReplyScheduler<A> for Serial<A> where A: Actor + ReplySchedulingConfig<Scheduler = Self> {}
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Serial<A>`
+   |
+   | / impl<A, const N: usize> ReplyScheduler<A> for Fixed<A, N>
+   | | where
+   | |     A: Actor + ReplySchedulingConfig<Scheduler = Self>,
+   | |     A::Sender: MessageSender<A>,
+   | |     A::Inbox: MessageInbox<A>,
+   | |______________________________^ `Fixed<A, N>`
+...
+   | / impl<A> ReplyScheduler<A> for Dynamic<A>
+   | | where
+   | |     A: Actor + ReplySchedulingConfig<Scheduler = Self>,
+   | |     A::Sender: MessageSender<A>,
+   | |     A::Inbox: MessageInbox<A>,
+   | |______________________________^ `Dynamic<A>`
+...
+   | / impl<A> ReplyScheduler<A> for Unbounded<A>
+   | | where
+   | |     A: Actor + ReplySchedulingConfig<Scheduler = Self>,
+   | |     A::Sender: MessageSender<A>,
+   | |     A::Inbox: MessageInbox<A>,
+   | |______________________________^ `loong_actor::scheduling::Unbounded<A>`
+   = note: required for `Fixed<Manual, 1>` to implement `ReplyScheduler<Manual>`
+note: required by a bound in `Actor`
+  --> $WORKSPACE/crates/actor/src/actor.rs
+   |
+   | pub trait Actor:
+   |           ----- required by a bound in this trait
+   |     MessageConfig<Inbox: RuntimeInbox<Self>>
+   |     + ReplySchedulingConfig<Scheduler: ReplyScheduler<Self>>
+   |                                        ^^^^^^^^^^^^^^^^^^^^ required by this bound in `Actor`
+
+error[E0277]: the trait bound `loong_actor::transport::NoInbox: MessageInbox<Manual>` is not satisfied
+  --> tests/ui/actor/fail/interleaving_without_mailbox_capability.rs:33:6
+   |
+33 | impl Actor for Manual {
+   |      ^^^^^ the trait `MessageInbox<Manual>` is not implemented for `loong_actor::transport::NoInbox`
+   |
+help: the following other types implement trait `ReplyScheduler<A>`
+  --> $WORKSPACE/crates/actor/src/scheduling/mod.rs
+   |
+   |   impl<A> ReplyScheduler<A> for Serial<A> where A: Actor + ReplySchedulingConfig<Scheduler = Self> {}
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Serial<A>`
+   |
+   | / impl<A, const N: usize> ReplyScheduler<A> for Fixed<A, N>
+   | | where
+   | |     A: Actor + ReplySchedulingConfig<Scheduler = Self>,
+   | |     A::Sender: MessageSender<A>,
+   | |     A::Inbox: MessageInbox<A>,
+   | |______________________________^ `Fixed<A, N>`
+...
+   | / impl<A> ReplyScheduler<A> for Dynamic<A>
+   | | where
+   | |     A: Actor + ReplySchedulingConfig<Scheduler = Self>,
+   | |     A::Sender: MessageSender<A>,
+   | |     A::Inbox: MessageInbox<A>,
+   | |______________________________^ `Dynamic<A>`
+...
+   | / impl<A> ReplyScheduler<A> for Unbounded<A>
+   | | where
+   | |     A: Actor + ReplySchedulingConfig<Scheduler = Self>,
+   | |     A::Sender: MessageSender<A>,
+   | |     A::Inbox: MessageInbox<A>,
+   | |______________________________^ `loong_actor::scheduling::Unbounded<A>`
+   = note: required for `Fixed<Manual, 1>` to implement `ReplyScheduler<Manual>`
+note: required by a bound in `Actor`
+  --> $WORKSPACE/crates/actor/src/actor.rs
+   |
+   | pub trait Actor:
+   |           ----- required by a bound in this trait
+   |     MessageConfig<Inbox: RuntimeInbox<Self>>
+   |     + ReplySchedulingConfig<Scheduler: ReplyScheduler<Self>>
+   |                                        ^^^^^^^^^^^^^^^^^^^^ required by this bound in `Actor`

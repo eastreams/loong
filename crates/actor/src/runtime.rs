@@ -1,7 +1,6 @@
 use std::{
     fmt,
     future::Future,
-    num::NonZeroUsize,
     panic::{self, AssertUnwindSafe},
     pin::Pin,
     sync::Arc,
@@ -16,14 +15,20 @@ use tokio::sync::mpsc;
 use crate::{
     Actor, ActorConfig, ActorRef, Child, ChildExit, ChildId, ErasedFuture, ExitReason, ExitStatus,
     Shutdown, ShutdownStatus, SubtreeStatus,
-    config::InterleavingConfig,
+    config::ReplySchedulingConfig,
     mailbox::{ActorInbox, ActorInner, Control, HookEntryPermit, Mode},
     owned::OwnedTasks,
-    scheduler::{InterleavedPoll, ReplyScheduler},
-    transport::MessageConfig,
+    scheduling::{ActorScheduler, RuntimeScheduler, SchedulerTurn, TurnContext},
 };
 
 /// Actor-specific configuration applied to one spawn.
+///
+/// Dynamic mailbox options expose
+/// [`with_mailbox_capacity`](crate::DynamicMailboxOptions::with_mailbox_capacity).
+/// Dynamic interleaving options expose
+/// [`with_max_in_flight`](crate::DynamicInterleavingOptions::with_max_in_flight).
+/// Pass changed options to [`spawn_with`].
+/// Other built-in policies expose no corresponding builder.
 pub type SpawnOptions<A> = <A as ActorConfig>::Options;
 
 /// Spawns a root actor with its default [`SpawnOptions`].
@@ -127,7 +132,7 @@ impl<A: Actor> fmt::Debug for ActorOwner<A> {
 
 // Runtime ownership stays private.
 // Public scope views expose only phase-valid capabilities.
-struct ScopeState<A: Actor> {
+pub(crate) struct ScopeState<A: Actor> {
     actor_ref: ActorRef<A>,
     children: ChildSet,
     supervisor_tx: mpsc::UnboundedSender<ChildExit>,
@@ -135,7 +140,7 @@ struct ScopeState<A: Actor> {
 
 impl<A: Actor> ScopeState<A> {
     /// Lends the capabilities valid before child cleanup.
-    fn actor_scope(&mut self) -> ActorScope<'_, A> {
+    pub(crate) fn actor_scope(&mut self) -> ActorScope<'_, A> {
         ActorScope { state: self }
     }
 
@@ -202,9 +207,10 @@ pub struct ActorScope<'a, A: Actor> {
 impl<A: Actor> ActorScope<'_, A> {
     /// Returns this actor's non-owning address.
     ///
-    /// An owned reply consumes no interleaved slot.
-    /// Its self-call can progress while a slot remains available.
-    /// An interleaved reply needs one additional slot for its self-call.
+    /// Owned replies consume no interleaved capacity.
+    /// Their self-calls still require scheduler dispatch capacity.
+    /// Actors without interleaving have no interleaved capacity gate.
+    /// An interleaved reply needs another slot for its self-call.
     /// An exclusive reply blocks its queued self-call until it ends.
     ///
     /// A serial lifecycle hook also blocks dispatch. While admission is still
@@ -406,7 +412,7 @@ impl ChildSet {
 impl<A: Actor> PreparedActor<A> {
     fn new(args: A::SpawnArgs, options: SpawnOptions<A>) -> Self {
         // Resolve borrowed options before any value enters the spawned task.
-        let max_in_flight = <A as InterleavingConfig>::max_in_flight(&options);
+        let scheduler = <A as ReplySchedulingConfig>::open_scheduler(&options);
         let (inner, inbox) = ActorInner::open(&options);
         let actor_ref = ActorRef::new(inner);
 
@@ -418,7 +424,7 @@ impl<A: Actor> PreparedActor<A> {
             children: ChildSet::default(),
             supervisor_tx,
         };
-        let future = Box::pin(run_actor(args, state, inbox, supervisor_rx, max_in_flight));
+        let future = Box::pin(run_actor(args, state, inbox, supervisor_rx, scheduler));
 
         Self { actor_ref, future }
     }
@@ -662,13 +668,11 @@ async fn run_actor<A: Actor>(
     mut state: ScopeState<A>,
     mut inbox: ActorInbox<A>,
     mut supervisor_rx: mpsc::UnboundedReceiver<ChildExit>,
-    max_in_flight: NonZeroUsize,
+    mut scheduler: ActorScheduler<A>,
 ) -> ExitStatus {
     let inner = Arc::clone(&state.actor_ref.0);
     let control = &inner.control;
     let owned = OwnedTasks::new(Arc::clone(&inner));
-    let mut scheduler = ReplyScheduler::new(max_in_flight);
-    let mut turn_cursor = TurnCursor::default();
 
     let initialized = if let Some(_permit) = control.begin_initialization() {
         let mut scope = state.actor_scope();
@@ -709,7 +713,6 @@ async fn run_actor<A: Actor>(
                     &inner,
                     &owned,
                     &mut scheduler,
-                    &mut turn_cursor,
                 )
                 .await;
             }
@@ -746,7 +749,6 @@ async fn run_actor<A: Actor>(
             &mut scheduler,
             true,
             Mode::Running,
-            &mut turn_cursor,
         ))
         .catch_unwind()
         .await;
@@ -760,11 +762,8 @@ async fn run_actor<A: Actor>(
         };
 
         match turn {
-            Turn::LifecycleHint | Turn::ReplyProgress => {}
-            Turn::RepliesFinished => {
-                unreachable!("a running actor cannot finish reply scheduling")
-            }
-            Turn::Child(event) => {
+            SchedulerTurn::LifecycleHint | SchedulerTurn::Progress => {}
+            SchedulerTurn::Child(event) => {
                 match handle_child_exit(&mut actor, &mut state, event, control).await {
                     Work::Complete(()) => {}
                     Work::Killed => {
@@ -776,8 +775,7 @@ async fn run_actor<A: Actor>(
                     }
                 }
             }
-            Turn::MailboxProgress => {}
-            Turn::InboxClosed => {
+            SchedulerTurn::InboxClosed => {
                 control.begin_failure();
                 return fail_actor(&mut state, &mut inbox, &owned, &mut scheduler).await;
             }
@@ -785,49 +783,12 @@ async fn run_actor<A: Actor>(
     }
 }
 
-enum Turn {
-    // Notification or mismatch; the caller re-reads Control.
-    LifecycleHint,
-    ReplyProgress,
-    // Drain handles child exits while awaiting this barrier.
-    RepliesFinished,
-    Child(ChildExit),
-    MailboxProgress,
-    InboxClosed,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-enum OrdinaryLane {
-    #[default]
-    Mailbox,
-    Interleaved,
-    ChildExit,
-}
-
-impl OrdinaryLane {
-    /// Defines the fixed cycle shared by ordinary actor work.
-    const fn next(self) -> Self {
-        match self {
-            Self::Mailbox => Self::Interleaved,
-            Self::Interleaved => Self::ChildExit,
-            Self::ChildExit => Self::Mailbox,
-        }
-    }
-}
-
-#[derive(Default)]
-struct TurnCursor {
-    next_ordinary: OrdinaryLane,
-}
-
 #[expect(
     clippy::too_many_arguments,
     reason = "one turn borrows each independent actor-task resource"
 )]
-// Mailbox, interleaved, and child work share the cursor.
-// Owned tasks do not share this rotation.
-// Exclusive work pauses those three sources.
-// Lifecycle changes are checked before the rotation.
+// Scheduler profiles own their eligible lane rotation.
+// Lifecycle keeps first poll rights across every profile.
 async fn actor_turn<A: Actor>(
     actor: &mut A,
     state: &mut ScopeState<A>,
@@ -835,126 +796,70 @@ async fn actor_turn<A: Actor>(
     supervisor_rx: &mut mpsc::UnboundedReceiver<ChildExit>,
     inner: &Arc<ActorInner<A>>,
     owned: &OwnedTasks<A>,
-    scheduler: &mut ReplyScheduler<A>,
+    scheduler: &mut ActorScheduler<A>,
     receive_messages: bool,
     expected_mode: Mode,
-    cursor: &mut TurnCursor,
-) -> Turn {
+) -> SchedulerTurn {
     let control = &inner.control;
-    let wait_for_owned = !receive_messages && scheduler.is_empty();
-    let mailbox_dispatch_budget = <A as MessageConfig>::MAILBOX_DISPATCH_BUDGET.get();
     let fair_turn = std::future::poll_fn(|task| {
-        if control.mode() != expected_mode {
-            return Poll::Ready(Turn::LifecycleHint);
-        }
-
-        if scheduler.has_exclusive() {
-            let mut scope = state.actor_scope();
-            let ready = scheduler
-                .poll_exclusive(actor, &mut scope, control, expected_mode, task)
-                .is_ready();
-            if control.mode() != expected_mode {
-                return Poll::Ready(Turn::LifecycleHint);
-            }
-            return if ready {
-                Poll::Ready(Turn::ReplyProgress)
-            } else {
-                Poll::Pending
-            };
-        }
-
-        let start = cursor.next_ordinary;
-        let mut lane = start;
-        loop {
-            if control.mode() != expected_mode {
-                return Poll::Ready(Turn::LifecycleHint);
-            }
-            let selected = match lane {
-                OrdinaryLane::Mailbox if receive_messages && scheduler.has_dispatch_capacity() => {
-                    let mut scope = state.actor_scope();
-                    let mut dispatched = 0;
-                    loop {
-                        match inbox.poll_recv(task) {
-                            Poll::Ready(Some(envelope)) => {
-                                envelope.dispatch(actor, &mut scope, owned, scheduler, inner);
-                                dispatched += 1;
-                            }
-                            Poll::Ready(None) => break Some(Turn::InboxClosed),
-                            Poll::Pending
-                                if dispatched > 0
-                                    && start == OrdinaryLane::Interleaved
-                                    && scheduler.has_interleaved() =>
-                            {
-                                // Dispatch can activate a lane already visited this turn.
-                                // Return progress so the new future gets its first poll.
-                                break Some(Turn::MailboxProgress);
-                            }
-                            Poll::Pending => break None,
-                        }
-
-                        if control.mode() != expected_mode {
-                            cursor.next_ordinary = lane.next();
-                            return Poll::Ready(Turn::LifecycleHint);
-                        }
-                        if dispatched == mailbox_dispatch_budget
-                            || !scheduler.has_dispatch_capacity()
-                        {
-                            break Some(Turn::MailboxProgress);
-                        }
-                    }
-                }
-                OrdinaryLane::Interleaved if scheduler.has_interleaved() => {
-                    let mut scope = state.actor_scope();
-                    match scheduler.poll_interleaved(
-                        actor,
-                        &mut scope,
-                        control,
-                        expected_mode,
-                        task,
-                    ) {
-                        InterleavedPoll::Pending => None,
-                        InterleavedPoll::Progress => Some(Turn::ReplyProgress),
-                        InterleavedPoll::BudgetExhausted => {
-                            // Continue from the next lane after Tokio repolls us.
-                            // The scheduler already preserved and woke its sweep.
-                            cursor.next_ordinary = lane.next();
-                            return Poll::Pending;
-                        }
-                    }
-                }
-                OrdinaryLane::ChildExit => match supervisor_rx.poll_recv(task) {
-                    Poll::Ready(Some(event)) => Some(Turn::Child(event)),
-                    Poll::Ready(None) => {
-                        // The runtime keeps this receiver open while scope lives.
-                        // Parent runtime state retains the paired sender.
-                        unreachable!("child-exit receiver closed while parent runtime was alive")
-                    }
-                    Poll::Pending => None,
-                },
-                _ => None,
-            };
-
-            if let Some(turn) = selected {
-                cursor.next_ordinary = lane.next();
-                return Poll::Ready(turn);
-            }
-
-            lane = lane.next();
-            if lane == start {
-                break;
-            }
-        }
-
-        cursor.next_ordinary = start.next();
-        Poll::Pending
+        let mut turn = TurnContext {
+            actor,
+            state,
+            inbox,
+            supervisor_rx,
+            inner,
+            owned,
+            receive_messages,
+            expected_mode,
+        };
+        RuntimeScheduler::poll_turn(scheduler, &mut turn, task)
     });
 
     // Lifecycle always gets first poll rights, especially Kill.
     tokio::select! {
         biased;
-        () = control.actor_notified() => Turn::LifecycleHint,
+        () = control.actor_notified() => SchedulerTurn::LifecycleHint,
         turn = fair_turn => turn,
-        () = owned.wait(), if wait_for_owned => Turn::RepliesFinished,
+    }
+}
+
+enum DrainTurn {
+    Scheduled(SchedulerTurn),
+    RepliesFinished,
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one drain turn borrows each independent actor-task resource"
+)]
+// Scheduler work keeps priority over the owned-task completion barrier.
+// The nested scheduler turn preserves lifecycle-first polling.
+async fn drain_turn<A: Actor>(
+    actor: &mut A,
+    state: &mut ScopeState<A>,
+    inbox: &mut ActorInbox<A>,
+    supervisor_rx: &mut mpsc::UnboundedReceiver<ChildExit>,
+    inner: &Arc<ActorInner<A>>,
+    owned: &OwnedTasks<A>,
+    scheduler: &mut ActorScheduler<A>,
+    receive_messages: bool,
+) -> DrainTurn {
+    let wait_for_owned = !receive_messages && RuntimeScheduler::is_idle(scheduler);
+
+    tokio::select! {
+        biased;
+        turn = actor_turn(
+            actor,
+            state,
+            inbox,
+            supervisor_rx,
+            inner,
+            owned,
+            scheduler,
+            receive_messages,
+            Mode::Draining,
+        ) => DrainTurn::Scheduled(turn),
+        () = owned.wait(), if wait_for_owned => DrainTurn::RepliesFinished,
     }
 }
 
@@ -999,11 +904,11 @@ async fn stop_actor<A: Actor>(
     inbox: &mut ActorInbox<A>,
     control: &Control,
     owned: &OwnedTasks<A>,
-    scheduler: &mut ReplyScheduler<A>,
+    scheduler: &mut ActorScheduler<A>,
 ) -> ExitStatus {
-    match close_and_discard(inbox, &state.actor_ref.0.control, Mode::Stopping).await {
+    match close_and_discard(inbox, control, Mode::Stopping).await {
         DiscardOutcome::Complete => {}
-        DiscardOutcome::ModeChanged => match state.actor_ref.0.control.mode() {
+        DiscardOutcome::ModeChanged => match control.mode() {
             Mode::Killing => return kill_actor(state, inbox, owned, scheduler).await,
             Mode::Failing => return fail_actor(state, inbox, owned, scheduler).await,
             // Lifecycle cannot return to a graceful mode. Aborting and Exited
@@ -1028,10 +933,6 @@ async fn stop_actor<A: Actor>(
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "drain borrows each independent actor-task resource"
-)]
 async fn drain_actor<A: Actor>(
     actor: &mut A,
     state: &mut ScopeState<A>,
@@ -1039,8 +940,7 @@ async fn drain_actor<A: Actor>(
     supervisor_rx: &mut mpsc::UnboundedReceiver<ChildExit>,
     inner: &Arc<ActorInner<A>>,
     owned: &OwnedTasks<A>,
-    scheduler: &mut ReplyScheduler<A>,
-    turn_cursor: &mut TurnCursor,
+    scheduler: &mut ActorScheduler<A>,
 ) -> ExitStatus {
     let control = &inner.control;
     // Admission physically enqueues under the lifecycle transaction, so this
@@ -1071,7 +971,7 @@ async fn drain_actor<A: Actor>(
             owned.close();
         }
 
-        let turn = AssertUnwindSafe(actor_turn(
+        let turn = AssertUnwindSafe(drain_turn(
             actor,
             state,
             inbox,
@@ -1080,8 +980,6 @@ async fn drain_actor<A: Actor>(
             owned,
             scheduler,
             !inbox_drained,
-            Mode::Draining,
-            turn_cursor,
         ))
         .catch_unwind()
         .await;
@@ -1095,20 +993,21 @@ async fn drain_actor<A: Actor>(
         };
 
         match turn {
-            Turn::LifecycleHint | Turn::ReplyProgress => {}
-            Turn::RepliesFinished => break,
-            Turn::Child(event) => match handle_child_exit(actor, state, event, control).await {
-                Work::Complete(()) => {}
-                Work::Killed => {
-                    return kill_actor(state, inbox, owned, scheduler).await;
+            DrainTurn::RepliesFinished => break,
+            DrainTurn::Scheduled(SchedulerTurn::LifecycleHint | SchedulerTurn::Progress) => {}
+            DrainTurn::Scheduled(SchedulerTurn::Child(event)) => {
+                match handle_child_exit(actor, state, event, control).await {
+                    Work::Complete(()) => {}
+                    Work::Killed => {
+                        return kill_actor(state, inbox, owned, scheduler).await;
+                    }
+                    Work::Panicked | Work::DropPanicked(()) => {
+                        control.begin_failure();
+                        return fail_actor(state, inbox, owned, scheduler).await;
+                    }
                 }
-                Work::Panicked | Work::DropPanicked(()) => {
-                    control.begin_failure();
-                    return fail_actor(state, inbox, owned, scheduler).await;
-                }
-            },
-            Turn::MailboxProgress => {}
-            Turn::InboxClosed => {
+            }
+            DrainTurn::Scheduled(SchedulerTurn::InboxClosed) => {
                 inbox_drained = true;
                 owned.close();
             }
@@ -1127,9 +1026,9 @@ async fn finish_replies<A: Actor>(
     state: &mut ScopeState<A>,
     control: &Control,
     owned: &OwnedTasks<A>,
-    scheduler: &mut ReplyScheduler<A>,
+    scheduler: &mut ActorScheduler<A>,
 ) -> Work {
-    while !scheduler.is_empty() {
+    while !RuntimeScheduler::is_idle(scheduler) {
         match control.mode() {
             Mode::Killing => return Work::Killed,
             Mode::Failing => return Work::Panicked,
@@ -1143,7 +1042,14 @@ async fn finish_replies<A: Actor>(
                 () = control.actor_notified() => {}
                 () = std::future::poll_fn(|task| {
                     let mut scope = state.actor_scope();
-                    scheduler.poll_active(actor, &mut scope, control, Mode::Stopping, task)
+                    RuntimeScheduler::poll_actor_replies(
+                        scheduler,
+                        actor,
+                        &mut scope,
+                        control,
+                        Mode::Stopping,
+                        task,
+                    )
                 }) => {}
             }
         })
@@ -1225,7 +1131,7 @@ async fn kill_actor<A: Actor>(
     state: &mut ScopeState<A>,
     inbox: &mut ActorInbox<A>,
     owned: &OwnedTasks<A>,
-    scheduler: &mut ReplyScheduler<A>,
+    scheduler: &mut ActorScheduler<A>,
 ) -> ExitStatus {
     let inner = Arc::clone(&state.actor_ref.0);
     let control = &inner.control;
@@ -1234,7 +1140,7 @@ async fn kill_actor<A: Actor>(
     inbox.close();
     state.children.request_all(Shutdown::Kill);
     owned.close();
-    scheduler.clear(control);
+    RuntimeScheduler::clear(scheduler, control);
     let mut expected_mode = Mode::Killing;
     loop {
         match close_and_discard(inbox, control, expected_mode).await {
@@ -1251,7 +1157,7 @@ async fn fail_actor<A: Actor>(
     state: &mut ScopeState<A>,
     inbox: &mut ActorInbox<A>,
     owned: &OwnedTasks<A>,
-    scheduler: &mut ReplyScheduler<A>,
+    scheduler: &mut ActorScheduler<A>,
 ) -> ExitStatus {
     let inner = Arc::clone(&state.actor_ref.0);
     let control = &inner.control;
@@ -1265,7 +1171,7 @@ async fn fail_actor<A: Actor>(
     inbox.close();
     state.children.request_all(Shutdown::Kill);
     owned.close();
-    scheduler.clear(control);
+    RuntimeScheduler::clear(scheduler, control);
     let mut expected_mode = control.mode();
     loop {
         match close_and_discard(inbox, control, expected_mode).await {

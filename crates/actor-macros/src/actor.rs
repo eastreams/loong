@@ -57,15 +57,23 @@ fn expand_actor(implementation: &ItemImpl, args: ActorArgs) -> syn::Result<Token
         None => MailboxExpansion::absent(&actor),
     };
     let MailboxExpansion {
-        options,
+        options: mailbox_options,
         sender,
         inbox,
-        open,
+        open: open_mailbox,
     } = mailbox;
 
-    // Parsing reserves these options for their direct configuration units.
-    // They do not project placeholder policy types in this expansion.
-    let _ = args.interleaved;
+    let interleaving = match &args.interleaved {
+        Some((_, interleaving)) => interleaving.expand_interleaving(&actor),
+        None => InterleavingExpansion::absent(&actor),
+    };
+    let InterleavingExpansion {
+        options: interleaving_options,
+        scheduler,
+        open: open_scheduler,
+    } = interleaving;
+
+    // Parsing reserves child options for the supervision configuration unit.
     let _ = args.children;
 
     Ok(quote! {
@@ -74,7 +82,11 @@ fn expand_actor(implementation: &ItemImpl, args: ActorArgs) -> syn::Result<Token
         #(#config_attrs)*
         #[automatically_derived]
         impl #impl_generics #actor::ActorConfig for #self_ty #where_clause {
-            type Options = #actor::__private::ActorOptions<Self, #options>;
+            type Options = #actor::__private::ActorOptions<
+                Self,
+                #mailbox_options,
+                #interleaving_options,
+            >;
         }
 
         #(#config_attrs)*
@@ -86,15 +98,17 @@ fn expand_actor(implementation: &ItemImpl, args: ActorArgs) -> syn::Result<Token
             type Inbox = #inbox;
 
             fn open(options: &Self::Options) -> (Self::Sender, Self::Inbox) {
-                #open
+                #open_mailbox
             }
         }
 
         #(#config_attrs)*
         #[automatically_derived]
-        impl #impl_generics #actor::InterleavingConfig for #self_ty #where_clause {
-            fn max_in_flight(options: &Self::Options) -> ::core::num::NonZeroUsize {
-                options.max_in_flight()
+        impl #impl_generics #actor::ReplySchedulingConfig for #self_ty #where_clause {
+            type Scheduler = #scheduler;
+
+            fn open_scheduler(options: &Self::Options) -> Self::Scheduler {
+                #open_scheduler
             }
         }
     })
@@ -151,37 +165,30 @@ impl Parse for ActorArgs {
                 let budget: Expr = input.parse()?;
                 validate_mailbox_budget_expression(&budget)?;
                 args.mailbox_budget = Some((name, budget));
-            } else {
-                let capacity = if input.peek(Token![=]) {
-                    input.parse::<Token![=]>()?;
-                    input.parse()?
-                } else {
-                    CapacitySpec::Default
-                };
-                if name == "mailbox" {
-                    if args.mailbox.is_some() {
-                        return Err(syn::Error::new(name.span(), "duplicate `mailbox` option"));
-                    }
-                    args.mailbox = Some(capacity);
-                } else if name == "interleaved" {
-                    if args.interleaved.is_some() {
-                        return Err(syn::Error::new(
-                            name.span(),
-                            "duplicate `interleaved` option",
-                        ));
-                    }
-                    args.interleaved = Some((name, capacity));
-                } else if name == "children" {
-                    if args.children.is_some() {
-                        return Err(syn::Error::new(name.span(), "duplicate `children` option"));
-                    }
-                    args.children = Some(capacity);
-                } else {
+            } else if name == "mailbox" {
+                if args.mailbox.is_some() {
+                    return Err(syn::Error::new(name.span(), "duplicate `mailbox` option"));
+                }
+                args.mailbox = Some(parse_capacity(input, "mailbox capacity")?);
+            } else if name == "interleaved" {
+                if args.interleaved.is_some() {
                     return Err(syn::Error::new(
                         name.span(),
-                        "unsupported actor option; expected `mailbox`, `mailbox_budget`, `interleaved`, or `children`",
+                        "duplicate `interleaved` option",
                     ));
                 }
+                let limit = parse_capacity(input, "interleaved limit")?;
+                args.interleaved = Some((name, limit));
+            } else if name == "children" {
+                if args.children.is_some() {
+                    return Err(syn::Error::new(name.span(), "duplicate `children` option"));
+                }
+                args.children = Some(parse_capacity(input, "child capacity")?);
+            } else {
+                return Err(syn::Error::new(
+                    name.span(),
+                    "unsupported actor option; expected `mailbox`, `mailbox_budget`, `interleaved`, or `children`",
+                ));
             }
 
             if input.is_empty() {
@@ -193,6 +200,14 @@ impl Parse for ActorArgs {
     }
 }
 
+fn parse_capacity(input: ParseStream<'_>, quantity: &'static str) -> syn::Result<CapacitySpec> {
+    if !input.peek(Token![=]) {
+        return Ok(CapacitySpec::Default);
+    }
+    input.parse::<Token![=]>()?;
+    CapacitySpec::parse(input, quantity)
+}
+
 enum CapacitySpec {
     Default,
     Unbounded,
@@ -202,6 +217,42 @@ enum CapacitySpec {
 }
 
 impl CapacitySpec {
+    fn parse(input: ParseStream<'_>, quantity: &'static str) -> syn::Result<Self> {
+        let capacity: Expr = input.parse()?;
+
+        if let Some(policy) = expression_ident(&capacity) {
+            if policy == "unbounded" {
+                return Ok(Self::Unbounded);
+            }
+            if policy == "dynamic" {
+                return Ok(Self::Dynamic);
+            }
+        }
+
+        if let Expr::Call(call) = capacity {
+            if expression_ident(&call.func).is_some_and(|policy| policy == "dynamic") {
+                let capacity = match call.args.first() {
+                    Some(capacity) if call.args.len() == 1 => capacity.clone(),
+                    _ => {
+                        return Err(syn::Error::new_spanned(
+                            call,
+                            format!("`dynamic(...)` requires one default {quantity}"),
+                        ));
+                    }
+                };
+                validate_capacity_expression(&capacity, quantity)?;
+                return Ok(Self::DynamicWithDefault(capacity));
+            }
+
+            let capacity = Expr::Call(call);
+            validate_capacity_expression(&capacity, quantity)?;
+            return Ok(Self::Fixed(capacity));
+        }
+
+        validate_capacity_expression(&capacity, quantity)?;
+        Ok(Self::Fixed(capacity))
+    }
+
     fn expand_mailbox(&self, actor: &TokenStream2) -> MailboxExpansion {
         match self {
             Self::Default => MailboxExpansion::bounded(
@@ -217,6 +268,25 @@ impl CapacitySpec {
             Self::DynamicWithDefault(capacity) => {
                 let capacity = expand_const_argument(capacity);
                 MailboxExpansion::dynamic(actor, Some(capacity))
+            }
+        }
+    }
+
+    fn expand_interleaving(&self, actor: &TokenStream2) -> InterleavingExpansion {
+        match self {
+            Self::Default => InterleavingExpansion::fixed(
+                actor,
+                quote!({ #actor::__private::DEFAULT_MAX_IN_FLIGHT }),
+            ),
+            Self::Unbounded => InterleavingExpansion::unbounded(actor),
+            Self::Fixed(limit) => {
+                let limit = expand_const_argument(limit);
+                InterleavingExpansion::fixed(actor, limit)
+            }
+            Self::Dynamic => InterleavingExpansion::dynamic(actor, None),
+            Self::DynamicWithDefault(limit) => {
+                let limit = expand_const_argument(limit);
+                InterleavingExpansion::dynamic(actor, Some(limit))
             }
         }
     }
@@ -240,21 +310,25 @@ impl MailboxExpansion {
     }
 
     fn bounded(actor: &TokenStream2, capacity: TokenStream2) -> Self {
+        let nonzero_capacity =
+            expand_nonzero_const(&capacity, "mailbox capacity must be greater than zero");
         Self {
             options: quote!(#actor::__private::FixedMailbox),
             sender: quote!(#actor::__private::BoundedSender<Self>),
             inbox: quote!(#actor::__private::BoundedInbox<Self>),
             open: quote! {
-                let capacity = const {
-                    ::core::num::NonZeroUsize::new(#capacity)
-                        .expect("mailbox capacity must be greater than zero")
-                };
+                let capacity = #nonzero_capacity;
                 #actor::__private::BoundedSender::<Self>::open(capacity)
             },
         }
     }
 
     fn dynamic(actor: &TokenStream2, default: Option<TokenStream2>) -> Self {
+        let validate_default = default.as_ref().map(|default| {
+            let nonzero_default =
+                expand_nonzero_const(default, "mailbox capacity must be greater than zero");
+            quote!(let _ = #nonzero_default;)
+        });
         let options = match default {
             Some(default) => quote!(#actor::__private::DynamicMailbox<#default>),
             None => quote!(#actor::__private::DynamicMailbox),
@@ -264,6 +338,7 @@ impl MailboxExpansion {
             sender: quote!(#actor::__private::BoundedSender<Self>),
             inbox: quote!(#actor::__private::BoundedInbox<Self>),
             open: quote! {
+                #validate_default
                 #actor::__private::BoundedSender::<Self>::open(options.mailbox_capacity())
             },
         }
@@ -279,41 +354,62 @@ impl MailboxExpansion {
     }
 }
 
-impl Parse for CapacitySpec {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let capacity: Expr = input.parse()?;
+struct InterleavingExpansion {
+    options: TokenStream2,
+    scheduler: TokenStream2,
+    open: TokenStream2,
+}
 
-        if let Some(policy) = expression_ident(&capacity) {
-            if policy == "unbounded" {
-                return Ok(Self::Unbounded);
-            }
-            if policy == "dynamic" {
-                return Ok(Self::Dynamic);
-            }
+impl InterleavingExpansion {
+    fn absent(actor: &TokenStream2) -> Self {
+        Self {
+            options: quote!(#actor::__private::NoInterleaving),
+            scheduler: quote!(#actor::scheduling::Serial<Self>),
+            open: quote!(#actor::scheduling::Serial::<Self>::new()),
         }
+    }
 
-        if let Expr::Call(call) = capacity {
-            if expression_ident(&call.func).is_some_and(|policy| policy == "dynamic") {
-                let capacity = match call.args.first() {
-                    Some(capacity) if call.args.len() == 1 => capacity.clone(),
-                    _ => {
-                        return Err(syn::Error::new_spanned(
-                            call,
-                            "`dynamic(...)` requires one default capacity",
-                        ));
-                    }
-                };
-                validate_capacity_expression(&capacity)?;
-                return Ok(Self::DynamicWithDefault(capacity));
-            }
-
-            let capacity = Expr::Call(call);
-            validate_capacity_expression(&capacity)?;
-            return Ok(Self::Fixed(capacity));
+    fn fixed(actor: &TokenStream2, limit: TokenStream2) -> Self {
+        let nonzero_limit =
+            expand_nonzero_const(&limit, "interleaved limit must be greater than zero");
+        Self {
+            options: quote!(#actor::__private::FixedInterleaving),
+            scheduler: quote!(#actor::scheduling::Fixed<Self, #limit>),
+            open: quote! {
+                let _ = #nonzero_limit;
+                #actor::scheduling::Fixed::<Self, #limit>::new()
+            },
         }
+    }
 
-        validate_capacity_expression(&capacity)?;
-        Ok(Self::Fixed(capacity))
+    fn dynamic(actor: &TokenStream2, default: Option<TokenStream2>) -> Self {
+        let validate_default = default.as_ref().map(|default| {
+            let nonzero_default =
+                expand_nonzero_const(default, "interleaved limit must be greater than zero");
+            quote!(let _ = #nonzero_default;)
+        });
+        let options = match default {
+            Some(default) => quote!(#actor::__private::DynamicInterleaving<#default>),
+            None => quote!(#actor::__private::DynamicInterleaving),
+        };
+        Self {
+            options,
+            scheduler: quote!(#actor::scheduling::Dynamic<Self>),
+            open: quote! {
+                #validate_default
+                #actor::scheduling::Dynamic::<Self>::new(
+                    options.max_in_flight(),
+                )
+            },
+        }
+    }
+
+    fn unbounded(actor: &TokenStream2) -> Self {
+        Self {
+            options: quote!(#actor::__private::UnboundedInterleaving),
+            scheduler: quote!(#actor::scheduling::Unbounded<Self>),
+            open: quote!(#actor::scheduling::Unbounded::<Self>::new()),
+        }
     }
 }
 
@@ -340,7 +436,16 @@ fn expand_const_argument(capacity: &Expr) -> TokenStream2 {
     }
 }
 
-fn validate_capacity_expression(capacity: &Expr) -> syn::Result<()> {
+// Keep named zero failures at the actor definition.
+fn expand_nonzero_const(value: &TokenStream2, message: &'static str) -> TokenStream2 {
+    quote! {
+        const {
+            ::core::num::NonZeroUsize::new(#value).expect(#message)
+        }
+    }
+}
+
+fn validate_capacity_expression(capacity: &Expr, quantity: &'static str) -> syn::Result<()> {
     let Expr::Lit(expression) = capacity else {
         return Ok(());
     };
@@ -350,7 +455,7 @@ fn validate_capacity_expression(capacity: &Expr) -> syn::Result<()> {
     if capacity.base10_parse::<usize>()? == 0 {
         return Err(syn::Error::new(
             capacity.span(),
-            "capacity must be greater than zero",
+            format!("{quantity} must be greater than zero"),
         ));
     }
     Ok(())

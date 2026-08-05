@@ -1,0 +1,15 @@
+error[E0080]: evaluation panicked: interleaved limit must be greater than zero
+ --> tests/ui/actor/fail/zero_dynamic_const_interleaving.rs:5:1
+  |
+5 | #[actor_api::actor(mailbox, interleaved = dynamic(ZERO))]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `<Zero as loong_actor::ReplySchedulingConfig>::open_scheduler::{constant#0}` failed here
+  |
+  = note: this error originates in the attribute macro `actor_api::actor` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+note: erroneous constant encountered
+ --> tests/ui/actor/fail/zero_dynamic_const_interleaving.rs:5:1
+  |
+5 | #[actor_api::actor(mailbox, interleaved = dynamic(ZERO))]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this note originates in the attribute macro `actor_api::actor` (in Nightly builds, run with -Z macro-backtrace for more info)

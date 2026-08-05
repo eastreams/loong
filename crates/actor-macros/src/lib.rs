@@ -13,28 +13,52 @@ mod message;
 
 /// Configures an actor implementation.
 ///
-/// Each option enables one runtime capability.
+/// Options select runtime capabilities and policies.
 /// A bare attribute enables no optional capability.
 ///
 /// Supported options:
 ///
 /// - `mailbox` enables public messaging.
 /// - `mailbox_budget = E` limits consecutive message dispatches.
-/// - `children` enables direct-child ownership.
+/// - `children` reserves typed supervision syntax.
 /// - `interleaved` enables interleaved replies.
+///
+/// `children` currently changes no runtime behavior.
+/// Every actor can currently own direct children.
+///
+/// `mailbox` has five forms:
+///
+/// - `mailbox` uses a fixed capacity of 32.
+/// - `mailbox = N` uses a fixed const capacity.
+/// - `mailbox = dynamic` uses a per-spawn capacity defaulting to 32.
+/// - `mailbox = dynamic(N)` changes that per-spawn default.
+/// - `mailbox = unbounded` removes the admission limit.
+///
+/// Dynamic mailbox forms expose `SpawnOptions::with_mailbox_capacity`.
+/// Every finite mailbox capacity must exceed zero.
+///
+/// `interleaved` has five forms:
+///
+/// - `interleaved` uses a fixed limit of 32.
+/// - `interleaved = N` uses a fixed const limit.
+/// - `interleaved = dynamic` uses a per-spawn limit defaulting to 32.
+/// - `interleaved = dynamic(N)` changes that per-spawn default.
+/// - `interleaved = unbounded` removes the admission limit.
+///
+/// Every finite interleaved limit must exceed zero.
+/// Dynamic forms expose `SpawnOptions::with_max_in_flight`.
+/// Unbounded admission can retain arbitrarily many active replies.
+/// Omitting `interleaved` provides no capability or reply queue.
+/// Exclusive replies do not require this capability.
+/// A full finite limit pauses mailbox dispatch.
+/// It pauses before the next handler runs.
+/// Ready, owned, and exclusive handlers wait behind this gate.
 ///
 /// `interleaved` requires `mailbox`.
 /// `mailbox_budget` also requires `mailbox`.
 /// `mailbox_budget` accepts a nonzero const expression.
-/// `mailbox_budget` defaults to 16.
+/// `mailbox_budget` defaults to 16 when omitted.
 /// It does not force a Tokio task yield.
-/// Omit an option to disable its capability.
-/// A key-only capacity option uses fixed capacity 32.
-/// Use `option = Policy` to select another policy.
-/// A const expression selects a fixed capacity.
-/// `unbounded` has no finite limit.
-/// `dynamic` has a default capacity of 32.
-/// `dynamic(N)` selects another default.
 #[proc_macro_attribute]
 pub fn actor(args: TokenStream, input: TokenStream) -> TokenStream {
     actor::expand(args, input)

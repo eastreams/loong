@@ -37,6 +37,12 @@ Return a bare `Future` for independent async work.
 Use `interleaved` for cooperative actor-aware work.
 Use `exclusive` when that work requires actor isolation.
 
+The bare `interleaved` option uses a fixed limit of 32.
+Dynamic options allow `with_max_in_flight` per spawn.
+Omitting the option provides no capability or reply queue.
+Unbounded interleaving can retain arbitrarily many active replies.
+Exclusive replies need no interleaving capability.
+
 ## Actor topology
 
 Lifecycle ownership and message addresses form different graphs.
