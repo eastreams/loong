@@ -89,6 +89,7 @@ fn expand_actor(implementation: &ItemImpl, args: ActorArgs) -> syn::Result<Token
 
         #(#config_attrs)*
         #[automatically_derived]
+        #[doc(hidden)]
         impl #impl_generics #actor::ActorConfig for #self_ty #where_clause {
             type Options = #actor::__private::ActorOptions<
                 Self,
@@ -100,6 +101,7 @@ fn expand_actor(implementation: &ItemImpl, args: ActorArgs) -> syn::Result<Token
 
         #(#config_attrs)*
         #[automatically_derived]
+        #[doc(hidden)]
         impl #impl_generics #actor::MessageConfig for #self_ty #where_clause {
             #mailbox_budget
 
@@ -118,6 +120,7 @@ fn expand_actor(implementation: &ItemImpl, args: ActorArgs) -> syn::Result<Token
 
         #(#config_attrs)*
         #[automatically_derived]
+        #[doc(hidden)]
         impl #impl_generics #actor::SupervisionConfig for #self_ty #where_clause {
             type Children = #children;
 
