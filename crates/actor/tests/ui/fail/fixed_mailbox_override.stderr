@@ -1,11 +1,11 @@
-error[E0599]: no method named `with_mailbox_capacity` found for struct `loong_actor::__private::ActorOptions<Fixed, loong_actor::__private::FixedMailbox, loong_actor::__private::NoInterleaving, loong_actor::__private::NoChildren>` in the current scope
+error[E0599]: no method named `with_mailbox_capacity` found for struct `loac::__private::ActorOptions<Fixed, loac::__private::FixedMailbox, loac::__private::NoInterleaving, loac::__private::NoChildren>` in the current scope
   --> tests/ui/fail/fixed_mailbox_override.rs:17:10
    |
-16 |       let _ = loong_actor::SpawnOptions::<Fixed>::default()
+16 |       let _ = loac::SpawnOptions::<Fixed>::default()
    |  _____________-
 17 | |         .with_mailbox_capacity(NonZeroUsize::MIN);
-   | |         -^^^^^^^^^^^^^^^^^^^^^ method not found in `loong_actor::__private::ActorOptions<Fixed, loong_actor::__private::FixedMailbox, loong_actor::__private::NoInterleaving, loong_actor::__private::NoChildren>`
+   | |         -^^^^^^^^^^^^^^^^^^^^^ method not found in `loac::__private::ActorOptions<Fixed, loac::__private::FixedMailbox, loac::__private::NoInterleaving, loac::__private::NoChildren>`
    | |_________|
    |
    |
-   = note: the method was found for `loong_actor::__private::ActorOptions<A, loong_actor::__private::DynamicMailbox<DEFAULT>, I, C>`
+   = note: the method was found for `loac::__private::ActorOptions<A, loac::__private::DynamicMailbox<DEFAULT>, I, C>`

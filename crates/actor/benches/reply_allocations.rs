@@ -13,14 +13,14 @@
 use std::hint::black_box;
 
 use allocation_counter::{AllocationInfo, measure};
-use loong_actor::{ActorRef, ExitReason, Shutdown, prelude::*, spawn};
+use loac::{ActorRef, ExitReason, Shutdown, prelude::*, spawn};
 
 const WARMUP_CALLS: usize = 64;
 const MEASURED_CALLS: usize = 10_000;
 
 struct ReplyActor;
 
-#[loong_actor::actor(mailbox = 1, interleaved = 1)]
+#[loac::actor(mailbox = 1, interleaved = 1)]
 impl Actor for ReplyActor {
     type SpawnArgs = ();
 

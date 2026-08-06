@@ -1,6 +1,6 @@
 use std::task::{Context, Poll};
 
-use loong_actor::{
+use loac::{
     Actor, ActorConfig, ActorScope, MessageConfig, SupervisionConfig, supervision,
     transport::{ErasedEnvelope, RuntimeInbox},
 };

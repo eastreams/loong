@@ -109,7 +109,7 @@ pub trait Actor:
     /// Child spawning is unavailable during cleanup:
     ///
     /// ```compile_fail
-    /// use loong_actor::{Actor, ActorScope, ExitReason, StopScope, actor};
+    /// use loac::{Actor, ActorScope, ExitReason, StopScope, actor};
     ///
     /// struct Parent;
     /// struct ChildActor;
@@ -264,7 +264,7 @@ pub trait Message: Send + 'static {
 /// A unit reply needs no explicit return expression:
 ///
 /// ```
-/// use loong_actor::{Actor, ActorScope, Handler, Message, SyncHandler, actor};
+/// use loac::{Actor, ActorScope, Handler, Message, SyncHandler, actor};
 ///
 /// struct Worker {
 ///     notifications: usize,
@@ -328,7 +328,7 @@ pub trait Handler<M: Message>: HasMailbox {
     /// borrow:
     ///
     /// ```
-    /// use loong_actor::{ActorScope, Handler, IntoReply, Message};
+    /// use loac::{ActorScope, Handler, IntoReply, Message};
     ///
     /// fn detach_reply<A, M>(
     ///     actor: &mut A,

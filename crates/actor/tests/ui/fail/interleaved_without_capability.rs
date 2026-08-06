@@ -1,5 +1,5 @@
 // Serial actors cannot select interleaved scheduling.
-use loong_actor::prelude::*;
+use loac::prelude::*;
 use std::{
     pin::Pin,
     task::{Context, Poll},
@@ -21,7 +21,7 @@ struct Ping;
 
 struct Pending;
 
-impl loong_actor::ActorFuture<Serial> for Pending {
+impl loac::ActorFuture<Serial> for Pending {
     type Output = ();
 
     fn poll(

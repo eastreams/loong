@@ -190,7 +190,7 @@ pub enum Either<L, R> {
 /// Downstream crates cannot add reply strategies:
 ///
 /// ```compile_fail,E0277
-/// use loong_actor::{Actor, ActorScope, IntoReply, Message, actor};
+/// use loac::{Actor, ActorScope, IntoReply, Message, actor};
 ///
 /// struct MyActor;
 /// #[actor]

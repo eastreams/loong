@@ -1,6 +1,6 @@
 use std::mem::{needs_drop, size_of};
 
-use loong_actor::{
+use loac::{
     Actor, ActorConfig, ActorScope, ExitReason, MessageConfig, Shutdown, SupervisionConfig,
     scheduling, spawn, supervision,
     transport::{NoInbox, NoSender},

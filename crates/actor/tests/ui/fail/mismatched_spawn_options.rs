@@ -1,27 +1,27 @@
 // Spawn options remain bound to their configured actor type.
 struct First;
 
-#[loong_actor::actor(mailbox)]
-impl loong_actor::Actor for First {
+#[loac::actor(mailbox)]
+impl loac::Actor for First {
     type SpawnArgs = ();
 
-    async fn init(_: (), _: &mut loong_actor::ActorScope<'_, Self>) -> Self {
+    async fn init(_: (), _: &mut loac::ActorScope<'_, Self>) -> Self {
         Self
     }
 }
 
 struct Second;
 
-#[loong_actor::actor(mailbox)]
-impl loong_actor::Actor for Second {
+#[loac::actor(mailbox)]
+impl loac::Actor for Second {
     type SpawnArgs = ();
 
-    async fn init(_: (), _: &mut loong_actor::ActorScope<'_, Self>) -> Self {
+    async fn init(_: (), _: &mut loac::ActorScope<'_, Self>) -> Self {
         Self
     }
 }
 
 fn main() {
-    let options = loong_actor::SpawnOptions::<First>::default();
-    let _ = loong_actor::spawn_with::<Second>((), options);
+    let options = loac::SpawnOptions::<First>::default();
+    let _ = loac::spawn_with::<Second>((), options);
 }

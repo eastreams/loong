@@ -16,7 +16,7 @@
 //! [`SyncHandler`] produces each reply during message dispatch.
 //!
 //! ```
-//! use loong_actor::{ExitReason, Shutdown, prelude::*, spawn};
+//! use loac::{ExitReason, Shutdown, prelude::*, spawn};
 //!
 //! struct Counter(u64);
 //!
@@ -210,7 +210,7 @@
 
 // Derives use this name inside the runtime package.
 // External callers may still rename their dependency.
-extern crate self as loong_actor;
+extern crate self as loac;
 
 use std::{future::Future, pin::Pin};
 

@@ -2,7 +2,7 @@
 //! `mailbox = dynamic(N)` makes `N` the spawn default.
 //! `interleaved = N` fixes the limit for each actor type.
 
-use loong_actor::{ExitReason, Shutdown, prelude::*, spawn};
+use loac::{ExitReason, Shutdown, prelude::*, spawn};
 
 struct Service<const N: usize>;
 

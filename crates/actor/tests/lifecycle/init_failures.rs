@@ -8,7 +8,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use loong_actor::{
+use loac::{
     Actor, ActorScope, CallError, ExitReason, Handler, Message, ReplyExt, Shutdown, ShutdownStatus,
     StopScope, SubtreeStatus, TryCallErrorKind, actor, spawn,
 };
@@ -54,7 +54,7 @@ impl Handler<InitPing> for NeverReadyInit {
         &mut self,
         _message: InitPing,
         _scope: &mut ActorScope<'_, Self>,
-    ) -> impl loong_actor::IntoReply<Self, InitPing> + use<> {
+    ) -> impl loac::IntoReply<Self, InitPing> + use<> {
         ().ready()
     }
 }
@@ -158,18 +158,18 @@ impl Handler<InitPing> for InitChild {
         &mut self,
         _message: InitPing,
         _scope: &mut ActorScope<'_, Self>,
-    ) -> impl loong_actor::IntoReply<Self, InitPing> + use<> {
+    ) -> impl loac::IntoReply<Self, InitPing> + use<> {
         ().ready()
     }
 }
 
 struct ReadyDropArgs {
-    child_started: oneshot::Sender<loong_actor::ActorRef<InitChild>>,
+    child_started: oneshot::Sender<loac::ActorRef<InitChild>>,
     actor_drop_observed_kill: oneshot::Sender<bool>,
 }
 
 struct ReadyDropActor {
-    child: loong_actor::ActorRef<InitChild>,
+    child: loac::ActorRef<InitChild>,
     actor_drop_observed_kill: Option<oneshot::Sender<bool>>,
 }
 
@@ -248,7 +248,7 @@ async fn ready_init_future_drop_panic_kills_child_before_actor_drop() {
 }
 
 struct PanicInitArgs {
-    child_started: oneshot::Sender<loong_actor::ActorRef<InitChild>>,
+    child_started: oneshot::Sender<loac::ActorRef<InitChild>>,
     cleanup: Arc<AtomicUsize>,
     panic_during_call: bool,
 }
@@ -284,7 +284,7 @@ impl Handler<InitPing> for PanicInit {
         &mut self,
         _message: InitPing,
         _scope: &mut ActorScope<'_, Self>,
-    ) -> impl loong_actor::IntoReply<Self, InitPing> + use<> {
+    ) -> impl loac::IntoReply<Self, InitPing> + use<> {
         ().ready()
     }
 }

@@ -1,6 +1,6 @@
 //! Uses `SyncHandler` when a reply is complete during dispatch.
 
-use loong_actor::{ExitReason, Shutdown, prelude::*, spawn};
+use loac::{ExitReason, Shutdown, prelude::*, spawn};
 
 struct Counter(u64);
 

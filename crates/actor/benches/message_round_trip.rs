@@ -10,14 +10,14 @@ use std::{
 };
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use loong_actor::{
+use loac::{
     Actor, ActorRef, ActorScope, Handler, InterleavedFutureExt, IntoActorFuture, Message, ReplyExt,
     Shutdown, spawn,
 };
 
 struct ReplyActor;
 
-#[loong_actor::actor(mailbox = 1, interleaved = 1)]
+#[loac::actor(mailbox = 1, interleaved = 1)]
 impl Actor for ReplyActor {
     type SpawnArgs = ();
 
@@ -28,7 +28,7 @@ impl Actor for ReplyActor {
 
 struct UnboundedReplyActor;
 
-#[loong_actor::actor(mailbox = 1, interleaved = unbounded)]
+#[loac::actor(mailbox = 1, interleaved = unbounded)]
 impl Actor for UnboundedReplyActor {
     type SpawnArgs = ();
 
@@ -46,7 +46,7 @@ impl Handler<Ready> for ReplyActor {
         &mut self,
         _message: Ready,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, Ready> + use<> {
+    ) -> impl loac::IntoReply<Self, Ready> + use<> {
         1.ready()
     }
 }
@@ -60,7 +60,7 @@ impl Handler<Owned> for ReplyActor {
         &mut self,
         _message: Owned,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, Owned> + use<> {
+    ) -> impl loac::IntoReply<Self, Owned> + use<> {
         std::future::ready(1)
     }
 }
@@ -74,7 +74,7 @@ impl Handler<Interleaved> for ReplyActor {
         &mut self,
         _message: Interleaved,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, Interleaved> + use<> {
+    ) -> impl loac::IntoReply<Self, Interleaved> + use<> {
         std::future::ready(1).into_actor().interleaved()
     }
 }
@@ -84,7 +84,7 @@ impl Handler<Interleaved> for UnboundedReplyActor {
         &mut self,
         _message: Interleaved,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, Interleaved> + use<> {
+    ) -> impl loac::IntoReply<Self, Interleaved> + use<> {
         std::future::ready(1).into_actor().interleaved()
     }
 }
@@ -98,7 +98,7 @@ impl Handler<Exclusive> for ReplyActor {
         &mut self,
         _message: Exclusive,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, Exclusive> + use<> {
+    ) -> impl loac::IntoReply<Self, Exclusive> + use<> {
         std::future::ready(1).into_actor().exclusive()
     }
 }
@@ -215,9 +215,9 @@ fn message_round_trip(criterion: &mut Criterion) {
     group.finish();
 
     let reason = runtime.block_on(owner.shutdown(Shutdown::Kill));
-    assert_eq!(reason.reason(), loong_actor::ExitReason::Killed);
+    assert_eq!(reason.reason(), loac::ExitReason::Killed);
     let reason = runtime.block_on(unbounded_owner.shutdown(Shutdown::Kill));
-    assert_eq!(reason.reason(), loong_actor::ExitReason::Killed);
+    assert_eq!(reason.reason(), loac::ExitReason::Killed);
 }
 
 criterion_group!(benches, message_round_trip);

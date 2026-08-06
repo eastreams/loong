@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use loong_actor::{ExitReason, Shutdown, prelude::*, spawn};
+use loac::{ExitReason, Shutdown, prelude::*, spawn};
 
 struct Store {
     cache: HashMap<String, u64>,

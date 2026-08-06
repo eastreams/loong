@@ -5,7 +5,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use loong_actor::{
+use loac::{
     Actor, ActorFuture, ActorScope, ExitReason, Handler, InterleavedFutureExt, IntoReply, Message,
     Shutdown, actor, spawn,
 };

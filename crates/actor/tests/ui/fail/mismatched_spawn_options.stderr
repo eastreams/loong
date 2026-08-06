@@ -1,13 +1,13 @@
 error[E0308]: mismatched types
-  --> tests/ui/fail/mismatched_spawn_options.rs:26:51
+  --> tests/ui/fail/mismatched_spawn_options.rs:26:44
    |
-26 |     let _ = loong_actor::spawn_with::<Second>((), options);
-   |             ---------------------------------     ^^^^^^^ expected `ActorOptions<Second, ..., ..., ...>`, found `ActorOptions<First, ..., ..., ...>`
+26 |     let _ = loac::spawn_with::<Second>((), options);
+   |             --------------------------     ^^^^^^^ expected `ActorOptions<Second, ..., ..., ...>`, found `ActorOptions<First, ..., ..., ...>`
    |             |
    |             arguments to this function are incorrect
    |
-   = note: expected struct `loong_actor::__private::ActorOptions<Second, loong_actor::__private::FixedMailbox, loong_actor::__private::NoInterleaving, loong_actor::__private::NoChildren>`
-              found struct `loong_actor::__private::ActorOptions<First, loong_actor::__private::FixedMailbox, loong_actor::__private::NoInterleaving, loong_actor::__private::NoChildren>`
+   = note: expected struct `loac::__private::ActorOptions<Second, loac::__private::FixedMailbox, loac::__private::NoInterleaving, loac::__private::NoChildren>`
+              found struct `loac::__private::ActorOptions<First, loac::__private::FixedMailbox, loac::__private::NoInterleaving, loac::__private::NoChildren>`
 note: function defined here
   --> src/runtime.rs
    |

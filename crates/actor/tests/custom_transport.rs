@@ -6,7 +6,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use loong_actor::{
+use loac::{
     Actor, ActorConfig, ActorFuture, ActorFutureExt, ActorScope, ExitReason, Handler, HasChildren,
     HasInterleaving, InterleavedFutureExt, IntoActorFuture, IntoReply, Message, MessageConfig,
     Shutdown, SupervisionConfig, SyncHandler, scheduling, spawn_with, supervision,

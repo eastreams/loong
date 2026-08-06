@@ -4,7 +4,7 @@ error[E0119]: conflicting implementations of trait `HasChildren` for type `Bare`
 15 | impl HasChildren for Bare {}
    | ^^^^^^^^^^^^^^^^^^^^^^^^^
    |
-   = note: conflicting implementation in crate `loong_actor`:
+   = note: conflicting implementation in crate `loac`:
            - impl<A> HasChildren for A
              where A: Actor, <A as SupervisionConfig>::Children: ChildSpawner, <A as SupervisionConfig>::Children: ?Sized;
-   = note: upstream crates may add a new impl of trait `loong_actor::supervision::ChildSpawner` for type `loong_actor::supervision::Disabled` in future versions
+   = note: upstream crates may add a new impl of trait `loac::supervision::ChildSpawner` for type `loac::supervision::Disabled` in future versions

@@ -1,4 +1,4 @@
-use loong_actor::prelude::*;
+use loac::prelude::*;
 
 // The prelude exports the trait and derive together.
 // Their shared name occupies separate Rust namespaces.
@@ -18,7 +18,7 @@ where
 {
 }
 
-// Integration targets resolve this package as `Name("loong_actor")`.
+// Integration targets resolve this package as `Name("loac")`.
 // This catches expansions that incorrectly use `crate`.
 #[test]
 fn derives_messages_inside_the_actor_package() {

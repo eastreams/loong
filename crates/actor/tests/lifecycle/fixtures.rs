@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use loong_actor::{
+use loac::{
     Actor, ActorFutureExt, ActorScope, ExitReason, Handler, IntoActorFuture, Message, ReplyExt,
     SpawnOptions, StopScope, actor, spawn_with,
 };
@@ -60,7 +60,7 @@ impl Handler<Step> for LifecycleActor {
         &mut self,
         mut message: Step,
         _scope: &mut ActorScope<'_, Self>,
-    ) -> impl loong_actor::IntoReply<Self, Step> + use<> {
+    ) -> impl loac::IntoReply<Self, Step> + use<> {
         async move {
             if let Some(entered) = message.entered.take() {
                 let _ = entered.send(());
@@ -80,7 +80,7 @@ impl Handler<Step> for LifecycleActor {
 }
 
 pub(super) struct LifecycleHarness {
-    pub(super) owner: loong_actor::ActorOwner<LifecycleActor>,
+    pub(super) owner: loac::ActorOwner<LifecycleActor>,
     pub(super) handled: Arc<Mutex<Vec<u8>>>,
     pub(super) cleanup: Arc<Mutex<Vec<ExitReason>>>,
 }

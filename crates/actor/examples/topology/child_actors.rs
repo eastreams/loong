@@ -2,7 +2,7 @@
 //! Each agent is a child actor.
 //! Choose independent roots for independently owned agents.
 
-use loong_actor::{ActorRef, CallError, ExitReason, Shutdown, SubtreeStatus, prelude::*, spawn};
+use loac::{ActorRef, CallError, ExitReason, Shutdown, SubtreeStatus, prelude::*, spawn};
 
 #[derive(Debug, PartialEq, Eq)]
 struct Report {

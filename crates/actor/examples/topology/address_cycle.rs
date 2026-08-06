@@ -1,7 +1,7 @@
 //! Builds a parent-child address cycle during context-first initialization.
 //! The parent runtime owns the child; both actors keep non-owning addresses.
 
-use loong_actor::{ActorRef, ExitReason, Shutdown, SubtreeStatus, prelude::*, spawn};
+use loac::{ActorRef, ExitReason, Shutdown, SubtreeStatus, prelude::*, spawn};
 use tokio::sync::oneshot;
 
 struct Parent {

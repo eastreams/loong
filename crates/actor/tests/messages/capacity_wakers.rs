@@ -8,7 +8,7 @@ use std::{
     task::{Context, Poll, Wake, Waker},
 };
 
-use loong_actor::{ExitReason, Shutdown, ShutdownStatus, spawn_with};
+use loac::{ExitReason, Shutdown, ShutdownStatus, spawn_with};
 use tokio::sync::oneshot;
 
 use super::{Block, Notify, Record, SerialActor, single_slot_options, watchdog};

@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-//! Procedural macros for `loong-actor`.
+//! Procedural macros for `loac`.
 
 use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
@@ -24,8 +24,8 @@ mod message;
 /// A bare attribute enables no optional capability.
 ///
 /// ```
-/// # use actor_api as loong_actor;
-/// use loong_actor::{Actor, ActorScope, actor};
+/// # use actor_api as loac;
+/// use loac::{Actor, ActorScope, actor};
 ///
 /// struct Worker;
 ///
@@ -103,26 +103,26 @@ mod message;
 /// Omitting `children` removes child actor spawning methods.
 /// This option does not require `mailbox`.
 ///
-/// [actor-config]: https://docs.rs/loong-actor/latest/loong_actor/trait.ActorConfig.html
-/// [disabled]: https://docs.rs/loong-actor/latest/loong_actor/scheduling/struct.Disabled.html
-/// [message-config]: https://docs.rs/loong-actor/latest/loong_actor/trait.MessageConfig.html
-/// [serial]: https://docs.rs/loong-actor/latest/loong_actor/scheduling/struct.Serial.html
-/// [supervision-config]: https://docs.rs/loong-actor/latest/loong_actor/trait.SupervisionConfig.html
-/// [spawn-options]: https://docs.rs/loong-actor/latest/loong_actor/type.SpawnOptions.html
-/// [mailbox-builder]: https://docs.rs/loong-actor/latest/loong_actor/trait.DynamicMailboxOptions.html#tymethod.with_mailbox_capacity
-/// [interleaving-builder]: https://docs.rs/loong-actor/latest/loong_actor/trait.DynamicInterleavingOptions.html#tymethod.with_max_in_flight
-/// [children-builder]: https://docs.rs/loong-actor/latest/loong_actor/trait.DynamicChildrenOptions.html#tymethod.with_max_children
-/// [call]: https://docs.rs/loong-actor/latest/loong_actor/struct.ActorRef.html#method.call
-/// [send]: https://docs.rs/loong-actor/latest/loong_actor/struct.ActorRef.html#method.send
-/// [try-call]: https://docs.rs/loong-actor/latest/loong_actor/struct.ActorRef.html#method.try_call
-/// [try-send]: https://docs.rs/loong-actor/latest/loong_actor/struct.ActorRef.html#method.try_send
-/// [on-child-exit]: https://docs.rs/loong-actor/latest/loong_actor/trait.Actor.html#method.on_child_exit
+/// [actor-config]: https://docs.rs/loac/latest/loac/trait.ActorConfig.html
+/// [disabled]: https://docs.rs/loac/latest/loac/scheduling/struct.Disabled.html
+/// [message-config]: https://docs.rs/loac/latest/loac/trait.MessageConfig.html
+/// [serial]: https://docs.rs/loac/latest/loac/scheduling/struct.Serial.html
+/// [supervision-config]: https://docs.rs/loac/latest/loac/trait.SupervisionConfig.html
+/// [spawn-options]: https://docs.rs/loac/latest/loac/type.SpawnOptions.html
+/// [mailbox-builder]: https://docs.rs/loac/latest/loac/trait.DynamicMailboxOptions.html#tymethod.with_mailbox_capacity
+/// [interleaving-builder]: https://docs.rs/loac/latest/loac/trait.DynamicInterleavingOptions.html#tymethod.with_max_in_flight
+/// [children-builder]: https://docs.rs/loac/latest/loac/trait.DynamicChildrenOptions.html#tymethod.with_max_children
+/// [call]: https://docs.rs/loac/latest/loac/struct.ActorRef.html#method.call
+/// [send]: https://docs.rs/loac/latest/loac/struct.ActorRef.html#method.send
+/// [try-call]: https://docs.rs/loac/latest/loac/struct.ActorRef.html#method.try_call
+/// [try-send]: https://docs.rs/loac/latest/loac/struct.ActorRef.html#method.try_send
+/// [on-child-exit]: https://docs.rs/loac/latest/loac/trait.Actor.html#method.on_child_exit
 #[proc_macro_attribute]
 pub fn actor(args: TokenStream, input: TokenStream) -> TokenStream {
     actor::expand(args, input)
 }
 
-/// Derives `loong_actor::Message` for a struct, enum, or union.
+/// Derives `loac::Message` for a struct, enum, or union.
 ///
 /// The reply type defaults to `()`. Use `#[message(reply = Type)]` to select
 /// another owned `Send + 'static` Rust type. Generic parameters and existing
@@ -135,15 +135,15 @@ pub fn derive_message(input: TokenStream) -> TokenStream {
 fn actor_crate_path() -> syn::Result<TokenStream2> {
     // Proc macros lack `$crate`.
     // Resolve the package after dependency renaming.
-    match crate_name("loong-actor").map_err(|error| {
+    match crate_name("loac").map_err(|error| {
         syn::Error::new(
             Span::call_site(),
-            format!("could not resolve the `loong-actor` crate: {error}"),
+            format!("could not resolve the `loac` crate: {error}"),
         )
     })? {
         // `crate` may name a package binary or example.
         // The runtime exports one stable self alias.
-        FoundCrate::Itself => Ok(quote!(::loong_actor)),
+        FoundCrate::Itself => Ok(quote!(::loac)),
         FoundCrate::Name(name) => {
             let ident = syn::Ident::new(&name, Span::call_site());
             Ok(quote!(::#ident))

@@ -7,7 +7,7 @@ appear resolved.
 
 ## Implemented Actor Runtime, Open Product Ownership
 
-[`loong-actor`](../crates/actor/src/lib.rs) is the source of truth for actor
+[`loac`](../crates/actor/src/lib.rs) is the source of truth for actor
 semantics. It owns actor state, bounded mailbox admission, reply scheduling, and
 subtree lifecycle on Tokio. Those runtime responsibilities do not by themselves
 define a product `Session`, `Turn`, or `Step`.
@@ -24,7 +24,7 @@ narrowed access APIs, and side-effect code still requires
 
 ## Session, Turn, and Step Semantics
 
-`loong-actor` settles actor-local ownership, scheduling, and subtree lifecycle,
+`loac` settles actor-local ownership, scheduling, and subtree lifecycle,
 but not product ownership. An actor, message, or reply is not automatically a
 product `Session`, `Turn`, or `Step`.
 

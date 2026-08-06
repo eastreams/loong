@@ -1,5 +1,5 @@
 // A real mailbox cannot select the disabled scheduler profile.
-use loong_actor::{
+use loac::{
     Actor, ActorConfig, ActorScope, MessageConfig, SupervisionConfig, scheduling, supervision,
     transport::{UnboundedInbox, UnboundedSender},
 };

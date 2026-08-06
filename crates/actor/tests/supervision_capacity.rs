@@ -9,7 +9,7 @@ use std::{
     },
 };
 
-use loong_actor::{
+use loac::{
     Actor, ActorConfig, ActorScope, MessageConfig, Shutdown, SpawnOptions, SupervisionConfig,
     actor, scheduling, spawn, spawn_with, supervision,
     transport::{NoInbox, NoSender},
@@ -56,7 +56,7 @@ async fn fixed_capacity_returns_rejected_spawn_args() {
     assert_eq!(watchdog(result_rx).await.unwrap(), 2);
     assert_eq!(
         watchdog(owner.shutdown(Shutdown::Stop)).await.reason(),
-        loong_actor::ExitReason::Stopped,
+        loac::ExitReason::Stopped,
     );
 }
 
@@ -248,11 +248,7 @@ impl Actor for RestartingParent {
         }
     }
 
-    async fn on_child_exit(
-        &mut self,
-        _event: loong_actor::ChildExit,
-        scope: &mut ActorScope<'_, Self>,
-    ) {
+    async fn on_child_exit(&mut self, _event: loac::ChildExit, scope: &mut ActorScope<'_, Self>) {
         let replaced = scope.spawn_child::<IdleChild>(9).is_ok();
         if let Some(replacement) = self.replacement.take() {
             let _ = replacement.send(replaced);

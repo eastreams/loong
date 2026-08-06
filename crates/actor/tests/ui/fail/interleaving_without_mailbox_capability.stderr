@@ -6,11 +6,11 @@ error[E0277]: the trait bound `NoSender: MessageSender<Manual>` is not satisfied
    |
    = help: the following other types implement trait `SchedulerProfile<A>`:
              Serial<A>
-             loong_actor::scheduling::Disabled
-             loong_actor::scheduling::Dynamic<A>
-             loong_actor::scheduling::Fixed<A, N>
-             loong_actor::scheduling::Unbounded<A>
-   = note: required for `loong_actor::scheduling::Fixed<Manual, 1>` to implement `SchedulerProfile<Manual>`
+             loac::scheduling::Disabled
+             loac::scheduling::Dynamic<A>
+             loac::scheduling::Fixed<A, N>
+             loac::scheduling::Unbounded<A>
+   = note: required for `loac::scheduling::Fixed<Manual, 1>` to implement `SchedulerProfile<Manual>`
 note: required by a bound in `Actor`
   --> src/actor.rs
    |
@@ -27,11 +27,11 @@ error[E0277]: the trait bound `NoInbox: MessageInbox<Manual>` is not satisfied
    |
    = help: the following other types implement trait `SchedulerProfile<A>`:
              Serial<A>
-             loong_actor::scheduling::Disabled
-             loong_actor::scheduling::Dynamic<A>
-             loong_actor::scheduling::Fixed<A, N>
-             loong_actor::scheduling::Unbounded<A>
-   = note: required for `loong_actor::scheduling::Fixed<Manual, 1>` to implement `SchedulerProfile<Manual>`
+             loac::scheduling::Disabled
+             loac::scheduling::Dynamic<A>
+             loac::scheduling::Fixed<A, N>
+             loac::scheduling::Unbounded<A>
+   = note: required for `loac::scheduling::Fixed<Manual, 1>` to implement `SchedulerProfile<Manual>`
 note: required by a bound in `Actor`
   --> src/actor.rs
    |

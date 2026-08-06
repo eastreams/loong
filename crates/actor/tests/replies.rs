@@ -11,7 +11,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use loong_actor::{
+use loac::{
     Actor, ActorFutureExt, ActorRef, ActorScope, CallError, ChildExit, ExitReason, Handler,
     InterleavedFutureExt, IntoActorFuture, Message, ReplyExt, Response, Shutdown, SpawnOptions,
     SyncHandler, actor, reply, spawn, spawn_with,
@@ -68,7 +68,7 @@ impl Handler<ChooseReply> for Counter {
         &mut self,
         message: ChooseReply,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, ChooseReply> + use<> {
+    ) -> impl loac::IntoReply<Self, ChooseReply> + use<> {
         if message.0 {
             reply::Either::Left(1.ready())
         } else {
@@ -114,7 +114,7 @@ impl Handler<PendingOwned> for ProgressActor {
         &mut self,
         message: PendingOwned,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, PendingOwned> + use<> {
+    ) -> impl loac::IntoReply<Self, PendingOwned> + use<> {
         async move {
             let _ = message.entered.send(());
             let _ = message.release.await;
@@ -130,7 +130,7 @@ impl Handler<Record> for ProgressActor {
         &mut self,
         message: Record,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, Record> + use<> {
+    ) -> impl loac::IntoReply<Self, Record> + use<> {
         lock(&self.log).push(message.0);
         ().ready()
     }
@@ -151,7 +151,7 @@ impl Handler<ThenSequence> for ProgressActor {
         &mut self,
         _message: ThenSequence,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, ThenSequence> + use<> {
+    ) -> impl loac::IntoReply<Self, ThenSequence> + use<> {
         async { 1_u8 }
             .into_actor()
             .then(|value, actor: &mut Self, _scope| {
@@ -167,7 +167,7 @@ impl Handler<InterleavedSequence> for ProgressActor {
         &mut self,
         message: InterleavedSequence,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, InterleavedSequence> + use<> {
+    ) -> impl loac::IntoReply<Self, InterleavedSequence> + use<> {
         lock(&self.log).push("interleaved-start");
         let _ = message.started.send(());
         async move {
@@ -250,7 +250,7 @@ impl Handler<StopChild> for HookChild {
         &mut self,
         _message: StopChild,
         scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, StopChild> + use<> {
+    ) -> impl loac::IntoReply<Self, StopChild> + use<> {
         scope.request_shutdown(Shutdown::Stop);
         ().ready()
     }
@@ -288,7 +288,7 @@ impl Handler<PendingOwned> for ExclusiveActor {
         &mut self,
         message: PendingOwned,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, PendingOwned> + use<> {
+    ) -> impl loac::IntoReply<Self, PendingOwned> + use<> {
         async move {
             let _ = message.entered.send(());
             let _ = message.release.await;
@@ -307,7 +307,7 @@ impl Handler<InterleavedGate> for ExclusiveActor {
         &mut self,
         message: InterleavedGate,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, InterleavedGate> + use<> {
+    ) -> impl loac::IntoReply<Self, InterleavedGate> + use<> {
         let _ = message.dispatched.send(());
         async move { drop(message.release.await) }
             .into_actor()
@@ -326,7 +326,7 @@ impl Handler<ExclusiveGate> for ExclusiveActor {
         &mut self,
         message: ExclusiveGate,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, ExclusiveGate> + use<> {
+    ) -> impl loac::IntoReply<Self, ExclusiveGate> + use<> {
         async move {
             let _ = message.entered.send(());
             let _ = message.release.await;
@@ -344,7 +344,7 @@ impl Handler<Mark> for ExclusiveActor {
         &mut self,
         message: Mark,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, Mark> + use<> {
+    ) -> impl loac::IntoReply<Self, Mark> + use<> {
         let _ = message.0.send(());
         ().ready()
     }
@@ -441,7 +441,7 @@ impl Handler<StopOwned> for StopActor {
         &mut self,
         message: StopOwned,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, StopOwned> + use<> {
+    ) -> impl loac::IntoReply<Self, StopOwned> + use<> {
         async move {
             let _ = message.entered.send(());
             let _ = message.release.await;
@@ -484,7 +484,7 @@ async fn owned_replies_need_no_interleaving_and_graceful_shutdown_waits() {
 
         assert_eq!(
             owner.request_shutdown(shutdown),
-            loong_actor::ShutdownStatus::Requested
+            loac::ShutdownStatus::Requested
         );
         let mut stopped = Box::pin(owner.wait());
         assert!(poll_once(stopped.as_mut()).await.is_pending());
@@ -523,7 +523,7 @@ impl Handler<PendingSibling> for PanicActor {
         &mut self,
         message: PendingSibling,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, PendingSibling> + use<> {
+    ) -> impl loac::IntoReply<Self, PendingSibling> + use<> {
         async move {
             let _ = message.entered.send(());
             let _ = message.release.await;
@@ -559,7 +559,7 @@ impl Handler<PanicAfterReady> for PanicActor {
         &mut self,
         message: PanicAfterReady,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, PanicAfterReady> + use<> {
+    ) -> impl loac::IntoReply<Self, PanicAfterReady> + use<> {
         message
     }
 }
@@ -569,7 +569,7 @@ impl Handler<PanicReply> for PanicActor {
         &mut self,
         message: PanicReply,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, PanicReply> + use<> {
+    ) -> impl loac::IntoReply<Self, PanicReply> + use<> {
         async move {
             let _ = message.entered.send(());
             let _ = message.release.await;
@@ -645,7 +645,7 @@ impl Handler<Echo> for SelfCaller {
         &mut self,
         message: Echo,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, Echo> + use<> {
+    ) -> impl loac::IntoReply<Self, Echo> + use<> {
         message.0.ready()
     }
 }
@@ -659,7 +659,7 @@ impl Handler<OwnedSelfCall> for SelfCaller {
         &mut self,
         message: OwnedSelfCall,
         scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, OwnedSelfCall> + use<> {
+    ) -> impl loac::IntoReply<Self, OwnedSelfCall> + use<> {
         let response = scope.myself().try_call(Echo(message.0)).unwrap();
         async move { response.await.unwrap() }
     }
@@ -674,7 +674,7 @@ impl Handler<InterleavedSelfCall> for SelfCaller {
         &mut self,
         message: InterleavedSelfCall,
         scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, InterleavedSelfCall> + use<> {
+    ) -> impl loac::IntoReply<Self, InterleavedSelfCall> + use<> {
         let response = scope.myself().try_call(Echo(message.0)).unwrap();
         async move { response.await.unwrap() }
             .into_actor()
@@ -693,7 +693,7 @@ impl Handler<ExclusiveSelfCall> for SelfCaller {
         &mut self,
         message: ExclusiveSelfCall,
         scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, ExclusiveSelfCall> + use<> {
+    ) -> impl loac::IntoReply<Self, ExclusiveSelfCall> + use<> {
         let awaited = scope.myself().try_call(Echo(1)).unwrap();
         let observed = scope.myself().try_call(Echo(2)).unwrap();
         let _ = message.observed.send(observed);
@@ -729,7 +729,7 @@ async fn nonexclusive_self_calls_progress_but_exclusive_self_call_waits() {
 
     assert_eq!(
         owner.request_shutdown(Shutdown::Kill),
-        loong_actor::ShutdownStatus::Requested
+        loac::ShutdownStatus::Requested
     );
     assert_eq!(
         watchdog(outer).await,
@@ -780,7 +780,7 @@ impl Handler<OwnedTaskIdentity> for FairActor {
         &mut self,
         _message: OwnedTaskIdentity,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, OwnedTaskIdentity> + use<> {
+    ) -> impl loac::IntoReply<Self, OwnedTaskIdentity> + use<> {
         let actor_task = tokio::task::id();
         async move { tokio::task::id() != actor_task }
     }
@@ -798,7 +798,7 @@ impl Handler<ActiveInterleavedReply> for FairActor {
         &mut self,
         message: ActiveInterleavedReply,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, ActiveInterleavedReply> + use<> {
+    ) -> impl loac::IntoReply<Self, ActiveInterleavedReply> + use<> {
         async move {
             let _ = message.entered.send(());
             let _ = message.release.await;
@@ -820,7 +820,7 @@ impl Handler<ReadyWork> for FairActor {
         &mut self,
         _message: ReadyWork,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, ReadyWork> + use<> {
+    ) -> impl loac::IntoReply<Self, ReadyWork> + use<> {
         self.handled.fetch_add(1, Ordering::SeqCst);
         ().ready()
     }
@@ -918,7 +918,7 @@ impl Handler<PendingOwned> for FairChildExitActor {
         &mut self,
         message: PendingOwned,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, PendingOwned> + use<> {
+    ) -> impl loac::IntoReply<Self, PendingOwned> + use<> {
         async move {
             let _ = message.entered.send(());
             let _ = message.release.await;
@@ -931,7 +931,7 @@ impl Handler<ExclusiveGate> for FairChildExitActor {
         &mut self,
         message: ExclusiveGate,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, ExclusiveGate> + use<> {
+    ) -> impl loac::IntoReply<Self, ExclusiveGate> + use<> {
         async move {
             let _ = message.entered.send(());
             let _ = message.release.await;
@@ -946,7 +946,7 @@ impl Handler<ReadyWork> for FairChildExitActor {
         &mut self,
         _message: ReadyWork,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, ReadyWork> + use<> {
+    ) -> impl loac::IntoReply<Self, ReadyWork> + use<> {
         self.handled.fetch_add(1, Ordering::SeqCst);
         ().ready()
     }

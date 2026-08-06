@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use loong_actor::{
+use loac::{
     Actor, ActorFuture, ActorOwner, ActorScope, CallError, ExitReason, Handler,
     InterleavedFutureExt, Message, ReplyExt, Shutdown, ShutdownStatus, StopScope, SubtreeStatus,
     actor, spawn,
@@ -204,7 +204,7 @@ impl Handler<QueuedDrop> for PendingInit {
         &mut self,
         _message: QueuedDrop,
         _scope: &mut ActorScope<'_, Self>,
-    ) -> impl loong_actor::IntoReply<Self, QueuedDrop> + use<> {
+    ) -> impl loac::IntoReply<Self, QueuedDrop> + use<> {
         unreachable!("pending initialization prevents dispatch");
         #[allow(unreachable_code)]
         ().ready()
@@ -322,7 +322,7 @@ impl Handler<PendingInterleavedDrop> for PendingInterleavedActor {
         &mut self,
         message: PendingInterleavedDrop,
         _scope: &mut ActorScope<'_, Self>,
-    ) -> impl loong_actor::IntoReply<Self, PendingInterleavedDrop> + use<> {
+    ) -> impl loac::IntoReply<Self, PendingInterleavedDrop> + use<> {
         message.interleaved()
     }
 }
@@ -400,7 +400,7 @@ impl Handler<PanicNow> for PanicActor {
         &mut self,
         _message: PanicNow,
         _scope: &mut ActorScope<'_, Self>,
-    ) -> impl loong_actor::IntoReply<Self, PanicNow> + use<> {
+    ) -> impl loac::IntoReply<Self, PanicNow> + use<> {
         panic!("intentional handler panic");
         #[allow(unreachable_code)]
         ().ready()
@@ -431,7 +431,7 @@ impl Handler<PanicAfterBarrier> for PanicActor {
         &mut self,
         message: PanicAfterBarrier,
         _scope: &mut ActorScope<'_, Self>,
-    ) -> impl loong_actor::IntoReply<Self, PanicAfterBarrier> + use<> {
+    ) -> impl loac::IntoReply<Self, PanicAfterBarrier> + use<> {
         async move {
             let _ = message.entered.send(());
             message.barrier.wait();

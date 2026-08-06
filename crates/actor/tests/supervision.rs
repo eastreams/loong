@@ -6,7 +6,7 @@ use std::sync::{
 };
 use std::task::Poll;
 
-use loong_actor::{
+use loac::{
     Actor, ActorScope, CallError, Child, ChildExit, ExitReason, Handler, InterleavedFutureExt,
     IntoActorFuture, Message, ReplyExt, Shutdown, SubtreeStatus, actor, spawn,
 };
@@ -36,7 +36,7 @@ impl Handler<StopSelf> for ChildActor {
         &mut self,
         _message: StopSelf,
         scope: &mut ActorScope<'_, Self>,
-    ) -> impl loong_actor::IntoReply<Self, StopSelf> + use<> {
+    ) -> impl loac::IntoReply<Self, StopSelf> + use<> {
         scope.request_shutdown(Shutdown::Stop);
         ().ready()
     }
@@ -50,7 +50,7 @@ impl Handler<PanicSelf> for ChildActor {
         &mut self,
         _message: PanicSelf,
         _scope: &mut ActorScope<'_, Self>,
-    ) -> impl loong_actor::IntoReply<Self, PanicSelf> + use<> {
+    ) -> impl loac::IntoReply<Self, PanicSelf> + use<> {
         panic!("intentional child panic");
         #[allow(unreachable_code)]
         ().ready()
@@ -101,7 +101,7 @@ impl Handler<Observed> for Supervisor {
         &mut self,
         _message: Observed,
         _scope: &mut ActorScope<'_, Self>,
-    ) -> impl loong_actor::IntoReply<Self, Observed> + use<> {
+    ) -> impl loac::IntoReply<Self, Observed> + use<> {
         self.observed.load(Ordering::SeqCst).ready()
     }
 }
@@ -114,7 +114,7 @@ impl Handler<ChildExitBarrier> for Supervisor {
         &mut self,
         _message: ChildExitBarrier,
         _scope: &mut ActorScope<'_, Self>,
-    ) -> impl loong_actor::IntoReply<Self, ChildExitBarrier> + use<> {
+    ) -> impl loac::IntoReply<Self, ChildExitBarrier> + use<> {
         let mut yielded = false;
         std::future::poll_fn(move |task| {
             if yielded {
@@ -133,7 +133,7 @@ impl Handler<ChildExitBarrier> for Supervisor {
 fn spawn_supervisor(
     child_exits_during_init: bool,
 ) -> (
-    loong_actor::ActorOwner<Supervisor>,
+    loac::ActorOwner<Supervisor>,
     oneshot::Receiver<Child<ChildActor>>,
     mpsc::UnboundedReceiver<ChildExit>,
 ) {

@@ -1,9 +1,9 @@
-use loong_actor::{Actor, ActorScope, HasInterleaving};
+use loac::{Actor, ActorScope, HasInterleaving};
 
 // Scheduler capability supplies this implementation automatically.
 struct Interleaved;
 
-#[loong_actor::actor(mailbox, interleaved)]
+#[loac::actor(mailbox, interleaved)]
 impl Actor for Interleaved {
     type SpawnArgs = ();
 

@@ -3,16 +3,16 @@ use std::num::NonZeroUsize;
 // An unbounded scheduler has no finite limit to override.
 struct Unbounded;
 
-#[loong_actor::actor(mailbox, interleaved = unbounded)]
-impl loong_actor::Actor for Unbounded {
+#[loac::actor(mailbox, interleaved = unbounded)]
+impl loac::Actor for Unbounded {
     type SpawnArgs = ();
 
-    async fn init(_: (), _: &mut loong_actor::ActorScope<'_, Self>) -> Self {
+    async fn init(_: (), _: &mut loac::ActorScope<'_, Self>) -> Self {
         Self
     }
 }
 
 fn main() {
-    let _ = loong_actor::SpawnOptions::<Unbounded>::default()
+    let _ = loac::SpawnOptions::<Unbounded>::default()
         .with_max_in_flight(NonZeroUsize::MIN);
 }

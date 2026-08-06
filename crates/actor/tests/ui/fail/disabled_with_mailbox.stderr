@@ -10,8 +10,8 @@ note: expected this to be `NoSender`
 14 |     type Sender = UnboundedSender<Self>;
    |                   ^^^^^^^^^^^^^^^^^^^^^
    = note: expected struct `NoSender`
-              found struct `loong_actor::transport::UnboundedSender<Manual>`
-   = note: required for `loong_actor::scheduling::Disabled` to implement `SchedulerProfile<Manual>`
+              found struct `loac::transport::UnboundedSender<Manual>`
+   = note: required for `loac::scheduling::Disabled` to implement `SchedulerProfile<Manual>`
 note: required by a bound in `Actor`
   --> src/actor.rs
    |
@@ -32,8 +32,8 @@ note: expected this to be `NoInbox`
 15 |     type Inbox = UnboundedInbox<Self>;
    |                  ^^^^^^^^^^^^^^^^^^^^
    = note: expected struct `NoInbox`
-              found struct `loong_actor::transport::UnboundedInbox<Manual>`
-   = note: required for `loong_actor::scheduling::Disabled` to implement `SchedulerProfile<Manual>`
+              found struct `loac::transport::UnboundedInbox<Manual>`
+   = note: required for `loac::scheduling::Disabled` to implement `SchedulerProfile<Manual>`
 note: required by a bound in `Actor`
   --> src/actor.rs
    |

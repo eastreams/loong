@@ -11,7 +11,7 @@ use std::{
     task::Poll,
 };
 
-use loong_actor::{
+use loac::{
     Actor, ActorFutureExt, ActorScope, CallError, ExitReason, Handler, IntoActorFuture, Message,
     ReplyExt, Shutdown, SpawnOptions, SyncHandler, TryCallErrorKind, TrySendErrorKind, actor,
     spawn, spawn_with,
@@ -40,7 +40,7 @@ impl Handler<Add> for Calculator {
         &mut self,
         message: Add,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, Add> + use<> {
+    ) -> impl loac::IntoReply<Self, Add> + use<> {
         self.0 += message.0;
         self.0.ready()
     }
@@ -55,7 +55,7 @@ impl Handler<Describe> for Calculator {
         &mut self,
         _message: Describe,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, Describe> + use<> {
+    ) -> impl loac::IntoReply<Self, Describe> + use<> {
         format!("count={}", self.0).ready()
     }
 }
@@ -83,7 +83,7 @@ impl Handler<Events> for Calculator {
         &mut self,
         _message: Events,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, Events> + use<> {
+    ) -> impl loac::IntoReply<Self, Events> + use<> {
         let (events, receiver) = mpsc::channel(2);
         events.try_send(1).expect("the stream buffer has room");
         events.try_send(2).expect("the stream buffer has room");
@@ -130,7 +130,7 @@ impl Handler<Block> for SerialActor {
         &mut self,
         message: Block,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, Block> + use<> {
+    ) -> impl loac::IntoReply<Self, Block> + use<> {
         async move {
             let _ = message.entered.send(());
             let _ = message.release.await;
@@ -149,7 +149,7 @@ impl Handler<Record> for SerialActor {
         &mut self,
         message: Record,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, Record> + use<> {
+    ) -> impl loac::IntoReply<Self, Record> + use<> {
         lock(&self.committed).push(message.0);
         message.0.ready()
     }
@@ -164,7 +164,7 @@ impl Handler<Snapshot> for SerialActor {
         &mut self,
         _message: Snapshot,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, Snapshot> + use<> {
+    ) -> impl loac::IntoReply<Self, Snapshot> + use<> {
         lock(&self.committed).clone().ready()
     }
 }
@@ -358,7 +358,7 @@ async fn try_send_recovers_messages_rejected_as_full_or_closed() {
 
     assert!(matches!(
         owner.request_shutdown(Shutdown::Stop),
-        loong_actor::ShutdownStatus::Requested
+        loac::ShutdownStatus::Requested
     ));
     let closed = actor.try_send(Notify(3)).unwrap_err();
     assert_eq!(closed.kind(), TrySendErrorKind::Closed);
@@ -398,7 +398,7 @@ async fn send_recovers_a_message_when_shutdown_wins_admission() {
 
     assert!(matches!(
         owner.request_shutdown(Shutdown::Stop),
-        loong_actor::ShutdownStatus::Requested
+        loac::ShutdownStatus::Requested
     ));
     let rejected = watchdog(waiting).await.unwrap_err();
     assert_eq!(rejected.into_message().0, 2);
@@ -418,7 +418,7 @@ async fn ready_capacity_does_not_bypass_closed_admission() {
 
     assert!(matches!(
         owner.request_shutdown(Shutdown::Stop),
-        loong_actor::ShutdownStatus::Requested
+        loac::ShutdownStatus::Requested
     ));
     let rejected = actor.send(Notify(1)).await.unwrap_err();
     assert_eq!(rejected.into_message().0, 1);
@@ -439,7 +439,7 @@ impl Handler<CommitAfterRelease> for SerialActor {
         &mut self,
         message: CommitAfterRelease,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, CommitAfterRelease> + use<> {
+    ) -> impl loac::IntoReply<Self, CommitAfterRelease> + use<> {
         async move {
             let _ = message.entered.send(());
             let _ = message.release.await;
@@ -511,7 +511,7 @@ async fn a_capacity_waiter_wakes_when_stop_closes_admission() {
 
     assert!(matches!(
         owner.request_shutdown(Shutdown::Stop),
-        loong_actor::ShutdownStatus::Requested
+        loac::ShutdownStatus::Requested
     ));
     assert_eq!(watchdog(waiting).await, Err(CallError::Closed));
     assert_eq!(

@@ -1,6 +1,6 @@
 use std::num::NonZeroUsize;
 
-use loong_actor::{
+use loac::{
     Actor, ActorOwner, ActorScope, ExitReason, Handler, Message, Shutdown, SpawnOptions,
     SyncHandler, TrySendErrorKind, actor, spawn, spawn_with,
 };

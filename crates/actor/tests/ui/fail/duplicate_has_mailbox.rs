@@ -1,9 +1,9 @@
-use loong_actor::{Actor, ActorScope, HasMailbox};
+use loac::{Actor, ActorScope, HasMailbox};
 
 // Transport capability supplies this implementation automatically.
 struct Mailboxed;
 
-#[loong_actor::actor(mailbox)]
+#[loac::actor(mailbox)]
 impl Actor for Mailboxed {
     type SpawnArgs = ();
 

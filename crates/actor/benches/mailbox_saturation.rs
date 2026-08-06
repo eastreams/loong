@@ -12,7 +12,7 @@ use std::{
 };
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use loong_actor::{
+use loac::{
     Actor, ActorOwner, ActorRef, ActorScope, ExitReason, Handler, Message, ReplyExt, Response,
     Shutdown, SpawnOptions, TryCallErrorKind, spawn_with,
 };
@@ -21,7 +21,7 @@ const MAILBOX_CAPACITIES: [usize; 3] = [1, 32, 256];
 
 struct MailboxActor;
 
-#[loong_actor::actor(mailbox = dynamic)]
+#[loac::actor(mailbox = dynamic)]
 impl Actor for MailboxActor {
     type SpawnArgs = ();
 
@@ -38,7 +38,7 @@ impl Handler<ReadyTraffic> for MailboxActor {
         &mut self,
         _message: ReadyTraffic,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, ReadyTraffic> + use<> {
+    ) -> impl loac::IntoReply<Self, ReadyTraffic> + use<> {
         ().ready()
     }
 }

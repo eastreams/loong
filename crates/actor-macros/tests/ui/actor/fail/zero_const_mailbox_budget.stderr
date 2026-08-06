@@ -2,7 +2,7 @@ error[E0080]: evaluation panicked: mailbox budget must be greater than zero
  --> tests/ui/actor/fail/zero_const_mailbox_budget.rs:6:1
   |
 6 | #[actor_api::actor(mailbox, mailbox_budget = ZERO)]
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `<ConstZero as loong_actor::MessageConfig>::MAILBOX_DISPATCH_BUDGET` failed here
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `<ConstZero as loac::MessageConfig>::MAILBOX_DISPATCH_BUDGET` failed here
   |
   = note: this error originates in the attribute macro `actor_api::actor` (in Nightly builds, run with -Z macro-backtrace for more info)
 

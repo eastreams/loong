@@ -1,12 +1,12 @@
-# Examples for loong-actor
+# Examples for loac
 
-These examples are small, executable guides to `loong-actor`.
+These examples are small, executable guides to `loac`.
 Start with [`sync_handler`](sync_handler.rs).
 
 Run an example from the workspace root:
 
 ```console
-cargo run -p loong-actor --example sync_handler
+cargo run -p loac --example sync_handler
 ```
 
 Replace `sync_handler` with any target listed below.

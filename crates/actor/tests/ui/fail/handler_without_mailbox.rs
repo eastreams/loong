@@ -1,9 +1,9 @@
 // A handler requires the actor to expose a public mailbox.
-use loong_actor::{Actor, ActorScope, Handler, ReplyExt};
+use loac::{Actor, ActorScope, Handler, ReplyExt};
 
 struct Bare;
 
-#[loong_actor::actor]
+#[loac::actor]
 impl Actor for Bare {
     type SpawnArgs = ();
 
@@ -12,7 +12,7 @@ impl Actor for Bare {
     }
 }
 
-#[derive(loong_actor::Message)]
+#[derive(loac::Message)]
 struct Ping;
 
 impl Handler<Ping> for Bare {
@@ -20,7 +20,7 @@ impl Handler<Ping> for Bare {
         &mut self,
         _message: Ping,
         _scope: &mut ActorScope<'_, Self>,
-    ) -> impl loong_actor::IntoReply<Self, Ping> + use<> {
+    ) -> impl loac::IntoReply<Self, Ping> + use<> {
         ().ready()
     }
 }

@@ -1,4 +1,4 @@
-use loong_actor::{
+use loac::{
     Actor, ActorFutureExt, ActorScope, CallError, ExitReason, Handler, InterleavedFutureExt,
     IntoActorFuture, Message, ReplyExt, Shutdown, ShutdownStatus, TryCallErrorKind, actor, spawn,
 };
@@ -17,7 +17,7 @@ impl Handler<StopFromExclusive> for LifecycleActor {
         &mut self,
         _message: StopFromExclusive,
         _scope: &mut ActorScope<'_, Self>,
-    ) -> impl loong_actor::IntoReply<Self, StopFromExclusive> + use<> {
+    ) -> impl loac::IntoReply<Self, StopFromExclusive> + use<> {
         async {}
             .into_actor()
             .map(|(), _actor: &mut Self, scope| {
@@ -155,7 +155,7 @@ impl Handler<InterleavedDrainStep> for InterleavedDrainActor {
         &mut self,
         message: InterleavedDrainStep,
         _scope: &mut ActorScope<'_, Self>,
-    ) -> impl loong_actor::IntoReply<Self, InterleavedDrainStep> + use<> {
+    ) -> impl loac::IntoReply<Self, InterleavedDrainStep> + use<> {
         async move {
             let _ = message.entered.send(());
             let _ = message.release.await;

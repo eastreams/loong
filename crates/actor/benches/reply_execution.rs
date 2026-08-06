@@ -28,7 +28,7 @@ use std::{
 };
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use loong_actor::{
+use loac::{
     Actor, ActorOwner, ActorRef, ActorScope, ExitReason, Handler, InterleavedFutureExt,
     IntoActorFuture, Message, ReplyExt, Response, Shutdown, SpawnOptions, TryCallErrorKind,
     spawn_with,
@@ -100,7 +100,7 @@ impl ReplyExecution {
 
 struct ReplyActor;
 
-#[loong_actor::actor(mailbox = dynamic, interleaved = dynamic)]
+#[loac::actor(mailbox = dynamic, interleaved = dynamic)]
 impl Actor for ReplyActor {
     type SpawnArgs = ();
 
@@ -120,7 +120,7 @@ impl Handler<OwnedReply> for ReplyActor {
         &mut self,
         message: OwnedReply,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, OwnedReply> + use<> {
+    ) -> impl loac::IntoReply<Self, OwnedReply> + use<> {
         async move {
             let _ = message.started.send(());
             let _ = message.release.await;
@@ -139,7 +139,7 @@ impl Handler<InterleavedReply> for ReplyActor {
         &mut self,
         message: InterleavedReply,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, InterleavedReply> + use<> {
+    ) -> impl loac::IntoReply<Self, InterleavedReply> + use<> {
         async move {
             let _ = message.started.send(());
             let _ = message.release.await;
@@ -186,7 +186,7 @@ impl Handler<OwnedWakeProbe> for ReplyActor {
         &mut self,
         message: OwnedWakeProbe,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, OwnedWakeProbe> + use<> {
+    ) -> impl loac::IntoReply<Self, OwnedWakeProbe> + use<> {
         message.0
     }
 }
@@ -199,7 +199,7 @@ impl Handler<InterleavedWakeProbe> for ReplyActor {
         &mut self,
         message: InterleavedWakeProbe,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, InterleavedWakeProbe> + use<> {
+    ) -> impl loac::IntoReply<Self, InterleavedWakeProbe> + use<> {
         message.0.into_actor().interleaved()
     }
 }
@@ -212,7 +212,7 @@ impl Handler<MailboxBacklog> for ReplyActor {
         &mut self,
         _message: MailboxBacklog,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, MailboxBacklog> + use<> {
+    ) -> impl loac::IntoReply<Self, MailboxBacklog> + use<> {
         ().ready()
     }
 }
@@ -228,7 +228,7 @@ impl Handler<MailboxTurnTrigger> for ReplyActor {
         &mut self,
         message: MailboxTurnTrigger,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, MailboxTurnTrigger> + use<> {
+    ) -> impl loac::IntoReply<Self, MailboxTurnTrigger> + use<> {
         if message
             .commands
             .try_send(WakeCommand {
@@ -254,7 +254,7 @@ impl Handler<StageMailboxBacklog> for ReplyActor {
         &mut self,
         message: StageMailboxBacklog,
         _scope: &mut ActorScope<Self>,
-    ) -> impl loong_actor::IntoReply<Self, StageMailboxBacklog> + use<> {
+    ) -> impl loac::IntoReply<Self, StageMailboxBacklog> + use<> {
         async move {
             let _ = message.entered.send(());
             message

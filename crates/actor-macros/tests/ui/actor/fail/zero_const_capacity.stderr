@@ -2,7 +2,7 @@ error[E0080]: evaluation panicked: mailbox capacity must be greater than zero
  --> tests/ui/actor/fail/zero_const_capacity.rs:6:1
   |
 6 | #[actor_api::actor(mailbox = ZERO)]
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `<Zero as loong_actor::MessageConfig>::open::{constant#0}` failed here
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `<Zero as loac::MessageConfig>::open::{constant#0}` failed here
   |
   = note: this error originates in the attribute macro `actor_api::actor` (in Nightly builds, run with -Z macro-backtrace for more info)
 

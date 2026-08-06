@@ -4,7 +4,7 @@ error[E0277]: `Serial` cannot schedule interleaved replies
 15 | impl HasInterleaving for Serial {}
    |      ^^^^^^^^^^^^^^^ enable `interleaved` in this actor's `#[actor(...)]` configuration
    |
-   = help: the trait `InterleavedScheduler<Serial>` is not implemented for `loong_actor::scheduling::Serial<Serial>`
+   = help: the trait `InterleavedScheduler<Serial>` is not implemented for `loac::scheduling::Serial<Serial>`
 help: the following other types implement trait `InterleavedScheduler<A>`
   --> src/scheduling.rs
    |
@@ -13,21 +13,21 @@ help: the following other types implement trait `InterleavedScheduler<A>`
    | |     A: Actor + MessageConfig<Scheduler = Self>,
    | |     A::Sender: MessageSender<A>,
    | |     A::Inbox: MessageInbox<A>,
-   | |______________________________^ `loong_actor::scheduling::Fixed<A, N>`
+   | |______________________________^ `loac::scheduling::Fixed<A, N>`
 ...
    | / impl<A> InterleavedScheduler<A> for Dynamic<A>
    | | where
    | |     A: Actor + MessageConfig<Scheduler = Self>,
    | |     A::Sender: MessageSender<A>,
    | |     A::Inbox: MessageInbox<A>,
-   | |______________________________^ `loong_actor::scheduling::Dynamic<A>`
+   | |______________________________^ `loac::scheduling::Dynamic<A>`
 ...
    | / impl<A> InterleavedScheduler<A> for Unbounded<A>
    | | where
    | |     A: Actor + MessageConfig<Scheduler = Self>,
    | |     A::Sender: MessageSender<A>,
    | |     A::Inbox: MessageInbox<A>,
-   | |______________________________^ `loong_actor::scheduling::Unbounded<A>`
+   | |______________________________^ `loac::scheduling::Unbounded<A>`
 note: required by a bound in `HasInterleaving`
   --> src/actor.rs
    |

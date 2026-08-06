@@ -1,6 +1,6 @@
 use std::{future, sync::mpsc as std_mpsc, time::Duration};
 
-use loong_actor::{
+use loac::{
     ActorScope, CallError, ExitReason, Handler, IntoActorFuture, Message, ReplyExt, Shutdown,
     ShutdownStatus,
 };
@@ -23,7 +23,7 @@ impl Handler<Interruptible> for LifecycleActor {
         &mut self,
         message: Interruptible,
         _scope: &mut ActorScope<'_, Self>,
-    ) -> impl loong_actor::IntoReply<Self, Interruptible> + use<> {
+    ) -> impl loac::IntoReply<Self, Interruptible> + use<> {
         async move {
             let _dropped = message.dropped;
             let _ = message.entered.send(());
@@ -59,7 +59,7 @@ impl Handler<OwnedInterruptible> for LifecycleActor {
         &mut self,
         message: OwnedInterruptible,
         _scope: &mut ActorScope<'_, Self>,
-    ) -> impl loong_actor::IntoReply<Self, OwnedInterruptible> + use<> {
+    ) -> impl loac::IntoReply<Self, OwnedInterruptible> + use<> {
         async move {
             let _drop_barrier = message.drop_barrier;
             let _ = message.entered.send(());
@@ -76,7 +76,7 @@ impl Handler<KillBeforeReady> for LifecycleActor {
         &mut self,
         _message: KillBeforeReady,
         scope: &mut ActorScope<'_, Self>,
-    ) -> impl loong_actor::IntoReply<Self, KillBeforeReady> + use<> {
+    ) -> impl loac::IntoReply<Self, KillBeforeReady> + use<> {
         assert_eq!(
             scope.request_shutdown(Shutdown::Kill),
             ShutdownStatus::Requested

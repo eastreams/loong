@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use loong_actor::{ExitReason, Shutdown, prelude::*, spawn};
+use loac::{ExitReason, Shutdown, prelude::*, spawn};
 use tokio::sync::oneshot;
 
 struct Counter(u64);

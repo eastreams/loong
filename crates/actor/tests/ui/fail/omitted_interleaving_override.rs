@@ -3,16 +3,16 @@ use std::num::NonZeroUsize;
 // A serial actor has no interleaved limit to override.
 struct Serial;
 
-#[loong_actor::actor(mailbox)]
-impl loong_actor::Actor for Serial {
+#[loac::actor(mailbox)]
+impl loac::Actor for Serial {
     type SpawnArgs = ();
 
-    async fn init(_: (), _: &mut loong_actor::ActorScope<'_, Self>) -> Self {
+    async fn init(_: (), _: &mut loac::ActorScope<'_, Self>) -> Self {
         Self
     }
 }
 
 fn main() {
-    let _ = loong_actor::SpawnOptions::<Serial>::default()
+    let _ = loac::SpawnOptions::<Serial>::default()
         .with_max_in_flight(NonZeroUsize::MIN);
 }

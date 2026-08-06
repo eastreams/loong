@@ -2,11 +2,11 @@
 //! The dynamic mailbox limit may change per spawn.
 //! The mailbox dispatch budget belongs to the actor type.
 //! Unbounded profiles leave resource growth to the application.
-//! See [`#[actor(...)]`](macro@loong_actor::actor) for every option.
+//! See [`#[actor(...)]`](macro@loac::actor) for every option.
 
 use std::num::NonZeroUsize;
 
-use loong_actor::{ExitReason, Shutdown, SpawnOptions, prelude::*, spawn_with};
+use loac::{ExitReason, Shutdown, SpawnOptions, prelude::*, spawn_with};
 
 const DEFAULT_MAILBOX_CAPACITY: usize = 32;
 const MAILBOX_DISPATCH_BUDGET: usize = 8;

@@ -1,9 +1,9 @@
-use loong_actor::{Actor, ActorScope, HasInterleaving};
+use loac::{Actor, ActorScope, HasInterleaving};
 
 // HasInterleaving is derived from scheduler capability.
 struct Serial;
 
-#[loong_actor::actor(mailbox)]
+#[loac::actor(mailbox)]
 impl Actor for Serial {
     type SpawnArgs = ();
 

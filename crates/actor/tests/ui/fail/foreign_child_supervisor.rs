@@ -1,4 +1,4 @@
-use loong_actor::supervision::ChildSupervisor;
+use loac::supervision::ChildSupervisor;
 
 struct ForeignChildren;
 

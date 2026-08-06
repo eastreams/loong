@@ -1,9 +1,9 @@
 // HasChildren is derived from supervision capabilities.
-use loong_actor::{Actor, ActorScope, HasChildren};
+use loac::{Actor, ActorScope, HasChildren};
 
 struct Bare;
 
-#[loong_actor::actor]
+#[loac::actor]
 impl Actor for Bare {
     type SpawnArgs = ();
 

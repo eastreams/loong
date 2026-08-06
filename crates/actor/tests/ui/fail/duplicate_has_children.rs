@@ -1,8 +1,8 @@
-use loong_actor::{Actor, ActorScope, HasChildren};
+use loac::{Actor, ActorScope, HasChildren};
 
 struct Supervisor;
 
-#[loong_actor::actor(children = unbounded)]
+#[loac::actor(children = unbounded)]
 impl Actor for Supervisor {
     type SpawnArgs = ();
 

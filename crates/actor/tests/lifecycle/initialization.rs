@@ -7,7 +7,7 @@ use std::{
     task::Poll,
 };
 
-use loong_actor::{
+use loac::{
     Actor, ActorScope, CallError, ExitReason, Handler, Message, ReplyExt, Shutdown, ShutdownStatus,
     StopScope, TrySendErrorKind, actor, spawn,
 };
@@ -50,7 +50,7 @@ impl Handler<Notify> for AdmissionActor {
         &mut self,
         message: Notify,
         _scope: &mut ActorScope<'_, Self>,
-    ) -> impl loong_actor::IntoReply<Self, Notify> + use<> {
+    ) -> impl loac::IntoReply<Self, Notify> + use<> {
         self.value += message.0;
         self.handled.fetch_add(1, Ordering::SeqCst);
         ().ready()
@@ -66,7 +66,7 @@ impl Handler<Read> for AdmissionActor {
         &mut self,
         _message: Read,
         _scope: &mut ActorScope<'_, Self>,
-    ) -> impl loong_actor::IntoReply<Self, Read> + use<> {
+    ) -> impl loac::IntoReply<Self, Read> + use<> {
         (self.value, self.handled.load(Ordering::SeqCst)).ready()
     }
 }
@@ -167,7 +167,7 @@ impl Handler<InitPing> for ControlledInit {
         &mut self,
         _message: InitPing,
         _scope: &mut ActorScope<'_, Self>,
-    ) -> impl loong_actor::IntoReply<Self, InitPing> + use<> {
+    ) -> impl loac::IntoReply<Self, InitPing> + use<> {
         self.handled.fetch_add(1, Ordering::SeqCst);
         ().ready()
     }

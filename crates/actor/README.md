@@ -1,8 +1,10 @@
-# loong-actor
+# loac
 
-`loong-actor` is a small runtime for typed, local actors. It combines
+`loac` is a small runtime for typed, local actors. It combines
 Actix-style message/reply typing with bounded admission, explicit ownership,
 and a Ractor-style supervision tree.
+
+The name joins `Loong` and `Actor` (`lo` + `ac`).
 
 The crate is an early MVP. Its current contract is deliberately narrow:
 
@@ -23,7 +25,7 @@ The crate is an early MVP. Its current contract is deliberately narrow:
   a running synchronous handler, a poll call that never returns, or user `Drop`.
 
 ```rust
-use loong_actor::{ExitReason, Shutdown, SubtreeStatus, prelude::*, spawn};
+use loac::{ExitReason, Shutdown, SubtreeStatus, prelude::*, spawn};
 
 struct Counter(u64);
 

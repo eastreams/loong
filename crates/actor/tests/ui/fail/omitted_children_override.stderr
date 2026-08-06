@@ -1,7 +1,7 @@
-error[E0599]: no method named `with_max_children` found for struct `loong_actor::__private::ActorOptions<Bare, loong_actor::__private::NoMailbox, loong_actor::__private::NoInterleaving, loong_actor::__private::NoChildren>` in the current scope
-  --> tests/ui/fail/omitted_children_override.rs:15:58
+error[E0599]: no method named `with_max_children` found for struct `loac::__private::ActorOptions<Bare, loac::__private::NoMailbox, loac::__private::NoInterleaving, loac::__private::NoChildren>` in the current scope
+  --> tests/ui/fail/omitted_children_override.rs:15:51
    |
-15 |     let _ = loong_actor::SpawnOptions::<Bare>::default().with_max_children(NonZeroUsize::MIN);
-   |                                                          ^^^^^^^^^^^^^^^^^ method not found in `loong_actor::__private::ActorOptions<Bare, loong_actor::__private::NoMailbox, loong_actor::__private::NoInterleaving, loong_actor::__private::NoChildren>`
+15 |     let _ = loac::SpawnOptions::<Bare>::default().with_max_children(NonZeroUsize::MIN);
+   |                                                   ^^^^^^^^^^^^^^^^^ method not found in `loac::__private::ActorOptions<Bare, loac::__private::NoMailbox, loac::__private::NoInterleaving, loac::__private::NoChildren>`
    |
-   = note: the method was found for `loong_actor::__private::ActorOptions<A, M, I, loong_actor::__private::DynamicChildren<DEFAULT>>`
+   = note: the method was found for `loac::__private::ActorOptions<A, M, I, loac::__private::DynamicChildren<DEFAULT>>`

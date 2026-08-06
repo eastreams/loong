@@ -1,5 +1,5 @@
 // A disabled transport cannot select an active scheduler profile.
-use loong_actor::{
+use loac::{
     Actor, ActorConfig, ActorScope, MessageConfig, SupervisionConfig, scheduling, supervision,
     transport::{NoInbox, NoSender},
 };

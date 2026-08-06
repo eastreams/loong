@@ -1,7 +1,7 @@
 //! Runs independent root actors with separate lifecycle owners.
 //! Dropping one owner requests Kill without affecting its peer.
 
-use loong_actor::{ExitReason, Shutdown, prelude::*, spawn};
+use loac::{ExitReason, Shutdown, prelude::*, spawn};
 
 struct Worker {
     factor: u64,

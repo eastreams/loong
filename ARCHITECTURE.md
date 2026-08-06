@@ -67,7 +67,7 @@ authorize execution, and it is not a second proof.
 
 ## Runtime Actor Model
 
-[`loong-actor`](crates/actor/src/lib.rs) implements the Tokio actor contract:
+[`loac`](crates/actor/src/lib.rs) implements the Tokio actor contract:
 bounded mailbox admission, an independent `max_in_flight` limit, separate
 `ActorRef` and `ActorOwner` roles, actor-owned child lifecycles,
 ready/owned/interleaved/exclusive reply scheduling, and Stop/Drain/Kill

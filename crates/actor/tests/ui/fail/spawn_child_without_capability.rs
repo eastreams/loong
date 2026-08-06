@@ -1,8 +1,8 @@
-use loong_actor::{Actor, ActorScope};
+use loac::{Actor, ActorScope};
 
 struct Child;
 
-#[loong_actor::actor]
+#[loac::actor]
 impl Actor for Child {
     type SpawnArgs = ();
 
@@ -13,7 +13,7 @@ impl Actor for Child {
 
 struct Parent;
 
-#[loong_actor::actor]
+#[loac::actor]
 impl Actor for Parent {
     type SpawnArgs = ();
 

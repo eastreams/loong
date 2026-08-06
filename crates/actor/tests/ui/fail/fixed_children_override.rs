@@ -2,15 +2,15 @@ use std::num::NonZeroUsize;
 
 struct Fixed;
 
-#[loong_actor::actor(children = 8)]
-impl loong_actor::Actor for Fixed {
+#[loac::actor(children = 8)]
+impl loac::Actor for Fixed {
     type SpawnArgs = ();
 
-    async fn init(_: (), _: &mut loong_actor::ActorScope<'_, Self>) -> Self {
+    async fn init(_: (), _: &mut loac::ActorScope<'_, Self>) -> Self {
         Self
     }
 }
 
 fn main() {
-    let _ = loong_actor::SpawnOptions::<Fixed>::default().with_max_children(NonZeroUsize::MIN);
+    let _ = loac::SpawnOptions::<Fixed>::default().with_max_children(NonZeroUsize::MIN);
 }

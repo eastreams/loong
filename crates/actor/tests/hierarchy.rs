@@ -6,7 +6,7 @@ use std::{
     task::Poll,
 };
 
-use loong_actor::{
+use loac::{
     Actor, ActorRef, ActorScope, CallError, ExitReason, Handler, IntoActorFuture, Message,
     ReplyExt, Shutdown, ShutdownStatus, StopScope, SubtreeStatus, actor, spawn,
 };
@@ -73,7 +73,7 @@ async fn parent_stop_cleans_up_children_before_the_parent() {
     );
     assert!(matches!(
         parent.try_call(ParentPing).unwrap_err().kind(),
-        loong_actor::TryCallErrorKind::Closed
+        loac::TryCallErrorKind::Closed
     ));
     assert_eq!(
         watchdog(owner.shutdown(Shutdown::Stop)).await.reason(),
@@ -92,7 +92,7 @@ impl Handler<ParentPing> for LogParent {
         &mut self,
         _message: ParentPing,
         _scope: &mut ActorScope<'_, Self>,
-    ) -> impl loong_actor::IntoReply<Self, ParentPing> + use<> {
+    ) -> impl loac::IntoReply<Self, ParentPing> + use<> {
         ().ready()
     }
 }
@@ -123,7 +123,7 @@ impl Handler<Work> for Worker {
         &mut self,
         message: Work,
         _scope: &mut ActorScope<'_, Self>,
-    ) -> impl loong_actor::IntoReply<Self, Work> + use<> {
+    ) -> impl loac::IntoReply<Self, Work> + use<> {
         lock(&self.log).push(format!("work-{}", message.0));
         message.0.ready()
     }
@@ -169,7 +169,7 @@ impl Handler<ParentBlock> for DrainParent {
         &mut self,
         message: ParentBlock,
         _scope: &mut ActorScope<'_, Self>,
-    ) -> impl loong_actor::IntoReply<Self, ParentBlock> + use<> {
+    ) -> impl loac::IntoReply<Self, ParentBlock> + use<> {
         async move {
             let _ = message.entered.send(());
             let _ = message.release.await;
@@ -188,7 +188,7 @@ impl Handler<Forward> for DrainParent {
         &mut self,
         message: Forward,
         _scope: &mut ActorScope<'_, Self>,
-    ) -> impl loong_actor::IntoReply<Self, Forward> + use<> {
+    ) -> impl loac::IntoReply<Self, Forward> + use<> {
         let worker = self.worker.clone();
         async move { worker.call(Work(message.0)).await }
     }
@@ -347,7 +347,7 @@ impl Handler<PanicTree> for PanicParent {
         &mut self,
         _message: PanicTree,
         _scope: &mut ActorScope<'_, Self>,
-    ) -> impl loong_actor::IntoReply<Self, PanicTree> + use<> {
+    ) -> impl loac::IntoReply<Self, PanicTree> + use<> {
         panic!("intentional parent panic");
         #[allow(unreachable_code)]
         ().ready()

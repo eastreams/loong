@@ -1,9 +1,9 @@
 // A no-mailbox actor cannot call or send through its ref.
-use loong_actor::{Actor, ActorScope, spawn};
+use loac::{Actor, ActorScope, spawn};
 
 struct Bare;
 
-#[loong_actor::actor]
+#[loac::actor]
 impl Actor for Bare {
     type SpawnArgs = ();
 
@@ -12,7 +12,7 @@ impl Actor for Bare {
     }
 }
 
-#[derive(loong_actor::Message)]
+#[derive(loac::Message)]
 struct Ping;
 
 fn main() {

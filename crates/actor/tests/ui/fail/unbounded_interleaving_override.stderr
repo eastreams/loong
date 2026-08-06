@@ -1,11 +1,11 @@
-error[E0599]: no method named `with_max_in_flight` found for struct `loong_actor::__private::ActorOptions<Unbounded, loong_actor::__private::FixedMailbox, loong_actor::__private::UnboundedInterleaving, loong_actor::__private::NoChildren>` in the current scope
+error[E0599]: no method named `with_max_in_flight` found for struct `loac::__private::ActorOptions<Unbounded, loac::__private::FixedMailbox, loac::__private::UnboundedInterleaving, loac::__private::NoChildren>` in the current scope
   --> tests/ui/fail/unbounded_interleaving_override.rs:17:10
    |
-16 |       let _ = loong_actor::SpawnOptions::<Unbounded>::default()
+16 |       let _ = loac::SpawnOptions::<Unbounded>::default()
    |  _____________-
 17 | |         .with_max_in_flight(NonZeroUsize::MIN);
-   | |         -^^^^^^^^^^^^^^^^^^ method not found in `loong_actor::__private::ActorOptions<Unbounded, loong_actor::__private::FixedMailbox, loong_actor::__private::UnboundedInterleaving, loong_actor::__private::NoChildren>`
+   | |         -^^^^^^^^^^^^^^^^^^ method not found in `loac::__private::ActorOptions<Unbounded, loac::__private::FixedMailbox, loac::__private::UnboundedInterleaving, loac::__private::NoChildren>`
    | |_________|
    |
    |
-   = note: the method was found for `loong_actor::__private::ActorOptions<A, M, loong_actor::__private::DynamicInterleaving<DEFAULT>, C>`
+   = note: the method was found for `loac::__private::ActorOptions<A, M, loac::__private::DynamicInterleaving<DEFAULT>, C>`

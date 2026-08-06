@@ -1,5 +1,5 @@
 // An active scheduler requires public mailbox operations.
-use loong_actor::{
+use loac::{
     Actor, ActorConfig, ActorScope, MessageConfig, SupervisionConfig, scheduling, supervision,
     transport::{NoInbox, NoSender},
 };

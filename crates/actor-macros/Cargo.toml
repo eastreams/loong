@@ -4,7 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 rust-version = "1.97.1"
 license.workspace = true
-description = "Procedural macros for loong-actor"
+description = "Procedural macros for loac"
 repository = "https://github.com/eastreams/loong"
 
 [lib]
@@ -17,7 +17,7 @@ quote = "1.0.47"
 syn = { version = "3.0.3", features = ["full"] }
 
 [dev-dependencies]
-actor-api = { package = "loong-actor", path = "../actor" }
+actor-api = { package = "loac", path = "../actor" }
 trybuild = "1.0.118"
 
 [lints]

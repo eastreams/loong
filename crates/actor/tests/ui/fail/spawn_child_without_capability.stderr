@@ -7,7 +7,7 @@ error[E0599]: the method `spawn_child` exists for mutable reference `&mut ActorS
   ::: src/supervision.rs
    |
    | pub struct Disabled;
-   | ------------------- doesn't satisfy `loong_actor::supervision::Disabled: ChildSpawner`
+   | ------------------- doesn't satisfy `loac::supervision::Disabled: ChildSpawner`
    |
    = note: the following trait bounds were not satisfied:
-           `loong_actor::supervision::Disabled: ChildSpawner`
+           `loac::supervision::Disabled: ChildSpawner`
