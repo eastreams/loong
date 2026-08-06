@@ -4,12 +4,12 @@ error[E0271]: type mismatch resolving `<Manual as MessageConfig>::Sender == NoSe
 32 | impl Actor for Manual {
    |      ^^^^^ type mismatch resolving `<Manual as MessageConfig>::Sender == NoSender`
    |
-note: expected this to be `loong_actor::transport::NoSender`
+note: expected this to be `NoSender`
   --> tests/ui/fail/disabled_with_mailbox.rs:14:19
    |
 14 |     type Sender = UnboundedSender<Self>;
    |                   ^^^^^^^^^^^^^^^^^^^^^
-   = note: expected struct `loong_actor::transport::NoSender`
+   = note: expected struct `NoSender`
               found struct `loong_actor::transport::UnboundedSender<Manual>`
    = note: required for `loong_actor::scheduling::Disabled` to implement `SchedulerProfile<Manual>`
 note: required by a bound in `Actor`
@@ -26,12 +26,12 @@ error[E0271]: type mismatch resolving `<Manual as MessageConfig>::Inbox == NoInb
 32 | impl Actor for Manual {
    |      ^^^^^ type mismatch resolving `<Manual as MessageConfig>::Inbox == NoInbox`
    |
-note: expected this to be `loong_actor::transport::NoInbox`
+note: expected this to be `NoInbox`
   --> tests/ui/fail/disabled_with_mailbox.rs:15:18
    |
 15 |     type Inbox = UnboundedInbox<Self>;
    |                  ^^^^^^^^^^^^^^^^^^^^
-   = note: expected struct `loong_actor::transport::NoInbox`
+   = note: expected struct `NoInbox`
               found struct `loong_actor::transport::UnboundedInbox<Manual>`
    = note: required for `loong_actor::scheduling::Disabled` to implement `SchedulerProfile<Manual>`
 note: required by a bound in `Actor`

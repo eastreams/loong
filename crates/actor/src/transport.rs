@@ -178,20 +178,25 @@ pub trait RuntimeInbox<A: Actor>: Send + 'static {
 pub trait MessageInbox<A: Actor>: RuntimeInbox<A> {}
 
 /// Sending storage for an actor without a mailbox.
-#[doc(hidden)]
+///
+/// Manual no-mailbox configurations pair this with [`NoInbox`] and
+/// [`crate::scheduling::Disabled`]. The pair keeps [`crate::HasMailbox`]
+/// unsatisfied. [`crate::Handler`] and messaging methods are unavailable.
+/// The actor ref keeps lifecycle methods.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoSender;
 
 impl NoSender {
     /// Opens transport storage without a mailbox.
-    #[doc(hidden)]
     pub fn open() -> (Self, NoInbox) {
         (Self, NoInbox)
     }
 }
 
 /// Runtime inbox for an actor without a mailbox.
-#[doc(hidden)]
+///
+/// Same pairing as [`NoSender`]. The runtime polls nothing.
+/// This inbox never admits messages.
 #[derive(Debug, Default)]
 pub struct NoInbox;
 

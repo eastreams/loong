@@ -1,8 +1,8 @@
-error[E0277]: the trait bound `loong_actor::transport::NoSender: MessageSender<Manual>` is not satisfied
+error[E0277]: the trait bound `NoSender: MessageSender<Manual>` is not satisfied
   --> tests/ui/fail/serial_without_mailbox.rs:32:6
    |
 32 | impl Actor for Manual {
-   |      ^^^^^ the trait `MessageSender<Manual>` is not implemented for `loong_actor::transport::NoSender`
+   |      ^^^^^ the trait `MessageSender<Manual>` is not implemented for `NoSender`
    |
    = help: the following other types implement trait `SchedulerProfile<A>`:
              Serial<A>
@@ -19,11 +19,11 @@ note: required by a bound in `Actor`
    |     MessageConfig<Inbox: RuntimeInbox<Self>, Scheduler: SchedulerProfile<Self>>
    |                                                         ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Actor`
 
-error[E0277]: the trait bound `loong_actor::transport::NoInbox: MessageInbox<Manual>` is not satisfied
+error[E0277]: the trait bound `NoInbox: MessageInbox<Manual>` is not satisfied
   --> tests/ui/fail/serial_without_mailbox.rs:32:6
    |
 32 | impl Actor for Manual {
-   |      ^^^^^ the trait `MessageInbox<Manual>` is not implemented for `loong_actor::transport::NoInbox`
+   |      ^^^^^ the trait `MessageInbox<Manual>` is not implemented for `NoInbox`
    |
    = help: the following other types implement trait `SchedulerProfile<A>`:
              Serial<A>

@@ -55,3 +55,53 @@ async fn no_mailbox_omits_reply_runtime_state() {
         ExitReason::Stopped
     );
 }
+
+/// A manual no-mailbox actor may still supervise children.
+struct Parent;
+
+impl ActorConfig for Parent {
+    type Options = ();
+}
+
+impl MessageConfig for Parent {
+    type Sender = NoSender;
+    type Inbox = NoInbox;
+    type Scheduler = scheduling::Disabled;
+
+    fn open(_options: &Self::Options) -> (Self::Sender, Self::Inbox, Self::Scheduler) {
+        let (sender, inbox) = NoSender::open();
+        (sender, inbox, scheduling::Disabled::new())
+    }
+}
+
+impl SupervisionConfig for Parent {
+    type Children = supervision::Fixed<2>;
+
+    fn open_children(_options: &Self::Options) -> Self::Children {
+        supervision::Fixed::<2>::new()
+    }
+}
+
+impl Actor for Parent {
+    type SpawnArgs = ();
+
+    async fn init(_: (), scope: &mut ActorScope<'_, Self>) -> Self {
+        // No mailbox does not disable child ownership.
+        let _child = scope.spawn_child::<ManualActor>(());
+        Self
+    }
+}
+
+// The manual no-mailbox recipe keeps lifecycle and children.
+#[tokio::test]
+async fn manual_no_mailbox_keeps_lifecycle_and_children() {
+    let owner = spawn::<Parent>(());
+
+    // The actor ref keeps lifecycle methods.
+    assert!(owner.actor_ref().exit_status().is_none());
+
+    assert_eq!(
+        owner.shutdown(Shutdown::Drain).await.reason(),
+        ExitReason::Drained
+    );
+}

@@ -44,11 +44,11 @@ note: required by a bound in `HasMailbox`
    |         Scheduler: ReplyScheduler<Self>,
    |                    ^^^^^^^^^^^^^^^^^^^^ required by this bound in `HasMailbox`
 
-error[E0277]: the trait bound `loong_actor::transport::NoInbox: MessageInbox<Bare>` is not satisfied
+error[E0277]: the trait bound `NoInbox: MessageInbox<Bare>` is not satisfied
   --> tests/ui/fail/manual_has_mailbox.rs:15:6
    |
 15 | impl HasMailbox for Bare {}
-   |      ^^^^^^^^^^ the trait `MessageInbox<Bare>` is not implemented for `loong_actor::transport::NoInbox`
+   |      ^^^^^^^^^^ the trait `MessageInbox<Bare>` is not implemented for `NoInbox`
    |
 note: required by a bound in `HasMailbox`
   --> src/actor.rs
@@ -59,11 +59,11 @@ note: required by a bound in `HasMailbox`
    |         Inbox: MessageInbox<Self>,
    |                ^^^^^^^^^^^^^^^^^^ required by this bound in `HasMailbox`
 
-error[E0277]: the trait bound `loong_actor::transport::NoSender: MessageSender<Bare>` is not satisfied
+error[E0277]: the trait bound `NoSender: MessageSender<Bare>` is not satisfied
   --> tests/ui/fail/manual_has_mailbox.rs:15:6
    |
 15 | impl HasMailbox for Bare {}
-   |      ^^^^^^^^^^ the trait `MessageSender<Bare>` is not implemented for `loong_actor::transport::NoSender`
+   |      ^^^^^^^^^^ the trait `MessageSender<Bare>` is not implemented for `NoSender`
    |
 note: required by a bound in `HasMailbox`
   --> src/actor.rs

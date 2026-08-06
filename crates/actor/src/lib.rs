@@ -89,6 +89,19 @@
 //!
 //! Pass changed [`SpawnOptions`] to [`spawn_with`].
 //!
+//! # Manual no-mailbox configuration
+//!
+//! The [`#[actor(...)]`](actor) attribute covers ordinary actors.
+//! Manual configurations exist for custom transports.
+//! A mailbox manual config supplies its own transport.
+//! A no-mailbox manual config may reuse the built-in states.
+//! Implement [`ActorConfig`], [`MessageConfig`], and [`SupervisionConfig`].
+//! Use [`transport::NoSender`], [`transport::NoInbox`], and
+//! [`scheduling::Disabled`].
+//!
+//! A manual config may also supply its own options carrier.
+//! Normally the empty carrier (`()`) suffices.
+//!
 //! # Core model
 //!
 //! | Type | Role |
