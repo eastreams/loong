@@ -441,7 +441,7 @@ dependencies = [
  "allocation-counter",
  "criterion",
  "futures-util",
- "loong-actor-macros",
+ "loac-macros",
  "oorandom",
  "pin-project-lite",
  "serde",
@@ -450,6 +450,18 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-util",
+ "trybuild",
+]
+
+[[package]]
+name = "loac-macros"
+version = "0.1.0"
+dependencies = [
+ "loac",
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
  "trybuild",
 ]
 
@@ -467,18 +479,6 @@ name = "log"
 version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
-
-[[package]]
-name = "loong-actor-macros"
-version = "0.1.0"
-dependencies = [
- "loac",
- "proc-macro-crate",
- "proc-macro2",
- "quote",
- "syn 3.0.3",
- "trybuild",
-]
 
 [[package]]
 name = "loong-cli"

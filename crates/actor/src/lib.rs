@@ -241,7 +241,7 @@ pub use future::{ActorFuture, ActorFutureExt, FutureActor, IntoActorFuture, Map,
 pub use lifecycle::{
     Child, ChildExit, ChildId, ExitReason, ExitStatus, Shutdown, ShutdownStatus, SubtreeStatus,
 };
-pub use loong_actor_macros::{Message, actor};
+pub use loac_macros::{Message, actor};
 pub use reply::{InterleavedFutureExt, IntoReply, ReplyExt};
 pub use runtime::{ActorOwner, ActorScope, SpawnOptions, StopScope, spawn, spawn_with};
 pub use transport::MessageConfig;
