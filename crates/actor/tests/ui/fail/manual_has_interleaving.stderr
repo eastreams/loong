@@ -6,21 +6,21 @@ error[E0277]: `Serial` cannot schedule interleaved replies
    |
    = help: the trait `InterleavedScheduler<Serial>` is not implemented for `loong_actor::scheduling::Serial<Serial>`
 help: the following other types implement trait `InterleavedScheduler<A>`
-  --> src/scheduling/mod.rs
+  --> src/scheduling.rs
    |
    | / impl<A, const N: usize> InterleavedScheduler<A> for Fixed<A, N>
    | | where
    | |     A: Actor + ReplySchedulingConfig<Scheduler = Self>,
    | |     A::Sender: MessageSender<A>,
    | |     A::Inbox: MessageInbox<A>,
-   | |______________________________^ `Fixed<A, N>`
+   | |______________________________^ `loong_actor::scheduling::Fixed<A, N>`
 ...
    | / impl<A> InterleavedScheduler<A> for Dynamic<A>
    | | where
    | |     A: Actor + ReplySchedulingConfig<Scheduler = Self>,
    | |     A::Sender: MessageSender<A>,
    | |     A::Inbox: MessageInbox<A>,
-   | |______________________________^ `Dynamic<A>`
+   | |______________________________^ `loong_actor::scheduling::Dynamic<A>`
 ...
    | / impl<A> InterleavedScheduler<A> for Unbounded<A>
    | | where
@@ -43,21 +43,21 @@ error[E0277]: the trait bound `loong_actor::scheduling::Serial<Serial>: scheduli
    |      ^^^^^^^^^^^^^^^ the trait `scheduling::runtime::RuntimeInterleavedScheduler<Serial>` is not implemented for `loong_actor::scheduling::Serial<Serial>`
    |
 help: the following other types implement trait `InterleavedScheduler<A>`
-  --> src/scheduling/mod.rs
+  --> src/scheduling.rs
    |
    | / impl<A, const N: usize> InterleavedScheduler<A> for Fixed<A, N>
    | | where
    | |     A: Actor + ReplySchedulingConfig<Scheduler = Self>,
    | |     A::Sender: MessageSender<A>,
    | |     A::Inbox: MessageInbox<A>,
-   | |______________________________^ `Fixed<A, N>`
+   | |______________________________^ `loong_actor::scheduling::Fixed<A, N>`
 ...
    | / impl<A> InterleavedScheduler<A> for Dynamic<A>
    | | where
    | |     A: Actor + ReplySchedulingConfig<Scheduler = Self>,
    | |     A::Sender: MessageSender<A>,
    | |     A::Inbox: MessageInbox<A>,
-   | |______________________________^ `Dynamic<A>`
+   | |______________________________^ `loong_actor::scheduling::Dynamic<A>`
 ...
    | / impl<A> InterleavedScheduler<A> for Unbounded<A>
    | | where

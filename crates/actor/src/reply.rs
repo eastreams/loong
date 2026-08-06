@@ -116,7 +116,7 @@ impl<T> ReplyExt for T {}
 /// It also allows other interleaved replies.
 /// An active [`exclusive`](ReplyExt::exclusive) reply pauses these polls.
 /// Each active reply consumes one configured slot.
-/// Unbounded admission may retain arbitrarily many replies.
+/// Unbounded interleaving may retain arbitrarily many replies.
 pub trait InterleavedFutureExt<A>: ActorFuture<A> + Sized
 where
     A: HasInterleaving,

@@ -1,11 +1,11 @@
-error[E0599]: no method named `with_max_in_flight` found for struct `loong_actor::__private::ActorOptions<Serial, loong_actor::__private::FixedMailbox, loong_actor::__private::NoInterleaving>` in the current scope
+error[E0599]: no method named `with_max_in_flight` found for struct `loong_actor::__private::ActorOptions<Serial, loong_actor::__private::FixedMailbox, loong_actor::__private::NoInterleaving, loong_actor::__private::NoChildren>` in the current scope
   --> tests/ui/fail/omitted_interleaving_override.rs:17:10
    |
 16 |       let _ = loong_actor::SpawnOptions::<Serial>::default()
    |  _____________-
 17 | |         .with_max_in_flight(NonZeroUsize::MIN);
-   | |         -^^^^^^^^^^^^^^^^^^ method not found in `loong_actor::__private::ActorOptions<Serial, loong_actor::__private::FixedMailbox, loong_actor::__private::NoInterleaving>`
+   | |         -^^^^^^^^^^^^^^^^^^ method not found in `loong_actor::__private::ActorOptions<Serial, loong_actor::__private::FixedMailbox, loong_actor::__private::NoInterleaving, loong_actor::__private::NoChildren>`
    | |_________|
    |
    |
-   = note: the method was found for `loong_actor::__private::ActorOptions<A, M, loong_actor::__private::DynamicInterleaving<DEFAULT>>`
+   = note: the method was found for `loong_actor::__private::ActorOptions<A, M, loong_actor::__private::DynamicInterleaving<DEFAULT>, C>`

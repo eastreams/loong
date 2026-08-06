@@ -1,8 +1,9 @@
 use std::task::{Context, Poll};
 
 use loong_actor::{
-    Actor, ActorConfig, ActorScope, MessageConfig, ReplySchedulingConfig,
+    Actor, ActorConfig, ActorScope, MessageConfig, ReplySchedulingConfig, SupervisionConfig,
     scheduling::ReplyScheduler,
+    supervision,
     transport::{ErasedEnvelope, RuntimeInbox},
 };
 
@@ -55,9 +56,16 @@ impl ReplySchedulingConfig for ForeignActor {
     }
 }
 
-impl<A> ReplyScheduler<A> for ForeignScheduler
-where
-    A: Actor + ReplySchedulingConfig<Scheduler = ForeignScheduler>,
+impl SupervisionConfig for ForeignActor {
+    type Children = supervision::Disabled;
+
+    fn open_children(_: &Self::Options) -> Self::Children {
+        supervision::Disabled::new()
+    }
+}
+
+impl<A> ReplyScheduler<A> for ForeignScheduler where
+    A: Actor + ReplySchedulingConfig<Scheduler = ForeignScheduler>
 {
 }
 

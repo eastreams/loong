@@ -2,69 +2,21 @@
 #![deny(missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
 
-//! Actors own mutable state and run serial lifecycle work.
-//! An actor with [`HasMailbox`] also processes typed messages.
+//! Typed local actors with bounded messaging and structured supervision.
 //!
-//! These actors are local to one process.
-//! Their tasks remain `Send`.
-//! `#[actor(mailbox)]` adds a public mailbox.
-//! It stores accepted messages awaiting dispatch.
-//! Dispatch starts the matching [`Handler`] implementation.
+//! An [`Actor`] owns mutable state.
+//! Its lifecycle hooks run serially.
+//! Communication stays inside one process.
+//! Actor tasks are `Send` and run on Tokio.
+//! Messaging, interleaving, and child actor ownership are opt-in.
 //!
-//! # Define an actor
+//! # Quick start
 //!
-//! Implement [`Actor`] for state owned by one actor.
-//! Most implementations use `#[actor(...)]`.
-//! Its options declare the actor's runtime capabilities.
-//! Omitting `interleaved` removes that capability and its queue.
-//! Custom transports implement [`ActorConfig`], [`MessageConfig`], and
-//! [`ReplySchedulingConfig`] directly.
-//! [`Actor::SpawnArgs`] owns its construction inputs.
-//! [`Actor::init`] asynchronously builds the complete state.
-//! Derive [`Message`] for every message type.
-//! [`Message::Reply`] defines its successful call result.
-//! The derive defaults that type to `()`.
-//! Use `#[message(reply = Type)]` to select another type.
-//! Implement [`SyncHandler<M>`](SyncHandler) for an immediate reply.
-//! Implement [`Handler<M>`](Handler) for other reply strategies.
-//!
-//! # Start an actor
-//!
-//! Call [`spawn`] inside a Tokio runtime.
-//! It returns the root actor's unique [`ActorOwner`].
-//! It returns before initialization completes.
-//! The actor task then awaits [`Actor::init`].
-//! For a message actor, admission opens during initialization.
-//! Its handler dispatch starts only after initialization succeeds.
-//! Obtain an [`ActorRef`] through [`ActorOwner::actor_ref`].
-//! References to actors with [`HasMailbox`] send typed messages.
-//! An actor reference does not own lifecycle.
-//!
-//! # Send messages
-//!
-//! Use [`ActorRef::call`] when the sender needs a reply.
-//! When full, `call` waits for mailbox capacity.
-//! Once accepted, it waits for the request's reply.
-//! Cancelling before acceptance discards the message.
-//! Dropping a queued call may skip its handler.
-//! After dispatch, dropping it only abandons the result.
-//! [`CallError`] distinguishes rejection from known dispatch interruptions.
-//!
-//! Use [`ActorRef::send`] for one-way messages.
-//! When full, `send` also waits for mailbox capacity.
-//! A one-way send only reports mailbox acceptance.
-//! It does not report handler completion.
-//! One-way messages use `()` as [`Message::Reply`].
-//! After acceptance, the sender cannot withdraw the message.
-//! Stop or Kill may still discard it before dispatch.
-//! A [`SendError`] retains an unaccepted message.
-//!
-//! [`ActorRef::try_call`] and [`ActorRef::try_send`] never wait for capacity.
-//! Their rejection returns the original message.
-//! Successful `try_call` returns a [`Response`] future.
+//! This actor accepts typed `Add` requests.
+//! [`SyncHandler`] produces each reply during message dispatch.
 //!
 //! ```
-//! use loong_actor::{ExitReason, Shutdown, SubtreeStatus, prelude::*, spawn};
+//! use loong_actor::{ExitReason, Shutdown, prelude::*, spawn};
 //!
 //! struct Counter(u64);
 //!
@@ -72,10 +24,7 @@
 //! impl Actor for Counter {
 //!     type SpawnArgs = u64;
 //!
-//!     async fn init(
-//!         initial: u64,
-//!         _scope: &mut ActorScope<'_, Self>,
-//!     ) -> Self {
+//!     async fn init(initial: u64, _scope: &mut ActorScope<'_, Self>) -> Self {
 //!         Self(initial)
 //!     }
 //! }
@@ -96,92 +45,149 @@
 //! }
 //!
 //! #[tokio::main]
-//! async fn main() {
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let owner = spawn::<Counter>(0);
 //!     let counter = owner.actor_ref();
 //!
-//!     assert_eq!(counter.call(Add(2)).await, Ok(2));
+//!     assert_eq!(counter.call(Add(2)).await?, 2);
 //!     let status = owner.shutdown(Shutdown::Drain).await;
 //!     assert_eq!(status.reason(), ExitReason::Drained);
-//!     assert_eq!(status.subtree(), SubtreeStatus::Terminated);
+//!     Ok(())
 //! }
 //! ```
 //!
-//! # Replies and actor progress
+//! [`spawn`] returns before [`Actor::init`] completes.
+//! Messages may enter the mailbox during initialization.
+//! Handler dispatch starts after initialization.
+//! The [`ActorOwner`] owns the root actor's lifecycle.
 //!
-//! A reply strategy controls actor progress after dispatch.
-//! [`SyncHandler`] automatically selects ready scheduling.
-//! Inside [`Handler`], use [`ReplyExt::ready`] for a produced value.
-//! Returning a bare [`Future`] selects owned scheduling automatically.
-//! Owned futures receive no actor or scope access.
-//! They can progress alongside other actor work.
-//! [`ActorFuture`] values receive temporary actor access during each poll.
-//! [`InterleavedFutureExt::interleaved`] allows other work between polls.
-//! It requires the actor's [`HasInterleaving`] capability.
-//! Fixed and dynamic configurations bound active replies.
-//! A full finite limit pauses dispatch before another handler starts.
-//! The handler's reply mode remains unknown until dispatch finishes.
-//! Dynamic options expose `SpawnOptions::with_max_in_flight`.
-//! Unbounded configurations may retain arbitrarily many active replies.
-//! [`ReplyExt::exclusive`] pauses mailbox dispatch and interleaved replies.
-//! It does not require [`HasInterleaving`].
-//! It also pauses child actor exit hooks.
-//! Already-dispatched owned replies still progress.
-//! Kill can still cancel an exclusive reply between polls.
-//! Use [`reply::Either`] when runtime branches need different strategies.
-//! The [`reply`] module documents cancellation and shutdown behavior.
+//! # Choose actor capabilities
 //!
-//! # Ownership and shutdown
+//! Most actors use [`#[actor(...)]`](actor) on their [`Actor`] implementation.
+//! The attribute generates the built-in runtime configuration.
+//! Its reference documents every syntax, default, and constraint.
 //!
-//! Actor handles and lifecycle ownership are separate.
+//! | Option | Purpose | When omitted |
+//! | --- | --- | --- |
+//! | `mailbox` | Enables typed [`send`](ActorRef::send) and [`call`](ActorRef::call) | Messaging methods are unavailable |
+//! | `mailbox_budget = E` | Limits consecutive message dispatch | Uses `16` with a mailbox |
+//! | `interleaved` | Enables [`interleaved`](InterleavedFutureExt::interleaved) replies | The method is unavailable |
+//! | `children` | Enables [`spawn_child`](ActorScope::spawn_child) | The method is unavailable |
+//!
+//! `mailbox`, `interleaved`, and `children` support three limit profiles.
+//! Those profiles are fixed, dynamic, and unbounded.
+//! Dynamic profiles expose spawn-specific overrides:
+//!
+//! - [`with_mailbox_capacity`](DynamicMailboxOptions::with_mailbox_capacity);
+//! - [`with_max_in_flight`](DynamicInterleavingOptions::with_max_in_flight);
+//! - [`with_max_children`](DynamicChildrenOptions::with_max_children).
+//!
+//! Pass changed [`SpawnOptions`] to [`spawn_with`].
+//!
+//! # Core model
+//!
+//! | Type | Role |
+//! | --- | --- |
+//! | [`Actor`] | Owns state and serial lifecycle hooks |
+//! | [`ActorRef`] | Provides a cloneable, non-owning handle |
+//! | [`ActorOwner`] | Uniquely owns one root actor |
+//! | [`ActorScope`] | Exposes temporary capabilities during actor work |
+//!
+//! An [`ActorRef`] may request shutdown.
+//! It sends messages only when the actor has [`HasMailbox`].
+//! Keeping an [`ActorRef`] does not keep its actor alive.
+//!
+//! # Messages
+//!
+//! Derive [`Message`] for each accepted request type.
+//! [`Message::Reply`] defines the successful call result.
+//! It defaults to `()`.
+//! Use `#[message(reply = Type)]` for another reply type.
+//!
+//! Implement [`SyncHandler<M>`](SyncHandler) for an immediate reply.
+//! Implement [`Handler<M>`](Handler) for asynchronous reply work.
+//! One actor may handle many message types.
+//!
+//! [`ActorRef::call`] waits for acceptance and a typed reply.
+//! [`ActorRef::send`] waits only for one-way message acceptance.
+//! The `try_` variants never wait for mailbox capacity.
+//! Their errors retain messages that were not accepted.
+//! Method docs describe cancellation and shutdown races.
+//!
+//! # Reply progress
+//!
+//! A reply mode controls actor progress after handler dispatch.
+//!
+//! | Selection | Actor progress while awaiting the reply |
+//! | --- | --- |
+//! | [`SyncHandler`] or [`ready`](ReplyExt::ready) | The reply finishes during dispatch |
+//! | A bare [`Future`] | Other actor work continues beside an owned Tokio task |
+//! | [`interleaved`](InterleavedFutureExt::interleaved) | Eligible actor work continues between polls |
+//! | [`exclusive`](ReplyExt::exclusive) | Other actor-local work pauses; owned tasks may continue |
+//!
+//! Interleaved replies require [`HasInterleaving`].
+//! Exclusive replies require no interleaving capability.
+//! See [`reply`] for cancellation, panic, and scheduling behavior.
+//! See [`scheduling`] for the built-in scheduling profiles.
+//!
+//! # Ownership and child actors
+//!
 //! Each root actor has one [`ActorOwner`].
-//! [`ActorScope::spawn_child`] registers direct child actors.
-//! The parent runtime retains their lifecycle ownership.
-//! After child cleanup, [`Actor::on_stop`] receives [`StopScope`].
-//! This parent-child ownership forms the supervision tree.
-//! Supervision links a child actor's lifecycle to its parent.
-//! A [`Child`] is a non-owning child actor handle.
-//! Cloned [`ActorRef`] values never keep actors alive.
-//! Any [`ActorRef`] may request shutdown.
-//! Only [`ActorOwner`] requests Kill when dropped.
-//! Parent shutdown requests shutdown from every owned child actor.
-//! [`ExitReason`] describes only one actor.
-//! [`ExitStatus`] also reports the runtime's subtree guarantee.
+//! [`ActorScope::spawn_child`] starts a direct child actor.
+//! The parent runtime owns that child actor.
+//! Child spawning requires [`HasChildren`].
+//! A [`Child`] is a typed, non-owning handle.
+//! Parent shutdown reaches every owned child actor.
 //!
-//! Every shutdown mode closes new message admission.
-//! [`Shutdown::Stop`] lets dispatched replies finish.
-//! It discards messages still awaiting dispatch.
-//! [`Shutdown::Drain`] keeps accepted work eligible for dispatch.
-//! An abandoned call may still be skipped before dispatch.
-//! [`Shutdown::Kill`] discards queued messages.
-//! It drops cooperative actor work between polls.
-//! It skips graceful cleanup.
-//! No mode interrupts a non-returning poll.
-//! No mode interrupts non-returning user `Drop` code.
-//! See [`Shutdown`] for each mode's complete behavior.
+//! Ownership forms a tree.
+//! Actor references may cross tree boundaries.
+//! They may also form communication cycles.
+//! See [`supervision`] for built-in child actor profiles.
 //!
-//! Dropping [`ActorOwner`] requests Kill without waiting.
-//! Dropping an [`ActorRef`] only drops that handle.
-//! [`ExitStatus`] separates local reason and subtree confirmation.
-//! [`ActorOwner::wait`] retains ownership while waiting.
+//! # Shutdown and completion
+//!
+//! Every shutdown mode closes new message acceptance.
+//!
+//! | Mode | Behavior |
+//! | --- | --- |
+//! | [`Stop`](Shutdown::Stop) | Finishes dispatched replies and discards queued messages |
+//! | [`Drain`](Shutdown::Drain) | Dispatches eligible queued messages and finishes resulting replies |
+//! | [`Kill`](Shutdown::Kill) | Cancels cooperative work and skips graceful cleanup |
+//!
+//! Kill takes effect between polls.
+//! It cannot interrupt synchronous code or user destructors.
+//! [`Shutdown`] documents the complete retained-work contract.
+//!
+//! [`ActorOwner::shutdown`] requests a mode and waits.
+//! [`ActorOwner::wait`] waits without requesting shutdown.
 //! [`ActorRef::closed`] only observes actor termination.
-//! Either wait may remain pending indefinitely.
+//! [`ExitStatus`] separates local reason from subtree confirmation.
 //!
-//! # Communication graph
+//! # Progress boundaries
 //!
-//! Actor handles may cross supervision-tree boundaries.
-//! They may also form cycles.
-//! Cyclic calls may wait indefinitely.
-//! Initialization blocks dispatch.
-//! A call to the same actor cannot complete inside [`Actor::init`].
-//! Actor-local continuations avoid another mailbox call.
-//! Build them with [`ActorFutureExt::map`] or [`ActorFutureExt::then`].
+//! Initialization and lifecycle hooks are serial.
+//! They pause handler dispatch while pending.
+//! Awaiting a self-call requires a later mailbox dispatch.
+//! It cannot complete during initialization or exclusive work.
+//! Communication cycles can therefore wait indefinitely.
+//! Use [`map`](ActorFutureExt::map) or [`then`](ActorFutureExt::then) for local sequencing.
+//!
+//! # Advanced configuration
+//!
+//! The `actor` attribute covers built-in runtime shapes.
+//! Custom configurations implement [`ActorConfig`] and [`MessageConfig`].
+//! They also implement [`ReplySchedulingConfig`] and [`SupervisionConfig`].
+//! Choose public profiles from [`scheduling`] and [`supervision`].
+//! The [`transport`] module documents custom message transports.
 //!
 //! # Imports
 //!
-//! [`prelude`] contains traits used to define actors.
+//! [`prelude`] contains actor-definition traits and extension methods.
 //! Runtime operations remain explicit imports.
 //! This keeps lifecycle choices visible at call sites.
+//! The [examples index] lists runnable guides.
+//!
+//! [examples index]: https://github.com/eastreams/loong/blob/dev/crates/actor/examples/README.md
 
 // Derives use this name inside the runtime package.
 // External callers may still rename their dependency.
@@ -194,37 +200,40 @@ mod address;
 mod config;
 mod error;
 mod future;
+mod lifecycle;
 mod mailbox;
 mod owned;
 pub mod reply;
 mod runtime;
 pub mod scheduling;
-mod supervision;
+pub mod supervision;
 pub mod transport;
 
-pub use actor::{Actor, Handler, HasInterleaving, HasMailbox, Message, SyncHandler};
+pub use actor::{Actor, Handler, HasChildren, HasInterleaving, HasMailbox, Message, SyncHandler};
 pub use address::{ActorRef, Response};
 pub use config::{
-    ActorConfig, DynamicInterleavingOptions, DynamicMailboxOptions, ReplySchedulingConfig,
+    ActorConfig, DynamicChildrenOptions, DynamicInterleavingOptions, DynamicMailboxOptions,
+    ReplySchedulingConfig, SupervisionConfig,
 };
 pub use error::{
     CallError, SendError, TryCallError, TryCallErrorKind, TrySendError, TrySendErrorKind,
 };
 pub use future::{ActorFuture, ActorFutureExt, FutureActor, IntoActorFuture, Map, Then};
+pub use lifecycle::{
+    Child, ChildExit, ChildId, ExitReason, ExitStatus, Shutdown, ShutdownStatus, SubtreeStatus,
+};
 pub use loong_actor_macros::{Message, actor};
 pub use reply::{InterleavedFutureExt, IntoReply, ReplyExt};
 pub use runtime::{ActorOwner, ActorScope, SpawnOptions, StopScope, spawn, spawn_with};
-pub use supervision::{
-    Child, ChildExit, ChildId, ExitReason, ExitStatus, Shutdown, ShutdownStatus, SubtreeStatus,
-};
 pub use transport::MessageConfig;
 
 /// Implementation details used by generated actor configuration.
 #[doc(hidden)]
 pub mod __private {
     pub use crate::config::{
-        ActorOptions, DEFAULT_MAILBOX_CAPACITY, DEFAULT_MAX_IN_FLIGHT, DynamicInterleaving,
-        DynamicMailbox, FixedInterleaving, FixedMailbox, NoInterleaving, NoMailbox,
+        ActorOptions, DEFAULT_MAILBOX_CAPACITY, DEFAULT_MAX_CHILDREN, DEFAULT_MAX_IN_FLIGHT,
+        DynamicChildren, DynamicInterleaving, DynamicMailbox, FixedChildren, FixedInterleaving,
+        FixedMailbox, NoChildren, NoInterleaving, NoMailbox, UnboundedChildren,
         UnboundedInterleaving, UnboundedMailbox,
     };
     pub use crate::transport::{
@@ -239,9 +248,10 @@ pub mod __private {
 /// remain explicit imports so operational behavior stays visible at call sites.
 pub mod prelude {
     pub use crate::{
-        Actor, ActorFuture, ActorFutureExt, ActorScope, DynamicInterleavingOptions,
-        DynamicMailboxOptions, Handler, HasInterleaving, HasMailbox, InterleavedFutureExt,
-        IntoActorFuture, IntoReply, Message, ReplyExt, StopScope, SyncHandler, actor, reply,
+        Actor, ActorFuture, ActorFutureExt, ActorScope, DynamicChildrenOptions,
+        DynamicInterleavingOptions, DynamicMailboxOptions, Handler, HasChildren, HasInterleaving,
+        HasMailbox, InterleavedFutureExt, IntoActorFuture, IntoReply, Message, ReplyExt, StopScope,
+        SyncHandler, actor, reply,
     };
 }
 

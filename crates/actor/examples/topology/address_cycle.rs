@@ -16,7 +16,8 @@ impl Actor for Parent {
     async fn init(completed: Self::SpawnArgs, scope: &mut ActorScope<'_, Self>) -> Self {
         // The address exists before Parent. The child can retain it immediately.
         let parent = scope.myself().clone();
-        let child = scope.spawn_child::<Child>(parent).into_actor_ref();
+        let Ok(child) = scope.spawn_child::<Child>(parent);
+        let child = child.into_actor_ref();
 
         Self {
             child,

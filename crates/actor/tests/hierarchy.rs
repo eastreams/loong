@@ -45,9 +45,8 @@ impl Actor for LogParent {
     type SpawnArgs = LogParentArgs;
 
     async fn init(args: Self::SpawnArgs, scope: &mut ActorScope<'_, Self>) -> Self {
-        let child = scope
-            .spawn_child::<LogChild>(Arc::clone(&args.log))
-            .into_actor_ref();
+        let Ok(child) = scope.spawn_child::<LogChild>(Arc::clone(&args.log));
+        let child = child.into_actor_ref();
         let _ = args.child_started.send(child);
         Self { log: args.log }
     }
@@ -145,9 +144,8 @@ impl Actor for DrainParent {
     type SpawnArgs = DrainParentArgs;
 
     async fn init(args: Self::SpawnArgs, scope: &mut ActorScope<'_, Self>) -> Self {
-        let worker = scope
-            .spawn_child::<Worker>(Arc::clone(&args.log))
-            .into_actor_ref();
+        let Ok(worker) = scope.spawn_child::<Worker>(Arc::clone(&args.log));
+        let worker = worker.into_actor_ref();
         let _ = args.worker_started.send(worker.clone());
         Self {
             log: args.log,
@@ -291,13 +289,12 @@ impl Actor for Branch {
     type SpawnArgs = BranchArgs;
 
     async fn init(args: Self::SpawnArgs, scope: &mut ActorScope<'_, Self>) -> Self {
-        let leaf = scope
-            .spawn_child::<Leaf>(LeafArgs {
-                drop_entered: args.leaf_drop_entered,
-                drop_release: args.leaf_drop_release,
-                dropped: args.leaf_dropped,
-            })
-            .into_actor_ref();
+        let Ok(leaf) = scope.spawn_child::<Leaf>(LeafArgs {
+            drop_entered: args.leaf_drop_entered,
+            drop_release: args.leaf_drop_release,
+            dropped: args.leaf_dropped,
+        });
+        let leaf = leaf.into_actor_ref();
         let _ = args.leaf_started.send(leaf);
         Self {
             dropped: Some(args.dropped),
@@ -329,15 +326,14 @@ impl Actor for PanicParent {
     type SpawnArgs = PanicParentArgs;
 
     async fn init(args: Self::SpawnArgs, scope: &mut ActorScope<'_, Self>) -> Self {
-        let branch = scope
-            .spawn_child::<Branch>(BranchArgs {
-                leaf_started: args.leaf_started,
-                leaf_drop_entered: args.leaf_drop_entered,
-                leaf_drop_release: args.leaf_drop_release,
-                leaf_dropped: args.leaf_dropped,
-                dropped: args.branch_dropped,
-            })
-            .into_actor_ref();
+        let Ok(branch) = scope.spawn_child::<Branch>(BranchArgs {
+            leaf_started: args.leaf_started,
+            leaf_drop_entered: args.leaf_drop_entered,
+            leaf_drop_release: args.leaf_drop_release,
+            leaf_dropped: args.leaf_dropped,
+            dropped: args.branch_dropped,
+        });
+        let branch = branch.into_actor_ref();
         let _ = args.branch_started.send(branch);
         Self
     }
@@ -430,7 +426,8 @@ impl Actor for SpawnDuringInit {
     async fn init(args: Self::SpawnArgs, scope: &mut ActorScope<'_, Self>) -> Self {
         let _ = args.entered.send(());
         let _ = args.release.await;
-        let child = scope.spawn_child::<LateChild>(()).into_actor_ref();
+        let Ok(child) = scope.spawn_child::<LateChild>(());
+        let child = child.into_actor_ref();
         let _ = args.spawned.send(child);
         Self
     }
@@ -481,7 +478,8 @@ impl Actor for SpawnAfterKill {
             scope.request_shutdown(Shutdown::Kill),
             ShutdownStatus::Requested
         );
-        let child = scope.spawn_child::<LateChild>(()).into_actor_ref();
+        let Ok(child) = scope.spawn_child::<LateChild>(());
+        let child = child.into_actor_ref();
         let _ = spawned.send(child);
         Self
     }

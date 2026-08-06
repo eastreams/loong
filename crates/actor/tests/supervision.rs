@@ -74,7 +74,7 @@ impl Actor for Supervisor {
     type SpawnArgs = SupervisorArgs;
 
     async fn init(args: Self::SpawnArgs, scope: &mut ActorScope<'_, Self>) -> Self {
-        let child = scope.spawn_child::<ChildActor>(args.child_exits_during_init);
+        let Ok(child) = scope.spawn_child::<ChildActor>(args.child_exits_during_init);
         let _ = args.child_started.send(child);
         Self {
             events: args.events,

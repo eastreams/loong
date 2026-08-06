@@ -11,54 +11,109 @@ use quote::quote;
 mod actor;
 mod message;
 
-/// Configures an actor implementation.
+/// Configures one `impl Actor for Type` block.
 ///
-/// Options select runtime capabilities and policies.
+/// The attribute generates these runtime configuration implementations:
+///
+/// - [`ActorConfig`][actor-config];
+/// - [`MessageConfig`][message-config];
+/// - [`ReplySchedulingConfig`][scheduling-config];
+/// - [`SupervisionConfig`][supervision-config].
+///
+/// Do not implement those traits again for the same actor.
 /// A bare attribute enables no optional capability.
 ///
-/// Supported options:
+/// ```
+/// # use actor_api as loong_actor;
+/// use loong_actor::{Actor, ActorScope, actor};
 ///
-/// - `mailbox` enables public messaging.
-/// - `mailbox_budget = E` limits consecutive message dispatches.
-/// - `children` reserves typed supervision syntax.
-/// - `interleaved` enables interleaved replies.
+/// struct Worker;
 ///
-/// `children` currently changes no runtime behavior.
-/// Every actor can currently own direct children.
+/// #[actor(mailbox = dynamic, interleaved = dynamic, children = 4)]
+/// impl Actor for Worker {
+///     type SpawnArgs = ();
 ///
-/// `mailbox` has five forms:
+///     async fn init(_: (), _: &mut ActorScope<'_, Self>) -> Self {
+///         Self
+///     }
+/// }
+/// ```
 ///
-/// - `mailbox` uses a fixed capacity of 32.
-/// - `mailbox = N` uses a fixed const capacity.
-/// - `mailbox = dynamic` uses a per-spawn capacity defaulting to 32.
-/// - `mailbox = dynamic(N)` changes that per-spawn default.
-/// - `mailbox = unbounded` removes the admission limit.
+/// # Options
 ///
-/// Dynamic mailbox forms expose `SpawnOptions::with_mailbox_capacity`.
-/// Every finite mailbox capacity must exceed zero.
+/// | Option | Purpose | Requires |
+/// | --- | --- | --- |
+/// | `mailbox` | Enables typed public messaging | Nothing |
+/// | `mailbox_budget = E` | Limits consecutive message dispatch | `mailbox` |
+/// | `interleaved` | Enables interleaved actor-aware replies | `mailbox` |
+/// | `children` | Enables direct child actor ownership | Nothing |
 ///
-/// `interleaved` has five forms:
+/// `mailbox`, `interleaved`, and `children` share five forms:
 ///
-/// - `interleaved` uses a fixed limit of 32.
-/// - `interleaved = N` uses a fixed const limit.
-/// - `interleaved = dynamic` uses a per-spawn limit defaulting to 32.
-/// - `interleaved = dynamic(N)` changes that per-spawn default.
-/// - `interleaved = unbounded` removes the admission limit.
+/// | Form | Selected profile |
+/// | --- | --- |
+/// | bare option | Fixed limit of `32` |
+/// | `option = N` | Fixed limit of `N` |
+/// | `option = dynamic` | Per-spawn limit defaulting to `32` |
+/// | `option = dynamic(N)` | Per-spawn limit defaulting to `N` |
+/// | `option = unbounded` | No finite limit |
 ///
-/// Every finite interleaved limit must exceed zero.
-/// Dynamic forms expose `SpawnOptions::with_max_in_flight`.
-/// Unbounded admission can retain arbitrarily many active replies.
-/// Omitting `interleaved` provides no capability or reply queue.
-/// Exclusive replies do not require this capability.
-/// A full finite limit pauses mailbox dispatch.
-/// It pauses before the next handler runs.
-/// Ready, owned, and exclusive handlers wait behind this gate.
+/// Every finite expression must produce a nonzero `usize` constant.
+/// Dynamic forms expose one method on [`SpawnOptions`][spawn-options]:
 ///
-/// `interleaved` requires `mailbox`.
-/// `mailbox_budget` also requires `mailbox`.
-/// `mailbox_budget` accepts a nonzero const expression.
-/// `mailbox_budget` defaults to 16 when omitted.
-/// It does not force a Tokio task yield.
+/// - [`with_mailbox_capacity`][mailbox-builder] for `mailbox`;
+/// - [`with_max_in_flight`][interleaving-builder] for `interleaved`;
+/// - [`with_max_children`][children-builder] for `children`.
+///
+/// # Mailbox
+///
+/// Mailbox capacity bounds accepted messages awaiting dispatch.
+/// It does not bound active replies.
+/// [`ActorRef::call`][call] and [`ActorRef::send`][send] wait when full.
+/// [`ActorRef::try_call`][try-call] and [`ActorRef::try_send`][try-send] return immediately.
+/// Omitting `mailbox` removes public messaging methods.
+///
+/// # Mailbox dispatch budget
+///
+/// `mailbox_budget = E` accepts a nonzero `usize` const expression.
+/// It defaults to `16` when omitted.
+/// At most `E` messages dispatch before checking other actor work.
+/// This check does not force a Tokio task yield.
+/// The option requires `mailbox`.
+///
+/// # Interleaved replies
+///
+/// The limit counts active interleaved replies.
+/// At the limit, queued messages pause before handler dispatch.
+/// Their reply modes are not known yet.
+/// All queued messages therefore wait behind the same limit.
+/// Omitting `interleaved` removes that capability and its queue.
+/// Exclusive replies remain available.
+/// The option requires `mailbox`.
+///
+/// # Child actors
+///
+/// The limit counts direct child actors retained by the parent.
+/// An exited child actor remains counted until its slot is released.
+/// That release occurs before [`Actor::on_child_exit`][on-child-exit] starts.
+/// A finite rejection returns the original spawn input.
+/// Unbounded spawning uses [`Infallible`](std::convert::Infallible) as its error.
+/// Omitting `children` removes child actor spawning methods.
+/// This option does not require `mailbox`.
+///
+/// [actor-config]: https://docs.rs/loong-actor/latest/loong_actor/trait.ActorConfig.html
+/// [message-config]: https://docs.rs/loong-actor/latest/loong_actor/trait.MessageConfig.html
+/// [scheduling-config]: https://docs.rs/loong-actor/latest/loong_actor/trait.ReplySchedulingConfig.html
+/// [supervision-config]: https://docs.rs/loong-actor/latest/loong_actor/trait.SupervisionConfig.html
+/// [spawn-options]: https://docs.rs/loong-actor/latest/loong_actor/type.SpawnOptions.html
+/// [mailbox-builder]: https://docs.rs/loong-actor/latest/loong_actor/trait.DynamicMailboxOptions.html#tymethod.with_mailbox_capacity
+/// [interleaving-builder]: https://docs.rs/loong-actor/latest/loong_actor/trait.DynamicInterleavingOptions.html#tymethod.with_max_in_flight
+/// [children-builder]: https://docs.rs/loong-actor/latest/loong_actor/trait.DynamicChildrenOptions.html#tymethod.with_max_children
+/// [call]: https://docs.rs/loong-actor/latest/loong_actor/struct.ActorRef.html#method.call
+/// [send]: https://docs.rs/loong-actor/latest/loong_actor/struct.ActorRef.html#method.send
+/// [try-call]: https://docs.rs/loong-actor/latest/loong_actor/struct.ActorRef.html#method.try_call
+/// [try-send]: https://docs.rs/loong-actor/latest/loong_actor/struct.ActorRef.html#method.try_send
+/// [on-child-exit]: https://docs.rs/loong-actor/latest/loong_actor/trait.Actor.html#method.on_child_exit
 #[proc_macro_attribute]
 pub fn actor(args: TokenStream, input: TokenStream) -> TokenStream {
     actor::expand(args, input)

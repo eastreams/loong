@@ -2,7 +2,7 @@ use std::future::Future;
 
 use crate::{
     ActorScope, ChildExit, ExitReason, StopScope,
-    config::ReplySchedulingConfig,
+    config::{ReplySchedulingConfig, SupervisionConfig},
     reply::{IntoReply, ReplyExt},
     scheduling::{InterleavedScheduler, ReplyScheduler},
     transport::{MessageConfig, MessageInbox, MessageSender, RuntimeInbox},
@@ -10,8 +10,10 @@ use crate::{
 
 /// State that can be run as an actor.
 ///
-/// Use `#[actor(...)]` with built-in transports.
-/// Custom transports implement the configuration traits directly.
+/// Use [`#[actor(...)]`](macro@crate::actor) for built-in runtime profiles.
+/// Manual configurations implement [`ActorConfig`](crate::ActorConfig).
+/// They also implement [`MessageConfig`], [`ReplySchedulingConfig`], and
+/// [`SupervisionConfig`].
 ///
 /// Initialization and lifecycle hooks run in the serial actor context.
 /// While they are pending, handlers and actor-aware replies pause.
@@ -35,6 +37,7 @@ use crate::{
 pub trait Actor:
     MessageConfig<Inbox: RuntimeInbox<Self>>
     + ReplySchedulingConfig<Scheduler: ReplyScheduler<Self>>
+    + SupervisionConfig
     + Send
     + Sized
     + 'static
@@ -149,9 +152,34 @@ pub trait Actor:
     }
 }
 
+/// An actor configured to own direct child actors.
+///
+/// [`#[actor(children)]`](macro@crate::actor) selects this capability automatically.
+/// Fixed, dynamic, and unbounded limits all qualify.
+/// The selected supervision profile provides this capability.
+/// Do not implement this trait directly.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` cannot spawn child actors",
+    label = "enable `children` in this actor's configuration"
+)]
+pub trait HasChildren:
+    Actor + SupervisionConfig<Children: crate::supervision::ChildSpawner>
+{
+}
+
+// The active supervision profile proves this capability.
+#[doc(hidden)]
+#[diagnostic::do_not_recommend]
+impl<A> HasChildren for A
+where
+    A: Actor,
+    A::Children: crate::supervision::ChildSpawner,
+{
+}
+
 /// An actor with public message transport operations.
 ///
-/// `#[actor(mailbox)]` selects this capability automatically.
+/// [`#[actor(mailbox)]`](macro@crate::actor) selects this capability automatically.
 /// Fixed, dynamic, and unbounded mailboxes all qualify.
 /// Actors without `mailbox` can still supervise children.
 /// Their [`ActorRef`](crate::ActorRef) values retain lifecycle methods.
@@ -177,7 +205,7 @@ where
 
 /// An actor configured to run interleaved replies.
 ///
-/// `#[actor(mailbox, interleaved)]` selects this capability.
+/// [`#[actor(mailbox, interleaved)]`](macro@crate::actor) selects this capability.
 /// Fixed, dynamic, and unbounded limits all qualify.
 /// This capability also requires [`HasMailbox`].
 /// It exposes [`InterleavedFutureExt::interleaved`](crate::InterleavedFutureExt::interleaved).

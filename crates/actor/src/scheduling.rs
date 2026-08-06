@@ -1,16 +1,19 @@
 //! Built-in actor-aware reply scheduling profiles.
 //!
-//! Most actors select a profile through `#[actor(...)]`.
-//! Manual configurations may choose one profile directly.
-//! [`Serial`] backs actors without `interleaved`.
-//! [`Fixed`] backs `interleaved` and `interleaved = N`.
-//! [`Dynamic`] backs both `dynamic` forms.
-//! [`Unbounded`] backs `interleaved = unbounded`.
+//! [`#[actor(...)]`](macro@crate::actor) selects one profile:
+//!
+//! - omitting `interleaved` selects [`Serial`];
+//! - fixed `interleaved` forms select [`Fixed`];
+//! - dynamic `interleaved` forms select [`Dynamic`];
+//! - unbounded `interleaved` selects [`Unbounded`].
+//!
+//! The macro reference documents syntax and defaults.
+//! Manual configurations may select a profile directly.
 //!
 //! A finite limit bounds active interleaved replies.
-//! A full limit pauses mailbox dispatch before the next handler.
-//! The runtime learns reply strategy only after handler dispatch.
-//! Ready, owned, and exclusive handlers therefore wait too.
+//! At the limit, dispatch pauses before the next handler.
+//! The reply mode becomes known only after handler dispatch.
+//! Every queued handler must therefore pass the same gate.
 //!
 //! Ready replies finish during dispatch.
 //! Owned replies run in separate Tokio tasks.
@@ -49,7 +52,7 @@ fn drop_without_unwind<T>(value: T) {
     }
 }
 
-/// A sealed reply scheduler compatible with one actor.
+/// A sealed reply scheduling profile for one actor.
 ///
 /// Custom configurations select a built-in profile.
 /// They do not implement this trait directly.
@@ -63,7 +66,7 @@ fn drop_without_unwind<T>(value: T) {
 )]
 pub trait ReplyScheduler<A: Actor>: runtime::RuntimeScheduler<A> {}
 
-/// A sealed scheduler supporting interleaved replies.
+/// A sealed profile supporting interleaved replies.
 ///
 /// [`Serial`] intentionally does not implement this capability.
 #[diagnostic::on_unimplemented(
@@ -79,7 +82,7 @@ pub trait InterleavedScheduler<A: Actor>:
 {
 }
 
-/// Provides actor-aware scheduling without an interleaved queue.
+/// Schedules actor-aware replies without interleaving.
 ///
 /// Ready replies require no scheduler storage.
 /// Owned replies run in separate Tokio tasks.
@@ -90,7 +93,7 @@ pub struct Serial<A: Actor> {
 }
 
 impl<A: Actor> Serial<A> {
-    /// Creates an empty serial scheduler.
+    /// Creates an empty serial profile.
     pub fn new() -> Self {
         Self {
             exclusive: Exclusive::new(),
@@ -111,7 +114,7 @@ pub struct Fixed<A: Actor, const N: usize> {
 }
 
 impl<A: Actor, const N: usize> Fixed<A, N> {
-    /// Creates an empty fixed scheduler.
+    /// Creates an empty fixed profile.
     ///
     /// Compilation fails when `N` is zero.
     pub fn new() -> Self {
@@ -134,7 +137,7 @@ pub struct Dynamic<A: Actor> {
 }
 
 impl<A: Actor> Dynamic<A> {
-    /// Creates an empty scheduler with one resolved limit.
+    /// Creates an empty profile with one resolved limit.
     pub fn new(limit: NonZeroUsize) -> Self {
         Self {
             state: InterleavedState::with_limit(DynamicLimit(limit)),
@@ -148,7 +151,7 @@ pub struct Unbounded<A: Actor> {
 }
 
 impl<A: Actor> Unbounded<A> {
-    /// Creates an empty unbounded scheduler.
+    /// Creates an empty unbounded profile.
     pub fn new() -> Self {
         Self {
             state: InterleavedState::with_limit(UnboundedLimit),

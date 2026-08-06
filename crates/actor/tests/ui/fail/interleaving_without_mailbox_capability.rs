@@ -1,6 +1,7 @@
 // An active scheduler requires public mailbox operations.
 use loong_actor::{
-    Actor, ActorConfig, ActorScope, MessageConfig, ReplySchedulingConfig, scheduling,
+    Actor, ActorConfig, ActorScope, MessageConfig, ReplySchedulingConfig, SupervisionConfig,
+    scheduling, supervision,
     transport::{NoInbox, NoSender},
 };
 
@@ -27,6 +28,14 @@ impl ReplySchedulingConfig for Manual {
 
     fn open_scheduler(_options: &Self::Options) -> Self::Scheduler {
         scheduling::Fixed::new()
+    }
+}
+
+impl SupervisionConfig for Manual {
+    type Children = supervision::Disabled;
+
+    fn open_children(_options: &Self::Options) -> Self::Children {
+        supervision::Disabled::new()
     }
 }
 

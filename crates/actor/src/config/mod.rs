@@ -4,32 +4,49 @@ mod options;
 mod tests;
 
 pub use options::{
-    ActorOptions, DEFAULT_MAILBOX_CAPACITY, DEFAULT_MAX_IN_FLIGHT, DynamicInterleaving,
-    DynamicInterleavingOptions, DynamicMailbox, DynamicMailboxOptions, FixedInterleaving,
-    FixedMailbox, NoInterleaving, NoMailbox, UnboundedInterleaving, UnboundedMailbox,
+    ActorOptions, DEFAULT_MAILBOX_CAPACITY, DEFAULT_MAX_CHILDREN, DEFAULT_MAX_IN_FLIGHT,
+    DynamicChildren, DynamicChildrenOptions, DynamicInterleaving, DynamicInterleavingOptions,
+    DynamicMailbox, DynamicMailboxOptions, FixedChildren, FixedInterleaving, FixedMailbox,
+    NoChildren, NoInterleaving, NoMailbox, UnboundedChildren, UnboundedInterleaving,
+    UnboundedMailbox,
 };
 
 /// Spawn configuration selected by one actor type.
 ///
-/// `#[actor]` generates this implementation for built-in transports.
-/// Custom transports implement it with their own options carrier.
+/// [`#[actor]`](macro@crate::actor) generates this implementation.
+/// Manual configurations supply their own options carrier.
+/// They also implement [`MessageConfig`](crate::MessageConfig).
+/// [`ReplySchedulingConfig`] and [`SupervisionConfig`] complete the shape.
 pub trait ActorConfig {
     /// Values resolved synchronously before the actor task starts.
     type Options: Default;
 }
 
-/// Configures actor-aware reply scheduling for one actor.
+/// Configures one actor's direct-child supervision.
 ///
-/// Custom actor configurations implement this beside [`ActorConfig`].
-/// Choose one built-in [`scheduling`] profile.
-/// This trait schedules actor-aware replies only.
+/// Custom configurations select one built-in [`supervision`] profile.
+/// The profile owns child registrations and terminal events.
+///
+/// [`supervision`]: crate::supervision
+pub trait SupervisionConfig: ActorConfig {
+    /// The direct-child supervision profile.
+    type Children: crate::supervision::ChildSupervisor;
+
+    /// Opens this actor's direct-child supervision profile.
+    fn open_children(options: &Self::Options) -> Self::Children;
+}
+
+/// Configures one actor's reply scheduling.
+///
+/// Custom configurations select one built-in [`scheduling`] profile.
+/// The profile schedules actor-aware replies only.
 /// Owned replies run in separate Tokio tasks.
 ///
 /// [`scheduling`]: crate::scheduling
 pub trait ReplySchedulingConfig: ActorConfig {
-    /// The scheduler selected for this actor.
+    /// The reply scheduling profile.
     type Scheduler: Send + 'static;
 
-    /// Opens this actor's reply scheduler.
+    /// Opens this actor's reply scheduling profile.
     fn open_scheduler(options: &Self::Options) -> Self::Scheduler;
 }

@@ -1,269 +1,219 @@
-use std::fmt;
+//! Built-in direct-child supervision profiles.
+//!
+//! [`#[actor(...)]`](macro@crate::actor) selects one profile:
+//!
+//! - omitting `children` selects [`Disabled`];
+//! - fixed `children` forms select [`Fixed`];
+//! - dynamic `children` forms select [`Dynamic`];
+//! - unbounded `children` selects [`Unbounded`].
+//!
+//! The macro reference documents syntax and defaults.
+//! Manual configurations may select a profile directly.
+//!
+//! A finite limit bounds child actors retained by the parent.
+//! At the limit, child spawning returns [`Full`] with its input.
+//! An exited child actor still occupies its slot.
+//! The slot is released before [`Actor::on_child_exit`](crate::Actor::on_child_exit).
 
-use slotmap::DefaultKey;
+pub(crate) mod runtime;
 
-use crate::{Actor, ActorRef};
+use std::{convert::Infallible, fmt, num::NonZeroUsize};
 
-/// A requested actor shutdown mode.
+/// A sealed direct-child supervision profile.
 ///
-/// Every mode closes admission as soon as the request commits. Stop and Drain
-/// are graceful, first-wins peers; Kill may upgrade either one. Graceful
-/// shutdown proceeds post-order through the owned actor tree. Kill skips actor
-/// cleanup but still waits for descendants when possible. See [`ExitStatus`]
-/// for the final local reason and subtree guarantee.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum Shutdown {
-    /// Finishes dispatched replies and discards messages still queued for
-    /// dispatch.
-    ///
-    /// Pending actor initialization finishes first.
-    /// The actor then requests Stop from its children, waits for their terminal
-    /// events, and runs [`Actor::on_stop`] with [`ExitReason::Stopped`].
-    Stop,
-    /// Dispatches the fixed queue accepted before Drain committed and finishes
-    /// all resulting replies.
-    ///
-    /// Pending actor initialization finishes first.
-    /// The actor then requests Drain from its children, waits for their terminal
-    /// events, and runs [`Actor::on_stop`] with [`ExitReason::Drained`].
-    Drain,
-    /// Cancels cooperative actor work without running [`Actor::on_stop`].
-    /// It waits for every retained child actor.
-    ///
-    /// This may prevent [`Actor::init`] or cancel it between polls.
-    /// The runtime installs no actor value before initialization returns.
-    ///
-    /// Kill first drops interrupted initialization or an entered hook.
-    /// This releases its mutable scope borrow.
-    /// Kill then reaches children before active replies and queued messages are dropped.
-    /// Descendants can begin termination before those destructors.
-    /// The final status reports subtree confirmation.
-    ///
-    /// Kill takes effect between polls. It cannot interrupt a synchronous
-    /// handler, a poll call that does not return, or user `Drop` code.
-    Kill,
+/// Custom actor configurations select one built-in profile.
+/// They do not implement this trait directly.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` cannot supervise child actors",
+    label = "select a built-in supervision profile"
+)]
+#[allow(
+    private_bounds,
+    private_interfaces,
+    reason = "a private runtime bridge seals supervision profiles"
+)]
+pub trait ChildSupervisor: Send + 'static {
+    /// Exposes this profile only to the actor runtime.
+    #[doc(hidden)]
+    fn __runtime(&mut self, _: runtime::Seal) -> &mut impl runtime::RuntimeChildren;
 }
 
-/// The result of submitting a shutdown request.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum ShutdownStatus {
-    /// The request established or upgraded the actor's shutdown mode.
-    ///
-    /// This confirms only that the request committed, not that shutdown has
-    /// completed.
-    Requested,
-    /// The request made no change because shutdown is already in progress.
-    ///
-    /// Stop or Drain identifies the graceful mode that already won. Kill either
-    /// identifies an active Kill or reports that panic/executor teardown has made
-    /// graceful shutdown impossible. Inspect the eventual [`ExitStatus`].
-    InProgress(Shutdown),
-    /// The actor has already published its terminal status.
-    Exited(ExitStatus),
-}
-
-/// Why an actor terminated.
+/// A sealed supervision profile supporting child actor spawning.
 ///
-/// This value describes only the actor itself.
-/// [`ExitStatus::subtree`] reports the runtime's descendant guarantee.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum ExitReason {
-    /// Stop completed, including graceful cleanup.
-    Stopped,
-    /// Drain completed, including graceful cleanup.
-    Drained,
-    /// Kill interrupted or discarded actor work.
-    Killed,
-    /// Actor code panicked and the panic was contained by the runtime.
-    Panicked,
-    /// The executor dropped this actor's task.
-    Aborted,
+/// [`Disabled`] intentionally lacks this capability.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` cannot spawn child actors",
+    label = "enable `children` in this actor's configuration"
+)]
+#[allow(
+    private_bounds,
+    private_interfaces,
+    reason = "a private runtime bridge reserves child spawning"
+)]
+pub trait ChildSpawner: ChildSupervisor {
+    /// The error returned with rejected spawn input.
+    type Error<T>;
+
+    /// Exposes child spawning only to the actor runtime.
+    #[doc(hidden)]
+    fn __runtime_spawner(
+        &mut self,
+        _: runtime::Seal,
+    ) -> &mut impl runtime::RuntimeChildSpawner<Self>;
 }
 
-impl fmt::Display for ExitReason {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let text = match self {
-            Self::Stopped => "stopped",
-            Self::Drained => "drained",
-            Self::Killed => "killed",
-            Self::Panicked => "panicked",
-            Self::Aborted => "aborted",
-        };
-        formatter.write_str(text)
+/// Disables direct child actor supervision.
+///
+/// This profile is zero-sized.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Disabled;
+
+impl Disabled {
+    /// Creates a disabled profile.
+    pub const fn new() -> Self {
+        Self
     }
 }
 
-/// Whether the runtime confirmed every owned descendant terminated.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum SubtreeStatus {
-    /// The runtime confirmed termination before status publication.
-    Terminated,
-    /// An abort path prevented termination confirmation.
+/// Supervises at most `N` retained direct child actors.
+pub struct Fixed<const N: usize> {
+    state: runtime::ChildSet,
+}
+
+impl<const N: usize> Fixed<N> {
+    /// Creates an empty fixed profile.
     ///
-    /// An aborted actor requests Kill from children it still owns.
-    /// Its synchronous teardown cannot await their termination.
-    /// `Unconfirmed` means positive proof is unavailable.
-    /// It does not prove any descendant remains alive.
-    /// This status does not stop a running parent.
-    /// It remains unconfirmed through every ancestor.
-    Unconfirmed,
-}
-
-/// The final outcome of one actor and its owned subtree.
-///
-/// [`reason`](Self::reason) describes only this actor.
-/// [`subtree`](Self::subtree) reports the runtime's guarantee.
-/// Descendant status never replaces the parent's local reason.
-/// A parent may stop normally after a descendant aborts.
-/// That produces `Stopped` with [`SubtreeStatus::Unconfirmed`].
-/// `Panicked` may retain `Terminated` after asynchronous cleanup.
-/// Local `Aborted` happens during synchronous task destruction.
-/// It therefore always forces `Unconfirmed`.
-///
-/// The runtime publishes this value once.
-/// Later lifecycle requests cannot change it.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ExitStatus {
-    reason: ExitReason,
-    subtree: SubtreeStatus,
-}
-
-impl ExitStatus {
-    pub(crate) const fn new(reason: ExitReason, subtree: SubtreeStatus) -> Self {
-        let subtree = match reason {
-            ExitReason::Aborted => SubtreeStatus::Unconfirmed,
-            _ => subtree,
-        };
-        Self { reason, subtree }
-    }
-
-    /// Returns why this actor terminated.
-    pub const fn reason(self) -> ExitReason {
-        self.reason
-    }
-
-    /// Returns the runtime's subtree termination guarantee.
-    pub const fn subtree(self) -> SubtreeStatus {
-        self.subtree
-    }
-}
-
-/// Opaque identity of one direct-child registration.
-///
-/// Compare identities only within one parent actor.
-/// IDs from different parents may compare equal.
-///
-/// The generation rejects stale IDs when storage slots are reused. It can wrap
-/// after 2^31 reuses of one slot. This is not a registry key.
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
-pub struct ChildId(DefaultKey);
-
-impl ChildId {
-    pub(crate) const fn from_key(key: DefaultKey) -> Self {
-        Self(key)
-    }
-
-    pub(crate) const fn key(self) -> DefaultKey {
-        self.0
-    }
-
-    #[cfg(test)]
-    /// Creates an invalid ID for tests that only schedule an event.
-    pub(crate) fn invalid_for_test() -> Self {
-        Self(DefaultKey::default())
-    }
-}
-
-impl fmt::Debug for ChildId {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("ChildId(..)")
-    }
-}
-
-/// The terminal event of a direct child actor.
-///
-/// While the parent is active, the runtime delivers this value serially to
-/// [`Actor::on_child_exit`]. Hook entry and graceful cutoff share one lifecycle
-/// gate: an event that loses the cutoff is absorbed, while a hook admitted first
-/// is allowed to finish before parent cleanup proceeds.
-/// Event equality is meaningful only within one direct parent.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ChildExit {
-    child: ChildId,
-    status: ExitStatus,
-}
-
-impl ChildExit {
-    pub(crate) const fn new(child: ChildId, status: ExitStatus) -> Self {
-        Self { child, status }
-    }
-
-    /// Returns the identity assigned by the direct parent.
-    ///
-    /// Compare it only with children spawned by that parent.
-    pub const fn child(&self) -> &ChildId {
-        &self.child
-    }
-
-    /// Returns the child actor's terminal status.
-    pub const fn status(&self) -> ExitStatus {
-        self.status
-    }
-}
-
-/// A typed, non-owning reference to a child registered in its parent's tree.
-///
-/// Registration is complete when this value is returned.
-/// Child initialization may still be pending.
-/// The parent runtime retains lifecycle ownership. Cloning or dropping a
-/// `Child` does not keep the child alive or initiate shutdown.
-pub struct Child<A: Actor> {
-    id: ChildId,
-    actor_ref: ActorRef<A>,
-}
-
-impl<A: Actor> Child<A> {
-    pub(crate) const fn new(id: ChildId, actor_ref: ActorRef<A>) -> Self {
-        Self { id, actor_ref }
-    }
-
-    /// Returns the identity assigned by the direct parent.
-    ///
-    /// Compare it only with events observed by that parent.
-    pub const fn id(&self) -> &ChildId {
-        &self.id
-    }
-
-    /// Returns the child's message address.
-    pub const fn actor_ref(&self) -> &ActorRef<A> {
-        &self.actor_ref
-    }
-
-    /// Discards the identity wrapper and returns the message address.
-    pub fn into_actor_ref(self) -> ActorRef<A> {
-        self.actor_ref
-    }
-}
-
-impl<A: Actor> Clone for Child<A> {
-    fn clone(&self) -> Self {
+    /// Compilation fails when `N` is zero.
+    pub fn new() -> Self {
+        const { assert!(N > 0, "child limit must be greater than zero") };
         Self {
-            id: self.id,
-            actor_ref: self.actor_ref.clone(),
+            state: runtime::ChildSet::new(),
         }
     }
 }
 
-impl<A: Actor> fmt::Debug for Child<A> {
+impl<const N: usize> Default for Fixed<N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Supervises direct child actors with a per-spawn limit.
+pub struct Dynamic {
+    state: runtime::ChildSet,
+    limit: NonZeroUsize,
+}
+
+impl Dynamic {
+    /// Creates an empty profile with one resolved limit.
+    pub fn new(limit: NonZeroUsize) -> Self {
+        Self {
+            state: runtime::ChildSet::new(),
+            limit,
+        }
+    }
+}
+
+/// Supervises direct child actors without a finite limit.
+pub struct Unbounded {
+    state: runtime::ChildSet,
+}
+
+impl Unbounded {
+    /// Creates an empty unbounded profile.
+    pub fn new() -> Self {
+        Self {
+            state: runtime::ChildSet::new(),
+        }
+    }
+}
+
+impl Default for Unbounded {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ChildSupervisor for Disabled {
+    fn __runtime(&mut self, _: runtime::Seal) -> &mut impl runtime::RuntimeChildren {
+        self
+    }
+}
+
+impl<const N: usize> ChildSupervisor for Fixed<N> {
+    fn __runtime(&mut self, _: runtime::Seal) -> &mut impl runtime::RuntimeChildren {
+        self
+    }
+}
+
+impl ChildSupervisor for Dynamic {
+    fn __runtime(&mut self, _: runtime::Seal) -> &mut impl runtime::RuntimeChildren {
+        self
+    }
+}
+
+impl ChildSupervisor for Unbounded {
+    fn __runtime(&mut self, _: runtime::Seal) -> &mut impl runtime::RuntimeChildren {
+        self
+    }
+}
+
+impl<const N: usize> ChildSpawner for Fixed<N> {
+    type Error<T> = Full<T>;
+
+    fn __runtime_spawner(
+        &mut self,
+        _: runtime::Seal,
+    ) -> &mut impl runtime::RuntimeChildSpawner<Self> {
+        self
+    }
+}
+
+impl ChildSpawner for Dynamic {
+    type Error<T> = Full<T>;
+
+    fn __runtime_spawner(
+        &mut self,
+        _: runtime::Seal,
+    ) -> &mut impl runtime::RuntimeChildSpawner<Self> {
+        self
+    }
+}
+
+impl ChildSpawner for Unbounded {
+    type Error<T> = Infallible;
+
+    fn __runtime_spawner(
+        &mut self,
+        _: runtime::Seal,
+    ) -> &mut impl runtime::RuntimeChildSpawner<Self> {
+        self
+    }
+}
+
+/// A spawn input rejected at the direct child actor limit.
+#[derive(thiserror::Error)]
+#[error("direct child actor limit reached")]
+pub struct Full<T> {
+    value: T,
+}
+
+impl<T> Full<T> {
+    pub(crate) const fn new(value: T) -> Self {
+        Self { value }
+    }
+
+    /// Returns the rejected value without dropping it.
+    pub fn into_inner(self) -> T {
+        self.value
+    }
+}
+
+impl<T> fmt::Debug for Full<T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("Child")
-            .field("id", &self.id)
-            .field("actor_ref", &self.actor_ref)
+            .debug_struct("Full")
+            .field("value", &"<value>")
             .finish()
     }
 }

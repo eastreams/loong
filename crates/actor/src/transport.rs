@@ -1,6 +1,6 @@
 //! Advanced message transport extension points.
 //!
-//! Most actors should use `#[actor(...)]`.
+//! Most actors should use [`#[actor(...)]`](macro@crate::actor).
 //! Manual actors may implement these traits instead.
 //! These traits are safe and unsealed.
 //! Their behavioral contracts remain mandatory.
@@ -47,7 +47,7 @@ use crate::{Actor, ActorConfig, mailbox::Envelope};
 /// Configures one actor's message transport.
 ///
 /// Implement this manually only for custom transports.
-/// Built-in actors should use `#[actor(...)]`.
+/// Built-in actors should use [`#[actor(...)]`](macro@crate::actor).
 pub trait MessageConfig: ActorConfig {
     /// Maximum mailbox dispatches during one actor lane visit.
     ///

@@ -1,0 +1,7 @@
+error[E0599]: no method named `with_max_children` found for struct `loong_actor::__private::ActorOptions<Fixed, loong_actor::__private::NoMailbox, loong_actor::__private::NoInterleaving, loong_actor::__private::FixedChildren>` in the current scope
+  --> tests/ui/fail/fixed_children_override.rs:15:59
+   |
+15 |     let _ = loong_actor::SpawnOptions::<Fixed>::default().with_max_children(NonZeroUsize::MIN);
+   |                                                           ^^^^^^^^^^^^^^^^^ method not found in `loong_actor::__private::ActorOptions<Fixed, loong_actor::__private::NoMailbox, loong_actor::__private::NoInterleaving, loong_actor::__private::FixedChildren>`
+   |
+   = note: the method was found for `loong_actor::__private::ActorOptions<A, M, I, loong_actor::__private::DynamicChildren<DEFAULT>>`

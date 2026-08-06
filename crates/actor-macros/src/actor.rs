@@ -73,8 +73,15 @@ fn expand_actor(implementation: &ItemImpl, args: ActorArgs) -> syn::Result<Token
         open: open_scheduler,
     } = interleaving;
 
-    // Parsing reserves child options for the supervision configuration unit.
-    let _ = args.children;
+    let supervision = match &args.children {
+        Some(children) => children.expand_supervision(&actor),
+        None => SupervisionExpansion::absent(&actor),
+    };
+    let SupervisionExpansion {
+        options: supervision_options,
+        children,
+        open: open_children,
+    } = supervision;
 
     Ok(quote! {
         #implementation
@@ -86,6 +93,7 @@ fn expand_actor(implementation: &ItemImpl, args: ActorArgs) -> syn::Result<Token
                 Self,
                 #mailbox_options,
                 #interleaving_options,
+                #supervision_options,
             >;
         }
 
@@ -109,6 +117,16 @@ fn expand_actor(implementation: &ItemImpl, args: ActorArgs) -> syn::Result<Token
 
             fn open_scheduler(options: &Self::Options) -> Self::Scheduler {
                 #open_scheduler
+            }
+        }
+
+        #(#config_attrs)*
+        #[automatically_derived]
+        impl #impl_generics #actor::SupervisionConfig for #self_ty #where_clause {
+            type Children = #children;
+
+            fn open_children(options: &Self::Options) -> Self::Children {
+                #open_children
             }
         }
     })
@@ -290,6 +308,25 @@ impl CapacitySpec {
             }
         }
     }
+
+    fn expand_supervision(&self, actor: &TokenStream2) -> SupervisionExpansion {
+        match self {
+            Self::Default => SupervisionExpansion::fixed(
+                actor,
+                quote!({ #actor::__private::DEFAULT_MAX_CHILDREN }),
+            ),
+            Self::Unbounded => SupervisionExpansion::unbounded(actor),
+            Self::Fixed(capacity) => {
+                let capacity = expand_const_argument(capacity);
+                SupervisionExpansion::fixed(actor, capacity)
+            }
+            Self::Dynamic => SupervisionExpansion::dynamic(actor, None),
+            Self::DynamicWithDefault(capacity) => {
+                let capacity = expand_const_argument(capacity);
+                SupervisionExpansion::dynamic(actor, Some(capacity))
+            }
+        }
+    }
 }
 
 struct MailboxExpansion {
@@ -409,6 +446,63 @@ impl InterleavingExpansion {
             options: quote!(#actor::__private::UnboundedInterleaving),
             scheduler: quote!(#actor::scheduling::Unbounded<Self>),
             open: quote!(#actor::scheduling::Unbounded::<Self>::new()),
+        }
+    }
+}
+
+struct SupervisionExpansion {
+    options: TokenStream2,
+    children: TokenStream2,
+    open: TokenStream2,
+}
+
+impl SupervisionExpansion {
+    fn absent(actor: &TokenStream2) -> Self {
+        Self {
+            options: quote!(#actor::__private::NoChildren),
+            children: quote!(#actor::supervision::Disabled),
+            open: quote!(#actor::supervision::Disabled::new()),
+        }
+    }
+
+    fn fixed(actor: &TokenStream2, capacity: TokenStream2) -> Self {
+        let nonzero_capacity =
+            expand_nonzero_const(&capacity, "child capacity must be greater than zero");
+        Self {
+            options: quote!(#actor::__private::FixedChildren),
+            children: quote!(#actor::supervision::Fixed<#capacity>),
+            open: quote! {
+                let _ = #nonzero_capacity;
+                #actor::supervision::Fixed::<#capacity>::new()
+            },
+        }
+    }
+
+    fn dynamic(actor: &TokenStream2, default: Option<TokenStream2>) -> Self {
+        let validate_default = default.as_ref().map(|default| {
+            let nonzero_default =
+                expand_nonzero_const(default, "child capacity must be greater than zero");
+            quote!(let _ = #nonzero_default;)
+        });
+        let options = match default {
+            Some(default) => quote!(#actor::__private::DynamicChildren<#default>),
+            None => quote!(#actor::__private::DynamicChildren),
+        };
+        Self {
+            options,
+            children: quote!(#actor::supervision::Dynamic),
+            open: quote! {
+                #validate_default
+                #actor::supervision::Dynamic::new(options.max_children())
+            },
+        }
+    }
+
+    fn unbounded(actor: &TokenStream2) -> Self {
+        Self {
+            options: quote!(#actor::__private::UnboundedChildren),
+            children: quote!(#actor::supervision::Unbounded),
+            open: quote!(#actor::supervision::Unbounded::new()),
         }
     }
 }

@@ -1,0 +1,7 @@
+error[E0599]: no method named `with_max_children` found for struct `loong_actor::__private::ActorOptions<Unbounded, loong_actor::__private::NoMailbox, loong_actor::__private::NoInterleaving, loong_actor::__private::UnboundedChildren>` in the current scope
+  --> tests/ui/fail/unbounded_children_override.rs:15:63
+   |
+15 |     let _ = loong_actor::SpawnOptions::<Unbounded>::default().with_max_children(NonZeroUsize::MIN);
+   |                                                               ^^^^^^^^^^^^^^^^^ method not found in `loong_actor::__private::ActorOptions<Unbounded, loong_actor::__private::NoMailbox, loong_actor::__private::NoInterleaving, loong_actor::__private::UnboundedChildren>`
+   |
+   = note: the method was found for `loong_actor::__private::ActorOptions<A, M, I, loong_actor::__private::DynamicChildren<DEFAULT>>`

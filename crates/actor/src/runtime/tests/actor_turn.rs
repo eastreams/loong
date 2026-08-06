@@ -17,10 +17,11 @@ use crate::{
         ActorScheduler, InterleavedLane, InterleavedProfile, RuntimeInterleavedScheduler,
         RuntimeScheduler, SchedulerTurn,
     },
+    supervision::runtime::tests::ChildrenFixture,
     transport::MessageConfig,
 };
 
-use super::super::{ChildSet, ScopeState, actor_turn};
+use super::super::{ScopeState, actor_turn};
 use super::{CountEnvelope, TestActor, enqueue_test_envelope, scope_state, test_actor_inner};
 
 /// Owns all inputs for focused actor-turn tests.
@@ -40,7 +41,7 @@ impl<A: Actor> ActorTurnFixture<A> {
         inbox: ActorInbox<A>,
         scheduler: ActorScheduler<A>,
     ) -> Self {
-        let state = scope_state(&inner, ChildSet::default());
+        let state = scope_state(&inner);
         let owned = OwnedTasks::new(Arc::clone(&inner));
         Self {
             actor,
@@ -100,7 +101,7 @@ impl ActorTurnFixture<TestActor> {
 
 struct SerialActor;
 
-#[crate::actor(mailbox = dynamic, mailbox_budget = 3)]
+#[crate::actor(mailbox = dynamic, mailbox_budget = 3, children = 1)]
 impl Actor for SerialActor {
     type SpawnArgs = ();
 
@@ -223,15 +224,10 @@ async fn ordinary_cursor_visits_each_actor_source_between_mailbox_batches() {
         fixture.enqueue(CountEnvelope(Arc::clone(&mailbox_dispatches)));
     }
 
-    fixture
-        .state
-        .children
-        .event_tx
-        .send(ChildExit::new(
-            ChildId::invalid_for_test(),
-            ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Terminated),
-        ))
-        .unwrap();
+    fixture.state.children.publish(ChildExit::new(
+        ChildId::invalid_for_test(),
+        ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Terminated),
+    ));
 
     let interleaved_completed = Arc::new(AtomicBool::new(false));
     RuntimeInterleavedScheduler::push_interleaved(&mut fixture.scheduler, {
@@ -322,15 +318,10 @@ async fn drain_rotates_then_uses_the_configured_mailbox_budget() {
     let mut fixture =
         ActorTurnFixture::new(mailbox_dispatch_budget + 2, NonZeroUsize::new(2).unwrap());
     RuntimeInterleavedScheduler::push_interleaved(&mut fixture.scheduler, async {}.into_actor());
-    fixture
-        .state
-        .children
-        .event_tx
-        .send(ChildExit::new(
-            ChildId::invalid_for_test(),
-            ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Terminated),
-        ))
-        .unwrap();
+    fixture.state.children.publish(ChildExit::new(
+        ChildId::invalid_for_test(),
+        ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Terminated),
+    ));
     fixture.enqueue(ShutdownEnvelope {
         dispatched: Arc::clone(&dispatched),
         shutdown: Shutdown::Drain,
@@ -373,15 +364,10 @@ async fn serial_drain_inherits_cursor_before_resuming_mailbox() {
     let mailbox_dispatch_budget = <SerialActor as MessageConfig>::MAILBOX_DISPATCH_BUDGET.get();
     let dispatched = Arc::new(AtomicUsize::new(0));
     let mut fixture = ActorTurnFixture::<SerialActor>::new_serial(mailbox_dispatch_budget + 2);
-    fixture
-        .state
-        .children
-        .event_tx
-        .send(ChildExit::new(
-            ChildId::invalid_for_test(),
-            ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Terminated),
-        ))
-        .unwrap();
+    fixture.state.children.publish(ChildExit::new(
+        ChildId::invalid_for_test(),
+        ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Terminated),
+    ));
     fixture.enqueue(ShutdownEnvelope {
         dispatched: Arc::clone(&dispatched),
         shutdown: Shutdown::Drain,

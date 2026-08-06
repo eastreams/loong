@@ -2,7 +2,7 @@ use std::task::{Context, Poll};
 
 use loong_actor::{
     Actor, ActorConfig, ActorScope, ExitReason, MessageConfig, ReplySchedulingConfig, Shutdown,
-    scheduling, spawn,
+    SupervisionConfig, scheduling, spawn, supervision,
     transport::{ErasedEnvelope, RuntimeInbox},
 };
 
@@ -56,6 +56,14 @@ impl ReplySchedulingConfig for ManualActor {
     }
 }
 
+impl SupervisionConfig for ManualActor {
+    type Children = supervision::Disabled;
+
+    fn open_children(_options: &Self::Options) -> Self::Children {
+        supervision::Disabled::new()
+    }
+}
+
 impl Actor for ManualActor {
     type SpawnArgs = ();
 
@@ -68,6 +76,7 @@ impl Actor for ManualActor {
 #[tokio::test]
 async fn no_mailbox_uses_the_serial_scheduler() {
     let _: scheduling::Serial<ManualActor> = ManualActor::open_scheduler(&());
+    let _: supervision::Disabled = ManualActor::open_children(&());
     let owner = spawn::<ManualActor>(());
 
     assert_eq!(

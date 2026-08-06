@@ -216,7 +216,8 @@ impl Actor for ReadyDropActor {
         args: Self::SpawnArgs,
         scope: &'a mut ActorScope<'_, Self>,
     ) -> impl Future<Output = Self> + Send + 'a {
-        let child = scope.spawn_child::<InitChild>(()).into_actor_ref();
+        let Ok(child) = scope.spawn_child::<InitChild>(());
+        let child = child.into_actor_ref();
         let _ = args.child_started.send(child.clone());
         ReadyThenDropPanic {
             actor: Some(Self {
@@ -264,7 +265,8 @@ impl Actor for PanicInit {
         args: Self::SpawnArgs,
         scope: &'a mut ActorScope<'_, Self>,
     ) -> impl Future<Output = Self> + Send + 'a {
-        let child = scope.spawn_child::<InitChild>(()).into_actor_ref();
+        let Ok(child) = scope.spawn_child::<InitChild>(());
+        let child = child.into_actor_ref();
         let _ = args.child_started.send(child);
         assert!(!args.panic_during_call, "intentional init call panic");
         std::future::ready(Self {

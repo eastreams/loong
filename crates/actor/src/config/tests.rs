@@ -1,15 +1,16 @@
 use std::{mem::size_of, num::NonZeroUsize};
 
 use crate::{
-    Actor, ActorScope, HasInterleaving, MessageConfig, actor,
+    Actor, ActorScope, HasChildren, HasInterleaving, MessageConfig, actor, supervision,
     transport::{MessageSender, TryReserveError},
 };
 
 use super::{
-    ActorConfig, ActorOptions, DEFAULT_MAILBOX_CAPACITY, DEFAULT_MAX_IN_FLIGHT,
-    DynamicInterleaving, DynamicInterleavingOptions, DynamicMailbox, DynamicMailboxOptions,
-    FixedInterleaving, FixedMailbox, NoInterleaving, NoMailbox, ReplySchedulingConfig,
-    UnboundedInterleaving, UnboundedMailbox,
+    ActorConfig, ActorOptions, DEFAULT_MAILBOX_CAPACITY, DEFAULT_MAX_CHILDREN,
+    DEFAULT_MAX_IN_FLIGHT, DynamicChildren, DynamicChildrenOptions, DynamicInterleaving,
+    DynamicInterleavingOptions, DynamicMailbox, DynamicMailboxOptions, FixedChildren,
+    FixedInterleaving, FixedMailbox, NoChildren, NoInterleaving, NoMailbox, ReplySchedulingConfig,
+    SupervisionConfig, UnboundedChildren, UnboundedInterleaving, UnboundedMailbox,
 };
 
 struct Bare;
@@ -34,9 +35,20 @@ impl Actor for DefaultMailbox {
     }
 }
 
+struct DefaultChildren;
+
+#[actor(children)]
+impl Actor for DefaultChildren {
+    type SpawnArgs = ();
+
+    async fn init(_: (), _: &mut ActorScope<'_, Self>) -> Self {
+        Self
+    }
+}
+
 struct Fixed;
 
-#[actor(mailbox = 11, interleaved = 7)]
+#[actor(mailbox = 11, interleaved = 7, children = 5)]
 impl Actor for Fixed {
     type SpawnArgs = ();
 
@@ -47,7 +59,7 @@ impl Actor for Fixed {
 
 struct Dynamic;
 
-#[actor(mailbox = dynamic, interleaved = dynamic)]
+#[actor(mailbox = dynamic, interleaved = dynamic, children = dynamic)]
 impl Actor for Dynamic {
     type SpawnArgs = ();
 
@@ -58,7 +70,7 @@ impl Actor for Dynamic {
 
 struct CustomDynamic;
 
-#[actor(mailbox = 1, interleaved = dynamic(3))]
+#[actor(mailbox = 1, interleaved = dynamic(3), children = dynamic(4))]
 impl Actor for CustomDynamic {
     type SpawnArgs = ();
 
@@ -69,7 +81,7 @@ impl Actor for CustomDynamic {
 
 struct Unbounded;
 
-#[actor(mailbox = unbounded, interleaved = unbounded)]
+#[actor(mailbox = unbounded, interleaved = unbounded, children = unbounded)]
 impl Actor for Unbounded {
     type SpawnArgs = ();
 
@@ -80,44 +92,87 @@ impl Actor for Unbounded {
 
 fn assert_config<A>()
 where
-    A: ActorConfig + MessageConfig + ReplySchedulingConfig,
+    A: ActorConfig + MessageConfig + ReplySchedulingConfig + SupervisionConfig,
 {
 }
 
 fn assert_send_sync_static<T: Send + Sync + 'static>() {}
 fn assert_has_interleaving<A: HasInterleaving>() {}
+fn assert_has_children<A: HasChildren>() {}
+
+trait Same<T> {}
+
+impl<T> Same<T> for T {}
+
+fn assert_same<T, U>()
+where
+    T: Same<U>,
+{
+}
 
 #[test]
 fn generated_configs_use_actor_specific_options() {
     assert_config::<Bare>();
     assert_config::<DefaultMailbox>();
+    assert_config::<DefaultChildren>();
     assert_config::<Fixed>();
     assert_config::<Dynamic>();
     assert_config::<CustomDynamic>();
     assert_config::<Unbounded>();
 
-    let _: ActorOptions<Bare, NoMailbox, NoInterleaving> = Default::default();
-    let _: ActorOptions<DefaultMailbox, FixedMailbox, NoInterleaving> = Default::default();
-    let _: ActorOptions<Fixed, FixedMailbox, FixedInterleaving> = Default::default();
-    let _: ActorOptions<Dynamic, DynamicMailbox, DynamicInterleaving> = Default::default();
-    let _: ActorOptions<CustomDynamic, FixedMailbox, DynamicInterleaving<3>> = Default::default();
-    let _: ActorOptions<Unbounded, UnboundedMailbox, UnboundedInterleaving> = Default::default();
+    let _: ActorOptions<Bare, NoMailbox, NoInterleaving, NoChildren> = Default::default();
+    let _: ActorOptions<DefaultMailbox, FixedMailbox, NoInterleaving, NoChildren> =
+        Default::default();
+    let _: ActorOptions<DefaultChildren, NoMailbox, NoInterleaving, FixedChildren> =
+        Default::default();
+    let _: ActorOptions<Fixed, FixedMailbox, FixedInterleaving, FixedChildren> = Default::default();
+    let _: ActorOptions<Dynamic, DynamicMailbox, DynamicInterleaving, DynamicChildren> =
+        Default::default();
+    let _: ActorOptions<CustomDynamic, FixedMailbox, DynamicInterleaving<3>, DynamicChildren<4>> =
+        Default::default();
+    let _: ActorOptions<Unbounded, UnboundedMailbox, UnboundedInterleaving, UnboundedChildren> =
+        Default::default();
 
     assert_has_interleaving::<Fixed>();
     assert_has_interleaving::<Dynamic>();
     assert_has_interleaving::<CustomDynamic>();
     assert_has_interleaving::<Unbounded>();
+    assert_has_children::<Fixed>();
+    assert_has_children::<DefaultChildren>();
+    assert_has_children::<Dynamic>();
+    assert_has_children::<CustomDynamic>();
+    assert_has_children::<Unbounded>();
 
     assert_send_sync_static::<<Bare as ActorConfig>::Options>();
     assert_send_sync_static::<<Fixed as ActorConfig>::Options>();
     assert_send_sync_static::<<Dynamic as ActorConfig>::Options>();
     assert_send_sync_static::<<CustomDynamic as ActorConfig>::Options>();
     assert_send_sync_static::<<Unbounded as ActorConfig>::Options>();
+
+    assert_same::<<Bare as SupervisionConfig>::Children, supervision::Disabled>();
+    assert_same::<
+        <DefaultChildren as SupervisionConfig>::Children,
+        supervision::Fixed<DEFAULT_MAX_CHILDREN>,
+    >();
+    assert_same::<<Fixed as SupervisionConfig>::Children, supervision::Fixed<5>>();
+    assert_same::<<Dynamic as SupervisionConfig>::Children, supervision::Dynamic>();
+    assert_same::<<CustomDynamic as SupervisionConfig>::Children, supervision::Dynamic>();
+    assert_same::<<Unbounded as SupervisionConfig>::Children, supervision::Unbounded>();
 }
 
 #[test]
 fn omitted_interleaving_uses_zero_sized_spawn_state() {
     assert_eq!(size_of::<NoInterleaving>(), 0);
+}
+
+#[test]
+fn omitted_children_use_zero_sized_state() {
+    let options = <Bare as ActorConfig>::Options::default();
+    let children: supervision::Disabled = Bare::open_children(&options);
+
+    assert_eq!(size_of::<NoChildren>(), 0);
+    assert_eq!(size_of::<supervision::Disabled>(), 0);
+    let _ = children;
 }
 
 #[test]
@@ -161,6 +216,24 @@ fn dynamic_interleaving_resolves_default_and_override_limit() {
     assert_eq!(options.max_in_flight(), NonZeroUsize::new(3).unwrap());
     let options = DynamicInterleavingOptions::with_max_in_flight(options, max_in_flight);
     assert_eq!(options.max_in_flight(), max_in_flight);
+}
+
+#[test]
+fn dynamic_children_resolve_default_and_override_limit() {
+    let options = <Dynamic as ActorConfig>::Options::default();
+    assert_eq!(
+        options.max_children(),
+        NonZeroUsize::new(DEFAULT_MAX_CHILDREN).unwrap()
+    );
+
+    let max_children = NonZeroUsize::new(6).unwrap();
+    let options = DynamicChildrenOptions::with_max_children(options, max_children);
+    assert_eq!(options.max_children(), max_children);
+
+    let options = <CustomDynamic as ActorConfig>::Options::default();
+    assert_eq!(options.max_children(), NonZeroUsize::new(4).unwrap());
+    let options = DynamicChildrenOptions::with_max_children(options, max_children);
+    assert_eq!(options.max_children(), max_children);
 }
 
 #[test]

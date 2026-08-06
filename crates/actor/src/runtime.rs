@@ -9,16 +9,18 @@ use std::{
 
 use futures_util::FutureExt;
 use pin_project_lite::pin_project;
-use slotmap::{DefaultKey, SlotMap};
-use tokio::sync::mpsc;
 
 use crate::{
-    Actor, ActorConfig, ActorRef, Child, ChildExit, ChildId, ErasedFuture, ExitReason, ExitStatus,
-    Shutdown, ShutdownStatus, SubtreeStatus,
-    config::ReplySchedulingConfig,
+    Actor, ActorConfig, ActorRef, Child, ChildExit, ErasedFuture, ExitReason, ExitStatus,
+    HasChildren, Shutdown, ShutdownStatus, SubtreeStatus,
+    config::{ReplySchedulingConfig, SupervisionConfig},
     mailbox::{ActorInbox, ActorInner, Control, HookEntryPermit, Mode},
     owned::OwnedTasks,
     scheduling::{ActorScheduler, RuntimeScheduler, SchedulerTurn, TurnContext},
+    supervision::{
+        ChildSpawner, ChildSupervisor,
+        runtime::{ParentLink, RegisteredChild, RuntimeChildSpawner, RuntimeChildren, Seal},
+    },
 };
 
 /// Actor-specific configuration applied to one spawn.
@@ -27,8 +29,10 @@ use crate::{
 /// [`with_mailbox_capacity`](crate::DynamicMailboxOptions::with_mailbox_capacity).
 /// Dynamic interleaving options expose
 /// [`with_max_in_flight`](crate::DynamicInterleavingOptions::with_max_in_flight).
+/// Dynamic supervision options expose
+/// [`with_max_children`](crate::DynamicChildrenOptions::with_max_children).
 /// Pass changed options to [`spawn_with`].
-/// Other built-in policies expose no corresponding builder.
+/// Fixed and unbounded profiles expose no matching builder.
 pub type SpawnOptions<A> = <A as ActorConfig>::Options;
 
 /// Spawns a root actor with its default [`SpawnOptions`].
@@ -52,7 +56,7 @@ pub fn spawn<A: Actor>(args: A::SpawnArgs) -> ActorOwner<A> {
 /// This function requires an active Tokio runtime.
 #[must_use = "dropping the returned owner requests Kill"]
 pub fn spawn_with<A: Actor>(args: A::SpawnArgs, options: SpawnOptions<A>) -> ActorOwner<A> {
-    ActorOwner(PreparedActor::new(args, options).start(None))
+    ActorOwner(PreparedActor::new(args, options).start_root())
 }
 
 /// The unique lifecycle owner of a root actor.
@@ -134,10 +138,15 @@ impl<A: Actor> fmt::Debug for ActorOwner<A> {
 // Public scope views expose only phase-valid capabilities.
 pub(crate) struct ScopeState<A: Actor> {
     actor_ref: ActorRef<A>,
-    children: ChildSet,
+    children: <A as SupervisionConfig>::Children,
 }
 
 impl<A: Actor> ScopeState<A> {
+    // This bridge keeps sealed profile details out of scheduler code.
+    fn children(&mut self) -> &mut impl RuntimeChildren {
+        self.children.__runtime(Seal)
+    }
+
     /// Lends the capabilities valid before child cleanup.
     pub(crate) fn actor_scope(&mut self) -> ActorScope<'_, A> {
         ActorScope { state: self }
@@ -145,11 +154,12 @@ impl<A: Actor> ScopeState<A> {
 
     /// Polls exits without exposing child storage to schedulers.
     pub(crate) fn poll_child_exit(&mut self, task: &mut Context<'_>) -> Poll<ChildExit> {
-        self.children.poll_exit(task)
+        self.children().poll_exit(task)
     }
 
     /// Lends the restricted cleanup capabilities.
-    fn stop_scope(&self) -> StopScope<'_, A> {
+    /// The exclusive borrow avoids requiring child state to be `Sync`.
+    fn stop_scope(&mut self) -> StopScope<'_, A> {
         StopScope {
             actor_ref: &self.actor_ref,
         }
@@ -241,33 +251,74 @@ impl<A: Actor> ActorScope<'_, A> {
     pub fn request_shutdown(&self, shutdown: Shutdown) -> ShutdownStatus {
         self.state.actor_ref.request_shutdown(shutdown)
     }
+}
 
+impl<A: HasChildren> ActorScope<'_, A> {
     /// Spawns and owns one direct child actor.
     ///
     /// Child registration commits synchronously.
     /// Child initialization then runs asynchronously.
     /// Its mailbox accepts before initialization finishes.
+    /// Registration completes before the child task can start.
+    ///
+    /// Finite profiles return [`Full`](crate::supervision::Full) at capacity.
+    /// The error retains `args` without opening child configuration.
+    /// Recover `args` through [`Full::into_inner`](crate::supervision::Full::into_inner).
+    /// Unbounded profiles use [`Infallible`](std::convert::Infallible).
+    /// Capacity counts retained direct-child registrations.
+    /// A dequeued exit still retains its registration.
+    /// Reaping releases capacity before [`Actor::on_child_exit`].
     ///
     /// The returned [`Child`] does not own lifecycle.
     /// Retained graceful work keeps this capability.
     /// A concurrent Kill cannot interrupt the current poll.
-    pub fn spawn_child<C: Actor>(&mut self, args: C::SpawnArgs) -> Child<C> {
-        self.spawn_child_with::<C>(args, SpawnOptions::<C>::default())
+    pub fn spawn_child<C: Actor>(
+        &mut self,
+        args: C::SpawnArgs,
+    ) -> Result<Child<C>, <A::Children as ChildSpawner>::Error<C::SpawnArgs>> {
+        let args = self.state.children.__runtime_spawner(Seal).admit(args)?;
+        let prepared = PreparedActor::new(args, SpawnOptions::<C>::default());
+        let registered = self
+            .state
+            .children
+            .__runtime_spawner(Seal)
+            .register(prepared);
+        Ok(start_child(registered))
     }
 
     /// Spawns and owns one direct child actor with explicit options.
     ///
     /// Registration and initialization follow [`spawn_child`](Self::spawn_child).
     ///
+    /// A finite rejection retains `(args, options)`.
+    /// [`Full::into_inner`](crate::supervision::Full::into_inner) returns that tuple.
+    /// Child configuration remains unopened after rejection.
+    ///
     /// The returned [`Child`] does not own lifecycle.
     /// Retained graceful work keeps this capability.
     /// A concurrent Kill cannot interrupt the current poll.
+    #[allow(
+        clippy::type_complexity,
+        reason = "the error preserves both rejected spawn inputs"
+    )]
     pub fn spawn_child_with<C: Actor>(
         &mut self,
         args: C::SpawnArgs,
         options: SpawnOptions<C>,
-    ) -> Child<C> {
-        self.state.children.spawn::<C>(args, options)
+    ) -> Result<Child<C>, <A::Children as ChildSpawner>::Error<(C::SpawnArgs, SpawnOptions<C>)>>
+    {
+        let (args, options) = self
+            .state
+            .children
+            .__runtime_spawner(Seal)
+            .admit((args, options))?;
+        let prepared = PreparedActor::new(args, options);
+        let registered = self
+            .state
+            .children
+            .__runtime_spawner(Seal)
+            .register(prepared);
+        Ok(start_child(registered))
     }
 }
 
@@ -276,159 +327,21 @@ impl<A: Actor> fmt::Debug for ActorScope<'_, A> {
         formatter
             .debug_struct("ActorScope")
             .field("actor_ref", self.myself())
-            .field("children", &self.state.children.len())
             .finish_non_exhaustive()
     }
-}
-
-struct ParentLink {
-    id: ChildId,
-    events: mpsc::UnboundedSender<ChildExit>,
 }
 
 /// Builds actor communication state without scheduling actor code.
 ///
 /// A child must receive its parent-issued key before its task can exit.
 /// Preparation keeps that ordering explicit without placeholder state.
-struct PreparedActor<A: Actor> {
+pub struct PreparedActor<A: Actor> {
     actor_ref: ActorRef<A>,
     future: ErasedFuture<'static, ExitStatus>,
 }
 
-/// Cold ownership operations for heterogeneous child storage.
-///
-/// The trait object points at the same allocation as its typed ActorRef.
-/// It exposes no message capability to ChildSet.
-trait ErasedActor: Send + Sync {
-    fn control(&self) -> &Control;
-}
-
-impl<A: Actor> ErasedActor for ActorInner<A> {
-    fn control(&self) -> &Control {
-        &self.control
-    }
-}
-
-struct ErasedActorOwner(Arc<dyn ErasedActor>);
-
-impl ErasedActorOwner {
-    fn new<A: Actor>(actor_ref: &ActorRef<A>) -> Self {
-        Self(Arc::clone(&actor_ref.0) as Arc<dyn ErasedActor>)
-    }
-
-    fn control(&self) -> &Control {
-        self.0.control()
-    }
-
-    async fn wait(&self) -> ExitStatus {
-        self.control().wait_for_exit().await
-    }
-}
-
-impl Drop for ErasedActorOwner {
-    fn drop(&mut self) {
-        self.control().request(Shutdown::Kill);
-    }
-}
-
-/// Owns direct child registrations and terminal events.
-struct ChildSet {
-    actors: SlotMap<DefaultKey, ErasedActorOwner>,
-    // Removed children cannot erase a lost subtree guarantee.
-    subtree: SubtreeStatus,
-    // Child teardown never waits for parent work.
-    // Owning both endpoints makes early receiver closure invalid.
-    event_tx: mpsc::UnboundedSender<ChildExit>,
-    event_rx: mpsc::UnboundedReceiver<ChildExit>,
-}
-
-impl Default for ChildSet {
-    fn default() -> Self {
-        let (event_tx, event_rx) = mpsc::unbounded_channel();
-        Self {
-            actors: SlotMap::new(),
-            subtree: SubtreeStatus::Terminated,
-            event_tx,
-            event_rx,
-        }
-    }
-}
-
-impl ChildSet {
-    fn len(&self) -> usize {
-        self.actors.len()
-    }
-
-    /// Issues the storage key before constructing the child's parent link.
-    /// The parent cannot consume an exit until this insertion returns.
-    fn spawn<A: Actor>(&mut self, args: A::SpawnArgs, options: SpawnOptions<A>) -> Child<A> {
-        let prepared = PreparedActor::new(args, options);
-        let child_ref = prepared.actor_ref.clone();
-        let events = self.event_tx.clone();
-        let key = self.actors.insert_with_key(move |key| {
-            let parent = ParentLink {
-                id: ChildId::from_key(key),
-                events,
-            };
-            let actor_ref = prepared.start(Some(parent));
-            ErasedActorOwner::new(&actor_ref)
-        });
-        Child::new(ChildId::from_key(key), child_ref)
-    }
-
-    fn poll_exit(&mut self, task: &mut Context<'_>) -> Poll<ChildExit> {
-        match self.event_rx.poll_recv(task) {
-            Poll::Ready(Some(event)) => Poll::Ready(event),
-            Poll::Ready(None) => {
-                unreachable!("child-exit receiver closed while parent runtime was alive")
-            }
-            Poll::Pending => Poll::Pending,
-        }
-    }
-
-    #[cfg(test)]
-    /// Installs an already-started fixture without a parent notification link.
-    fn insert(&mut self, actor: ErasedActorOwner) -> ChildId {
-        ChildId::from_key(self.actors.insert(actor))
-    }
-
-    fn remove(&mut self, event: &ChildExit) -> bool {
-        if self.actors.remove(event.child().key()).is_none() {
-            return false;
-        }
-        if event.status().subtree() == SubtreeStatus::Unconfirmed {
-            self.subtree = SubtreeStatus::Unconfirmed;
-        }
-        true
-    }
-
-    fn request_all(&self, shutdown: Shutdown) {
-        for actor in self.actors.values() {
-            actor.control().request(shutdown);
-        }
-    }
-
-    async fn wait_all(&mut self) {
-        // Persist each unconfirmed result before another cancellation point.
-        let Self {
-            actors, subtree, ..
-        } = self;
-        for actor in actors.values() {
-            if actor.wait().await.subtree() == SubtreeStatus::Unconfirmed {
-                *subtree = SubtreeStatus::Unconfirmed;
-            }
-        }
-        actors.clear();
-    }
-
-    /// Combines this actor's reason with the retained subtree guarantee.
-    fn terminal_status(&self, reason: ExitReason) -> ExitStatus {
-        ExitStatus::new(reason, self.subtree)
-    }
-}
-
 impl<A: Actor> PreparedActor<A> {
-    fn new(args: A::SpawnArgs, options: SpawnOptions<A>) -> Self {
+    pub(crate) fn new(args: A::SpawnArgs, options: SpawnOptions<A>) -> Self {
         // Resolve borrowed options before any value enters the spawned task.
         let scheduler = <A as ReplySchedulingConfig>::open_scheduler(&options);
         let (inner, inbox) = ActorInner::open(&options);
@@ -436,7 +349,7 @@ impl<A: Actor> PreparedActor<A> {
 
         let state = ScopeState {
             actor_ref: actor_ref.clone(),
-            children: ChildSet::default(),
+            children: <A as SupervisionConfig>::open_children(&options),
         };
         let future = Box::pin(run_actor(args, state, inbox, scheduler));
 
@@ -444,12 +357,27 @@ impl<A: Actor> PreparedActor<A> {
     }
 
     /// Starts the detached task after its complete parent link exists.
-    fn start(self, parent: Option<ParentLink>) -> ActorRef<A> {
+    pub(crate) fn actor_ref(&self) -> ActorRef<A> {
+        self.actor_ref.clone()
+    }
+
+    fn start_root(self) -> ActorRef<A> {
+        self.start_task(None)
+    }
+
+    fn start_task(self, parent: Option<ParentLink>) -> ActorRef<A> {
         let Self { actor_ref, future } = self;
         let exit = ExitGuard::new(Arc::clone(&actor_ref.0), parent);
         drop(tokio::spawn(ActorTask::new(future, exit)));
         actor_ref
     }
+}
+
+/// Starts only a child actor whose parent already owns it.
+pub(crate) fn start_child<A: Actor>(registered: RegisteredChild<A>) -> Child<A> {
+    let (prepared, parent, id) = registered.into_parts();
+    let actor_ref = prepared.start_task(Some(parent));
+    Child::new(id, actor_ref)
 }
 
 struct ExitGuard<A: Actor> {
@@ -486,7 +414,7 @@ impl<A: Actor> ExitGuard<A> {
         self.finished = true;
         let status = self.actor.control.finish(proposed);
         if let Some(parent) = &self.parent {
-            let _ = parent.events.send(ChildExit::new(parent.id, status));
+            parent.publish(status);
         }
         status
     }
@@ -708,7 +636,7 @@ async fn run_actor<A: Actor>(
         Work::DropPanicked(actor) => {
             // The init frame failed after producing actor state.
             // Descendant cancellation must precede arbitrary actor Drop code.
-            state.children.request_all(Shutdown::Kill);
+            state.children().request_all(Shutdown::Kill);
             control.drop_user_value(actor);
             return fail_actor(&mut state, &mut inbox, &owned, &mut scheduler).await;
         }
@@ -872,7 +800,7 @@ async fn handle_child_exit<A: Actor>(
     event: ChildExit,
     control: &Control,
 ) -> Work {
-    if !state.children.remove(&event) {
+    if !state.children().reap(&event) {
         return Work::Complete(());
     }
 
@@ -930,7 +858,7 @@ async fn stop_actor<A: Actor>(
     }
 
     match graceful_finish(actor, state, control, Shutdown::Stop, ExitReason::Stopped).await {
-        Work::Complete(()) => state.children.terminal_status(ExitReason::Stopped),
+        Work::Complete(()) => state.children().terminal_status(ExitReason::Stopped),
         Work::Killed => kill_actor(state, inbox, owned, scheduler).await,
         Work::Panicked | Work::DropPanicked(()) => fail_actor(state, inbox, owned, scheduler).await,
     }
@@ -1016,7 +944,7 @@ async fn drain_actor<A: Actor>(
     }
 
     match graceful_finish(actor, state, control, Shutdown::Drain, ExitReason::Drained).await {
-        Work::Complete(()) => state.children.terminal_status(ExitReason::Drained),
+        Work::Complete(()) => state.children().terminal_status(ExitReason::Drained),
         Work::Killed => kill_actor(state, inbox, owned, scheduler).await,
         Work::Panicked | Work::DropPanicked(()) => fail_actor(state, inbox, owned, scheduler).await,
     }
@@ -1105,8 +1033,8 @@ async fn graceful_finish<A: Actor>(
     // committed before this poll must win before Stop or Drain reaches children.
     match await_actor_work(
         async {
-            state.children.request_all(shutdown);
-            state.children.wait_all().await;
+            state.children().request_all(shutdown);
+            state.children().wait_all().await;
         },
         control,
     )
@@ -1139,7 +1067,7 @@ async fn kill_actor<A: Actor>(
     // Commit subtree cancellation before running arbitrary Drop code from actor
     // work. Children can then begin terminating even if a destructor is slow.
     inbox.close();
-    state.children.request_all(Shutdown::Kill);
+    state.children().request_all(Shutdown::Kill);
     owned.close();
     RuntimeScheduler::clear(scheduler, control);
     let mut expected_mode = Mode::Killing;
@@ -1150,8 +1078,8 @@ async fn kill_actor<A: Actor>(
         }
     }
     owned.wait().await;
-    state.children.wait_all().await;
-    state.children.terminal_status(ExitReason::Killed)
+    state.children().wait_all().await;
+    state.children().terminal_status(ExitReason::Killed)
 }
 
 async fn fail_actor<A: Actor>(
@@ -1170,7 +1098,7 @@ async fn fail_actor<A: Actor>(
         Mode::Running | Mode::Draining | Mode::Stopping | Mode::Failing => ExitReason::Panicked,
     };
     inbox.close();
-    state.children.request_all(Shutdown::Kill);
+    state.children().request_all(Shutdown::Kill);
     owned.close();
     RuntimeScheduler::clear(scheduler, control);
     let mut expected_mode = control.mode();
@@ -1181,8 +1109,8 @@ async fn fail_actor<A: Actor>(
         }
     }
     owned.wait().await;
-    state.children.wait_all().await;
-    state.children.terminal_status(reason)
+    state.children().wait_all().await;
+    state.children().terminal_status(reason)
 }
 
 const TEARDOWN_DROP_BUDGET: usize = 16;

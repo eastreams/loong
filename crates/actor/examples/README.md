@@ -53,5 +53,10 @@ Lifecycle ownership and message addresses form different graphs.
 | [`child_actors`](topology/child_actors.rs) | Own child actors and gather their replies. |
 | [`address_cycle`](topology/address_cycle.rs) | Build an address cycle during actor initialization. |
 
+Topology examples select `children = unbounded`.
+This enables `spawn_child` without a finite limit.
+Its error is `Infallible`.
+The examples destructure `Ok` without panicking.
+
 An address cycle does not create lifecycle ownership.
 Cyclic calls can still wait forever.

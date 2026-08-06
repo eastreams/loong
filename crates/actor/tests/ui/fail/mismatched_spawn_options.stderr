@@ -2,12 +2,12 @@ error[E0308]: mismatched types
   --> tests/ui/fail/mismatched_spawn_options.rs:26:51
    |
 26 |     let _ = loong_actor::spawn_with::<Second>((), options);
-   |             ---------------------------------     ^^^^^^^ expected `ActorOptions<Second, FixedMailbox, ...>`, found `ActorOptions<First, FixedMailbox, ...>`
+   |             ---------------------------------     ^^^^^^^ expected `ActorOptions<Second, ..., ..., ...>`, found `ActorOptions<First, ..., ..., ...>`
    |             |
    |             arguments to this function are incorrect
    |
-   = note: expected struct `loong_actor::__private::ActorOptions<Second, loong_actor::__private::FixedMailbox, loong_actor::__private::NoInterleaving>`
-              found struct `loong_actor::__private::ActorOptions<First, loong_actor::__private::FixedMailbox, loong_actor::__private::NoInterleaving>`
+   = note: expected struct `loong_actor::__private::ActorOptions<Second, loong_actor::__private::FixedMailbox, loong_actor::__private::NoInterleaving, loong_actor::__private::NoChildren>`
+              found struct `loong_actor::__private::ActorOptions<First, loong_actor::__private::FixedMailbox, loong_actor::__private::NoInterleaving, loong_actor::__private::NoChildren>`
 note: function defined here
   --> src/runtime.rs
    |

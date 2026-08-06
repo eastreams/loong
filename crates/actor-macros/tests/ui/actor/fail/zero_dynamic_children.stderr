@@ -1,0 +1,5 @@
+error: child capacity must be greater than zero
+ --> tests/ui/actor/fail/zero_dynamic_children.rs:4:39
+  |
+4 | #[actor_api::actor(children = dynamic(0))]
+  |                                       ^

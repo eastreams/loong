@@ -8,18 +8,24 @@ pub const DEFAULT_MAILBOX_CAPACITY: usize = 32;
 #[doc(hidden)]
 pub const DEFAULT_MAX_IN_FLIGHT: usize = 32;
 
+/// Default limit used by built-in child configurations.
+#[doc(hidden)]
+pub const DEFAULT_MAX_CHILDREN: usize = 32;
+
 /// Built-in spawn options for one actor.
 ///
 /// `M` retains only mailbox values which may vary per spawn.
 /// `I` retains only interleaving values which may vary per spawn.
+/// `C` retains only child limits which may vary per spawn.
 /// The actor marker prevents options from crossing actor types.
-pub struct ActorOptions<A, M, I> {
+pub struct ActorOptions<A, M, I, C> {
     mailbox: M,
     interleaving: I,
+    children: C,
     actor: PhantomData<fn() -> A>,
 }
 
-impl<A, M, const DEFAULT: usize> ActorOptions<A, M, DynamicInterleaving<DEFAULT>> {
+impl<A, M, C, const DEFAULT: usize> ActorOptions<A, M, DynamicInterleaving<DEFAULT>, C> {
     /// Sets the maximum number of active interleaved replies.
     pub const fn with_max_in_flight(mut self, max_in_flight: NonZeroUsize) -> Self {
         self.interleaving.max_in_flight = Some(max_in_flight);
@@ -36,7 +42,7 @@ impl<A, M, const DEFAULT: usize> ActorOptions<A, M, DynamicInterleaving<DEFAULT>
     }
 }
 
-impl<A, I, const DEFAULT: usize> ActorOptions<A, DynamicMailbox<DEFAULT>, I> {
+impl<A, I, C, const DEFAULT: usize> ActorOptions<A, DynamicMailbox<DEFAULT>, I, C> {
     /// Overrides this actor's dynamic mailbox capacity.
     pub const fn with_mailbox_capacity(mut self, capacity: NonZeroUsize) -> Self {
         self.mailbox.capacity = Some(capacity);
@@ -53,41 +59,63 @@ impl<A, I, const DEFAULT: usize> ActorOptions<A, DynamicMailbox<DEFAULT>, I> {
     }
 }
 
-impl<A, M: Clone, I: Clone> Clone for ActorOptions<A, M, I> {
+impl<A, M, I, const DEFAULT: usize> ActorOptions<A, M, I, DynamicChildren<DEFAULT>> {
+    /// Overrides this actor's direct-child limit.
+    pub const fn with_max_children(mut self, max_children: NonZeroUsize) -> Self {
+        self.children.max_children = Some(max_children);
+        self
+    }
+
+    /// Resolves this spawn's direct-child limit.
+    #[doc(hidden)]
+    pub const fn max_children(&self) -> NonZeroUsize {
+        match self.children.max_children {
+            Some(max_children) => max_children,
+            None => DynamicChildren::<DEFAULT>::DEFAULT_MAX_CHILDREN,
+        }
+    }
+}
+
+impl<A, M: Clone, I: Clone, C: Clone> Clone for ActorOptions<A, M, I, C> {
     fn clone(&self) -> Self {
         Self {
             mailbox: self.mailbox.clone(),
             interleaving: self.interleaving.clone(),
+            children: self.children.clone(),
             actor: PhantomData,
         }
     }
 }
 
-impl<A, M: Copy, I: Copy> Copy for ActorOptions<A, M, I> {}
+impl<A, M: Copy, I: Copy, C: Copy> Copy for ActorOptions<A, M, I, C> {}
 
-impl<A, M: fmt::Debug, I: fmt::Debug> fmt::Debug for ActorOptions<A, M, I> {
+impl<A, M: fmt::Debug, I: fmt::Debug, C: fmt::Debug> fmt::Debug for ActorOptions<A, M, I, C> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ActorOptions")
             .field("mailbox", &self.mailbox)
             .field("interleaving", &self.interleaving)
+            .field("children", &self.children)
             .finish()
     }
 }
 
-impl<A, M: PartialEq, I: PartialEq> PartialEq for ActorOptions<A, M, I> {
+impl<A, M: PartialEq, I: PartialEq, C: PartialEq> PartialEq for ActorOptions<A, M, I, C> {
     fn eq(&self, other: &Self) -> bool {
-        self.mailbox == other.mailbox && self.interleaving == other.interleaving
+        self.mailbox == other.mailbox
+            && self.interleaving == other.interleaving
+            && self.children == other.children
     }
 }
 
-impl<A, M: Eq, I: Eq> Eq for ActorOptions<A, M, I> {}
+impl<A, M: Eq, I: Eq, C: Eq> Eq for ActorOptions<A, M, I, C> {}
 
-impl<A, M: Default, I: Default> Default for ActorOptions<A, M, I> {
+impl<A, M: Default, I: Default, C: Default> Default for ActorOptions<A, M, I, C> {
     fn default() -> Self {
         Self {
             mailbox: M::default(),
             interleaving: I::default(),
+            children: C::default(),
             actor: PhantomData,
         }
     }
@@ -116,6 +144,18 @@ pub struct FixedInterleaving;
 /// Spawn state for an actor with unbounded interleaved replies.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct UnboundedInterleaving;
+
+/// Spawn state for an actor without direct children.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct NoChildren;
+
+/// Spawn state for an actor with a fixed child limit.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct FixedChildren;
+
+/// Spawn state for an actor with unbounded direct children.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct UnboundedChildren;
 
 /// Spawn state for an actor with a dynamic mailbox.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -153,14 +193,31 @@ impl<const DEFAULT: usize> Default for DynamicInterleaving<DEFAULT> {
     }
 }
 
+/// Spawn state for an actor with a dynamic child limit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DynamicChildren<const DEFAULT: usize = DEFAULT_MAX_CHILDREN> {
+    max_children: Option<NonZeroUsize>,
+}
+
+impl<const DEFAULT: usize> DynamicChildren<DEFAULT> {
+    const DEFAULT_MAX_CHILDREN: NonZeroUsize =
+        NonZeroUsize::new(DEFAULT).expect("child limit must be greater than zero");
+}
+
+impl<const DEFAULT: usize> Default for DynamicChildren<DEFAULT> {
+    fn default() -> Self {
+        Self { max_children: None }
+    }
+}
+
 /// Options whose mailbox capacity may change per spawn.
 pub trait DynamicMailboxOptions: Sized {
     /// Overrides the mailbox capacity for one spawn.
     fn with_mailbox_capacity(self, capacity: NonZeroUsize) -> Self;
 }
 
-impl<A, I, const DEFAULT: usize> DynamicMailboxOptions
-    for ActorOptions<A, DynamicMailbox<DEFAULT>, I>
+impl<A, I, C, const DEFAULT: usize> DynamicMailboxOptions
+    for ActorOptions<A, DynamicMailbox<DEFAULT>, I, C>
 {
     fn with_mailbox_capacity(self, capacity: NonZeroUsize) -> Self {
         ActorOptions::with_mailbox_capacity(self, capacity)
@@ -173,10 +230,24 @@ pub trait DynamicInterleavingOptions: Sized {
     fn with_max_in_flight(self, max_in_flight: NonZeroUsize) -> Self;
 }
 
-impl<A, M, const DEFAULT: usize> DynamicInterleavingOptions
-    for ActorOptions<A, M, DynamicInterleaving<DEFAULT>>
+impl<A, M, C, const DEFAULT: usize> DynamicInterleavingOptions
+    for ActorOptions<A, M, DynamicInterleaving<DEFAULT>, C>
 {
     fn with_max_in_flight(self, max_in_flight: NonZeroUsize) -> Self {
         ActorOptions::with_max_in_flight(self, max_in_flight)
+    }
+}
+
+/// Options whose direct-child limit may change per spawn.
+pub trait DynamicChildrenOptions: Sized {
+    /// Overrides the direct-child limit for one spawn.
+    fn with_max_children(self, max_children: NonZeroUsize) -> Self;
+}
+
+impl<A, M, I, const DEFAULT: usize> DynamicChildrenOptions
+    for ActorOptions<A, M, I, DynamicChildren<DEFAULT>>
+{
+    fn with_max_children(self, max_children: NonZeroUsize) -> Self {
+        ActorOptions::with_max_children(self, max_children)
     }
 }

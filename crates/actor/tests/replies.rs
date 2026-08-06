@@ -270,7 +270,8 @@ impl Actor for ExclusiveActor {
     type SpawnArgs = ExclusiveActorArgs;
 
     async fn init(args: Self::SpawnArgs, scope: &mut ActorScope<'_, Self>) -> Self {
-        let child = scope.spawn_child::<HookChild>(()).into_actor_ref();
+        let Ok(child) = scope.spawn_child::<HookChild>(());
+        let child = child.into_actor_ref();
         let _ = args.child_started.send(child);
         Self {
             child_hooks: args.child_hooks,
@@ -893,7 +894,8 @@ impl Actor for FairChildExitActor {
     type SpawnArgs = FairChildExitArgs;
 
     async fn init(args: Self::SpawnArgs, scope: &mut ActorScope<'_, Self>) -> Self {
-        let child = scope.spawn_child::<HookChild>(()).into_actor_ref();
+        let Ok(child) = scope.spawn_child::<HookChild>(());
+        let child = child.into_actor_ref();
         let _ = args.child_started.send(child);
         Self {
             handled: args.handled,

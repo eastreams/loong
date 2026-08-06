@@ -10,7 +10,7 @@ The crate is an early MVP. Its current contract is deliberately narrow:
 - `SyncHandler` returns immediate reply values;
 - bare `Future` values use owned scheduling;
 - `.interleaved()` and `.exclusive()` select actor-aware scheduling;
-- interleaved work has its own admission policy;
+- interleaved work has its own active-reply limit;
 - exclusive work needs no interleaving capability;
 - owned tasks are unbounded;
 - `ActorRef` values communicate and may request shutdown;
@@ -73,19 +73,32 @@ Interleaved replies are opt-in through `#[actor(...)]`:
 - `interleaved = N` uses a fixed const limit;
 - `interleaved = dynamic` defaults each spawn to 32;
 - `interleaved = dynamic(N)` changes that default;
-- `interleaved = unbounded` removes the admission limit.
+- `interleaved = unbounded` removes the active-reply limit.
 
 Every finite const limit must exceed zero.
 Only dynamic options expose `with_max_in_flight`.
 Omitting `interleaved` provides no capability or reply queue.
-Unbounded admission can retain arbitrarily many active replies.
+Unbounded interleaving can retain arbitrarily many active replies.
 Exclusive replies remain available without interleaved replies.
 A full finite limit pauses dispatch before another handler starts.
 The handler's reply mode remains unknown until dispatch finishes.
 
+Direct-child ownership is also opt-in:
+
+- `children` uses a fixed limit of 32;
+- `children = N` uses a fixed const limit;
+- `children = dynamic` defaults each spawn to 32;
+- `children = dynamic(N)` changes that default;
+- `children = unbounded` removes the direct-child limit.
+
+Only dynamic options expose `with_max_children`.
+Omitting `children` removes the child-spawn capability.
+Finite profiles return the original inputs on `Full`.
+Unbounded spawning uses `Infallible` as its error.
+
 `ExitStatus::reason` describes only that actor. `ExitStatus::subtree` reports
 whether the runtime confirmed all owned descendants terminated. An unconfirmed
-child does not automatically stop its parent. The missing guarantee remains
+child actor does not automatically stop its parent. The missing guarantee remains
 sticky. `Unconfirmed` means proof is unavailable. It does not prove liveness.
 
 Streaming does not require a runtime-specific message kind: a message reply may

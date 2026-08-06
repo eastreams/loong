@@ -26,14 +26,14 @@ use crate::{
         SchedulerTurn,
     },
     spawn,
+    supervision::runtime::{RuntimeChildren, tests::ChildrenFixture},
     transport::MessageSender,
 };
 
 use super::{
-    ActorTask, ActorWorkGuard, ActorWorkState, ChildSet, DiscardOutcome, DrainTurn,
-    ErasedActorOwner, ExitGuard, ScopeState, TEARDOWN_DROP_BUDGET, Work, actor_turn,
-    await_actor_work, close_and_discard, drain_turn, graceful_finish, handle_child_exit,
-    kill_actor, run_actor,
+    ActorTask, ActorWorkGuard, ActorWorkState, DiscardOutcome, DrainTurn, ExitGuard, ScopeState,
+    TEARDOWN_DROP_BUDGET, Work, actor_turn, await_actor_work, close_and_discard, drain_turn,
+    graceful_finish, handle_child_exit, kill_actor, run_actor,
 };
 
 mod actor_turn;
@@ -84,15 +84,11 @@ impl Actor for UnboundedTestActor {
     }
 }
 
-fn erased_owner<A: Actor>(inner: &Arc<ActorInner<A>>) -> ErasedActorOwner {
-    let actor_ref = ActorRef::new(Arc::clone(inner));
-    ErasedActorOwner::new(&actor_ref)
-}
-
-fn scope_state<A: Actor>(inner: &Arc<ActorInner<A>>, children: ChildSet) -> ScopeState<A> {
+fn scope_state<A: Actor>(inner: &Arc<ActorInner<A>>) -> ScopeState<A> {
+    let options = <A as ActorConfig>::Options::default();
     ScopeState {
         actor_ref: ActorRef::new(Arc::clone(inner)),
-        children,
+        children: A::open_children(&options),
     }
 }
 
@@ -244,7 +240,8 @@ impl Actor for AbortChildParent {
         scope: &mut ActorScope<'_, Self>,
     ) -> Self {
         let (child, _inbox) = test_actor_inner(1);
-        let child_id = scope.state.children.insert(erased_owner(&child));
+        let child_ref = ActorRef::new(Arc::clone(&child));
+        let child_id = scope.state.children.insert_ref(&child_ref);
         child.control.begin_abort();
         let status = child.control.finish(ExitStatus::new(
             ExitReason::Aborted,
@@ -253,9 +250,7 @@ impl Actor for AbortChildParent {
         scope
             .state
             .children
-            .event_tx
-            .send(ChildExit::new(child_id, status))
-            .expect("the parent owns its child-exit receiver");
+            .publish(ChildExit::new(child_id, status));
 
         Self {
             child_exit: Some(child_exit),
@@ -730,12 +725,11 @@ async fn aborted_descendant_only_weakens_parent_subtree_status() {
             ExitReason::Aborted,
             SubtreeStatus::Unconfirmed,
         ));
-        let mut children = ChildSet::default();
-        children.insert(erased_owner(&child));
-
         let (inner, inbox) = test_actor_inner(1);
         let control = &inner.control;
-        let scope = scope_state(&inner, children);
+        let mut scope = scope_state(&inner);
+        let child_ref = ActorRef::new(Arc::clone(&child));
+        scope.children.insert_ref(&child_ref);
 
         match exit {
             ParentExit::Shutdown(shutdown) => {
@@ -765,47 +759,22 @@ async fn aborted_descendant_only_weakens_parent_subtree_status() {
     }
 }
 
-// The generation is why ChildSet uses SlotMap instead of Slab.
-// A stale exit must not remove a later child reusing the same slot.
-#[test]
-fn stale_child_exit_cannot_remove_a_reused_slot() {
-    let mut children = ChildSet::default();
-    let (first_actor, _first_inbox) = test_actor_inner(1);
-    let first = children.insert(erased_owner(&first_actor));
-    assert!(children.remove(&ChildExit::new(
-        first,
-        ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Terminated),
-    )));
-
-    let (second_actor, _second_inbox) = test_actor_inner(1);
-    let second = children.insert(erased_owner(&second_actor));
-    assert_ne!(first, second);
-    assert!(!children.remove(&ChildExit::new(
-        first,
-        ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Terminated),
-    )));
-    assert_eq!(children.len(), 1);
-}
-
 // Dequeue observes completion but cannot release ownership.
 // Reaping happens only when the event is handled.
 #[tokio::test]
 async fn dequeued_child_exit_keeps_registration_until_handled() {
     let observed = Arc::new(AtomicUsize::new(0));
-    let mut children = ChildSet::default();
     let (child, _child_inbox) = test_actor_inner(1);
-    let child_id = children.insert(erased_owner(&child));
     let status = ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Terminated);
     child.control.finish(status);
-    children
-        .event_tx
-        .send(ChildExit::new(child_id, status))
-        .unwrap();
 
     let options = <CountChildExit as ActorConfig>::Options::default();
     let (inner, _inbox) = ActorInner::<CountChildExit>::open(&options);
     let control = &inner.control;
-    let mut state = scope_state(&inner, children);
+    let mut state = scope_state(&inner);
+    let child_ref = ActorRef::new(Arc::clone(&child));
+    let child_id = state.children.insert_ref(&child_ref);
+    state.children.publish(ChildExit::new(child_id, status));
     let event = std::future::poll_fn(|task| state.poll_child_exit(task)).await;
     assert_eq!(state.children.len(), 1);
 
@@ -816,62 +785,6 @@ async fn dequeued_child_exit_keeps_registration_until_handled() {
     ));
     assert_eq!(state.children.len(), 0);
     assert_eq!(observed.load(Ordering::SeqCst), 1);
-}
-
-// Typed messaging and erased ownership must share one actor allocation.
-#[test]
-fn typed_and_erased_handles_share_one_allocation() {
-    let (inner, _inbox) = test_actor_inner(1);
-    let actor_ref = ActorRef::new(Arc::clone(&inner));
-    let erased = ErasedActorOwner::new(&actor_ref);
-
-    assert_eq!(
-        Arc::as_ptr(&actor_ref.0).cast::<()>(),
-        Arc::as_ptr(&erased.0).cast::<()>(),
-    );
-}
-
-// One heterogeneous owner set must retain RAII Kill for every actor type.
-#[test]
-fn heterogeneous_erased_owner_drop_requests_kill() {
-    let (first, _first_inbox) = test_actor_inner(1);
-    let options = <CountChildExit as ActorConfig>::Options::default();
-    let (second, _second_inbox) = ActorInner::<CountChildExit>::open(&options);
-    let mut children = ChildSet::default();
-    children.insert(erased_owner(&first));
-    children.insert(erased_owner(&second));
-
-    drop(children);
-
-    assert_eq!(first.control.mode(), Mode::Killing);
-    assert_eq!(second.control.mode(), Mode::Killing);
-}
-
-// Waiting must retain uncertainty before clearing completed child owners.
-#[tokio::test]
-async fn child_set_wait_all_retains_unconfirmed_subtree() {
-    let (uncertain, _uncertain_inbox) = test_actor_inner(1);
-    uncertain.control.finish(ExitStatus::new(
-        ExitReason::Aborted,
-        SubtreeStatus::Unconfirmed,
-    ));
-    let options = <CountChildExit as ActorConfig>::Options::default();
-    let (terminated, _terminated_inbox) = ActorInner::<CountChildExit>::open(&options);
-    terminated.control.finish(ExitStatus::new(
-        ExitReason::Stopped,
-        SubtreeStatus::Terminated,
-    ));
-    let mut children = ChildSet::default();
-    children.insert(erased_owner(&uncertain));
-    children.insert(erased_owner(&terminated));
-
-    children.wait_all().await;
-
-    assert_eq!(children.len(), 0);
-    assert_eq!(
-        children.terminal_status(ExitReason::Stopped),
-        ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Unconfirmed),
-    );
 }
 
 // This recreates the original race window after actor_turn has dequeued a
@@ -887,14 +800,14 @@ async fn graceful_cutoff_absorbs_a_dequeued_child_exit() {
             Shutdown::Kill => unreachable!("the test uses graceful modes"),
         };
         let observed = Arc::new(AtomicUsize::new(0));
-        let mut children = ChildSet::default();
         let (child, _child_inbox) = test_actor_inner(1);
-        let child_id = children.insert(erased_owner(&child));
 
         let options = <CountChildExit as ActorConfig>::Options::default();
         let (inner, _inbox) = ActorInner::<CountChildExit>::open(&options);
         let control = &inner.control;
-        let mut scope = scope_state(&inner, children);
+        let mut scope = scope_state(&inner);
+        let child_ref = ActorRef::new(Arc::clone(&child));
+        let child_id = scope.children.insert_ref(&child_ref);
         let mut actor = CountChildExit(Arc::clone(&observed));
         assert_eq!(control.request(shutdown), ShutdownStatus::Requested);
         assert!(matches!(
@@ -928,14 +841,14 @@ async fn admitted_child_exit_hook_finishes_across_graceful_cutoff() {
         let (entered_tx, entered_rx) = oneshot::channel();
         let (release_tx, release_rx) = oneshot::channel();
         let (completed_tx, completed_rx) = oneshot::channel();
-        let mut children = ChildSet::default();
         let (child, _child_inbox) = test_actor_inner(1);
-        let child_id = children.insert(erased_owner(&child));
 
         let options = <ControlledChildExit as ActorConfig>::Options::default();
         let (inner, _inbox) = ActorInner::<ControlledChildExit>::open(&options);
         let control = &inner.control;
-        let mut scope = scope_state(&inner, children);
+        let mut scope = scope_state(&inner);
+        let child_ref = ActorRef::new(Arc::clone(&child));
+        let child_id = scope.children.insert_ref(&child_ref);
         let mut actor = ControlledChildExit {
             entered: Some(entered_tx),
             release: Some(release_rx),
@@ -985,7 +898,7 @@ async fn unadmitted_mailbox_permit_does_not_extend_drain() {
         .await
         .expect("the test mailbox is open");
     let control = &inner.control;
-    let scope = scope_state(&inner, ChildSet::default());
+    let scope = scope_state(&inner);
     assert_eq!(control.request(Shutdown::Drain), ShutdownStatus::Requested);
 
     let options = <TestActor as ActorConfig>::Options::default()
@@ -1010,12 +923,12 @@ async fn committed_kill_prevents_a_graceful_child_request() {
     // first poll of the guarded future: request_all would synchronously commit
     // Stop before graceful_finish could return Work::Killed.
     let (child, _child_inbox) = test_actor_inner(1);
-    let mut children = ChildSet::default();
-    children.insert(erased_owner(&child));
 
     let (inner, _inbox) = test_actor_inner(1);
     let control = &inner.control;
-    let mut scope = scope_state(&inner, children);
+    let mut scope = scope_state(&inner);
+    let child_ref = ActorRef::new(Arc::clone(&child));
+    scope.children.insert_ref(&child_ref);
     let mut actor = TestActor;
 
     assert_eq!(control.request(Shutdown::Kill), ShutdownStatus::Requested);
@@ -1045,7 +958,7 @@ fn truncated_reply_sweep_yields_before_ready_mailbox() {
     let (inner, mut inbox) = test_actor_inner(1);
     enqueue_test_envelope(&inner, CountEnvelope(Arc::clone(&mailbox_dispatches)));
 
-    let mut scope = scope_state(&inner, ChildSet::default());
+    let mut scope = scope_state(&inner);
     let owned = OwnedTasks::new(Arc::clone(&inner));
     let options = <TestActor as ActorConfig>::Options::default()
         .with_max_in_flight(NonZeroUsize::new(REPLIES).unwrap());
@@ -1086,35 +999,6 @@ fn truncated_reply_sweep_yields_before_ready_mailbox() {
     assert_eq!(scheduler.state().cursor, InterleavedLane::ChildExit);
 }
 
-// Parent runtime state keeps this receiver open.
-// Treat early closure as corruption; a hint would spin forever.
-#[tokio::test]
-#[should_panic(expected = "child-exit receiver closed while parent runtime was alive")]
-async fn closed_child_exit_channel_is_an_invariant_failure() {
-    let (inner, mut inbox) = test_actor_inner(1);
-    let mut scope = scope_state(&inner, ChildSet::default());
-    scope.children.event_rx.close();
-
-    let owned = OwnedTasks::new(Arc::clone(&inner));
-    let options =
-        <TestActor as ActorConfig>::Options::default().with_max_in_flight(NonZeroUsize::MIN);
-    let mut scheduler = TestActor::open_scheduler(&options);
-    let mut actor = TestActor;
-    scheduler.state().cursor = InterleavedLane::ChildExit;
-
-    actor_turn(
-        &mut actor,
-        &mut scope,
-        &mut inbox,
-        &inner,
-        &owned,
-        &mut scheduler,
-        true,
-        Mode::Running,
-    )
-    .await;
-}
-
 // Drain must observe lifecycle and child work before completion.
 // Otherwise a ready barrier can skip accepted supervision events.
 #[tokio::test]
@@ -1123,16 +1007,12 @@ async fn drain_priority_precedes_owned_completion() {
     let control = &inner.control;
     assert_eq!(control.request(Shutdown::Drain), ShutdownStatus::Requested);
 
-    let mut scope = scope_state(&inner, ChildSet::default());
+    let mut scope = scope_state(&inner);
     let child = ChildId::invalid_for_test();
-    scope
-        .children
-        .event_tx
-        .send(ChildExit::new(
-            child,
-            ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Terminated),
-        ))
-        .unwrap();
+    scope.children.publish(ChildExit::new(
+        child,
+        ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Terminated),
+    ));
 
     let owned = OwnedTasks::new(Arc::clone(&inner));
     owned.close();
@@ -1193,8 +1073,6 @@ async fn child_kill_commits_before_actor_work_is_dropped() {
     let child_owner = spawn::<TestActor>(());
     let child_ref = child_owner.actor_ref();
     let child_inner = Arc::clone(&child_ref.0);
-    let mut children = ChildSet::default();
-    children.insert(ErasedActorOwner::new(&child_ref));
 
     let active_observed_kill = Arc::new(AtomicBool::new(false));
     let queued_observed_kill = Arc::new(AtomicBool::new(false));
@@ -1211,7 +1089,8 @@ async fn child_kill_commits_before_actor_work_is_dropped() {
         ShutdownStatus::Requested
     );
 
-    let mut scope = scope_state(&inner, children);
+    let mut scope = scope_state(&inner);
+    scope.children.insert_ref(&child_ref);
     let owned = OwnedTasks::new(Arc::clone(&inner));
     let options =
         <TestActor as ActorConfig>::Options::default().with_max_in_flight(NonZeroUsize::MIN);

@@ -1,11 +1,11 @@
 error[E0277]: the trait bound `loong_actor::transport::NoSender: MessageSender<Manual>` is not satisfied
-  --> tests/ui/fail/interleaving_without_mailbox_capability.rs:33:6
+  --> tests/ui/fail/interleaving_without_mailbox_capability.rs:42:6
    |
-33 | impl Actor for Manual {
+42 | impl Actor for Manual {
    |      ^^^^^ the trait `MessageSender<Manual>` is not implemented for `loong_actor::transport::NoSender`
    |
 help: the following other types implement trait `ReplyScheduler<A>`
-  --> src/scheduling/mod.rs
+  --> src/scheduling.rs
    |
    |   impl<A> ReplyScheduler<A> for Serial<A> where A: Actor + ReplySchedulingConfig<Scheduler = Self> {}
    |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Serial<A>`
@@ -15,14 +15,14 @@ help: the following other types implement trait `ReplyScheduler<A>`
    | |     A: Actor + ReplySchedulingConfig<Scheduler = Self>,
    | |     A::Sender: MessageSender<A>,
    | |     A::Inbox: MessageInbox<A>,
-   | |______________________________^ `Fixed<A, N>`
+   | |______________________________^ `loong_actor::scheduling::Fixed<A, N>`
 ...
    | / impl<A> ReplyScheduler<A> for Dynamic<A>
    | | where
    | |     A: Actor + ReplySchedulingConfig<Scheduler = Self>,
    | |     A::Sender: MessageSender<A>,
    | |     A::Inbox: MessageInbox<A>,
-   | |______________________________^ `Dynamic<A>`
+   | |______________________________^ `loong_actor::scheduling::Dynamic<A>`
 ...
    | / impl<A> ReplyScheduler<A> for Unbounded<A>
    | | where
@@ -30,7 +30,7 @@ help: the following other types implement trait `ReplyScheduler<A>`
    | |     A::Sender: MessageSender<A>,
    | |     A::Inbox: MessageInbox<A>,
    | |______________________________^ `loong_actor::scheduling::Unbounded<A>`
-   = note: required for `Fixed<Manual, 1>` to implement `ReplyScheduler<Manual>`
+   = note: required for `loong_actor::scheduling::Fixed<Manual, 1>` to implement `ReplyScheduler<Manual>`
 note: required by a bound in `Actor`
   --> src/actor.rs
    |
@@ -41,13 +41,13 @@ note: required by a bound in `Actor`
    |                                        ^^^^^^^^^^^^^^^^^^^^ required by this bound in `Actor`
 
 error[E0277]: the trait bound `loong_actor::transport::NoInbox: MessageInbox<Manual>` is not satisfied
-  --> tests/ui/fail/interleaving_without_mailbox_capability.rs:33:6
+  --> tests/ui/fail/interleaving_without_mailbox_capability.rs:42:6
    |
-33 | impl Actor for Manual {
+42 | impl Actor for Manual {
    |      ^^^^^ the trait `MessageInbox<Manual>` is not implemented for `loong_actor::transport::NoInbox`
    |
 help: the following other types implement trait `ReplyScheduler<A>`
-  --> src/scheduling/mod.rs
+  --> src/scheduling.rs
    |
    |   impl<A> ReplyScheduler<A> for Serial<A> where A: Actor + ReplySchedulingConfig<Scheduler = Self> {}
    |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Serial<A>`
@@ -57,14 +57,14 @@ help: the following other types implement trait `ReplyScheduler<A>`
    | |     A: Actor + ReplySchedulingConfig<Scheduler = Self>,
    | |     A::Sender: MessageSender<A>,
    | |     A::Inbox: MessageInbox<A>,
-   | |______________________________^ `Fixed<A, N>`
+   | |______________________________^ `loong_actor::scheduling::Fixed<A, N>`
 ...
    | / impl<A> ReplyScheduler<A> for Dynamic<A>
    | | where
    | |     A: Actor + ReplySchedulingConfig<Scheduler = Self>,
    | |     A::Sender: MessageSender<A>,
    | |     A::Inbox: MessageInbox<A>,
-   | |______________________________^ `Dynamic<A>`
+   | |______________________________^ `loong_actor::scheduling::Dynamic<A>`
 ...
    | / impl<A> ReplyScheduler<A> for Unbounded<A>
    | | where
@@ -72,7 +72,7 @@ help: the following other types implement trait `ReplyScheduler<A>`
    | |     A::Sender: MessageSender<A>,
    | |     A::Inbox: MessageInbox<A>,
    | |______________________________^ `loong_actor::scheduling::Unbounded<A>`
-   = note: required for `Fixed<Manual, 1>` to implement `ReplyScheduler<Manual>`
+   = note: required for `loong_actor::scheduling::Fixed<Manual, 1>` to implement `ReplyScheduler<Manual>`
 note: required by a bound in `Actor`
   --> src/actor.rs
    |

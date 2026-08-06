@@ -43,8 +43,10 @@ impl Actor for Team {
     type SpawnArgs = ();
 
     async fn init(_args: Self::SpawnArgs, scope: &mut ActorScope<'_, Self>) -> Self {
-        let correctness = scope.spawn_child::<Agent>("correctness").into_actor_ref();
-        let readability = scope.spawn_child::<Agent>("readability").into_actor_ref();
+        let Ok(correctness) = scope.spawn_child::<Agent>("correctness");
+        let Ok(readability) = scope.spawn_child::<Agent>("readability");
+        let correctness = correctness.into_actor_ref();
+        let readability = readability.into_actor_ref();
 
         // The parent runtime owns both lifecycles. State keeps only addresses.
         Self {

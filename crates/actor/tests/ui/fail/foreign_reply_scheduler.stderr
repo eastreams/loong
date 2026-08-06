@@ -1,13 +1,13 @@
 error[E0277]: the trait bound `ForeignScheduler: scheduling::runtime::RuntimeScheduler<ForeignActor>` is not satisfied
-  --> tests/ui/fail/foreign_reply_scheduler.rs:65:6
+  --> tests/ui/fail/foreign_reply_scheduler.rs:73:6
    |
-65 | impl Actor for ForeignActor {
+73 | impl Actor for ForeignActor {
    |      ^^^^^ unsatisfied trait bound
    |
 help: the trait `scheduling::runtime::SchedulerProfile<ForeignActor>` is not implemented for `ForeignScheduler`
-  --> tests/ui/fail/foreign_reply_scheduler.rs:9:1
+  --> tests/ui/fail/foreign_reply_scheduler.rs:10:1
    |
- 9 | struct ForeignScheduler;
+10 | struct ForeignScheduler;
    | ^^^^^^^^^^^^^^^^^^^^^^^
 help: the following other types implement trait `scheduling::runtime::SchedulerProfile<A>`
   --> src/scheduling/runtime.rs
@@ -22,14 +22,14 @@ help: the following other types implement trait `scheduling::runtime::SchedulerP
    | |     A: Actor + ReplySchedulingConfig<Scheduler = Self>,
    | |     A::Sender: MessageSender<A>,
    | |     A::Inbox: MessageInbox<A>,
-   | |______________________________^ `Fixed<A, N>`
+   | |______________________________^ `loong_actor::scheduling::Fixed<A, N>`
 ...
    | / impl<A> SchedulerProfile<A> for Dynamic<A>
    | | where
    | |     A: Actor + ReplySchedulingConfig<Scheduler = Self>,
    | |     A::Sender: MessageSender<A>,
    | |     A::Inbox: MessageInbox<A>,
-   | |______________________________^ `Dynamic<A>`
+   | |______________________________^ `loong_actor::scheduling::Dynamic<A>`
 ...
    | / impl<A> SchedulerProfile<A> for Unbounded<A>
    | | where

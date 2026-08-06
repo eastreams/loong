@@ -7,9 +7,10 @@ use std::{
 };
 
 use loong_actor::{
-    Actor, ActorConfig, ActorFuture, ActorFutureExt, ActorScope, ExitReason, Handler,
+    Actor, ActorConfig, ActorFuture, ActorFutureExt, ActorScope, ExitReason, Handler, HasChildren,
     HasInterleaving, InterleavedFutureExt, IntoActorFuture, IntoReply, Message, MessageConfig,
-    ReplySchedulingConfig, Shutdown, SyncHandler, scheduling, spawn_with,
+    ReplySchedulingConfig, Shutdown, SupervisionConfig, SyncHandler, scheduling, spawn_with,
+    supervision,
     transport::{
         ErasedEnvelope, MessageInbox, MessageReservation, MessageSender, RuntimeInbox,
         TryReserveError,
@@ -129,6 +130,14 @@ impl ReplySchedulingConfig for ManualActor {
     }
 }
 
+impl SupervisionConfig for ManualActor {
+    type Children = supervision::Fixed<1>;
+
+    fn open_children(_options: &Self::Options) -> Self::Children {
+        supervision::Fixed::new()
+    }
+}
+
 impl Actor for ManualActor {
     type SpawnArgs = u64;
 
@@ -157,6 +166,14 @@ impl ReplySchedulingConfig for ManualSerial {
 
     fn open_scheduler(_options: &Self::Options) -> Self::Scheduler {
         scheduling::Serial::new()
+    }
+}
+
+impl SupervisionConfig for ManualSerial {
+    type Children = supervision::Disabled;
+
+    fn open_children(_options: &Self::Options) -> Self::Children {
+        supervision::Disabled::new()
     }
 }
 
@@ -191,6 +208,14 @@ impl ReplySchedulingConfig for ManualDynamic {
     }
 }
 
+impl SupervisionConfig for ManualDynamic {
+    type Children = supervision::Dynamic;
+
+    fn open_children(_options: &Self::Options) -> Self::Children {
+        supervision::Dynamic::new(std::num::NonZeroUsize::MIN)
+    }
+}
+
 impl Actor for ManualDynamic {
     type SpawnArgs = ();
 
@@ -219,6 +244,14 @@ impl ReplySchedulingConfig for ManualUnbounded {
 
     fn open_scheduler(_options: &Self::Options) -> Self::Scheduler {
         scheduling::Unbounded::new()
+    }
+}
+
+impl SupervisionConfig for ManualUnbounded {
+    type Children = supervision::Unbounded;
+
+    fn open_children(_options: &Self::Options) -> Self::Children {
+        supervision::Unbounded::new()
     }
 }
 
@@ -259,6 +292,7 @@ impl SyncHandler<Notify> for ManualActor {
 }
 
 fn assert_send<T: Send>(_: &T) {}
+fn assert_has_children<A: HasChildren>() {}
 fn assert_has_interleaving<A: HasInterleaving>() {}
 
 fn generic_interleaved_reply<A, M, F>(future: F) -> impl IntoReply<A, M>
@@ -278,6 +312,20 @@ fn manual_transport_selects_each_public_scheduler() {
     let _: scheduling::Serial<ManualSerial> = ManualSerial::open_scheduler(&());
     let _: scheduling::Dynamic<ManualDynamic> = ManualDynamic::open_scheduler(&());
     let _: scheduling::Unbounded<ManualUnbounded> = ManualUnbounded::open_scheduler(&());
+}
+
+// Manual configs can select every built-in supervision profile.
+#[test]
+fn manual_configs_select_each_public_supervisor() {
+    let options = ManualOptions::default();
+    let _: supervision::Fixed<1> = ManualActor::open_children(&options);
+    let _: supervision::Disabled = ManualSerial::open_children(&());
+    let _: supervision::Dynamic = ManualDynamic::open_children(&());
+    let _: supervision::Unbounded = ManualUnbounded::open_children(&());
+
+    assert_has_children::<ManualActor>();
+    assert_has_children::<ManualDynamic>();
+    assert_has_children::<ManualUnbounded>();
 }
 
 // This proves manual configs use stable public extension points.

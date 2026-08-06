@@ -37,6 +37,28 @@ impl Actor for Supervisor {
     }
 }
 
+struct FixedSupervisor;
+
+#[actor_api::actor(children = 8)]
+impl Actor for FixedSupervisor {
+    type SpawnArgs = ();
+
+    async fn init(_: (), _: &mut ActorScope<'_, Self>) -> Self {
+        Self
+    }
+}
+
+struct DynamicSupervisor;
+
+#[actor_api::actor(children = dynamic)]
+impl Actor for DynamicSupervisor {
+    type SpawnArgs = ();
+
+    async fn init(_: (), _: &mut ActorScope<'_, Self>) -> Self {
+        Self
+    }
+}
+
 struct DynamicMailbox;
 
 #[actor_api::actor(mailbox = dynamic)]
@@ -144,4 +166,6 @@ fn main() {
     let _ = override_interleaving::<Generic<u8, 6>>(
         actor_api::SpawnOptions::<Generic<u8, 6>>::default(),
     );
+    let _ = actor_api::SpawnOptions::<DynamicSupervisor>::default()
+        .with_max_children(NonZeroUsize::MIN);
 }
