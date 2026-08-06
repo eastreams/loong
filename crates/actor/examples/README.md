@@ -29,6 +29,7 @@ Each capability selects its limit profile independently.
 | Example | Focus |
 | --- | --- |
 | [`actor_configuration`](configuration/actor_configuration.rs) | Mixed limit profiles, one spawn override, and dispatch budget. |
+| [`const_generic_configuration`](configuration/const_generic_configuration.rs) | Reuse a const generic as a fixed limit and dynamic default. |
 
 `SpawnOptions` changes one actor spawn.
 Dynamic profiles expose per-spawn overrides.

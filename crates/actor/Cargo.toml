@@ -39,6 +39,10 @@ name = "actor_configuration"
 path = "examples/configuration/actor_configuration.rs"
 
 [[example]]
+name = "const_generic_configuration"
+path = "examples/configuration/const_generic_configuration.rs"
+
+[[example]]
 name = "explicit_replies"
 path = "examples/replies/explicit_replies.rs"
 
