@@ -9,8 +9,10 @@
 //!
 //! # Conforming transport laws
 //!
-//! `open` returns paired endpoints for one empty transport.
-//! Both endpoints remain open until runtime calls `close`.
+//! `open` returns matched sender, inbox, and scheduler state.
+//! The scheduler satisfies the actor's capability bounds.
+//! Mailbox profiles open one empty transport.
+//! Admission stays open until runtime calls `close`.
 //! Every successful enqueue stores exactly one carrier.
 //! Its completion order defines mailbox FIFO.
 //! The inbox returns each carrier exactly once.

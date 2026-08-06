@@ -22,6 +22,20 @@ Their assertions check the demonstrated behavior.
 Prefer `SyncHandler<M>` for an immediate reply.
 It is equivalent to returning `.ready()` from `Handler<M>`.
 
+## Actor configuration
+
+Each capability selects its limit profile independently.
+
+| Example | Focus |
+| --- | --- |
+| [`actor_configuration`](configuration/actor_configuration.rs) | Mixed limit profiles, one spawn override, and dispatch budget. |
+
+`SpawnOptions` changes one actor spawn.
+Dynamic profiles expose per-spawn overrides.
+Unbounded removes only the selected finite limit.
+Applications remain responsible for resource growth.
+`mailbox_budget` belongs to the actor type.
+
 ## Reply scheduling
 
 A reply strategy controls actor progress after handler dispatch.

@@ -35,6 +35,10 @@ name = "sync_handler"
 path = "examples/sync_handler.rs"
 
 [[example]]
+name = "actor_configuration"
+path = "examples/configuration/actor_configuration.rs"
+
+[[example]]
 name = "explicit_replies"
 path = "examples/replies/explicit_replies.rs"
 
