@@ -1,3 +1,47 @@
+error[E0277]: `loong_actor::scheduling::Disabled` cannot schedule actor-aware replies for `Bare`
+  --> tests/ui/fail/handler_without_mailbox.rs:18:6
+   |
+18 | impl Handler<Ping> for Bare {
+   |      ^^^^^^^^^^^^^ select a scheduler compatible with this actor's mailbox
+   |
+   = help: the trait `ReplyScheduler<Bare>` is not implemented for `loong_actor::scheduling::Disabled`
+help: the following other types implement trait `ReplyScheduler<A>`
+  --> src/scheduling.rs
+   |
+   | / impl<A> ReplyScheduler<A> for Serial<A>
+   | | where
+   | |     A: Actor + MessageConfig<Scheduler = Self>,
+   | |     A::Sender: MessageSender<A>,
+   | |     A::Inbox: MessageInbox<A>,
+   | |______________________________^ `Serial<A>`
+...
+   | / impl<A, const N: usize> ReplyScheduler<A> for Fixed<A, N>
+   | | where
+   | |     A: Actor + MessageConfig<Scheduler = Self>,
+   | |     A::Sender: MessageSender<A>,
+   | |     A::Inbox: MessageInbox<A>,
+   | |______________________________^ `loong_actor::scheduling::Fixed<A, N>`
+...
+   | / impl<A> ReplyScheduler<A> for Dynamic<A>
+   | | where
+   | |     A: Actor + MessageConfig<Scheduler = Self>,
+   | |     A::Sender: MessageSender<A>,
+   | |     A::Inbox: MessageInbox<A>,
+   | |______________________________^ `loong_actor::scheduling::Dynamic<A>`
+...
+   | / impl<A> ReplyScheduler<A> for Unbounded<A>
+   | | where
+   | |     A: Actor + MessageConfig<Scheduler = Self>,
+   | |     A::Sender: MessageSender<A>,
+   | |     A::Inbox: MessageInbox<A>,
+   | |______________________________^ `loong_actor::scheduling::Unbounded<A>`
+   = note: required for `Bare` to implement `HasMailbox`
+note: required by a bound in `Handler`
+  --> src/actor.rs
+   |
+   | pub trait Handler<M: Message>: HasMailbox {
+   |                                ^^^^^^^^^^ required by this bound in `Handler`
+
 error[E0277]: the trait bound `loong_actor::transport::NoInbox: MessageInbox<Bare>` is not satisfied
   --> tests/ui/fail/handler_without_mailbox.rs:18:6
    |

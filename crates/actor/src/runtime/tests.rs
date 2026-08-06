@@ -16,14 +16,13 @@ use tokio::sync::oneshot;
 
 use crate::{
     Actor, ActorConfig, ActorRef, ActorScope, ChildExit, ChildId, ExitReason, ExitStatus,
-    IntoActorFuture, Message, ReplySchedulingConfig, Shutdown, ShutdownStatus, SubtreeStatus,
-    SyncHandler,
+    IntoActorFuture, Message, MessageConfig, Shutdown, ShutdownStatus, SubtreeStatus, SyncHandler,
     actor::HasMailbox,
     mailbox::{ActorInbox, ActorInner, Control, Envelope, Mode},
     owned::OwnedTasks,
     scheduling::{
-        ActorScheduler, InterleavedLane, InterleavedProfile, RuntimeInterleavedScheduler,
-        SchedulerTurn,
+        ActorScheduler, InterleavedLane, InterleavedProfile, InterleavedScheduler, SchedulerTurn,
+        Seal,
     },
     spawn,
     supervision::runtime::{RuntimeChildren, tests::ChildrenFixture},
@@ -58,7 +57,8 @@ impl Actor for TestActor {
 fn test_actor_inner(capacity: usize) -> (Arc<ActorInner<TestActor>>, ActorInbox<TestActor>) {
     let capacity = NonZeroUsize::new(capacity).expect("test mailbox capacity is nonzero");
     let options = <TestActor as ActorConfig>::Options::default().with_mailbox_capacity(capacity);
-    ActorInner::<TestActor>::open(&options)
+    let (inner, inbox, _scheduler) = ActorInner::<TestActor>::open(&options);
+    (inner, inbox)
 }
 
 /// Enqueues one fixture through the same admission boundary as production.
@@ -740,13 +740,9 @@ async fn aborted_descendant_only_weakens_parent_subtree_status() {
 
         let options =
             <TestActor as ActorConfig>::Options::default().with_max_in_flight(NonZeroUsize::MIN);
+        let (_, _, scheduler) = TestActor::open(&options);
         let task = ActorTask::new(
-            Box::pin(run_actor::<TestActor>(
-                (),
-                scope,
-                inbox,
-                TestActor::open_scheduler(&options),
-            )),
+            Box::pin(run_actor::<TestActor>((), scope, inbox, scheduler)),
             ExitGuard::new(Arc::clone(&inner), None),
         );
         let status = tokio::time::timeout(Duration::from_secs(1), task)
@@ -769,7 +765,7 @@ async fn dequeued_child_exit_keeps_registration_until_handled() {
     child.control.finish(status);
 
     let options = <CountChildExit as ActorConfig>::Options::default();
-    let (inner, _inbox) = ActorInner::<CountChildExit>::open(&options);
+    let (inner, _inbox, _scheduler) = ActorInner::<CountChildExit>::open(&options);
     let control = &inner.control;
     let mut state = scope_state(&inner);
     let child_ref = ActorRef::new(Arc::clone(&child));
@@ -803,7 +799,7 @@ async fn graceful_cutoff_absorbs_a_dequeued_child_exit() {
         let (child, _child_inbox) = test_actor_inner(1);
 
         let options = <CountChildExit as ActorConfig>::Options::default();
-        let (inner, _inbox) = ActorInner::<CountChildExit>::open(&options);
+        let (inner, _inbox, _scheduler) = ActorInner::<CountChildExit>::open(&options);
         let control = &inner.control;
         let mut scope = scope_state(&inner);
         let child_ref = ActorRef::new(Arc::clone(&child));
@@ -844,7 +840,7 @@ async fn admitted_child_exit_hook_finishes_across_graceful_cutoff() {
         let (child, _child_inbox) = test_actor_inner(1);
 
         let options = <ControlledChildExit as ActorConfig>::Options::default();
-        let (inner, _inbox) = ActorInner::<ControlledChildExit>::open(&options);
+        let (inner, _inbox, _scheduler) = ActorInner::<ControlledChildExit>::open(&options);
         let control = &inner.control;
         let mut scope = scope_state(&inner);
         let child_ref = ActorRef::new(Arc::clone(&child));
@@ -903,9 +899,10 @@ async fn unadmitted_mailbox_permit_does_not_extend_drain() {
 
     let options = <TestActor as ActorConfig>::Options::default()
         .with_max_in_flight(NonZeroUsize::new(1).unwrap());
+    let (_, _, scheduler) = TestActor::open(&options);
     let status = tokio::time::timeout(
         Duration::from_secs(1),
-        run_actor::<TestActor>((), scope, inbox, TestActor::open_scheduler(&options)),
+        run_actor::<TestActor>((), scope, inbox, scheduler),
     )
     .await
     .expect("an unadmitted capacity permit must not hold Drain open");
@@ -962,11 +959,11 @@ fn truncated_reply_sweep_yields_before_ready_mailbox() {
     let owned = OwnedTasks::new(Arc::clone(&inner));
     let options = <TestActor as ActorConfig>::Options::default()
         .with_max_in_flight(NonZeroUsize::new(REPLIES).unwrap());
-    let mut scheduler = TestActor::open_scheduler(&options);
+    let (_, _, mut scheduler) = TestActor::open(&options);
     for _ in 0..REPLIES {
         let replies_polled = Arc::clone(&replies_polled);
-        RuntimeInterleavedScheduler::push_interleaved(
-            &mut scheduler,
+        scheduler.__push_interleaved(
+            Seal,
             async move {
                 replies_polled.fetch_add(1, Ordering::SeqCst);
             }
@@ -1018,7 +1015,7 @@ async fn drain_priority_precedes_owned_completion() {
     owned.close();
     let options =
         <TestActor as ActorConfig>::Options::default().with_max_in_flight(NonZeroUsize::MIN);
-    let mut scheduler = TestActor::open_scheduler(&options);
+    let (_, _, mut scheduler) = TestActor::open(&options);
     let mut actor = TestActor;
 
     assert!(matches!(
@@ -1094,7 +1091,7 @@ async fn child_kill_commits_before_actor_work_is_dropped() {
     let owned = OwnedTasks::new(Arc::clone(&inner));
     let options =
         <TestActor as ActorConfig>::Options::default().with_max_in_flight(NonZeroUsize::MIN);
-    let mut scheduler = TestActor::open_scheduler(&options);
+    let (_, _, mut scheduler) = TestActor::open(&options);
     owned.spawn(ChildKillDropProbe {
         child: child_inner,
         observed_kill: Arc::clone(&active_observed_kill),
@@ -1223,7 +1220,7 @@ fn inbox_drop_contains_each_envelope_drop() {
 #[test]
 fn unbounded_inbox_drop_contains_each_envelope_drop() {
     let options = <UnboundedTestActor as ActorConfig>::Options::default();
-    let (inner, inbox) = ActorInner::<UnboundedTestActor>::open(&options);
+    let (inner, inbox, _scheduler) = ActorInner::<UnboundedTestActor>::open(&options);
     let panic_dropped = Arc::new(AtomicBool::new(false));
     let tail_dropped = Arc::new(AtomicBool::new(false));
     let tail_dropped_while_unwinding = Arc::new(AtomicBool::new(false));

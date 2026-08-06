@@ -44,15 +44,15 @@ pub(crate) struct ActorInner<A: Actor> {
 
 // `admit` lives in control.rs, keeping raw gate access private.
 impl<A: Actor> ActorInner<A> {
-    pub(crate) fn open(options: &A::Options) -> (Arc<Self>, ActorInbox<A>) {
-        let (sender, receiver) = A::open(options);
+    pub(crate) fn open(options: &A::Options) -> (Arc<Self>, ActorInbox<A>, ActorScheduler<A>) {
+        let (sender, receiver, scheduler) = A::open(options);
         let control = Control::new();
         let actor = Arc::new(Self { sender, control });
         let inbox = ActorInbox {
             receiver,
             inner: Arc::clone(&actor),
         };
-        (actor, inbox)
+        (actor, inbox, scheduler)
     }
 }
 

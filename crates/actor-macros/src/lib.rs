@@ -17,9 +17,9 @@ mod message;
 ///
 /// - [`ActorConfig`][actor-config];
 /// - [`MessageConfig`][message-config];
-/// - [`ReplySchedulingConfig`][scheduling-config];
 /// - [`SupervisionConfig`][supervision-config].
 ///
+/// The generated `MessageConfig` opens matched runtime state.
 /// Do not implement those traits again for the same actor.
 /// A bare attribute enables no optional capability.
 ///
@@ -71,7 +71,9 @@ mod message;
 /// It does not bound active replies.
 /// [`ActorRef::call`][call] and [`ActorRef::send`][send] wait when full.
 /// [`ActorRef::try_call`][try-call] and [`ActorRef::try_send`][try-send] return immediately.
+/// A mailbox without `interleaved` uses [`Serial`][serial].
 /// Omitting `mailbox` removes public messaging methods.
+/// It selects zero-sized [`Disabled`][disabled].
 ///
 /// # Mailbox dispatch budget
 ///
@@ -102,8 +104,9 @@ mod message;
 /// This option does not require `mailbox`.
 ///
 /// [actor-config]: https://docs.rs/loong-actor/latest/loong_actor/trait.ActorConfig.html
+/// [disabled]: https://docs.rs/loong-actor/latest/loong_actor/scheduling/struct.Disabled.html
 /// [message-config]: https://docs.rs/loong-actor/latest/loong_actor/trait.MessageConfig.html
-/// [scheduling-config]: https://docs.rs/loong-actor/latest/loong_actor/trait.ReplySchedulingConfig.html
+/// [serial]: https://docs.rs/loong-actor/latest/loong_actor/scheduling/struct.Serial.html
 /// [supervision-config]: https://docs.rs/loong-actor/latest/loong_actor/trait.SupervisionConfig.html
 /// [spawn-options]: https://docs.rs/loong-actor/latest/loong_actor/type.SpawnOptions.html
 /// [mailbox-builder]: https://docs.rs/loong-actor/latest/loong_actor/trait.DynamicMailboxOptions.html#tymethod.with_mailbox_capacity

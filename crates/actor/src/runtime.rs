@@ -13,7 +13,7 @@ use pin_project_lite::pin_project;
 use crate::{
     Actor, ActorConfig, ActorRef, Child, ChildExit, ErasedFuture, ExitReason, ExitStatus,
     HasChildren, Shutdown, ShutdownStatus, SubtreeStatus,
-    config::{ReplySchedulingConfig, SupervisionConfig},
+    config::SupervisionConfig,
     mailbox::{ActorInbox, ActorInner, Control, HookEntryPermit, Mode},
     owned::OwnedTasks,
     scheduling::{ActorScheduler, RuntimeScheduler, SchedulerTurn, TurnContext},
@@ -343,8 +343,7 @@ pub struct PreparedActor<A: Actor> {
 impl<A: Actor> PreparedActor<A> {
     pub(crate) fn new(args: A::SpawnArgs, options: SpawnOptions<A>) -> Self {
         // Resolve borrowed options before any value enters the spawned task.
-        let scheduler = <A as ReplySchedulingConfig>::open_scheduler(&options);
-        let (inner, inbox) = ActorInner::open(&options);
+        let (inner, inbox, scheduler) = ActorInner::open(&options);
         let actor_ref = ActorRef::new(inner);
 
         let state = ScopeState {

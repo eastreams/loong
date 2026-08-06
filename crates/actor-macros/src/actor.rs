@@ -65,12 +65,13 @@ fn expand_actor(implementation: &ItemImpl, args: ActorArgs) -> syn::Result<Token
 
     let interleaving = match &args.interleaved {
         Some((_, interleaving)) => interleaving.expand_interleaving(&actor),
-        None => InterleavingExpansion::absent(&actor),
+        None if args.mailbox.is_some() => InterleavingExpansion::serial(&actor),
+        None => InterleavingExpansion::disabled(&actor),
     };
     let InterleavingExpansion {
         options: interleaving_options,
         scheduler,
-        open: open_scheduler,
+        open: make_scheduler,
     } = interleaving;
 
     let supervision = match &args.children {
@@ -104,19 +105,14 @@ fn expand_actor(implementation: &ItemImpl, args: ActorArgs) -> syn::Result<Token
 
             type Sender = #sender;
             type Inbox = #inbox;
-
-            fn open(options: &Self::Options) -> (Self::Sender, Self::Inbox) {
-                #open_mailbox
-            }
-        }
-
-        #(#config_attrs)*
-        #[automatically_derived]
-        impl #impl_generics #actor::ReplySchedulingConfig for #self_ty #where_clause {
             type Scheduler = #scheduler;
 
-            fn open_scheduler(options: &Self::Options) -> Self::Scheduler {
-                #open_scheduler
+            fn open(
+                options: &Self::Options,
+            ) -> (Self::Sender, Self::Inbox, Self::Scheduler) {
+                let (sender, inbox) = { #open_mailbox };
+                let scheduler = { #make_scheduler };
+                (sender, inbox, scheduler)
             }
         }
 
@@ -398,7 +394,15 @@ struct InterleavingExpansion {
 }
 
 impl InterleavingExpansion {
-    fn absent(actor: &TokenStream2) -> Self {
+    fn disabled(actor: &TokenStream2) -> Self {
+        Self {
+            options: quote!(#actor::__private::NoInterleaving),
+            scheduler: quote!(#actor::scheduling::Disabled),
+            open: quote!(#actor::scheduling::Disabled::new()),
+        }
+    }
+
+    fn serial(actor: &TokenStream2) -> Self {
         Self {
             options: quote!(#actor::__private::NoInterleaving),
             scheduler: quote!(#actor::scheduling::Serial<Self>),

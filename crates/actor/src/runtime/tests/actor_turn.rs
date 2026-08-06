@@ -10,12 +10,12 @@ use std::{
 
 use crate::{
     Actor, ActorConfig, ActorScope, ChildExit, ChildId, ExitReason, ExitStatus, HasMailbox,
-    IntoActorFuture, ReplySchedulingConfig, Shutdown, SubtreeStatus,
+    IntoActorFuture, Shutdown, SubtreeStatus,
     mailbox::{ActorInbox, ActorInner, Control, Envelope, Mode},
     owned::OwnedTasks,
     scheduling::{
-        ActorScheduler, InterleavedLane, InterleavedProfile, RuntimeInterleavedScheduler,
-        RuntimeScheduler, SchedulerTurn,
+        ActorScheduler, InterleavedLane, InterleavedProfile, InterleavedScheduler, ReplyScheduler,
+        RuntimeScheduler, SchedulerTurn, Seal,
     },
     supervision::runtime::tests::ChildrenFixture,
     transport::MessageConfig,
@@ -95,7 +95,8 @@ impl ActorTurnFixture<TestActor> {
         let (inner, inbox) = test_actor_inner(mailbox_capacity);
         let options =
             <TestActor as ActorConfig>::Options::default().with_max_in_flight(max_interleaved);
-        Self::from_parts(TestActor, inner, inbox, TestActor::open_scheduler(&options))
+        let (_, _, scheduler) = TestActor::open(&options);
+        Self::from_parts(TestActor, inner, inbox, scheduler)
     }
 }
 
@@ -115,13 +116,8 @@ impl ActorTurnFixture<SerialActor> {
         let capacity = NonZeroUsize::new(mailbox_capacity).expect("test capacity is nonzero");
         let options =
             <SerialActor as ActorConfig>::Options::default().with_mailbox_capacity(capacity);
-        let (inner, inbox) = ActorInner::open(&options);
-        Self::from_parts(
-            SerialActor,
-            inner,
-            inbox,
-            SerialActor::open_scheduler(&options),
-        )
+        let (inner, inbox, scheduler) = ActorInner::open(&options);
+        Self::from_parts(SerialActor, inner, inbox, scheduler)
     }
 }
 
@@ -197,13 +193,10 @@ impl Envelope<TestActor> for BatchBoundaryEnvelope {
         self.dispatched.fetch_add(1, Ordering::SeqCst);
         match self.boundary {
             BatchBoundary::Exclusive => {
-                RuntimeScheduler::push_exclusive(
-                    scheduler,
-                    std::future::pending::<()>().into_actor(),
-                );
+                scheduler.__push_exclusive(Seal, std::future::pending::<()>().into_actor());
             }
             BatchBoundary::Interleaved => {
-                RuntimeInterleavedScheduler::push_interleaved(scheduler, async {}.into_actor());
+                scheduler.__push_interleaved(Seal, async {}.into_actor());
             }
         }
     }
@@ -230,7 +223,7 @@ async fn ordinary_cursor_visits_each_actor_source_between_mailbox_batches() {
     ));
 
     let interleaved_completed = Arc::new(AtomicBool::new(false));
-    RuntimeInterleavedScheduler::push_interleaved(&mut fixture.scheduler, {
+    fixture.scheduler.__push_interleaved(Seal, {
         let completed = Arc::clone(&interleaved_completed);
         async move {
             completed.store(true, Ordering::SeqCst);
@@ -291,8 +284,8 @@ async fn completed_exclusive_drop_panic_is_contained_after_removal() {
     let mut fixture = ActorTurnFixture::new(1, NonZeroUsize::MIN);
     let drops = Arc::new(AtomicUsize::new(0));
     let dropped_while_unwinding = Arc::new(AtomicBool::new(false));
-    RuntimeScheduler::push_exclusive(
-        &mut fixture.scheduler,
+    fixture.scheduler.__push_exclusive(
+        Seal,
         ReadyExclusiveDrop {
             drops: Arc::clone(&drops),
             dropped_while_unwinding: Arc::clone(&dropped_while_unwinding),
@@ -317,7 +310,9 @@ async fn drain_rotates_then_uses_the_configured_mailbox_budget() {
     let dispatched = Arc::new(AtomicUsize::new(0));
     let mut fixture =
         ActorTurnFixture::new(mailbox_dispatch_budget + 2, NonZeroUsize::new(2).unwrap());
-    RuntimeInterleavedScheduler::push_interleaved(&mut fixture.scheduler, async {}.into_actor());
+    fixture
+        .scheduler
+        .__push_interleaved(Seal, async {}.into_actor());
     fixture.state.children.publish(ChildExit::new(
         ChildId::invalid_for_test(),
         ExitStatus::new(ExitReason::Stopped, SubtreeStatus::Terminated),

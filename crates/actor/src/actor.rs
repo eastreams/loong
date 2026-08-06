@@ -2,9 +2,9 @@ use std::future::Future;
 
 use crate::{
     ActorScope, ChildExit, ExitReason, StopScope,
-    config::{ReplySchedulingConfig, SupervisionConfig},
+    config::SupervisionConfig,
     reply::{IntoReply, ReplyExt},
-    scheduling::{InterleavedScheduler, ReplyScheduler},
+    scheduling::{InterleavedScheduler, ReplyScheduler, SchedulerProfile},
     transport::{MessageConfig, MessageInbox, MessageSender, RuntimeInbox},
 };
 
@@ -12,8 +12,8 @@ use crate::{
 ///
 /// Use [`#[actor(...)]`](macro@crate::actor) for built-in runtime profiles.
 /// Manual configurations implement [`ActorConfig`](crate::ActorConfig).
-/// They also implement [`MessageConfig`], [`ReplySchedulingConfig`], and
-/// [`SupervisionConfig`].
+/// [`MessageConfig`] supplies transport and reply scheduling.
+/// [`SupervisionConfig`] supplies child actor ownership.
 ///
 /// Initialization and lifecycle hooks run in the serial actor context.
 /// While they are pending, handlers and actor-aware replies pause.
@@ -35,8 +35,7 @@ use crate::{
 /// Their confirmation appears in
 /// [`ExitStatus::subtree`](crate::ExitStatus::subtree).
 pub trait Actor:
-    MessageConfig<Inbox: RuntimeInbox<Self>>
-    + ReplySchedulingConfig<Scheduler: ReplyScheduler<Self>>
+    MessageConfig<Inbox: RuntimeInbox<Self>, Scheduler: SchedulerProfile<Self>>
     + SupervisionConfig
     + Send
     + Sized
@@ -188,7 +187,12 @@ where
     label = "select or implement a mailbox transport"
 )]
 pub trait HasMailbox:
-    Actor + MessageConfig<Sender: MessageSender<Self>, Inbox: MessageInbox<Self>>
+    Actor
+    + MessageConfig<
+        Sender: MessageSender<Self>,
+        Inbox: MessageInbox<Self>,
+        Scheduler: ReplyScheduler<Self>,
+    >
 {
 }
 
@@ -200,6 +204,7 @@ where
     A: Actor,
     A::Sender: MessageSender<A>,
     A::Inbox: MessageInbox<A>,
+    A::Scheduler: ReplyScheduler<A>,
 {
 }
 
@@ -216,7 +221,7 @@ where
     label = "interleaved replies require mailbox and interleaving capabilities"
 )]
 pub trait HasInterleaving:
-    HasMailbox + ReplySchedulingConfig<Scheduler: InterleavedScheduler<Self>>
+    HasMailbox + MessageConfig<Scheduler: InterleavedScheduler<Self>>
 {
 }
 

@@ -2,13 +2,14 @@
 //!
 //! [`#[actor(...)]`](macro@crate::actor) selects one profile:
 //!
-//! - omitting `interleaved` selects [`Serial`];
+//! - omitting `mailbox` selects [`Disabled`];
+//! - `mailbox` without `interleaved` selects [`Serial`];
 //! - fixed `interleaved` forms select [`Fixed`];
 //! - dynamic `interleaved` forms select [`Dynamic`];
 //! - unbounded `interleaved` selects [`Unbounded`].
 //!
 //! The macro reference documents syntax and defaults.
-//! Manual configurations may select a profile directly.
+//! Manual [`MessageConfig`] implementations select a profile directly.
 //!
 //! A finite limit bounds active interleaved replies.
 //! At the limit, dispatch pauses before the next handler.
@@ -31,14 +32,11 @@ use std::{
 
 use crate::{
     Actor, ActorFuture, ActorScope,
-    config::ReplySchedulingConfig,
     mailbox::{Control, Mode},
-    transport::{MessageInbox, MessageSender},
+    transport::{MessageConfig, MessageInbox, MessageSender, NoInbox, NoSender},
 };
 
-pub(crate) use runtime::{
-    ActorScheduler, RuntimeInterleavedScheduler, RuntimeScheduler, SchedulerTurn, TurnContext,
-};
+pub(crate) use runtime::{ActorScheduler, RuntimeScheduler, SchedulerTurn, Seal, TurnContext};
 
 use queue::Queue;
 
@@ -52,7 +50,7 @@ fn drop_without_unwind<T>(value: T) {
     }
 }
 
-/// A sealed reply scheduling profile for one actor.
+/// A sealed runtime scheduling profile for one actor.
 ///
 /// Custom configurations select a built-in profile.
 /// They do not implement this trait directly.
@@ -62,9 +60,34 @@ fn drop_without_unwind<T>(value: T) {
 )]
 #[allow(
     private_bounds,
-    reason = "this proof trait seals private runtime operations"
+    private_interfaces,
+    reason = "a private runtime bridge seals reply profiles"
 )]
-pub trait ReplyScheduler<A: Actor>: runtime::RuntimeScheduler<A> {}
+pub trait SchedulerProfile<A: Actor>: Send + 'static + Sized {
+    /// Private strategy selected by this profile.
+    #[doc(hidden)]
+    type Strategy: runtime::SchedulerStrategy<A, Self>;
+}
+
+/// A sealed profile supporting actor-aware replies.
+///
+/// [`Disabled`] intentionally lacks this capability.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` cannot schedule actor-aware replies for `{A}`",
+    label = "select a scheduler compatible with this actor's mailbox"
+)]
+#[allow(
+    private_bounds,
+    private_interfaces,
+    reason = "a private runtime bridge reserves reply scheduling"
+)]
+pub trait ReplyScheduler<A: Actor>: SchedulerProfile<A> {
+    /// Pushes exclusive work through the sealed runtime bridge.
+    #[doc(hidden)]
+    fn __push_exclusive<F>(&mut self, _: runtime::Seal, future: F)
+    where
+        F: ActorFuture<A, Output = ()> + Send + 'static;
+}
 
 /// A sealed profile supporting interleaved replies.
 ///
@@ -75,14 +98,31 @@ pub trait ReplyScheduler<A: Actor>: runtime::RuntimeScheduler<A> {}
 )]
 #[allow(
     private_bounds,
-    reason = "this proof trait seals private runtime operations"
+    private_interfaces,
+    reason = "a private runtime bridge reserves interleaved scheduling"
 )]
-pub trait InterleavedScheduler<A: Actor>:
-    ReplyScheduler<A> + runtime::RuntimeInterleavedScheduler<A>
-{
+pub trait InterleavedScheduler<A: Actor>: ReplyScheduler<A> {
+    /// Pushes interleaved work through the sealed runtime bridge.
+    #[doc(hidden)]
+    fn __push_interleaved<F>(&mut self, _: runtime::Seal, future: F)
+    where
+        F: ActorFuture<A, Output = ()> + Send + 'static;
 }
 
-/// Schedules actor-aware replies without interleaving.
+/// The scheduler for actors without a mailbox.
+///
+/// This profile is zero-sized and schedules nothing.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Disabled;
+
+impl Disabled {
+    /// Creates a disabled profile.
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+/// The scheduler for mailbox actors without interleaving.
 ///
 /// Ready replies require no scheduler storage.
 /// Owned replies run in separate Tokio tasks.
@@ -165,54 +205,145 @@ impl<A: Actor> Default for Unbounded<A> {
     }
 }
 
-impl<A> ReplyScheduler<A> for Serial<A> where A: Actor + ReplySchedulingConfig<Scheduler = Self> {}
-
-impl<A, const N: usize> ReplyScheduler<A> for Fixed<A, N>
+impl<A> SchedulerProfile<A> for Disabled
 where
-    A: Actor + ReplySchedulingConfig<Scheduler = Self>,
+    A: Actor + MessageConfig<Sender = NoSender, Inbox = NoInbox, Scheduler = Self>,
+{
+    type Strategy = runtime::DisabledStrategy;
+}
+
+impl<A> SchedulerProfile<A> for Serial<A>
+where
+    A: Actor + MessageConfig<Scheduler = Self>,
     A::Sender: MessageSender<A>,
     A::Inbox: MessageInbox<A>,
 {
+    type Strategy = runtime::SerialStrategy;
+}
+
+impl<A, const N: usize> SchedulerProfile<A> for Fixed<A, N>
+where
+    A: Actor + MessageConfig<Scheduler = Self>,
+    A::Sender: MessageSender<A>,
+    A::Inbox: MessageInbox<A>,
+{
+    type Strategy = runtime::InterleavedStrategy;
+}
+
+impl<A> SchedulerProfile<A> for Dynamic<A>
+where
+    A: Actor + MessageConfig<Scheduler = Self>,
+    A::Sender: MessageSender<A>,
+    A::Inbox: MessageInbox<A>,
+{
+    type Strategy = runtime::InterleavedStrategy;
+}
+
+impl<A> SchedulerProfile<A> for Unbounded<A>
+where
+    A: Actor + MessageConfig<Scheduler = Self>,
+    A::Sender: MessageSender<A>,
+    A::Inbox: MessageInbox<A>,
+{
+    type Strategy = runtime::InterleavedStrategy;
+}
+
+impl<A> ReplyScheduler<A> for Serial<A>
+where
+    A: Actor + MessageConfig<Scheduler = Self>,
+    A::Sender: MessageSender<A>,
+    A::Inbox: MessageInbox<A>,
+{
+    fn __push_exclusive<F>(&mut self, _: runtime::Seal, future: F)
+    where
+        F: ActorFuture<A, Output = ()> + Send + 'static,
+    {
+        self.exclusive.push(future);
+    }
+}
+
+impl<A, const N: usize> ReplyScheduler<A> for Fixed<A, N>
+where
+    A: Actor + MessageConfig<Scheduler = Self>,
+    A::Sender: MessageSender<A>,
+    A::Inbox: MessageInbox<A>,
+{
+    fn __push_exclusive<F>(&mut self, _: runtime::Seal, future: F)
+    where
+        F: ActorFuture<A, Output = ()> + Send + 'static,
+    {
+        self.state.exclusive.push(future);
+    }
 }
 
 impl<A> ReplyScheduler<A> for Dynamic<A>
 where
-    A: Actor + ReplySchedulingConfig<Scheduler = Self>,
+    A: Actor + MessageConfig<Scheduler = Self>,
     A::Sender: MessageSender<A>,
     A::Inbox: MessageInbox<A>,
 {
+    fn __push_exclusive<F>(&mut self, _: runtime::Seal, future: F)
+    where
+        F: ActorFuture<A, Output = ()> + Send + 'static,
+    {
+        self.state.exclusive.push(future);
+    }
 }
 
 impl<A> ReplyScheduler<A> for Unbounded<A>
 where
-    A: Actor + ReplySchedulingConfig<Scheduler = Self>,
+    A: Actor + MessageConfig<Scheduler = Self>,
     A::Sender: MessageSender<A>,
     A::Inbox: MessageInbox<A>,
 {
+    fn __push_exclusive<F>(&mut self, _: runtime::Seal, future: F)
+    where
+        F: ActorFuture<A, Output = ()> + Send + 'static,
+    {
+        self.state.exclusive.push(future);
+    }
 }
 
 impl<A, const N: usize> InterleavedScheduler<A> for Fixed<A, N>
 where
-    A: Actor + ReplySchedulingConfig<Scheduler = Self>,
+    A: Actor + MessageConfig<Scheduler = Self>,
     A::Sender: MessageSender<A>,
     A::Inbox: MessageInbox<A>,
 {
+    fn __push_interleaved<F>(&mut self, _: runtime::Seal, future: F)
+    where
+        F: ActorFuture<A, Output = ()> + Send + 'static,
+    {
+        self.state.push_interleaved(Box::pin(future));
+    }
 }
 
 impl<A> InterleavedScheduler<A> for Dynamic<A>
 where
-    A: Actor + ReplySchedulingConfig<Scheduler = Self>,
+    A: Actor + MessageConfig<Scheduler = Self>,
     A::Sender: MessageSender<A>,
     A::Inbox: MessageInbox<A>,
 {
+    fn __push_interleaved<F>(&mut self, _: runtime::Seal, future: F)
+    where
+        F: ActorFuture<A, Output = ()> + Send + 'static,
+    {
+        self.state.push_interleaved(Box::pin(future));
+    }
 }
 
 impl<A> InterleavedScheduler<A> for Unbounded<A>
 where
-    A: Actor + ReplySchedulingConfig<Scheduler = Self>,
+    A: Actor + MessageConfig<Scheduler = Self>,
     A::Sender: MessageSender<A>,
     A::Inbox: MessageInbox<A>,
 {
+    fn __push_interleaved<F>(&mut self, _: runtime::Seal, future: F)
+    where
+        F: ActorFuture<A, Output = ()> + Send + 'static,
+    {
+        self.state.push_interleaved(Box::pin(future));
+    }
 }
 
 pub(crate) struct InterleavedState<A: Actor, L> {

@@ -66,7 +66,8 @@ impl Actor for RegistrationProbe {
 }
 
 fn actor_inner<A: Actor>() -> (Arc<ActorInner<A>>, ActorInbox<A>) {
-    ActorInner::open(&<A as ActorConfig>::Options::default())
+    let (inner, inbox, _scheduler) = ActorInner::open(&<A as ActorConfig>::Options::default());
+    (inner, inbox)
 }
 
 // The only child start token names an existing registration.

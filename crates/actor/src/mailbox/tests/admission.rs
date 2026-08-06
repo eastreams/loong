@@ -84,7 +84,8 @@ impl Envelope<UnboundedTestActor> for PanicDropEnvelope {
 
 fn open<A: Actor>() -> (Arc<ActorInner<A>>, ActorInbox<A>) {
     let options = <A as ActorConfig>::Options::default();
-    ActorInner::open(&options)
+    let (inner, inbox, _scheduler) = ActorInner::open(&options);
+    (inner, inbox)
 }
 
 #[derive(Message)]

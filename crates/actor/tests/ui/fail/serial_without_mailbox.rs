@@ -1,4 +1,4 @@
-// An active scheduler requires public mailbox operations.
+// A disabled transport cannot select an active scheduler profile.
 use loong_actor::{
     Actor, ActorConfig, ActorScope, MessageConfig, SupervisionConfig, scheduling, supervision,
     transport::{NoInbox, NoSender},
@@ -6,28 +6,25 @@ use loong_actor::{
 
 struct Manual;
 
-#[derive(Default)]
-struct Options;
-
 impl ActorConfig for Manual {
-    type Options = Options;
+    type Options = ();
 }
 
 impl MessageConfig for Manual {
     type Sender = NoSender;
     type Inbox = NoInbox;
-    type Scheduler = scheduling::Fixed<Self, 1>;
+    type Scheduler = scheduling::Serial<Self>;
 
-    fn open(_options: &Self::Options) -> (Self::Sender, Self::Inbox, Self::Scheduler) {
+    fn open(_: &Self::Options) -> (Self::Sender, Self::Inbox, Self::Scheduler) {
         let (sender, inbox) = NoSender::open();
-        (sender, inbox, scheduling::Fixed::new())
+        (sender, inbox, scheduling::Serial::new())
     }
 }
 
 impl SupervisionConfig for Manual {
     type Children = supervision::Disabled;
 
-    fn open_children(_options: &Self::Options) -> Self::Children {
+    fn open_children(_: &Self::Options) -> Self::Children {
         supervision::Disabled::new()
     }
 }

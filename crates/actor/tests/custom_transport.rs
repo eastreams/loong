@@ -9,8 +9,7 @@ use std::{
 use loong_actor::{
     Actor, ActorConfig, ActorFuture, ActorFutureExt, ActorScope, ExitReason, Handler, HasChildren,
     HasInterleaving, InterleavedFutureExt, IntoActorFuture, IntoReply, Message, MessageConfig,
-    ReplySchedulingConfig, Shutdown, SupervisionConfig, SyncHandler, scheduling, spawn_with,
-    supervision,
+    Shutdown, SupervisionConfig, SyncHandler, scheduling, spawn_with, supervision,
     transport::{
         ErasedEnvelope, MessageInbox, MessageReservation, MessageSender, RuntimeInbox,
         TryReserveError,
@@ -115,18 +114,12 @@ impl ActorConfig for ManualActor {
 impl MessageConfig for ManualActor {
     type Sender = ManualSender<Self>;
     type Inbox = ManualInbox<Self>;
-
-    fn open(options: &Self::Options) -> (Self::Sender, Self::Inbox) {
-        options.opened.set(true);
-        ManualSender::open()
-    }
-}
-
-impl ReplySchedulingConfig for ManualActor {
     type Scheduler = scheduling::Fixed<Self, 1>;
 
-    fn open_scheduler(_options: &Self::Options) -> Self::Scheduler {
-        scheduling::Fixed::new()
+    fn open(options: &Self::Options) -> (Self::Sender, Self::Inbox, Self::Scheduler) {
+        options.opened.set(true);
+        let (sender, inbox) = ManualSender::open();
+        (sender, inbox, scheduling::Fixed::new())
     }
 }
 
@@ -155,17 +148,11 @@ impl ActorConfig for ManualSerial {
 impl MessageConfig for ManualSerial {
     type Sender = ManualSender<Self>;
     type Inbox = ManualInbox<Self>;
-
-    fn open(_options: &Self::Options) -> (Self::Sender, Self::Inbox) {
-        ManualSender::open()
-    }
-}
-
-impl ReplySchedulingConfig for ManualSerial {
     type Scheduler = scheduling::Serial<Self>;
 
-    fn open_scheduler(_options: &Self::Options) -> Self::Scheduler {
-        scheduling::Serial::new()
+    fn open(_options: &Self::Options) -> (Self::Sender, Self::Inbox, Self::Scheduler) {
+        let (sender, inbox) = ManualSender::open();
+        (sender, inbox, scheduling::Serial::new())
     }
 }
 
@@ -194,17 +181,15 @@ impl ActorConfig for ManualDynamic {
 impl MessageConfig for ManualDynamic {
     type Sender = ManualSender<Self>;
     type Inbox = ManualInbox<Self>;
-
-    fn open(_options: &Self::Options) -> (Self::Sender, Self::Inbox) {
-        ManualSender::open()
-    }
-}
-
-impl ReplySchedulingConfig for ManualDynamic {
     type Scheduler = scheduling::Dynamic<Self>;
 
-    fn open_scheduler(_options: &Self::Options) -> Self::Scheduler {
-        scheduling::Dynamic::new(std::num::NonZeroUsize::MIN)
+    fn open(_options: &Self::Options) -> (Self::Sender, Self::Inbox, Self::Scheduler) {
+        let (sender, inbox) = ManualSender::open();
+        (
+            sender,
+            inbox,
+            scheduling::Dynamic::new(std::num::NonZeroUsize::MIN),
+        )
     }
 }
 
@@ -233,17 +218,11 @@ impl ActorConfig for ManualUnbounded {
 impl MessageConfig for ManualUnbounded {
     type Sender = ManualSender<Self>;
     type Inbox = ManualInbox<Self>;
-
-    fn open(_options: &Self::Options) -> (Self::Sender, Self::Inbox) {
-        ManualSender::open()
-    }
-}
-
-impl ReplySchedulingConfig for ManualUnbounded {
     type Scheduler = scheduling::Unbounded<Self>;
 
-    fn open_scheduler(_options: &Self::Options) -> Self::Scheduler {
-        scheduling::Unbounded::new()
+    fn open(_options: &Self::Options) -> (Self::Sender, Self::Inbox, Self::Scheduler) {
+        let (sender, inbox) = ManualSender::open();
+        (sender, inbox, scheduling::Unbounded::new())
     }
 }
 
@@ -304,14 +283,16 @@ where
     future.interleaved()
 }
 
-// A manual transport may pair with every built-in scheduler profile.
+// A manual transport may select every active scheduler profile.
 #[test]
 fn manual_transport_selects_each_public_scheduler() {
     let options = ManualOptions::default();
-    let _: scheduling::Fixed<ManualActor, 1> = ManualActor::open_scheduler(&options);
-    let _: scheduling::Serial<ManualSerial> = ManualSerial::open_scheduler(&());
-    let _: scheduling::Dynamic<ManualDynamic> = ManualDynamic::open_scheduler(&());
-    let _: scheduling::Unbounded<ManualUnbounded> = ManualUnbounded::open_scheduler(&());
+    let (_, _, fixed): (_, _, scheduling::Fixed<ManualActor, 1>) = ManualActor::open(&options);
+    let (_, _, serial): (_, _, scheduling::Serial<ManualSerial>) = ManualSerial::open(&());
+    let (_, _, dynamic): (_, _, scheduling::Dynamic<ManualDynamic>) = ManualDynamic::open(&());
+    let (_, _, unbounded): (_, _, scheduling::Unbounded<ManualUnbounded>) =
+        ManualUnbounded::open(&());
+    drop((fixed, serial, dynamic, unbounded));
 }
 
 // Manual configs can select every built-in supervision profile.

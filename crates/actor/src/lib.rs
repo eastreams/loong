@@ -66,6 +66,11 @@
 //! Most actors use [`#[actor(...)]`](actor) on their [`Actor`] implementation.
 //! The attribute generates the built-in runtime configuration.
 //! Its reference documents every syntax, default, and constraint.
+//! The generated [`MessageConfig`] opens three matched states.
+//! They are [`Sender`](MessageConfig::Sender), [`Inbox`](MessageConfig::Inbox),
+//! and [`Scheduler`](MessageConfig::Scheduler).
+//! Without `mailbox`, the scheduler is [`Disabled`](scheduling::Disabled).
+//! Without `interleaved`, a mailbox uses [`Serial`](scheduling::Serial).
 //!
 //! | Option | Purpose | When omitted |
 //! | --- | --- | --- |
@@ -176,7 +181,8 @@
 //!
 //! The `actor` attribute covers built-in runtime shapes.
 //! Custom configurations implement [`ActorConfig`] and [`MessageConfig`].
-//! They also implement [`ReplySchedulingConfig`] and [`SupervisionConfig`].
+//! They also implement [`SupervisionConfig`].
+//! [`MessageConfig`] opens transport and reply scheduling together.
 //! Choose public profiles from [`scheduling`] and [`supervision`].
 //! The [`transport`] module documents custom message transports.
 //!
@@ -213,7 +219,7 @@ pub use actor::{Actor, Handler, HasChildren, HasInterleaving, HasMailbox, Messag
 pub use address::{ActorRef, Response};
 pub use config::{
     ActorConfig, DynamicChildrenOptions, DynamicInterleavingOptions, DynamicMailboxOptions,
-    ReplySchedulingConfig, SupervisionConfig,
+    SupervisionConfig,
 };
 pub use error::{
     CallError, SendError, TryCallError, TryCallErrorKind, TrySendError, TrySendErrorKind,

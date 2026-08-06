@@ -10,8 +10,8 @@ use std::{
 };
 
 use loong_actor::{
-    Actor, ActorConfig, ActorScope, MessageConfig, ReplySchedulingConfig, Shutdown, SpawnOptions,
-    SupervisionConfig, actor, scheduling, spawn, spawn_with, supervision,
+    Actor, ActorConfig, ActorScope, MessageConfig, Shutdown, SpawnOptions, SupervisionConfig,
+    actor, scheduling, spawn, spawn_with, supervision,
     transport::{NoInbox, NoSender},
 };
 use tokio::sync::oneshot;
@@ -150,18 +150,12 @@ impl ActorConfig for PreparationProbe {
 impl MessageConfig for PreparationProbe {
     type Sender = NoSender;
     type Inbox = NoInbox;
+    type Scheduler = scheduling::Disabled;
 
-    fn open(options: &Self::Options) -> (Self::Sender, Self::Inbox) {
+    fn open(options: &Self::Options) -> (Self::Sender, Self::Inbox, Self::Scheduler) {
         options.opened.fetch_add(1, Ordering::SeqCst);
-        NoSender::open()
-    }
-}
-
-impl ReplySchedulingConfig for PreparationProbe {
-    type Scheduler = scheduling::Serial<Self>;
-
-    fn open_scheduler(_: &Self::Options) -> Self::Scheduler {
-        scheduling::Serial::new()
+        let (sender, inbox) = NoSender::open();
+        (sender, inbox, scheduling::Disabled::new())
     }
 }
 

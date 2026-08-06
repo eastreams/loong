@@ -1,7 +1,10 @@
-use std::{mem::size_of, num::NonZeroUsize};
+use std::{
+    mem::{needs_drop, size_of},
+    num::NonZeroUsize,
+};
 
 use crate::{
-    Actor, ActorScope, HasChildren, HasInterleaving, MessageConfig, actor, supervision,
+    Actor, ActorScope, HasChildren, HasInterleaving, MessageConfig, actor, scheduling, supervision,
     transport::{MessageSender, TryReserveError},
 };
 
@@ -9,8 +12,8 @@ use super::{
     ActorConfig, ActorOptions, DEFAULT_MAILBOX_CAPACITY, DEFAULT_MAX_CHILDREN,
     DEFAULT_MAX_IN_FLIGHT, DynamicChildren, DynamicChildrenOptions, DynamicInterleaving,
     DynamicInterleavingOptions, DynamicMailbox, DynamicMailboxOptions, FixedChildren,
-    FixedInterleaving, FixedMailbox, NoChildren, NoInterleaving, NoMailbox, ReplySchedulingConfig,
-    SupervisionConfig, UnboundedChildren, UnboundedInterleaving, UnboundedMailbox,
+    FixedInterleaving, FixedMailbox, NoChildren, NoInterleaving, NoMailbox, SupervisionConfig,
+    UnboundedChildren, UnboundedInterleaving, UnboundedMailbox,
 };
 
 struct Bare;
@@ -92,7 +95,7 @@ impl Actor for Unbounded {
 
 fn assert_config<A>()
 where
-    A: ActorConfig + MessageConfig + ReplySchedulingConfig + SupervisionConfig,
+    A: ActorConfig + MessageConfig + SupervisionConfig,
 {
 }
 
@@ -150,6 +153,15 @@ fn generated_configs_use_actor_specific_options() {
     assert_send_sync_static::<<Unbounded as ActorConfig>::Options>();
 
     assert_same::<<Bare as SupervisionConfig>::Children, supervision::Disabled>();
+    assert_same::<<Bare as MessageConfig>::Scheduler, scheduling::Disabled>();
+    assert_same::<<DefaultMailbox as MessageConfig>::Scheduler, scheduling::Serial<DefaultMailbox>>(
+    );
+    assert_same::<<DefaultChildren as MessageConfig>::Scheduler, scheduling::Disabled>();
+    assert_same::<<Fixed as MessageConfig>::Scheduler, scheduling::Fixed<Fixed, 7>>();
+    assert_same::<<Dynamic as MessageConfig>::Scheduler, scheduling::Dynamic<Dynamic>>();
+    assert_same::<<CustomDynamic as MessageConfig>::Scheduler, scheduling::Dynamic<CustomDynamic>>(
+    );
+    assert_same::<<Unbounded as MessageConfig>::Scheduler, scheduling::Unbounded<Unbounded>>();
     assert_same::<
         <DefaultChildren as SupervisionConfig>::Children,
         supervision::Fixed<DEFAULT_MAX_CHILDREN>,
@@ -163,6 +175,17 @@ fn generated_configs_use_actor_specific_options() {
 #[test]
 fn omitted_interleaving_uses_zero_sized_spawn_state() {
     assert_eq!(size_of::<NoInterleaving>(), 0);
+}
+
+#[test]
+fn omitted_mailbox_uses_no_scheduler_state() {
+    assert_eq!(size_of::<<Bare as MessageConfig>::Scheduler>(), 0);
+    assert_eq!(
+        size_of::<<DefaultChildren as MessageConfig>::Scheduler>(),
+        0
+    );
+    assert!(!needs_drop::<<Bare as MessageConfig>::Scheduler>());
+    assert!(!needs_drop::<<DefaultChildren as MessageConfig>::Scheduler>());
 }
 
 #[test]
@@ -191,7 +214,7 @@ fn dynamic_options_resolve_default_and_override_capacity() {
 #[test]
 fn default_mailbox_uses_the_shared_capacity() {
     let options = <DefaultMailbox as ActorConfig>::Options::default();
-    let (sender, _inbox) = <DefaultMailbox as MessageConfig>::open(&options);
+    let (sender, _inbox, _scheduler) = <DefaultMailbox as MessageConfig>::open(&options);
     let reservations = (0..DEFAULT_MAILBOX_CAPACITY)
         .map(|_| sender.try_reserve().unwrap())
         .collect::<Vec<_>>();

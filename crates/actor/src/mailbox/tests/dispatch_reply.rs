@@ -14,7 +14,7 @@ use tokio::sync::oneshot;
 
 use crate::{
     Actor, ActorConfig, ActorScope, CallError, ExitReason, FutureActor, InterleavedFutureExt,
-    IntoActorFuture, Message, ReplyExt, ReplySchedulingConfig, Shutdown, ShutdownStatus,
+    IntoActorFuture, Message, MessageConfig, ReplyExt, Shutdown, ShutdownStatus,
     owned::OwnedTasks,
     reply::{Either, Interleaved, Ready, sealed::HandleReply},
     scheduling::{InterleavedProfile, RuntimeScheduler},
@@ -84,7 +84,7 @@ fn either_promotes_only_the_escaping_branch() {
     let inner = actor_inner();
     let owned = OwnedTasks::new(Arc::clone(&inner));
     let options = <TestActor as ActorConfig>::Options::default();
-    let mut scheduler = TestActor::open_scheduler(&options);
+    let (_, _, mut scheduler) = TestActor::open(&options);
     let strong = Arc::strong_count(&inner);
 
     let permit = inner.begin_dispatch().expect("dispatch wins the gate");

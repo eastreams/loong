@@ -4,6 +4,16 @@ use std::num::NonZeroUsize;
 
 use actor_api::{ActorConfig, MessageConfig, prelude::*};
 
+trait Same<T> {}
+
+impl<T> Same<T> for T {}
+
+fn assert_same<T, U>()
+where
+    T: Same<U>,
+{
+}
+
 struct Bare;
 
 #[actor]
@@ -154,6 +164,20 @@ where
 }
 
 fn main() {
+    assert_same::<<Bare as MessageConfig>::Scheduler, actor_api::scheduling::Disabled>();
+    assert_same::<
+        <Messaging as MessageConfig>::Scheduler,
+        actor_api::scheduling::Serial<Messaging>,
+    >();
+    assert_same::<
+        <DefaultCapabilities as MessageConfig>::Scheduler,
+        actor_api::scheduling::Fixed<DefaultCapabilities, 32>,
+    >();
+    assert_same::<
+        <Generic<u8, 6> as MessageConfig>::Scheduler,
+        actor_api::scheduling::Dynamic<Generic<u8, 6>>,
+    >();
+
     assert_eq!(Messaging::MAILBOX_DISPATCH_BUDGET.get(), 3);
     assert_eq!(Combined::MAILBOX_DISPATCH_BUDGET.get(), MAILBOX_BUDGET);
     assert_eq!(Generic::<u8, 6>::MAILBOX_DISPATCH_BUDGET.get(), 6);

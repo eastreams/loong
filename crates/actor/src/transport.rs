@@ -44,10 +44,14 @@ use tokio::sync::mpsc;
 
 use crate::{Actor, ActorConfig, mailbox::Envelope};
 
-/// Configures one actor's message transport.
+/// Configures one actor's messaging state.
 ///
 /// Implement this manually only for custom transports.
 /// Built-in actors should use [`#[actor(...)]`](macro@crate::actor).
+/// `open` creates one matched state triple.
+/// Actor bounds reject incompatible state triples.
+/// Actors without a mailbox use [`scheduling::Disabled`](crate::scheduling::Disabled).
+/// Mailbox actors without interleaving use [`scheduling::Serial`](crate::scheduling::Serial).
 pub trait MessageConfig: ActorConfig {
     /// Maximum mailbox dispatches during one actor lane visit.
     ///
@@ -62,10 +66,13 @@ pub trait MessageConfig: ActorConfig {
     /// Receiving state owned by the actor task.
     type Inbox: Send + 'static;
 
-    /// Opens this actor's transport.
+    /// Reply scheduling state paired with this transport.
+    type Scheduler: Send + 'static;
+
+    /// Opens sender, inbox, and scheduler together.
     ///
     /// Resolution finishes before the actor task starts.
-    fn open(options: &Self::Options) -> (Self::Sender, Self::Inbox);
+    fn open(options: &Self::Options) -> (Self::Sender, Self::Inbox, Self::Scheduler);
 }
 
 /// An opaque accepted message owned by a transport.

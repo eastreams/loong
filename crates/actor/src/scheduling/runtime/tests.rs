@@ -9,12 +9,25 @@ use std::{
 };
 
 use crate::{
-    Actor, ActorConfig, ActorFuture, ActorScope, IntoActorFuture, ReplySchedulingConfig,
+    Actor, ActorConfig, ActorFuture, ActorScope, IntoActorFuture, MessageConfig,
     mailbox::{ActorInner, Mode},
-    scheduling::{Exclusive, Fixed, InterleavedProfile, Serial},
+    scheduling::{
+        Exclusive, Fixed, InterleavedProfile, InterleavedScheduler, ReplyScheduler, Seal, Serial,
+    },
 };
 
-use super::{RuntimeInterleavedScheduler, RuntimeScheduler};
+use super::RuntimeScheduler;
+
+struct DisabledActor;
+
+#[crate::actor]
+impl Actor for DisabledActor {
+    type SpawnArgs = ();
+
+    async fn init(_: (), _: &mut ActorScope<'_, Self>) -> Self {
+        Self
+    }
+}
 
 struct SerialActor;
 
@@ -62,46 +75,35 @@ impl Actor for UnboundedActor {
 
 #[test]
 fn serial_profile_has_smaller_runtime_state() {
+    assert_eq!(size_of::<<DisabledActor as MessageConfig>::Scheduler>(), 0);
     assert!(size_of::<Serial<SerialActor>>() < size_of::<Fixed<FixedActor, 2>>());
 }
 
 #[test]
 fn fixed_limit_stops_dispatch_at_capacity() {
     let options = <FixedActor as ActorConfig>::Options::default();
-    let mut scheduler = FixedActor::open_scheduler(&options);
+    let (_, _, mut scheduler) = FixedActor::open(&options);
 
     assert!(scheduler.state().has_dispatch_capacity());
-    RuntimeInterleavedScheduler::push_interleaved(
-        &mut scheduler,
-        std::future::pending::<()>().into_actor(),
-    );
+    scheduler.__push_interleaved(Seal, std::future::pending::<()>().into_actor());
     assert!(scheduler.state().has_dispatch_capacity());
-    RuntimeInterleavedScheduler::push_interleaved(
-        &mut scheduler,
-        std::future::pending::<()>().into_actor(),
-    );
+    scheduler.__push_interleaved(Seal, std::future::pending::<()>().into_actor());
     assert!(!scheduler.state().has_dispatch_capacity());
 }
 
 #[test]
 fn dynamic_limit_uses_each_spawn_option() {
     let options = <DynamicActor as ActorConfig>::Options::default();
-    let mut scheduler = DynamicActor::open_scheduler(&options);
+    let (_, _, mut scheduler) = DynamicActor::open(&options);
     for _ in 0..2 {
-        RuntimeInterleavedScheduler::push_interleaved(
-            &mut scheduler,
-            std::future::pending::<()>().into_actor(),
-        );
+        scheduler.__push_interleaved(Seal, std::future::pending::<()>().into_actor());
     }
     assert!(!scheduler.state().has_dispatch_capacity());
 
     let options = options.with_max_in_flight(std::num::NonZeroUsize::new(3).unwrap());
-    let mut scheduler = DynamicActor::open_scheduler(&options);
+    let (_, _, mut scheduler) = DynamicActor::open(&options);
     for _ in 0..2 {
-        RuntimeInterleavedScheduler::push_interleaved(
-            &mut scheduler,
-            std::future::pending::<()>().into_actor(),
-        );
+        scheduler.__push_interleaved(Seal, std::future::pending::<()>().into_actor());
     }
     assert!(scheduler.state().has_dispatch_capacity());
 }
@@ -109,14 +111,11 @@ fn dynamic_limit_uses_each_spawn_option() {
 #[test]
 fn unbounded_profile_never_closes_capacity() {
     let options = <UnboundedActor as ActorConfig>::Options::default();
-    let mut scheduler = UnboundedActor::open_scheduler(&options);
+    let (_, _, mut scheduler) = UnboundedActor::open(&options);
 
     for _ in 0..128 {
         assert!(scheduler.state().has_dispatch_capacity());
-        RuntimeInterleavedScheduler::push_interleaved(
-            &mut scheduler,
-            std::future::pending::<()>().into_actor(),
-        );
+        scheduler.__push_interleaved(Seal, std::future::pending::<()>().into_actor());
     }
     assert!(scheduler.state().has_dispatch_capacity());
 }
@@ -154,8 +153,8 @@ fn actor_inner() -> Arc<ActorInner<DynamicActor>> {
     ActorInner::open(&options).0
 }
 
-fn dynamic_scheduler() -> <DynamicActor as ReplySchedulingConfig>::Scheduler {
-    DynamicActor::open_scheduler(&<DynamicActor as ActorConfig>::Options::default())
+fn dynamic_scheduler() -> <DynamicActor as MessageConfig>::Scheduler {
+    DynamicActor::open(&<DynamicActor as ActorConfig>::Options::default()).2
 }
 
 #[test]
@@ -166,16 +165,16 @@ fn clear_contains_each_reply_drop() {
     let dropped_while_unwinding = Arc::new(AtomicBool::new(false));
     let mut scheduler = dynamic_scheduler();
 
-    RuntimeInterleavedScheduler::push_interleaved(
-        &mut scheduler,
+    scheduler.__push_interleaved(
+        Seal,
         DropProbe {
             dropped: Arc::clone(&interleaved_dropped),
             dropped_while_unwinding: Arc::clone(&dropped_while_unwinding),
             panic: false,
         },
     );
-    RuntimeScheduler::push_exclusive(
-        &mut scheduler,
+    scheduler.__push_exclusive(
+        Seal,
         DropProbe {
             dropped: Arc::clone(&exclusive_dropped),
             dropped_while_unwinding: Arc::clone(&dropped_while_unwinding),
@@ -203,8 +202,8 @@ fn queue_clear_continues_after_one_drop_panics() {
         (Arc::clone(&first_dropped), true),
         (Arc::clone(&second_dropped), false),
     ] {
-        RuntimeInterleavedScheduler::push_interleaved(
-            &mut scheduler,
+        scheduler.__push_interleaved(
+            Seal,
             DropProbe {
                 dropped,
                 dropped_while_unwinding: Arc::clone(&dropped_while_unwinding),

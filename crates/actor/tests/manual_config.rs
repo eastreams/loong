@@ -1,58 +1,25 @@
-use std::task::{Context, Poll};
+use std::mem::{needs_drop, size_of};
 
 use loong_actor::{
-    Actor, ActorConfig, ActorScope, ExitReason, MessageConfig, ReplySchedulingConfig, Shutdown,
-    SupervisionConfig, scheduling, spawn, supervision,
-    transport::{ErasedEnvelope, RuntimeInbox},
+    Actor, ActorConfig, ActorScope, ExitReason, MessageConfig, Shutdown, SupervisionConfig,
+    scheduling, spawn, supervision,
+    transport::{NoInbox, NoSender},
 };
 
 struct ManualActor;
-
-#[derive(Default)]
-struct ManualInbox {
-    closed: bool,
-}
-
-impl<A: Actor> RuntimeInbox<A> for ManualInbox {
-    fn poll_recv(&mut self, _task: &mut Context<'_>) -> Poll<Option<ErasedEnvelope<A>>> {
-        if self.closed {
-            Poll::Ready(None)
-        } else {
-            Poll::Pending
-        }
-    }
-
-    fn try_recv(&mut self) -> Option<ErasedEnvelope<A>> {
-        None
-    }
-
-    fn is_empty(&self) -> bool {
-        true
-    }
-
-    fn close(&mut self) {
-        self.closed = true;
-    }
-}
 
 impl ActorConfig for ManualActor {
     type Options = ();
 }
 
 impl MessageConfig for ManualActor {
-    type Sender = ();
-    type Inbox = ManualInbox;
+    type Sender = NoSender;
+    type Inbox = NoInbox;
+    type Scheduler = scheduling::Disabled;
 
-    fn open(_options: &Self::Options) -> (Self::Sender, Self::Inbox) {
-        ((), ManualInbox::default())
-    }
-}
-
-impl ReplySchedulingConfig for ManualActor {
-    type Scheduler = scheduling::Serial<Self>;
-
-    fn open_scheduler(_options: &Self::Options) -> Self::Scheduler {
-        scheduling::Serial::new()
+    fn open(_options: &Self::Options) -> (Self::Sender, Self::Inbox, Self::Scheduler) {
+        let (sender, inbox) = NoSender::open();
+        (sender, inbox, scheduling::Disabled::new())
     }
 }
 
@@ -72,11 +39,15 @@ impl Actor for ManualActor {
     }
 }
 
-// Manual configs can pair no mailbox with the serial scheduler.
+// Manual configs can omit the complete reply scheduler state.
 #[tokio::test]
-async fn no_mailbox_uses_the_serial_scheduler() {
-    let _: scheduling::Serial<ManualActor> = ManualActor::open_scheduler(&());
+async fn no_mailbox_omits_reply_runtime_state() {
+    let (_, _, scheduler) = ManualActor::open(&());
     let _: supervision::Disabled = ManualActor::open_children(&());
+    assert_eq!(size_of::<scheduling::Disabled>(), 0);
+    assert!(!needs_drop::<scheduling::Disabled>());
+    let _: scheduling::Disabled = scheduler;
+
     let owner = spawn::<ManualActor>(());
 
     assert_eq!(

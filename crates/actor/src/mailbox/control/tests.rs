@@ -145,7 +145,7 @@ fn public_notification_panic_preserves_every_other_waiter() {
 #[test]
 fn kill_before_dispatch_rejects_the_queued_phase() {
     let options = <TestActor as crate::ActorConfig>::Options::default();
-    let (actor, _inbox) = ActorInner::<TestActor>::open(&options);
+    let (actor, _inbox, _scheduler) = ActorInner::<TestActor>::open(&options);
     assert_eq!(
         actor.control.request(Shutdown::Kill),
         ShutdownStatus::Requested

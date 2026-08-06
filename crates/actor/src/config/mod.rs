@@ -15,8 +15,10 @@ pub use options::{
 ///
 /// [`#[actor]`](macro@crate::actor) generates this implementation.
 /// Manual configurations supply their own options carrier.
-/// They also implement [`MessageConfig`](crate::MessageConfig).
-/// [`ReplySchedulingConfig`] and [`SupervisionConfig`] complete the shape.
+/// [`MessageConfig`](crate::MessageConfig) supplies messaging state.
+/// [`SupervisionConfig`] completes the shape.
+/// `Options` carries every per-spawn runtime choice.
+/// Both configuration traits read the same value.
 pub trait ActorConfig {
     /// Values resolved synchronously before the actor task starts.
     type Options: Default;
@@ -34,19 +36,4 @@ pub trait SupervisionConfig: ActorConfig {
 
     /// Opens this actor's direct-child supervision profile.
     fn open_children(options: &Self::Options) -> Self::Children;
-}
-
-/// Configures one actor's reply scheduling.
-///
-/// Custom configurations select one built-in [`scheduling`] profile.
-/// The profile schedules actor-aware replies only.
-/// Owned replies run in separate Tokio tasks.
-///
-/// [`scheduling`]: crate::scheduling
-pub trait ReplySchedulingConfig: ActorConfig {
-    /// The reply scheduling profile.
-    type Scheduler: Send + 'static;
-
-    /// Opens this actor's reply scheduling profile.
-    fn open_scheduler(options: &Self::Options) -> Self::Scheduler;
 }

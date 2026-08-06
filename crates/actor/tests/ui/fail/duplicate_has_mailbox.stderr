@@ -6,4 +6,4 @@ error[E0119]: conflicting implementations of trait `HasMailbox` for type `Mailbo
    |
    = note: conflicting implementation in crate `loong_actor`:
            - impl<A> HasMailbox for A
-             where A: Actor, <A as MessageConfig>::Sender: MessageSender<A>, <A as MessageConfig>::Inbox: MessageInbox<A>, <A as MessageConfig>::Sender: ?Sized, <A as MessageConfig>::Inbox: ?Sized;
+             where A: Actor, <A as MessageConfig>::Sender: MessageSender<A>, <A as MessageConfig>::Inbox: MessageInbox<A>, <A as MessageConfig>::Scheduler: ReplyScheduler<A>, <A as MessageConfig>::Sender: ?Sized, <A as MessageConfig>::Inbox: ?Sized, <A as MessageConfig>::Scheduler: ?Sized;

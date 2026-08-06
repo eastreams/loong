@@ -1,3 +1,49 @@
+error[E0277]: `loong_actor::scheduling::Disabled` cannot schedule actor-aware replies for `Bare`
+  --> tests/ui/fail/manual_has_mailbox.rs:15:6
+   |
+15 | impl HasMailbox for Bare {}
+   |      ^^^^^^^^^^ select a scheduler compatible with this actor's mailbox
+   |
+   = help: the trait `ReplyScheduler<Bare>` is not implemented for `loong_actor::scheduling::Disabled`
+help: the following other types implement trait `ReplyScheduler<A>`
+  --> src/scheduling.rs
+   |
+   | / impl<A> ReplyScheduler<A> for Serial<A>
+   | | where
+   | |     A: Actor + MessageConfig<Scheduler = Self>,
+   | |     A::Sender: MessageSender<A>,
+   | |     A::Inbox: MessageInbox<A>,
+   | |______________________________^ `Serial<A>`
+...
+   | / impl<A, const N: usize> ReplyScheduler<A> for Fixed<A, N>
+   | | where
+   | |     A: Actor + MessageConfig<Scheduler = Self>,
+   | |     A::Sender: MessageSender<A>,
+   | |     A::Inbox: MessageInbox<A>,
+   | |______________________________^ `loong_actor::scheduling::Fixed<A, N>`
+...
+   | / impl<A> ReplyScheduler<A> for Dynamic<A>
+   | | where
+   | |     A: Actor + MessageConfig<Scheduler = Self>,
+   | |     A::Sender: MessageSender<A>,
+   | |     A::Inbox: MessageInbox<A>,
+   | |______________________________^ `loong_actor::scheduling::Dynamic<A>`
+...
+   | / impl<A> ReplyScheduler<A> for Unbounded<A>
+   | | where
+   | |     A: Actor + MessageConfig<Scheduler = Self>,
+   | |     A::Sender: MessageSender<A>,
+   | |     A::Inbox: MessageInbox<A>,
+   | |______________________________^ `loong_actor::scheduling::Unbounded<A>`
+note: required by a bound in `HasMailbox`
+  --> src/actor.rs
+   |
+   | pub trait HasMailbox:
+   |           ---------- required by a bound in this trait
+...
+   |         Scheduler: ReplyScheduler<Self>,
+   |                    ^^^^^^^^^^^^^^^^^^^^ required by this bound in `HasMailbox`
+
 error[E0277]: the trait bound `loong_actor::transport::NoInbox: MessageInbox<Bare>` is not satisfied
   --> tests/ui/fail/manual_has_mailbox.rs:15:6
    |
@@ -9,8 +55,9 @@ note: required by a bound in `HasMailbox`
    |
    | pub trait HasMailbox:
    |           ---------- required by a bound in this trait
-   |     Actor + MessageConfig<Sender: MessageSender<Self>, Inbox: MessageInbox<Self>>
-   |                                                               ^^^^^^^^^^^^^^^^^^ required by this bound in `HasMailbox`
+...
+   |         Inbox: MessageInbox<Self>,
+   |                ^^^^^^^^^^^^^^^^^^ required by this bound in `HasMailbox`
 
 error[E0277]: the trait bound `loong_actor::transport::NoSender: MessageSender<Bare>` is not satisfied
   --> tests/ui/fail/manual_has_mailbox.rs:15:6
@@ -23,5 +70,6 @@ note: required by a bound in `HasMailbox`
    |
    | pub trait HasMailbox:
    |           ---------- required by a bound in this trait
-   |     Actor + MessageConfig<Sender: MessageSender<Self>, Inbox: MessageInbox<Self>>
-   |                                   ^^^^^^^^^^^^^^^^^^^ required by this bound in `HasMailbox`
+...
+   |         Sender: MessageSender<Self>,
+   |                 ^^^^^^^^^^^^^^^^^^^ required by this bound in `HasMailbox`

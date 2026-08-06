@@ -1,23 +1,30 @@
+#![allow(
+    private_interfaces,
+    reason = "public strategy proofs remain hidden by the private runtime module"
+)]
+
 use std::{
     sync::Arc,
     task::{Context, Poll},
 };
 
 use crate::{
-    Actor, ActorFuture, ChildExit,
-    config::ReplySchedulingConfig,
+    Actor, ChildExit,
     mailbox::{ActorInbox, ActorInner, Control, Mode},
     owned::OwnedTasks,
     runtime::ScopeState,
-    transport::{MessageInbox, MessageSender},
+    transport::{MessageConfig, MessageInbox, MessageSender, NoInbox, NoSender},
 };
 
 use super::{
-    Dynamic, Exclusive, Fixed, InterleavedLane, InterleavedProfile, Serial, SerialLane, Unbounded,
+    Disabled, Exclusive, InterleavedLane, InterleavedProfile, SchedulerProfile, Serial, SerialLane,
     queue::InterleavedPoll,
 };
 
-pub(crate) type ActorScheduler<A> = <A as ReplySchedulingConfig>::Scheduler;
+pub(crate) type ActorScheduler<A> = <A as MessageConfig>::Scheduler;
+
+/// Grants access to sealed reply runtime bridges.
+pub struct Seal;
 
 /// Result of one scheduler-owned actor turn.
 pub(crate) enum SchedulerTurn {
@@ -45,10 +52,6 @@ pub(crate) struct TurnContext<'a, A: Actor> {
 pub(crate) trait RuntimeScheduler<A: Actor>: Send + 'static {
     fn is_idle(&mut self) -> bool;
 
-    fn push_exclusive<F>(&mut self, future: F)
-    where
-        F: ActorFuture<A, Output = ()> + Send + 'static;
-
     fn poll_actor_replies(
         &mut self,
         actor: &mut A,
@@ -67,22 +70,8 @@ pub(crate) trait RuntimeScheduler<A: Actor>: Send + 'static {
     fn clear(&mut self, control: &Control);
 }
 
-pub(crate) trait RuntimeInterleavedScheduler<A: Actor>: RuntimeScheduler<A> {
-    fn push_interleaved<F>(&mut self, future: F)
-    where
-        F: ActorFuture<A, Output = ()> + Send + 'static;
-}
-
-trait SchedulerProfile<A: Actor>: Send + 'static + Sized {
-    type Strategy: SchedulerStrategy<A, Self>;
-}
-
-trait SchedulerStrategy<A: Actor, P: Send + 'static>: Send + 'static {
+pub trait SchedulerStrategy<A: Actor, P: Send + 'static>: Send + 'static {
     fn is_idle(scheduler: &mut P) -> bool;
-
-    fn push_exclusive<F>(scheduler: &mut P, future: F)
-    where
-        F: ActorFuture<A, Output = ()> + Send + 'static;
 
     fn poll_actor_replies(
         scheduler: &mut P,
@@ -102,59 +91,18 @@ trait SchedulerStrategy<A: Actor, P: Send + 'static>: Send + 'static {
     fn clear(scheduler: &mut P, control: &Control);
 }
 
-struct SerialStrategy;
-struct InterleavedStrategy;
+pub struct DisabledStrategy;
+pub struct SerialStrategy;
+pub struct InterleavedStrategy;
 
-impl<A> SchedulerProfile<A> for Serial<A>
-where
-    A: Actor + ReplySchedulingConfig<Scheduler = Self>,
-{
-    type Strategy = SerialStrategy;
-}
-
-impl<A, const N: usize> SchedulerProfile<A> for Fixed<A, N>
-where
-    A: Actor + ReplySchedulingConfig<Scheduler = Self>,
-    A::Sender: MessageSender<A>,
-    A::Inbox: MessageInbox<A>,
-{
-    type Strategy = InterleavedStrategy;
-}
-
-impl<A> SchedulerProfile<A> for Dynamic<A>
-where
-    A: Actor + ReplySchedulingConfig<Scheduler = Self>,
-    A::Sender: MessageSender<A>,
-    A::Inbox: MessageInbox<A>,
-{
-    type Strategy = InterleavedStrategy;
-}
-
-impl<A> SchedulerProfile<A> for Unbounded<A>
-where
-    A: Actor + ReplySchedulingConfig<Scheduler = Self>,
-    A::Sender: MessageSender<A>,
-    A::Inbox: MessageInbox<A>,
-{
-    type Strategy = InterleavedStrategy;
-}
-
-// Coherence cannot treat InterleavedProfile as a closed set.
-// This private strategy selects one of two monomorphized loops.
+// One associated strategy selects a monomorphized actor loop.
 impl<A, P> RuntimeScheduler<A> for P
 where
-    A: Actor + ReplySchedulingConfig<Scheduler = P>,
+    A: Actor + MessageConfig<Scheduler = P>,
     P: SchedulerProfile<A>,
 {
     fn is_idle(&mut self) -> bool {
         P::Strategy::is_idle(self)
-    }
-
-    fn push_exclusive<F>(&mut self, future: F)
-    where
-        F: ActorFuture<A, Output = ()> + Send + 'static,
-    {
-        P::Strategy::push_exclusive(self, future);
     }
 
     fn poll_actor_replies(
@@ -181,21 +129,55 @@ where
     }
 }
 
+// Disabled has no mailbox or reply lanes.
+// Child exits still need a supervision lane.
+impl<A> SchedulerStrategy<A, Disabled> for DisabledStrategy
+where
+    A: Actor + MessageConfig<Sender = NoSender, Inbox = NoInbox, Scheduler = Disabled>,
+{
+    fn is_idle(_scheduler: &mut Disabled) -> bool {
+        true
+    }
+
+    fn poll_actor_replies(
+        _scheduler: &mut Disabled,
+        _actor: &mut A,
+        _scope: &mut crate::ActorScope<'_, A>,
+        _control: &Control,
+        _expected_mode: Mode,
+        _task: &mut Context<'_>,
+    ) -> Poll<()> {
+        Poll::Pending
+    }
+
+    fn poll_turn(
+        _scheduler: &mut Disabled,
+        turn: &mut TurnContext<'_, A>,
+        task: &mut Context<'_>,
+    ) -> Poll<SchedulerTurn> {
+        if turn.inner.control.mode() != turn.expected_mode {
+            return Poll::Ready(SchedulerTurn::LifecycleHint);
+        }
+
+        match poll_child(turn.state, task) {
+            Some(turn) => Poll::Ready(turn),
+            None => Poll::Pending,
+        }
+    }
+
+    fn clear(_scheduler: &mut Disabled, _control: &Control) {}
+}
+
 // Serial and interleaved profiles keep separate lane loops.
 // Serial therefore acquires no interleaving protocol.
 impl<A> SchedulerStrategy<A, Serial<A>> for SerialStrategy
 where
-    A: Actor + ReplySchedulingConfig<Scheduler = Serial<A>>,
+    A: Actor + MessageConfig<Scheduler = Serial<A>>,
+    A::Sender: MessageSender<A>,
+    A::Inbox: MessageInbox<A>,
 {
     fn is_idle(scheduler: &mut Serial<A>) -> bool {
         scheduler.exclusive.is_empty()
-    }
-
-    fn push_exclusive<F>(scheduler: &mut Serial<A>, future: F)
-    where
-        F: ActorFuture<A, Output = ()> + Send + 'static,
-    {
-        scheduler.exclusive.push(future);
     }
 
     fn poll_actor_replies(
@@ -283,7 +265,7 @@ where
 
 impl<A, P> SchedulerStrategy<A, P> for InterleavedStrategy
 where
-    A: Actor + ReplySchedulingConfig<Scheduler = P>,
+    A: Actor + MessageConfig<Scheduler = P>,
     A::Sender: MessageSender<A>,
     A::Inbox: MessageInbox<A>,
     P: InterleavedProfile<A>,
@@ -291,13 +273,6 @@ where
     fn is_idle(scheduler: &mut P) -> bool {
         let state = scheduler.state();
         state.exclusive.is_empty() && !state.has_interleaved()
-    }
-
-    fn push_exclusive<F>(scheduler: &mut P, future: F)
-    where
-        F: ActorFuture<A, Output = ()> + Send + 'static,
-    {
-        scheduler.state().exclusive.push(future);
     }
 
     fn poll_actor_replies(
@@ -416,22 +391,6 @@ where
         let state = scheduler.state();
         state.exclusive.clear(control);
         state.queue.clear(control);
-    }
-}
-
-#[diagnostic::do_not_recommend]
-impl<A, P> RuntimeInterleavedScheduler<A> for P
-where
-    A: Actor + ReplySchedulingConfig<Scheduler = P>,
-    A::Sender: MessageSender<A>,
-    A::Inbox: MessageInbox<A>,
-    P: InterleavedProfile<A>,
-{
-    fn push_interleaved<F>(&mut self, future: F)
-    where
-        F: ActorFuture<A, Output = ()> + Send + 'static,
-    {
-        self.state().push_interleaved(Box::pin(future));
     }
 }
 

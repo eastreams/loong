@@ -53,10 +53,10 @@ use std::{
 use pin_project_lite::pin_project;
 
 use crate::{
-    Actor, ActorFuture, ActorScope, HasInterleaving, Message,
+    Actor, ActorFuture, ActorScope, HasInterleaving, HasMailbox, Message,
     mailbox::DispatchReply,
     owned::OwnedTasks,
-    scheduling::{ActorScheduler, RuntimeInterleavedScheduler, RuntimeScheduler},
+    scheduling::{ActorScheduler, InterleavedScheduler, ReplyScheduler, Seal},
 };
 
 /// Extension methods that select explicit reply scheduling strategies.
@@ -279,16 +279,13 @@ pub(crate) mod sealed {
             scheduler: &mut ActorScheduler<A>,
             reply: DispatchReply<'_, A, M::Reply>,
         ) {
-            RuntimeInterleavedScheduler::push_interleaved(
-                scheduler,
-                CompleteReply::new(self.future, reply.into_owned()),
-            );
+            scheduler.__push_interleaved(Seal, CompleteReply::new(self.future, reply.into_owned()));
         }
     }
 
     impl<A, M, F> HandleReply<A, M> for Exclusive<F>
     where
-        A: Actor,
+        A: HasMailbox,
         M: Message,
         F: ActorFuture<A, Output = M::Reply> + Send + 'static,
     {
@@ -298,10 +295,7 @@ pub(crate) mod sealed {
             scheduler: &mut ActorScheduler<A>,
             reply: DispatchReply<'_, A, M::Reply>,
         ) {
-            RuntimeScheduler::push_exclusive(
-                scheduler,
-                CompleteReply::new(self.future, reply.into_owned()),
-            );
+            scheduler.__push_exclusive(Seal, CompleteReply::new(self.future, reply.into_owned()));
         }
     }
 

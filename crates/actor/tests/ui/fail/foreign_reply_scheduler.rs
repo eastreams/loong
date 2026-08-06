@@ -1,9 +1,7 @@
 use std::task::{Context, Poll};
 
 use loong_actor::{
-    Actor, ActorConfig, ActorScope, MessageConfig, ReplySchedulingConfig, SupervisionConfig,
-    scheduling::ReplyScheduler,
-    supervision,
+    Actor, ActorConfig, ActorScope, MessageConfig, SupervisionConfig, supervision,
     transport::{ErasedEnvelope, RuntimeInbox},
 };
 
@@ -42,17 +40,10 @@ impl ActorConfig for ForeignActor {
 impl MessageConfig for ForeignActor {
     type Sender = ();
     type Inbox = ForeignInbox;
-
-    fn open(_: &Self::Options) -> (Self::Sender, Self::Inbox) {
-        ((), ForeignInbox { closed: false })
-    }
-}
-
-impl ReplySchedulingConfig for ForeignActor {
     type Scheduler = ForeignScheduler;
 
-    fn open_scheduler(_: &Self::Options) -> Self::Scheduler {
-        ForeignScheduler
+    fn open(_: &Self::Options) -> (Self::Sender, Self::Inbox, Self::Scheduler) {
+        ((), ForeignInbox { closed: false }, ForeignScheduler)
     }
 }
 
@@ -62,11 +53,6 @@ impl SupervisionConfig for ForeignActor {
     fn open_children(_: &Self::Options) -> Self::Children {
         supervision::Disabled::new()
     }
-}
-
-impl<A> ReplyScheduler<A> for ForeignScheduler where
-    A: Actor + ReplySchedulingConfig<Scheduler = ForeignScheduler>
-{
 }
 
 // A manual config must select a built-in scheduler profile.
