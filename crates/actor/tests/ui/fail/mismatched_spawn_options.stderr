@@ -6,8 +6,8 @@ error[E0308]: mismatched types
    |             |
    |             arguments to this function are incorrect
    |
-   = note: expected struct `loac::__private::ActorOptions<Second, loac::__private::FixedMailbox, loac::__private::NoInterleaving, loac::__private::NoChildren>`
-              found struct `loac::__private::ActorOptions<First, loac::__private::FixedMailbox, loac::__private::NoInterleaving, loac::__private::NoChildren>`
+   = note: expected struct `ActorOptions<Second, FixedMailbox, NoInterleaving, NoChildren>`
+              found struct `ActorOptions<First, FixedMailbox, NoInterleaving, NoChildren>`
 note: function defined here
   --> src/runtime.rs
    |

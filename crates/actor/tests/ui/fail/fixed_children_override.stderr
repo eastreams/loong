@@ -1,7 +1,7 @@
-error[E0599]: no method named `with_max_children` found for struct `loac::__private::ActorOptions<Fixed, loac::__private::NoMailbox, loac::__private::NoInterleaving, loac::__private::FixedChildren>` in the current scope
+error[E0599]: no method named `with_max_children` found for struct `ActorOptions<Fixed, NoMailbox, NoInterleaving, FixedChildren>` in the current scope
   --> tests/ui/fail/fixed_children_override.rs:15:52
    |
 15 |     let _ = loac::SpawnOptions::<Fixed>::default().with_max_children(NonZeroUsize::MIN);
-   |                                                    ^^^^^^^^^^^^^^^^^ method not found in `loac::__private::ActorOptions<Fixed, loac::__private::NoMailbox, loac::__private::NoInterleaving, loac::__private::FixedChildren>`
+   |                                                    ^^^^^^^^^^^^^^^^^ method not found in `ActorOptions<Fixed, NoMailbox, NoInterleaving, FixedChildren>`
    |
-   = note: the method was found for `loac::__private::ActorOptions<A, M, I, loac::__private::DynamicChildren<DEFAULT>>`
+   = note: the method was found for `ActorOptions<A, M, I, DynamicChildren<DEFAULT>>`

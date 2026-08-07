@@ -246,6 +246,15 @@ pub use reply::{InterleavedFutureExt, IntoReply, ReplyExt};
 pub use runtime::{ActorOwner, ActorScope, SpawnOptions, StopScope, spawn, spawn_with};
 pub use transport::MessageConfig;
 
+// The macro references these through `__private`.
+// The root re-export keeps rustc diagnostics free of `__private` paths.
+#[doc(hidden)]
+pub use config::{
+    ActorOptions, DynamicChildren, DynamicInterleaving, DynamicMailbox, FixedChildren,
+    FixedInterleaving, FixedMailbox, NoChildren, NoInterleaving, NoMailbox, UnboundedChildren,
+    UnboundedInterleaving, UnboundedMailbox,
+};
+
 /// Implementation details used by generated actor configuration.
 #[doc(hidden)]
 pub mod __private {
