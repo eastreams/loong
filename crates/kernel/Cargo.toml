@@ -5,7 +5,7 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-actix = "0.13.5"
+loac.workspace = true
 loong-contracts.workspace = true
 uuid.workspace = true
 async-trait.workspace = true

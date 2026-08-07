@@ -13,11 +13,11 @@ use loong_contracts::policy::PolicyResult;
 
 use crate::{Facade, policy::action::ActionMeta};
 
-pub trait Policy<A: ActionMeta>: Sync {
+pub trait Policy<A: ActionMeta>: Send + Sync {
     fn evaluate(&self, ctx: &Facade, action: &A) -> PolicyResult;
 }
 
-pub trait PolicyAny: Sync {
+pub trait PolicyAny: Send + Sync {
     fn evaluate(&self, ctx: &Facade, action: &dyn ActionMeta) -> PolicyResult;
 }
 

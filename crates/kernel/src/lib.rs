@@ -4,7 +4,7 @@ pub mod access;
 pub mod actors;
 pub mod policy;
 
-use actix::{WeakAddr, prelude::*};
+use loac::{ActorRef, CallError, prelude::*};
 
 use thiserror::Error;
 
@@ -17,47 +17,53 @@ pub struct Kernel {
     policy_engine: PolicyEngine,
 }
 
+#[actor(mailbox)]
 impl Actor for Kernel {
-    type Context = actix::Context<Self>;
+    type SpawnArgs = ();
+
+    async fn init(_: (), _: &mut ActorScope<'_, Self>) -> Self {
+        Self {
+            policy_engine: Default::default(),
+        }
+    }
 }
 
 #[derive(Message)]
-#[rtype(result = "Result<Granted<A>, Denied>")]
+#[message(reply = Result<Granted<A>, Denied>)]
 pub struct PolicyEvent<A: ActionMeta> {
     action: A,
     ctx: Facade,
 }
 
-impl<A: ActionMeta> Handler<PolicyEvent<A>> for Kernel {
-    type Result = Result<Granted<A>, Denied>;
-    fn handle(&mut self, msg: PolicyEvent<A>, _ctx: &mut Self::Context) -> Self::Result {
+impl<A: ActionMeta> SyncHandler<PolicyEvent<A>> for Kernel {
+    fn handle(
+        &mut self,
+        msg: PolicyEvent<A>,
+        _scope: &mut ActorScope<Self>,
+    ) -> Result<Granted<A>, Denied> {
         self.policy_engine.grant(&msg.ctx, msg.action)
     }
 }
 
 #[derive(Clone)]
 pub struct Facade {
-    handle: WeakAddr<Kernel>,
+    handle: ActorRef<Kernel>,
     capabilities: Capabilities,
 }
 
 #[derive(Debug, Error)]
 pub enum GrantSendError {
-    #[error("denied {0}")]
+    #[error(transparent)]
     Denied(#[from] Denied),
-    #[error("kernel unavailable")]
-    KernelUnavailable,
-    #[error("mailbox error {0}")]
-    Mailbox(#[from] MailboxError),
+    #[error("call error: {0}")]
+    CallError(#[from] CallError),
 }
 
 impl Facade {
     pub async fn grant<A: ActionMeta>(&self, action: A) -> Result<Granted<A>, GrantSendError> {
         Ok(self
             .handle
-            .upgrade()
-            .ok_or(GrantSendError::KernelUnavailable)?
-            .send(PolicyEvent {
+            .call(PolicyEvent {
                 action,
                 ctx: self.clone(),
             })
@@ -67,7 +73,24 @@ impl Facade {
 
 impl Facade {
     #[must_use]
-    pub fn fs<'b>(&'b self) -> FsAccess<'b> {
+    pub fn fs(&self) -> FsAccess<'_> {
         FsAccess::new(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use loong_contracts::capability::Capability;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test() {
+        let kernel = loac::spawn::<Kernel>(());
+        let ctx = Facade {
+            handle: kernel.actor_ref(),
+            capabilities: Capabilities::singleton(Capability::FsRead),
+        };
+        println!("{}", ctx.fs().read("test.txt").await.unwrap_err());
     }
 }

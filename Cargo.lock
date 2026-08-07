@@ -8,9 +8,7 @@ version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "de7fa236829ba0841304542f7614c42b80fca007455315c45c785ccfa873a85b"
 dependencies = [
- "actix-macros",
  "actix-rt",
- "actix_derive",
  "bitflags",
  "bytes",
  "crossbeam-channel",
@@ -28,16 +26,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "actix-macros"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e01ed3140b2f8d422c68afa1ed2e85d996ea619c988ac834d255db32138655cb"
-dependencies = [
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "actix-rt"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -45,17 +33,6 @@ checksum = "92589714878ca59a7626ea19734f0e07a6a875197eec751bb5d3f99e64998c63"
 dependencies = [
  "futures-core",
  "tokio",
-]
-
-[[package]]
-name = "actix_derive"
-version = "0.6.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6ac1e58cded18cb28ddc17143c4dea5345b3ad575e14f32f66e4054a56eb271"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
 ]
 
 [[package]]
@@ -502,8 +479,8 @@ dependencies = [
 name = "loong-kernel"
 version = "0.2.0"
 dependencies = [
- "actix",
  "async-trait",
+ "loac",
  "loong-contracts",
  "serde_json",
  "thiserror",

@@ -1,3 +1,6 @@
+use loong_contracts::policy::{
+    PolicyDecision, PolicyDecisionFinal, PolicyDecisionMiddle, PolicyResult,
+};
 use uuid::Uuid;
 
 use crate::Facade;
@@ -7,6 +10,7 @@ use super::{
     action::{ActionMeta, Denied, Granted},
 };
 
+#[derive(Default)]
 pub struct PolicyEngine {
     inbound: Vec<Box<dyn PolicyAny>>,
 }
@@ -20,10 +24,21 @@ impl PolicyEngine {
         }
 
         for policy in &self.inbound {
-            let _ = policy.evaluate(ctx, &action);
-            todo!();
+            let PolicyResult { decision, reason } = policy.evaluate(ctx, &action);
+            return match decision {
+                PolicyDecision::Final(PolicyDecisionFinal::Allow) => {
+                    Ok(Granted::<A>::new(Uuid::nil(), action))
+                }
+                PolicyDecision::Final(
+                    PolicyDecisionFinal::Deny | PolicyDecisionFinal::RequiresApproval,
+                ) => Err(Denied { reason }),
+                PolicyDecision::Middle(PolicyDecisionMiddle::Abstain) => continue,
+                PolicyDecision::Middle(PolicyDecisionMiddle::SkipChain) => break,
+            };
         }
-        let _ = Granted::<A>::new(Uuid::nil(), action);
-        todo!()
+
+        Err(Denied {
+            reason: Some(String::from("No matching policy.")),
+        })
     }
 }

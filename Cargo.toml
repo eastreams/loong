@@ -19,6 +19,7 @@ unsafe_code = "forbid"
 [workspace.dependencies]
 loong-contracts = { path = "crates/contracts" }
 loong-kernel = { path = "crates/kernel" }
+loac = { path = "crates/actor" }
 
 bincode = "1.3.3"
 schemars = "1.2.1"

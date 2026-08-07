@@ -12,7 +12,7 @@ use super::FsAccess;
 /// Failure while authorizing or executing a filesystem read.
 #[derive(Debug, Error)]
 pub enum FsReadError {
-    #[error("access denied: {0:?}")]
+    #[error("fs.read: {0}")]
     Denied(#[from] GrantSendError),
     #[error("failed to read `{}`: {source}", .path.display())]
     Io { path: PathBuf, source: io::Error },
