@@ -1,4 +1,4 @@
-use std::{error::Error, fmt};
+use std::fmt;
 
 use thiserror::Error;
 
@@ -158,6 +158,8 @@ pub enum TryCallErrorKind {
 /// The original message is retained and can be recovered with
 /// [`into_message`](Self::into_message). Neither failure kind commits the
 /// message, so retrying it elsewhere is safe.
+#[derive(thiserror::Error)]
+#[error("{kind}")]
 pub struct TryCallError<M> {
     kind: TryCallErrorKind,
     message: M,
@@ -188,11 +190,3 @@ impl<M> fmt::Debug for TryCallError<M> {
             .finish()
     }
 }
-
-impl<M> fmt::Display for TryCallError<M> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.kind.fmt(formatter)
-    }
-}
-
-impl<M> Error for TryCallError<M> {}
