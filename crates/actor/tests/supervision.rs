@@ -148,6 +148,7 @@ fn spawn_supervisor(
     (owner, child_rx, events_rx)
 }
 
+// A clean child exit is reported exactly once with its identity.
 #[tokio::test(flavor = "current_thread")]
 async fn clean_child_exit_is_reported_exactly_once() {
     let (owner, child_rx, mut events) = spawn_supervisor(false);
@@ -192,6 +193,7 @@ async fn child_exiting_during_init_keeps_its_registered_identity() {
     );
 }
 
+// Child panic is contained and reported without stopping the parent.
 #[tokio::test]
 async fn child_panic_is_reported_without_stopping_the_parent() {
     let (owner, child_rx, mut events) = spawn_supervisor(false);

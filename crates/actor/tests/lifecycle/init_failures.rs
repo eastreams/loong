@@ -91,6 +91,7 @@ impl Actor for PreKilledActor {
 // Kill commits before the actor task's first poll.
 // The counter rejects any later constructor entry.
 // A `SpawnArgs` Drop panic must remain contained.
+// Pre-init Kill skips the sync constructor and contains args drop.
 #[tokio::test(flavor = "current_thread")]
 async fn preinit_kill_skips_sync_constructor_and_contains_args_drop() {
     let constructor_calls = Arc::new(AtomicUsize::new(0));
@@ -111,6 +112,7 @@ async fn preinit_kill_skips_sync_constructor_and_contains_args_drop() {
 
 // Kill must not construct `Self` from a pending init.
 // The accepted call must retain its before-dispatch phase.
+// Kill cancels never-ready init before actor construction.
 #[tokio::test]
 async fn kill_cancels_never_ready_init_before_actor_construction() {
     let (entered_tx, entered_rx) = oneshot::channel();
@@ -230,6 +232,7 @@ impl Actor for ReadyDropActor {
 
 // Ready actor state remains runtime-owned after future cleanup fails.
 // Child cutoff must precede actor state Drop.
+// Init future Drop panic kills children before actor Drop.
 #[tokio::test(flavor = "current_thread")]
 async fn ready_init_future_drop_panic_kills_child_before_actor_drop() {
     let (child_tx, child_rx) = oneshot::channel();
@@ -291,6 +294,7 @@ impl Handler<InitPing> for PanicInit {
 
 // A constructor panic happens before any init future exists.
 // Registered children and queued calls still require failure teardown.
+// Init panic discards calls and kills registered children.
 #[tokio::test(flavor = "current_thread")]
 async fn init_call_panic_discards_calls_and_kills_registered_children() {
     let (child_tx, child_rx) = oneshot::channel();

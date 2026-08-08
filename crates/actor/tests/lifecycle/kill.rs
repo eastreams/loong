@@ -85,6 +85,7 @@ impl Handler<KillBeforeReady> for LifecycleActor {
     }
 }
 
+// Kill before ready completion reports the dispatching phase.
 #[tokio::test]
 async fn kill_before_ready_completion_reports_the_dispatching_phase() {
     let mut owner = actor_with_capacity(1).owner;
@@ -97,6 +98,7 @@ async fn kill_before_ready_completion_reports_the_dispatching_phase() {
     assert_eq!(watchdog(owner.wait()).await.reason(), ExitReason::Killed);
 }
 
+// Kill drops current and queued work without graceful cleanup.
 #[tokio::test]
 async fn kill_drops_current_and_queued_work_without_cleanup() {
     let LifecycleHarness {
@@ -139,6 +141,7 @@ async fn kill_drops_current_and_queued_work_without_cleanup() {
 
 // The destructor blocks after confirming cancellation.
 // Killed must remain unpublished until that barrier opens.
+// Kill joins owned reply cancellation before publishing exit.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn kill_joins_owned_reply_cancellation_before_publishing_exit() {
     let mut owner = actor_with_capacity(1).owner;
@@ -175,6 +178,7 @@ async fn kill_joins_owned_reply_cancellation_before_publishing_exit() {
     );
 }
 
+// Graceful mode is first-wins and Kill can upgrade it.
 #[tokio::test]
 async fn graceful_mode_is_first_wins_and_kill_can_upgrade_it() {
     let LifecycleHarness {

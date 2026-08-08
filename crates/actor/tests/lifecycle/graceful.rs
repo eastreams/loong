@@ -30,6 +30,7 @@ impl Handler<StopFromExclusive> for LifecycleActor {
     }
 }
 
+// Exclusive completion can commit graceful shutdown without a repoll.
 #[tokio::test]
 async fn exclusive_completion_can_commit_graceful_shutdown_without_repoll() {
     let LifecycleHarness {
@@ -42,6 +43,7 @@ async fn exclusive_completion_can_commit_graceful_shutdown_without_repoll() {
     assert_eq!(*lock(&cleanup), vec![ExitReason::Stopped]);
 }
 
+// Stop finishes the current message and cancels queued messages.
 #[tokio::test]
 async fn stop_finishes_current_and_cancels_queued_messages() {
     let LifecycleHarness {
@@ -87,6 +89,7 @@ async fn stop_finishes_current_and_cancels_queued_messages() {
     assert_eq!(*lock(&cleanup), vec![ExitReason::Stopped]);
 }
 
+// Drain runs the fixed accepted queue in admission order.
 #[tokio::test]
 async fn drain_runs_the_fixed_accepted_queue_in_order() {
     let LifecycleHarness {
@@ -166,6 +169,7 @@ impl Handler<InterleavedDrainStep> for InterleavedDrainActor {
     }
 }
 
+// Drain respects max_in_flight for the fixed interleaved queue.
 #[tokio::test]
 async fn drain_respects_max_in_flight_for_the_fixed_interleaved_queue() {
     let mut owner = loac::spawn::<InterleavedDrainActor>(());

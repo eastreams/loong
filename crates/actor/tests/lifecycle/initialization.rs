@@ -73,6 +73,7 @@ impl Handler<Read> for AdmissionActor {
 
 // `Full` proves both earlier messages reached the mailbox.
 // Zero counters prove neither construction nor dispatch ran early.
+// Messages are admitted but not dispatched before init is ready.
 #[tokio::test]
 async fn messages_are_admitted_but_not_dispatched_before_init_ready() {
     let (entered_tx, entered_rx) = oneshot::channel();
@@ -175,6 +176,7 @@ impl Handler<InitPing> for ControlledInit {
 
 // Graceful modes must retain initialization.
 // The response distinguishes Stop discard from Drain dispatch.
+// Stop and Drain wait for init, then apply their queue policies.
 #[tokio::test]
 async fn stop_and_drain_wait_for_init_then_apply_queue_policy() {
     for (shutdown, expected_reason) in [

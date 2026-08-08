@@ -29,6 +29,7 @@ impl Actor for ExitedActor {
     }
 }
 
+// Shutdown requests after exit report the published status.
 #[tokio::test]
 async fn shutdown_requests_after_exit_report_the_published_status() {
     for (initial, expected_reason) in [
@@ -76,6 +77,7 @@ impl Drop for StateDrop {
     }
 }
 
+// Actor refs do not keep an actor alive.
 #[tokio::test]
 async fn actor_refs_do_not_keep_an_actor_alive() {
     let (initialized_tx, initialized_rx) = oneshot::channel();
@@ -127,6 +129,7 @@ impl Wake for ReentrantShutdownWaker {
 // Lifecycle observers may use any safe Waker. Requesting Stop on an OS thread
 // makes synchronous reentry observable without allowing the old self-deadlock
 // to freeze this current-thread runtime or hide behind an async timeout.
+// Lifecycle notification allows reentrant shutdown from a safe waker.
 #[tokio::test(flavor = "current_thread")]
 async fn lifecycle_notification_allows_reentrant_shutdown_from_a_safe_waker() {
     let owner = Arc::new(loac::spawn::<ExitedActor>(()));
@@ -407,6 +410,7 @@ impl Handler<PanicNow> for PanicActor {
     }
 }
 
+// Handler panics are contained and reported as exit reason.
 #[tokio::test]
 async fn handler_panics_are_contained_and_reported() {
     let mut owner = loac::spawn::<PanicActor>(());
@@ -440,6 +444,7 @@ impl Handler<PanicAfterBarrier> for PanicActor {
     }
 }
 
+// Kill committed during a handler poll wins over panic.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn kill_committed_during_a_handler_poll_wins_over_panic() {
     let mut owner = loac::spawn::<PanicActor>(());
@@ -485,6 +490,7 @@ impl Actor for KillOnStop {
     }
 }
 
+// Kill requested at graceful finalization wins atomically.
 #[tokio::test]
 async fn kill_requested_at_graceful_finalization_wins_atomically() {
     let owner = loac::spawn::<KillOnStop>(());
