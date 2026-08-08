@@ -1,7 +1,7 @@
 //! Builds a parent-child address cycle during scope-based initialization.
 //! The parent runtime owns the child; both actors keep non-owning addresses.
 
-use loac::{ActorRef, ExitReason, Shutdown, SubtreeStatus, prelude::*, spawn};
+use loac::{ActorRef, prelude::*};
 use tokio::sync::oneshot;
 
 struct Parent {
@@ -83,7 +83,7 @@ impl SyncHandler<ReturnToParent> for Parent {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (completed_tx, completed_rx) = oneshot::channel();
-    let owner = spawn::<Parent>(());
+    let owner = loac::spawn::<Parent>(());
     let parent = owner.actor_ref();
 
     parent
@@ -93,8 +93,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     completed_rx.await?;
 
-    let status = owner.shutdown(Shutdown::Drain).await;
-    assert_eq!(status.reason(), ExitReason::Drained);
-    assert_eq!(status.subtree(), SubtreeStatus::Terminated);
+    let status = owner.shutdown(loac::Shutdown::Drain).await;
+    assert_eq!(status.reason(), loac::ExitReason::Drained);
+    assert_eq!(status.subtree(), loac::SubtreeStatus::Terminated);
     Ok(())
 }

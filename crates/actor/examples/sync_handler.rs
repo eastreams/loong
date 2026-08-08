@@ -1,6 +1,6 @@
 //! Uses `SyncHandler` when a reply is complete during dispatch.
 
-use loac::{ExitReason, Shutdown, prelude::*, spawn};
+use loac::prelude::*;
 
 struct Counter(u64);
 
@@ -35,7 +35,7 @@ impl SyncHandler<Reset> for Counter {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let owner = spawn::<Counter>(1);
+    let owner = loac::spawn::<Counter>(1);
     let counter = owner.actor_ref();
 
     assert_eq!(counter.call(Add(2)).await?, 3);
@@ -43,8 +43,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(counter.call(Add(4)).await?, 4);
 
     assert_eq!(
-        owner.shutdown(Shutdown::Drain).await.reason(),
-        ExitReason::Drained
+        owner.shutdown(loac::Shutdown::Drain).await.reason(),
+        loac::ExitReason::Drained
     );
     Ok(())
 }

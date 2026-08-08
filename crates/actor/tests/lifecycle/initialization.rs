@@ -9,7 +9,7 @@ use std::{
 
 use loac::{
     Actor, ActorScope, CallError, ExitReason, Handler, Message, ReplyExt, Shutdown, ShutdownStatus,
-    StopScope, TrySendErrorKind, actor, spawn,
+    StopScope, TrySendErrorKind, actor,
 };
 use tokio::sync::oneshot;
 
@@ -79,7 +79,7 @@ async fn messages_are_admitted_but_not_dispatched_before_init_ready() {
     let (release_tx, release_rx) = oneshot::channel();
     let constructed = Arc::new(AtomicUsize::new(0));
     let handled = Arc::new(AtomicUsize::new(0));
-    let owner = spawn::<AdmissionActor>(AdmissionArgs {
+    let owner = loac::spawn::<AdmissionActor>(AdmissionArgs {
         entered: entered_tx,
         release: release_rx,
         constructed: Arc::clone(&constructed),
@@ -187,7 +187,7 @@ async fn stop_and_drain_wait_for_init_then_apply_queue_policy() {
         let (completed_tx, completed_rx) = oneshot::channel();
         let handled = Arc::new(AtomicUsize::new(0));
         let cleanup = Arc::new(Mutex::new(Vec::new()));
-        let mut owner = spawn::<ControlledInit>(ControlledInitArgs {
+        let mut owner = loac::spawn::<ControlledInit>(ControlledInitArgs {
             entered: entered_tx,
             repolled: repolled_tx,
             release: release_rx,

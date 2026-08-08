@@ -16,7 +16,7 @@
 //! [`SyncHandler`] produces each reply during message dispatch.
 //!
 //! ```
-//! use loac::{ExitReason, Shutdown, prelude::*, spawn};
+//! use loac::{ExitReason, Shutdown, prelude::*};
 //!
 //! struct Counter(u64);
 //!
@@ -46,7 +46,7 @@
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let owner = spawn::<Counter>(0);
+//!     let owner = loac::spawn::<Counter>(0);
 //!     let counter = owner.actor_ref();
 //!
 //!     assert_eq!(counter.call(Add(2)).await?, 2);

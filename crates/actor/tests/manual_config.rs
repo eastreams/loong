@@ -2,7 +2,7 @@ use std::mem::{needs_drop, size_of};
 
 use loac::{
     Actor, ActorConfig, ActorScope, ExitReason, MessageConfig, Shutdown, SupervisionConfig,
-    scheduling, spawn, supervision,
+    scheduling, supervision,
     transport::{NoInbox, NoSender},
 };
 
@@ -48,7 +48,7 @@ async fn no_mailbox_omits_reply_runtime_state() {
     assert!(!needs_drop::<scheduling::Disabled>());
     let _: scheduling::Disabled = scheduler;
 
-    let owner = spawn::<ManualActor>(());
+    let owner = loac::spawn::<ManualActor>(());
 
     assert_eq!(
         owner.shutdown(Shutdown::Stop).await.reason(),
@@ -95,7 +95,7 @@ impl Actor for Parent {
 // The manual no-mailbox recipe keeps lifecycle and children.
 #[tokio::test]
 async fn manual_no_mailbox_keeps_lifecycle_and_children() {
-    let owner = spawn::<Parent>(());
+    let owner = loac::spawn::<Parent>(());
 
     // The actor ref keeps lifecycle methods.
     assert!(owner.actor_ref().exit_status().is_none());

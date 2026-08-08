@@ -11,7 +11,7 @@ use std::{
 
 use loac::{
     Actor, ActorConfig, ActorScope, MessageConfig, Shutdown, SpawnOptions, SupervisionConfig,
-    actor, scheduling, spawn, spawn_with, supervision,
+    actor, scheduling, spawn_with, supervision,
     transport::{NoInbox, NoSender},
 };
 use tokio::sync::oneshot;
@@ -51,7 +51,7 @@ impl Actor for FixedParent {
 #[tokio::test(flavor = "current_thread")]
 async fn fixed_capacity_returns_rejected_spawn_args() {
     let (result_tx, result_rx) = oneshot::channel();
-    let owner = spawn::<FixedParent>(result_tx);
+    let owner = loac::spawn::<FixedParent>(result_tx);
 
     assert_eq!(watchdog(result_rx).await.unwrap(), 2);
     assert_eq!(
@@ -84,7 +84,7 @@ impl Actor for DynamicParent {
 #[tokio::test(flavor = "current_thread")]
 async fn dynamic_capacity_is_enforced_at_runtime() {
     let (default_tx, default_rx) = oneshot::channel();
-    let default_owner = spawn::<DynamicParent>(default_tx);
+    let default_owner = loac::spawn::<DynamicParent>(default_tx);
     assert_eq!(watchdog(default_rx).await.unwrap(), (2, vec![2, 3]));
     let _ = watchdog(default_owner.shutdown(Shutdown::Stop)).await;
 
@@ -122,7 +122,7 @@ fn unwrap_infallible<T>(result: Result<T, Infallible>) -> T {
 #[tokio::test(flavor = "current_thread")]
 async fn unbounded_supervision_accepts_beyond_the_default_limit() {
     let (result_tx, result_rx) = oneshot::channel();
-    let owner = spawn::<UnboundedParent>(result_tx);
+    let owner = loac::spawn::<UnboundedParent>(result_tx);
 
     assert_eq!(watchdog(result_rx).await.unwrap(), 64);
     let _ = watchdog(owner.shutdown(Shutdown::Stop)).await;
@@ -213,7 +213,7 @@ impl Actor for PreparationParent {
 #[tokio::test(flavor = "current_thread")]
 async fn full_spawn_with_returns_options_without_opening_child_config() {
     let (result_tx, result_rx) = oneshot::channel();
-    let owner = spawn::<PreparationParent>(result_tx);
+    let owner = loac::spawn::<PreparationParent>(result_tx);
 
     assert_eq!(watchdog(result_rx).await.unwrap(), (2, true, 1, 0));
     let _ = watchdog(owner.shutdown(Shutdown::Stop)).await;
@@ -260,7 +260,7 @@ impl Actor for RestartingParent {
 #[tokio::test(flavor = "current_thread")]
 async fn child_exit_hook_can_fill_the_reaped_slot() {
     let (replacement_tx, replacement_rx) = oneshot::channel();
-    let owner = spawn::<RestartingParent>(replacement_tx);
+    let owner = loac::spawn::<RestartingParent>(replacement_tx);
 
     assert!(watchdog(replacement_rx).await.unwrap());
     let _ = watchdog(owner.shutdown(Shutdown::Stop)).await;

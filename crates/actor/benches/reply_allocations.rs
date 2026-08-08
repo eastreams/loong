@@ -13,7 +13,7 @@
 use std::hint::black_box;
 
 use allocation_counter::{AllocationInfo, measure};
-use loac::{ActorRef, ExitReason, Shutdown, prelude::*, spawn};
+use loac::{ActorRef, prelude::*};
 
 const WARMUP_CALLS: usize = 64;
 const MEASURED_CALLS: usize = 10_000;
@@ -123,7 +123,7 @@ fn main() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
         .expect("the benchmark runtime builds");
-    let owner = runtime.block_on(async { spawn::<ReplyActor>(()) });
+    let owner = runtime.block_on(async { loac::spawn::<ReplyActor>(()) });
     let actor = owner.actor_ref();
 
     run_calls(&runtime, &actor, WARMUP_CALLS, || Ready);
@@ -157,7 +157,9 @@ fn main() {
     }
 
     assert_eq!(
-        runtime.block_on(owner.shutdown(Shutdown::Kill)).reason(),
-        ExitReason::Killed
+        runtime
+            .block_on(owner.shutdown(loac::Shutdown::Kill))
+            .reason(),
+        loac::ExitReason::Killed
     );
 }

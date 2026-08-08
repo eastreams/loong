@@ -6,7 +6,7 @@
 
 use std::num::NonZeroUsize;
 
-use loac::{ExitReason, Shutdown, SpawnOptions, prelude::*, spawn_with};
+use loac::{SpawnOptions, prelude::*};
 
 const DEFAULT_MAILBOX_CAPACITY: usize = 32;
 const MAILBOX_DISPATCH_BUDGET: usize = 8;
@@ -43,12 +43,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let options = SpawnOptions::<Service>::default()
         .with_mailbox_capacity(NonZeroUsize::new(64).expect("capacity is non-zero"));
 
-    let owner = spawn_with::<Service>((), options);
+    let owner = loac::spawn_with::<Service>((), options);
     assert_eq!(owner.actor_ref().call(HealthCheck).await?, "ready");
 
     assert_eq!(
-        owner.shutdown(Shutdown::Drain).await.reason(),
-        ExitReason::Drained
+        owner.shutdown(loac::Shutdown::Drain).await.reason(),
+        loac::ExitReason::Drained
     );
     Ok(())
 }

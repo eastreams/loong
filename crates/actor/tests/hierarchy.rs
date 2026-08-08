@@ -8,7 +8,7 @@ use std::{
 
 use loac::{
     Actor, ActorRef, ActorScope, CallError, ExitReason, Handler, IntoActorFuture, Message,
-    ReplyExt, Shutdown, ShutdownStatus, StopScope, SubtreeStatus, actor, spawn,
+    ReplyExt, Shutdown, ShutdownStatus, StopScope, SubtreeStatus, actor,
 };
 use tokio::sync::oneshot;
 
@@ -60,7 +60,7 @@ impl Actor for LogParent {
 async fn parent_stop_cleans_up_children_before_the_parent() {
     let log = Arc::new(Mutex::new(Vec::new()));
     let (child_tx, child_rx) = oneshot::channel();
-    let owner = spawn::<LogParent>(LogParentArgs {
+    let owner = loac::spawn::<LogParent>(LogParentArgs {
         log: log.clone(),
         child_started: child_tx,
     });
@@ -198,7 +198,7 @@ impl Handler<Forward> for DrainParent {
 async fn parent_drain_finishes_parent_queue_before_draining_children() {
     let log = Arc::new(Mutex::new(Vec::new()));
     let (worker_tx, worker_rx) = oneshot::channel();
-    let mut owner = spawn::<DrainParent>(DrainParentArgs {
+    let mut owner = loac::spawn::<DrainParent>(DrainParentArgs {
         log: log.clone(),
         worker_started: worker_tx,
     });
@@ -362,7 +362,7 @@ async fn parent_panic_kills_descendants_before_parent_exit() {
     let (leaf_drop_release_tx, leaf_drop_release_rx) = sync_mpsc::channel();
     let (branch_dropped_tx, branch_dropped_rx) = oneshot::channel();
     let (leaf_dropped_tx, leaf_dropped_rx) = oneshot::channel();
-    let mut owner = spawn::<PanicParent>(PanicParentArgs {
+    let mut owner = loac::spawn::<PanicParent>(PanicParentArgs {
         branch_started: branch_tx,
         leaf_started: leaf_tx,
         leaf_drop_entered: leaf_drop_entered_tx,
@@ -438,7 +438,7 @@ async fn assert_init_child_joins_graceful_shutdown(shutdown: Shutdown, reason: E
     let (entered_tx, entered_rx) = oneshot::channel();
     let (release_tx, release_rx) = oneshot::channel();
     let (spawned_tx, spawned_rx) = oneshot::channel();
-    let mut owner = spawn::<SpawnDuringInit>(SpawnDuringInitArgs {
+    let mut owner = loac::spawn::<SpawnDuringInit>(SpawnDuringInitArgs {
         entered: entered_tx,
         release: release_rx,
         spawned: spawned_tx,
@@ -489,7 +489,7 @@ impl Actor for SpawnAfterKill {
 #[tokio::test]
 async fn kill_includes_children_spawned_before_the_current_poll_returns() {
     let (spawned_tx, spawned_rx) = oneshot::channel();
-    let mut owner = spawn::<SpawnAfterKill>(spawned_tx);
+    let mut owner = loac::spawn::<SpawnAfterKill>(spawned_tx);
 
     let child = watchdog(spawned_rx).await.unwrap();
     let status = watchdog(owner.wait()).await;

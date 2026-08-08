@@ -10,7 +10,7 @@ use std::{
 
 use loac::{
     Actor, ActorScope, CallError, ExitReason, Handler, Message, ReplyExt, Shutdown, ShutdownStatus,
-    StopScope, SubtreeStatus, TryCallErrorKind, actor, spawn,
+    StopScope, SubtreeStatus, TryCallErrorKind, actor,
 };
 use tokio::sync::oneshot;
 
@@ -95,7 +95,7 @@ impl Actor for PreKilledActor {
 async fn preinit_kill_skips_sync_constructor_and_contains_args_drop() {
     let constructor_calls = Arc::new(AtomicUsize::new(0));
     let (dropped_tx, dropped_rx) = oneshot::channel();
-    let mut owner = spawn::<PreKilledActor>(PreKilledArgs {
+    let mut owner = loac::spawn::<PreKilledActor>(PreKilledArgs {
         constructor_calls: Arc::clone(&constructor_calls),
         dropped: Some(dropped_tx),
     });
@@ -116,7 +116,7 @@ async fn kill_cancels_never_ready_init_before_actor_construction() {
     let (entered_tx, entered_rx) = oneshot::channel();
     let (cancelled_tx, cancelled_rx) = oneshot::channel();
     let actor_drops = Arc::new(AtomicUsize::new(0));
-    let mut owner = spawn::<NeverReadyInit>(NeverReadyArgs {
+    let mut owner = loac::spawn::<NeverReadyInit>(NeverReadyArgs {
         entered: entered_tx,
         cancelled: cancelled_tx,
         actor_drops: Arc::clone(&actor_drops),
@@ -234,7 +234,7 @@ impl Actor for ReadyDropActor {
 async fn ready_init_future_drop_panic_kills_child_before_actor_drop() {
     let (child_tx, child_rx) = oneshot::channel();
     let (observed_tx, observed_rx) = oneshot::channel();
-    let mut owner = spawn::<ReadyDropActor>(ReadyDropArgs {
+    let mut owner = loac::spawn::<ReadyDropActor>(ReadyDropArgs {
         child_started: child_tx,
         actor_drop_observed_kill: observed_tx,
     });
@@ -295,7 +295,7 @@ impl Handler<InitPing> for PanicInit {
 async fn init_call_panic_discards_calls_and_kills_registered_children() {
     let (child_tx, child_rx) = oneshot::channel();
     let cleanup = Arc::new(AtomicUsize::new(0));
-    let mut owner = spawn::<PanicInit>(PanicInitArgs {
+    let mut owner = loac::spawn::<PanicInit>(PanicInitArgs {
         child_started: child_tx,
         cleanup: Arc::clone(&cleanup),
         panic_during_call: true,

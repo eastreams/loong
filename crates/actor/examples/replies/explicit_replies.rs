@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use loac::{ExitReason, Shutdown, prelude::*, spawn};
+use loac::prelude::*;
 
 struct Store {
     cache: HashMap<String, u64>,
@@ -40,14 +40,14 @@ async fn load_value(key: String) -> u64 {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let owner = spawn::<Store>(HashMap::from([("cached".to_owned(), 21)]));
+    let owner = loac::spawn::<Store>(HashMap::from([("cached".to_owned(), 21)]));
     let store = owner.actor_ref();
 
     assert_eq!(store.call(Lookup("cached".to_owned())).await?, 21);
     assert_eq!(store.call(Lookup("uncached".to_owned())).await?, 8);
     assert_eq!(
-        owner.shutdown(Shutdown::Drain).await.reason(),
-        ExitReason::Drained
+        owner.shutdown(loac::Shutdown::Drain).await.reason(),
+        loac::ExitReason::Drained
     );
     Ok(())
 }

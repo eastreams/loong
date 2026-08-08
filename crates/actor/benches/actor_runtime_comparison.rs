@@ -5,7 +5,7 @@ use std::{
 };
 
 use actix::Actor as _;
-use loac::{ActorOwner, ActorRef, ExitReason, Shutdown, prelude::*, spawn};
+use loac::{ActorOwner, ActorRef, prelude::*};
 use oorandom::Rand64;
 use serde::Serialize;
 
@@ -191,7 +191,7 @@ impl RuntimePair {
         let loong_runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .expect("the Loong benchmark runtime builds");
-        let loong_owner = loong_runtime.block_on(async { spawn::<LoongActor>(()) });
+        let loong_owner = loong_runtime.block_on(async { loac::spawn::<LoongActor>(()) });
         let loac = loong_owner.actor_ref();
 
         let actix_system = actix::System::with_tokio_rt(|| {
@@ -319,8 +319,8 @@ impl RuntimePair {
     fn shutdown(self) {
         let status = self
             .loong_runtime
-            .block_on(self.loong_owner.shutdown(Shutdown::Kill));
-        assert_eq!(status.reason(), ExitReason::Killed);
+            .block_on(self.loong_owner.shutdown(loac::Shutdown::Kill));
+        assert_eq!(status.reason(), loac::ExitReason::Killed);
 
         drop(self.actix_actor);
         actix::System::current().stop();

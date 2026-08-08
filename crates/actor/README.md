@@ -25,7 +25,7 @@ The crate is an early MVP. Its current contract is deliberately narrow:
   a running synchronous handler, a poll call that never returns, or user `Drop`.
 
 ```rust
-use loac::{ExitReason, Shutdown, SubtreeStatus, prelude::*, spawn};
+use loac::{ExitReason, Shutdown, SubtreeStatus, prelude::*};
 
 struct Counter(u64);
 
@@ -55,7 +55,7 @@ impl SyncHandler<Add> for Counter {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let owner = spawn::<Counter>(0);
+    let owner = loac::spawn::<Counter>(0);
     let counter = owner.actor_ref();
 
     assert_eq!(counter.call(Add(2)).await?, 2);

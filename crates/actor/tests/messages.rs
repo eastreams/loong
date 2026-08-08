@@ -14,7 +14,7 @@ use std::{
 use loac::{
     Actor, ActorFutureExt, ActorScope, CallError, ExitReason, Handler, IntoActorFuture, Message,
     ReplyExt, Shutdown, SpawnOptions, SyncHandler, TryCallErrorKind, TrySendErrorKind, actor,
-    spawn, spawn_with,
+    spawn_with,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -62,7 +62,7 @@ impl Handler<Describe> for Calculator {
 
 #[tokio::test]
 async fn one_actor_handles_multiple_typed_message_replies() {
-    let owner = spawn::<Calculator>(0);
+    let owner = loac::spawn::<Calculator>(0);
     let actor = owner.actor_ref();
 
     assert_eq!(watchdog(actor.call(Add(3))).await.unwrap(), 3);
@@ -93,7 +93,7 @@ impl Handler<Events> for Calculator {
 
 #[tokio::test]
 async fn a_stream_handle_is_an_ordinary_typed_reply() {
-    let owner = spawn::<Calculator>(0);
+    let owner = loac::spawn::<Calculator>(0);
     let actor = owner.actor_ref();
     let mut events = watchdog(actor.call(Events)).await.unwrap();
 
@@ -413,7 +413,7 @@ async fn send_recovers_a_message_when_shutdown_wins_admission() {
 #[tokio::test]
 async fn ready_capacity_does_not_bypass_closed_admission() {
     let committed = Arc::default();
-    let mut owner = spawn::<SerialActor>(Arc::clone(&committed));
+    let mut owner = loac::spawn::<SerialActor>(Arc::clone(&committed));
     let actor = owner.actor_ref();
 
     assert!(matches!(
@@ -455,7 +455,7 @@ impl Handler<CommitAfterRelease> for SerialActor {
 
 #[tokio::test]
 async fn abandoning_an_in_flight_call_does_not_cancel_handler_effects() {
-    let owner = spawn::<SerialActor>(Arc::default());
+    let owner = loac::spawn::<SerialActor>(Arc::default());
     let actor = owner.actor_ref();
     let (entered_tx, entered_rx) = oneshot::channel();
     let (release_tx, release_rx) = oneshot::channel();

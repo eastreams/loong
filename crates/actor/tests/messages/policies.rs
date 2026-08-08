@@ -2,7 +2,7 @@ use std::num::NonZeroUsize;
 
 use loac::{
     Actor, ActorOwner, ActorScope, ExitReason, Handler, Message, Shutdown, SpawnOptions,
-    SyncHandler, TrySendErrorKind, actor, spawn, spawn_with,
+    SyncHandler, TrySendErrorKind, actor, spawn_with,
 };
 use tokio::sync::oneshot;
 
@@ -97,7 +97,7 @@ where
 #[tokio::test]
 async fn dynamic_mailbox_uses_its_default_capacity() {
     let (_hold_init, init) = oneshot::channel();
-    let owner = spawn::<DynamicActor>(init);
+    let owner = loac::spawn::<DynamicActor>(init);
     assert_bounded_capacity(owner, 32).await;
 }
 
@@ -105,7 +105,7 @@ async fn dynamic_mailbox_uses_its_default_capacity() {
 #[tokio::test]
 async fn dynamic_mailbox_accepts_a_custom_actor_default() {
     let (_hold_init, init) = oneshot::channel();
-    let owner = spawn::<CustomDynamicActor>(init);
+    let owner = loac::spawn::<CustomDynamicActor>(init);
     assert_bounded_capacity(owner, 3).await;
 }
 
@@ -123,7 +123,7 @@ async fn dynamic_mailbox_accepts_one_spawn_override() {
 #[tokio::test]
 async fn fixed_mailbox_uses_its_actor_capacity() {
     let (_hold_init, init) = oneshot::channel();
-    let owner = spawn::<FixedActor>(init);
+    let owner = loac::spawn::<FixedActor>(init);
     assert_bounded_capacity(owner, 2).await;
 }
 
@@ -131,7 +131,7 @@ async fn fixed_mailbox_uses_its_actor_capacity() {
 #[tokio::test]
 async fn unbounded_mailbox_never_reports_saturation() {
     let (_hold_init, init) = oneshot::channel();
-    let owner = spawn::<UnboundedActor>(init);
+    let owner = loac::spawn::<UnboundedActor>(init);
     let actor = owner.actor_ref();
 
     for _ in 0..1_024 {

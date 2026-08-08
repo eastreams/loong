@@ -2,7 +2,7 @@
 //! Each agent is a child actor.
 //! Choose independent roots for independently owned agents.
 
-use loac::{ActorRef, CallError, ExitReason, Shutdown, SubtreeStatus, prelude::*, spawn};
+use loac::{ActorRef, prelude::*};
 
 #[derive(Debug, PartialEq, Eq)]
 struct Report {
@@ -56,7 +56,7 @@ impl Actor for Team {
 }
 
 #[derive(Message)]
-#[message(reply = Result<[Report; 2], CallError>)]
+#[message(reply = Result<[Report; 2], loac::CallError>)]
 struct ReviewTask(&'static str);
 
 impl Handler<ReviewTask> for Team {
@@ -79,7 +79,7 @@ impl Handler<ReviewTask> for Team {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let owner = spawn::<Team>(());
+    let owner = loac::spawn::<Team>(());
     let team = owner.actor_ref();
 
     let reports = team.call(ReviewTask("actor runtime")).await?;
@@ -98,8 +98,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ]
     );
 
-    let status = owner.shutdown(Shutdown::Drain).await;
-    assert_eq!(status.reason(), ExitReason::Drained);
-    assert_eq!(status.subtree(), SubtreeStatus::Terminated);
+    let status = owner.shutdown(loac::Shutdown::Drain).await;
+    assert_eq!(status.reason(), loac::ExitReason::Drained);
+    assert_eq!(status.subtree(), loac::SubtreeStatus::Terminated);
     Ok(())
 }

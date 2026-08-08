@@ -7,7 +7,7 @@ use std::{
 
 use loac::{
     Actor, ActorFuture, ActorScope, ExitReason, Handler, InterleavedFutureExt, IntoReply, Message,
-    Shutdown, actor, spawn,
+    Shutdown, actor,
 };
 
 use support::watchdog;
@@ -91,8 +91,8 @@ async fn handler_context_selects_the_actor_future_implementation() {
     // One concrete future implements ActorFuture for both actors. Driving both
     // handlers in one expression ensures each IntoReply context selects its
     // actor-specific implementation without an explicit type annotation.
-    let first_owner = spawn::<FirstActor>(1);
-    let second_owner = spawn::<SecondActor>(2);
+    let first_owner = loac::spawn::<FirstActor>(1);
+    let second_owner = loac::spawn::<SecondActor>(2);
     let first = first_owner.actor_ref();
     let second = second_owner.actor_ref();
 

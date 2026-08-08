@@ -14,7 +14,7 @@ use std::{
 use loac::{
     Actor, ActorFutureExt, ActorRef, ActorScope, CallError, ChildExit, ExitReason, Handler,
     InterleavedFutureExt, IntoActorFuture, Message, ReplyExt, Response, Shutdown, SpawnOptions,
-    SyncHandler, actor, reply, spawn, spawn_with,
+    SyncHandler, actor, reply, spawn_with,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -48,7 +48,7 @@ impl SyncHandler<Increment> for Counter {
 
 #[tokio::test]
 async fn sync_handler_mutates_actor_and_replies_immediately() {
-    let owner = spawn::<Counter>(0);
+    let owner = loac::spawn::<Counter>(0);
     let actor = owner.actor_ref();
 
     assert_eq!(watchdog(actor.call(Increment)).await, Ok(1));
@@ -79,7 +79,7 @@ impl Handler<ChooseReply> for Counter {
 
 #[tokio::test]
 async fn either_selects_between_reply_strategies_without_boxing() {
-    let owner = spawn::<Counter>(0);
+    let owner = loac::spawn::<Counter>(0);
     let actor = owner.actor_ref();
 
     assert_eq!(watchdog(actor.call(ChooseReply(true))).await, Ok(1));
@@ -184,7 +184,7 @@ impl Handler<InterleavedSequence> for ProgressActor {
 #[tokio::test]
 async fn owned_does_not_block_mailbox_and_interleaved_reborrows_actor() {
     let log = Arc::new(Mutex::new(Vec::new()));
-    let owner = spawn::<ProgressActor>(log.clone());
+    let owner = loac::spawn::<ProgressActor>(log.clone());
     let actor = owner.actor_ref();
 
     let (owned_entered_tx, owned_entered_rx) = oneshot::channel();
@@ -354,7 +354,7 @@ impl Handler<Mark> for ExclusiveActor {
 async fn exclusive_blocks_actor_work_but_owned_continues() {
     let (child_started_tx, child_started_rx) = oneshot::channel();
     let (child_hooks_tx, mut child_hooks_rx) = mpsc::unbounded_channel();
-    let owner = spawn::<ExclusiveActor>(ExclusiveActorArgs {
+    let owner = loac::spawn::<ExclusiveActor>(ExclusiveActorArgs {
         child_started: child_started_tx,
         child_hooks: child_hooks_tx,
     });
@@ -458,7 +458,7 @@ async fn owned_replies_need_no_interleaving_and_graceful_shutdown_waits() {
         (Shutdown::Stop, ExitReason::Stopped),
         (Shutdown::Drain, ExitReason::Drained),
     ] {
-        let mut owner = spawn::<StopActor>(());
+        let mut owner = loac::spawn::<StopActor>(());
         let actor = owner.actor_ref();
         let mut entered = Vec::new();
         let mut releases = Vec::new();
@@ -580,7 +580,7 @@ impl Handler<PanicReply> for PanicActor {
 
 #[tokio::test]
 async fn reply_panic_fails_sibling_in_flight_work() {
-    let mut owner = spawn::<PanicActor>(());
+    let mut owner = loac::spawn::<PanicActor>(());
     let actor = owner.actor_ref();
     let (sibling_entered_tx, sibling_entered_rx) = oneshot::channel();
     let (_sibling_release_tx, sibling_release_rx) = oneshot::channel();
@@ -618,7 +618,7 @@ async fn reply_panic_fails_sibling_in_flight_work() {
 // A later future Drop panic must still fail the actor.
 #[tokio::test]
 async fn owned_task_panic_after_reply_completion_still_fails_the_actor() {
-    let mut owner = spawn::<PanicActor>(());
+    let mut owner = loac::spawn::<PanicActor>(());
     let actor = owner.actor_ref();
 
     assert_eq!(watchdog(actor.call(PanicAfterReady)).await, Ok(()));
@@ -831,7 +831,7 @@ impl Handler<ReadyWork> for FairActor {
 #[tokio::test]
 async fn owned_reply_runs_in_a_distinct_tokio_task() {
     let handled = Arc::new(AtomicUsize::new(0));
-    let owner = spawn::<FairActor>(handled.clone());
+    let owner = loac::spawn::<FairActor>(handled.clone());
     let actor = owner.actor_ref();
     assert_eq!(watchdog(actor.call(OwnedTaskIdentity)).await, Ok(true));
     assert_eq!(
@@ -843,7 +843,7 @@ async fn owned_reply_runs_in_a_distinct_tokio_task() {
 #[tokio::test]
 async fn ready_mailbox_input_does_not_starve_woken_interleaved_reply() {
     let handled = Arc::new(AtomicUsize::new(0));
-    let owner = spawn::<FairActor>(handled.clone());
+    let owner = loac::spawn::<FairActor>(handled.clone());
     let actor = owner.actor_ref();
     let completed_at = Arc::new(AtomicUsize::new(usize::MAX));
     let (entered_tx, entered_rx) = oneshot::channel();
@@ -958,7 +958,7 @@ async fn queued_child_exit_progresses_before_ready_mailbox_is_exhausted() {
     let hook_completed_at = Arc::new(AtomicUsize::new(usize::MAX));
     let (child_started_tx, child_started_rx) = oneshot::channel();
     let (hook_completed_tx, hook_completed_rx) = oneshot::channel();
-    let owner = spawn::<FairChildExitActor>(FairChildExitArgs {
+    let owner = loac::spawn::<FairChildExitActor>(FairChildExitArgs {
         child_started: child_started_tx,
         handled: handled.clone(),
         hook_completed_at: hook_completed_at.clone(),

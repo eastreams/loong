@@ -24,7 +24,6 @@ use crate::{
         ActorScheduler, InterleavedLane, InterleavedProfile, InterleavedScheduler, SchedulerTurn,
         Seal,
     },
-    spawn,
     supervision::runtime::{RuntimeChildren, tests::ChildrenFixture},
     transport::MessageSender,
 };
@@ -679,7 +678,7 @@ fn unfinished_exit_guard_overrides_tentative_hard_mode() {
 #[tokio::test]
 async fn aborted_child_does_not_stop_running_parent() {
     let (child_exit_tx, child_exit_rx) = oneshot::channel();
-    let owner = spawn::<AbortChildParent>(child_exit_tx);
+    let owner = loac::spawn::<AbortChildParent>(child_exit_tx);
     let actor = owner.actor_ref();
 
     let child_status = tokio::time::timeout(Duration::from_secs(1), child_exit_rx)
@@ -1067,7 +1066,7 @@ async fn child_kill_commits_before_actor_work_is_dropped() {
     // Active replies and queued envelopes may both run arbitrary destructors.
     // Observing the child mode from each Drop rejects any teardown that merely
     // waits for children after clearing local work instead of cancelling first.
-    let child_owner = spawn::<TestActor>(());
+    let child_owner = loac::spawn::<TestActor>(());
     let child_ref = child_owner.actor_ref();
     let child_inner = Arc::clone(&child_ref.0);
 

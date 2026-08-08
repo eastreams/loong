@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use loac::{ExitReason, Shutdown, prelude::*, spawn};
+use loac::prelude::*;
 use tokio::sync::oneshot;
 
 struct Counter(u64);
@@ -64,7 +64,7 @@ impl Handler<Read> for Counter {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let owner = spawn::<Counter>(10);
+    let owner = loac::spawn::<Counter>(10);
     let counter = owner.actor_ref();
     let (started_tx, started_rx) = oneshot::channel();
     let (resume_tx, resume_rx) = oneshot::channel();
@@ -90,8 +90,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(read.await?, 15);
 
     assert_eq!(
-        owner.shutdown(Shutdown::Drain).await.reason(),
-        ExitReason::Drained
+        owner.shutdown(loac::Shutdown::Drain).await.reason(),
+        loac::ExitReason::Drained
     );
     Ok(())
 }

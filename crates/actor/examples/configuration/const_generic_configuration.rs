@@ -2,7 +2,7 @@
 //! `mailbox = dynamic(N)` makes `N` the spawn default.
 //! `interleaved = N` fixes the limit for each actor type.
 
-use loac::{ExitReason, Shutdown, prelude::*, spawn};
+use loac::prelude::*;
 
 struct Service<const N: usize>;
 
@@ -27,12 +27,12 @@ impl<const N: usize> SyncHandler<ReadTypeParameter> for Service<N> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let owner = spawn::<Service<8>>(());
+    let owner = loac::spawn::<Service<8>>(());
     assert_eq!(owner.actor_ref().call(ReadTypeParameter).await?, 8);
 
     assert_eq!(
-        owner.shutdown(Shutdown::Drain).await.reason(),
-        ExitReason::Drained
+        owner.shutdown(loac::Shutdown::Drain).await.reason(),
+        loac::ExitReason::Drained
     );
     Ok(())
 }

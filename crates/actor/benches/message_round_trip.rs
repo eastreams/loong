@@ -12,7 +12,7 @@ use std::{
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use loac::{
     Actor, ActorRef, ActorScope, Handler, InterleavedFutureExt, IntoActorFuture, Message, ReplyExt,
-    Shutdown, spawn,
+    Shutdown,
 };
 
 struct ReplyActor;
@@ -148,9 +148,9 @@ fn message_round_trip(criterion: &mut Criterion) {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
         .expect("the benchmark runtime builds");
-    let owner = runtime.block_on(async { spawn::<ReplyActor>(()) });
+    let owner = runtime.block_on(async { loac::spawn::<ReplyActor>(()) });
     let actor = owner.actor_ref();
-    let unbounded_owner = runtime.block_on(async { spawn::<UnboundedReplyActor>(()) });
+    let unbounded_owner = runtime.block_on(async { loac::spawn::<UnboundedReplyActor>(()) });
     let unbounded_actor = unbounded_owner.actor_ref();
 
     let mut group = criterion.benchmark_group("message_round_trip");

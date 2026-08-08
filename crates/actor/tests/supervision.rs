@@ -8,7 +8,7 @@ use std::task::Poll;
 
 use loac::{
     Actor, ActorScope, CallError, Child, ChildExit, ExitReason, Handler, InterleavedFutureExt,
-    IntoActorFuture, Message, ReplyExt, Shutdown, SubtreeStatus, actor, spawn,
+    IntoActorFuture, Message, ReplyExt, Shutdown, SubtreeStatus, actor,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -139,7 +139,7 @@ fn spawn_supervisor(
 ) {
     let (child_tx, child_rx) = oneshot::channel();
     let (events_tx, events_rx) = mpsc::unbounded_channel();
-    let owner = spawn::<Supervisor>(SupervisorArgs {
+    let owner = loac::spawn::<Supervisor>(SupervisorArgs {
         child_started: child_tx,
         events: events_tx,
         observed: Arc::new(AtomicUsize::new(0)),

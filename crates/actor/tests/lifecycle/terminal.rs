@@ -12,7 +12,7 @@ use std::{
 use loac::{
     Actor, ActorFuture, ActorOwner, ActorScope, CallError, ExitReason, Handler,
     InterleavedFutureExt, Message, ReplyExt, Shutdown, ShutdownStatus, StopScope, SubtreeStatus,
-    actor, spawn,
+    actor,
 };
 use tokio::sync::oneshot;
 
@@ -36,7 +36,7 @@ async fn shutdown_requests_after_exit_report_the_published_status() {
         (Shutdown::Drain, ExitReason::Drained),
         (Shutdown::Kill, ExitReason::Killed),
     ] {
-        let mut owner = spawn::<ExitedActor>(());
+        let mut owner = loac::spawn::<ExitedActor>(());
         assert_eq!(owner.request_shutdown(initial), ShutdownStatus::Requested);
         let status = watchdog(owner.wait()).await;
         assert_eq!(status.reason(), expected_reason);
@@ -80,7 +80,7 @@ impl Drop for StateDrop {
 async fn actor_refs_do_not_keep_an_actor_alive() {
     let (initialized_tx, initialized_rx) = oneshot::channel();
     let (dropped_tx, dropped_rx) = oneshot::channel();
-    let owner = spawn::<StateDrop>(StateDropArgs {
+    let owner = loac::spawn::<StateDrop>(StateDropArgs {
         initialized: initialized_tx,
         dropped: dropped_tx,
     });
@@ -129,7 +129,7 @@ impl Wake for ReentrantShutdownWaker {
 // to freeze this current-thread runtime or hide behind an async timeout.
 #[tokio::test(flavor = "current_thread")]
 async fn lifecycle_notification_allows_reentrant_shutdown_from_a_safe_waker() {
-    let owner = Arc::new(spawn::<ExitedActor>(()));
+    let owner = Arc::new(loac::spawn::<ExitedActor>(()));
     let actor = owner.actor_ref();
     let (kill_tx, kill_rx) = mpsc::sync_channel(1);
     let probe = Arc::new(ReentrantShutdownWaker {
@@ -226,7 +226,7 @@ fn executor_teardown_discards_each_accepted_message() {
     let tail_unwinding = Arc::new(AtomicBool::new(false));
 
     let (owner, response) = runtime.block_on(async {
-        let owner = spawn::<PendingInit>(entered_tx);
+        let owner = loac::spawn::<PendingInit>(entered_tx);
         entered_rx.await.unwrap();
         let actor = owner.actor_ref();
         let response = actor
@@ -340,7 +340,7 @@ fn executor_teardown_contains_each_interleaved_drop_panic() {
     let (second_entered_tx, second_entered_rx) = oneshot::channel();
 
     let (owner, first, second) = runtime.block_on(async {
-        let owner = spawn::<PendingInterleavedActor>(());
+        let owner = loac::spawn::<PendingInterleavedActor>(());
         let actor = owner.actor_ref();
         let first = actor
             .try_call(PendingInterleavedDrop {
@@ -409,7 +409,7 @@ impl Handler<PanicNow> for PanicActor {
 
 #[tokio::test]
 async fn handler_panics_are_contained_and_reported() {
-    let mut owner = spawn::<PanicActor>(());
+    let mut owner = loac::spawn::<PanicActor>(());
     let actor = owner.actor_ref();
 
     assert_eq!(
@@ -442,7 +442,7 @@ impl Handler<PanicAfterBarrier> for PanicActor {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn kill_committed_during_a_handler_poll_wins_over_panic() {
-    let mut owner = spawn::<PanicActor>(());
+    let mut owner = loac::spawn::<PanicActor>(());
     let actor = owner.actor_ref();
     let barrier = Arc::new(Barrier::new(2));
     let (entered_tx, entered_rx) = oneshot::channel();
@@ -487,7 +487,7 @@ impl Actor for KillOnStop {
 
 #[tokio::test]
 async fn kill_requested_at_graceful_finalization_wins_atomically() {
-    let owner = spawn::<KillOnStop>(());
+    let owner = loac::spawn::<KillOnStop>(());
 
     assert_eq!(
         watchdog(owner.shutdown(Shutdown::Stop)).await.reason(),
