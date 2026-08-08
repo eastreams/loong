@@ -80,6 +80,28 @@ impl Actor for DynamicMailbox {
     }
 }
 
+struct UnboundedMailbox;
+
+#[actor_api::actor(mailbox = unbounded)]
+impl Actor for UnboundedMailbox {
+    type SpawnArgs = ();
+
+    async fn init(_: (), _: &mut ActorScope<'_, Self>) -> Self {
+        Self
+    }
+}
+
+struct UnboundedInterleaved;
+
+#[actor_api::actor(mailbox, interleaved = unbounded)]
+impl Actor for UnboundedInterleaved {
+    type SpawnArgs = ();
+
+    async fn init(_: (), _: &mut ActorScope<'_, Self>) -> Self {
+        Self
+    }
+}
+
 struct DefaultCapabilities;
 
 #[actor_api::actor(mailbox, children, interleaved)]
@@ -137,9 +159,21 @@ where
 #[cfg(any())]
 struct Conditional;
 
+struct ConditionalAttribute;
+
 #[actor_api::actor(mailbox = dynamic)]
 #[cfg(any())]
 impl Actor for Conditional {
+    type SpawnArgs = ();
+
+    async fn init(_: (), _: &mut ActorScope<'_, Self>) -> Self {
+        Self
+    }
+}
+
+#[cfg_attr(any(), cfg(any()))]
+#[actor_api::actor(mailbox = unbounded)]
+impl Actor for ConditionalAttribute {
     type SpawnArgs = ();
 
     async fn init(_: (), _: &mut ActorScope<'_, Self>) -> Self {
@@ -176,6 +210,18 @@ fn main() {
     assert_same::<
         <Generic<u8, 6> as MessageConfig>::Scheduler,
         actor_api::scheduling::Dynamic<Generic<u8, 6>>,
+    >();
+    assert_same::<
+        <UnboundedMailbox as MessageConfig>::Sender,
+        actor_api::transport::UnboundedSender<UnboundedMailbox>,
+    >();
+    assert_same::<
+        <UnboundedMailbox as MessageConfig>::Inbox,
+        actor_api::transport::UnboundedInbox<UnboundedMailbox>,
+    >();
+    assert_same::<
+        <UnboundedInterleaved as MessageConfig>::Scheduler,
+        actor_api::scheduling::Unbounded<UnboundedInterleaved>,
     >();
 
     assert_eq!(Messaging::MAILBOX_DISPATCH_BUDGET.get(), 3);
