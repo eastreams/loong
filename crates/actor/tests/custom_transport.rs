@@ -17,6 +17,10 @@ use loac::{
 };
 use tokio::sync::mpsc;
 
+mod support;
+
+use support::watchdog;
+
 struct ManualActor(u64);
 
 struct ManualOptions {
@@ -323,14 +327,16 @@ async fn manual_transport_round_trips_with_local_spawn_options() {
     let actor = owner.actor_ref();
     let call = actor.call(Add(3));
     assert_send(&call);
-    assert_eq!(call.await, Ok(5));
+    assert_eq!(watchdog(call).await, Ok(5));
 
     let send = actor.send(Notify(4));
     assert_send(&send);
-    send.await.expect("the manual transport remains open");
-    assert_eq!(actor.call(Add(0)).await, Ok(9));
+    watchdog(send)
+        .await
+        .expect("the manual transport remains open");
+    assert_eq!(watchdog(actor.call(Add(0))).await, Ok(9));
     assert_eq!(
-        owner.shutdown(Shutdown::Drain).await.reason(),
+        watchdog(owner.shutdown(Shutdown::Drain)).await.reason(),
         ExitReason::Drained
     );
 }
