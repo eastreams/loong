@@ -16,11 +16,57 @@ use crate::{
 /// A [`HasMailbox`] handle can also send typed messages.
 /// A handle does not own lifecycle.
 /// Keeping one alive does not delay owner-initiated shutdown.
+/// Use [`ActorRef::recipient`] when a caller needs one message capability
+/// without exposing the actor's concrete type.
 pub struct ActorRef<A: Actor>(pub(crate) Arc<ActorInner<A>>);
+
+/// A cloneable, non-owning handle for one message type.
+///
+/// `Recipient<M>` erases the actor type while retaining the typed message and
+/// reply contract. It has no lifecycle or shutdown authority. Dropping it does
+/// not affect the actor.
+///
+/// Create one with [`ActorRef::recipient`]. The conversion allocates one small
+/// type-erasure target. Direct [`ActorRef`] calls keep their static dispatch.
+pub struct Recipient<M: Message> {
+    target: Arc<dyn RecipientTarget<M>>,
+}
+
+// Boxed futures keep the single type-erasure boundary object-safe.
+type RecipientFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+// This is the only dynamic boundary. Admission remains in ActorRef.
+trait RecipientTarget<M: Message>: Send + Sync {
+    fn call<'a>(&'a self, message: M) -> RecipientFuture<'a, Result<M::Reply, CallError>>;
+
+    fn try_call(&self, message: M) -> Result<Response<M::Reply>, TryCallError<M>>;
+
+    fn send<'a>(&'a self, message: M) -> RecipientFuture<'a, Result<(), SendError<M>>>
+    where
+        M: Message<Reply = ()>;
+
+    fn try_send(&self, message: M) -> Result<(), TrySendError<M>>
+    where
+        M: Message<Reply = ()>;
+}
 
 impl<A: Actor> ActorRef<A> {
     pub(crate) fn new(inner: Arc<ActorInner<A>>) -> Self {
         Self(inner)
+    }
+
+    /// Erases the actor type while retaining the capability for `M`.
+    ///
+    /// The returned handle is cloneable and non-owning. It can call `M` and,
+    /// for unit-reply `M`, also send it. It has no lifecycle methods.
+    pub fn recipient<M>(&self) -> Recipient<M>
+    where
+        A: Handler<M>,
+        M: Message,
+    {
+        Recipient {
+            target: Arc::new(self.clone()),
+        }
     }
 
     /// Sends a typed request, waiting for bounded mailbox capacity if needed.
@@ -342,7 +388,85 @@ impl<A: Actor> fmt::Debug for ActorRef<A> {
     }
 }
 
-/// The typed reply of an accepted [`ActorRef::try_call`] request.
+impl<M: Message> Recipient<M> {
+    /// Sends a typed request, waiting for mailbox capacity if needed.
+    ///
+    /// It follows [`ActorRef::call`] cancellation and shutdown rules.
+    pub async fn call(&self, message: M) -> Result<M::Reply, CallError> {
+        self.target.call(message).await
+    }
+
+    /// Attempts immediate admission without waiting for mailbox capacity.
+    ///
+    /// It follows [`ActorRef::try_call`] admission and error rules.
+    /// On failure, the error retains the original uncommitted message.
+    pub fn try_call(&self, message: M) -> Result<Response<M::Reply>, TryCallError<M>> {
+        self.target.try_call(message)
+    }
+}
+
+impl<M: Message<Reply = ()>> Recipient<M> {
+    /// Sends a one-way message, waiting for mailbox capacity if needed.
+    ///
+    /// It follows [`ActorRef::send`] cancellation and shutdown rules.
+    /// Returning means admission committed. The handler may still be pending.
+    pub async fn send(&self, message: M) -> Result<(), SendError<M>> {
+        self.target.send(message).await
+    }
+
+    /// Attempts immediate admission of a one-way message.
+    ///
+    /// It follows [`ActorRef::try_send`] admission and error rules.
+    /// On failure, the error retains the original uncommitted message.
+    pub fn try_send(&self, message: M) -> Result<(), TrySendError<M>> {
+        self.target.try_send(message)
+    }
+}
+
+impl<M: Message> Clone for Recipient<M> {
+    fn clone(&self) -> Self {
+        Self {
+            target: Arc::clone(&self.target),
+        }
+    }
+}
+
+impl<M: Message> fmt::Debug for Recipient<M> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Recipient(..)")
+    }
+}
+
+impl<A, M> RecipientTarget<M> for ActorRef<A>
+where
+    A: Actor + Handler<M>,
+    M: Message,
+{
+    fn call<'a>(&'a self, message: M) -> RecipientFuture<'a, Result<M::Reply, CallError>> {
+        Box::pin(ActorRef::call(self, message))
+    }
+
+    fn try_call(&self, message: M) -> Result<Response<M::Reply>, TryCallError<M>> {
+        ActorRef::try_call(self, message)
+    }
+
+    fn send<'a>(&'a self, message: M) -> RecipientFuture<'a, Result<(), SendError<M>>>
+    where
+        M: Message<Reply = ()>,
+    {
+        Box::pin(ActorRef::send(self, message))
+    }
+
+    fn try_send(&self, message: M) -> Result<(), TrySendError<M>>
+    where
+        M: Message<Reply = ()>,
+    {
+        ActorRef::try_send(self, message)
+    }
+}
+
+/// The typed reply of an accepted [`ActorRef::try_call`] or
+/// [`Recipient::try_call`] request.
 ///
 /// The message has committed to the mailbox, but its handler may not have run.
 /// It may remain queued while initialization is pending.

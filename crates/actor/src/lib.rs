@@ -107,13 +107,15 @@
 //! | Type | Role |
 //! | --- | --- |
 //! | [`Actor`] | Owns state and serial lifecycle hooks |
-//! | [`ActorRef`] | Provides a cloneable, non-owning handle |
+//! | [`ActorRef`] | Provides a cloneable, typed non-owning handle |
+//! | [`Recipient`] | Erases the actor type for one message capability |
 //! | [`ActorOwner`] | Uniquely owns one root actor |
 //! | [`ActorScope`] | Exposes temporary capabilities during actor work |
 //!
 //! An [`ActorRef`] may request shutdown.
 //! It sends messages only when the actor has [`HasMailbox`].
 //! Keeping an [`ActorRef`] does not keep its actor alive.
+//! A [`Recipient`] has only one message capability and no lifecycle methods.
 //!
 //! # Messages
 //!
@@ -128,6 +130,7 @@
 //!
 //! [`ActorRef::call`] waits for acceptance and a typed reply.
 //! [`ActorRef::send`] waits only for one-way message acceptance.
+//! [`ActorRef::recipient`] creates a type-erased handle for one message type.
 //! The `try_` variants never wait for mailbox capacity.
 //! Their errors retain messages that were not accepted.
 //! Method docs describe cancellation and shutdown races.
@@ -229,7 +232,7 @@ pub mod supervision;
 pub mod transport;
 
 pub use actor::{Actor, Handler, HasChildren, HasInterleaving, HasMailbox, Message, SyncHandler};
-pub use address::{ActorRef, Response};
+pub use address::{ActorRef, Recipient, Response};
 pub use config::{
     ActorConfig, DynamicChildrenOptions, DynamicInterleavingOptions, DynamicMailboxOptions,
     SupervisionConfig,
