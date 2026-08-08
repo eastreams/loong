@@ -50,6 +50,7 @@ struct ManualInbox<A: Actor>(mpsc::UnboundedReceiver<ErasedEnvelope<A>>);
 
 struct ManualReservation<'a, A: Actor> {
     sender: &'a ManualSender<A>,
+    // Deliberately !Send: sync admission must not require a Send reservation.
     _local: PhantomData<Rc<()>>,
 }
 
