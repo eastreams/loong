@@ -1,3 +1,5 @@
+//! Selects ready or owned reply work at runtime with `reply::Either`.
+
 use std::collections::HashMap;
 
 use loac::prelude::*;

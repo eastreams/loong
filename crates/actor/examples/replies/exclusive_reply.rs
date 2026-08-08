@@ -1,3 +1,5 @@
+//! Pauses mailbox work until an exclusive actor-aware reply completes.
+
 use std::time::Duration;
 
 use loac::prelude::*;

@@ -1,3 +1,5 @@
+//! Lets mailbox work progress between polls of an interleaved reply.
+
 use loac::prelude::*;
 use tokio::sync::oneshot;
 
