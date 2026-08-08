@@ -1,0 +1,7 @@
+error[E0599]: no method named `with_mailbox_capacity` found for struct `ActorOptions<Bare, NoMailbox, NoInterleaving, NoChildren>` in the current scope
+  --> tests/ui/fail/omitted_mailbox_override.rs:15:51
+   |
+15 |     let _ = loac::SpawnOptions::<Bare>::default().with_mailbox_capacity(NonZeroUsize::MIN);
+   |                                                   ^^^^^^^^^^^^^^^^^^^^^ method not found in `ActorOptions<Bare, NoMailbox, NoInterleaving, NoChildren>`
+   |
+   = note: the method was found for `ActorOptions<A, DynamicMailbox<DEFAULT>, I, C>`
