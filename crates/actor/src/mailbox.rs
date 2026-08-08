@@ -97,6 +97,8 @@ impl<A: Actor> Drop for ActorInbox<A> {
         // Runtime teardown closes lifecycle admission first.
         // Bounded reservations rely on this ordering.
         // Outstanding permits therefore cannot refill this queue.
+        // This Drop drains the remaining queue synchronously.
+        // Abort with a huge queue can occupy this poll.
         self.close();
         while self.try_discard() {}
     }
