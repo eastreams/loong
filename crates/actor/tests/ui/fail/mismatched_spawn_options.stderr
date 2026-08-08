@@ -9,7 +9,7 @@ error[E0308]: mismatched types
    = note: expected struct `ActorOptions<Second, FixedMailbox, NoInterleaving, NoChildren>`
               found struct `ActorOptions<First, FixedMailbox, NoInterleaving, NoChildren>`
 note: function defined here
-  --> src/runtime.rs
+  --> src/runtime/mod.rs
    |
    | pub fn spawn_with<A: Actor>(args: A::SpawnArgs, options: SpawnOptions<A>) -> ActorOwner<A> {
    |        ^^^^^^^^^^
