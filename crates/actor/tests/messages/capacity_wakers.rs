@@ -11,7 +11,7 @@ use std::{
 use loac::{ExitReason, Shutdown, ShutdownStatus, spawn_with};
 use tokio::sync::oneshot;
 
-use super::{Block, Notify, Record, SerialActor, single_slot_options, watchdog};
+use super::{Block, Notify, Record, SerialActor, single_slot_options, support::watchdog};
 
 struct PanicWake(Arc<AtomicUsize>);
 
