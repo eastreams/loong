@@ -6,7 +6,7 @@ error[E0277]: `Serial` cannot schedule interleaved replies
    |
    = help: the trait `InterleavedScheduler<Serial>` is not implemented for `loac::scheduling::Serial<Serial>`
 help: the following other types implement trait `InterleavedScheduler<A>`
-  --> src/scheduling.rs
+  --> src/scheduling/profile.rs
    |
    | / impl<A, const N: usize> InterleavedScheduler<A> for Fixed<A, N>
    | | where
