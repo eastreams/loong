@@ -209,7 +209,7 @@
 //! This keeps lifecycle choices visible at call sites.
 //! The [examples index] lists runnable guides.
 //!
-//! [examples index]: https://github.com/eastreams/loong/blob/loac-v0.1.0/crates/actor/examples/README.md
+//! [examples index]: https://github.com/eastreams/loong/blob/loac-v0.1.1/crates/actor/examples/README.md
 
 // Derives use this name inside the runtime package.
 // External callers may still rename their dependency.

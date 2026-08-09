@@ -66,6 +66,8 @@ Loong 希望支持两种扩展方式：
 
 架构记录在 [ARCHITECTURE.md](ARCHITECTURE.md)，尚未拍板的设计记录在
 [docs/open-questions.md](docs/open-questions.md)。
+`loac` 与 `loac-macros` 的 crates.io 发布流程见
+[发布指南](docs/development/releasing.md)。
 
 当前的检查命令为：
 

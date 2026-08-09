@@ -70,6 +70,8 @@ they become real rather than presenting planned work as finished.
 The technical design is documented in [ARCHITECTURE.md](ARCHITECTURE.md), and
 unresolved design decisions are tracked in
 [docs/open-questions.md](docs/open-questions.md).
+The [release guide](docs/development/releasing.md) documents the crates.io
+workflow for `loac` and `loac-macros`.
 
 The current checks are:
 

@@ -1,6 +1,6 @@
 [package]
 name = "loac"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 rust-version = "1.97.1"
 license.workspace = true
@@ -13,7 +13,7 @@ autoexamples = false
 
 [dependencies]
 futures-util = { version = "0.3.31", default-features = false, features = ["std"] }
-loac-macros = { version = "0.1.0", path = "../actor-macros" }
+loac-macros = { version = "0.1.1", path = "../actor-macros" }
 pin-project-lite = "0.2.16"
 slotmap = { version = "1.1.1", default-features = false }
 thiserror = "2.0.19"
