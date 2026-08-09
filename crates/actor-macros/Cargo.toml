@@ -17,7 +17,7 @@ quote = "1.0.47"
 syn = { version = "3.0.3", features = ["full"] }
 
 [dev-dependencies]
-actor-api = { package = "loac", path = "../actor" }
+actor-api = { package = "loac", path = "../actor", version = "0.1.0" }
 trybuild = "1.0.118"
 
 [lints]

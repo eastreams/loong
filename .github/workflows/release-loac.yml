@@ -1,0 +1,101 @@
+name: Release loac
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: release-loac
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - name: Check out the release branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: rewrite
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Validate source and release metadata
+        run: bash scripts/release-loac.sh check
+
+      - name: Test the macro package archive
+        run: bash scripts/release-loac.sh verify-package loac-macros
+
+      - name: Publish loac-macros
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          version=$(bash scripts/release-loac.sh version)
+          status=$(bash scripts/release-loac.sh crate-status loac-macros)
+          case "$status" in
+            match)
+              echo "loac-macros $version is already published with this archive"
+              ;;
+            absent)
+              cargo publish -p loac-macros --locked --token "$CARGO_REGISTRY_TOKEN"
+              ;;
+            mismatch)
+              echo "loac-macros $version is published with different contents" >&2
+              exit 1
+              ;;
+            *)
+              echo "unexpected registry status: $status" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Wait for loac-macros in the registry
+        run: |
+          set -euo pipefail
+          version=$(bash scripts/release-loac.sh version)
+          for attempt in $(seq 1 60); do
+            status=$(bash scripts/release-loac.sh crate-status loac-macros)
+            [[ "$status" == match ]] && exit 0
+            [[ "$status" == absent ]] || {
+              echo "loac-macros $version is published with different contents" >&2
+              exit 1
+            }
+            sleep 5
+          done
+          echo "loac-macros $version did not reach crates.io" >&2
+          exit 1
+
+      - name: Test the actor package archive
+        run: bash scripts/release-loac.sh verify-package loac
+
+      - name: Create the immutable release tag
+        run: bash scripts/release-loac.sh tag
+
+      - name: Publish loac
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          version=$(bash scripts/release-loac.sh version)
+          status=$(bash scripts/release-loac.sh crate-status loac)
+          case "$status" in
+            match)
+              echo "loac $version is already published with this archive"
+              ;;
+            absent)
+              cargo publish -p loac --locked --token "$CARGO_REGISTRY_TOKEN"
+              ;;
+            mismatch)
+              echo "loac $version is published with different contents" >&2
+              exit 1
+              ;;
+            *)
+              echo "unexpected registry status: $status" >&2
+              exit 1
+              ;;
+          esac
