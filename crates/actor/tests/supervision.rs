@@ -217,3 +217,28 @@ async fn child_panic_is_reported_without_stopping_the_parent() {
     assert_eq!(parent_status.reason(), ExitReason::Stopped);
     assert_eq!(parent_status.subtree(), SubtreeStatus::Terminated);
 }
+
+// An external child Kill disposes the child independently of its parent.
+#[tokio::test]
+async fn child_kill_is_reported_without_stopping_the_parent() {
+    let (owner, child_rx, mut events) = spawn_supervisor(false);
+    let supervisor = owner.actor_ref();
+    let child = watchdog(child_rx).await.unwrap();
+
+    assert_eq!(
+        child.actor_ref().request_shutdown(Shutdown::Kill),
+        loac::ShutdownStatus::Requested
+    );
+    let event = watchdog(events.recv()).await.unwrap();
+    assert_eq!(event.child(), child.id());
+    assert_eq!(event.status().reason(), ExitReason::Killed);
+    assert_eq!(
+        watchdog(child.actor_ref().closed()).await.reason(),
+        ExitReason::Killed
+    );
+    assert_eq!(watchdog(supervisor.call(Observed)).await.unwrap(), 1);
+
+    let parent_status = watchdog(owner.shutdown(Shutdown::Stop)).await;
+    assert_eq!(parent_status.reason(), ExitReason::Stopped);
+    assert_eq!(parent_status.subtree(), SubtreeStatus::Terminated);
+}
