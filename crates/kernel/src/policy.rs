@@ -11,17 +11,31 @@ pub mod engine;
 use loong_contracts::capability::Capabilities;
 use loong_contracts::policy::PolicyResult;
 
-use crate::{Facade, policy::action::ActionMeta};
+use crate::policy::action::ActionMeta;
+
+/// Immutable facts supplied for one policy evaluation.
+///
+/// A trusted gateway creates this snapshot. Its capabilities set the caller's
+/// allowed ceiling. Authorization is decided per action by the policy engine.
+/// Policy configuration remains in the policy instance or engine; handles and
+/// services stay outside this value.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyContext {
+    pub capabilities: Capabilities,
+}
+
+impl PolicyContext {
+    #[must_use]
+    pub const fn new(capabilities: Capabilities) -> Self {
+        Self { capabilities }
+    }
+}
 
 pub trait Policy<A: ActionMeta>: Send + Sync {
-    fn evaluate(&self, ctx: &Facade, action: &A) -> PolicyResult;
+    fn evaluate(&self, context: &PolicyContext, action: &A) -> PolicyResult;
 }
 
 pub trait PolicyAny: Send + Sync {
-    fn evaluate(&self, ctx: &Facade, action: &dyn ActionMeta) -> PolicyResult;
-}
-
-/// Has a set of allowed capabilities that are nested monotonically.
-pub trait CapabilityContext {
-    fn allowed_capabilities(&self) -> Capabilities;
+    fn evaluate(&self, context: &PolicyContext, action: &dyn ActionMeta) -> PolicyResult;
 }
