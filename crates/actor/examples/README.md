@@ -12,6 +12,7 @@ cargo run -p loac --example sync_handler
 Replace `sync_handler` with any target listed below.
 Most examples print nothing.
 Their assertions check the demonstrated behavior.
+`streaming` prints receive times to show items arriving during production.
 
 ## Message handling
 
@@ -21,6 +22,22 @@ Their assertions check the demonstrated behavior.
 
 Prefer `SyncHandler<M>` for an immediate reply.
 It is equivalent to returning `.ready()` from `Handler<M>`.
+
+## Streaming
+
+A provider actor produces a stream for each subscriber.
+
+| Example | Focus |
+| --- | --- |
+| [`streaming`](streaming.rs) | A one-way subscribe whose reply task produces the items. |
+
+The subscriber owns the receiver and passes the sender as message data.
+The subscribe handler returns a future: the runtime tracks it as an owned task,
+and it produces items into the caller's channel.
+One-way `send` admits the subscription without waiting for production, so the
+caller reads while the provider still produces.
+The stream ends when the production task finishes or a send fails.
+Stop and Drain wait for a running production task; Kill cancels it.
 
 ## Actor configuration
 

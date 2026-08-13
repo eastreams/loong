@@ -70,6 +70,28 @@ Still unresolved:
 No `SessionAuthority`, `CapabilityToken`, or second grant proof should be
 introduced to answer these questions.
 
+## Stream Reply Mode
+
+`loac` replies once per message. Streaming is an application composition: the
+subscriber owns a channel receiver and passes the sender as message data; the
+subscribe handler returns a future whose owned task produces items into that
+channel, so the actor stores no subscriber state. The
+[streaming example](../crates/actor/examples/streaming.rs) documents this shape.
+
+A runtime-driven stream reply — a handler returning a stream that the runtime
+polls per item with actor borrows — is deliberately not implemented. Still
+unresolved:
+
+- Who polls each item, and does each poll receive actor state?
+- Which scheduling slot or capability bounds each active stream?
+- What channel capacity and backpressure policy connects runtime and caller?
+- When does `call` resolve, and how do Stop, Drain, and Kill close active
+  streams?
+- Does dropping the caller's stream cancel the pump and release its slot?
+
+Do not add a stream reply strategy until a product feature requires per-item
+actor state without mailbox turns.
+
 ## Runtime Extension Trust Boundary
 
 The product direction includes both compile-time Rust extensions and runtime

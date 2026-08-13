@@ -116,7 +116,7 @@ See the [attribute reference](https://docs.rs/loac/latest/loac/attr.actor.html) 
 | `interleaved` | Eligible actor work continues between polls. |
 | `exclusive` | Other actor-local work pauses. Owned tasks continue. |
 
-A reply may be a bounded channel receiver, so streaming needs no special message kind.
+A reply may be a bounded channel receiver. The [streaming example](examples/streaming.rs) passes the sender as message data; the reply's owned task produces the items, and the stream ends when that task stops. A runtime-driven stream reply mode is outside the current contract.
 
 ## Lifecycle and Shutdown
 

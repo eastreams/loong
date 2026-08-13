@@ -35,6 +35,10 @@ name = "sync_handler"
 path = "examples/sync_handler.rs"
 
 [[example]]
+name = "streaming"
+path = "examples/streaming.rs"
+
+[[example]]
 name = "actor_configuration"
 path = "examples/configuration/actor_configuration.rs"
 
