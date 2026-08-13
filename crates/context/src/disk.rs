@@ -45,6 +45,7 @@ pub struct DiskStore {
 enum Pending {
     Idle,
     Append(Vec<TranscriptItem>),
+    /// The next head lives in `items`; flush publishes it in one shot.
     Replace,
 }
 
