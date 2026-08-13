@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use loong_context::{ContextItem, ContextStore, OpenError, Role};
+use loong_context::{ContextItem, ContextStore, DiskStore, MemoryStore, OpenError, Role};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
@@ -24,11 +24,8 @@ fn item(role: Role, text: &str) -> ContextItem {
     }
 }
 
-#[test]
-fn open_append_snapshot_flush_and_replay() {
-    let path = test_path("roundtrip");
-    let mut store = ContextStore::open(path.clone()).unwrap();
-
+/// Exercises the backend-independent part of the contract.
+fn assert_store_contract(mut store: impl ContextStore) {
     assert_eq!(store.append(vec![item(Role::User, "hello")]), 1);
     assert_eq!(store.append(vec![item(Role::Assistant, "hi")]), 2);
 
@@ -39,12 +36,25 @@ fn open_append_snapshot_flush_and_replay() {
 
     store.flush().unwrap();
     assert_eq!(store.replace(vec![item(Role::User, "again")]), 3);
+    let snapshot = store.snapshot();
+    assert_eq!(snapshot.version, 3);
+    assert_eq!(snapshot.items, vec![item(Role::User, "again")]);
     store.flush().unwrap();
-    drop(store);
+}
+
+#[test]
+fn memory_store_satisfies_the_contract() {
+    assert_store_contract(MemoryStore::new());
+}
+
+#[test]
+fn disk_store_satisfies_the_contract_and_replays() {
+    let path = test_path("roundtrip");
+    assert_store_contract(DiskStore::open(path.clone()).unwrap());
 
     // A fresh store replays the current head. Version restarts from the head
     // generation and is not durable.
-    let store = ContextStore::open(path.clone()).unwrap();
+    let store = DiskStore::open(path.clone()).unwrap();
     let snapshot = store.snapshot();
     assert_eq!(snapshot.version, 1);
     assert_eq!(snapshot.items, vec![item(Role::User, "again")]);
@@ -56,11 +66,11 @@ fn open_append_snapshot_flush_and_replay() {
 #[test]
 fn unflushed_records_do_not_replay() {
     let path = test_path("unflushed");
-    let mut store = ContextStore::open(path.clone()).unwrap();
+    let mut store = DiskStore::open(path.clone()).unwrap();
     store.append(vec![item(Role::User, "unsaved")]);
     drop(store);
 
-    let store = ContextStore::open(path.clone()).unwrap();
+    let store = DiskStore::open(path.clone()).unwrap();
     let snapshot = store.snapshot();
     assert_eq!(snapshot.version, 0);
     assert!(snapshot.items.is_empty());
@@ -75,7 +85,7 @@ fn torn_head_line_does_not_break_replay() {
     std::fs::create_dir_all(&path).unwrap();
     std::fs::write(head_path(&path, 0), "{\"role\":\"user\"").unwrap();
 
-    let mut store = ContextStore::open(path.clone()).unwrap();
+    let mut store = DiskStore::open(path.clone()).unwrap();
     let snapshot = store.snapshot();
     assert_eq!(snapshot.version, 0);
     assert!(snapshot.items.is_empty());
@@ -84,7 +94,7 @@ fn torn_head_line_does_not_break_replay() {
     store.flush().unwrap();
     drop(store);
 
-    let store = ContextStore::open(path.clone()).unwrap();
+    let store = DiskStore::open(path.clone()).unwrap();
     let snapshot = store.snapshot();
     assert_eq!(snapshot.version, 0);
     assert_eq!(snapshot.items, vec![item(Role::User, "after")]);
@@ -98,7 +108,7 @@ fn open_reports_failure() {
     let base = test_path("parent-file");
     std::fs::write(&base, "not a directory").unwrap();
 
-    match ContextStore::open(base.join("sub").join("log.jsonl")) {
+    match DiskStore::open(base.join("sub").join("log")) {
         Err(OpenError::Io(_)) => {}
         other => panic!("expected Io error, got {other:?}"),
     }
@@ -109,15 +119,15 @@ fn open_reports_failure() {
 #[test]
 fn open_locks_the_path_exclusively() {
     let path = test_path("exclusive");
-    let store = ContextStore::open(path.clone()).unwrap();
+    let store = DiskStore::open(path.clone()).unwrap();
 
-    match ContextStore::open(path.clone()) {
+    match DiskStore::open(path.clone()) {
         Err(OpenError::InUse(_)) => {}
         other => panic!("expected InUse, got {other:?}"),
     }
 
     drop(store);
-    let store = ContextStore::open(path.clone()).unwrap();
+    let store = DiskStore::open(path.clone()).unwrap();
     drop(store);
 
     let _ = std::fs::remove_dir_all(&path);
@@ -126,7 +136,7 @@ fn open_locks_the_path_exclusively() {
 #[test]
 fn replace_publishes_a_new_head_and_keeps_the_old_one() {
     let path = test_path("heads");
-    let mut store = ContextStore::open(path.clone()).unwrap();
+    let mut store = DiskStore::open(path.clone()).unwrap();
     store.append(vec![item(Role::User, "v1")]);
     store.flush().unwrap();
     store.replace(vec![item(Role::User, "v2")]);
@@ -139,7 +149,7 @@ fn replace_publishes_a_new_head_and_keeps_the_old_one() {
     assert!(head0.contains("v1"));
     assert!(!head0.contains("v2"));
 
-    let mut store = ContextStore::open(path.clone()).unwrap();
+    let mut store = DiskStore::open(path.clone()).unwrap();
     let snapshot = store.snapshot();
     assert_eq!(snapshot.version, 1);
     assert_eq!(snapshot.items, vec![item(Role::User, "v2")]);
@@ -153,7 +163,7 @@ fn replace_publishes_a_new_head_and_keeps_the_old_one() {
     assert!(head1.contains("v2"));
     assert!(head1.contains("v3"));
 
-    let store = ContextStore::open(path.clone()).unwrap();
+    let store = DiskStore::open(path.clone()).unwrap();
     let snapshot = store.snapshot();
     assert_eq!(
         snapshot.items,
@@ -161,6 +171,5 @@ fn replace_publishes_a_new_head_and_keeps_the_old_one() {
     );
     drop(store);
 
-    let _ = std::fs::remove_file(head_path(&path, 0));
-    let _ = std::fs::remove_file(head_path(&path, 1));
+    let _ = std::fs::remove_dir_all(&path);
 }

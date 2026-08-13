@@ -1,4 +1,4 @@
-//! The durable context store.
+//! The disk context store backend.
 
 use std::fmt;
 use std::fs::{self, File};
@@ -7,8 +7,9 @@ use std::path::PathBuf;
 
 use crate::item::ContextItem;
 use crate::log;
+use crate::store::{ContextSnapshot, ContextStore};
 
-/// Why opening a store failed.
+/// Why opening a disk store failed.
 #[derive(Debug, thiserror::Error)]
 pub enum OpenError {
     /// Another live store holds the same base path.
@@ -21,27 +22,15 @@ pub enum OpenError {
     Io(#[from] io::Error),
 }
 
-/// A point-in-time projection of the working context.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ContextSnapshot {
-    pub items: Vec<ContextItem>,
-    /// Monotonic within one store lifetime. Not durable across restarts.
-    pub version: u64,
-    /// Character-count estimate. A real token counter replaces this later.
-    pub usage_tokens: usize,
-}
-
-/// The durable context store.
+/// The durable disk-backed context store.
 ///
-/// Heads live next to the base path as `<base>.<generation>.jsonl` in ascending
+/// Heads live inside the base directory as `<generation>.jsonl` in ascending
 /// order. The highest generation is the current context. `replace` publishes
 /// a new head and keeps the old ones; `append` mutates only the current head.
-/// An exclusive advisory lock on `<base>.lock` scopes ownership to one live
-/// store per host. The lock is released when the store drops.
-///
-/// The owning actor keeps this value as a field. Its serial task is the only
-/// writer, so no mailbox or actor boundary is needed yet.
-pub struct ContextStore {
+/// An exclusive advisory lock on the `lock` file inside the directory scopes
+/// ownership to one live store per host. The lock is released when the store
+/// drops.
+pub struct DiskStore {
     base: PathBuf,
     /// Held for the store's lifetime to keep the exclusive lock.
     _lock: File,
@@ -59,10 +48,10 @@ enum Pending {
     Replace,
 }
 
-impl fmt::Debug for ContextStore {
+impl fmt::Debug for DiskStore {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("ContextStore")
+            .debug_struct("DiskStore")
             .field("base", &self.base)
             .field("generation", &self.generation)
             .field("pending", &self.pending)
@@ -72,7 +61,7 @@ impl fmt::Debug for ContextStore {
     }
 }
 
-impl ContextStore {
+impl DiskStore {
     /// Opens the store, takes the exclusive lock, and replays the current
     /// head.
     ///
@@ -99,53 +88,6 @@ impl ContextStore {
             version: generation,
             items,
         })
-    }
-
-    /// Appends items. Returns the new version.
-    pub fn append(&mut self, items: Vec<ContextItem>) -> u64 {
-        self.items.extend(items.iter().cloned());
-        match &mut self.pending {
-            Pending::Idle => self.pending = Pending::Append(items),
-            Pending::Append(pending) => pending.extend(items),
-            // A pending replace already captures the full working items.
-            Pending::Replace => {}
-        }
-        self.version += 1;
-        self.version
-    }
-
-    /// Replaces the working context. Returns the new version.
-    pub fn replace(&mut self, items: Vec<ContextItem>) -> u64 {
-        self.items = items.clone();
-        self.pending = Pending::Replace;
-        self.version += 1;
-        self.version
-    }
-
-    /// Projects the current working context.
-    pub fn snapshot(&self) -> ContextSnapshot {
-        ContextSnapshot {
-            items: self.items.clone(),
-            version: self.version,
-            usage_tokens: self
-                .items
-                .iter()
-                .map(|item| item.text.chars().count())
-                .sum(),
-        }
-    }
-
-    /// Writes buffered mutations to the current head.
-    ///
-    /// Each write reaches the OS, not disk: a power loss can still drop recent
-    /// writes. On failure the unwritten suffix stays pending and is retried on
-    /// the next flush.
-    pub fn flush(&mut self) -> io::Result<()> {
-        match std::mem::replace(&mut self.pending, Pending::Idle) {
-            Pending::Idle => Ok(()),
-            Pending::Append(items) => self.flush_append(items),
-            Pending::Replace => self.flush_replace(),
-        }
     }
 
     fn flush_append(&mut self, items: Vec<ContextItem>) -> io::Result<()> {
@@ -183,5 +125,38 @@ impl ContextStore {
         self.file = file;
         self.generation = next;
         Ok(())
+    }
+}
+
+impl ContextStore for DiskStore {
+    fn append(&mut self, items: Vec<ContextItem>) -> u64 {
+        self.items.extend(items.iter().cloned());
+        match &mut self.pending {
+            Pending::Idle => self.pending = Pending::Append(items),
+            Pending::Append(pending) => pending.extend(items),
+            // A pending replace already captures the full working items.
+            Pending::Replace => {}
+        }
+        self.version += 1;
+        self.version
+    }
+
+    fn replace(&mut self, items: Vec<ContextItem>) -> u64 {
+        self.items = items.clone();
+        self.pending = Pending::Replace;
+        self.version += 1;
+        self.version
+    }
+
+    fn snapshot(&self) -> ContextSnapshot {
+        ContextSnapshot::build(self.items.clone(), self.version)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match std::mem::replace(&mut self.pending, Pending::Idle) {
+            Pending::Idle => Ok(()),
+            Pending::Append(items) => self.flush_append(items),
+            Pending::Replace => self.flush_replace(),
+        }
     }
 }
