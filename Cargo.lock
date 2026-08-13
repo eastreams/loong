@@ -469,6 +469,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "loong-context"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "loong-contracts"
 version = "0.2.0"
 dependencies = [

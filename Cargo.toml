@@ -4,6 +4,7 @@ members = [
     "crates/actor",
     "crates/actor-macros",
     "crates/agent",
+    "crates/context",
     "crates/contracts",
     "crates/kernel",
 ]
