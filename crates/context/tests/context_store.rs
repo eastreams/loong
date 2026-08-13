@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use loong_context::{ContextItem, ContextStore, DiskStore, MemoryStore, OpenError, Role};
+use loong_context::disk::{DiskStore, OpenError};
+use loong_context::memory::MemoryStore;
+use loong_context::{ContextItem, ContextStore, Role};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
