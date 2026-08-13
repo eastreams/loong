@@ -118,44 +118,6 @@ pub(crate) async fn run_actor<A: Actor>(
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "one turn borrows each independent actor-task resource"
-)]
-// Scheduler profiles own their eligible lane rotation.
-// Lifecycle keeps first poll rights across every profile.
-pub(crate) async fn actor_turn<A: Actor>(
-    actor: &mut A,
-    state: &mut ScopeState<A>,
-    inbox: &mut ActorInbox<A>,
-    inner: &Arc<ActorInner<A>>,
-    owned: &OwnedTasks<A>,
-    scheduler: &mut ActorScheduler<A>,
-    receive_messages: bool,
-    expected_mode: Mode,
-) -> SchedulerTurn {
-    let control = &inner.control;
-    let fair_turn = std::future::poll_fn(|task| {
-        let mut turn = TurnContext {
-            actor,
-            state,
-            inbox,
-            inner,
-            owned,
-            receive_messages,
-            expected_mode,
-        };
-        RuntimeScheduler::poll_turn(scheduler, &mut turn, task)
-    });
-
-    // Lifecycle always gets first poll rights, especially Kill.
-    tokio::select! {
-        biased;
-        () = control.actor_notified() => SchedulerTurn::LifecycleHint,
-        turn = fair_turn => turn,
-    }
-}
-
 pub(crate) enum DrainTurn {
     Scheduled(SchedulerTurn),
     RepliesFinished,
@@ -224,3 +186,42 @@ async fn run_child_exit_hook<A: Actor>(
     )
     .await
 }
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one turn borrows each independent actor-task resource"
+)]
+// Scheduler profiles own their eligible lane rotation.
+// Lifecycle keeps first poll rights across every profile.
+pub(crate) async fn actor_turn<A: Actor>(
+    actor: &mut A,
+    state: &mut ScopeState<A>,
+    inbox: &mut ActorInbox<A>,
+    inner: &Arc<ActorInner<A>>,
+    owned: &OwnedTasks<A>,
+    scheduler: &mut ActorScheduler<A>,
+    receive_messages: bool,
+    expected_mode: Mode,
+) -> SchedulerTurn {
+    let control = &inner.control;
+    let fair_turn = std::future::poll_fn(|task| {
+        let mut turn = TurnContext {
+            actor,
+            state,
+            inbox,
+            inner,
+            owned,
+            receive_messages,
+            expected_mode,
+        };
+        RuntimeScheduler::poll_turn(scheduler, &mut turn, task)
+    });
+
+    // Lifecycle always gets first poll rights, especially Kill.
+    tokio::select! {
+        biased;
+        () = control.actor_notified() => SchedulerTurn::LifecycleHint,
+        turn = fair_turn => turn,
+    }
+}
+
