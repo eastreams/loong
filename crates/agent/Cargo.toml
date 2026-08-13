@@ -1,0 +1,8 @@
+[package]
+name = "loong-agent"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
