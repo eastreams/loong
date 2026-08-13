@@ -1,28 +1,12 @@
 # loac
 
-`loac` is a small runtime for typed, local actors. It combines
-Actix-style message/reply typing with bounded admission, explicit ownership,
-and a Ractor-style supervision tree.
+`loac` is a small runtime for typed, local actors. It combines Actix-style message/reply typing with bounded admission, explicit ownership, and a Ractor-style supervision tree.
 
 The name joins `Loong` and `Actor` (`lo` + `ac`).
 
-The crate is an early MVP. Its current contract is deliberately narrow:
+The crate is an early MVP with a deliberately narrow contract.
 
-- most `Actor` implementations use `#[actor(...)]`;
-- `SyncHandler` returns immediate reply values;
-- bare `Future` values use owned scheduling;
-- `.interleaved()` and `.exclusive()` select actor-aware scheduling;
-- interleaved work has its own active-reply limit;
-- exclusive work needs no interleaving capability;
-- owned tasks are unbounded;
-- `ActorRef` values communicate and may request shutdown;
-- the unique `ActorOwner` owns root lifetime;
-- child actors are owned by their parent runtime;
-- exit status separates local reason from subtree confirmation;
-- Stop, Drain, and Kill use a control plane separate from the mailbox;
-- mailbox FIFO determines dispatch order, not reply completion order;
-- Kill can interrupt cooperative async work between polls, but cannot interrupt
-  a running synchronous handler, a poll call that never returns, or user `Drop`.
+## Quick Start
 
 ```rust
 use loac::{ExitReason, Shutdown, SubtreeStatus, prelude::*};
@@ -69,50 +53,95 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 See the [examples index](examples/README.md) for runnable guides.
 
-Interleaved replies are opt-in through `#[actor(...)]`:
+## Core Model
 
-- `interleaved` uses a fixed limit of 32;
-- `interleaved = N` uses a fixed const limit;
-- `interleaved = dynamic` defaults each spawn to 32;
-- `interleaved = dynamic(N)` changes that default;
-- `interleaved = unbounded` removes the active-reply limit.
+| Type | Role |
+| --- | --- |
+| [`Actor`](https://docs.rs/loac/latest/loac/trait.Actor.html) | Owns state. Lifecycle hooks run serially. |
+| [`ActorRef`](https://docs.rs/loac/latest/loac/struct.ActorRef.html) | Cloneable, typed, non-owning handle. |
+| [`Recipient`](https://docs.rs/loac/latest/loac/struct.Recipient.html) | Erases the actor type for one message type. |
+| [`ActorOwner`](https://docs.rs/loac/latest/loac/struct.ActorOwner.html) | Uniquely owns one root actor. |
+| [`ActorScope`](https://docs.rs/loac/latest/loac/struct.ActorScope.html) | Exposes temporary capabilities during actor work. |
 
-Every finite const limit must exceed zero.
-Only dynamic options expose `with_max_in_flight`.
-Omitting `interleaved` provides no capability or reply queue.
-Unbounded interleaving can retain arbitrarily many active replies.
-Exclusive replies remain available without interleaved replies.
-A full finite limit pauses dispatch before another handler starts.
-The handler's reply mode remains unknown until dispatch finishes.
+## Choose Capabilities
 
-Direct-child ownership is also opt-in:
+`#[actor(...)]` generates the runtime configuration.
+Messaging, interleaved replies, and child ownership are opt-in.
+Omitting an option removes that capability.
+`mailbox`, `interleaved`, and `children` share the five forms below.
+Every finite form takes a nonzero `usize` constant.
 
-- `children` uses a fixed limit of 32;
-- `children = N` uses a fixed const limit;
-- `children = dynamic` defaults each spawn to 32;
-- `children = dynamic(N)` changes that default;
-- `children = unbounded` removes the direct-child limit.
+| Form | Selected profile |
+| --- | --- |
+| bare `option` | Fixed limit of 32 |
+| `option = N` | Fixed limit of N |
+| `option = dynamic` | Per-spawn limit defaulting to 32 |
+| `option = dynamic(N)` | Per-spawn limit defaulting to N |
+| `option = unbounded` | No finite limit |
 
-Only dynamic options expose `with_max_children`.
-Omitting `children` removes the child-spawn capability.
-Finite profiles return the original inputs on `Full`.
-Unbounded spawning uses `Infallible` as its error.
+### Mailbox
 
-`ExitStatus::reason` describes only that actor. `ExitStatus::subtree` reports
-whether the runtime confirmed all owned descendants terminated. An unconfirmed
-child actor does not automatically stop its parent. The missing guarantee remains
-sticky. `Unconfirmed` means proof is unavailable.
+Here `option` is `mailbox`.
 
-Streaming does not require a runtime-specific message kind: a message reply may
-be a bounded channel receiver or another application-defined stream handle.
+Mailbox capacity bounds messages awaiting dispatch.
+It does not bound active replies. [`call`](https://docs.rs/loac/latest/loac/struct.ActorRef.html#method.call) and [`send`](https://docs.rs/loac/latest/loac/struct.ActorRef.html#method.send) wait when full.
+[`try_call`](https://docs.rs/loac/latest/loac/struct.ActorRef.html#method.try_call) and [`try_send`](https://docs.rs/loac/latest/loac/struct.ActorRef.html#method.try_send) return immediately.
+Dynamic options expose [`with_mailbox_capacity`](https://docs.rs/loac/latest/loac/trait.DynamicMailboxOptions.html#tymethod.with_mailbox_capacity).
 
-Owned replies consume no `max_in_flight` slot. Their self-calls still require
-scheduler dispatch capacity. Interleaved replies need another slot for mailbox
-re-entry. An exclusive reply blocks its queued self-call.
-`init` completes before dispatch starts. `on_child_exit` blocks dispatch while
-running. `spawn` returns before `init`; sends may admit while calls await
-dispatch. Admission is closed in `on_stop`, so a new self-call returns
-`Closed`. Prefer `ActorFutureExt::map` or `then` for consecutive actor work.
-Address cycles can still deadlock when every participant waits.
+### Interleaved Replies
+
+Here `option` is `interleaved`. It requires `mailbox`.
+
+The limit counts active replies. A full limit pauses dispatch before another
+handler starts. Exclusive replies remain available without `interleaved`.
+Dynamic options expose [`with_max_in_flight`](https://docs.rs/loac/latest/loac/trait.DynamicInterleavingOptions.html#tymethod.with_max_in_flight).
+
+### Child-Spawning
+
+Here `option` is `children`.
+
+The limit counts retained child registrations.
+Finite profiles return the original spawn inputs on [`Full`](https://docs.rs/loac/latest/loac/supervision/struct.Full.html).
+Unbounded profiles use `Infallible` as their error.
+Dynamic options expose [`with_max_children`](https://docs.rs/loac/latest/loac/trait.DynamicChildrenOptions.html#tymethod.with_max_children).
+
+See the [attribute reference](https://docs.rs/loac/latest/loac/attr.actor.html) for syntax and constraints.
+
+## Reply Modes
+
+| Selection | Actor progress while awaiting the reply |
+| --- | --- |
+| [`SyncHandler`](https://docs.rs/loac/latest/loac/trait.SyncHandler.html) or [`ready`](https://docs.rs/loac/latest/loac/trait.ReplyExt.html#method.ready) | The reply finishes during dispatch. |
+| A bare `Future` | An owned Tokio task continues beside actor work. |
+| `interleaved` | Eligible actor work continues between polls. |
+| `exclusive` | Other actor-local work pauses. Owned tasks continue. |
+
+A reply may be a bounded channel receiver, so streaming needs no special message kind.
+
+## Lifecycle and Shutdown
+
+Graceful shutdown runs post-order through the owned tree.
+
+| Mode | Behavior |
+| --- | --- |
+| `Stop` | Finishes dispatched replies and discards queued messages. |
+| `Drain` | Dispatches eligible queued messages and finishes their replies. |
+| `Kill` | Cancels cooperative work and skips `on_stop`. |
+
+Shutdown closes admission when it commits.
+A later [`call`](https://docs.rs/loac/latest/loac/struct.ActorRef.html#method.call) returns [`CallError::Closed`](https://docs.rs/loac/latest/loac/enum.CallError.html#variant.Closed).
+[`ExitStatus::reason`](https://docs.rs/loac/latest/loac/struct.ExitStatus.html) describes only that actor.
+`subtree` reports whether the runtime confirmed every owned descendant terminated.
+`Unconfirmed` means proof is unavailable. It stays sticky through ancestors and does not stop a running parent.
+Kill takes effect between polls. It cannot interrupt a synchronous handler, a poll that never returns, or user `Drop`.
+
+## Progress Boundaries
+
+- [`spawn`](https://docs.rs/loac/latest/loac/fn.spawn.html) schedules `init` and returns immediately. Admission opens before `init` finishes.
+- `init` and lifecycle hooks run serially and block dispatch.
+- Mailbox FIFO decides dispatch order. Async replies may complete in a different order.
+- A self-call needs fresh dispatch capacity. It cannot complete during `init` or exclusive work.
+- Prefer [`ActorFutureExt::map`](https://docs.rs/loac/latest/loac/trait.ActorFutureExt.html#method.map) or [`then`](https://docs.rs/loac/latest/loac/trait.ActorFutureExt.html#method.then) for consecutive actor work.
+- Address cycles can deadlock when every participant waits.
 
 Licensed under the MIT License.
