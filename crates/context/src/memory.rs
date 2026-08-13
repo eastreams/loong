@@ -2,15 +2,15 @@
 
 use std::io;
 
-use crate::item::ContextItem;
 use crate::store::{ContextSnapshot, ContextStore};
+use loong_contracts::transcript::TranscriptItem;
 
 /// A context store that keeps items in memory only.
 ///
 /// `flush` is a no-op. Use it for ephemeral sessions and tests.
 #[derive(Debug, Default)]
 pub struct MemoryStore {
-    items: Vec<ContextItem>,
+    items: Vec<TranscriptItem>,
     version: u64,
 }
 
@@ -22,13 +22,13 @@ impl MemoryStore {
 }
 
 impl ContextStore for MemoryStore {
-    fn append(&mut self, items: Vec<ContextItem>) -> u64 {
+    fn append(&mut self, items: Vec<TranscriptItem>) -> u64 {
         self.items.extend(items);
         self.version += 1;
         self.version
     }
 
-    fn replace(&mut self, items: Vec<ContextItem>) -> u64 {
+    fn replace(&mut self, items: Vec<TranscriptItem>) -> u64 {
         self.items = items;
         self.version += 1;
         self.version

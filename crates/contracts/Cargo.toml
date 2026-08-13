@@ -11,6 +11,7 @@ workspace = true
 schemars.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+uuid = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 bincode.workspace = true

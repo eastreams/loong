@@ -4,7 +4,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use crate::item::ContextItem;
+use loong_contracts::transcript::TranscriptItem;
 
 /// Opens the exclusive-lock sidecar inside the store directory.
 pub(super) fn open_lock_file(base: &Path) -> io::Result<File> {
@@ -62,7 +62,7 @@ pub(super) fn repair_tail(file: &mut File) -> io::Result<()> {
 }
 
 /// Rebuilds the working items from one head.
-pub(super) fn replay_items(file: &mut File) -> io::Result<Vec<ContextItem>> {
+pub(super) fn replay_items(file: &mut File) -> io::Result<Vec<TranscriptItem>> {
     file.seek(SeekFrom::Start(0))?;
     let mut items = Vec::new();
     for line in BufReader::new(&*file).lines() {
@@ -70,7 +70,7 @@ pub(super) fn replay_items(file: &mut File) -> io::Result<Vec<ContextItem>> {
         if line.trim().is_empty() {
             continue;
         }
-        let Ok(item) = serde_json::from_str::<ContextItem>(&line) else {
+        let Ok(item) = serde_json::from_str::<TranscriptItem>(&line) else {
             // Skip torn or foreign lines; the rest stays replayable.
             continue;
         };
@@ -82,7 +82,11 @@ pub(super) fn replay_items(file: &mut File) -> io::Result<Vec<ContextItem>> {
 /// Writes a complete head to a temp file, then publishes it by rename.
 ///
 /// A failed publish removes the temp file so the next attempt can retry.
-pub(super) fn publish_head(base: &Path, generation: u64, items: &[ContextItem]) -> io::Result<()> {
+pub(super) fn publish_head(
+    base: &Path,
+    generation: u64,
+    items: &[TranscriptItem],
+) -> io::Result<()> {
     let tmp_path = tmp_path(base, generation);
     let final_path = head_path(base, generation);
     let result = (|| {
@@ -103,7 +107,7 @@ pub(super) fn publish_head(base: &Path, generation: u64, items: &[ContextItem]) 
 }
 
 /// Appends one item as a JSONL line.
-pub(super) fn write_item(file: &mut File, item: &ContextItem) -> io::Result<()> {
+pub(super) fn write_item(file: &mut File, item: &TranscriptItem) -> io::Result<()> {
     let mut line = serde_json::to_vec(item).expect("context items serialize");
     line.push(b'\n');
     file.write_all(&line)

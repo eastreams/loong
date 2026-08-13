@@ -30,4 +30,4 @@ serde_json = "1.0.151"
 async-trait = "0.1.91"
 thiserror = "2.0.19"
 tokio = { version = "1.53.1", features = ["fs", "macros"] }
-uuid = "1.24.0"
+uuid = { version = "1.24.0", default-features = false }

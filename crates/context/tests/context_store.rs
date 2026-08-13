@@ -3,7 +3,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use loong_context::disk::{DiskStore, OpenError};
 use loong_context::memory::MemoryStore;
-use loong_context::{ContextItem, ContextStore, Role};
+use loong_context::{ContextSnapshot, ContextStore};
+use loong_contracts::transcript::{Role, TranscriptItem, TranscriptItemId, TranscriptItemKind};
+use uuid::Uuid;
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
@@ -19,17 +21,45 @@ fn head_path(base: &PathBuf, generation: u64) -> PathBuf {
     base.join(format!("{generation}.jsonl"))
 }
 
-fn item(role: Role, text: &str) -> ContextItem {
-    ContextItem {
-        role,
-        text: text.to_owned(),
+fn next_id() -> TranscriptItemId {
+    let next = NEXT.fetch_add(1, Ordering::Relaxed);
+    TranscriptItemId::from(Uuid::from_u128(u128::from(next)))
+}
+
+fn message(role: Role, text: &str) -> TranscriptItem {
+    TranscriptItem {
+        id: next_id(),
+        kind: TranscriptItemKind::Message {
+            role,
+            text: text.to_owned(),
+        },
+    }
+}
+
+fn tool_call(name: &str, arguments: &str) -> TranscriptItem {
+    TranscriptItem {
+        id: next_id(),
+        kind: TranscriptItemKind::ToolCall {
+            name: name.to_owned(),
+            arguments: arguments.to_owned(),
+        },
+    }
+}
+
+fn tool_result(call_id: TranscriptItemId, output: &str) -> TranscriptItem {
+    TranscriptItem {
+        id: next_id(),
+        kind: TranscriptItemKind::ToolResult {
+            call_id,
+            output: output.to_owned(),
+        },
     }
 }
 
 /// Exercises the backend-independent part of the contract.
 fn assert_store_contract(mut store: impl ContextStore) {
-    assert_eq!(store.append(vec![item(Role::User, "hello")]), 1);
-    assert_eq!(store.append(vec![item(Role::Assistant, "hi")]), 2);
+    assert_eq!(store.append(vec![message(Role::User, "hello")]), 1);
+    assert_eq!(store.append(vec![message(Role::Assistant, "hi")]), 2);
 
     let snapshot = store.snapshot();
     assert_eq!(snapshot.version, 2);
@@ -37,10 +67,11 @@ fn assert_store_contract(mut store: impl ContextStore) {
     assert_eq!(snapshot.items.len(), 2);
 
     store.flush().unwrap();
-    assert_eq!(store.replace(vec![item(Role::User, "again")]), 3);
+    let replaced = message(Role::User, "again");
+    assert_eq!(store.replace(vec![replaced.clone()]), 3);
     let snapshot = store.snapshot();
     assert_eq!(snapshot.version, 3);
-    assert_eq!(snapshot.items, vec![item(Role::User, "again")]);
+    assert_eq!(snapshot.items, vec![replaced]);
     store.flush().unwrap();
 }
 
@@ -59,7 +90,14 @@ fn disk_store_satisfies_the_contract_and_replays() {
     let store = DiskStore::open(path.clone()).unwrap();
     let snapshot = store.snapshot();
     assert_eq!(snapshot.version, 1);
-    assert_eq!(snapshot.items, vec![item(Role::User, "again")]);
+    assert_eq!(snapshot.items.len(), 1);
+    assert_eq!(
+        snapshot.items[0].kind,
+        TranscriptItemKind::Message {
+            role: Role::User,
+            text: "again".to_owned(),
+        }
+    );
     drop(store);
 
     let _ = std::fs::remove_dir_all(&path);
@@ -69,7 +107,7 @@ fn disk_store_satisfies_the_contract_and_replays() {
 fn unflushed_records_do_not_replay() {
     let path = test_path("unflushed");
     let mut store = DiskStore::open(path.clone()).unwrap();
-    store.append(vec![item(Role::User, "unsaved")]);
+    store.append(vec![message(Role::User, "unsaved")]);
     drop(store);
 
     let store = DiskStore::open(path.clone()).unwrap();
@@ -85,21 +123,32 @@ fn unflushed_records_do_not_replay() {
 fn torn_head_line_does_not_break_replay() {
     let path = test_path("torn");
     std::fs::create_dir_all(&path).unwrap();
-    std::fs::write(head_path(&path, 0), "{\"role\":\"user\"").unwrap();
+    std::fs::write(
+        head_path(&path, 0),
+        "{\"id\":\"00000000-0000-0000-0000-000000000000\",\"kind\":\"message\",\"role\":\"user\"",
+    )
+    .unwrap();
 
     let mut store = DiskStore::open(path.clone()).unwrap();
     let snapshot = store.snapshot();
     assert_eq!(snapshot.version, 0);
     assert!(snapshot.items.is_empty());
 
-    store.append(vec![item(Role::User, "after")]);
+    store.append(vec![message(Role::User, "after")]);
     store.flush().unwrap();
     drop(store);
 
     let store = DiskStore::open(path.clone()).unwrap();
     let snapshot = store.snapshot();
     assert_eq!(snapshot.version, 0);
-    assert_eq!(snapshot.items, vec![item(Role::User, "after")]);
+    assert_eq!(snapshot.items.len(), 1);
+    assert_eq!(
+        snapshot.items[0].kind,
+        TranscriptItemKind::Message {
+            role: Role::User,
+            text: "after".to_owned(),
+        }
+    );
     drop(store);
 
     let _ = std::fs::remove_dir_all(&path);
@@ -139,9 +188,9 @@ fn open_locks_the_path_exclusively() {
 fn replace_publishes_a_new_head_and_keeps_the_old_one() {
     let path = test_path("heads");
     let mut store = DiskStore::open(path.clone()).unwrap();
-    store.append(vec![item(Role::User, "v1")]);
+    store.append(vec![message(Role::User, "v1")]);
     store.flush().unwrap();
-    store.replace(vec![item(Role::User, "v2")]);
+    store.replace(vec![message(Role::User, "v2")]);
     store.flush().unwrap();
     drop(store);
 
@@ -154,10 +203,17 @@ fn replace_publishes_a_new_head_and_keeps_the_old_one() {
     let mut store = DiskStore::open(path.clone()).unwrap();
     let snapshot = store.snapshot();
     assert_eq!(snapshot.version, 1);
-    assert_eq!(snapshot.items, vec![item(Role::User, "v2")]);
+    assert_eq!(snapshot.items.len(), 1);
+    assert_eq!(
+        snapshot.items[0].kind,
+        TranscriptItemKind::Message {
+            role: Role::User,
+            text: "v2".to_owned(),
+        }
+    );
 
     // Appends after reopening go to the current head, not a new one.
-    store.append(vec![item(Role::User, "v3")]);
+    store.append(vec![message(Role::User, "v3")]);
     store.flush().unwrap();
     drop(store);
 
@@ -167,11 +223,49 @@ fn replace_publishes_a_new_head_and_keeps_the_old_one() {
 
     let store = DiskStore::open(path.clone()).unwrap();
     let snapshot = store.snapshot();
+    assert_eq!(snapshot.items.len(), 2);
     assert_eq!(
-        snapshot.items,
-        vec![item(Role::User, "v2"), item(Role::User, "v3")]
+        snapshot.items[1].kind,
+        TranscriptItemKind::Message {
+            role: Role::User,
+            text: "v3".to_owned(),
+        }
     );
     drop(store);
 
     let _ = std::fs::remove_dir_all(&path);
+}
+
+#[test]
+fn tool_items_replay_with_the_call_link_intact() {
+    let call_id = next_id();
+    let items = vec![
+        tool_call("echo", "{\"text\":\"hi\"}"),
+        tool_result(call_id, "hi"),
+    ];
+
+    let path = test_path("tools");
+    let mut store = DiskStore::open(path.clone()).unwrap();
+    store.append(items.clone());
+    store.flush().unwrap();
+    drop(store);
+
+    let store = DiskStore::open(path.clone()).unwrap();
+    let snapshot: ContextSnapshot = store.snapshot();
+    assert_eq!(snapshot.items, items);
+    drop(store);
+
+    let _ = std::fs::remove_dir_all(&path);
+}
+
+#[test]
+fn snapshot_usage_counts_tool_payloads() {
+    let call_id = next_id();
+    let mut store = MemoryStore::new();
+    store.append(vec![
+        tool_call("echo", "{\"x\":1}"),
+        tool_result(call_id, "ok"),
+    ]);
+    // "echo" + `{"x":1}` + "ok" = 4 + 7 + 2.
+    assert_eq!(store.snapshot().usage_tokens, 13);
 }

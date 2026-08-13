@@ -2,12 +2,12 @@
 
 use std::io;
 
-use crate::item::ContextItem;
+use loong_contracts::transcript::{TranscriptItem, TranscriptItemKind};
 
 /// A point-in-time projection of the working context.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ContextSnapshot {
-    pub items: Vec<ContextItem>,
+    pub items: Vec<TranscriptItem>,
     /// Monotonic within one store instance. Not durable across restarts.
     pub version: u64,
     /// Character-count estimate. A real token counter replaces this later.
@@ -16,13 +16,24 @@ pub struct ContextSnapshot {
 
 impl ContextSnapshot {
     /// Builds a snapshot, computing the usage estimate from the items.
-    pub(crate) fn build(items: Vec<ContextItem>, version: u64) -> Self {
-        let usage_tokens = items.iter().map(|item| item.text.chars().count()).sum();
+    pub(crate) fn build(items: Vec<TranscriptItem>, version: u64) -> Self {
+        let usage_tokens = items.iter().map(usage_of).sum();
         Self {
             items,
             version,
             usage_tokens,
         }
+    }
+}
+
+/// Counts the characters that a tokenizer would see in one item.
+fn usage_of(item: &TranscriptItem) -> usize {
+    match &item.kind {
+        TranscriptItemKind::Message { text, .. } => text.chars().count(),
+        TranscriptItemKind::ToolCall { name, arguments } => {
+            name.chars().count() + arguments.chars().count()
+        }
+        TranscriptItemKind::ToolResult { output, .. } => output.chars().count(),
     }
 }
 
@@ -33,10 +44,10 @@ impl ContextSnapshot {
 /// backend without durable storage returns `Ok`.
 pub trait ContextStore {
     /// Appends items. Returns the new version.
-    fn append(&mut self, items: Vec<ContextItem>) -> u64;
+    fn append(&mut self, items: Vec<TranscriptItem>) -> u64;
 
     /// Replaces the working context. Returns the new version.
-    fn replace(&mut self, items: Vec<ContextItem>) -> u64;
+    fn replace(&mut self, items: Vec<TranscriptItem>) -> u64;
 
     /// Projects the current working context.
     fn snapshot(&self) -> ContextSnapshot;

@@ -5,9 +5,9 @@ use std::fs::{self, File};
 use std::io;
 use std::path::PathBuf;
 
-use crate::item::ContextItem;
 use crate::log;
 use crate::store::{ContextSnapshot, ContextStore};
+use loong_contracts::transcript::TranscriptItem;
 
 /// Why opening a disk store failed.
 #[derive(Debug, thiserror::Error)]
@@ -37,14 +37,14 @@ pub struct DiskStore {
     file: File,
     generation: u64,
     pending: Pending,
-    items: Vec<ContextItem>,
+    items: Vec<TranscriptItem>,
     version: u64,
 }
 
 #[derive(Debug)]
 enum Pending {
     Idle,
-    Append(Vec<ContextItem>),
+    Append(Vec<TranscriptItem>),
     Replace,
 }
 
@@ -90,7 +90,7 @@ impl DiskStore {
         })
     }
 
-    fn flush_append(&mut self, items: Vec<ContextItem>) -> io::Result<()> {
+    fn flush_append(&mut self, items: Vec<TranscriptItem>) -> io::Result<()> {
         let mut written = 0usize;
         let mut result = Ok(());
         for item in &items {
@@ -129,7 +129,7 @@ impl DiskStore {
 }
 
 impl ContextStore for DiskStore {
-    fn append(&mut self, items: Vec<ContextItem>) -> u64 {
+    fn append(&mut self, items: Vec<TranscriptItem>) -> u64 {
         self.items.extend(items.iter().cloned());
         match &mut self.pending {
             Pending::Idle => self.pending = Pending::Append(items),
@@ -141,7 +141,7 @@ impl ContextStore for DiskStore {
         self.version
     }
 
-    fn replace(&mut self, items: Vec<ContextItem>) -> u64 {
+    fn replace(&mut self, items: Vec<TranscriptItem>) -> u64 {
         self.items = items.clone();
         self.pending = Pending::Replace;
         self.version += 1;

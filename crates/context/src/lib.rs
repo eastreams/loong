@@ -1,11 +1,11 @@
 //! Per-session agent context storage.
+//!
+//! This crate owns storage mechanics.
 
 pub mod disk;
 pub mod memory;
 
-mod item;
 mod log;
 mod store;
 
-pub use item::{ContextItem, Role};
 pub use store::{ContextSnapshot, ContextStore};
