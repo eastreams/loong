@@ -107,7 +107,6 @@ pub enum SubtreeStatus {
     /// An aborted actor requests Kill from children it still owns.
     /// Its synchronous teardown cannot await their termination.
     /// `Unconfirmed` means positive proof is unavailable.
-    /// It does not prove any descendant remains alive.
     /// This status does not stop a running parent.
     /// It remains unconfirmed through every ancestor.
     Unconfirmed,
@@ -158,7 +157,7 @@ impl ExitStatus {
 /// IDs from different parents may compare equal.
 ///
 /// The generation rejects stale IDs when storage slots are reused. It can wrap
-/// after 2^31 reuses of one slot. This is not a registry key.
+/// after 2^31 reuses of one slot.
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
 pub struct ChildId(DefaultKey);
 

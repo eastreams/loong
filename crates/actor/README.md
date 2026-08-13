@@ -101,7 +101,7 @@ Unbounded spawning uses `Infallible` as its error.
 `ExitStatus::reason` describes only that actor. `ExitStatus::subtree` reports
 whether the runtime confirmed all owned descendants terminated. An unconfirmed
 child actor does not automatically stop its parent. The missing guarantee remains
-sticky. `Unconfirmed` means proof is unavailable. It does not prove liveness.
+sticky. `Unconfirmed` means proof is unavailable.
 
 Streaming does not require a runtime-specific message kind: a message reply may
 be a bounded channel receiver or another application-defined stream handle.

@@ -47,7 +47,7 @@ impl<A: ActionMeta> SyncHandler<PolicyEvent<A>> for Kernel {
 /// Trusted gateway from application code into the kernel policy actor.
 ///
 /// Keep this value out of untrusted model output and tool inputs. The generic
-/// [`grant`](Self::grant) method is an assembly boundary, not a tool registry.
+/// [`grant`](Self::grant) method is an assembly boundary.
 #[derive(Clone)]
 pub struct Facade {
     handle: ActorRef<Kernel>,
