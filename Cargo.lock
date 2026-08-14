@@ -496,6 +496,7 @@ name = "loong-provider"
 version = "0.2.0"
 dependencies = [
  "async-trait",
+ "loac",
  "thiserror",
  "tokio",
 ]

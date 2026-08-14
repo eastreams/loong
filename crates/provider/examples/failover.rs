@@ -1,7 +1,8 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use loong_provider::{Failover, Provider, StreamError, Writer};
+use loac::Writer;
+use loong_provider::{Failover, Provider, StreamError};
 use tokio::{sync::mpsc, time::Instant};
 
 struct Refusing;

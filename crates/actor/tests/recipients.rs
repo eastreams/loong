@@ -78,12 +78,12 @@ fn assert_send_sync<T: Send + Sync>() {}
 async fn recipient_erases_actor_type_but_keeps_message_type() {
     let left = loac::spawn::<Left>(());
     let right = loac::spawn::<Right>(());
-    let recipients: Vec<Recipient<Query>> = vec![
+    let recipients: Vec<Arc<dyn Recipient<Query>>> = vec![
         left.actor_ref().recipient::<Query>(),
         right.actor_ref().recipient::<Query>(),
     ];
-    assert_send_sync::<Recipient<Query>>();
-    assert_send_sync::<Recipient<Notify>>();
+    assert_send_sync::<Arc<dyn Recipient<Query>>>();
+    assert_send_sync::<Arc<dyn Recipient<Notify>>>();
 
     assert_eq!(watchdog(recipients[0].call(Query(4))).await.unwrap(), 5);
     assert_eq!(watchdog(recipients[1].call(Query(4))).await.unwrap(), 8);

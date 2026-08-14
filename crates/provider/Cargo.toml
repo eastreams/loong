@@ -6,11 +6,11 @@ version.workspace = true
 
 [dependencies]
 async-trait.workspace = true
+loac = { workspace = true }
 thiserror.workspace = true
-tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
 
 [lints]
 workspace = true

@@ -115,7 +115,7 @@
 //! An [`ActorRef`] may request shutdown.
 //! It sends messages only when the actor has [`HasMailbox`].
 //! Keeping an [`ActorRef`] does not keep its actor alive.
-//! A [`Recipient`] has only one message capability and no lifecycle methods.
+//! A [`Recipient`] handle has only one message capability and no lifecycle methods.
 //!
 //! # Messages
 //!
@@ -230,6 +230,7 @@ mod runtime;
 pub mod scheduling;
 pub mod supervision;
 pub mod transport;
+mod writer;
 
 pub use actor::{Actor, Handler, HasChildren, HasInterleaving, HasMailbox, Message, SyncHandler};
 pub use address::{ActorRef, Recipient, Response};
@@ -248,6 +249,7 @@ pub use loac_macros::{Message, actor};
 pub use reply::{InterleavedFutureExt, IntoReply, ReplyExt};
 pub use runtime::{ActorOwner, ActorScope, SpawnOptions, StopScope, spawn, spawn_with};
 pub use transport::MessageConfig;
+pub use writer::Writer;
 
 // The macro references these through `__private`.
 // The root re-export keeps rustc diagnostics free of `__private` paths.
