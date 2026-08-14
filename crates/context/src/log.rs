@@ -4,7 +4,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use loong_contracts::transcript::TranscriptItem;
+use contracts::transcript::TranscriptItem;
 
 /// Opens the exclusive-lock sidecar inside the store directory.
 pub(super) fn open_lock_file(base: &Path) -> io::Result<File> {

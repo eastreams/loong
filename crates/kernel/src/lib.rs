@@ -6,7 +6,7 @@ pub mod policy;
 
 use loac::{ActorOwner, ActorRef, CallError, prelude::*};
 
-use loong_contracts::capability::Capabilities;
+use contracts::capability::Capabilities;
 use thiserror::Error;
 
 use crate::access::fs::FsAccess;
@@ -94,7 +94,7 @@ mod tests {
     use std::borrow::Cow;
 
     use loac::Shutdown;
-    use loong_contracts::capability::{Capabilities, Capability};
+    use contracts::capability::{Capabilities, Capability};
     use serde_json::Value;
 
     use super::*;
@@ -111,7 +111,7 @@ mod tests {
             Cow::Owned(Value::Null)
         }
 
-        fn required_capabilities(&self) -> loong_contracts::capability::Capabilities {
+        fn required_capabilities(&self) -> contracts::capability::Capabilities {
             Capability::FsRead.into()
         }
     }

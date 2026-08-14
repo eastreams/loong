@@ -3,7 +3,7 @@
 use std::io;
 
 use crate::store::{ContextSnapshot, ContextStore};
-use loong_contracts::transcript::TranscriptItem;
+use contracts::transcript::TranscriptItem;
 
 /// A context store that keeps items in memory only.
 ///

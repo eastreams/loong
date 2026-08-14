@@ -8,7 +8,7 @@
 //! record; it does not grant permission. An action does not choose where it
 //! runs.
 
-use loong_contracts::capability::Capabilities;
+use contracts::capability::Capabilities;
 use serde_json::Value;
 use std::any::Any;
 use std::borrow::Cow;
@@ -112,7 +112,7 @@ pub struct Denied {
 mod tests {
     use std::borrow::Cow;
 
-    use loong_contracts::capability::Capabilities;
+    use contracts::capability::Capabilities;
     use serde_json::Value;
     use uuid::Uuid;
 

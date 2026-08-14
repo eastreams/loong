@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use loong_context::disk::{DiskStore, OpenError};
 use loong_context::memory::MemoryStore;
 use loong_context::{ContextSnapshot, ContextStore};
-use loong_contracts::transcript::{Role, TranscriptItem, TranscriptItemId, TranscriptItemKind};
+use contracts::transcript::{Role, TranscriptItem, TranscriptItemId, TranscriptItemKind};
 use uuid::Uuid;
 
 static NEXT: AtomicU64 = AtomicU64::new(0);

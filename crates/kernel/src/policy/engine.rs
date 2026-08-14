@@ -1,4 +1,4 @@
-use loong_contracts::policy::{
+use contracts::policy::{
     PolicyDecision, PolicyDecisionFinal, PolicyDecisionMiddle, PolicyResult,
 };
 use uuid::Uuid;

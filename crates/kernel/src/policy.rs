@@ -8,8 +8,8 @@
 pub mod action;
 pub mod engine;
 
-use loong_contracts::capability::Capabilities;
-use loong_contracts::policy::PolicyResult;
+use contracts::capability::Capabilities;
+use contracts::policy::PolicyResult;
 
 use crate::policy::action::ActionMeta;
 

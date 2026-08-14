@@ -1,7 +1,7 @@
 use std::{borrow::Cow, io, path::PathBuf};
 
 use crate::policy::action::{Action, ActionMeta, Granted};
-use loong_contracts::capability::{Capabilities, Capability};
+use contracts::capability::{Capabilities, Capability};
 use serde_json::Value;
 use thiserror::Error;
 

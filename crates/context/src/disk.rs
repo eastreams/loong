@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use crate::log;
 use crate::store::{ContextSnapshot, ContextStore};
-use loong_contracts::transcript::TranscriptItem;
+use contracts::transcript::TranscriptItem;
 
 /// Why opening a disk store failed.
 #[derive(Debug, thiserror::Error)]

@@ -2,7 +2,7 @@
 
 use std::io;
 
-use loong_contracts::transcript::{TranscriptItem, TranscriptItemKind};
+use contracts::transcript::{TranscriptItem, TranscriptItemKind};
 
 /// A point-in-time projection of the working context.
 #[derive(Clone, Debug, Eq, PartialEq)]

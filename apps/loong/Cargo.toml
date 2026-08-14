@@ -9,7 +9,7 @@ name = "loong"
 path = "src/main.rs"
 
 [dependencies]
-loong-kernel.workspace = true
+kernel.workspace = true
 
 [lints]
 workspace = true

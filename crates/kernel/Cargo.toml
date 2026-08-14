@@ -6,7 +6,7 @@ version.workspace = true
 
 [dependencies]
 loac.workspace = true
-loong-contracts.workspace = true
+contracts.workspace = true
 uuid.workspace = true
 async-trait.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "fs", "net", "time"] }
