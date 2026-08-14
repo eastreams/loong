@@ -1,0 +1,16 @@
+[package]
+name = "loong-provider"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
+
+[lints]
+workspace = true

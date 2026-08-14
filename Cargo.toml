@@ -7,6 +7,7 @@ members = [
     "crates/context",
     "crates/contracts",
     "crates/kernel",
+    "crates/provider",
 ]
 resolver = "3"
 
@@ -23,6 +24,7 @@ contracts = { path = "crates/contracts", package = "loong-contracts" }
 kernel = { path = "crates/kernel", package = "loong-kernel" }
 context = { path = "crates/context", package = "loong-context" }
 loac = { path = "crates/actor" }
+provider = { path = "crates/provider", package = "loong-provider" }
 
 bincode = "1.3.3"
 schemars = "1.2.1"
