@@ -2,7 +2,7 @@
 
 use std::fmt;
 use std::fs::{self, File};
-use std::io;
+use std::io::{self, Seek, SeekFrom};
 use std::path::PathBuf;
 
 use crate::log;
@@ -92,22 +92,26 @@ impl DiskStore {
     }
 
     fn flush_append(&mut self, items: Vec<TranscriptItem>) -> io::Result<()> {
-        let mut written = 0usize;
-        let mut result = Ok(());
-        for item in &items {
+        for (index, item) in items.iter().enumerate() {
+            // Record where this line starts. A failed write can leave a
+            // partial line behind, and a retried suffix must never splice
+            // onto it.
+            let offset = match self.file.seek(SeekFrom::End(0)) {
+                Ok(offset) => offset,
+                Err(error) => {
+                    self.pending = Pending::Append(items[index..].to_vec());
+                    return Err(error);
+                }
+            };
             if let Err(error) = log::write_item(&mut self.file, item) {
-                result = Err(error);
-                break;
+                // Roll the partial line back so the pending retry starts a
+                // fresh line instead of corrupting one.
+                let rollback = self.file.set_len(offset);
+                self.pending = Pending::Append(items[index..].to_vec());
+                return Err(rollback.err().unwrap_or(error));
             }
-            written += 1;
         }
-        if result.is_ok() {
-            return Ok(());
-        }
-        // Written items stay in the OS buffer. The unwritten suffix stays
-        // pending and is retried on the next flush.
-        self.pending = Pending::Append(items[written..].to_vec());
-        result
+        Ok(())
     }
 
     fn flush_replace(&mut self) -> io::Result<()> {
