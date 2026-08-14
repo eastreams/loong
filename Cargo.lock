@@ -395,7 +395,7 @@ checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
 name = "loac"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "actix",
  "allocation-counter",
@@ -415,7 +415,7 @@ dependencies = [
 
 [[package]]
 name = "loac-macros"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "loac",
  "proc-macro-crate",
