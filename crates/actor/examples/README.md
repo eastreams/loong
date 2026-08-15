@@ -71,9 +71,9 @@ Use `exclusive` when that work requires actor isolation.
 
 The bare `interleaved` option uses a fixed limit of 32.
 Dynamic options allow `with_max_in_flight` per spawn.
-Omitting the option provides no capability or reply queue.
+Omitting the option provides no interleaving capability; exclusive and owned
+replies still work.
 Unbounded interleaving can retain arbitrarily many active replies.
-Exclusive replies need no interleaving capability.
 
 ## Actor topology
 
@@ -85,10 +85,11 @@ Lifecycle ownership and message addresses form different graphs.
 | [`child_actors`](topology/child_actors.rs) | Own child actors and gather their replies. |
 | [`address_cycle`](topology/address_cycle.rs) | Build an address cycle during actor initialization. |
 
-Topology examples select `children = unbounded`.
+The child-spawning examples (`child_actors`, `address_cycle`) select
+`children = unbounded`.
 This enables `spawn_child` without a finite limit.
 Its error is `Infallible`.
-The examples destructure `Ok` without panicking.
+Those examples destructure `Ok` without panicking.
 
 An address cycle does not create lifecycle ownership.
 Cyclic calls can still wait forever.

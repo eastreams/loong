@@ -59,7 +59,7 @@ See the [examples index](examples/README.md) for runnable guides.
 | --- | --- |
 | [`Actor`](https://docs.rs/loac/latest/loac/trait.Actor.html) | Owns state. Lifecycle hooks run serially. |
 | [`ActorRef`](https://docs.rs/loac/latest/loac/struct.ActorRef.html) | Cloneable, typed, non-owning handle. |
-| [`Recipient`](https://docs.rs/loac/latest/loac/struct.Recipient.html) | Erases the actor type for one message type. |
+| [`Recipient`](https://docs.rs/loac/latest/loac/trait.Recipient.html) | Erases the actor type for one message type. |
 | [`ActorOwner`](https://docs.rs/loac/latest/loac/struct.ActorOwner.html) | Uniquely owns one root actor. |
 | [`ActorScope`](https://docs.rs/loac/latest/loac/struct.ActorScope.html) | Exposes temporary capabilities during actor work. |
 
@@ -69,7 +69,7 @@ See the [examples index](examples/README.md) for runnable guides.
 Messaging, interleaved replies, and child ownership are opt-in.
 Omitting an option removes that capability.
 `mailbox`, `interleaved`, and `children` share the five forms below.
-Every finite form takes a nonzero `usize` constant.
+An explicit finite limit must be a nonzero `usize` constant.
 
 | Form | Selected profile |
 | --- | --- |
@@ -116,7 +116,7 @@ See the [attribute reference](https://docs.rs/loac/latest/loac/attr.actor.html) 
 | `interleaved` | Eligible actor work continues between polls. |
 | `exclusive` | Other actor-local work pauses. Owned tasks continue. |
 
-A reply may be a bounded channel receiver. The [streaming example](examples/streaming.rs) passes the sender as message data; the reply's owned task produces the items, and the stream ends when that task stops. A runtime-driven stream reply mode is outside the current contract.
+Streaming composes on a bounded channel: the subscriber owns the receiver, the message carries the sender, and the reply's owned task produces the items. The stream ends when that task stops. A runtime-driven stream reply mode is outside the current contract.
 
 ## Lifecycle and Shutdown
 
