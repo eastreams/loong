@@ -20,26 +20,24 @@
 
 Loong is a Rust foundation for vertical AI agents.
 Its priorities are security, performance, extensibility, and long-term evolution.
-Agents should work reliably in real environments over the long term.
-They should collaborate with developers beyond a single demonstration.
+Agents should work reliably in real environments over the long term and
+collaborate with developers beyond a single demonstration.
 
 ## Why Loong
 
-### Security is more than a sandbox
+### Architecture-governed safety
 
 Sensitive operations should be authorized before they happen.
-Loong aims to make permission decisions part of its normal execution path.
-It should not rely on scattered checks or sandbox-only security.
-Sandboxes can protect untrusted extensions; they cannot replace authorization.
+Loong models outbound effects as `Action`s and authorizes them before
+execution. Policy authorization is the primary boundary; sandboxes and model
+review can still add defense in depth.
 
 ### Performance starts with the foundation
 
 Loong uses Rust.
-Core execution paths should stay fast.
-Runtime overhead should remain predictable.
-Concrete performance claims require representative workload benchmarks.
-Loong aims to minimize its own runtime overhead.
-Today's high hardware costs make low runtime overhead even more important for edge and commodity hardware.
+Core execution paths should stay fast and runtime overhead should remain
+predictable. Concrete performance claims require representative workload
+benchmarks.
 
 ### Extend it at your own pace
 
@@ -58,6 +56,9 @@ system is still being designed.
 The rewrite deliberately begins with a small foundation. New product areas will
 be added as their responsibilities and safety boundaries become clear, keeping
 Loong understandable as it grows.
+
+The [Actor runtime](crates/actor/README.md) and its lifetime model make
+components easy to run, extend, stop, and restart.
 
 ## Current Status
 
