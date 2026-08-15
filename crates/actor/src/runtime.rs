@@ -115,8 +115,9 @@ impl<A: Actor> ActorOwner<A> {
 
     /// Waits for the actor to publish its terminal event.
     ///
-    /// This method does not initiate shutdown. Keeping `&mut self` allows a
-    /// caller to apply an external deadline and upgrade to Kill afterward.
+    /// The wait itself does not initiate shutdown. It borrows the owner
+    /// exclusively, so no concurrent owner method can race the wait; after a
+    /// timeout the caller can still request Kill.
     /// The status's reason describes only this actor.
     /// Its subtree status reports the runtime's termination guarantee.
     pub async fn wait(&mut self) -> ExitStatus {

@@ -136,7 +136,7 @@ impl<A: HasChildren> ActorScope<'_, A> {
     /// Reaping releases capacity before [`Actor::on_child_exit`].
     ///
     /// The returned [`Child`] does not own lifecycle.
-    /// Retained graceful work keeps this capability.
+    /// Retained graceful work keeps the actor scope capability valid.
     /// A concurrent Kill cannot interrupt the current poll.
     pub fn spawn_child<C: Actor>(
         &mut self,
@@ -161,7 +161,7 @@ impl<A: HasChildren> ActorScope<'_, A> {
     /// Child configuration remains unopened after rejection.
     ///
     /// The returned [`Child`] does not own lifecycle.
-    /// Retained graceful work keeps this capability.
+    /// Retained graceful work keeps the actor scope capability valid.
     /// A concurrent Kill cannot interrupt the current poll.
     #[allow(
         clippy::type_complexity,

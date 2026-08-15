@@ -56,7 +56,7 @@ impl Actor for TestActor {
     }
 }
 
-/// Opens the dynamic test policy with one explicit capacity.
+/// Opens the dynamic test policy with the given mailbox capacity.
 fn test_actor_inner(capacity: usize) -> (Arc<ActorInner<TestActor>>, ActorInbox<TestActor>) {
     let capacity = NonZeroUsize::new(capacity).expect("test mailbox capacity is nonzero");
     let options = <TestActor as ActorConfig>::Options::default().with_mailbox_capacity(capacity);

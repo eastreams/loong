@@ -238,6 +238,3 @@ fn unfinished_exit_guard_overrides_tentative_hard_mode() {
     drop(ExitGuard::new(Arc::clone(&failing), None));
     assert_eq!(failing.control.exit_status(), Some(expected));
 }
-
-// An aborted child reports uncertainty without stopping a running parent.
-// The parent must still dispatch messages before a later Stop.

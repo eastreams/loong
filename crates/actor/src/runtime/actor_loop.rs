@@ -217,7 +217,8 @@ pub(crate) async fn actor_turn<A: Actor>(
         RuntimeScheduler::poll_turn(scheduler, &mut turn, task)
     });
 
-    // Lifecycle always gets first poll rights, especially Kill.
+    // The biased select lets lifecycle notifications, especially Kill,
+    // preempt the fair scheduler turn.
     tokio::select! {
         biased;
         () = control.actor_notified() => SchedulerTurn::LifecycleHint,

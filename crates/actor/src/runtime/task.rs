@@ -2,7 +2,7 @@ use super::*;
 
 /// Builds actor communication state without scheduling actor code.
 ///
-/// A child must receive its parent-issued key before its task can exit.
+/// A child must receive its parent-issued key before its task can start.
 /// Preparation keeps that ordering explicit without placeholder state.
 pub struct PreparedActor<A: Actor> {
     actor_ref: ActorRef<A>,
@@ -24,7 +24,7 @@ impl<A: Actor> PreparedActor<A> {
         Self { actor_ref, future }
     }
 
-    /// Starts the detached task after its complete parent link exists.
+    /// Returns the actor address without scheduling actor code.
     pub(crate) fn actor_ref(&self) -> ActorRef<A> {
         self.actor_ref.clone()
     }

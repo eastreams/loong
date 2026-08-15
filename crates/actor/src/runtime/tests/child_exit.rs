@@ -110,7 +110,7 @@ async fn dequeued_child_exit_keeps_registration_until_handled() {
 // This recreates the original race window after actor_turn has dequeued a
 // valid event. A graceful cutoff that commits in that window must retire the
 // child without entering user code, for both graceful modes.
-// A weak grandchild status must survive a normal direct-child reason.
+// A weak child subtree status must survive a normal direct-child reason.
 #[tokio::test]
 async fn graceful_cutoff_absorbs_a_dequeued_child_exit() {
     for shutdown in [Shutdown::Stop, Shutdown::Drain] {
@@ -205,7 +205,3 @@ async fn admitted_child_exit_hook_finishes_across_graceful_cutoff() {
         assert_eq!(scope.children.len(), 0);
     }
 }
-
-// Reserving capacity is not admission. Drain must finish from the stable queue
-// snapshot even if an internal raw permit remains alive and keeps mpsc from
-// reporting channel termination.
