@@ -1,0 +1,521 @@
+//! Reply execution scaling benchmarks.
+//!
+//! Owned cases measure Tokio task scheduling.
+//! Interleaved cases measure actor-local scanning.
+//! After dispatch, owned work stays outside actor fairness.
+//! Exclusive work only stages the mailbox backlog fixture.
+//!
+//! `complete_all` starts with every reply pending.
+//! It measures releasing and completing the entire active set.
+//! `single_wake_to_target_poll` keeps that set pending across iterations.
+//! It measures one external notification until the target poll.
+//! That result is deliberately steady-state latency.
+//! Continuation work may already be runnable.
+//! Later work stays outside the measured interval.
+//!
+//! `mailbox_turn_to_target_poll_under_backlog` begins inside a mailbox handler.
+//! An exclusive barrier stages more ready messages behind it.
+//! Measurement ends inside the selected probe's next poll.
+//! Deterministic tests cover the complete fairness contract.
+//! This benchmark measures notification-to-poll handoff under mailbox load.
+
+use std::{
+    future::Future,
+    num::NonZeroUsize,
+    pin::Pin,
+    task::{Context, Poll},
+    time::{Duration, Instant},
+};
+
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use loac::{
+    Actor, ActorOwner, ActorRef, ActorScope, ExitReason, Handler, InterleavedFutureExt,
+    IntoActorFuture, Message, ReplyExt, Response, Shutdown, SpawnOptions, TryCallErrorKind,
+    spawn_with,
+};
+use tokio::sync::{mpsc, oneshot};
+
+const ACTIVE_COUNTS: [usize; 3] = [1, 32, 256];
+const MAILBOX_BACKLOG: usize = 32;
+
+#[derive(Clone, Copy)]
+enum ReplyExecution {
+    Owned,
+    Interleaved,
+}
+
+impl ReplyExecution {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Owned => "owned",
+            Self::Interleaved => "interleaved",
+        }
+    }
+
+    fn max_interleaved(self, active: usize) -> NonZeroUsize {
+        match self {
+            Self::Owned => NonZeroUsize::MIN,
+            Self::Interleaved => {
+                NonZeroUsize::new(active).expect("active reply counts are non-zero")
+            }
+        }
+    }
+
+    fn enqueue_reply(
+        self,
+        actor: &ActorRef<ReplyActor>,
+        started: oneshot::Sender<()>,
+        release: oneshot::Receiver<()>,
+    ) -> Response<()> {
+        match self {
+            Self::Owned => actor
+                .try_call(OwnedReply { started, release })
+                .expect("the benchmark mailbox has capacity"),
+            Self::Interleaved => actor
+                .try_call(InterleavedReply { started, release })
+                .expect("the benchmark mailbox has capacity"),
+        }
+    }
+
+    fn enqueue_wake_probe(
+        self,
+        actor: &ActorRef<ReplyActor>,
+        started: oneshot::Sender<()>,
+        commands: mpsc::Receiver<WakeCommand>,
+    ) -> Response<()> {
+        let probe = WakeProbe {
+            started: Some(started),
+            commands,
+        };
+        match self {
+            Self::Owned => actor
+                .try_call(OwnedWakeProbe(probe))
+                .expect("the benchmark mailbox has capacity"),
+            Self::Interleaved => actor
+                .try_call(InterleavedWakeProbe(probe))
+                .expect("the benchmark mailbox has capacity"),
+        }
+    }
+}
+
+struct ReplyActor;
+
+#[loac::actor(mailbox = dynamic, interleaved = dynamic)]
+impl Actor for ReplyActor {
+    type SpawnArgs = ();
+
+    async fn init(_args: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
+        Self
+    }
+}
+
+#[derive(Message)]
+struct OwnedReply {
+    started: oneshot::Sender<()>,
+    release: oneshot::Receiver<()>,
+}
+
+impl Handler<OwnedReply> for ReplyActor {
+    fn handle(
+        &mut self,
+        message: OwnedReply,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loac::IntoReply<Self, OwnedReply> + use<> {
+        async move {
+            let _ = message.started.send(());
+            let _ = message.release.await;
+        }
+    }
+}
+
+#[derive(Message)]
+struct InterleavedReply {
+    started: oneshot::Sender<()>,
+    release: oneshot::Receiver<()>,
+}
+
+impl Handler<InterleavedReply> for ReplyActor {
+    fn handle(
+        &mut self,
+        message: InterleavedReply,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loac::IntoReply<Self, InterleavedReply> + use<> {
+        async move {
+            let _ = message.started.send(());
+            let _ = message.release.await;
+        }
+        .into_actor()
+        .interleaved()
+    }
+}
+
+struct WakeCommand {
+    started: Instant,
+    completed: oneshot::Sender<Duration>,
+}
+
+struct WakeProbe {
+    started: Option<oneshot::Sender<()>>,
+    commands: mpsc::Receiver<WakeCommand>,
+}
+
+impl Future for WakeProbe {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, task: &mut Context<'_>) -> Poll<Self::Output> {
+        if let Some(started) = self.started.take() {
+            let _ = started.send(());
+        }
+        loop {
+            match self.commands.poll_recv(task) {
+                Poll::Ready(Some(WakeCommand { started, completed })) => {
+                    let _ = completed.send(started.elapsed());
+                }
+                Poll::Ready(None) => panic!("a measured wake probe lost its controller"),
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+    }
+}
+
+#[derive(Message)]
+struct OwnedWakeProbe(WakeProbe);
+
+impl Handler<OwnedWakeProbe> for ReplyActor {
+    fn handle(
+        &mut self,
+        message: OwnedWakeProbe,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loac::IntoReply<Self, OwnedWakeProbe> + use<> {
+        message.0
+    }
+}
+
+#[derive(Message)]
+struct InterleavedWakeProbe(WakeProbe);
+
+impl Handler<InterleavedWakeProbe> for ReplyActor {
+    fn handle(
+        &mut self,
+        message: InterleavedWakeProbe,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loac::IntoReply<Self, InterleavedWakeProbe> + use<> {
+        message.0.into_actor().interleaved()
+    }
+}
+
+#[derive(Message)]
+struct MailboxBacklog;
+
+impl Handler<MailboxBacklog> for ReplyActor {
+    fn handle(
+        &mut self,
+        _message: MailboxBacklog,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loac::IntoReply<Self, MailboxBacklog> + use<> {
+        ().ready()
+    }
+}
+
+#[derive(Message)]
+struct MailboxTurnTrigger {
+    commands: mpsc::Sender<WakeCommand>,
+    completed: oneshot::Sender<Duration>,
+}
+
+impl Handler<MailboxTurnTrigger> for ReplyActor {
+    fn handle(
+        &mut self,
+        message: MailboxTurnTrigger,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loac::IntoReply<Self, MailboxTurnTrigger> + use<> {
+        if message
+            .commands
+            .try_send(WakeCommand {
+                started: Instant::now(),
+                completed: message.completed,
+            })
+            .is_err()
+        {
+            panic!("the selected wake probe has one empty command slot");
+        }
+        ().ready()
+    }
+}
+
+#[derive(Message)]
+struct StageMailboxBacklog {
+    entered: oneshot::Sender<()>,
+    release: oneshot::Receiver<()>,
+}
+
+impl Handler<StageMailboxBacklog> for ReplyActor {
+    fn handle(
+        &mut self,
+        message: StageMailboxBacklog,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loac::IntoReply<Self, StageMailboxBacklog> + use<> {
+        async move {
+            let _ = message.entered.send(());
+            message
+                .release
+                .await
+                .expect("the benchmark releases the exclusive staging barrier");
+        }
+        .into_actor()
+        .exclusive()
+    }
+}
+
+fn spawn_benchmark_actor(active: usize, max_interleaved: NonZeroUsize) -> ActorOwner<ReplyActor> {
+    let capacity = NonZeroUsize::new(active).expect("active reply counts are non-zero");
+    spawn_with::<ReplyActor>(
+        (),
+        SpawnOptions::<ReplyActor>::default()
+            .with_mailbox_capacity(capacity)
+            .with_max_in_flight(max_interleaved),
+    )
+}
+
+async fn install_pending(
+    actor: &ActorRef<ReplyActor>,
+    count: usize,
+    execution: ReplyExecution,
+) -> (Vec<oneshot::Sender<()>>, Vec<Response<()>>) {
+    let mut started = Vec::with_capacity(count);
+    let mut releases = Vec::with_capacity(count);
+    let mut responses = Vec::with_capacity(count);
+
+    for _ in 0..count {
+        let (started_tx, started_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        responses.push(execution.enqueue_reply(actor, started_tx, release_rx));
+        started.push(started_rx);
+        releases.push(release_tx);
+    }
+    for started in started {
+        started
+            .await
+            .expect("each benchmark reply reaches its first poll");
+    }
+
+    (releases, responses)
+}
+
+async fn install_wake_probes(
+    actor: &ActorRef<ReplyActor>,
+    count: usize,
+    execution: ReplyExecution,
+) -> (Vec<mpsc::Sender<WakeCommand>>, Vec<Response<()>>) {
+    let mut started = Vec::with_capacity(count);
+    let mut commands = Vec::with_capacity(count);
+    let mut responses = Vec::with_capacity(count);
+
+    for _ in 0..count {
+        let (started_tx, started_rx) = oneshot::channel();
+        let (commands_tx, commands_rx) = mpsc::channel(1);
+        responses.push(execution.enqueue_wake_probe(actor, started_tx, commands_rx));
+        started.push(started_rx);
+        commands.push(commands_tx);
+    }
+    for started in started {
+        started
+            .await
+            .expect("each wake probe reaches its first poll");
+    }
+
+    (commands, responses)
+}
+
+async fn measure_complete_all(iters: u64, active: usize, execution: ReplyExecution) -> Duration {
+    let owner = spawn_benchmark_actor(active, execution.max_interleaved(active));
+    let actor = owner.actor_ref();
+    let mut measured = Duration::ZERO;
+
+    for _ in 0..iters {
+        // Dispatch and first-poll setup stay outside the accumulated duration.
+        let (releases, responses) = install_pending(&actor, active, execution).await;
+        let started = Instant::now();
+        for release in releases {
+            release
+                .send(())
+                .expect("the active reply remains scheduled");
+        }
+        for response in responses {
+            response.await.expect("the benchmark actor stays alive");
+        }
+        measured += started.elapsed();
+    }
+
+    assert_eq!(
+        owner.shutdown(Shutdown::Kill).await.reason(),
+        ExitReason::Killed
+    );
+    measured
+}
+
+async fn measure_single_wake_to_target_poll(
+    iters: u64,
+    active: usize,
+    execution: ReplyExecution,
+) -> Duration {
+    let owner = spawn_benchmark_actor(active, execution.max_interleaved(active));
+    let actor = owner.actor_ref();
+    let (commands, responses) = install_wake_probes(&actor, active, execution).await;
+    let mut measured = Duration::ZERO;
+    let mut index = 0;
+
+    for _ in 0..iters {
+        let (completed_tx, completed_rx) = oneshot::channel();
+        // The target records its own poll latency, so confirmation-sweep and
+        // benchmark-task work after that point stay outside this interval.
+        commands[index]
+            .try_send(WakeCommand {
+                started: Instant::now(),
+                completed: completed_tx,
+            })
+            .expect("the selected wake probe remains scheduled");
+        measured += completed_rx
+            .await
+            .expect("the selected wake probe records its poll latency");
+        index = (index + 1) % active;
+    }
+
+    assert_eq!(
+        owner.shutdown(Shutdown::Kill).await.reason(),
+        ExitReason::Killed
+    );
+    drop(commands);
+    drop(responses);
+    measured
+}
+
+async fn measure_mailbox_turn_to_target_poll_under_backlog(
+    iters: u64,
+    backlog: usize,
+    execution: ReplyExecution,
+) -> Duration {
+    let queued_after_trigger = backlog
+        .checked_sub(1)
+        .expect("mailbox backlog counts include a trigger message");
+    let mailbox_capacity = NonZeroUsize::new(backlog).expect("mailbox backlog counts are non-zero");
+    let owner = spawn_with::<ReplyActor>(
+        (),
+        SpawnOptions::<ReplyActor>::default()
+            .with_mailbox_capacity(mailbox_capacity)
+            // A pending probe needs capacity for staging dispatch.
+            .with_max_in_flight(execution.max_interleaved(2)),
+    );
+    let actor = owner.actor_ref();
+    let (mut commands, probe_responses) = install_wake_probes(&actor, 1, execution).await;
+    let commands = commands.pop().expect("one wake probe was installed");
+    let mut measured = Duration::ZERO;
+
+    for _ in 0..iters {
+        let (entered_tx, entered_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let exclusive_response = actor
+            .try_call(StageMailboxBacklog {
+                entered: entered_tx,
+                release: release_rx,
+            })
+            .expect("the exclusive probe is admitted");
+        entered_rx
+            .await
+            .expect("the exclusive probe reaches its first poll");
+
+        let (completed_tx, completed_rx) = oneshot::channel();
+        let trigger_response = actor
+            .try_call(MailboxTurnTrigger {
+                commands: commands.clone(),
+                completed: completed_tx,
+            })
+            .expect("the mailbox trigger is admitted");
+        let mailbox_responses: Vec<_> = (0..queued_after_trigger)
+            .map(|_| {
+                actor
+                    .try_call(MailboxBacklog)
+                    .expect("the configured mailbox backlog is admitted")
+            })
+            .collect();
+        let full = actor
+            .try_call(MailboxBacklog)
+            .expect_err("the mailbox is full before contention timing begins");
+        assert_eq!(full.kind(), TryCallErrorKind::Full);
+
+        release_tx
+            .send(())
+            .expect("the exclusive staging barrier remains scheduled");
+        measured += completed_rx
+            .await
+            .expect("the target probe records its poll latency");
+
+        exclusive_response
+            .await
+            .expect("the exclusive probe completes before cleanup");
+        trigger_response
+            .await
+            .expect("the mailbox trigger completes before cleanup");
+        for response in mailbox_responses {
+            response
+                .await
+                .expect("the ready mailbox backlog drains after measurement");
+        }
+    }
+
+    assert_eq!(
+        owner.shutdown(Shutdown::Kill).await.reason(),
+        ExitReason::Killed
+    );
+    drop(commands);
+    drop(probe_responses);
+    measured
+}
+
+fn reply_execution(criterion: &mut Criterion) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("the benchmark runtime builds");
+
+    for execution in [ReplyExecution::Owned, ReplyExecution::Interleaved] {
+        let mut group = criterion.benchmark_group(format!("reply_execution/{}", execution.name()));
+        for active in ACTIVE_COUNTS {
+            group.throughput(Throughput::Elements(active as u64));
+            group.bench_with_input(
+                BenchmarkId::new("complete_all", active),
+                &active,
+                |bencher, &active| {
+                    bencher
+                        .to_async(&runtime)
+                        .iter_custom(move |iters| measure_complete_all(iters, active, execution));
+                },
+            );
+
+            group.throughput(Throughput::Elements(1));
+            group.bench_with_input(
+                BenchmarkId::new("single_wake_to_target_poll", active),
+                &active,
+                |bencher, &active| {
+                    bencher.to_async(&runtime).iter_custom(move |iters| {
+                        measure_single_wake_to_target_poll(iters, active, execution)
+                    });
+                },
+            );
+        }
+
+        group.throughput(Throughput::Elements(1));
+        group.bench_with_input(
+            BenchmarkId::new("mailbox_turn_to_target_poll_under_backlog", MAILBOX_BACKLOG),
+            &MAILBOX_BACKLOG,
+            |bencher, &backlog| {
+                bencher.to_async(&runtime).iter_custom(move |iters| {
+                    measure_mailbox_turn_to_target_poll_under_backlog(iters, backlog, execution)
+                });
+            },
+        );
+        group.finish();
+    }
+}
+
+criterion_group!(benches, reply_execution);
+criterion_main!(benches);

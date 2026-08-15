@@ -10,259 +10,75 @@
 <p align="center"><strong><em>“发轫于东，以会群友”</em></strong></p>
 
 <p align="center">
-  <a href="https://github.com/eastreams/loong/actions/workflows/ci.yml?branch=dev"><img src="https://img.shields.io/github/actions/workflow/status/eastreams/loong/ci.yml?branch=dev&label=build&style=flat-square" alt="Build" /></a>
-  <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="License: MIT" /></a>
-  <img src="https://img.shields.io/badge/rust-edition%202024-orange.svg?style=flat-square" alt="Rust Edition 2024" />
-  <a href="https://github.com/eastreams/loong/releases"><img src="https://img.shields.io/github/v/release/eastreams/loong?label=version&color=yellow&include_prereleases&style=flat-square" alt="Version" /></a>
-  <br/>
-  <a href="https://x.com/loongclawai"><img src="https://img.shields.io/badge/X-follow-000000?logo=x&logoColor=white&style=flat-square" alt="X" /></a>
-  <a href="https://t.me/loongclaw"><img src="https://img.shields.io/badge/Telegram-community-26A5E4?logo=telegram&logoColor=white&style=flat-square" alt="Telegram" /></a>
-  <a href="https://discord.gg/7kSTX9mca"><img src="https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white&style=flat-square" alt="Discord" /></a>
-  <a href="https://www.reddit.com/r/LoongClaw"><img src="https://img.shields.io/badge/Reddit-community-FF4500?logo=reddit&logoColor=white&style=flat-square" alt="Reddit" /></a>
-  <br/>
-  <a href="https://xhslink.com/m/1dqFqF1IKDk"><img src="https://img.shields.io/badge/Xiaohongshu-follow-FF2442?logo=xiaohongshu&logoColor=white&style=flat-square" alt="Xiaohongshu" /></a>
-  <a href="https://loongclaw.ai/feishu.jpg"><img src="https://img.shields.io/badge/Feishu-QR-3370FF?logo=lark&logoColor=white&style=flat-square" alt="Feishu QR" /></a>
-  <a href="https://loongclaw.ai/wechat.jpg"><img src="https://img.shields.io/badge/WeChat-QR-07C160?logo=wechat&logoColor=white&style=flat-square" alt="WeChat QR" /></a>
-</p>
-
-***安全、可扩展、可持续演进***——Loong 是一套基于 Rust 构建的垂域智能体基座，在安全可控的基础上承载长程工作流构建、复合任务执行与闭环改进，让人与 AI 在真实场景中持续协作。
-
-<p align="center">
   <a href="README.md">English</a> |
   <a href="README.zh-CN.md">简体中文</a>
 </p>
 
-<p align="center">
-  <a href="site/index.mdx">文档总览</a> •
-  <a href="site/get-started/overview.mdx">快速上手</a> •
-  <a href="site/use-loong/configuration-patterns.mdx">配置模式</a> •
-  <a href="site/use-loong/common-setups.mdx">常见路线</a> •
-  <a href="site/build-on-loong/overview.mdx">扩展 Loong</a> •
-  <a href="CONTRIBUTING.md">参与贡献</a>
-</p>
+> [!IMPORTANT]
+> 本仓库是 Loong 的独立重写。当前只包含架构与骨架，还不是可用的
+> 智能体产品。
 
-<a id="why-loong"></a>
-## 为什么选 Loong
+Loong 是一套用 Rust 构建的垂域智能体基础设施。
+它关注安全、性能、可扩展性与长期演进。
+我们希望智能体能在真实环境中长期可靠地工作。
+它们也应与开发者长期协作，而不只完成一次演示。
 
-**因为它已经具备你在观察、操作、扩展过程中所需的核心能力：**
+## 为什么选择 Loong
 
-- **🚀 开箱即用的丰富配置**：内置 42+ provider、25+ 接入频道，几条命令即可跑通。
-- **👀 透明可控的操控能力**：`audit`、`tasks`、`skills`、`plugins`、`channels`、`runtime-snapshot` 以及 gateway control 都暴露为直接可用的命令。
-- **🛡️ 安全可控的基座能力**：provider 选择、工具、记忆、接入频道、审批、策略、审计都在明确的运行时边界之内。
+### 安全不只是沙箱
 
-**也因为无论你是小白还是极客，它都适合你：**
+敏感操作应在发生前获得授权。
+Loong 希望将权限决策纳入正常执行流程。
+它不应依赖散落的检查，也不应采用仅靠沙箱的安全模型。
+沙箱可以保护不可信扩展，但不能替代授权。
 
-- **⚡ 易于上手**：几条命令就能跑通，兼容 OpenClaw、Claude Code、Codex、OpenCode 等同类 AI 工具的已有配置。
-- **🧭 边界透明**：助手、网关、接入频道各自独立，不会混在一起。
-- **🔌 内核与扩展分离**：provider、工具、接入频道、记忆、策略独立于内核，按需编译组合。
-- **🌱 不是玩具**：面向长期使用设计，能跟着你的需求一起成长。
+### 高性能从基础开始
 
-另外，如果你想读更完整的公开定位和产品立场，可以看
-[Loong 的缘起与定位](site/reference/why-loong.mdx)。
+Loong 使用 Rust 构建。
+核心执行路径应保持快速。
+运行时开销应保持可预期。
+具体性能结论需要代表性工作负载的基准测试支撑。
+Loong 希望尽量降低自身运行时开销。
+在硬件成本高昂的今天，这对边缘设备和普通硬件尤其重要。
 
-## 赞助商
+### 按自己的节奏扩展
 
-<p align="center">
-  <a href="https://www.volcengine.com/activity/codingplan?utm_campaign=loong&utm_content=loong&utm_medium=devrel&utm_source=OWO&utm_term=loong">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="assets/sponsors_logo/volcengine/volcengine-logo-dark-zh.png"/>
-      <img src="assets/sponsors_logo/volcengine/volcengine-logo-light-zh.png" alt="火山引擎" height="44"/>
-    </picture>
-  </a>
-  <span>&emsp;&emsp;&emsp;</span>
-  <a href="https://www.feishu.cn">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="assets/sponsors_logo/feishu/feishu-logo-dark-zh.png"/>
-      <img src="assets/sponsors_logo/feishu/feishu-logo-light-zh.png" alt="飞书" height="44"/>
-    </picture>
-  </a>
-</p>
+Loong 希望支持两种扩展方式：
 
-<a id="quick-start"></a>
-## 快速开始
+- 需要深度集成或高性能时，使用 Rust 编写并和 Loong 一起编译。
+- 需要快速迭代时，在运行期加载脚本等扩展，无需重新构建宿主程序。
 
-> Loong 当前只支持 `loong` 这个命令行入口。
+两种方式都适用同样的安全要求。具体的运行期扩展系统仍在设计中。
 
-### 脚本安装（推荐）
+### 面向长期演进
 
-Linux 或 macOS：
+这次重写刻意从小而稳的基础开始。只有当职责与安全边界明晰时，
+新的产品领域才会被加入。这能让 Loong 在成长过程中仍然易于理解。
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/eastreams/loong/dev/scripts/install.sh | bash -s -- --onboard
-```
+## 当前状态
 
-Windows PowerShell：
+这次重写中，Loong 仍处于打基础的早期阶段，还不能作为完整的智能体产品安装和使用。
+仓库会随着能力真正落地再如实更新说明，
+因此请勿将计划中的工作当作已完成能力。
 
-```powershell
-$script = Join-Path $env:TEMP "loong-install.ps1"
-Invoke-WebRequest https://raw.githubusercontent.com/eastreams/loong/dev/scripts/install.ps1 -OutFile $script
-pwsh $script -Onboard
-```
+<details>
+<summary>给开发者</summary>
 
-从源码安装：
+架构记录在 [ARCHITECTURE.md](ARCHITECTURE.md)，尚未拍板的设计记录在
+[docs/open-questions.md](docs/open-questions.md)。
+`loac` 与 `loac-macros` 的 crates.io 发布流程见
+[发布指南](docs/development/releasing.md)。
 
-确保系统有 C 链接器（Rust 编译需要）：
+当前的检查命令为：
 
 ```bash
-# Debian / Ubuntu
-sudo apt update && sudo apt install build-essential
+cargo fmt --all -- --check
+cargo check --workspace --all-targets
+cargo test --workspace
 ```
 
-```bash
-# Fedora
-sudo dnf groupinstall "Development Tools"
-```
+</details>
 
-```bash
-# macOS
-xcode-select --install
-```
+## 许可证
 
-安装 Rust 工具链（已安装可跳过）：
-
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source "$HOME/.cargo/env"
-```
-
-构建并安装：
-
-```bash
-bash scripts/install.sh --source --onboard
-```
-
-```bash
-# 或者只通过 Cargo 安装（不含 onboard 引导）
-cargo install --path crates/daemon
-```
-
-### 首次运行
-
-```bash
-loong onboard                # 交互式初始化，配置 provider 和 model
-```
-
-```bash
-loong ask --message "用一句话总结这个仓库"  # 单轮提问，验证配置是否生效
-loong chat                   # 进入多轮对话
-loong doctor --fix           # 检查环境并自动修复常见问题
-loong update                 # 把当前安装升级到最新稳定版 GitHub Release
-```
-
-`loong update` 只会安装最新稳定版 GitHub Release，绝不会切到 pre-release。
-
-走完 `onboard` 就够了 —— 它会把一份能跑的配置写到 `~/.loong/config.toml`，不需要你手写 TOML。如果你想再加一个 provider 或接入频道，下面几段是 dev 分支当前的实际形态。
-
-#### Providers
-
-```toml
-active_provider = "openai"
-
-[providers.openai]
-kind = "openai"
-api_key = { env = "OPENAI_API_KEY" }
-model = "auto"
-
-[providers.volcengine]
-kind = "volcengine"
-api_key = { env = "ARK_API_KEY" }
-model = "auto"
-```
-
-- `active_provider` 决定当前运行的 lane，直接改字段或重跑一次 `loong onboard` 都能切换。
-- `api_key = { env = "OPENAI_API_KEY" }` 表示从环境变量读取；写成 `api_key = "OPENAI_API_KEY"` 会被当成字面量密钥值，这是常见踩坑。
-- `model = "auto"` 走 provider 端自动发现；如果你所在区域或账号下自动发现不稳，改成 `model = "<具体 id>"` 固定即可。
-
-#### 接入频道 —— 以飞书为例
-
-推荐先走命令行二维码接入：
-
-```bash
-# 国内飞书租户（open.feishu.cn）—— CLI 默认值
-loong feishu onboard --domain feishu
-
-# 国际版 Lark 租户（open.larksuite.com）
-loong feishu onboard --domain lark
-```
-
-`--domain` 一定要和你登录的租户类型对上：`feishu` 走国内 `open.feishu.cn`，`lark` 走国际 `open.larksuite.com`。选错端点时二维码扫完也绑不上对应 app。省略 `--domain` 时默认走 `feishu`。
-
-这条命令会在终端里展示二维码，走官方 Feishu/Lark 注册接口创建 bot app，并把生成的凭据写回 `loong.toml`。如果你已经有现成凭据，也可以继续用 `loong feishu onboard --manual --app-id ... --app-secret ...` 手动回填。
-
-```toml
-[feishu]
-enabled = true
-domain = "feishu"                         # 国际版 Lark 改成 "lark"
-mode = "websocket"
-receive_id_type = "chat_id"
-app_id = { env = "FEISHU_APP_ID" }
-app_secret = { env = "FEISHU_APP_SECRET" }
-allowed_chat_ids = ["oc_ops_room"]
-```
-
-先快速验证一下：
-
-```bash
-loong doctor
-loong feishu-send --receive-id "ou_example_user" --text "hello from loong"
-loong feishu-serve
-```
-
-完整的 provider / channel 矩阵、多账号配置与长期托管模型，继续看下面的 [文档](#documentation) 表。
-
-<a id="documentation"></a>
-## 文档
-
-| | |
-| --- | --- |
-| 快速上手 | [Get Started](site/get-started/overview.mdx)，或直接用 `onboard` / `ask` / `chat` / `doctor` |
-| 完整路径 | [Common Setups](site/use-loong/common-setups.mdx) |
-| 选 Provider | [Provider Guides](site/use-loong/provider-guides/index.mdx) 与 [Provider Recipes](site/use-loong/provider-recipes.mdx) |
-| 接入频道 | [Channel Guides](site/use-loong/channel-guides/index.mdx) 与 [Channel Recipes](site/use-loong/channel-recipes.mdx) |
-| 长期托管 | [Gateway 与监督](site/use-loong/gateway-and-supervision.mdx) |
-| 设计立场 | [Why Loong](site/reference/why-loong.mdx) |
-| 架构与扩展 | [Build On Loong](site/build-on-loong/overview.mdx) |
-| 参考资料 | [Reference](site/reference/overview.mdx) |
-
-<a id="architecture"></a>
-## 架构
-
-Loong 是一个 13-crate Rust workspace，依赖图严格无环，围绕一个受治理的
-kernel 组织，将稳定 contract、runtime substrate、product/runtime assembly、
-验证轨道与 daemon-owned delivery surfaces 分开。
-
-```text
-loong-core          (minimal shared base types)
-├── loong-runtime      -> loong-core
-├── loong-plugin-sdk   -> loong-core
-├── contracts          (stable contract vocabulary)
-├── kernel             -> contracts, plugin-sdk
-├── protocol           (independent transport foundation)
-├── bridge-runtime     -> contracts, kernel, protocol
-├── loong-app-protocol -> loong-runtime
-├── loong-cli          -> loong-app-protocol
-├── app                -> contracts, kernel
-├── spec               -> contracts, kernel, protocol, bridge-runtime
-├── bench              -> kernel, spec
-└── daemon             -> app, app-protocol, bench, bridge-runtime, contracts, kernel, protocol, spec
-```
-
-ownership 分区、分层执行模型（L0–L9）以及设计原则，见
-[ARCHITECTURE.md](ARCHITECTURE.md)。
-
-## 贡献
-
-欢迎贡献。先从 [CONTRIBUTING.md](CONTRIBUTING.md) 开始。
-
-如果你想先看哪些方向最值得补强，可以读 [Contribution Areas](site/build-on-loong/contribution-areas.mdx)。
-
-## Star History
-
-<p align="center">
-  <a href="https://star-history.com/#eastreams/loong&Date">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=eastreams/loong&type=Date&theme=dark"/>
-      <img src="https://api.star-history.com/svg?repos=eastreams/loong&type=Date" alt="Star History Chart"/>
-    </picture>
-  </a>
-</p>
+Loong 使用 [MIT License](LICENSE-MIT)。

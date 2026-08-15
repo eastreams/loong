@@ -1,0 +1,11 @@
+error[E0599]: no method named `with_max_in_flight` found for struct `ActorOptions<Fixed, FixedMailbox, FixedInterleaving, NoChildren>` in the current scope
+  --> tests/ui/fail/fixed_interleaving_override.rs:17:10
+   |
+16 |       let _ = loac::SpawnOptions::<Fixed>::default()
+   |  _____________-
+17 | |         .with_max_in_flight(NonZeroUsize::MIN);
+   | |         -^^^^^^^^^^^^^^^^^^ method not found in `ActorOptions<Fixed, FixedMailbox, FixedInterleaving, NoChildren>`
+   | |_________|
+   |
+   |
+   = note: the method was found for `ActorOptions<A, M, DynamicInterleaving<DEFAULT>, C>`

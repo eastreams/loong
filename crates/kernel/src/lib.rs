@@ -1,104 +1,151 @@
-#![forbid(unsafe_code)]
+//! Connects domain access to the application.
+//!
+//! [`Kernel`] is the policy actor: it evaluates [`PolicyEvent`] messages
+//! against a [`PolicyEngine`](policy::engine::PolicyEngine) and returns either
+//! a [`Granted`] proof or a [`Denied`] refusal. [`Facade`] is the trusted
+//! handle that application and access code use to reach that actor, and the
+//! [`access`] module exposes narrow domain-operation APIs on top of the
+//! facade.
 
-pub mod architecture;
-pub mod audit;
-pub mod awareness;
-pub mod bootstrap;
-pub mod clock;
-pub mod connector;
-pub mod contracts;
-pub mod errors;
-pub mod harness;
-pub mod integration;
-pub mod kernel;
-pub mod mailbox;
-pub mod memory;
-pub mod pack;
-pub mod plugin;
-pub mod plugin_ir;
+pub mod access;
+pub mod actors;
 pub mod policy;
-pub mod policy_ext;
-pub mod runtime;
-pub mod task_supervisor;
-pub mod tool;
 
-pub use architecture::{
-    ArchitectureBoundaryPolicy, ArchitectureGuardReport, ArchitecturePathDecision,
-    ArchitecturePathReport,
-};
-pub use audit::{
-    AuditEvent, AuditEventKind, AuditRepairOutcome, AuditRepairReport, AuditSink,
-    AuditVerificationReport, ExecutionPlane, FanoutAuditSink, InMemoryAuditSink, JsonlAuditSink,
-    NoopAuditSink, PlaneTier, probe_jsonl_audit_journal_runtime_ready, repair_jsonl_audit_journal,
-    verify_jsonl_audit_journal,
-};
-pub use awareness::{CodebaseAwarenessConfig, CodebaseAwarenessEngine, CodebaseAwarenessSnapshot};
-pub use bootstrap::{
-    BootstrapPolicy, BootstrapReport, BootstrapTask, BootstrapTaskStatus, PluginBootstrapExecutor,
-    plugin_bridge_is_high_risk_auto_apply,
-};
-pub use clock::{Clock, FixedClock, SystemClock};
-pub use connector::{
-    ConnectorExtensionAdapter, ConnectorPlane, ConnectorTier, CoreConnectorAdapter,
-};
-pub use contracts::{
-    Capability, CapabilityToken, ConnectorCommand, ConnectorOutcome, ExecutionRoute, Fault,
-    HarnessKind, HarnessOutcome, HarnessRequest, Namespace, TaskIntent, TaskState,
-};
-pub use errors::{
-    AuditError, ConnectorError, HarnessError, IntegrationError, KernelError, MemoryPlaneError,
-    PackError, PolicyError, RuntimePlaneError, ToolPlaneError,
-};
-pub use harness::{HarnessAdapter, HarnessBroker};
-pub use integration::{
-    AutoProvisionAgent, AutoProvisionRequest, ChannelConfig, IntegrationCatalog, IntegrationHotfix,
-    ProviderConfig, ProviderTemplate, ProvisionAction, ProvisionPlan,
-};
-pub use kernel::{ConnectorDispatch, Kernel, KernelBuilder, KernelDispatch, LoongKernel};
-pub use loong_plugin_sdk::PluginChannelBridgeContract as CanonicalPluginChannelBridgeContract;
-pub use memory::{
-    CoreMemoryAdapter, MemoryCoreOutcome, MemoryCoreRequest, MemoryExtensionAdapter,
-    MemoryExtensionOutcome, MemoryExtensionRequest, MemoryPlane, MemoryTier,
-};
-pub use pack::VerticalPackManifest;
-pub use plugin::{
-    CURRENT_PLUGIN_HOST_API, CURRENT_PLUGIN_MANIFEST_API_VERSION, PACKAGE_MANIFEST_FILE_NAME,
-    PluginAbsorbReport, PluginCompatibility, PluginCompatibilityMode, PluginCompatibilityShim,
-    PluginContractDialect, PluginDescriptor, PluginDiagnosticCode, PluginDiagnosticFinding,
-    PluginDiagnosticPhase, PluginDiagnosticSeverity, PluginManifest, PluginScanReport,
-    PluginScanner, PluginSetup, PluginSetupMode, PluginSlotClaim, PluginSlotMode, PluginSourceKind,
-    PluginTrustTier, format_plugin_provenance_summary, plugin_provenance_summary_for_descriptor,
-};
-pub use plugin_ir::{
-    BridgeSupportMatrix, PluginActivationCandidate, PluginActivationInventoryEntry,
-    PluginActivationPlan, PluginActivationStatus, PluginBridgeKind, PluginChannelBridgeContract,
-    PluginChannelBridgeReadiness, PluginCompatibilityShimSupport, PluginIR, PluginRuntimeProfile,
-    PluginRuntimeScaffoldDefaults, PluginSetupReadiness, PluginSetupReadinessContext,
-    PluginTranslationReport, PluginTranslator, canonical_channel_bridge_contract,
-    evaluate_plugin_setup_requirements, plugin_runtime_scaffold_defaults,
-};
-pub use policy::{PolicyContext, PolicyDecision, PolicyEngine, PolicyRequest, StaticPolicyEngine};
-pub use policy_ext::{PolicyExtension, PolicyExtensionChain, PolicyExtensionContext};
-pub use runtime::{
-    CoreRuntimeAdapter, RuntimeCoreOutcome, RuntimeCoreRequest, RuntimeExtensionAdapter,
-    RuntimeExtensionOutcome, RuntimeExtensionRequest, RuntimePlane, RuntimeTier,
-};
-pub use task_supervisor::TaskSupervisor;
-pub use tool::{
-    CoreToolAdapter, ToolConcurrencyClass, ToolCoreOutcome, ToolCoreRequest, ToolExtensionAdapter,
-    ToolExtensionOutcome, ToolExtensionRequest, ToolPlane, ToolTier,
-};
+use loac::{ActorOwner, ActorRef, CallError, prelude::*};
 
-pub mod test_support;
+use contracts::capability::Capabilities;
+use thiserror::Error;
+
+use crate::access::fs::FsAccess;
+use crate::policy::PolicyContext;
+use crate::policy::action::{ActionMeta, Denied, Granted};
+use crate::policy::engine::PolicyEngine;
+
+pub struct Kernel {
+    policy_engine: PolicyEngine,
+}
+
+#[actor(mailbox)]
+impl Actor for Kernel {
+    type SpawnArgs = PolicyEngine;
+
+    async fn init(policy_engine: Self::SpawnArgs, _: &mut ActorScope<'_, Self>) -> Self {
+        Self { policy_engine }
+    }
+}
+
+#[derive(Message)]
+#[message(reply = Result<Granted<A>, Denied>)]
+pub struct PolicyEvent<A: ActionMeta> {
+    action: A,
+    context: PolicyContext,
+}
+
+impl<A: ActionMeta> SyncHandler<PolicyEvent<A>> for Kernel {
+    fn handle(
+        &mut self,
+        msg: PolicyEvent<A>,
+        _scope: &mut ActorScope<Self>,
+    ) -> Result<Granted<A>, Denied> {
+        self.policy_engine.grant(msg.context, msg.action)
+    }
+}
+
+/// Trusted gateway from application code into the kernel policy actor.
+///
+/// Keep this value out of untrusted model output and tool inputs. The generic
+/// [`grant`](Self::grant) method is an assembly boundary: only assembly code
+/// should call it with concrete actions, while caller-facing APIs such as
+/// [`FsAccess`](crate::access::fs::FsAccess) narrow it into fixed operations.
+#[derive(Clone)]
+pub struct Facade {
+    handle: ActorRef<Kernel>,
+    capabilities: Capabilities,
+}
+
+#[derive(Debug, Error)]
+pub enum GrantSendError {
+    #[error(transparent)]
+    Denied(#[from] Denied),
+    #[error("call error: {0}")]
+    CallError(#[from] CallError),
+}
+
+impl Facade {
+    #[must_use]
+    pub fn for_owner(owner: &ActorOwner<Kernel>, capabilities: Capabilities) -> Self {
+        Self {
+            handle: owner.actor_ref(),
+            capabilities,
+        }
+    }
+
+    pub async fn grant<A: ActionMeta>(&self, action: A) -> Result<Granted<A>, GrantSendError> {
+        Ok(self
+            .handle
+            .call(PolicyEvent {
+                action,
+                context: PolicyContext::new(self.capabilities),
+            })
+            .await??)
+    }
+}
+
+impl Facade {
+    #[must_use]
+    pub fn fs(&self) -> FsAccess<'_> {
+        FsAccess::new(self)
+    }
+}
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    use std::borrow::Cow;
 
-#[cfg(test)]
-#[test]
-fn unknown_concurrency_class_requires_serial_execution() {
-    assert!(!ToolConcurrencyClass::ReadOnly.requires_serial_execution());
-    assert!(ToolConcurrencyClass::Mutating.requires_serial_execution());
-    assert!(ToolConcurrencyClass::Unknown.requires_serial_execution());
-    assert_eq!(ToolConcurrencyClass::Unknown.as_str(), "unknown");
+    use contracts::capability::{Capabilities, Capability};
+    use loac::Shutdown;
+    use serde_json::Value;
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct TestAction;
+
+    impl ActionMeta for TestAction {
+        fn name(&self) -> Cow<'_, str> {
+            Cow::Borrowed("test")
+        }
+
+        fn payload(&self) -> Cow<'_, Value> {
+            Cow::Owned(Value::Null)
+        }
+
+        fn required_capabilities(&self) -> contracts::capability::Capabilities {
+            Capability::FsRead.into()
+        }
+    }
+
+    #[tokio::test]
+    async fn explicit_capability_policy_grants_unique_ids() {
+        let owner = loac::spawn::<Kernel>(PolicyEngine::allow_capabilities());
+        let facade = Facade::for_owner(&owner, Capability::FsRead.into());
+
+        let first = facade.grant(TestAction).await.unwrap();
+        let second = facade.grant(TestAction).await.unwrap();
+        assert_ne!(first.grant_id(), second.grant_id());
+        assert_eq!(first.action().name(), "test");
+
+        owner.shutdown(Shutdown::Stop).await;
+    }
+
+    #[tokio::test]
+    async fn default_policy_denies_without_a_matching_policy() {
+        let owner = loac::spawn::<Kernel>(PolicyEngine::default());
+        let facade = Facade::for_owner(&owner, Capabilities::empty());
+
+        let error = facade.grant(TestAction).await.unwrap_err();
+        assert!(matches!(error, GrantSendError::Denied(_)));
+
+        owner.shutdown(Shutdown::Stop).await;
+    }
 }

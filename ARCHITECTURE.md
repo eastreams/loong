@@ -1,212 +1,106 @@
 # Loong Architecture
 
-Loong is structured as a 13-crate Rust workspace with a strict acyclic
-dependency graph. The current tree contains two connected families: the
-governed runtime rail that ships today, and an already-landed additive SDK
-spine that is still transitional. The kernel continues to enforce layered
-execution planes separating contracts, security, execution, and orchestration
-concerns.
+Loong keeps crate dependencies one-way and sends protected side effects through
+one authorization path. Detailed API rules live in the module docs linked
+below.
 
-This file describes the architecture as it is currently governed in the
-repository. The crate split, layer names, and ownership map are deliberate
-decisions, but they are not presented as eternal truths. If the product shape
-changes, maintainers may revise this map explicitly through design work rather
-than by letting boundary drift accumulate accidentally.
+## Crate Relationships
 
-Public reader-facing architecture docs live under `site/`. This file remains
-the repository-native architecture map for contributors, source readers, and
-maintainers who need the codebase-level structure behind the Mintlify docs.
-
-## Route By Audience
-
-| If you are trying to... | Start here |
-| --- | --- |
-| read the public builder-facing architecture summary first | [site/build-on-loong/architecture.mdx](site/build-on-loong/architecture.mdx) |
-| understand the crate DAG and where changes usually belong in the repo | this file |
-| inspect the full layer specification | [Layered Kernel Design](docs/design-docs/layered-kernel-design.md) |
-| understand the broader repository docs layering | [docs/README.md](docs/README.md) |
-
-## Read This File When
-
-- you need the repository-native architecture map rather than the shorter public
-  docs summary
-- you are deciding which crate or layer should own a change
-- you are reviewing whether a contribution introduces boundary drift or hidden
-  sidecar execution
-- you need the codebase-level map before opening the deeper design docs
-
-## Section Map
-
-| Section | Read it when... |
-| --- | --- |
-| [Crate Structure](#crate-structure) | you need the direct DAG and the higher-level ownership split across crates |
-| [Practical Ownership Map](#practical-ownership-map) | you need the shortest source-driven explanation of what each crate family really owns |
-| [Layered Execution Model](#layered-execution-model) | you need the architecture layers and what each one protects |
-| [Design Principles](#design-principles) | you need the invariants that should survive implementation detail changes |
-| [Further Reading](#further-reading) | you need the deeper source docs behind one area |
-
-## Crate Structure
-
-The workspace DAG matters, but so does the ownership model behind it. Today the
-codebase has three manifest-level leaves (`loong-core`, `contracts`,
-`protocol`), five additive spine crates, four governed runtime support crates,
-one benchmark rail, and one shipped binary crate.
+Arrows point from a crate to its dependency:
 
 ```text
-direct workspace dependency DAG
-
-leaves
-- loong-core
-- contracts
-- protocol
-
-additive spine
-- loong-plugin-sdk -> loong-core
-- loong-runtime -> loong-core
-- loong-app-protocol -> loong-runtime
-- loong-cli -> loong-app-protocol
-
-governed runtime rail
-- kernel -> contracts, loong-plugin-sdk
-- bridge-runtime -> contracts, kernel, protocol
-- app -> contracts, kernel
-- spec -> contracts, kernel, protocol, bridge-runtime
-- bench -> kernel, spec
-- daemon (`loong`) -> app, loong-app-protocol, bench, bridge-runtime, contracts, kernel, protocol, spec
+loong-cli -> loong-kernel -> loong-contracts
+loong-kernel -> loac -> loac-macros
+loong-agent -> loong-context -> loong-contracts
+loong-agent -> loong-provider -> loac
+loong-agent -> loac
 ```
 
-No dependency cycles. This is non-negotiable.
+`loong-contracts` defines data shared between layers. `loong-kernel` builds the
+authorization model on those contracts and exposes domain access facades.
+`loong-context` stores working-context transcripts, and `loong-provider` streams
+upstream items through ordered failover; `loong-agent` is the application-side
+skeleton that composes those services. `loac` is the actor runtime and
+`loac-macros` its procedural-macro companion; kernel and agent use it for
+actors, while provider only depends on its `Writer` contract. Final application
+assembly belongs in `loong-cli`. A lower crate never depends on a crate above
+it.
 
-## Practical Ownership Map
+## Access -> Action -> Policy
 
-The 13 packages fall into two ownership families:
+```text
+caller or tool
+    -> Access
+    -> concrete Action
+    -> Policy
+    -> Granted<Action>
+    -> Action::run or backend
+```
 
-- Governed runtime rail: `contracts`, `kernel`, `protocol`, `bridge-runtime`,
-  `app`, `spec`, `bench`, and `daemon` own the shipping product path and the
-  policy-governed runtime.
-- Additive SDK spine: `loong-core`, `loong-plugin-sdk`, `loong-runtime`,
-  `loong-app-protocol`, and `loong-cli` define the newer task/session/runtime
-  contract spine. They already participate in the live graph through `kernel`
-  and `daemon`, but they do not yet own the shipped bootstrap path end-to-end.
+An [access API](crates/kernel/src/access.rs) is the only operation surface given to
+a caller. It exposes a narrow set of requests and does not reveal the kernel,
+session, runtime, backend, or a global context.
 
-| Crate | Role |
-|-------|------|
-| `loong-core` | Leaf object model for sessions, tasks, turns, artifacts, workspace context, and execution lifecycle facts used by the additive spine. |
-| `loong-plugin-sdk` | Plugin contract spine above `loong-core`. Owns the additive plugin-facing contract that `kernel` already consumes. |
-| `loong-runtime` | Runtime ownership spine above `loong-core`. Defines oneshot, interactive, and task-status runtime contracts without yet taking over the shipped bootstrap path. |
-| `loong-app-protocol` | App-facing task/session/turn protocol built on `loong-runtime`. This is the transitional boundary that `daemon` already consumes directly. |
-| `loong-cli` | First-party CLI shell spine library. Exists as Phase 2 scaffolding; it is not the shipping `loong` binary entrypoint today. |
-| `contracts` | Shared governed-runtime vocabulary: capability tokens, policy/audit types, runtime/tool/memory request-outcome shapes, task state, namespaces, and pack manifests. Zero internal dependencies. |
-| `kernel` | Governed execution core. Owns audit, policy, runtime/tool/memory/connector planes, harness brokerage, task supervision, plugin and integration control, bootstrap execution, architecture awareness, and canonical plugin contract translation. |
-| `protocol` | Transport and route foundation: frames, route resolution, capability-aware authorization, json-line transport, and linked in-memory transport primitives. Independent leaf crate. |
-| `bridge-runtime` | Shared managed bridge transport primitives for `http_json` and `process_stdio`, reused by both the spec rail and production bridge execution paths. |
-| `app` | Product/runtime layer. Owns providers, channels, tools, memory backends, chat/conversation/session logic, config loading, runtime environment helpers, and presentation-facing surfaces. Houses the feature-flagged product modules and the live chat/ask bootstrap helpers. |
-| `spec` | Deterministic execution rail. Owns runner specs, bootstrap builders, programmatic tool/spec execution, and test-facing runtime scaffolding that should stay out of daemon business logic. |
-| `bench` | Performance and pressure rail. Owns benchmark suites and gate enforcement on top of the spec/kernel surfaces instead of folding that logic into the normal runtime path. |
-| `daemon` | Operator assembly layer and the shipping binary crate (`loong`). Wires lower-layer crates into CLI and service entrypoints such as `onboard`, `ask`, `chat`, `doctor`, `gateway`, `tasks`, `skills`, plugin flows, migration flows, and benchmarks. |
+Tool and access boundaries differ in representation. Runtime tool discovery
+and dispatch erase the concrete tool implementation type. Access does not erase
+its action type: the concrete `A` remains intact through policy, grant, and
+execution so the backend receives `Granted<ConcreteAction>`.
 
-## Layered Execution Model
+Each request becomes a [concrete action](crates/kernel/src/policy/action.rs).
+`ActionMeta` gives policy the action's name, payload, and required capabilities;
+generic policy may inspect it through a borrowed `dyn ActionMeta` view, but that
+does not erase the owned action. The kernel still owns the concrete `A`, so the
+resulting proof remains `Granted<A>`. An action describes what should happen,
+not where it runs.
 
-The kernel uses a layered model where each layer has clear responsibilities and strict
-boundaries. Higher layers depend on lower layers but never the reverse.
+[Policy](crates/kernel/src/policy.rs) evaluates that same action but does not
+execute it. The capabilities allowed by the
+[policy context](crates/kernel/src/policy.rs) are a ceiling; the current context
+cannot expand its own authority. Whether a parent may evaluate the same action
+above that ceiling is still unresolved (see
+[Open Architecture Questions](docs/open-questions.md)).
 
-### L0 -- Contract Layer
+After policy allows the action and the decision is recorded, the
+[policy engine](crates/kernel/src/policy/engine.rs) may create `Granted<A>`.
+`Granted<A>` binds the recorded `GrantId` to the concrete action and is the only
+proof accepted by side-effect code. If `A` implements `Action<Cx>`,
+`Granted<A>::run` consumes the grant and calls `Action::run`. Otherwise, a
+backend may consume `Granted<ConcreteAction>` directly. A backend must not
+accept a raw action and repeat the permission check itself.
 
-The stable kernel ABI surface. Defines request/outcome structs, the capability model, and
-the route model. Backward compatibility is enforced: no breaking changes to public types.
-Serialization format and field behavior are part of the kernel contract.
+`GrantId` only identifies the grant record. The concrete policy implementation
+assigns its opaque UUID; callers have no ordering contract. It does not
+authorize execution, and it is not a second proof.
 
-**Key files:** `contracts.rs`
+## Runtime Actor Model
 
-### L1 -- Security and Governance
+[`loac`](crates/actor/src/lib.rs) implements the Tokio actor contract:
+bounded mailbox admission, an independent `max_in_flight` limit, separate
+`ActorRef` and `ActorOwner` roles, actor-owned child lifecycles,
+ready/owned/interleaved/exclusive reply scheduling, and Stop/Drain/Kill
+termination. This settles actor-local ownership and scheduling.
 
-Every external action must pass through L1. The policy engine evaluates tool calls before
-dispatch: each decision combines model intent with a deterministic policy check. Policy
-extensions can only tighten behavior, never weaken core policy.
+[`loong-kernel`](crates/kernel/src/lib.rs) has migrated its policy actor to
+`loac`. The owner of each root actor tree, and how that ownership relates to
+product session lifecycle, remain open questions; do not reintroduce a
+compatibility facade that hides those gaps. See
+[Open Architecture Questions](docs/open-questions.md).
 
-- Capability token issue/revoke/authorize lifecycle
-- Human approval gates (per-call or one-time full-access, configurable)
-- Plugin security scanning with `block_on_high` hard gate
-- External profile integrity: checksum pinning + ed25519 signature verification
-- JSONL SIEM export lane with optional fail-closed mode
-- Denylist takes highest precedence over all grants
+### Actor Handle Boundary
 
-**Key files:** `policy.rs`, `policy_ext.rs`
+`ActorRef<A>` holds one typed `Arc<ActorInner<A>>`. The inner value contains
+the mailbox sender and lifecycle control. `ActorOwner<A>` adds RAII ownership
+without another allocation. `ChildSet` stores `Arc<dyn ErasedActor>`. That
+pointer shares the typed inner allocation. Dynamic dispatch stays on cold
+ownership paths.
 
-### L2 -- Execution Planes
+Queued calls retain only `Weak<ActorInner<A>>`. A strong edge would make the
+queue own its sender. That creates a cycle. Dispatch creates a strong typed
+permit only after dequeue. `Mode` remains the lifecycle authority. A private
+`Notify` only wakes the actor task.
 
-Four parallel planes, each following the Core/Extension adapter pattern:
+## Open Questions
 
-| Plane | Core Adapter | Extension Adapter |
-|-------|-------------|-------------------|
-| Runtime | Minimal trusted substrate | Rich behavior (WASM, process bridges) |
-| Tool | Built-in tools (`shell.exec`, `file.read`, `file.write`, `file.edit`) | Community tool adapters |
-| Memory | Base storage (SQLite) | Semantic retrieval enrichment |
-| Connector | Direct HTTP/protocol calls | Third-party integration adapters |
-
-Extension path never bypasses core path. Core interfaces remain stable and minimal.
-Each plane supports explicit default-core selection for deterministic orchestration.
-
-**Key files:** `runtime.rs`, `tool.rs`, `memory.rs`, `connector.rs`
-
-### L3 -- Orchestration
-
-Routes task execution to harness adapters, enforces pack boundaries and capability
-boundaries, and bridges L1 policy decisions to L2 execution. The orchestrator is
-policy-aware but business-logic-light.
-
-**Key files:** `harness.rs`, `kernel.rs`
-
-### Higher Layers
-
-| Layer | Scope |
-|-------|-------|
-| L4 -- Observability | Audit timeline, sink abstraction, deterministic clocking for reproducible tests |
-| L5 -- Vertical Packs | Domain packaging contract (`pack_id`, version, capabilities, allowed connectors) |
-| L5.5 -- Protocol Foundation | Transport frame contracts, typed route resolution, bounded channel primitives |
-| L6 -- Integration Control | Autonomous provider/channel provisioning, plugin scanning, hotplug/hotfix workflows |
-| L7 -- Plugin Translation | Multi-language plugin IR, bridge-kind inference, activation plan generation |
-| L8 -- Self-Awareness | Codebase snapshots, architecture guard policy, immutable-core mutation protection |
-| L9 -- Bootstrap | Plugin activation lifecycle (apply/defer/skip), policy-bounded bootstrap execution |
-
-Read the deeper design spec before changing semantics at these layers. This
-file is the map, not the full per-layer contract.
-
-## Design Principles
-
-These are the core principles for anyone working in this codebase. They are enforced
-mechanically where possible.
-
-Some of these principles are durable invariants, while others describe the
-current preferred architecture shape. The right way to change the latter is not
-to quietly code around them, but to first make the design case and then update
-the documented contract deliberately.
-
-1. **Kernel-first** -- kernel-governed execution routes through the kernel's capability, policy, and audit system. Remaining direct compatibility paths must be explicit and are follow-up work, not implicit shadow routing.
-2. **No breaking changes** -- new features are additive only. Existing public API signatures stay unchanged.
-3. **Capability-gated by default** -- every tool call, memory operation, and connector invocation requires a valid `CapabilityToken`.
-4. **Audit everything security-critical** -- policy denials, token lifecycle events, and module invocations all emit structured audit events.
-5. **13-crate DAG, no cycles** -- dependency direction is non-negotiable.
-6. **Tests first** -- if a behavior isn't tested, it doesn't exist. All tests pass at every commit.
-7. **Proven technology preferred** -- choose well-understood, composable dependencies over opaque packages.
-8. **Repository is the system of record** -- design decisions and architectural context live in `docs/`, not in chat threads.
-9. **Automate first** -- prefer linters, CI gates, and pre-commit hooks over code review comments.
-10. **Strictly avoid over-engineering** -- the minimum complexity for the current task is the right amount.
-
-## Further Reading
-
-| Topic | Document |
-|-------|----------|
-| Repository docs layering | [Repository Docs Map](docs/README.md) |
-| Full layer specification (L0-L9) | [Layered Kernel Design](docs/design-docs/layered-kernel-design.md) |
-| Runtime/bootstrap surface map | [Runtime Entrypoint and Bootstrap Map](docs/design-docs/runtime-entrypoint-map.md) |
-| Harness engineering & backpressure | [Harness Engineering](docs/design-docs/harness-engineering.md) |
-| Design decisions, patterns & catalog | [Design Docs Index](docs/design-docs/index.md) |
-| Security model & gaps | [Security](docs/SECURITY.md) |
-| Stage-based roadmap | [Roadmap](docs/ROADMAP.md) |
-| Build and kernel invariants | [Reliability](docs/RELIABILITY.md) |
-| Product principles | [Product Sense](docs/PRODUCT_SENSE.md) |
-| Repository support references | [References Index](docs/references/README.md) |
-| Release support conventions | [Release Docs Convention](docs/releases/README.md) |
-| Contributor workflow and recipes | [CONTRIBUTING.md](CONTRIBUTING.md) |
-| Examples and spec files | [Examples](examples/README.md) |
+Session, turn and step semantics, active cancellation and supervision,
+execution-plane ownership, approval audit, and runtime extension isolation
+remain unresolved. See [Open Architecture Questions](docs/open-questions.md).

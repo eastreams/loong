@@ -1,0 +1,43 @@
+error[E0271]: type mismatch resolving `<Manual as MessageConfig>::Sender == NoSender`
+  --> tests/ui/fail/disabled_with_mailbox.rs:32:6
+   |
+32 | impl Actor for Manual {
+   |      ^^^^^ type mismatch resolving `<Manual as MessageConfig>::Sender == NoSender`
+   |
+note: expected this to be `NoSender`
+  --> tests/ui/fail/disabled_with_mailbox.rs:14:19
+   |
+14 |     type Sender = UnboundedSender<Self>;
+   |                   ^^^^^^^^^^^^^^^^^^^^^
+   = note: expected struct `NoSender`
+              found struct `loac::transport::UnboundedSender<Manual>`
+   = note: required for `loac::scheduling::Disabled` to implement `SchedulerProfile<Manual>`
+note: required by a bound in `Actor`
+  --> src/actor.rs
+   |
+   | pub trait Actor:
+   |           ----- required by a bound in this trait
+   |     MessageConfig<Inbox: RuntimeInbox<Self>, Scheduler: SchedulerProfile<Self>>
+   |                                                         ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Actor`
+
+error[E0271]: type mismatch resolving `<Manual as MessageConfig>::Inbox == NoInbox`
+  --> tests/ui/fail/disabled_with_mailbox.rs:32:6
+   |
+32 | impl Actor for Manual {
+   |      ^^^^^ type mismatch resolving `<Manual as MessageConfig>::Inbox == NoInbox`
+   |
+note: expected this to be `NoInbox`
+  --> tests/ui/fail/disabled_with_mailbox.rs:15:18
+   |
+15 |     type Inbox = UnboundedInbox<Self>;
+   |                  ^^^^^^^^^^^^^^^^^^^^
+   = note: expected struct `NoInbox`
+              found struct `loac::transport::UnboundedInbox<Manual>`
+   = note: required for `loac::scheduling::Disabled` to implement `SchedulerProfile<Manual>`
+note: required by a bound in `Actor`
+  --> src/actor.rs
+   |
+   | pub trait Actor:
+   |           ----- required by a bound in this trait
+   |     MessageConfig<Inbox: RuntimeInbox<Self>, Scheduler: SchedulerProfile<Self>>
+   |                                                         ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Actor`

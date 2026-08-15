@@ -1,0 +1,13 @@
+error[E0599]: the method `spawn_child` exists for mutable reference `&mut ActorScope<'_, Parent>`, but its trait bounds were not satisfied
+  --> tests/ui/fail/spawn_child_without_capability.rs:21:23
+   |
+21 |         let _ = scope.spawn_child::<Child>(());
+   |                       ^^^^^^^^^^^ method cannot be called on `&mut ActorScope<'_, Parent>` due to unsatisfied trait bounds
+   |
+  ::: src/supervision.rs
+   |
+   | pub struct Disabled;
+   | ------------------- doesn't satisfy `loac::supervision::Disabled: ChildSpawner`
+   |
+   = note: the following trait bounds were not satisfied:
+           `loac::supervision::Disabled: ChildSpawner`

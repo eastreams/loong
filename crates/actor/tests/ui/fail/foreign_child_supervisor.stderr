@@ -1,0 +1,7 @@
+error[E0046]: not all trait items implemented, missing: `__runtime`
+ --> tests/ui/fail/foreign_child_supervisor.rs:6:1
+  |
+6 | impl ChildSupervisor for ForeignChildren {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ missing `__runtime` in implementation
+  |
+  = help: implement the missing item: `fn __runtime(&mut self, _: supervision::runtime::Seal) -> &mut impl supervision::runtime::RuntimeChildren { todo!() }`

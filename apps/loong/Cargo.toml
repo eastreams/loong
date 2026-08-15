@@ -1,0 +1,15 @@
+[package]
+name = "loong-cli"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "loong"
+path = "src/main.rs"
+
+[dependencies]
+kernel.workspace = true
+
+[lints]
+workspace = true

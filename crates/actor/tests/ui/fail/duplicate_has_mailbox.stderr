@@ -1,0 +1,9 @@
+error[E0119]: conflicting implementations of trait `HasMailbox` for type `Mailboxed`
+  --> tests/ui/fail/duplicate_has_mailbox.rs:15:1
+   |
+15 | impl HasMailbox for Mailboxed {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: conflicting implementation in crate `loac`:
+           - impl<A> HasMailbox for A
+             where A: Actor, <A as MessageConfig>::Sender: MessageSender<A>, <A as MessageConfig>::Inbox: MessageInbox<A>, <A as MessageConfig>::Scheduler: ReplyScheduler<A>, <A as MessageConfig>::Sender: ?Sized, <A as MessageConfig>::Inbox: ?Sized, <A as MessageConfig>::Scheduler: ?Sized;

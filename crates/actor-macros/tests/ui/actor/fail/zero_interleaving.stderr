@@ -1,0 +1,5 @@
+error: interleaved limit must be greater than zero
+ --> tests/ui/actor/fail/zero_interleaving.rs:3:43
+  |
+3 | #[actor_api::actor(mailbox, interleaved = 0)]
+  |                                           ^
