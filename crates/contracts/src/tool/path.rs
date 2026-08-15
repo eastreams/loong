@@ -13,7 +13,7 @@ pub enum ToolPathSegmentError {
     ReservedCharacter(char),
 }
 
-/// A valid part of tool path, which does not contain '.' or '/'
+/// A valid tool-path segment, containing neither '.' nor '/'.
 #[derive(Debug, Clone, Hash)]
 pub struct ToolPathSegment(String);
 

@@ -3,8 +3,8 @@
 //!
 //! The types below describe those decisions. Evaluation has no operational
 //! error channel: failures return deny, while `Abstain` and `SkipChain` are
-//! deliberate chain-control decisions. Grant issuance and parent requests use
-//! the same total boundary: callers receive either a grant or a final denial.
+//! deliberate chain-control decisions. Final evaluation has exactly three
+//! outcomes: `Allow`, `Deny`, and `RequiresApproval`.
 
 use alloc::string::String;
 
@@ -29,12 +29,15 @@ pub enum PolicyDecision {
     Middle(PolicyDecisionMiddle),
 }
 
+/// Outcome of one policy evaluation, which may still be a middle
+/// chain-control decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolicyResult {
     pub decision: PolicyDecision,
     pub reason: Option<String>,
 }
 
+/// Outcome of one evaluation that has already reached a final decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolicyResultFinal {
     pub decision: PolicyDecisionFinal,
