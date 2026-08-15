@@ -139,9 +139,8 @@ async fn kill_drops_current_and_queued_work_without_cleanup() {
     assert!(lock(&cleanup).is_empty());
 }
 
-// The destructor blocks after confirming cancellation.
-// Killed must remain unpublished until that barrier opens.
-// Kill joins owned reply cancellation before publishing exit.
+// The destructor blocks after confirming cancellation; Kill must join owned
+// reply cancellation before publishing exit.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn kill_joins_owned_reply_cancellation_before_publishing_exit() {
     let mut owner = actor_with_capacity(1).owner;

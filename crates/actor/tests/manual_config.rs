@@ -39,7 +39,6 @@ impl Actor for ManualActor {
     }
 }
 
-// Manual configs can omit the complete reply scheduler state.
 // A manual no-mailbox config omits reply runtime state and still runs.
 #[tokio::test]
 async fn no_mailbox_omits_reply_runtime_state() {

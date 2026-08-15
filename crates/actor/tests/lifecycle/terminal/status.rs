@@ -123,10 +123,10 @@ impl Wake for ReentrantShutdownWaker {
     }
 }
 
-// Lifecycle observers may use any safe Waker. Requesting Stop on an OS thread
-// makes synchronous reentry observable without allowing the old self-deadlock
-// to freeze this current-thread runtime or hide behind an async timeout.
-// Lifecycle notification allows reentrant shutdown from a safe waker.
+// A lifecycle notification may reenter shutdown from a safe waker. The
+// earlier implementation deadlocked on this synchronous reentry; requesting
+// Stop from an OS thread makes it observable without freezing this
+// current-thread runtime or hiding behind an async timeout.
 #[tokio::test(flavor = "current_thread")]
 async fn lifecycle_notification_allows_reentrant_shutdown_from_a_safe_waker() {
     let owner = Arc::new(loac::spawn::<ExitedActor>(()));
