@@ -10,12 +10,8 @@ use async_trait::async_trait;
 
 /// A stateless upstream that streams items into a caller-owned writer.
 ///
-/// `stream` either commits and resolves when the stream ends, or fails in one
-/// of two phases described by [`StreamError`]:
-///
-/// - [`StreamError::Rejected`] before committing, which failover can retry;
-/// - [`StreamError::Disconnected`] after committing, which is terminal
-///   because items may already have been emitted and cannot be replayed.
+/// `stream` either commits and resolves when the stream ends, or fails as
+/// described by [`StreamError`], which splits failures at the commit boundary.
 ///
 /// `Req`, `Item`, and `Out` are trait parameters, not method parameters, so
 /// the trait stays dyn-compatible. `Out` is any [`loac::Writer`] of `Item`.
@@ -42,7 +38,7 @@ pub enum StreamError<Req> {
     Rejected {
         /// Why the provider declined, before committing.
         reason: String,
-        /// The request, returned for retry by the next provider.
+        /// The original request, returned with this rejection.
         req: Req,
     },
 
@@ -73,7 +69,7 @@ impl<Req> StreamError<Req> {
 /// Ordered failover across a fixed set of providers.
 ///
 /// `Failover` is itself a [`Provider`], so it composes: one failover can be an
-/// entry in another failover. The first provider that commits wins; later
+/// entry in another failover. The first provider that succeeds wins; later
 /// providers are not consulted for this stream. A committed provider that
 /// disconnects ends the failover immediately.
 ///
@@ -112,7 +108,8 @@ where
             match provider.stream(req, &mut *out).await {
                 Ok(()) => return Ok(()),
                 Err(StreamError::Rejected { req: returned, .. }) => {
-                    // Per-provider reason is deferred to tracing.
+                    // Individual rejection reasons are dropped; failover
+                    // aggregates one final rejection.
                     req = returned;
                 }
                 Err(StreamError::Disconnected { reason }) => {
