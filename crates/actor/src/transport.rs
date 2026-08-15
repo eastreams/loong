@@ -17,24 +17,26 @@
 //! Its completion order defines mailbox FIFO.
 //! The inbox returns each carrier exactly once.
 //! It preserves FIFO while returning them.
-//! `poll_recv(Pending)` registers the supplied Waker.
+//! `poll_recv` returning `Poll::Pending` registers the Waker.
 //! Progress or closure wakes that Waker.
-//! `poll_recv(None)` requires closure and an empty inbox.
+//! `Poll::Ready(None)` requires closure and an empty inbox.
 //! `try_recv` and `is_empty` must agree.
 //! `close` is idempotent and preserves accepted carriers.
 //! It permanently rejects new reservations.
 //! `reserve_owned` is cancellation-safe.
 //! Persistent waiters receive reservations in FIFO order.
 //! Dropping any reservation releases its capacity.
-//! `enqueue(Err)` only reports permanent closure.
+//! `enqueue` returning `Err(_)` only reports permanent closure.
 //! It returns the unchanged carrier.
 //! `enqueue` never invokes user code.
 //! It never blocks, panics, or reenters Loong.
 //! Inbox methods never panic.
 //! Immediate operations never block.
-//! `close` may wake reservation waiters.
-//! No implementation drops an accepted carrier.
-//! Inbox destruction retains no carrier.
+//! `close` must wake pending reservation waiters so each `reserve_owned`
+//! future resolves `None` after closure.
+//! No transport operation drops an accepted carrier.
+//! Runtime cleanup is the only discard path: shutdown drains the queue, and
+//! inbox destruction must not retain any carrier.
 
 use std::{
     future::Future,
@@ -113,10 +115,7 @@ pub enum TryReserveError {
 
 /// A reserved right to enqueue one carrier.
 ///
-/// Dropping it must release reserved capacity.
-/// Enqueue must not block, panic, or reenter Loong.
-/// Success must retain exactly one carrier.
-/// Failure must return the original carrier.
+/// Enqueue and drop must follow the [module laws](self).
 pub trait MessageReservation<A: Actor> {
     /// Transfers one carrier into its reserved slot.
     fn enqueue(self, envelope: ErasedEnvelope<A>) -> Result<(), ErasedEnvelope<A>>;
@@ -124,7 +123,7 @@ pub trait MessageReservation<A: Actor> {
 
 /// Shared message admission for one actor.
 ///
-/// Successful enqueue order defines mailbox FIFO order.
+/// Enqueue ordering and reservations follow the [module laws](self).
 pub trait MessageSender<A: Actor>: Send + Sync + 'static {
     /// A reservation borrowing this sender.
     type Reservation<'a>: MessageReservation<A> + 'a
@@ -142,9 +141,8 @@ pub trait MessageSender<A: Actor>: Send + Sync + 'static {
 
     /// Waits for one owned reservation.
     ///
-    /// `None` means permanent closure.
-    /// This wait must be cancellation-safe.
-    /// Persistent waiters must progress in FIFO order.
+    /// `None` means permanent closure. Cancellation safety and waiter order
+    /// follow the [module laws](self).
     fn reserve_owned(
         &self,
     ) -> impl Future<Output = Option<Self::OwnedReservation>> + Send + use<A, Self>;
@@ -152,10 +150,7 @@ pub trait MessageSender<A: Actor>: Send + Sync + 'static {
 
 /// Inbox operations required by every actor task.
 ///
-/// `close` must permanently close new reservations.
-/// Closing must preserve already accepted carriers.
-/// `is_empty` must agree with `try_recv`.
-/// Inbox destruction must not retain any carrier.
+/// Polling, closing, and destruction follow the [module laws](self).
 pub trait RuntimeInbox<A: Actor>: Send + 'static {
     /// Polls the next accepted carrier.
     ///

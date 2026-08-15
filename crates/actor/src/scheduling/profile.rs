@@ -83,7 +83,6 @@ impl Disabled {
 /// The scheduler for mailbox actors without interleaving.
 ///
 /// Ready replies require no scheduler storage.
-/// Owned replies run in separate Tokio tasks.
 /// Exclusive replies run one at a time.
 pub struct Serial<A: Actor> {
     pub(super) exclusive: Exclusive<A>,

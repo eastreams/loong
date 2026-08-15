@@ -28,7 +28,7 @@ pub(super) enum InterleavedPoll {
     Progress,
     /// The budget ended before the current sweep finished.
     ///
-    /// The caller must stop polling ready lanes and return `Pending`.
+    /// The caller must stop polling ready lanes and return [`Poll::Pending`].
     BudgetExhausted,
 }
 
@@ -99,7 +99,8 @@ impl<A: Actor> Drop for Queue<A> {
 // Each call polls at most ACTIVE_POLL_BUDGET items.
 // A truncated sweep self-wakes and returns BudgetExhausted.
 // The deque front and `remaining` preserve its recovery point.
-// One user poll may still run without returning.
+// A future may complete during that sweep, but the caller must still
+// return Poll::Pending after BudgetExhausted.
 //
 // Every item receives the same proxy waker.
 // Its generation separates future notifications from continuation wakes.
