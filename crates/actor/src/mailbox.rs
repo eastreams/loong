@@ -94,11 +94,10 @@ impl<A: Actor> ActorInbox<A> {
 
 impl<A: Actor> Drop for ActorInbox<A> {
     fn drop(&mut self) {
-        // Runtime teardown closes lifecycle admission first.
-        // Bounded reservations rely on this ordering.
-        // Outstanding permits therefore cannot refill this queue.
-        // This Drop drains the remaining queue synchronously.
-        // Abort with a huge queue can occupy this poll.
+        // The actor task leaves Running before inbox destruction (see `admit`),
+        // so outstanding permits cannot refill this queue. This Drop drains
+        // the remaining queue synchronously.
+        // Abort with a huge queue can occupy task teardown.
         self.close();
         while self.try_discard() {}
     }

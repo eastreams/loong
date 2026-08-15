@@ -371,13 +371,15 @@ impl<A: Actor> ActorInner<A> {
     /// `Ok(())` means the envelope entered the mailbox.
     /// Later shutdown may still discard it.
     ///
-    /// Closed admission returns the permit and original envelope unchanged.
-    /// The caller then releases capacity and recovers the message.
-    /// Both actions happen after the transaction ends.
+    /// When the lifecycle gate is no longer `Running`, admission returns the
+    /// permit and original envelope unchanged. The caller then releases
+    /// capacity and recovers the message. Both actions happen after the
+    /// transaction ends.
     ///
-    /// Only transport enqueue runs inside the transaction.
-    /// Its contract forbids callbacks and lifecycle reentry.
-    /// It may wake only the private actor task.
+    /// The only transport-side operation inside the transaction is
+    /// `permit.enqueue`; `ErasedEnvelope` construction is runtime-owned and
+    /// runs no user code. The transport contract forbids callbacks and
+    /// lifecycle reentry, and may wake only the private actor task.
     /// No user destructor runs inside it.
     /// The actor task leaves Running before inbox destruction.
     /// Bounded permits rely on this ordering.
