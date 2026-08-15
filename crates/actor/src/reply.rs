@@ -16,8 +16,7 @@
 //! Move owned handles into it.
 //! Recreate borrowed views inside the future.
 //! Tokio polls it in a separate task.
-//! Dispatched owned tasks are unbounded.
-//! Mailbox capacity does not bound them.
+//! Dispatched owned tasks are unbounded; mailbox capacity does not bound them.
 //! The actor tracks each task until it stops.
 //! Stop and Drain wait for every task.
 //! Kill and actor failure request cancellation, then wait.

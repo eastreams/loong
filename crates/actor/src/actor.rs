@@ -179,7 +179,7 @@ where
 /// An actor with public message transport operations.
 ///
 /// [`#[actor(mailbox)]`](macro@crate::actor) selects this capability automatically.
-/// Fixed, dynamic, and unbounded mailboxes all qualify.
+/// Fixed, dynamic, and unbounded mailbox limits all qualify.
 /// Actors without `mailbox` can still supervise children.
 /// Their [`ActorRef`](crate::ActorRef) values retain lifecycle methods.
 #[diagnostic::on_unimplemented(
@@ -244,7 +244,8 @@ pub trait Message: Send + 'static {
     /// The typed value eventually returned to the caller.
     ///
     /// A reply may outlive synchronous handler dispatch and may cross a Tokio
-    /// task boundary to its caller, so it must be owned, `Send`, and `'static`.
+    /// task boundary to its caller, so it must be `Send + 'static` and cannot
+    /// borrow from the actor.
     type Reply: Send + 'static;
 }
 

@@ -124,7 +124,7 @@ impl<M> TrySendError<M> {
         self.kind
     }
 
-    /// Returns the message without retrying or dropping it.
+    /// Same contract as [`SendError::into_message`].
     pub fn into_message(self) -> M {
         self.message
     }
@@ -140,24 +140,25 @@ impl<M> fmt::Debug for TrySendError<M> {
     }
 }
 
-/// The reason a synchronous admission attempt failed.
+/// The reason a synchronous call admission attempt failed.
+///
+/// Variants mirror [`TrySendErrorKind`].
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 #[non_exhaustive]
 pub enum TryCallErrorKind {
-    /// No mailbox slot was immediately available.
+    /// See [`TrySendErrorKind::Full`].
     #[error("the actor mailbox is full")]
     Full,
 
-    /// The actor no longer accepts new messages.
+    /// See [`TrySendErrorKind::Closed`].
     #[error("the actor is closed to new messages")]
     Closed,
 }
 
 /// A failed [`ActorRef::try_call`](crate::ActorRef::try_call) attempt.
 ///
-/// The original message is retained and can be recovered with
-/// [`into_message`](Self::into_message). Neither failure kind commits the
-/// message, so retrying it elsewhere is safe.
+/// Same contract as [`TrySendError`]: the message is retained and neither
+/// failure kind commits it.
 #[derive(thiserror::Error)]
 #[error("{kind}")]
 pub struct TryCallError<M> {
@@ -170,12 +171,12 @@ impl<M> TryCallError<M> {
         Self { kind, message }
     }
 
-    /// Returns why admission failed.
+    /// Same contract as [`TrySendError::kind`].
     pub const fn kind(&self) -> TryCallErrorKind {
         self.kind
     }
 
-    /// Returns the message without retrying or dropping it.
+    /// Same contract as [`SendError::into_message`].
     pub fn into_message(self) -> M {
         self.message
     }

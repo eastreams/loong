@@ -62,8 +62,6 @@ pub trait ActorFutureExt<A: Actor>: ActorFuture<A> {
     /// the combined future. There is no mailbox turn, extra interleaved slot, or
     /// cancellation point between source completion and `f`. If the combined
     /// future is cancelled before the source completes, `f` is never called.
-    ///
-    /// The returned [`Map`] supports a source future that is not `Unpin`.
     fn map<F, U>(self, f: F) -> Map<Self, F>
     where
         Self: Sized,
@@ -82,8 +80,7 @@ pub trait ActorFutureExt<A: Actor>: ActorFuture<A> {
     ///
     /// Cancellation before the transition drops the first future and the unused
     /// closure. Cancellation after the transition drops the second future; the
-    /// completed first stage is not repeated. The returned [`Then`] supports both
-    /// stage futures when they are not `Unpin`.
+    /// completed first stage is not repeated.
     fn then<F, Fut>(self, f: F) -> Then<Self, Fut, F>
     where
         Self: Sized,
@@ -134,9 +131,8 @@ where
 pin_project! {
     /// An ordinary future viewed as an [`ActorFuture`].
     ///
-    /// This wrapper is created by [`IntoActorFuture::into_actor`], ignores the
-    /// actor and scope passed to each poll, and does not spawn or select a reply
-    /// scheduling mode. The wrapped future may be `!Unpin`.
+    /// Created by [`IntoActorFuture::into_actor`]; it ignores the actor and scope
+    /// passed to each poll. The wrapped future may be `!Unpin`.
     #[derive(Debug)]
     #[must_use = "futures do nothing unless polled"]
     pub struct FutureActor<A, F> {

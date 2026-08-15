@@ -5,12 +5,12 @@ use std::future::Future;
 
 use tokio::sync::mpsc;
 
-/// A minimal item writer.
+/// A writer that returns the item when the writer is closed.
 pub trait Writer<Item>
 where
     Item: Send,
 {
-    /// Writes one item, returning it if the writer is closed.
+    /// Writes one item.
     fn write(&mut self, item: Item) -> impl Future<Output = Result<(), Item>> + Send + '_;
 }
 

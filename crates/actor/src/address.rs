@@ -473,8 +473,8 @@ impl<M: Message> Recipient<M> for Arc<dyn Recipient<M>> {
     }
 }
 
-// A unit-reply message handle is also a `Writer`; `send` returns the message
-// when admission is closed.
+// A unit-reply message handle is also a `Writer`: `write` recovers the item
+// from `send`'s `SendError` when admission is closed.
 impl<M, R> Writer<M> for R
 where
     M: Message<Reply = ()>,
