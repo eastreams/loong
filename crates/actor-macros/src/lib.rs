@@ -19,7 +19,8 @@ mod message;
 /// - [`MessageConfig`][message-config];
 /// - [`SupervisionConfig`][supervision-config].
 ///
-/// The generated `MessageConfig` opens matched runtime state.
+/// The generated `MessageConfig` opens the actor's `Sender`, `Inbox`, and
+/// `Scheduler` state.
 /// Do not implement those traits again for the same actor.
 /// A bare attribute enables no optional capability.
 ///
@@ -125,8 +126,9 @@ pub fn actor(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Derives `loac::Message` for a struct, enum, or union.
 ///
 /// The reply type defaults to `()`. Use `#[message(reply = Type)]` to select
-/// another owned `Send + 'static` Rust type. Generic parameters and existing
-/// `where` predicates are preserved.
+/// another `Send + 'static` Rust type. Generic parameters and existing
+/// `where` predicates are preserved. The derive adds `Send + 'static` bounds
+/// to both the message type and the reply type.
 #[proc_macro_derive(Message, attributes(message))]
 pub fn derive_message(input: TokenStream) -> TokenStream {
     message::expand(input)
