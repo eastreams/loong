@@ -26,7 +26,9 @@ pub enum OpenError {
 ///
 /// Heads live inside the base directory as `<generation>.jsonl` in ascending
 /// order. The highest generation is the current context. `replace` publishes
-/// a new head and keeps the old ones; `append` mutates only the current head.
+/// a new head and keeps the old ones; `append` only buffers into the working
+/// context. A flush appends buffered items to the current head, or publishes
+/// the next head when a `replace` is pending.
 /// An exclusive advisory lock on the `lock` file inside the directory scopes
 /// ownership to one live store per host. The lock is released when the store
 /// drops.
@@ -66,9 +68,9 @@ impl DiskStore {
     /// Opens the store, takes the exclusive lock, and replays the current
     /// head.
     ///
-    /// Returns `Ok` only when no other live store holds the same base path.
-    /// [`OpenError::InUse`] reports a conflict. The lock is advisory and per
-    /// host; it is released when the store drops.
+    /// Returns `Ok` only when no other live store holds the same base path;
+    /// [`OpenError::InUse`] reports a conflict. The lock's scope and lifetime
+    /// are documented on [`DiskStore`](crate::disk::DiskStore).
     pub fn open(base: PathBuf) -> Result<Self, OpenError> {
         fs::create_dir_all(&base)?;
         let lock = log::open_lock_file(&base)?;

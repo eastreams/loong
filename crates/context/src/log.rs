@@ -45,7 +45,8 @@ pub(super) fn current_gen(base: &Path) -> io::Result<Option<u64>> {
     Ok(current)
 }
 
-/// Makes a torn trailing line parseable for the next replay.
+/// Ensures a torn trailing line is newline-terminated so future appends start
+/// a new JSONL line.
 ///
 /// Call this only while holding the exclusive lock.
 pub(super) fn repair_tail(file: &mut File) -> io::Result<()> {
@@ -61,7 +62,7 @@ pub(super) fn repair_tail(file: &mut File) -> io::Result<()> {
     Ok(())
 }
 
-/// Rebuilds the working items from one head.
+/// Rebuilds the working items from one head, skipping torn or foreign lines.
 pub(super) fn replay_items(file: &mut File) -> io::Result<Vec<TranscriptItem>> {
     file.seek(SeekFrom::Start(0))?;
     let mut items = Vec::new();

@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use contracts::transcript::{Role, TranscriptItem, TranscriptItemId, TranscriptItemKind};
 use loong_context::disk::{DiskStore, OpenError};
 use loong_context::memory::MemoryStore;
 use loong_context::{ContextSnapshot, ContextStore};
-use contracts::transcript::{Role, TranscriptItem, TranscriptItemId, TranscriptItemKind};
 use uuid::Uuid;
 
 static NEXT: AtomicU64 = AtomicU64::new(0);

@@ -8,7 +8,8 @@ use contracts::transcript::{TranscriptItem, TranscriptItemKind};
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ContextSnapshot {
     pub items: Vec<TranscriptItem>,
-    /// Monotonic within one store instance. Not durable across restarts.
+    /// Monotonic within one store instance. Durability is backend-defined; do
+    /// not assume the value survives a restart.
     pub version: u64,
     /// Character-count estimate. A real token counter replaces this later.
     pub usage_tokens: usize,
@@ -42,7 +43,7 @@ fn usage_of(item: &TranscriptItem) -> usize {
 /// `version` is monotonic within one store instance. Its initial value and
 /// durability are backend-defined. `flush` commits buffered mutations; a
 /// backend without durable storage returns `Ok`.
-pub trait ContextStore {
+pub trait ContextStore: Send + Sync {
     /// Appends items. Returns the new version.
     fn append(&mut self, items: Vec<TranscriptItem>) -> u64;
 
