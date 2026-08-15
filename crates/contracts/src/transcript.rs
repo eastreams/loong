@@ -13,57 +13,33 @@ use alloc::string::String;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// A stable id for one transcript item.
-///
-/// The same id space addresses tool calls and their results. Callers should
-/// generate v7 ids so id order matches creation order. `loong-contracts`
-/// holds ids only; generation lives in std callers.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct TranscriptItemId(Uuid);
-
-impl From<Uuid> for TranscriptItemId {
-    fn from(id: Uuid) -> Self {
-        Self(id)
-    }
-}
-
-impl From<TranscriptItemId> for Uuid {
-    fn from(id: TranscriptItemId) -> Self {
-        id.0
-    }
-}
-
 /// One entry of a session transcript.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct TranscriptItem {
-    pub id: TranscriptItemId,
-    /// Flattened so the JSON line is one flat record with a `kind` tag.
-    #[serde(flatten)]
-    pub kind: TranscriptItemKind,
-}
-
-/// What kind of record an item carries.
 ///
-/// Tool interactions are first-class. Flattening them into message text
-/// would drop the call identity and arguments needed for replay.
+/// The order of items in the log is the source of truth; individual items do
+/// not carry a transcript-wide id. Tool invocations carry a `call_id` on both
+/// the `ToolCall` and its `ToolResult`, which is the only cross-item identity
+/// this vocabulary needs.
+///
+/// The `kind` tag keeps every JSON line flat while naming the variant.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum TranscriptItemKind {
+pub enum TranscriptItem {
     /// Plain text from one participant.
     Message { role: Role, text: String },
     /// The assistant asked a tool to run.
     ///
+    /// `call_id` links this call to its eventual `ToolResult`.
     /// `arguments` is pre-serialized JSON text owned by the caller. The
     /// store replays bytes; it never interprets tool payloads.
-    ToolCall { name: String, arguments: String },
+    ToolCall {
+        call_id: Uuid,
+        name: String,
+        arguments: String,
+    },
     /// A tool finished and produced output.
     ///
-    /// `call_id` points at the matching `ToolCall` item.
-    ToolResult {
-        call_id: TranscriptItemId,
-        output: String,
-    },
+    /// `call_id` points at the matching `ToolCall`.
+    ToolResult { call_id: Uuid, output: String },
 }
 
 /// Who produced a message.
@@ -84,36 +60,29 @@ mod tests {
     use alloc::vec::Vec;
 
     use serde_json::json;
+    use uuid::Uuid;
 
-    use super::{Role, TranscriptItem, TranscriptItemId, TranscriptItemKind};
+    use super::{Role, TranscriptItem};
 
-    fn id(digits: u64) -> TranscriptItemId {
-        TranscriptItemId::from(uuid::Uuid::from_u128(u128::from(digits)))
+    fn call_id(digits: u64) -> Uuid {
+        Uuid::from_u128(u128::from(digits))
     }
 
     fn sample() -> Vec<TranscriptItem> {
-        let call = id(1);
+        let id = call_id(1);
         vec![
-            TranscriptItem {
-                id: id(2),
-                kind: TranscriptItemKind::Message {
-                    role: Role::System,
-                    text: "be terse".to_string(),
-                },
+            TranscriptItem::Message {
+                role: Role::System,
+                text: "be terse".to_string(),
             },
-            TranscriptItem {
-                id: call,
-                kind: TranscriptItemKind::ToolCall {
-                    name: "echo".to_string(),
-                    arguments: json!({"text": "hi"}).to_string(),
-                },
+            TranscriptItem::ToolCall {
+                call_id: id,
+                name: "echo".to_string(),
+                arguments: json!({"text": "hi"}).to_string(),
             },
-            TranscriptItem {
-                id: id(3),
-                kind: TranscriptItemKind::ToolResult {
-                    call_id: call,
-                    output: "hi".to_string(),
-                },
+            TranscriptItem::ToolResult {
+                call_id: id,
+                output: "hi".to_string(),
             },
         ]
     }
@@ -123,10 +92,11 @@ mod tests {
         let json = serde_json::to_value(sample()).unwrap();
         assert_eq!(json[0]["kind"], "message");
         assert_eq!(json[0]["role"], "system");
+        assert_eq!(json[0].get("id"), None);
         assert_eq!(json[1]["kind"], "tool_call");
         assert_eq!(json[1]["arguments"], json!({"text": "hi"}).to_string());
+        assert_eq!(json[1]["call_id"], json[2]["call_id"]);
         assert_eq!(json[2]["kind"], "tool_result");
-        assert_eq!(json[2]["call_id"], json[1]["id"]);
     }
 
     #[test]

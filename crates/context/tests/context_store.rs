@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use contracts::transcript::{Role, TranscriptItem, TranscriptItemId, TranscriptItemKind};
+use contracts::transcript::{Role, TranscriptItem};
 use loong_context::disk::{DiskStore, OpenError};
 use loong_context::memory::MemoryStore;
 use loong_context::{ContextSnapshot, ContextStore};
@@ -21,38 +21,30 @@ fn head_path(base: &PathBuf, generation: u64) -> PathBuf {
     base.join(format!("{generation}.jsonl"))
 }
 
-fn next_id() -> TranscriptItemId {
+fn next_call_id() -> Uuid {
     let next = NEXT.fetch_add(1, Ordering::Relaxed);
-    TranscriptItemId::from(Uuid::from_u128(u128::from(next)))
+    Uuid::from_u128(u128::from(next))
 }
 
 fn message(role: Role, text: &str) -> TranscriptItem {
-    TranscriptItem {
-        id: next_id(),
-        kind: TranscriptItemKind::Message {
-            role,
-            text: text.to_owned(),
-        },
+    TranscriptItem::Message {
+        role,
+        text: text.to_owned(),
     }
 }
 
-fn tool_call(name: &str, arguments: &str) -> TranscriptItem {
-    TranscriptItem {
-        id: next_id(),
-        kind: TranscriptItemKind::ToolCall {
-            name: name.to_owned(),
-            arguments: arguments.to_owned(),
-        },
+fn tool_call(call_id: Uuid, name: &str, arguments: &str) -> TranscriptItem {
+    TranscriptItem::ToolCall {
+        call_id,
+        name: name.to_owned(),
+        arguments: arguments.to_owned(),
     }
 }
 
-fn tool_result(call_id: TranscriptItemId, output: &str) -> TranscriptItem {
-    TranscriptItem {
-        id: next_id(),
-        kind: TranscriptItemKind::ToolResult {
-            call_id,
-            output: output.to_owned(),
-        },
+fn tool_result(call_id: Uuid, output: &str) -> TranscriptItem {
+    TranscriptItem::ToolResult {
+        call_id,
+        output: output.to_owned(),
     }
 }
 
@@ -92,8 +84,8 @@ fn disk_store_satisfies_the_contract_and_replays() {
     assert_eq!(snapshot.version, 1);
     assert_eq!(snapshot.items.len(), 1);
     assert_eq!(
-        snapshot.items[0].kind,
-        TranscriptItemKind::Message {
+        snapshot.items[0],
+        TranscriptItem::Message {
             role: Role::User,
             text: "again".to_owned(),
         }
@@ -125,7 +117,7 @@ fn torn_head_line_does_not_break_replay() {
     std::fs::create_dir_all(&path).unwrap();
     std::fs::write(
         head_path(&path, 0),
-        "{\"id\":\"00000000-0000-0000-0000-000000000000\",\"kind\":\"message\",\"role\":\"user\"",
+        "{\"kind\":\"message\",\"role\":\"user\"",
     )
     .unwrap();
 
@@ -143,8 +135,8 @@ fn torn_head_line_does_not_break_replay() {
     assert_eq!(snapshot.version, 0);
     assert_eq!(snapshot.items.len(), 1);
     assert_eq!(
-        snapshot.items[0].kind,
-        TranscriptItemKind::Message {
+        snapshot.items[0],
+        TranscriptItem::Message {
             role: Role::User,
             text: "after".to_owned(),
         }
@@ -205,8 +197,8 @@ fn replace_publishes_a_new_head_and_keeps_the_old_one() {
     assert_eq!(snapshot.version, 1);
     assert_eq!(snapshot.items.len(), 1);
     assert_eq!(
-        snapshot.items[0].kind,
-        TranscriptItemKind::Message {
+        snapshot.items[0],
+        TranscriptItem::Message {
             role: Role::User,
             text: "v2".to_owned(),
         }
@@ -225,8 +217,8 @@ fn replace_publishes_a_new_head_and_keeps_the_old_one() {
     let snapshot = store.snapshot();
     assert_eq!(snapshot.items.len(), 2);
     assert_eq!(
-        snapshot.items[1].kind,
-        TranscriptItemKind::Message {
+        snapshot.items[1],
+        TranscriptItem::Message {
             role: Role::User,
             text: "v3".to_owned(),
         }
@@ -238,9 +230,9 @@ fn replace_publishes_a_new_head_and_keeps_the_old_one() {
 
 #[test]
 fn tool_items_replay_with_the_call_link_intact() {
-    let call_id = next_id();
+    let call_id = next_call_id();
     let items = vec![
-        tool_call("echo", "{\"text\":\"hi\"}"),
+        tool_call(call_id, "echo", "{\"text\":\"hi\"}"),
         tool_result(call_id, "hi"),
     ];
 
@@ -260,10 +252,10 @@ fn tool_items_replay_with_the_call_link_intact() {
 
 #[test]
 fn snapshot_usage_counts_tool_payloads() {
-    let call_id = next_id();
+    let call_id = next_call_id();
     let mut store = MemoryStore::new();
     store.append(vec![
-        tool_call("echo", "{\"x\":1}"),
+        tool_call(call_id, "echo", "{\"x\":1}"),
         tool_result(call_id, "ok"),
     ]);
     // "echo" + `{"x":1}` + "ok" = 4 + 7 + 2.

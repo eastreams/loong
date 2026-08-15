@@ -2,7 +2,7 @@
 
 use std::io;
 
-use contracts::transcript::{TranscriptItem, TranscriptItemKind};
+use contracts::transcript::TranscriptItem;
 
 /// A point-in-time projection of the working context.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -29,12 +29,12 @@ impl ContextSnapshot {
 
 /// Counts the characters that a tokenizer would see in one item.
 fn usage_of(item: &TranscriptItem) -> usize {
-    match &item.kind {
-        TranscriptItemKind::Message { text, .. } => text.chars().count(),
-        TranscriptItemKind::ToolCall { name, arguments } => {
-            name.chars().count() + arguments.chars().count()
-        }
-        TranscriptItemKind::ToolResult { output, .. } => output.chars().count(),
+    match item {
+        TranscriptItem::Message { text, .. } => text.chars().count(),
+        TranscriptItem::ToolCall {
+            name, arguments, ..
+        } => name.chars().count() + arguments.chars().count(),
+        TranscriptItem::ToolResult { output, .. } => output.chars().count(),
     }
 }
 
