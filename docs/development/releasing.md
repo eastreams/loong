@@ -23,8 +23,10 @@ Work on a release commit that will land on `rewrite`.
 The workspace version is unrelated. Do not change it for this release.
 
 The macro crate's `actor-api` dev-dependency uses both `path` and `version`.
-Keep its version at the last published `loac` release, currently `0.1.0`.
-Workspace tests use the local runtime. Published archives use crates.io.
+Workspace tests use the local runtime through `path`; `cargo package` strips
+`path`, so published macro archives resolve the `version` from crates.io. Keep
+that version at the last published `loac` release — currently `0.2.0` — and do
+not advance it to the new actor version until that release is on crates.io.
 This lets macro archive tests run before the new actor release.
 
 Before pushing the release commit, run the local source check:
@@ -89,7 +91,7 @@ needs a new version and a new release commit.
 After the workflow succeeds, verify the tag and both registry entries:
 
 ```bash
-VERSION=0.1.1
+VERSION=0.2.0
 git fetch origin --tags
 git show --stat "loac-v$VERSION"
 cargo info "loac@$VERSION"

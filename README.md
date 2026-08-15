@@ -20,7 +20,7 @@
 
 Loong is a Rust foundation for vertical AI agents.
 Its priorities are security, performance, extensibility, and long-term evolution.
-Agents should work reliably in real environments.
+Agents should work reliably in real environments over the long term.
 They should collaborate with developers beyond a single demonstration.
 
 ## Why Loong
@@ -39,7 +39,7 @@ Core execution paths should stay fast.
 Runtime overhead should remain predictable.
 Concrete performance claims require representative workload benchmarks.
 Loong aims to minimize its own runtime overhead.
-Today's high hardware costs increase its importance for edge and commodity hardware.
+Today's high hardware costs make low runtime overhead even more important for edge and commodity hardware.
 
 ### Extend it at your own pace
 

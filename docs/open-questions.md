@@ -12,11 +12,10 @@ semantics. It owns actor state, bounded mailbox admission, reply scheduling, and
 subtree lifecycle on Tokio. Those runtime responsibilities do not by themselves
 define a product `Session`, `Turn`, or `Step`.
 
-[`loong-kernel`](../crates/kernel/src/lib.rs) still uses Actix `Actor`,
-`WeakAddr<Kernel>`, and its mailbox as an unmigrated prototype. It is not a
-second supported runtime. Do not introduce a compatibility facade between the
-two models; kernel migration must follow decisions about who owns each root
-actor tree and how that ownership relates to product session lifecycle.
+[`loong-kernel`](../crates/kernel/src/lib.rs) has migrated its policy actor to
+`loac`. The owner of each root actor tree, and how that ownership relates to
+product session lifecycle, remain open; do not introduce a compatibility
+facade to hide those gaps.
 
 Actor execution context is not side-effect authority. Tools still receive only
 narrowed access APIs, and side-effect code still requires
@@ -55,10 +54,10 @@ Still unresolved:
 
 ## Parent Policy Request Semantics
 
-The application context locates the parent boundary by implementing
-`ParentGrantRequester`. `RequiresApproval` passes the same concrete action to
-that boundary and returns the parent's final `Granted<A>` or denial; the child
-does not expand its own capability ceiling or mint a replacement grant.
+Parent approval is not implemented yet. `RequiresApproval` currently maps to
+denial in the kernel engine; no `ParentGrantRequester` type locates the parent
+boundary, and the child does not expand its own capability ceiling or mint a
+replacement grant.
 
 Still unresolved:
 
