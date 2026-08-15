@@ -1,4 +1,11 @@
-//! Code that connects domain access to the application.
+//! Connects domain access to the application.
+//!
+//! [`Kernel`] is the policy actor: it evaluates [`PolicyEvent`] messages
+//! against a [`PolicyEngine`](policy::engine::PolicyEngine) and returns either
+//! a [`Granted`] proof or a [`Denied`] refusal. [`Facade`] is the trusted
+//! handle that application and access code use to reach that actor, and the
+//! [`access`] module exposes narrow domain-operation APIs on top of the
+//! facade.
 
 pub mod access;
 pub mod actors;
@@ -47,7 +54,9 @@ impl<A: ActionMeta> SyncHandler<PolicyEvent<A>> for Kernel {
 /// Trusted gateway from application code into the kernel policy actor.
 ///
 /// Keep this value out of untrusted model output and tool inputs. The generic
-/// [`grant`](Self::grant) method is an assembly boundary.
+/// [`grant`](Self::grant) method is an assembly boundary: only assembly code
+/// should call it with concrete actions, while caller-facing APIs such as
+/// [`FsAccess`](crate::access::fs::FsAccess) narrow it into fixed operations.
 #[derive(Clone)]
 pub struct Facade {
     handle: ActorRef<Kernel>,
@@ -93,8 +102,8 @@ impl Facade {
 mod tests {
     use std::borrow::Cow;
 
-    use loac::Shutdown;
     use contracts::capability::{Capabilities, Capability};
+    use loac::Shutdown;
     use serde_json::Value;
 
     use super::*;

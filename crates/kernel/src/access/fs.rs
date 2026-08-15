@@ -8,8 +8,11 @@ use crate::Facade;
 /// Filesystem access facade.
 ///
 /// This module is the side-effect boundary for governed filesystem operations.
-/// Callers provide raw paths and operation inputs; `FsAccess` resolves paths,
+///
+/// The planned flow resolves raw caller paths into proof-bearing values,
 /// builds typed actions, asks policy for grants, and only then touches disk.
+/// Path resolution is not implemented yet: the current `read` scaffold still
+/// carries a raw `PathBuf`, so it is not a resolved-path proof.
 pub struct FsAccess<'a> {
     ctx: &'a Facade,
 }

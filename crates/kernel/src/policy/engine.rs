@@ -1,6 +1,4 @@
-use contracts::policy::{
-    PolicyDecision, PolicyDecisionFinal, PolicyDecisionMiddle, PolicyResult,
-};
+use contracts::policy::{PolicyDecision, PolicyDecisionFinal, PolicyDecisionMiddle, PolicyResult};
 use uuid::Uuid;
 
 use super::{
@@ -18,8 +16,7 @@ impl PolicyEngine {
     /// Allows actions whose requirements fit the caller's capability ceiling.
     /// A grant names the allowed action; capabilities gate admission.
     ///
-    /// This is the explicit policy used by the deterministic application
-    /// probe.
+    /// This is the explicit policy used by the kernel tests.
     #[must_use]
     pub fn allow_capabilities() -> Self {
         Self {

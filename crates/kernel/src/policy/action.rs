@@ -4,9 +4,9 @@
 //! `Action<Cx>` lets an action execute itself when that model fits.
 //!
 //! Code that performs a Loong side effect must require `Granted<A>`. Its
-//! constructor is private to `loong-core`. `GrantId` only identifies the grant
-//! record; it does not grant permission. An action does not choose where it
-//! runs.
+//! constructor is private to the kernel's [`policy`](crate::policy) module.
+//! `GrantId` only identifies the grant record; it does not grant permission.
+//! An action does not choose where it runs.
 
 use contracts::capability::Capabilities;
 use serde_json::Value;
@@ -47,8 +47,9 @@ pub struct GrantId(Uuid);
 /// A recorded authorization represented as an unforgeable value.
 ///
 /// Its fields and constructor are private. Callers can inspect or consume a
-/// grant, but only the trusted policy path inside core can bind an action to a
-/// recorded grant identifier.
+/// grant, but only the trusted policy path inside the kernel's
+/// [`policy`](crate::policy) module can bind an action to a recorded grant
+/// identifier.
 #[derive(Debug)]
 pub struct Granted<A: ActionMeta> {
     grant_id: GrantId,
@@ -106,7 +107,7 @@ pub struct Denied {
     pub reason: Option<String>,
 }
 
-// TODO: Here may be a Approval-relevant type for "requesting parent for approval"
+// TODO: an approval-request type for asking a parent for approval.
 
 #[cfg(test)]
 mod tests {
