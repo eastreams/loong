@@ -446,6 +446,7 @@ version = "0.2.0"
 dependencies = [
  "loac",
  "loong-context",
+ "loong-provider",
 ]
 
 [[package]]
