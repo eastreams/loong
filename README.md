@@ -271,10 +271,10 @@ If you want to help where it matters most right now, read [Contribution Areas](s
 ## Star History
 
 <p align="center">
-  <a href="https://star-history.com/#eastreams/loong&Date">
+  <a href="https://star-history.dera.page/#eastreams/loong&Date">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=eastreams/loong&type=Date&theme=dark"/>
-      <img src="https://api.star-history.com/svg?repos=eastreams/loong&type=Date" alt="Star History Chart"/>
+      <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=eastreams/loong&type=Date&theme=dark"/>
+      <img src="https://star-history.dera.page/svg?repos=eastreams/loong&type=Date" alt="Star History Chart"/>
     </picture>
   </a>
 </p>
