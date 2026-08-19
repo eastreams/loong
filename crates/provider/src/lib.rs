@@ -75,8 +75,8 @@ impl<Req> StreamError<Req> {
 /// providers are not consulted for this stream. A committed provider that
 /// disconnects ends the failover immediately.
 ///
-/// The `'static` bounds come from storing `Arc<dyn Provider<...>>`, not from
-/// the `Provider` contract.
+/// Here lifetime is intentionally left `'static`, because non-`'static`
+/// scenarios are rare.
 pub struct Failover<Req, Item, Out>
 where
     Req: Send + 'static,
