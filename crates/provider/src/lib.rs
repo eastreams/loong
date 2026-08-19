@@ -26,7 +26,9 @@ where
     Out: loac::Writer<Item> + Send,
 {
     /// Streams the request into `out` and resolves when the stream ends.
-    async fn stream(&self, req: Req, out: &mut Out) -> Result<(), StreamError<Req>>;
+    async fn stream(&self, req: Req, out: &mut Out) -> Result<(), StreamError<Req>>
+    where
+        Req: 'async_trait;
 }
 
 /// Why a stream failed, split by the commit boundary.
