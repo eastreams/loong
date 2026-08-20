@@ -1,0 +1,23 @@
+[package]
+name = "loong-provider-openai"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+contracts.workspace = true
+eventsource-stream = "0.2.3"
+futures-util = "0.3.31"
+loac.workspace = true
+provider.workspace = true
+reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls", "stream"] }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+
+[lints]
+workspace = true
