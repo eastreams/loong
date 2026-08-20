@@ -842,6 +842,7 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 name = "loong-agent"
 version = "0.2.0"
 dependencies = [
+ "async-trait",
  "loac",
  "loong-context",
  "loong-contracts",
