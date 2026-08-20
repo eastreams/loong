@@ -2,8 +2,9 @@
 
 use context::ContextStore;
 use contracts::provider::{Request, StreamItem};
+use contracts::transcript::{Role, TranscriptItem};
 use loac::prelude::*;
-use provider::Provider;
+use provider::{Provider, StreamError};
 use tokio::sync::mpsc;
 
 /// Writer that receives streamed provider items.
@@ -19,8 +20,6 @@ where
     C: ContextStore,
     P: Provider<Request, StreamItem, ProviderOut> + Clone,
 {
-    // Owned by the actor; request handlers will read it.
-    #[allow(dead_code)]
     store: C,
     provider: P,
 }
@@ -33,6 +32,24 @@ where
 #[derive(loac::Message)]
 #[message(reply = ())]
 pub struct SwitchProvider<P>(pub P);
+
+/// Asks the agent to stream a provider reply for one user message.
+///
+/// The agent appends the user message to its context store before streaming,
+/// then appends the assistant text after the stream commits.
+#[derive(loac::Message)]
+#[message(reply = Result<(), StreamError<Request>>)]
+pub struct Prompt {
+    /// The user message to append and send.
+    pub text: String,
+    /// Writer that receives streamed items as they arrive.
+    pub out: ProviderOut,
+}
+
+/// Appends assistant transcript items after a stream commits.
+#[derive(loac::Message)]
+#[message(reply = ())]
+struct CommitTranscript(Vec<TranscriptItem>);
 
 #[actor(mailbox)]
 impl<C, P> Actor for Agent<C, P>
@@ -60,14 +77,102 @@ where
     }
 }
 
+impl<C, P> Handler<Prompt> for Agent<C, P>
+where
+    C: ContextStore + 'static,
+    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
+{
+    fn handle(
+        &mut self,
+        message: Prompt,
+        scope: &mut ActorScope<'_, Self>,
+    ) -> impl IntoReply<Self, Prompt> + use<C, P> {
+        let provider = self.provider.clone();
+        let myself = scope.myself().clone();
+
+        let user_item = TranscriptItem::Message {
+            role: Role::User,
+            text: message.text,
+        };
+        let request = {
+            let mut messages = self.store.snapshot().items;
+            messages.push(user_item.clone());
+            Request {
+                messages,
+                tools: Vec::new(),
+            }
+        };
+        self.store.append(vec![user_item]);
+
+        let frontend = message.out;
+        let (mut local_tx, local_rx) = mpsc::channel::<StreamItem>(8);
+
+        async move {
+            let relay = tokio::spawn(async move {
+                let mut rx = local_rx;
+                let mut items = Vec::new();
+                while let Some(item) = rx.recv().await {
+                    let _ = frontend.send(item.clone()).await;
+                    items.push(item);
+                }
+                items
+            });
+
+            let result = provider.stream(request, &mut local_tx).await;
+            drop(local_tx);
+
+            let items = relay.await.unwrap_or_default();
+            let assistant = collect_assistant_items(items);
+            if !assistant.is_empty() {
+                let _ = myself.call(CommitTranscript(assistant)).await;
+            }
+
+            result
+        }
+    }
+}
+
+impl<C, P> SyncHandler<CommitTranscript> for Agent<C, P>
+where
+    C: ContextStore + 'static,
+    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
+{
+    fn handle(&mut self, message: CommitTranscript, _scope: &mut ActorScope<'_, Self>) {
+        self.store.append(message.0);
+    }
+}
+
+/// Collects streamed items into the assistant transcript suffix.
+///
+/// Tool calls are forwarded to the frontend but not persisted until the
+/// tool loop lands; this keeps the minimal path text-only.
+fn collect_assistant_items(items: Vec<StreamItem>) -> Vec<TranscriptItem> {
+    let mut text = String::new();
+    for item in items {
+        if let StreamItem::Text { delta } = item {
+            text.push_str(&delta);
+        }
+    }
+
+    if text.is_empty() {
+        Vec::new()
+    } else {
+        vec![TranscriptItem::Message {
+            role: Role::Assistant,
+            text,
+        }]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use context::memory::MemoryStore;
-    use loac::{ExitReason, Shutdown};
+    use context::{ContextSnapshot, ContextStore, memory::MemoryStore};
+    use contracts::transcript::{Role, TranscriptItem};
+    use loac::{ExitReason, Shutdown, Writer};
     use provider::{Provider, StreamError};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     #[derive(Clone)]
     struct DummyProvider;
@@ -123,6 +228,93 @@ mod tests {
             .call(SwitchProvider(Arc::new(NonCloneProvider)))
             .await
             .unwrap();
+
+        let status = owner.shutdown(Shutdown::Drain).await;
+        assert_eq!(status.reason(), ExitReason::Drained);
+    }
+
+    #[derive(Clone)]
+    struct SharedStore(Arc<Mutex<MemoryStore>>);
+
+    impl ContextStore for SharedStore {
+        fn append(&mut self, items: Vec<TranscriptItem>) -> u64 {
+            self.0.lock().unwrap().append(items)
+        }
+
+        fn replace(&mut self, items: Vec<TranscriptItem>) -> u64 {
+            self.0.lock().unwrap().replace(items)
+        }
+
+        fn snapshot(&self) -> ContextSnapshot {
+            self.0.lock().unwrap().snapshot()
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.0.lock().unwrap().flush()
+        }
+    }
+
+    #[derive(Clone)]
+    struct EchoProvider;
+
+    #[async_trait]
+    impl Provider<Request, StreamItem, ProviderOut> for EchoProvider {
+        async fn stream(
+            &self,
+            _req: Request,
+            out: &mut ProviderOut,
+        ) -> Result<(), StreamError<Request>> {
+            out.write(StreamItem::Text {
+                delta: "hello".to_string(),
+            })
+            .await
+            .unwrap();
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn prompt_streams_and_appends_context() {
+        let store = SharedStore(Arc::new(Mutex::new(MemoryStore::new())));
+        let owner = loac::spawn::<Agent<SharedStore, EchoProvider>>((store.clone(), EchoProvider));
+        let actor_ref = owner.actor_ref();
+
+        let (tx, mut rx) = mpsc::channel(8);
+        actor_ref
+            .call(Prompt {
+                text: "hi".to_string(),
+                out: tx,
+            })
+            .await
+            .unwrap()
+            .unwrap();
+
+        let mut text = String::new();
+        while let Some(item) = rx.recv().await {
+            match item {
+                StreamItem::Text { delta } => text.push_str(&delta),
+                StreamItem::ToolCall { .. } => panic!("unexpected tool call"),
+            }
+        }
+
+        assert_eq!(text, "hello");
+
+        let snapshot = store.snapshot();
+        assert_eq!(snapshot.items.len(), 2);
+        assert_eq!(
+            snapshot.items[0],
+            TranscriptItem::Message {
+                role: Role::User,
+                text: "hi".to_string(),
+            }
+        );
+        assert_eq!(
+            snapshot.items[1],
+            TranscriptItem::Message {
+                role: Role::Assistant,
+                text: "hello".to_string(),
+            }
+        );
 
         let status = owner.shutdown(Shutdown::Drain).await;
         assert_eq!(status.reason(), ExitReason::Drained);

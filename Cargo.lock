@@ -854,7 +854,13 @@ dependencies = [
 name = "loong-cli"
 version = "0.2.0"
 dependencies = [
- "loong-kernel",
+ "loac",
+ "loong-agent",
+ "loong-context",
+ "loong-contracts",
+ "loong-provider",
+ "loong-provider-openai",
+ "tokio",
 ]
 
 [[package]]

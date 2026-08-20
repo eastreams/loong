@@ -9,7 +9,13 @@ name = "loong"
 path = "src/main.rs"
 
 [dependencies]
-kernel.workspace = true
+agent.workspace = true
+context.workspace = true
+contracts.workspace = true
+loac.workspace = true
+provider.workspace = true
+provider-openai.workspace = true
+tokio = { workspace = true, features = ["io-std", "macros", "rt-multi-thread", "sync"] }
 
 [lints]
 workspace = true

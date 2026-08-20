@@ -24,8 +24,10 @@ unsafe_code = "forbid"
 contracts = { path = "crates/contracts", package = "loong-contracts" }
 kernel = { path = "crates/kernel", package = "loong-kernel" }
 context = { path = "crates/context", package = "loong-context" }
+agent = { path = "crates/agent", package = "loong-agent" }
 loac = { path = "crates/actor" }
 provider = { path = "crates/provider", package = "loong-provider" }
+provider-openai = { path = "crates/provider-openai", package = "loong-provider-openai" }
 
 bincode = "1.3.3"
 schemars = "1.2.1"
