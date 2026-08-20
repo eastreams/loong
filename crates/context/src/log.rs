@@ -12,6 +12,7 @@ pub(super) fn open_lock_file(base: &Path) -> io::Result<File> {
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .open(base.join("lock"))
 }
 
