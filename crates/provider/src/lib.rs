@@ -68,6 +68,26 @@ impl<Req> StreamError<Req> {
     }
 }
 
+/// A shared provider is itself a provider.
+///
+/// This makes `Arc<NonCloneProvider>` a [`Provider`] without requiring the
+/// provider type to implement `Clone`.
+#[async_trait]
+impl<Req, Item, Out, P> Provider<Req, Item, Out> for Arc<P>
+where
+    Req: Send,
+    Item: Send,
+    Out: loac::Writer<Item> + Send,
+    P: Provider<Req, Item, Out> + ?Sized,
+{
+    async fn stream(&self, req: Req, out: &mut Out) -> Result<(), StreamError<Req>>
+    where
+        Req: 'async_trait,
+    {
+        self.as_ref().stream(req, out).await
+    }
+}
+
 /// Ordered failover across a fixed set of providers.
 ///
 /// `Failover` is itself a [`Provider`], so it composes: one failover can be an
@@ -94,6 +114,19 @@ where
 {
     pub fn new(providers: Vec<Arc<dyn Provider<Req, Item, Out>>>) -> Self {
         Self { providers }
+    }
+}
+
+impl<Req, Item, Out> Clone for Failover<Req, Item, Out>
+where
+    Req: Send + 'static,
+    Item: Send + 'static,
+    Out: loac::Writer<Item> + Send + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            providers: self.providers.clone(),
+        }
     }
 }
 
@@ -181,6 +214,19 @@ where
             reason: "all providers rejected the request".to_string(),
             req,
         })
+    }
+}
+
+impl<Req, Item, Out> Clone for RefFailover<Req, Item, Out>
+where
+    Req: ?Sized + Sync,
+    Item: Send,
+    Out: loac::Writer<Item> + Send,
+{
+    fn clone(&self) -> Self {
+        Self {
+            providers: self.providers.clone(),
+        }
     }
 }
 

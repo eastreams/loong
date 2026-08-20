@@ -217,3 +217,31 @@ async fn ref_failover_composes() {
     assert_eq!(rx.recv().await, Some(1));
     assert_eq!(rx.recv().await, None);
 }
+
+#[test]
+fn failovers_are_clone_without_cloning_the_request() {
+    fn assert_clone<T: Clone>() {}
+    assert_clone::<Failover<Request, u8, mpsc::Sender<u8>>>();
+    assert_clone::<RefFailover<Request, u8, mpsc::Sender<u8>>>();
+}
+
+#[tokio::test]
+async fn arc_provider_streams_for_non_clone_provider() {
+    let provider = Arc::new(Sequence(vec![1, 2]));
+    let (mut tx, mut rx) = mpsc::channel(4);
+
+    provider.stream(Request, &mut tx).await.unwrap();
+    drop(tx);
+
+    assert_eq!(rx.recv().await, Some(1));
+    assert_eq!(rx.recv().await, Some(2));
+    assert_eq!(rx.recv().await, None);
+}
+
+#[test]
+fn arc_provider_is_a_provider() {
+    fn assert_provider<T: Provider<Request, u8, mpsc::Sender<u8>>>() {}
+
+    assert_provider::<Arc<Sequence>>();
+    assert_provider::<Arc<dyn Provider<Request, u8, mpsc::Sender<u8>>>>();
+}
