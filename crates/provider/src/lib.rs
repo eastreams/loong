@@ -75,8 +75,8 @@ impl<Req> StreamError<Req> {
 /// providers are not consulted for this stream. A committed provider that
 /// disconnects ends the failover immediately.
 ///
-/// Here lifetime is intentionally left `'static`, because non-`'static`
-/// scenarios are rare.
+/// `Failover` owns each request and is intentionally `'static`. For borrowed
+/// requests, see [`RefFailover`].
 pub struct Failover<Req, Item, Out>
 where
     Req: Send + 'static,
@@ -123,5 +123,75 @@ where
             reason: "all providers rejected the request".to_string(),
             req,
         })
+    }
+}
+
+/// A provider that accepts any borrow of `Req`.
+pub type BorrowedProvider<Req, Item, Out> = dyn for<'a> Provider<&'a Req, Item, Out>;
+
+/// Ordered failover for borrowed requests.
+///
+/// `RefFailover` stores [`BorrowedProvider`]s. The higher-ranked lifetime
+/// keeps this failover `'static` while each call borrows its request only for
+/// the stream's duration.
+///
+/// Like [`Failover`], `RefFailover` is itself a [`Provider`] for borrowed
+/// requests, so it composes: one borrowed failover can be an entry in another.
+/// Use it when callers hold `&Req` rather than an owned `Req`.
+pub struct RefFailover<Req, Item, Out>
+where
+    Req: ?Sized + Sync,
+    Item: Send,
+    Out: loac::Writer<Item> + Send,
+{
+    providers: Vec<Arc<BorrowedProvider<Req, Item, Out>>>,
+}
+
+impl<Req, Item, Out> RefFailover<Req, Item, Out>
+where
+    Req: ?Sized + Sync,
+    Item: Send,
+    Out: loac::Writer<Item> + Send,
+{
+    pub fn new(providers: Vec<Arc<BorrowedProvider<Req, Item, Out>>>) -> Self {
+        Self { providers }
+    }
+
+    /// Streams a borrowed request through the providers.
+    pub async fn stream<'a>(
+        &self,
+        req: &'a Req,
+        out: &mut Out,
+    ) -> Result<(), StreamError<&'a Req>> {
+        let mut req = req;
+        for provider in &self.providers {
+            match provider.stream(req, &mut *out).await {
+                Ok(()) => return Ok(()),
+                Err(StreamError::Rejected { req: returned, .. }) => {
+                    // Individual rejection reasons are dropped; failover
+                    // aggregates one final rejection.
+                    req = returned;
+                }
+                Err(StreamError::Disconnected { reason }) => {
+                    return Err(StreamError::Disconnected { reason });
+                }
+            }
+        }
+        Err(StreamError::Rejected {
+            reason: "all providers rejected the request".to_string(),
+            req,
+        })
+    }
+}
+
+#[async_trait]
+impl<'a, Req, Item, Out> Provider<&'a Req, Item, Out> for RefFailover<Req, Item, Out>
+where
+    Req: ?Sized + Sync,
+    Item: Send,
+    Out: loac::Writer<Item> + Send,
+{
+    async fn stream(&self, req: &'a Req, out: &mut Out) -> Result<(), StreamError<&'a Req>> {
+        RefFailover::stream(self, req, out).await
     }
 }
