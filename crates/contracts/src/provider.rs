@@ -8,16 +8,16 @@ use crate::{tool::ToolSpec, transcript::TranscriptItem};
 
 /// Provider-agnostic chat request.
 ///
-/// The shape deliberately mirrors an OpenAI-compatible chat completion
-/// request (`model`, `messages`, and `tools`). Providers map this vocabulary
-/// to their own wire format at the adapter edge; it is not a wire type.
+/// The request describes the task (`messages` and `tools`), while each
+/// provider owns its deployment details such as `model`. Providers map this
+/// vocabulary to their own wire format at the adapter edge; it is not a wire
+/// type.
 ///
 /// The provider contract always streams items, so `stream` is not a request
 /// field. Non-streaming providers simply emit the whole assistant message as
 /// one [`StreamItem`]. Empty `tools` requests a plain completion.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Request {
-    pub model: String,
     pub messages: Vec<TranscriptItem>,
     pub tools: Vec<ToolSpec>,
 }

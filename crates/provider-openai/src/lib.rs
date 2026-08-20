@@ -22,13 +22,20 @@ pub struct OpenAiConfig {
     pub base_url: String,
     /// Bearer token sent as `Authorization: Bearer ...`.
     pub api_key: String,
+    /// Model name sent with every request.
+    pub model: String,
 }
 
 impl OpenAiConfig {
-    pub fn new(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
+    pub fn new(
+        base_url: impl Into<String>,
+        api_key: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Self {
         Self {
             base_url: base_url.into(),
             api_key: api_key.into(),
+            model: model.into(),
         }
     }
 }
@@ -65,7 +72,7 @@ where
     Out: loac::Writer<StreamItem> + Send,
 {
     async fn stream(&self, req: Request, out: &mut Out) -> Result<(), StreamError<Request>> {
-        let body = build_body(&req);
+        let body = build_body(&req, &self.config.model);
         let response = match self
             .client
             .post(self.chat_completions_url())
@@ -170,7 +177,7 @@ where
     }
 }
 
-fn build_body(req: &Request) -> Value {
+fn build_body(req: &Request, model: &str) -> Value {
     let messages: Vec<Value> = req
         .messages
         .iter()
@@ -180,7 +187,7 @@ fn build_body(req: &Request) -> Value {
     let tools: Vec<Value> = req.tools.iter().map(tool_spec_to_function).collect();
 
     let mut body = json!({
-        "model": req.model,
+        "model": model,
         "messages": messages,
         "stream": true,
     });

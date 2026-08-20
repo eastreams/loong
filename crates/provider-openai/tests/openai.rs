@@ -16,9 +16,8 @@ use provider::{Provider, StreamError};
 use serde_json::json;
 use tokio::sync::mpsc;
 
-fn request(model: &str) -> Request {
+fn request() -> Request {
     Request {
-        model: model.to_string(),
         messages: vec![TranscriptItem::Message {
             role: Role::User,
             text: "hi".to_string(),
@@ -90,10 +89,10 @@ async fn streams_text_deltas() {
     let app = Router::new().route("/chat/completions", post(sse_text));
     let base_url = spawn_server(app).await;
 
-    let provider = OpenAiProvider::new(OpenAiConfig::new(base_url, "test-key"));
+    let provider = OpenAiProvider::new(OpenAiConfig::new(base_url, "test-key", "gpt-test"));
     let (mut tx, mut rx) = mpsc::channel(16);
 
-    let result = provider.stream(request("gpt-test"), &mut tx).await;
+    let result = provider.stream(request(), &mut tx).await;
     drop(tx);
 
     assert!(result.is_ok(), "{result:?}");
@@ -117,10 +116,10 @@ async fn reassembles_tool_call_deltas() {
     let app = Router::new().route("/chat/completions", post(sse_tool_calls));
     let base_url = spawn_server(app).await;
 
-    let provider = OpenAiProvider::new(OpenAiConfig::new(base_url, "test-key"));
+    let provider = OpenAiProvider::new(OpenAiConfig::new(base_url, "test-key", "gpt-test"));
     let (mut tx, mut rx) = mpsc::channel(16);
 
-    let result = provider.stream(request("gpt-test"), &mut tx).await;
+    let result = provider.stream(request(), &mut tx).await;
     drop(tx);
 
     assert!(result.is_ok(), "{result:?}");
@@ -140,13 +139,16 @@ async fn rejects_request_without_consuming_it_on_http_error() {
     let app = Router::new().route("/chat/completions", post(unauthorized));
     let base_url = spawn_server(app).await;
 
-    let provider = OpenAiProvider::new(OpenAiConfig::new(base_url, "test-key"));
+    let provider = OpenAiProvider::new(OpenAiConfig::new(base_url, "test-key", "gpt-test"));
     let (mut tx, _rx) = mpsc::channel(16);
 
-    let result = provider.stream(request("gpt-test"), &mut tx).await;
+    let result = provider.stream(request(), &mut tx).await;
 
     match result {
-        Err(StreamError::Rejected { req, .. }) => assert_eq!(req.model, "gpt-test"),
+        Err(StreamError::Rejected { req, .. }) => {
+            assert_eq!(req.messages.len(), 1);
+            assert_eq!(req.tools.len(), 0);
+        }
         other => panic!("expected rejected, got {other:?}"),
     }
 }
@@ -156,10 +158,10 @@ async fn truncated_stream_disconnects() {
     let app = Router::new().route("/chat/completions", post(sse_truncated));
     let base_url = spawn_server(app).await;
 
-    let provider = OpenAiProvider::new(OpenAiConfig::new(base_url, "test-key"));
+    let provider = OpenAiProvider::new(OpenAiConfig::new(base_url, "test-key", "gpt-test"));
     let (mut tx, mut rx) = mpsc::channel(16);
 
-    let result = provider.stream(request("gpt-test"), &mut tx).await;
+    let result = provider.stream(request(), &mut tx).await;
     drop(tx);
 
     assert!(matches!(result, Err(StreamError::Disconnected { .. })));
