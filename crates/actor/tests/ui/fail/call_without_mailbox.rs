@@ -13,6 +13,7 @@ impl Actor for Bare {
 }
 
 #[derive(loac::Message)]
+#[message(reply = ())]
 struct Ping;
 
 fn main() {

@@ -35,6 +35,7 @@ impl Actor for SerialActor {
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct Block {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,

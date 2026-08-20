@@ -40,6 +40,7 @@ impl Handler<CancellableWork> for CancellationActor {
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct CancelWork {
     dispatched: oneshot::Sender<()>,
 }

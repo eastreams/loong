@@ -1,7 +1,7 @@
 error[E0277]: the trait bound `Bare: Handler<_>` is not satisfied
-  --> tests/ui/fail/call_without_mailbox.rs:21:28
+  --> tests/ui/fail/call_without_mailbox.rs:22:28
    |
-21 |     let _ = actor_ref.call(Ping);
+22 |     let _ = actor_ref.call(Ping);
    |                       ---- ^^^^ unsatisfied trait bound
    |                       |
    |                       required by a bound introduced by this call
@@ -22,9 +22,9 @@ note: required by a bound in `ActorRef::<A>::call`
    |            ^^^^^^^^^^ required by this bound in `ActorRef::<A>::call`
 
 error[E0277]: the trait bound `Bare: Handler<_>` is not satisfied
-  --> tests/ui/fail/call_without_mailbox.rs:22:28
+  --> tests/ui/fail/call_without_mailbox.rs:23:28
    |
-22 |     let _ = actor_ref.send(Ping);
+23 |     let _ = actor_ref.send(Ping);
    |                       ---- ^^^^ unsatisfied trait bound
    |                       |
    |                       required by a bound introduced by this call

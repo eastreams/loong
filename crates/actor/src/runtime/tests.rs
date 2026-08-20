@@ -268,6 +268,7 @@ impl Actor for AbortChildParent {
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct Ping;
 
 impl SyncHandler<Ping> for AbortChildParent {

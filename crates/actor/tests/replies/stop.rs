@@ -12,6 +12,7 @@ impl Actor for StopActor {
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct StopOwned {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,

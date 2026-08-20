@@ -20,6 +20,7 @@ impl Actor for PanicActor {
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct PanicNow;
 
 impl Handler<PanicNow> for PanicActor {
@@ -49,6 +50,7 @@ async fn handler_panics_are_contained_and_reported() {
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct PanicAfterBarrier {
     entered: oneshot::Sender<()>,
     barrier: Arc<Barrier>,

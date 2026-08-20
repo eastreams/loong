@@ -25,6 +25,7 @@ async fn poll_once<F: Future>(mut future: Pin<&mut F>) -> Poll<F::Output> {
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct PendingOwned {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
@@ -42,6 +43,7 @@ impl Actor for HookChild {
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct StopChild;
 
 impl Handler<StopChild> for HookChild {
@@ -56,6 +58,7 @@ impl Handler<StopChild> for HookChild {
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct ExclusiveGate {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,

@@ -161,6 +161,7 @@ impl Actor for ControlledInit {
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct InitPing;
 
 impl Handler<InitPing> for ControlledInit {

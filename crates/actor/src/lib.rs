@@ -120,9 +120,10 @@
 //! # Messages
 //!
 //! Derive [`Message`] for each accepted request type.
-//! [`Message::Reply`] defines the successful call result.
-//! It defaults to `()`.
-//! Use `#[message(reply = Type)]` for another reply type.
+//! A message with `#[message(reply = Type)]` implements [`HasReply`] and can be
+//! used with [`ActorRef::call`]; without the attribute it is send-only and
+//! accepts only [`ActorRef::send`]. [`Message::Reply`] defaults to `()` either
+//! way.
 //!
 //! Implement [`SyncHandler<M>`](SyncHandler) for an immediate reply.
 //! Implement [`Handler<M>`](Handler) for asynchronous reply work.
@@ -232,7 +233,9 @@ pub mod supervision;
 pub mod transport;
 mod writer;
 
-pub use actor::{Actor, Handler, HasChildren, HasInterleaving, HasMailbox, Message, SyncHandler};
+pub use actor::{
+    Actor, Handler, HasChildren, HasInterleaving, HasMailbox, HasReply, Message, SyncHandler,
+};
 pub use address::{ActorRef, Recipient, Response};
 pub use config::{
     ActorConfig, DynamicChildrenOptions, DynamicInterleavingOptions, DynamicMailboxOptions,
@@ -283,8 +286,8 @@ pub mod prelude {
     pub use crate::{
         Actor, ActorFuture, ActorFutureExt, ActorScope, DynamicChildrenOptions,
         DynamicInterleavingOptions, DynamicMailboxOptions, Handler, HasChildren, HasInterleaving,
-        HasMailbox, InterleavedFutureExt, IntoActorFuture, IntoReply, Message, ReplyExt, StopScope,
-        SyncHandler, actor, reply,
+        HasMailbox, HasReply, InterleavedFutureExt, IntoActorFuture, IntoReply, Message, ReplyExt,
+        StopScope, SyncHandler, actor, reply,
     };
 }
 

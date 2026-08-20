@@ -93,7 +93,7 @@ fn run_calls<M>(
     calls: usize,
     mut message: impl FnMut() -> M,
 ) where
-    M: Message,
+    M: Message + HasReply,
     ReplyActor: Handler<M>,
 {
     runtime.block_on(async {
@@ -113,7 +113,7 @@ fn measure_calls<M>(
     message: impl FnMut() -> M,
 ) -> AllocationInfo
 where
-    M: Message,
+    M: Message + HasReply,
     ReplyActor: Handler<M>,
 {
     measure(|| run_calls(runtime, actor, MEASURED_CALLS, message))

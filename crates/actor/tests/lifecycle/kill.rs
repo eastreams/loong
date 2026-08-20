@@ -12,6 +12,7 @@ use super::{
 };
 
 #[derive(Message)]
+#[message(reply = ())]
 struct Interruptible {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
@@ -35,6 +36,7 @@ impl Handler<Interruptible> for LifecycleActor {
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct OwnedInterruptible {
     entered: oneshot::Sender<()>,
     drop_barrier: DropBarrier,
@@ -69,6 +71,7 @@ impl Handler<OwnedInterruptible> for LifecycleActor {
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct KillBeforeReady;
 
 impl Handler<KillBeforeReady> for LifecycleActor {

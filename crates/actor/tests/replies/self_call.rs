@@ -58,6 +58,7 @@ impl Handler<InterleavedSelfCall> for SelfCaller {
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct ExclusiveSelfCall {
     observed: oneshot::Sender<Response<u8>>,
     polled: oneshot::Sender<()>,

@@ -1,7 +1,7 @@
 use std::{fmt, future::Future, pin::Pin, sync::Arc, task};
 
 use crate::{
-    Actor, CallError, ExitStatus, Handler, Message, SendError, Shutdown, ShutdownStatus,
+    Actor, CallError, ExitStatus, Handler, HasReply, Message, SendError, Shutdown, ShutdownStatus,
     TryCallError, TryCallErrorKind, TrySendError, TrySendErrorKind, Writer,
     actor::HasMailbox,
     mailbox::{
@@ -43,12 +43,16 @@ pub trait Recipient<M: Message>: Send + Sync + private::Sealed {
     fn call<'a>(
         &'a self,
         message: M,
-    ) -> Pin<Box<dyn Future<Output = Result<M::Reply, CallError>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = Result<M::Reply, CallError>> + Send + 'a>>
+    where
+        M: HasReply;
 
     /// Attempts immediate admission without waiting for mailbox capacity.
     ///
     /// It follows [`ActorRef::try_call`] admission and error rules.
-    fn try_call(&self, message: M) -> Result<Response<M::Reply>, TryCallError<M>>;
+    fn try_call(&self, message: M) -> Result<Response<M::Reply>, TryCallError<M>>
+    where
+        M: HasReply;
 
     /// Sends a one-way message, waiting for mailbox capacity if needed.
     ///
@@ -115,7 +119,7 @@ impl<A: Actor> ActorRef<A> {
     pub async fn call<M>(&self, message: M) -> Result<M::Reply, CallError>
     where
         A: Handler<M>,
-        M: Message,
+        M: Message + HasReply,
     {
         let response = match self.try_call(message) {
             Ok(response) => response,
@@ -196,7 +200,7 @@ impl<A: Actor> ActorRef<A> {
     pub fn try_call<M>(&self, message: M) -> Result<Response<M::Reply>, TryCallError<M>>
     where
         A: Handler<M>,
-        M: Message,
+        M: Message + HasReply,
     {
         let inner = &self.0;
 
@@ -417,11 +421,17 @@ where
     fn call<'a>(
         &'a self,
         message: M,
-    ) -> Pin<Box<dyn Future<Output = Result<M::Reply, CallError>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<M::Reply, CallError>> + Send + 'a>>
+    where
+        M: HasReply,
+    {
         Box::pin(ActorRef::call(self, message))
     }
 
-    fn try_call(&self, message: M) -> Result<Response<M::Reply>, TryCallError<M>> {
+    fn try_call(&self, message: M) -> Result<Response<M::Reply>, TryCallError<M>>
+    where
+        M: HasReply,
+    {
         ActorRef::try_call(self, message)
     }
 
@@ -447,11 +457,17 @@ impl<M: Message> Recipient<M> for Arc<dyn Recipient<M>> {
     fn call<'a>(
         &'a self,
         message: M,
-    ) -> Pin<Box<dyn Future<Output = Result<M::Reply, CallError>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<M::Reply, CallError>> + Send + 'a>>
+    where
+        M: HasReply,
+    {
         self.as_ref().call(message)
     }
 
-    fn try_call(&self, message: M) -> Result<Response<M::Reply>, TryCallError<M>> {
+    fn try_call(&self, message: M) -> Result<Response<M::Reply>, TryCallError<M>>
+    where
+        M: HasReply,
+    {
         self.as_ref().try_call(message)
     }
 

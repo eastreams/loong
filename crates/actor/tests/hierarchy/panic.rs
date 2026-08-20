@@ -115,6 +115,7 @@ impl Actor for PanicParent {
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct PanicTree;
 
 impl Handler<PanicTree> for PanicParent {

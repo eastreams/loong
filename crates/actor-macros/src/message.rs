@@ -15,7 +15,7 @@ pub(super) fn expand(input: TokenStream) -> TokenStream {
 }
 
 fn expand_message(input: &DeriveInput) -> syn::Result<TokenStream2> {
-    let reply = reply_type(&input.attrs)?;
+    let (explicit_reply, reply) = reply_type(&input.attrs)?;
     let actor = actor_crate_path()?;
     let ident = &input.ident;
     let (_, type_generics, _) = input.generics.split_for_impl();
@@ -27,18 +27,27 @@ fn expand_message(input: &DeriveInput) -> syn::Result<TokenStream2> {
     predicates.push(parse_quote!(#reply: ::core::marker::Send + 'static));
     let (impl_generics, _, where_clause) = generics.split_for_impl();
 
+    let has_reply_impl = explicit_reply.then(|| {
+        quote! {
+            #[automatically_derived]
+            impl #impl_generics #actor::HasReply for #message #where_clause {}
+        }
+    });
+
     Ok(quote! {
         #[automatically_derived]
         impl #impl_generics #actor::Message for #message #where_clause {
             type Reply = #reply;
         }
+
+        #has_reply_impl
     })
 }
 
-fn reply_type(attrs: &[Attribute]) -> syn::Result<Type> {
+fn reply_type(attrs: &[Attribute]) -> syn::Result<(bool, Type)> {
     let mut message_attrs = attrs.iter().filter(|attr| attr.path().is_ident("message"));
     let Some(attr) = message_attrs.next() else {
-        return Ok(parse_quote!(()));
+        return Ok((false, parse_quote!(())));
     };
 
     if let Some(duplicate) = message_attrs.next() {
@@ -63,5 +72,6 @@ fn reply_type(attrs: &[Attribute]) -> syn::Result<Type> {
         Ok(())
     })?;
 
-    reply.ok_or_else(|| syn::Error::new_spanned(attr, "expected `reply = <type>`"))
+    let reply = reply.ok_or_else(|| syn::Error::new_spanned(attr, "expected `reply = <type>`"))?;
+    Ok((true, reply))
 }

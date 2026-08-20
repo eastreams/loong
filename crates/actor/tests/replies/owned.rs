@@ -27,6 +27,7 @@ impl Handler<PendingOwned> for ProgressActor {
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct Record(&'static str);
 
 impl Handler<Record> for ProgressActor {
@@ -41,6 +42,7 @@ impl Handler<Record> for ProgressActor {
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct InterleavedSequence {
     started: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,

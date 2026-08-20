@@ -29,6 +29,7 @@ impl Actor for ChildActor {
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct StopSelf;
 
 impl Handler<StopSelf> for ChildActor {
@@ -43,6 +44,7 @@ impl Handler<StopSelf> for ChildActor {
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct PanicSelf;
 
 impl Handler<PanicSelf> for ChildActor {
@@ -107,6 +109,7 @@ impl Handler<Observed> for Supervisor {
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct ChildExitBarrier;
 
 impl Handler<ChildExitBarrier> for Supervisor {

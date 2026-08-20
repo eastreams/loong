@@ -29,10 +29,14 @@ where
 {
 }
 
+// An explicitly selected reply also implements the callable marker.
+fn assert_has_reply<M: Message + HasReply>() {}
+
 fn main() {
     assert_reply::<Wake, ()>();
     assert_reply::<Reset, ()>();
     assert_reply::<Query<'static, u8, 4>, Result<[u8; 4], &'static str>>();
+    assert_has_reply::<Query<'static, u8, 4>>();
     let _ = Wake::Now;
     let _ = Reset { value: 0 };
 }

@@ -51,6 +51,7 @@ impl Actor for LogParent {
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct ParentPing;
 
 impl Handler<ParentPing> for LogParent {

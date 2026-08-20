@@ -25,6 +25,7 @@ impl Actor for PendingInit {
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct QueuedDrop {
     dropped: Arc<AtomicBool>,
     dropped_while_unwinding: Arc<AtomicBool>,
@@ -127,6 +128,7 @@ impl Actor for PendingInterleavedActor {
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct PendingInterleavedDrop {
     entered: Option<oneshot::Sender<()>>,
     drops: Arc<AtomicUsize>,

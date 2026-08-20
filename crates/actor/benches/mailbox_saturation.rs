@@ -31,6 +31,7 @@ impl Actor for MailboxActor {
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct ReadyTraffic;
 
 impl Handler<ReadyTraffic> for MailboxActor {

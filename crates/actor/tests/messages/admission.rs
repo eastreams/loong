@@ -28,6 +28,7 @@ impl Handler<Snapshot> for SerialActor {
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct CommitAfterRelease {
     value: u8,
     entered: tokio::sync::oneshot::Sender<()>,

@@ -12,6 +12,7 @@ impl Actor for PanicActor {
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct PendingSibling {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
@@ -31,12 +32,14 @@ impl Handler<PendingSibling> for PanicActor {
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct PanicReply {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct PanicAfterReady;
 
 impl Future for PanicAfterReady {

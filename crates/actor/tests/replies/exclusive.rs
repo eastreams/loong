@@ -41,6 +41,7 @@ impl Handler<PendingOwned> for ExclusiveActor {
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct InterleavedGate {
     dispatched: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
@@ -75,6 +76,7 @@ impl Handler<ExclusiveGate> for ExclusiveActor {
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct Mark(oneshot::Sender<()>);
 
 impl Handler<Mark> for ExclusiveActor {

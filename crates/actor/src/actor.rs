@@ -239,7 +239,9 @@ where
 ///
 /// Declare one with `#[derive(Message)]`.
 /// The derive defaults its reply type to `()`.
-/// Use `#[message(reply = Type)]` to select another type.
+/// Without `#[message(reply = Type)]` the message is send-only and does not
+/// implement [`HasReply`], so it cannot be passed to [`crate::ActorRef::call`].
+/// Add `#[message(reply = Type)]` to make it callable.
 pub trait Message: Send + 'static {
     /// The typed value eventually returned to the caller.
     ///
@@ -248,6 +250,13 @@ pub trait Message: Send + 'static {
     /// borrow from the actor.
     type Reply: Send + 'static;
 }
+
+/// Marks a [`Message`] with an explicitly selected reply type.
+///
+/// `#[derive(Message)]` without `#[message(reply = Type)]` is send-only and
+/// does not implement this trait, so [`crate::ActorRef::call`] and
+/// [`crate::ActorRef::try_call`] are unavailable for it.
+pub trait HasReply: Message {}
 
 /// Handles one message by producing its reply before returning.
 ///

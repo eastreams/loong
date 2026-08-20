@@ -1,0 +1,43 @@
+error[E0277]: the trait bound `Ping: HasReply` is not satisfied
+  --> tests/ui/fail/send_only_message_call.rs:25:28
+   |
+25 |     let _ = actor_ref.call(Ping);
+   |                       ---- ^^^^ unsatisfied trait bound
+   |                       |
+   |                       required by a bound introduced by this call
+   |
+help: the trait `HasReply` is not implemented for `Ping`
+  --> tests/ui/fail/send_only_message_call.rs:16:1
+   |
+16 | struct Ping;
+   | ^^^^^^^^^^^
+note: required by a bound in `ActorRef::<A>::call`
+  --> src/address.rs
+   |
+   |     pub async fn call<M>(&self, message: M) -> Result<M::Reply, CallError>
+   |                  ---- required by a bound in this associated function
+...
+   |         M: Message + HasReply,
+   |                      ^^^^^^^^ required by this bound in `ActorRef::<A>::call`
+
+error[E0277]: the trait bound `Ping: HasReply` is not satisfied
+  --> tests/ui/fail/send_only_message_call.rs:27:28
+   |
+27 |     let _ = recipient.call(Ping);
+   |                       ---- ^^^^ unsatisfied trait bound
+   |                       |
+   |                       required by a bound introduced by this call
+   |
+help: the trait `HasReply` is not implemented for `Ping`
+  --> tests/ui/fail/send_only_message_call.rs:16:1
+   |
+16 | struct Ping;
+   | ^^^^^^^^^^^
+note: required by a bound in `loac::Recipient::call`
+  --> src/address.rs
+   |
+   |     fn call<'a>(
+   |        ---- required by a bound in this associated function
+...
+   |         M: HasReply;
+   |            ^^^^^^^^ required by this bound in `Recipient::call`

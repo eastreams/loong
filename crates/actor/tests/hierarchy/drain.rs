@@ -70,6 +70,7 @@ impl Actor for DrainParent {
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct ParentBlock {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,

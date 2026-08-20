@@ -10,6 +10,7 @@ use super::{
 };
 
 #[derive(Message)]
+#[message(reply = ())]
 struct StopFromExclusive;
 
 impl Handler<StopFromExclusive> for LifecycleActor {

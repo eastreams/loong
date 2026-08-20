@@ -29,6 +29,7 @@ impl Handler<OwnedTaskIdentity> for FairActor {
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct ActiveInterleavedReply {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
@@ -55,6 +56,7 @@ impl Handler<ActiveInterleavedReply> for FairActor {
 }
 
 #[derive(Message)]
+#[message(reply = ())]
 struct ReadyWork;
 
 impl Handler<ReadyWork> for FairActor {
