@@ -4,5 +4,12 @@ edition.workspace = true
 license.workspace = true
 version.workspace = true
 
+[dependencies]
+context.workspace = true
+contracts.workspace = true
+loac.workspace = true
+provider.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+
 [lints]
 workspace = true

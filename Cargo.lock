@@ -446,7 +446,9 @@ version = "0.2.0"
 dependencies = [
  "loac",
  "loong-context",
+ "loong-contracts",
  "loong-provider",
+ "tokio",
 ]
 
 [[package]]

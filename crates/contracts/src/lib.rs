@@ -8,5 +8,6 @@ extern crate alloc;
 
 pub mod capability;
 pub mod policy;
+pub mod provider;
 pub mod tool;
 pub mod transcript;
