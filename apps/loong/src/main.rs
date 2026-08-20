@@ -34,10 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let model = env_or("LOONG_OPENAI_MODEL", "gpt-4o-mini");
 
     let config = OpenAiConfig::new(base_url.clone(), api_key.clone(), model.clone());
-    let owner = loac::spawn::<Agent<MemoryStore, OpenAiProvider>>((
-        MemoryStore::new(),
-        OpenAiProvider::new(config),
-    ));
+    let owner = loac::spawn::<Agent<_, _>>((MemoryStore::new(), OpenAiProvider::new(config)));
     let agent_ref = owner.actor_ref();
 
     let stdin = BufReader::new(tokio::io::stdin());
