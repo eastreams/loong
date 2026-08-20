@@ -24,7 +24,27 @@ pub struct Request {
 
 /// One item streamed from an upstream provider.
 ///
-/// Streaming providers emit deltas; non-streaming providers emit the whole
-/// assistant message as a single item.
+/// Streaming providers emit text deltas and complete tool calls. Non-streaming
+/// providers emit the whole assistant message as a single [`StreamItem::Text`].
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct StreamItem(pub String);
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StreamItem {
+    /// One text delta, or a whole assistant message for non-streaming
+    /// providers.
+    Text {
+        /// The delta text.
+        delta: String,
+    },
+    /// One complete assistant tool call.
+    ///
+    /// Streaming adapters reassemble tool-call deltas before emitting, so
+    /// callers never observe partial JSON arguments.
+    ToolCall {
+        /// Provider-issued tool call id.
+        id: String,
+        /// Tool name.
+        name: String,
+        /// Complete pre-serialized JSON arguments.
+        arguments: String,
+    },
+}
