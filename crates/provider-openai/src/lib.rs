@@ -41,6 +41,7 @@ impl OpenAiConfig {
 }
 
 /// OpenAI-compatible chat completion provider.
+#[derive(Clone)]
 pub struct OpenAiProvider {
     client: reqwest::Client,
     config: OpenAiConfig,

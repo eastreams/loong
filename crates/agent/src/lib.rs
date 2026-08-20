@@ -10,10 +10,14 @@ use tokio::sync::mpsc;
 pub type ProviderOut = mpsc::Sender<StreamItem>;
 
 /// Scaffold actor that composes context storage and an upstream provider.
+///
+/// `P: Clone` keeps stream handlers able to capture the provider they were
+/// started with, so switching the actor's provider never interrupts streams
+/// that are already running.
 pub struct Agent<C, P>
 where
     C: ContextStore,
-    P: Provider<Request, StreamItem, ProviderOut>,
+    P: Provider<Request, StreamItem, ProviderOut> + Clone,
 {
     // Owned by the actor; request handlers will read it.
     #[allow(dead_code)]
@@ -24,8 +28,8 @@ where
 /// Replaces the provider used by subsequent streams.
 ///
 /// The frontend builds a new provider (for example an OpenAI provider with a
-/// different model) and sends it to the agent. Already-running streams keep
-/// their original provider.
+/// different model) and sends it to the agent. Streams that already started
+/// hold their own clone, so they keep their original provider.
 #[derive(loac::Message)]
 #[message(reply = ())]
 pub struct SwitchProvider<P>(pub P);
@@ -34,7 +38,7 @@ pub struct SwitchProvider<P>(pub P);
 impl<C, P> Actor for Agent<C, P>
 where
     C: ContextStore + 'static,
-    P: Provider<Request, StreamItem, ProviderOut> + 'static,
+    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
 {
     type SpawnArgs = (C, P);
 
@@ -49,7 +53,7 @@ where
 impl<C, P> SyncHandler<SwitchProvider<P>> for Agent<C, P>
 where
     C: ContextStore + 'static,
-    P: Provider<Request, StreamItem, ProviderOut> + 'static,
+    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
 {
     fn handle(&mut self, message: SwitchProvider<P>, _scope: &mut ActorScope<'_, Self>) {
         self.provider = message.0;
@@ -63,11 +67,29 @@ mod tests {
     use context::memory::MemoryStore;
     use loac::{ExitReason, Shutdown};
     use provider::{Provider, StreamError};
+    use std::sync::Arc;
 
+    #[derive(Clone)]
     struct DummyProvider;
 
     #[async_trait]
     impl Provider<Request, StreamItem, ProviderOut> for DummyProvider {
+        async fn stream(
+            &self,
+            _req: Request,
+            _out: &mut ProviderOut,
+        ) -> Result<(), StreamError<Request>> {
+            Ok(())
+        }
+    }
+
+    /// A provider that is intentionally not `Clone`; it can still be used
+    /// with `Agent` by wrapping it in an `Arc`, which is `Clone` and now
+    /// implements `Provider` through the blanket impl.
+    struct NonCloneProvider;
+
+    #[async_trait]
+    impl Provider<Request, StreamItem, ProviderOut> for NonCloneProvider {
         async fn stream(
             &self,
             _req: Request,
@@ -84,6 +106,23 @@ mod tests {
         let actor_ref = owner.actor_ref();
 
         actor_ref.call(SwitchProvider(DummyProvider)).await.unwrap();
+
+        let status = owner.shutdown(Shutdown::Drain).await;
+        assert_eq!(status.reason(), ExitReason::Drained);
+    }
+
+    #[tokio::test]
+    async fn switch_provider_accepts_arc_of_non_clone_provider() {
+        let owner = loac::spawn::<Agent<MemoryStore, Arc<NonCloneProvider>>>((
+            MemoryStore::new(),
+            Arc::new(NonCloneProvider),
+        ));
+        let actor_ref = owner.actor_ref();
+
+        actor_ref
+            .call(SwitchProvider(Arc::new(NonCloneProvider)))
+            .await
+            .unwrap();
 
         let status = owner.shutdown(Shutdown::Drain).await;
         assert_eq!(status.reason(), ExitReason::Drained);
