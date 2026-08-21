@@ -4,6 +4,10 @@ mod admission;
 mod capacity_wakers;
 #[path = "messages/policies.rs"]
 mod policies;
+#[path = "messages/stream_reply.rs"]
+mod stream_reply;
+#[path = "messages/stream_to.rs"]
+mod stream_to;
 mod support;
 #[path = "messages/typed_replies.rs"]
 mod typed_replies;

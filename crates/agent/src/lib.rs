@@ -38,12 +38,10 @@ pub struct SwitchProvider<P>(pub P);
 /// The agent appends the user message to its context store before streaming,
 /// then appends the assistant text after the stream commits.
 #[derive(loac::Message)]
-#[message(reply = Result<(), StreamError<Request>>)]
+#[message(stream = StreamItem, reply = Result<(), StreamError<Request>>)]
 pub struct Prompt {
     /// The user message to append and send.
     pub text: String,
-    /// Writer that receives streamed items as they arrive.
-    pub out: ProviderOut,
 }
 
 /// Appends assistant transcript items after a stream commits.
@@ -77,16 +75,20 @@ where
     }
 }
 
-impl<C, P> Handler<Prompt> for Agent<C, P>
+impl<C, P> StreamHandler<Prompt> for Agent<C, P>
 where
     C: ContextStore + 'static,
     P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
 {
-    fn handle(
+    fn handle<W>(
         &mut self,
         message: Prompt,
+        out: W,
         scope: &mut ActorScope<'_, Self>,
-    ) -> impl IntoReply<Self, Prompt> + use<C, P> {
+    ) -> impl loac::IntoStreamReply<Self, Prompt> + use<C, P, W>
+    where
+        W: loac::Writer<StreamItem> + Send + 'static,
+    {
         let provider = self.provider.clone();
         let myself = scope.myself().clone();
 
@@ -104,15 +106,15 @@ where
         };
         self.store.append(vec![user_item]);
 
-        let frontend = message.out;
         let (mut local_tx, local_rx) = mpsc::channel::<StreamItem>(8);
 
         async move {
             let relay = tokio::spawn(async move {
+                let mut out = out;
                 let mut rx = local_rx;
                 let mut items = Vec::new();
                 while let Some(item) = rx.recv().await {
-                    let _ = frontend.send(item.clone()).await;
+                    let _ = out.write(item.clone()).await;
                     items.push(item);
                 }
                 items
@@ -279,23 +281,21 @@ mod tests {
         let owner = loac::spawn::<Agent<SharedStore, EchoProvider>>((store.clone(), EchoProvider));
         let actor_ref = owner.actor_ref();
 
-        let (tx, mut rx) = mpsc::channel(8);
-        actor_ref
+        let mut reply = actor_ref
             .call(Prompt {
                 text: "hi".to_string(),
-                out: tx,
             })
             .await
-            .unwrap()
             .unwrap();
 
         let mut text = String::new();
-        while let Some(item) = rx.recv().await {
+        while let Some(item) = reply.recv().await {
             match item {
                 StreamItem::Text { delta } => text.push_str(&delta),
                 StreamItem::ToolCall { .. } => panic!("unexpected tool call"),
             }
         }
+        reply.finish().await.unwrap().unwrap();
 
         assert_eq!(text, "hello");
 

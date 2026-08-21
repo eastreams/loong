@@ -39,6 +39,14 @@ name = "streaming"
 path = "examples/streaming.rs"
 
 [[example]]
+name = "stream_strategies"
+path = "examples/stream_strategies.rs"
+
+[[example]]
+name = "stream_to"
+path = "examples/stream_to.rs"
+
+[[example]]
 name = "actor_configuration"
 path = "examples/configuration/actor_configuration.rs"
 

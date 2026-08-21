@@ -89,6 +89,40 @@ impl<M> fmt::Debug for SendError<M> {
     }
 }
 
+/// A streamed one-way message with a caller-provided writer that could not
+/// commit to an actor's mailbox.
+///
+/// The actor had already closed admission, so the handler was never invoked.
+/// Both the original message and the writer can be recovered with
+/// [`into_parts`](Self::into_parts) and are safe to retry elsewhere.
+#[derive(thiserror::Error)]
+#[error("the actor is closed to new messages")]
+pub struct SendToError<M, W> {
+    message: M,
+    writer: W,
+}
+
+impl<M, W> SendToError<M, W> {
+    pub(crate) const fn new(message: M, writer: W) -> Self {
+        Self { message, writer }
+    }
+
+    /// Returns the original message and writer without dropping either.
+    pub fn into_parts(self) -> (M, W) {
+        (self.message, self.writer)
+    }
+}
+
+impl<M, W> fmt::Debug for SendToError<M, W> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SendToError")
+            .field("message", &"<message>")
+            .field("writer", &"<writer>")
+            .finish()
+    }
+}
+
 /// The reason a synchronous one-way admission attempt failed.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 #[non_exhaustive]

@@ -50,13 +50,37 @@ use std::{
 };
 
 use pin_project_lite::pin_project;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::{
-    Actor, ActorFuture, ActorScope, HasInterleaving, HasMailbox, Message,
+    Actor, ActorFuture, ActorScope, CallError, HasInterleaving, HasMailbox, Message,
     mailbox::DispatchReply,
     owned::OwnedTasks,
     scheduling::{ActorScheduler, InterleavedScheduler, ReplyScheduler, Seal},
 };
+
+mod private {
+    pub trait Sealed {}
+}
+
+/// Selects the reply channel shape a [`Message`] uses.
+///
+/// [`Handler`](crate::Handler) is generic over this kind. The runtime uses the
+/// message's [`Message::Kind`] to select the matching handler implementation.
+/// Two kind values make the sync and stream handler blanket impls disjoint.
+pub trait ReplyKind: private::Sealed + Send + 'static {}
+
+/// The ordinary reply kind: one typed value returned to the caller.
+pub struct SyncKind;
+
+impl private::Sealed for SyncKind {}
+impl ReplyKind for SyncKind {}
+
+/// The streaming reply kind: a [`StreamReply`] handle returned to the caller.
+pub struct StreamKind;
+
+impl private::Sealed for StreamKind {}
+impl ReplyKind for StreamKind {}
 
 /// Extension methods that select explicit reply scheduling strategies.
 ///
@@ -217,6 +241,227 @@ where
 {
 }
 
+/// A stream-final scheduling strategy returned by a
+/// [`StreamHandler`](crate::StreamHandler).
+///
+/// This is the streaming counterpart of [`IntoReply`]: a bare [`Future`] with
+/// output `M::Final` selects owned scheduling, [`Ready`] completes the final
+/// value immediately, [`Exclusive`] selects actor-aware mailbox-pausing
+/// scheduling, [`Interleaved`] selects actor-aware interleaved scheduling, and
+/// [`Either`] chooses between two strategies at runtime.
+///
+/// [`Ready`] is mainly useful as one branch of an [`Either`] when the handler
+/// decides not to stream items. A message type that never streams should be an
+/// ordinary message instead of a stream message.
+///
+/// The trait is sealed so the stream-final sender and scheduler access stay
+/// private to the runtime.
+pub trait IntoStreamReply<A: Actor, M: StreamMessage>:
+    sealed::HandleStream<A, M> + sealed::HandleStreamCall<A, M>
+{
+}
+
+impl<A, M, T> IntoStreamReply<A, M> for T
+where
+    A: Actor,
+    M: StreamMessage,
+    T: sealed::HandleStream<A, M> + sealed::HandleStreamCall<A, M>,
+{
+}
+
+/// A caller handle for a streamed reply.
+///
+/// `call` returns this handle after the stream is set up. Read items with
+/// [`recv`](Self::recv) or [`items`](Self::items), then wait for the final
+/// value with [`finish`](Self::finish). Dropping the handle cancels the item
+/// stream; the handler observes closed writes and may stop early.
+///
+/// [`recv`](Self::recv) and [`items`](Self::items) wait for the item stream to
+/// close. A well-behaved handler closes it by dropping the writer when its
+/// future finishes. If a handler leaks the writer into a detached task, the
+/// item stream may stay open after the final value is ready; [`finish`](Self::finish)
+/// is final-aware and still returns.
+#[must_use = "a stream reply must be consumed or finished"]
+#[derive(Debug)]
+pub struct StreamReply<Item, Final> {
+    item_rx: mpsc::Receiver<Item>,
+    final_rx: oneshot::Receiver<Final>,
+}
+
+impl<Item, Final> StreamReply<Item, Final> {
+    /// Receives the next streamed item, or `None` when the item stream is done.
+    pub async fn recv(&mut self) -> Option<Item> {
+        self.item_rx.recv().await
+    }
+
+    /// Borrows the item stream as a [`futures_util::Stream`].
+    ///
+    /// The borrow keeps this [`StreamReply`] alive, so the final value stays
+    /// available through [`finish`](Self::finish) after the item stream ends.
+    pub fn items(&mut self) -> Items<'_, Item> {
+        Items {
+            item_rx: &mut self.item_rx,
+        }
+    }
+
+    /// Consumes this handle, discards remaining items, and returns the final
+    /// reply value.
+    ///
+    /// The item stream is drained while waiting so a handler that fills the
+    /// item channel can finish. If the final value arrives first, already
+    /// buffered items are discarded and the final value is returned.
+    pub async fn finish(mut self) -> Result<Final, CallError> {
+        loop {
+            tokio::select! {
+                item = self.item_rx.recv() => {
+                    if item.is_none() {
+                        return self.final_rx.await.map_err(|_| CallError::ResponseLost);
+                    }
+                }
+                result = &mut self.final_rx => {
+                    while self.item_rx.try_recv().is_ok() {}
+                    return result.map_err(|_| CallError::ResponseLost);
+                }
+            }
+        }
+    }
+}
+
+/// Borrowed item-stream view created by [`StreamReply::items`].
+#[derive(Debug)]
+pub struct Items<'a, Item> {
+    item_rx: &'a mut mpsc::Receiver<Item>,
+}
+
+impl<Item> futures_util::Stream for Items<'_, Item> {
+    type Item = Item;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.get_mut().item_rx.poll_recv(cx)
+    }
+}
+
+/// A [`Message`] whose reply is a stream of items plus a final value.
+///
+/// The derive implements this when `#[message(stream = Item, reply = Final)]`
+/// is present. The blanket [`StreamHandler`](crate::StreamHandler) adaptation
+/// targets [`Handler<M, StreamKind>`](crate::Handler).
+pub trait StreamMessage:
+    Message<Kind = StreamKind, Reply = StreamReply<Self::Item, Self::Final>>
+{
+    /// Type of each streamed item.
+    type Item: Send + 'static;
+    /// Type of the final value delivered after the stream ends.
+    type Final: Send + 'static;
+}
+
+pub(crate) struct StreamDispatch<S, Item, Final> {
+    strategy: S,
+    item_rx: mpsc::Receiver<Item>,
+    final_tx: oneshot::Sender<Final>,
+    final_rx: oneshot::Receiver<Final>,
+}
+
+impl<S, Item, Final> StreamDispatch<S, Item, Final> {
+    pub(crate) fn new(
+        strategy: S,
+        item_rx: mpsc::Receiver<Item>,
+        final_tx: oneshot::Sender<Final>,
+        final_rx: oneshot::Receiver<Final>,
+    ) -> Self {
+        Self {
+            strategy,
+            item_rx,
+            final_tx,
+            final_rx,
+        }
+    }
+}
+
+impl<A, M, S> sealed::HandleReply<A, M> for StreamDispatch<S, M::Item, M::Final>
+where
+    A: Actor,
+    M: StreamMessage,
+    S: sealed::HandleStream<A, M>,
+{
+    fn handle(
+        self,
+        owned: &OwnedTasks<A>,
+        scheduler: &mut ActorScheduler<A>,
+        reply: DispatchReply<'_, A, M::Reply>,
+    ) {
+        let this = self;
+        reply.complete(StreamReply {
+            item_rx: this.item_rx,
+            final_rx: this.final_rx,
+        });
+        this.strategy.handle_stream(owned, scheduler, this.final_tx);
+    }
+}
+
+pin_project! {
+    struct FinishStream<F, T> {
+        #[pin]
+        future: F,
+        final_tx: Option<oneshot::Sender<T>>,
+    }
+}
+
+impl<F, T> FinishStream<F, T> {
+    fn new(future: F, final_tx: oneshot::Sender<T>) -> Self {
+        Self {
+            future,
+            final_tx: Some(final_tx),
+        }
+    }
+}
+
+impl<F, T> Future for FinishStream<F, T>
+where
+    F: Future<Output = T>,
+{
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        match this.future.poll(cx) {
+            Poll::Ready(value) => {
+                if let Some(tx) = this.final_tx.take() {
+                    let _ = tx.send(value);
+                }
+                Poll::Ready(())
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl<A, F, T> ActorFuture<A> for FinishStream<F, T>
+where
+    A: Actor,
+    F: ActorFuture<A, Output = T>,
+    T: Send + 'static,
+{
+    type Output = ();
+
+    fn poll(
+        self: Pin<&mut Self>,
+        actor: &mut A,
+        scope: &mut ActorScope<'_, A>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Self::Output> {
+        let this = self.project();
+        match this.future.poll(actor, scope, cx) {
+            Poll::Ready(value) => {
+                if let Some(tx) = this.final_tx.take() {
+                    let _ = tx.send(value);
+                }
+                Poll::Ready(())
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
 // Crate visibility lets the mailbox invoke the static reply implementation
 // after dynamic envelope dispatch, while downstream crates cannot name it.
 #[expect(
@@ -314,6 +559,199 @@ pub(crate) mod sealed {
             match self {
                 Either::Left(left) => left.handle(owned, scheduler, reply),
                 Either::Right(right) => right.handle(owned, scheduler, reply),
+            }
+        }
+    }
+
+    /// Stream-final scheduling dispatch.
+    ///
+    /// The caller reply is already completed with a [`StreamReply`] before
+    /// this is called; only final-value production remains to be scheduled.
+    pub trait HandleStream<A: Actor, M: StreamMessage> {
+        fn handle_stream(
+            self,
+            owned: &OwnedTasks<A>,
+            scheduler: &mut ActorScheduler<A>,
+            final_tx: oneshot::Sender<M::Final>,
+        );
+    }
+
+    impl<A, M> HandleStream<A, M> for Ready<M::Final>
+    where
+        A: Actor,
+        M: StreamMessage,
+    {
+        fn handle_stream(
+            self,
+            _owned: &OwnedTasks<A>,
+            _scheduler: &mut ActorScheduler<A>,
+            final_tx: oneshot::Sender<M::Final>,
+        ) {
+            let _ = final_tx.send(self.value);
+        }
+    }
+
+    impl<A, M, F> HandleStream<A, M> for F
+    where
+        A: Actor,
+        M: StreamMessage,
+        F: Future<Output = M::Final> + Send + 'static,
+    {
+        fn handle_stream(
+            self,
+            owned: &OwnedTasks<A>,
+            _scheduler: &mut ActorScheduler<A>,
+            final_tx: oneshot::Sender<M::Final>,
+        ) {
+            owned.spawn(FinishStream::new(self, final_tx));
+        }
+    }
+
+    impl<A, M, F> HandleStream<A, M> for Interleaved<A, F>
+    where
+        A: HasInterleaving,
+        M: StreamMessage,
+        F: ActorFuture<A, Output = M::Final> + Send + 'static,
+    {
+        fn handle_stream(
+            self,
+            _owned: &OwnedTasks<A>,
+            scheduler: &mut ActorScheduler<A>,
+            final_tx: oneshot::Sender<M::Final>,
+        ) {
+            scheduler.__push_interleaved(Seal, FinishStream::new(self.future, final_tx));
+        }
+    }
+
+    impl<A, M, F> HandleStream<A, M> for Exclusive<F>
+    where
+        A: HasMailbox,
+        M: StreamMessage,
+        F: ActorFuture<A, Output = M::Final> + Send + 'static,
+    {
+        fn handle_stream(
+            self,
+            _owned: &OwnedTasks<A>,
+            scheduler: &mut ActorScheduler<A>,
+            final_tx: oneshot::Sender<M::Final>,
+        ) {
+            scheduler.__push_exclusive(Seal, FinishStream::new(self.future, final_tx));
+        }
+    }
+
+    impl<A, M, L, R> HandleStream<A, M> for Either<L, R>
+    where
+        A: Actor,
+        M: StreamMessage,
+        L: HandleStream<A, M>,
+        R: HandleStream<A, M>,
+    {
+        fn handle_stream(
+            self,
+            owned: &OwnedTasks<A>,
+            scheduler: &mut ActorScheduler<A>,
+            final_tx: oneshot::Sender<M::Final>,
+        ) {
+            match self {
+                Either::Left(left) => left.handle_stream(owned, scheduler, final_tx),
+                Either::Right(right) => right.handle_stream(owned, scheduler, final_tx),
+            }
+        }
+    }
+
+    /// Stream-final dispatch that completes a call reply directly.
+    ///
+    /// Used when the caller supplies the item writer, so there is no
+    /// [`StreamReply`] handle to complete. The final value is delivered through
+    /// the ordinary call reply path instead.
+    pub trait HandleStreamCall<A: Actor, M: StreamMessage> {
+        fn handle_stream_call(
+            self,
+            owned: &OwnedTasks<A>,
+            scheduler: &mut ActorScheduler<A>,
+            reply: DispatchReply<'_, A, M::Final>,
+        );
+    }
+
+    impl<A, M> HandleStreamCall<A, M> for Ready<M::Final>
+    where
+        A: Actor,
+        M: StreamMessage,
+    {
+        fn handle_stream_call(
+            self,
+            _owned: &OwnedTasks<A>,
+            _scheduler: &mut ActorScheduler<A>,
+            reply: DispatchReply<'_, A, M::Final>,
+        ) {
+            reply.complete(self.value);
+        }
+    }
+
+    impl<A, M, F> HandleStreamCall<A, M> for F
+    where
+        A: Actor,
+        M: StreamMessage,
+        F: Future<Output = M::Final> + Send + 'static,
+    {
+        fn handle_stream_call(
+            self,
+            owned: &OwnedTasks<A>,
+            _scheduler: &mut ActorScheduler<A>,
+            reply: DispatchReply<'_, A, M::Final>,
+        ) {
+            owned.spawn(CompleteReply::new(self, reply.into_owned()));
+        }
+    }
+
+    impl<A, M, F> HandleStreamCall<A, M> for Interleaved<A, F>
+    where
+        A: HasInterleaving,
+        M: StreamMessage,
+        F: ActorFuture<A, Output = M::Final> + Send + 'static,
+    {
+        fn handle_stream_call(
+            self,
+            _owned: &OwnedTasks<A>,
+            scheduler: &mut ActorScheduler<A>,
+            reply: DispatchReply<'_, A, M::Final>,
+        ) {
+            scheduler.__push_interleaved(Seal, CompleteReply::new(self.future, reply.into_owned()));
+        }
+    }
+
+    impl<A, M, F> HandleStreamCall<A, M> for Exclusive<F>
+    where
+        A: HasMailbox,
+        M: StreamMessage,
+        F: ActorFuture<A, Output = M::Final> + Send + 'static,
+    {
+        fn handle_stream_call(
+            self,
+            _owned: &OwnedTasks<A>,
+            scheduler: &mut ActorScheduler<A>,
+            reply: DispatchReply<'_, A, M::Final>,
+        ) {
+            scheduler.__push_exclusive(Seal, CompleteReply::new(self.future, reply.into_owned()));
+        }
+    }
+
+    impl<A, M, L, R> HandleStreamCall<A, M> for Either<L, R>
+    where
+        A: Actor,
+        M: StreamMessage,
+        L: HandleStreamCall<A, M>,
+        R: HandleStreamCall<A, M>,
+    {
+        fn handle_stream_call(
+            self,
+            owned: &OwnedTasks<A>,
+            scheduler: &mut ActorScheduler<A>,
+            reply: DispatchReply<'_, A, M::Final>,
+        ) {
+            match self {
+                Either::Left(left) => left.handle_stream_call(owned, scheduler, reply),
+                Either::Right(right) => right.handle_stream_call(owned, scheduler, reply),
             }
         }
     }

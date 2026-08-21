@@ -234,7 +234,8 @@ pub mod transport;
 mod writer;
 
 pub use actor::{
-    Actor, Handler, HasChildren, HasInterleaving, HasMailbox, HasReply, Message, SyncHandler,
+    Actor, Handler, HasChildren, HasInterleaving, HasMailbox, HasReply, Message, StreamHandler,
+    SyncHandler,
 };
 pub use address::{ActorRef, Recipient, Response};
 pub use config::{
@@ -242,14 +243,18 @@ pub use config::{
     SupervisionConfig,
 };
 pub use error::{
-    CallError, SendError, TryCallError, TryCallErrorKind, TrySendError, TrySendErrorKind,
+    CallError, SendError, SendToError, TryCallError, TryCallErrorKind, TrySendError,
+    TrySendErrorKind,
 };
 pub use future::{ActorFuture, ActorFutureExt, FutureActor, IntoActorFuture, Map, Then};
 pub use lifecycle::{
     Child, ChildExit, ChildId, ExitReason, ExitStatus, Shutdown, ShutdownStatus, SubtreeStatus,
 };
 pub use loac_macros::{Message, actor};
-pub use reply::{InterleavedFutureExt, IntoReply, ReplyExt};
+pub use reply::{
+    InterleavedFutureExt, IntoReply, IntoStreamReply, Items, ReplyExt, StreamKind, StreamMessage,
+    StreamReply, SyncKind,
+};
 pub use runtime::{ActorOwner, ActorScope, SpawnOptions, StopScope, spawn, spawn_with};
 pub use transport::MessageConfig;
 pub use writer::Writer;
@@ -286,8 +291,9 @@ pub mod prelude {
     pub use crate::{
         Actor, ActorFuture, ActorFutureExt, ActorScope, DynamicChildrenOptions,
         DynamicInterleavingOptions, DynamicMailboxOptions, Handler, HasChildren, HasInterleaving,
-        HasMailbox, HasReply, InterleavedFutureExt, IntoActorFuture, IntoReply, Message, ReplyExt,
-        StopScope, SyncHandler, actor, reply,
+        HasMailbox, HasReply, InterleavedFutureExt, IntoActorFuture, IntoReply, IntoStreamReply,
+        Items, Message, ReplyExt, StopScope, StreamHandler, StreamMessage, StreamReply,
+        SyncHandler, Writer, actor, reply,
     };
 }
 

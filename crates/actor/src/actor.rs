@@ -1,9 +1,11 @@
 use std::future::Future;
 
+use tokio::sync::{mpsc, oneshot};
+
 use crate::{
-    ActorScope, ChildExit, ExitReason, StopScope,
+    ActorScope, ChildExit, ExitReason, StopScope, Writer,
     config::SupervisionConfig,
-    reply::{IntoReply, ReplyExt},
+    reply::{IntoReply, IntoStreamReply, ReplyExt, StreamDispatch, StreamMessage, SyncKind},
     scheduling::{InterleavedScheduler, ReplyScheduler, SchedulerProfile},
     transport::{MessageConfig, MessageInbox, MessageSender, RuntimeInbox},
 };
@@ -249,6 +251,14 @@ pub trait Message: Send + 'static {
     /// task boundary to its caller, so it must be `Send + 'static` and cannot
     /// borrow from the actor.
     type Reply: Send + 'static;
+
+    /// The reply channel shape this message selects.
+    ///
+    /// Ordinary messages use [`reply::SyncKind`](crate::reply::SyncKind).
+    /// Messages derived with `#[message(stream = ...)]` use
+    /// [`reply::StreamKind`](crate::reply::StreamKind). The runtime reads this
+    /// kind when choosing a [`Handler`] implementation.
+    type Kind: crate::reply::ReplyKind;
 }
 
 /// Marks a [`Message`] with an explicitly selected reply type.
@@ -316,7 +326,7 @@ pub trait SyncHandler<M: Message>: HasMailbox {
 /// statically selects one concrete reply representation while keeping its type
 /// opaque. Mailbox FIFO determines the order in which eligible handlers are
 /// dispatched; asynchronous replies may complete in a different order.
-pub trait Handler<M: Message>: HasMailbox {
+pub trait Handler<M: Message, K: crate::reply::ReplyKind = SyncKind>: HasMailbox {
     /// Synchronously starts handling `message` and chooses its reply semantics.
     ///
     /// The runtime calls this method after the request commits to dispatch.
@@ -327,7 +337,13 @@ pub trait Handler<M: Message>: HasMailbox {
     /// not roll back effects that occur here. A panic is contained, fails this
     /// actor, and cancels its other active and queued work.
     ///
-    /// The precise `use<Self, M>` capture list excludes the lifetimes of this
+    /// The `K` parameter selects the reply channel shape. [`SyncKind`] is the
+    /// default for `Handler<M>` and is used by ordinary messages.
+    /// [`crate::reply::StreamKind`] is used by stream messages and is selected
+    /// automatically when the message implements
+    /// [`StreamMessage`](crate::reply::StreamMessage).
+    ///
+    /// The precise `use<Self, M, K>` capture list excludes the lifetimes of this
     /// invocation's `&mut self` and `scope` borrows. A returned asynchronous reply
     /// must therefore own everything it keeps across polls, such as a moved
     /// message or a cloned handle. It cannot carry either mutable borrow beyond
@@ -356,13 +372,13 @@ pub trait Handler<M: Message>: HasMailbox {
         &mut self,
         message: M,
         scope: &mut ActorScope<'_, Self>,
-    ) -> impl IntoReply<Self, M> + use<Self, M>;
+    ) -> impl IntoReply<Self, M> + use<Self, M, K>;
 }
 
-impl<A, M> Handler<M> for A
+impl<A, M> Handler<M, SyncKind> for A
 where
     A: SyncHandler<M>,
-    M: Message,
+    M: Message<Kind = SyncKind>,
 {
     fn handle(
         &mut self,
@@ -370,5 +386,68 @@ where
         scope: &mut ActorScope<'_, Self>,
     ) -> impl IntoReply<Self, M> + use<A, M> {
         <A as SyncHandler<M>>::handle(self, message, scope).ready()
+    }
+}
+
+/// Handles a stream message by writing items to an automatically created
+/// channel.
+///
+/// The runtime creates a bounded item channel and a final-value channel before
+/// calling [`handle`](Self::handle). The returned future owns the sender side
+/// and produces the final value; the caller receives the
+/// [`StreamReply`](crate::reply::StreamReply) handle.
+///
+/// This trait adapts to [`Handler<M, StreamKind>`](Handler) exactly like
+/// [`SyncHandler`] adapts to ordinary `Handler<M>`. Implementing both
+/// `StreamHandler<M>` and `Handler<M, StreamKind>` for the same actor and
+/// message pair is therefore a conflicting impl.
+pub trait StreamHandler<M>: HasMailbox
+where
+    M: StreamMessage,
+{
+    /// Starts producing stream items and returns the final reply strategy.
+    ///
+    /// `out` is the runtime-created item writer. The writer type is generic so
+    /// handler implementations stay compatible with future writer
+    /// implementations; the runtime currently passes a `tokio::sync::mpsc`
+    /// sender. Dropping `out` closes the caller's item stream.
+    ///
+    /// The returned [`IntoStreamReply`] selects final-value scheduling, just
+    /// like [`IntoReply`] for ordinary messages:
+    ///
+    /// - A bare [`Future`] with output `M::Final` runs as an owned task.
+    /// - [`ReplyExt::ready`] completes the final value immediately and closes
+    ///   the item stream; useful as one [`Either`](crate::reply::Either)
+    ///   branch when the handler decides not to stream.
+    /// - [`ReplyExt::exclusive`] runs a [`crate::ActorFuture`] with the mailbox
+    ///   paused; the future keeps the writer and may keep producing items.
+    /// - [`crate::InterleavedFutureExt::interleaved`] runs a [`crate::ActorFuture`]
+    ///   fairly with other actor work and requires [`crate::HasInterleaving`].
+    /// - [`Either`](crate::reply::Either) chooses between two strategies.
+    fn handle<W>(
+        &mut self,
+        message: M,
+        out: W,
+        scope: &mut ActorScope<'_, Self>,
+    ) -> impl IntoStreamReply<Self, M> + use<Self, M, W>
+    where
+        W: Writer<M::Item> + Send + 'static;
+}
+
+/// Crate-private concrete writer dispatch for stream handlers.
+impl<A, M> Handler<M, crate::reply::StreamKind> for A
+where
+    A: StreamHandler<M>,
+    M: StreamMessage,
+{
+    fn handle(
+        &mut self,
+        message: M,
+        scope: &mut ActorScope<'_, Self>,
+    ) -> impl IntoReply<Self, M> + use<A, M> {
+        let (item_tx, item_rx) = mpsc::channel::<M::Item>(8);
+        let (final_tx, final_rx) = oneshot::channel::<M::Final>();
+        let strategy = <A as StreamHandler<M>>::handle(self, message, item_tx, scope);
+        StreamDispatch::new(strategy, item_rx, final_tx, final_rx)
     }
 }

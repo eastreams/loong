@@ -13,7 +13,6 @@ use contracts::provider::StreamItem;
 use loac::Shutdown;
 use provider_openai::{OpenAiConfig, OpenAiProvider};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::sync::mpsc;
 
 fn env_or(key: &str, default: &str) -> String {
     env::var(key)
@@ -64,32 +63,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
 
-        let (tx, mut rx) = mpsc::channel::<StreamItem>(8);
-        let (result, ()) = tokio::join!(
-            agent_ref.call(Prompt {
-                text: line.clone(),
-                out: tx,
-            }),
-            async {
-                while let Some(item) = rx.recv().await {
-                    match item {
-                        StreamItem::Text { delta } => {
-                            print!("{delta}");
-                            let _ = std::io::stdout().flush();
-                        }
-                        StreamItem::ToolCall {
-                            id,
-                            name,
-                            arguments,
-                        } => {
-                            println!("\n[tool_call {name}] id={id} args={arguments}");
-                        }
-                    }
-                }
-            },
-        );
+        let mut reply = agent_ref.call(Prompt { text: line.clone() }).await?;
 
-        match result? {
+        while let Some(item) = reply.recv().await {
+            match item {
+                StreamItem::Text { delta } => {
+                    print!("{delta}");
+                    let _ = std::io::stdout().flush();
+                }
+                StreamItem::ToolCall {
+                    id,
+                    name,
+                    arguments,
+                } => {
+                    println!("\n[tool_call {name}] id={id} args={arguments}");
+                }
+            }
+        }
+
+        match reply.finish().await? {
             Ok(()) => {}
             Err(error) => eprintln!("\nstream error: {error}"),
         }

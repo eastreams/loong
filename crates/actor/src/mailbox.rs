@@ -7,9 +7,9 @@ use std::{
 use tokio::sync::oneshot;
 
 use crate::{
-    Actor, ActorScope, CallError, Handler, Message,
+    Actor, ActorScope, CallError, Handler, Message, StreamHandler, StreamMessage, Writer,
     owned::OwnedTasks,
-    reply::sealed::HandleReply,
+    reply::sealed::{HandleReply, HandleStreamCall},
     scheduling::ActorScheduler,
     transport::{ErasedEnvelope, RuntimeInbox},
 };
@@ -182,7 +182,7 @@ impl<M: Message> CallEnvelope<M> {
 
 impl<A, M> Envelope<A> for CallEnvelope<M>
 where
-    A: Handler<M>,
+    A: Handler<M, M::Kind>,
     M: Message,
 {
     fn dispatch(
@@ -275,6 +275,119 @@ where
     }
 }
 
+/// A queued stream message whose item writer was supplied by the caller.
+///
+/// `call_to` uses a response receiver; `send_to` does not. Both pass the
+/// caller-owned writer straight to [`StreamHandler::handle`] instead of
+/// creating the runtime item channel used by the default
+/// [`StreamReply`](crate::reply::StreamReply) path.
+pub(crate) struct StreamToEnvelope<M: StreamMessage, W> {
+    message: M,
+    out: W,
+    reply: Option<oneshot::Sender<Result<M::Final, CallError>>>,
+}
+
+impl<M: StreamMessage, W> StreamToEnvelope<M, W> {
+    pub(crate) fn new_call(message: M, out: W) -> (Self, ReplyReceiver<M::Final>) {
+        let (reply, response) = oneshot::channel();
+        (
+            Self {
+                message,
+                out,
+                reply: Some(reply),
+            },
+            response,
+        )
+    }
+
+    pub(crate) fn new_send(message: M, out: W) -> Self {
+        Self {
+            message,
+            out,
+            reply: None,
+        }
+    }
+
+    /// Recovers a stream message and writer whose envelope lost admission.
+    pub(crate) fn into_parts(self) -> (M, W) {
+        let Self {
+            message,
+            out,
+            reply,
+        } = self;
+        if let Some(reply) = reply
+            && let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| drop(reply)))
+        {
+            Control::discard_panic(payload);
+        }
+        (message, out)
+    }
+
+    fn reject(self, control: &Control, error: CallError) {
+        let Self {
+            message,
+            out,
+            reply,
+        } = self;
+        if let Some(reply) = reply {
+            notify_response(control, reply, Err(error));
+        }
+        control.drop_user_value(message);
+        control.drop_user_value(out);
+    }
+}
+
+impl<A, M, W> Envelope<A> for StreamToEnvelope<M, W>
+where
+    A: StreamHandler<M>,
+    M: StreamMessage,
+    W: Writer<M::Item> + Send + 'static,
+{
+    fn dispatch(
+        self: Box<Self>,
+        actor: &mut A,
+        scope: &mut ActorScope<'_, A>,
+        owned: &OwnedTasks<A>,
+        scheduler: &mut ActorScheduler<A>,
+        inner: &Arc<ActorInner<A>>,
+    ) {
+        if self.reply.as_ref().is_some_and(oneshot::Sender::is_closed) {
+            (*self).reject(&inner.control, inner.control.queued_failure());
+            return;
+        }
+
+        let Self {
+            message,
+            out,
+            reply,
+        } = *self;
+
+        let permit = match inner.begin_dispatch() {
+            Ok(permit) => permit,
+            Err(error) => {
+                if let Some(reply) = reply {
+                    notify_response(&inner.control, reply, Err(error));
+                }
+                inner.control.drop_user_value(message);
+                inner.control.drop_user_value(out);
+                return;
+            }
+        };
+
+        let reply = match reply {
+            Some(reply) => DispatchReply::new(reply, permit),
+            None => DispatchReply::one_way(permit),
+        };
+
+        let strategy = <A as StreamHandler<M>>::handle(actor, message, out, scope);
+        strategy.handle_stream_call(owned, scheduler, reply);
+    }
+
+    fn discard(self: Box<Self>, control: &Control) {
+        (*self).reject(control, control.queued_failure());
+    }
+}
+
 enum DispatchReplyState<'a, A: Actor, R> {
     Caller {
         reply: oneshot::Sender<Result<R, CallError>>,
@@ -343,7 +456,7 @@ impl<'a, A: Actor, R> DispatchReply<'a, A, R> {
     }
 }
 
-impl<'a, A: Actor> DispatchReply<'a, A, ()> {
+impl<'a, A: Actor, R> DispatchReply<'a, A, R> {
     fn one_way(permit: DispatchPermit<'a, A>) -> Self {
         Self {
             state: DispatchReplyState::OneWay { permit },

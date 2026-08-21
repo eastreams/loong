@@ -1,4 +1,4 @@
-error: unsupported message option; expected `reply = <type>`
+error: unsupported message option; expected `reply = <type>` or `stream = <type>`
  --> tests/ui/message/fail/unknown_option.rs:3:11
   |
 3 | #[message(result = u8)]

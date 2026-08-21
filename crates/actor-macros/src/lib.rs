@@ -127,9 +127,16 @@ pub fn actor(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// The reply type defaults to `()`. Use `#[message(reply = Type)]` to select
 /// another `Send + 'static` Rust type and make the message callable through
-/// `loac::HasReply`. Without the attribute the message is send-only. Generic
-/// parameters and existing `where` predicates are preserved. The derive adds
-/// `Send + 'static` bounds to both the message type and the reply type.
+/// `loac::HasReply`. Without the attribute the message is send-only.
+///
+/// Use `#[message(stream = Item, reply = Final)]` for a streamed reply:
+/// `loac::call` then returns `loac::StreamReply<Item, Final>`, and the message
+/// is handled by implementing `loac::StreamHandler`. The final reply type
+/// defaults to `()` when only `stream` is present.
+///
+/// Generic parameters and existing `where` predicates are preserved. The derive
+/// adds `Send + 'static` bounds to the message type and every selected reply
+/// or stream item type.
 #[proc_macro_derive(Message, attributes(message))]
 pub fn derive_message(input: TokenStream) -> TokenStream {
     message::expand(input)

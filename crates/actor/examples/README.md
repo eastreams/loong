@@ -25,19 +25,23 @@ It is equivalent to returning `.ready()` from `Handler<M>`.
 
 ## Streaming
 
-A provider actor produces a stream for each subscriber.
+A stream message derives `#[message(stream = Item, reply = Final)]`. The runtime
+creates a bounded item channel and returns the receiver side to the caller as a
+`StreamReply`; the handler receives the sender side as a generic `Writer`.
 
 | Example | Focus |
 | --- | --- |
-| [`streaming`](streaming.rs) | A one-way subscribe whose reply task produces the items. |
+| [`streaming`](streaming.rs) | The basic owned stream: a bare future writes items. |
+| [`stream_strategies`](stream_strategies.rs) | Owned, ready/`Either`, exclusive, and interleaved stream scheduling. |
+| [`stream_to`](stream_to.rs) | Caller-provided writers: `call_to`/`send_to` with an mpsc sender and an `ActorRef`. |
 
-The subscriber owns the receiver and passes the sender as message data.
-The subscribe handler returns a future: the runtime tracks it as an owned task,
-and it produces items into the caller's channel.
-One-way `send` admits the subscription without waiting for production, so the
-caller reads while the provider still produces.
-The stream ends when the production task finishes or a send fails.
-Stop and Drain wait for a running production task; Kill cancels it.
+`call` returns a `StreamReply`. Read items with `recv` or `items`, then `finish`
+returns the final value. The item stream closes when the handler drops the
+writer. `finish` is final-aware and discards remaining buffered items.
+
+For a caller-provided writer such as an `ActorRef`, use `call_to` or `send_to`.
+They pass the writer straight to the handler without creating an item channel,
+so `call_to` returns the final value directly and `send_to` is one-way.
 
 ## Actor configuration
 

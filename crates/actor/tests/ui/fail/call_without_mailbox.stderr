@@ -1,4 +1,4 @@
-error[E0277]: the trait bound `Bare: Handler<_>` is not satisfied
+error[E0277]: the trait bound `Bare: Handler<_, _>` is not satisfied
   --> tests/ui/fail/call_without_mailbox.rs:22:28
    |
 22 |     let _ = actor_ref.call(Ping);
@@ -6,20 +6,39 @@ error[E0277]: the trait bound `Bare: Handler<_>` is not satisfied
    |                       |
    |                       required by a bound introduced by this call
    |
-help: the trait `SyncHandler<_>` is not implemented for `Bare`
+help: the trait `Handler<_, _>` is not implemented for `Bare`
   --> tests/ui/fail/call_without_mailbox.rs:4:1
    |
  4 | struct Bare;
    | ^^^^^^^^^^^
-   = note: required for `Bare` to implement `Handler<_>`
 note: required by a bound in `ActorRef::<A>::call`
   --> src/address.rs
    |
    |     pub async fn call<M>(&self, message: M) -> Result<M::Reply, CallError>
    |                  ---- required by a bound in this associated function
    |     where
-   |         A: Handler<M>,
-   |            ^^^^^^^^^^ required by this bound in `ActorRef::<A>::call`
+   |         A: Handler<M, M::Kind>,
+   |            ^^^^^^^^^^^^^^^^^^^ required by this bound in `ActorRef::<A>::call`
+
+error[E0277]: the trait bound `Bare: Handler<_, _>` is not satisfied
+  --> tests/ui/fail/call_without_mailbox.rs:22:23
+   |
+22 |     let _ = actor_ref.call(Ping);
+   |                       ^^^^ unsatisfied trait bound
+   |
+help: the trait `Handler<_, _>` is not implemented for `Bare`
+  --> tests/ui/fail/call_without_mailbox.rs:4:1
+   |
+ 4 | struct Bare;
+   | ^^^^^^^^^^^
+note: required by a bound in `ActorRef::<A>::call`
+  --> src/address.rs
+   |
+   |     pub async fn call<M>(&self, message: M) -> Result<M::Reply, CallError>
+   |                  ---- required by a bound in this associated function
+   |     where
+   |         A: Handler<M, M::Kind>,
+   |            ^^^^^^^^^^^^^^^^^^^ required by this bound in `ActorRef::<A>::call`
 
 error[E0277]: the trait bound `Bare: Handler<_>` is not satisfied
   --> tests/ui/fail/call_without_mailbox.rs:23:28

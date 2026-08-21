@@ -1,9 +1,10 @@
-//! A provider actor streams items into a subscriber-owned channel.
-//! The subscribe message carries the sender; the reply task produces the items.
-//! The stream ends when that task stops.
+//! A provider actor streams items through a runtime-created channel.
+//! `call` returns a `StreamReply`; `recv` reads items and `finish` waits
+//! for the handler's final reply value. The stream ends when the handler
+//! future stops producing and drops its `out` writer.
 
+use futures_util::StreamExt;
 use loac::prelude::*;
-use tokio::sync::mpsc;
 
 struct Provider;
 
@@ -17,18 +18,23 @@ impl Actor for Provider {
 }
 
 #[derive(Message)]
-struct Subscribe(mpsc::Sender<u8>);
+#[message(stream = u8)]
+struct Subscribe;
 
-impl Handler<Subscribe> for Provider {
-    fn handle(
+impl StreamHandler<Subscribe> for Provider {
+    fn handle<W>(
         &mut self,
-        Subscribe(tx): Subscribe,
+        _message: Subscribe,
+        mut out: W,
         _scope: &mut ActorScope<Self>,
-    ) -> impl IntoReply<Self, Subscribe> + use<> {
+    ) -> impl loac::IntoStreamReply<Self, Subscribe> + use<W>
+    where
+        W: loac::Writer<u8> + Send + 'static,
+    {
         async move {
             for i in 0..4 {
-                // A failed send means the subscriber dropped its receiver.
-                if tx.send(i).await.is_err() {
+                // A failed write means the caller dropped its `StreamReply`.
+                if out.write(i).await.is_err() {
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -42,26 +48,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let owner = loac::spawn::<Provider>(());
     let provider = owner.actor_ref();
 
-    // The subscriber owns the stream's capacity and lifetime.
-    let (tx, mut rx) = mpsc::channel(4);
-
     let t0 = tokio::time::Instant::now();
 
-    // One-way `send` admits the subscription. The receiver is read while
-    // the provider still produces.
-    provider.send(Subscribe(tx)).await?;
+    // The runtime creates the item channel; `call` returns the receiver side.
+    let mut stream = provider.call(Subscribe).await?;
 
     // Intervals run slightly longer than the sleep: Tokio timer overshoot
     // is stable and accumulates across items.
-    for i in 0..4 {
-        assert_eq!(rx.recv().await, Some(i));
+    // `items` borrows the receiver. Keep one enumerated stream alive for the
+    // whole loop: recreating `enumerate` every iteration would reset the
+    // index to 0 each time.
+    let mut items = stream.items().enumerate();
+    while let Some((i, item)) = items.next().await {
+        assert_eq!(i, item as usize);
         println!("{:.3}s", t0.elapsed().as_secs_f32());
     }
 
-    assert_eq!(rx.recv().await, None);
+    assert_eq!(stream.recv().await, None);
 
-    // The production task finished, so its sender dropped and the stream
-    // closed. Drain finishes the actor; it would wait for a running task.
+    // The item stream closed because the handler future finished and dropped
+    // its writer. `finish` returns the final reply value after the actor's
+    // handler future completes.
+    assert_eq!(stream.finish().await?, ());
+
+    // Drain finishes the actor; it would wait for a running task.
     let status = owner.shutdown(loac::Shutdown::Drain).await;
     assert_eq!(status.reason(), loac::ExitReason::Drained);
     Ok(())
