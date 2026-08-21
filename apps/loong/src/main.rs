@@ -14,18 +14,6 @@ use loac::Shutdown;
 use provider_openai::{OpenAiConfig, OpenAiProvider};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-fn env_or(key: &str, default: &str) -> String {
-    env::var(key)
-        .ok()
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| default.to_string())
-}
-
-fn show_prompt() {
-    print!("loong> ");
-    let _ = std::io::stdout().flush();
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let base_url = env_or("LOONG_OPENAI_BASE_URL", "https://api.openai.com/v1");
@@ -91,4 +79,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let _ = owner.shutdown(Shutdown::Drain).await;
     Ok(())
+}
+
+fn env_or(key: &str, default: &str) -> String {
+    env::var(key)
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| default.to_string())
+}
+
+fn show_prompt() {
+    print!("loong> ");
+    let _ = std::io::stdout().flush();
 }
