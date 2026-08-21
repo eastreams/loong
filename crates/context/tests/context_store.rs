@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use contracts::transcript::{Role, TranscriptItem};
@@ -17,7 +17,7 @@ fn test_path(name: &str) -> PathBuf {
     ))
 }
 
-fn head_path(base: &PathBuf, generation: u64) -> PathBuf {
+fn head_path(base: &Path, generation: u64) -> PathBuf {
     base.join(format!("{generation}.jsonl"))
 }
 

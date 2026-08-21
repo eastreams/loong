@@ -155,6 +155,10 @@ impl ContextStore for DiskStore {
         self.version
     }
 
+    fn version(&self) -> u64 {
+        self.version
+    }
+
     fn snapshot(&self) -> ContextSnapshot {
         ContextSnapshot::build(self.items.clone(), self.version)
     }

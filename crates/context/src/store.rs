@@ -50,6 +50,9 @@ pub trait ContextStore: Send + Sync {
     /// Replaces the working context. Returns the new version.
     fn replace(&mut self, items: Vec<TranscriptItem>) -> u64;
 
+    /// Returns the current version without mutating or flushing.
+    fn version(&self) -> u64;
+
     /// Projects the current working context.
     fn snapshot(&self) -> ContextSnapshot;
 
