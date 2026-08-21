@@ -44,12 +44,7 @@ pub struct Prompt {
     pub text: String,
 }
 
-/// Appends assistant transcript items after a stream commits.
-#[derive(loac::Message)]
-#[message(reply = ())]
-struct CommitTranscript(Vec<TranscriptItem>);
-
-#[actor(mailbox)]
+#[actor(mailbox, interleaved)]
 impl<C, P> Actor for Agent<C, P>
 where
     C: ContextStore + 'static,
@@ -83,14 +78,13 @@ where
     fn handle<W>(
         &mut self,
         message: Prompt,
-        out: W,
-        scope: &mut ActorScope<'_, Self>,
+        mut out: W,
+        _scope: &mut ActorScope<'_, Self>,
     ) -> impl loac::IntoStreamReply<Self, Prompt> + use<C, P, W>
     where
         W: loac::Writer<StreamItem> + Send + 'static,
     {
         let provider = self.provider.clone();
-        let myself = scope.myself().clone();
 
         let user_item = TranscriptItem::Message {
             role: Role::User,
@@ -104,43 +98,36 @@ where
                 tools: Vec::new(),
             }
         };
-        self.store.append(vec![user_item]);
 
-        let (mut local_tx, local_rx) = mpsc::channel::<StreamItem>(8);
+        let (mut local_tx, mut local_rx) = mpsc::channel::<StreamItem>(8);
 
         async move {
-            let relay = tokio::spawn(async move {
-                let mut out = out;
-                let mut rx = local_rx;
-                let mut items = Vec::new();
-                while let Some(item) = rx.recv().await {
-                    let _ = out.write(item.clone()).await;
-                    items.push(item);
-                }
-                items
-            });
+            let (result, items) = tokio::join!(
+                async move { provider.stream(request, &mut local_tx).await },
+                async move {
+                    let mut items = Vec::new();
+                    while let Some(item) = local_rx.recv().await {
+                        let _ = out.write(item.clone()).await;
+                        items.push(item);
+                    }
+                    items
+                },
+            );
 
-            let result = provider.stream(request, &mut local_tx).await;
-            drop(local_tx);
-
-            let items = relay.await.unwrap_or_default();
             let assistant = collect_assistant_items(items);
-            if !assistant.is_empty() {
-                let _ = myself.call(CommitTranscript(assistant)).await;
-            }
 
-            result
+            (assistant, result)
         }
-    }
-}
-
-impl<C, P> SyncHandler<CommitTranscript> for Agent<C, P>
-where
-    C: ContextStore + 'static,
-    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
-{
-    fn handle(&mut self, message: CommitTranscript, _scope: &mut ActorScope<'_, Self>) {
-        self.store.append(message.0);
+        .into_actor()
+        .map(|(assistant, result), actor: &mut Self, _scope| {
+            if !assistant.is_empty() {
+                let _ = actor
+                    .store
+                    .append(std::iter::once(user_item).chain(assistant).collect());
+            }
+            result
+        })
+        .interleaved()
     }
 }
 
@@ -245,6 +232,10 @@ mod tests {
 
         fn replace(&mut self, items: Vec<TranscriptItem>) -> u64 {
             self.0.lock().unwrap().replace(items)
+        }
+
+        fn version(&self) -> u64 {
+            self.0.lock().unwrap().version()
         }
 
         fn snapshot(&self) -> ContextSnapshot {
