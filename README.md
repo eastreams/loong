@@ -181,6 +181,22 @@ model = "auto"
 - `api_key = { env = "OPENAI_API_KEY" }` reads the secret from that environment variable. `api_key = "OPENAI_API_KEY"` would instead treat the string as the literal key value — a common pitfall.
 - `model = "auto"` uses provider-side discovery; pin `model = "<id>"` when discovery is unreliable for your region or account.
 
+#### Optional web search via MCP
+
+Loong also accepts remote MCP servers in the same configuration file. To make
+Parallel Search available without changing the built-in web-search provider or
+its DuckDuckGo fallback, add this optional entry:
+
+```toml
+[mcp.servers.parallel-search]
+url = "https://search.parallel.ai/mcp"
+```
+
+No Parallel account or API key is needed for this endpoint. When you choose to
+use its tools, your web-search queries and any URLs you request are sent to
+Parallel. Remove the entry to stop exposing those tools; all existing provider,
+credential, and runtime settings remain unchanged.
+
 #### Channels — Lark / Feishu
 
 Recommended first-run setup:
