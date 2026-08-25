@@ -7,9 +7,11 @@
 use std::env;
 use std::io::Write;
 
-use agent::{Agent, Prompt, SwitchProvider};
+use agent::{AgentProfile, FileIoAgent, FileIoProfile, Prompt, SwitchProvider};
+use app::App;
 use context::memory::MemoryStore;
 use contracts::provider::StreamItem;
+use kernel::{Facade, Kernel, policy::engine::PolicyEngine};
 use loac::Shutdown;
 use provider_openai::{OpenAiConfig, OpenAiProvider};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -21,7 +23,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let model = env_or("LOONG_OPENAI_MODEL", "gpt-4o-mini");
 
     let config = OpenAiConfig::new(base_url.clone(), api_key.clone(), model.clone());
-    let owner = loac::spawn::<Agent<_, _>>((MemoryStore::new(), OpenAiProvider::new(config)));
+
+    let profile = FileIoProfile;
+    let kernel_owner = loac::spawn::<Kernel>(PolicyEngine::allow_capabilities());
+    let facade = Facade::for_owner(&kernel_owner, profile.capabilities());
+    let mut app = App::new(facade);
+    profile.register_tools(&mut app);
+    let workspace_root = env_or("LOONG_WORKSPACE", ".");
+    let owner = loac::spawn::<FileIoAgent<_, _>>((
+        MemoryStore::new(),
+        OpenAiProvider::new(config),
+        app,
+        workspace_root.into(),
+        profile,
+    ));
     let agent_ref = owner.actor_ref();
 
     let stdin = BufReader::new(tokio::io::stdin());
@@ -78,6 +93,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let _ = owner.shutdown(Shutdown::Drain).await;
+    let _ = kernel_owner.shutdown(Shutdown::Drain).await;
     Ok(())
 }
 

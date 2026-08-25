@@ -5,8 +5,6 @@ use contracts::transcript::{Role, TranscriptItem};
 use loong_context::disk::{DiskStore, OpenError};
 use loong_context::memory::MemoryStore;
 use loong_context::{ContextSnapshot, ContextStore};
-use uuid::Uuid;
-
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
 fn test_path(name: &str) -> PathBuf {
@@ -21,9 +19,9 @@ fn head_path(base: &Path, generation: u64) -> PathBuf {
     base.join(format!("{generation}.jsonl"))
 }
 
-fn next_call_id() -> Uuid {
+fn next_call_id() -> String {
     let next = NEXT.fetch_add(1, Ordering::Relaxed);
-    Uuid::from_u128(u128::from(next))
+    format!("call_{next}")
 }
 
 fn message(role: Role, text: &str) -> TranscriptItem {
@@ -33,7 +31,7 @@ fn message(role: Role, text: &str) -> TranscriptItem {
     }
 }
 
-fn tool_call(call_id: Uuid, name: &str, arguments: &str) -> TranscriptItem {
+fn tool_call(call_id: String, name: &str, arguments: &str) -> TranscriptItem {
     TranscriptItem::ToolCall {
         call_id,
         name: name.to_owned(),
@@ -41,7 +39,7 @@ fn tool_call(call_id: Uuid, name: &str, arguments: &str) -> TranscriptItem {
     }
 }
 
-fn tool_result(call_id: Uuid, output: &str) -> TranscriptItem {
+fn tool_result(call_id: String, output: &str) -> TranscriptItem {
     TranscriptItem::ToolResult {
         call_id,
         output: output.to_owned(),
@@ -232,7 +230,7 @@ fn replace_publishes_a_new_head_and_keeps_the_old_one() {
 fn tool_items_replay_with_the_call_link_intact() {
     let call_id = next_call_id();
     let items = vec![
-        tool_call(call_id, "echo", "{\"text\":\"hi\"}"),
+        tool_call(call_id.clone(), "echo", "{\"text\":\"hi\"}"),
         tool_result(call_id, "hi"),
     ];
 
@@ -255,7 +253,7 @@ fn snapshot_usage_counts_tool_payloads() {
     let call_id = next_call_id();
     let mut store = MemoryStore::new();
     store.append(vec![
-        tool_call(call_id, "echo", "{\"x\":1}"),
+        tool_call(call_id.clone(), "echo", "{\"x\":1}"),
         tool_result(call_id, "ok"),
     ]);
     // "echo" + `{"x":1}` + "ok" = 4 + 7 + 2.

@@ -1,0 +1,56 @@
+use async_trait::async_trait;
+use kernel::access::fs::FsWriteError;
+use schemars::JsonSchema;
+use serde_json::json;
+
+use crate::{OutputClassification, ToolContext, ToolHost, ToolImpl, ToolOutcome};
+
+pub struct WriteFileTool;
+
+#[derive(JsonSchema, serde::Deserialize)]
+pub struct WriteFileInput {
+    pub path: String,
+    pub content: String,
+}
+
+#[derive(JsonSchema)]
+pub struct WriteFileOutput {
+    pub written: String,
+}
+
+impl From<WriteFileOutput> for ToolOutcome {
+    fn from(output: WriteFileOutput) -> Self {
+        Self {
+            payload: json!({ "written": output.written }),
+            classification: OutputClassification::WorkspaceLocal,
+        }
+    }
+}
+
+#[async_trait]
+impl<H: ToolHost> ToolImpl<H> for WriteFileTool {
+    type Input = WriteFileInput;
+    type Output = WriteFileOutput;
+    type Error = FsWriteError;
+
+    fn name(&self) -> &'static str {
+        "write_file"
+    }
+
+    fn description(&self) -> &'static str {
+        "Write a text file inside the workspace"
+    }
+
+    async fn execute(
+        &self,
+        ctx: &H::ToolCx<'_>,
+        input: Self::Input,
+    ) -> Result<Self::Output, Self::Error> {
+        let path = input.path.clone();
+        ctx.fs()
+            .write(&input.path, input.content.into_bytes())
+            .await?;
+
+        Ok(WriteFileOutput { written: path })
+    }
+}

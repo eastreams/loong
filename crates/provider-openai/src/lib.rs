@@ -213,7 +213,7 @@ fn transcript_item_to_message(item: &TranscriptItem) -> Value {
         } => json!({
             "role": "assistant",
             "tool_calls": [{
-                "id": call_id.to_string(),
+                "id": call_id,
                 "type": "function",
                 "function": {
                     "name": name,
@@ -223,7 +223,7 @@ fn transcript_item_to_message(item: &TranscriptItem) -> Value {
         }),
         TranscriptItem::ToolResult { call_id, output } => json!({
             "role": "tool",
-            "tool_call_id": call_id.to_string(),
+            "tool_call_id": call_id,
             "content": output,
         }),
     }

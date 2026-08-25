@@ -9,9 +9,11 @@ name = "loong"
 path = "src/main.rs"
 
 [dependencies]
+app.workspace = true
 agent.workspace = true
 context.workspace = true
 contracts.workspace = true
+kernel.workspace = true
 loac.workspace = true
 provider.workspace = true
 provider-openai.workspace = true

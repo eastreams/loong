@@ -844,10 +844,26 @@ version = "0.2.0"
 dependencies = [
  "async-trait",
  "loac",
+ "loong-app",
  "loong-context",
  "loong-contracts",
+ "loong-kernel",
  "loong-provider",
+ "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "loong-app"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "loong-contracts",
+ "loong-kernel",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
@@ -856,8 +872,10 @@ version = "0.2.0"
 dependencies = [
  "loac",
  "loong-agent",
+ "loong-app",
  "loong-context",
  "loong-contracts",
+ "loong-kernel",
  "loong-provider",
  "loong-provider-openai",
  "tokio",
@@ -883,7 +901,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
- "uuid",
 ]
 
 [[package]]
@@ -1844,9 +1861,6 @@ name = "uuid"
 version = "1.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf3923a6f5c4c6382e0b653c4117f48d631ea17f38ed86e2a828e6f7412f5239"
-dependencies = [
- "serde_core",
-]
 
 [[package]]
 name = "version_check"

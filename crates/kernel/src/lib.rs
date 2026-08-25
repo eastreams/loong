@@ -16,7 +16,6 @@ use loac::{ActorOwner, ActorRef, CallError, prelude::*};
 use contracts::capability::Capabilities;
 use thiserror::Error;
 
-use crate::access::fs::FsAccess;
 use crate::policy::PolicyContext;
 use crate::policy::action::{ActionMeta, Denied, Granted};
 use crate::policy::engine::PolicyEngine;
@@ -88,13 +87,6 @@ impl Facade {
                 context: PolicyContext::new(self.capabilities),
             })
             .await??)
-    }
-}
-
-impl Facade {
-    #[must_use]
-    pub fn fs(&self) -> FsAccess<'_> {
-        FsAccess::new(self)
     }
 }
 

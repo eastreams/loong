@@ -11,7 +11,6 @@
 use alloc::string::String;
 
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 /// One entry of a session transcript.
 ///
@@ -32,14 +31,14 @@ pub enum TranscriptItem {
     /// `arguments` is pre-serialized JSON text owned by the caller. The
     /// store replays bytes; it never interprets tool payloads.
     ToolCall {
-        call_id: Uuid,
+        call_id: String,
         name: String,
         arguments: String,
     },
     /// A tool finished and produced output.
     ///
     /// `call_id` points at the matching `ToolCall`.
-    ToolResult { call_id: Uuid, output: String },
+    ToolResult { call_id: String, output: String },
 }
 
 /// Who produced a message.

@@ -7,35 +7,39 @@ use thiserror::Error;
 
 use crate::GrantSendError;
 
-use super::FsAccess;
+use super::{FsAccess, FsPathError};
 
 /// Failure while authorizing or executing a filesystem read.
 #[derive(Debug, Error)]
 pub enum FsReadError {
     #[error("fs.read: {0}")]
     Denied(#[from] GrantSendError),
+    #[error("fs.read path: {0}")]
+    Path(#[from] FsPathError),
     #[error("failed to read `{}`: {source}", .path.display())]
     Io { path: PathBuf, source: io::Error },
 }
 
 impl<'a> FsAccess<'a> {
     #[inline]
-    pub async fn read(&self, path: impl Into<PathBuf>) -> Result<Vec<u8>, FsReadError> {
-        let action = FsReadAction { path: path.into() };
-        let granted = self.grant(action).await?;
+    pub async fn read(&self, path: impl AsRef<std::path::Path>) -> Result<Vec<u8>, FsReadError> {
+        let path = super::resolve_existing(&self.workspace_root, path.as_ref()).await?;
+        let action = FsReadAction::new(path);
+        let granted = self.ctx.grant(action).await?;
         granted.run(self.ctx).await
     }
 }
 
-/// Internal scaffold for the read execution boundary.
-///
-/// A raw `PathBuf` is not a resolved-path proof. Do not expose or construct
-/// this action from an access method until that field uses the resolved type.
+/// The authorized filesystem read action.
 pub struct FsReadAction {
-    pub path: PathBuf,
+    path: PathBuf,
 }
 
 impl FsReadAction {
+    pub(super) fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
     const NAME: &str = "fs.read";
     const CAPABILITIES: Capabilities = Capabilities::singleton(Capability::FsRead);
 }

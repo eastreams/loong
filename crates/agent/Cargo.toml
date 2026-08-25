@@ -5,10 +5,12 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+app.workspace = true
 context.workspace = true
 contracts.workspace = true
 loac.workspace = true
 provider.workspace = true
+serde_json.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 
 [lints]
@@ -16,4 +18,5 @@ workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true
+kernel.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

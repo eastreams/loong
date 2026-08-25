@@ -1,14 +1,13 @@
-use alloc::string::ToString;
+use alloc::format;
+use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
-use serde_json::json;
-use uuid::Uuid;
-
 use super::{Role, TranscriptItem};
+use serde_json::json;
 
-fn call_id(digits: u64) -> Uuid {
-    Uuid::from_u128(u128::from(digits))
+fn call_id(digits: u64) -> String {
+    format!("call_{digits}")
 }
 
 fn sample() -> Vec<TranscriptItem> {
@@ -19,7 +18,7 @@ fn sample() -> Vec<TranscriptItem> {
             text: "be terse".to_string(),
         },
         TranscriptItem::ToolCall {
-            call_id: id,
+            call_id: id.clone(),
             name: "echo".to_string(),
             arguments: json!({"text": "hi"}).to_string(),
         },

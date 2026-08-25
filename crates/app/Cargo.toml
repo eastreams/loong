@@ -1,17 +1,17 @@
 [package]
-name = "loong-contracts"
+name = "loong-app"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
 
-[lints]
-workspace = true
-
 [dependencies]
+async-trait.workspace = true
+contracts.workspace = true
+kernel.workspace = true
 schemars.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 
-[dev-dependencies]
-bincode.workspace = true
-serde_json.workspace = true
+[lints]
+workspace = true
