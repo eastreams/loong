@@ -23,21 +23,21 @@ fn temp_workspace() -> PathBuf {
     path
 }
 
-fn plan_app() -> (loac::ActorOwner<Kernel>, App) {
+fn plan_registry() -> (loac::ActorOwner<Kernel>, ToolRegistry) {
     let kernel_owner = loac::spawn::<Kernel>(PolicyEngine::allow_capabilities());
     let profile = PlanProfile;
-    let facade = Facade::for_owner(&kernel_owner, profile.capabilities());
-    let app = App::new(facade);
-    (kernel_owner, app)
+    let facade = Facade::new(kernel_owner.actor_ref(), profile.capabilities());
+    let registry = ToolRegistry::new(facade);
+    (kernel_owner, registry)
 }
 
-fn file_io_app() -> (loac::ActorOwner<Kernel>, App) {
+fn file_io_registry() -> (loac::ActorOwner<Kernel>, ToolRegistry) {
     let kernel_owner = loac::spawn::<Kernel>(PolicyEngine::allow_capabilities());
     let profile = FileIoProfile;
-    let facade = Facade::for_owner(&kernel_owner, profile.capabilities());
-    let mut app = App::new(facade);
-    profile.register_tools(&mut app);
-    (kernel_owner, app)
+    let facade = Facade::new(kernel_owner.actor_ref(), profile.capabilities());
+    let mut registry = ToolRegistry::new(facade);
+    profile.register_tools(&mut registry);
+    (kernel_owner, registry)
 }
 
 #[derive(Clone)]
@@ -72,12 +72,12 @@ impl Provider<Request, StreamItem, ProviderOut> for NonCloneProvider {
 
 #[tokio::test]
 async fn switch_provider_message_is_accepted() {
-    let (kernel_owner, app) = plan_app();
+    let (kernel_owner, registry) = plan_registry();
     let workspace = temp_workspace();
     let owner = loac::spawn::<PlanAgent<MemoryStore, DummyProvider>>((
         MemoryStore::new(),
         DummyProvider,
-        app,
+        registry,
         workspace,
         PlanProfile,
     ));
@@ -92,12 +92,12 @@ async fn switch_provider_message_is_accepted() {
 
 #[tokio::test]
 async fn switch_provider_accepts_arc_of_non_clone_provider() {
-    let (kernel_owner, app) = plan_app();
+    let (kernel_owner, registry) = plan_registry();
     let workspace = temp_workspace();
     let owner = loac::spawn::<PlanAgent<MemoryStore, Arc<NonCloneProvider>>>((
         MemoryStore::new(),
         Arc::new(NonCloneProvider),
-        app,
+        registry,
         workspace,
         PlanProfile,
     ));
@@ -191,13 +191,13 @@ impl Provider<Request, StreamItem, ProviderOut> for EchoProvider {
 
 #[tokio::test]
 async fn prompt_streams_and_appends_context() {
-    let (kernel_owner, app) = plan_app();
+    let (kernel_owner, registry) = plan_registry();
     let workspace = temp_workspace();
     let store = SharedStore(Arc::new(Mutex::new(MemoryStore::new())));
     let owner = loac::spawn::<PlanAgent<SharedStore, EchoProvider>>((
         store.clone(),
         EchoProvider,
-        app,
+        registry,
         workspace,
         PlanProfile,
     ));
@@ -245,7 +245,7 @@ async fn prompt_streams_and_appends_context() {
 
 #[tokio::test]
 async fn prompt_executes_tool_calls_and_continues() {
-    let (kernel_owner, app) = file_io_app();
+    let (kernel_owner, registry) = file_io_registry();
     let workspace = temp_workspace();
     std::fs::write(workspace.join("hello.txt"), "hello").unwrap();
 
@@ -255,7 +255,7 @@ async fn prompt_executes_tool_calls_and_continues() {
         ToolCallProvider {
             calls: Arc::new(AtomicUsize::new(0)),
         },
-        app,
+        registry,
         workspace,
         FileIoProfile,
     ));

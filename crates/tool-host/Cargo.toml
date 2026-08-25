@@ -1,5 +1,5 @@
 [package]
-name = "loong-app"
+name = "loong-tool-host"
 edition.workspace = true
 license.workspace = true
 version.workspace = true

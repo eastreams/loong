@@ -9,7 +9,7 @@ name = "loong"
 path = "src/main.rs"
 
 [dependencies]
-app.workspace = true
+tool_host.workspace = true
 agent.workspace = true
 context.workspace = true
 contracts.workspace = true

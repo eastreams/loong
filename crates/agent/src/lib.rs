@@ -2,7 +2,6 @@
 
 use std::{marker::PhantomData, path::PathBuf, sync::Arc};
 
-use app::{App, InvocationParams};
 use context::ContextStore;
 use contracts::capability::{Capabilities, Capability};
 use contracts::provider::{Request, StreamItem};
@@ -11,6 +10,7 @@ use loac::prelude::*;
 use provider::{Provider, StreamError};
 use serde_json::Value;
 use tokio::sync::mpsc;
+use tool_host::{InvocationParams, ToolRegistry};
 
 /// Writer that receives streamed provider items.
 pub type ProviderOut = mpsc::Sender<StreamItem>;
@@ -36,7 +36,7 @@ pub trait AgentProfile: Send + Sync + 'static {
     }
 
     /// Registers the tools this agent kind may call.
-    fn register_tools(&self, _app: &mut App) {}
+    fn register_tools(&self, _registry: &mut ToolRegistry) {}
 }
 
 /// File I/O agent profile: read and write files inside the workspace.
@@ -61,9 +61,9 @@ impl AgentProfile for FileIoProfile {
         )
     }
 
-    fn register_tools(&self, app: &mut App) {
-        let _ = app.register("read_file".to_owned(), app::tools::ReadFileTool);
-        let _ = app.register("write_file".to_owned(), app::tools::WriteFileTool);
+    fn register_tools(&self, registry: &mut ToolRegistry) {
+        let _ = registry.register("read_file".to_owned(), tool_host::tools::ReadFileTool);
+        let _ = registry.register("write_file".to_owned(), tool_host::tools::WriteFileTool);
     }
 }
 
@@ -119,7 +119,7 @@ where
 {
     store: C,
     provider: P,
-    app: Arc<App>,
+    registry: Arc<ToolRegistry>,
     workspace_root: PathBuf,
     system_prompt: Option<String>,
     _profile: PhantomData<fn() -> K>,
@@ -160,16 +160,16 @@ where
     P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
     K: AgentProfile,
 {
-    type SpawnArgs = (C, P, App, PathBuf, K);
+    type SpawnArgs = (C, P, ToolRegistry, PathBuf, K);
 
     async fn init(args: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
-        let (store, provider, app, workspace_root, profile) = args;
+        let (store, provider, registry, workspace_root, profile) = args;
         let system_prompt = profile.system_prompt();
 
         Self {
             store,
             provider,
-            app: Arc::new(app),
+            registry: Arc::new(registry),
             workspace_root,
             system_prompt,
             _profile: PhantomData,
@@ -244,7 +244,7 @@ where
         W: loac::Writer<StreamItem> + Send + 'static,
     {
         let provider = self.provider.clone();
-        let app = Arc::clone(&self.app);
+        let registry = Arc::clone(&self.registry);
         let workspace_root = self.workspace_root.clone();
         let system_prompt = self.system_prompt.clone();
         let myself = scope.myself().clone();
@@ -280,7 +280,7 @@ where
                 }
             }
 
-            let tools = app.tool_specs();
+            let tools = registry.tool_specs();
 
             loop {
                 let request = Request {
@@ -334,9 +334,8 @@ where
                 for call in calls {
                     let payload = serde_json::from_str(&call.arguments).unwrap_or(Value::Null);
                     let params = InvocationParams::new(&workspace_root, None);
-                    let output = match app.invoke(&call.name, &params, payload).await {
-                        Ok(outcome) => serde_json::to_string(&outcome.payload)
-                            .unwrap_or_else(|_| outcome.payload.to_string()),
+                    let output = match registry.invoke(&call.name, &params, payload).await {
+                        Ok(value) => value.to_string(),
                         Err(error) => format!("tool error: {error}"),
                     };
                     let item = TranscriptItem::ToolResult {

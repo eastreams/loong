@@ -8,13 +8,13 @@ use std::env;
 use std::io::Write;
 
 use agent::{AgentProfile, FileIoAgent, FileIoProfile, Prompt, SwitchProvider};
-use app::App;
 use context::memory::MemoryStore;
 use contracts::provider::StreamItem;
 use kernel::{Facade, Kernel, policy::engine::PolicyEngine};
 use loac::Shutdown;
 use provider_openai::{OpenAiConfig, OpenAiProvider};
 use tokio::io::{AsyncBufReadExt, BufReader};
+use tool_host::ToolRegistry;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -26,14 +26,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let profile = FileIoProfile;
     let kernel_owner = loac::spawn::<Kernel>(PolicyEngine::allow_capabilities());
-    let facade = Facade::for_owner(&kernel_owner, profile.capabilities());
-    let mut app = App::new(facade);
-    profile.register_tools(&mut app);
+    let facade = Facade::new(kernel_owner.actor_ref(), profile.capabilities());
+    let mut registry = ToolRegistry::new(facade);
+    profile.register_tools(&mut registry);
     let workspace_root = env_or("LOONG_WORKSPACE", ".");
     let owner = loac::spawn::<FileIoAgent<_, _>>((
         MemoryStore::new(),
         OpenAiProvider::new(config),
-        app,
+        registry,
         workspace_root.into(),
         profile,
     ));

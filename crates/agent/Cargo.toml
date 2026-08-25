@@ -5,7 +5,7 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-app.workspace = true
+tool_host.workspace = true
 context.workspace = true
 contracts.workspace = true
 loac.workspace = true

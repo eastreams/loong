@@ -4,24 +4,8 @@ use async_trait::async_trait;
 use contracts::{capability::Capabilities, tool::ToolSpec};
 use kernel::{Facade, access::fs::FsAccess};
 use schemars::{JsonSchema, Schema};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
-
-/// The result of one tool invocation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolOutcome {
-    pub payload: Value,
-    pub classification: OutputClassification,
-}
-
-/// Where a tool result may flow.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum OutputClassification {
-    Public,
-    WorkspaceLocal,
-    Sensitive,
-}
 
 /// Per-call ambient parameters supplied by the agent.
 #[derive(Debug, Clone)]
@@ -43,13 +27,6 @@ impl InvocationParams {
     }
 }
 
-/// Why tool input parsing failed.
-#[derive(Debug, Error)]
-pub enum InputError {
-    #[error("invalid tool input: {0}")]
-    Invalid(String),
-}
-
 /// Why a tool could not be registered.
 #[derive(Debug, Error)]
 pub enum RegistrationError {
@@ -64,10 +41,12 @@ pub enum RegistrationError {
 pub enum ToolError {
     #[error("unknown tool {0:?}")]
     UnknownTool(String),
-    #[error(transparent)]
-    InvalidInput(#[from] InputError),
+    #[error("invalid tool input: {0}")]
+    InvalidInput(#[source] serde_json::Error),
     #[error("tool execution failed: {0}")]
     Execution(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("tool output serialization failed: {0}")]
+    Output(#[source] serde_json::Error),
 }
 
 /// Root JSON Schema for a tool input or output type.
@@ -102,14 +81,14 @@ pub trait ToolHost: Send + Sync + Sized + 'static {
         name: &str,
         params: &InvocationParams,
         payload: Value,
-    ) -> Result<ToolOutcome, ToolError>;
+    ) -> Result<Value, ToolError>;
 }
 
 /// A concrete tool implementation.
 #[async_trait]
 pub trait ToolImpl<H: ToolHost>: Send + Sync + 'static {
     type Input: JsonSchema + serde::de::DeserializeOwned + Send + 'static;
-    type Output: JsonSchema + Send + Into<ToolOutcome> + 'static;
+    type Output: JsonSchema + serde::Serialize + Send + 'static;
     type Error: std::error::Error + Send + Sync + 'static;
 
     fn name(&self) -> &'static str;
@@ -125,8 +104,8 @@ pub trait ToolImpl<H: ToolHost>: Send + Sync + 'static {
         }
     }
 
-    fn parse_input(&self, payload: Value) -> Result<Self::Input, InputError> {
-        serde_json::from_value(payload).map_err(|error| InputError::Invalid(error.to_string()))
+    fn parse_input(&self, payload: Value) -> Result<Self::Input, serde_json::Error> {
+        serde_json::from_value(payload)
     }
 
     async fn execute(
@@ -158,7 +137,7 @@ impl ToolRegistration {
 
 #[async_trait]
 trait ToolAdapter<H: ToolHost>: Send + Sync {
-    async fn invoke(&self, ctx: &H::ToolCx<'_>, payload: Value) -> Result<ToolOutcome, ToolError>;
+    async fn invoke(&self, ctx: &H::ToolCx<'_>, payload: Value) -> Result<Value, ToolError>;
 }
 
 /// Type-erased tool handle stored in the registry.
@@ -190,11 +169,7 @@ impl<H: ToolHost> RegisteredTool<H> {
         self.registration.spec()
     }
 
-    pub async fn invoke(
-        &self,
-        ctx: &H::ToolCx<'_>,
-        payload: Value,
-    ) -> Result<ToolOutcome, ToolError> {
+    pub async fn invoke(&self, ctx: &H::ToolCx<'_>, payload: Value) -> Result<Value, ToolError> {
         self.adapter.invoke(ctx, payload).await
     }
 }
@@ -219,24 +194,27 @@ where
     H: ToolHost,
     T: ToolImpl<H>,
 {
-    async fn invoke(&self, ctx: &H::ToolCx<'_>, payload: Value) -> Result<ToolOutcome, ToolError> {
-        let input = self.inner.parse_input(payload)?;
+    async fn invoke(&self, ctx: &H::ToolCx<'_>, payload: Value) -> Result<Value, ToolError> {
+        let input = self
+            .inner
+            .parse_input(payload)
+            .map_err(ToolError::InvalidInput)?;
         let output = self
             .inner
             .execute(ctx, input)
             .await
             .map_err(|error| ToolError::Execution(Box::new(error)))?;
-        Ok(output.into())
+        serde_json::to_value(output).map_err(ToolError::Output)
     }
 }
 
 /// The concrete tool host for the loong agent.
-pub struct App {
+pub struct ToolRegistry {
     facade: Facade,
-    tools: BTreeMap<String, RegisteredTool<App>>,
+    tools: BTreeMap<String, RegisteredTool<ToolRegistry>>,
 }
 
-impl App {
+impl ToolRegistry {
     #[must_use]
     pub fn new(facade: Facade) -> Self {
         Self {
@@ -276,28 +254,28 @@ impl App {
         name: &str,
         params: &InvocationParams,
         payload: Value,
-    ) -> Result<ToolOutcome, ToolError> {
+    ) -> Result<Value, ToolError> {
         let registered = self
             .tools
             .get(name)
             .ok_or_else(|| ToolError::UnknownTool(name.to_owned()))?;
-        let ctx = AppToolContext {
-            app: self,
+        let ctx = ToolRegistryContext {
+            registry: self,
             workspace_root: &params.workspace_root,
         };
         registered.invoke(&ctx, payload).await
     }
 }
 
-/// Per-call tool context backed by the app.
-pub struct AppToolContext<'a> {
-    app: &'a App,
+/// Per-call tool context backed by the tool registry.
+pub struct ToolRegistryContext<'a> {
+    registry: &'a ToolRegistry,
     workspace_root: &'a Path,
 }
 
-impl ToolContext<App> for AppToolContext<'_> {
+impl ToolContext<ToolRegistry> for ToolRegistryContext<'_> {
     fn facade(&self) -> &Facade {
-        self.app.facade()
+        self.registry.facade()
     }
 
     fn workspace_root(&self) -> &Path {
@@ -306,9 +284,9 @@ impl ToolContext<App> for AppToolContext<'_> {
 }
 
 #[async_trait]
-impl ToolHost for App {
+impl ToolHost for ToolRegistry {
     type ToolCx<'a>
-        = AppToolContext<'a>
+        = ToolRegistryContext<'a>
     where
         Self: 'a;
 
@@ -317,7 +295,7 @@ impl ToolHost for App {
         name: &str,
         params: &InvocationParams,
         payload: Value,
-    ) -> Result<ToolOutcome, ToolError> {
-        App::invoke(self, name, params, payload).await
+    ) -> Result<Value, ToolError> {
+        ToolRegistry::invoke(self, name, params, payload).await
     }
 }

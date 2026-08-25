@@ -1,9 +1,7 @@
+use crate::{ToolContext, ToolHost, ToolImpl};
 use async_trait::async_trait;
 use kernel::access::fs::FsWriteError;
 use schemars::JsonSchema;
-use serde_json::json;
-
-use crate::{OutputClassification, ToolContext, ToolHost, ToolImpl, ToolOutcome};
 
 pub struct WriteFileTool;
 
@@ -13,18 +11,9 @@ pub struct WriteFileInput {
     pub content: String,
 }
 
-#[derive(JsonSchema)]
+#[derive(JsonSchema, serde::Serialize)]
 pub struct WriteFileOutput {
     pub written: String,
-}
-
-impl From<WriteFileOutput> for ToolOutcome {
-    fn from(output: WriteFileOutput) -> Self {
-        Self {
-            payload: json!({ "written": output.written }),
-            classification: OutputClassification::WorkspaceLocal,
-        }
-    }
 }
 
 #[async_trait]

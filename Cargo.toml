@@ -2,7 +2,7 @@
 members = [
     "apps/loong",
     "crates/actor",
-    "crates/app",
+    "crates/tool-host",
     "crates/actor-macros",
     "crates/agent",
     "crates/context",
@@ -24,7 +24,7 @@ unsafe_code = "forbid"
 [workspace.dependencies]
 contracts = { path = "crates/contracts", package = "loong-contracts" }
 kernel = { path = "crates/kernel", package = "loong-kernel" }
-app = { path = "crates/app", package = "loong-app" }
+tool_host = { path = "crates/tool-host", package = "loong-tool-host" }
 context = { path = "crates/context", package = "loong-context" }
 agent = { path = "crates/agent", package = "loong-agent" }
 loac = { path = "crates/actor" }

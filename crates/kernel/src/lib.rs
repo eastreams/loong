@@ -11,7 +11,7 @@ pub mod access;
 pub mod actors;
 pub mod policy;
 
-use loac::{ActorOwner, ActorRef, CallError, prelude::*};
+use loac::{ActorRef, CallError, prelude::*};
 
 use contracts::capability::Capabilities;
 use thiserror::Error;
@@ -72,9 +72,9 @@ pub enum GrantSendError {
 
 impl Facade {
     #[must_use]
-    pub fn for_owner(owner: &ActorOwner<Kernel>, capabilities: Capabilities) -> Self {
+    pub fn new(handle: ActorRef<Kernel>, capabilities: Capabilities) -> Self {
         Self {
-            handle: owner.actor_ref(),
+            handle,
             capabilities,
         }
     }

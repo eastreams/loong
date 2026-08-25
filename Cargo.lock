@@ -844,26 +844,13 @@ version = "0.2.0"
 dependencies = [
  "async-trait",
  "loac",
- "loong-app",
  "loong-context",
  "loong-contracts",
  "loong-kernel",
  "loong-provider",
+ "loong-tool-host",
  "serde_json",
  "tokio",
-]
-
-[[package]]
-name = "loong-app"
-version = "0.2.0"
-dependencies = [
- "async-trait",
- "loong-contracts",
- "loong-kernel",
- "schemars",
- "serde",
- "serde_json",
- "thiserror",
 ]
 
 [[package]]
@@ -872,12 +859,12 @@ version = "0.2.0"
 dependencies = [
  "loac",
  "loong-agent",
- "loong-app",
  "loong-context",
  "loong-contracts",
  "loong-kernel",
  "loong-provider",
  "loong-provider-openai",
+ "loong-tool-host",
  "tokio",
 ]
 
@@ -941,6 +928,19 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "loong-tool-host"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "loong-contracts",
+ "loong-kernel",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]

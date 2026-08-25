@@ -26,7 +26,7 @@ impl ActionMeta for TestAction {
 #[tokio::test]
 async fn explicit_capability_policy_grants_unique_ids() {
     let owner = loac::spawn::<Kernel>(PolicyEngine::allow_capabilities());
-    let facade = Facade::for_owner(&owner, Capability::FsRead.into());
+    let facade = Facade::new(owner.actor_ref(), Capability::FsRead.into());
 
     let first = facade.grant(TestAction).await.unwrap();
     let second = facade.grant(TestAction).await.unwrap();
@@ -39,7 +39,7 @@ async fn explicit_capability_policy_grants_unique_ids() {
 #[tokio::test]
 async fn default_policy_denies_without_a_matching_policy() {
     let owner = loac::spawn::<Kernel>(PolicyEngine::default());
-    let facade = Facade::for_owner(&owner, Capabilities::empty());
+    let facade = Facade::new(owner.actor_ref(), Capabilities::empty());
 
     let error = facade.grant(TestAction).await.unwrap_err();
     assert!(matches!(error, GrantSendError::Denied(_)));

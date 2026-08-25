@@ -1,9 +1,7 @@
+use crate::{ToolContext, ToolHost, ToolImpl};
 use async_trait::async_trait;
 use kernel::access::fs::FsReadError;
 use schemars::JsonSchema;
-use serde_json::json;
-
-use crate::{OutputClassification, ToolContext, ToolHost, ToolImpl, ToolOutcome};
 
 pub struct ReadFileTool;
 
@@ -12,18 +10,9 @@ pub struct ReadFileInput {
     pub path: String,
 }
 
-#[derive(JsonSchema)]
+#[derive(JsonSchema, serde::Serialize)]
 pub struct ReadFileOutput {
     pub content: String,
-}
-
-impl From<ReadFileOutput> for ToolOutcome {
-    fn from(output: ReadFileOutput) -> Self {
-        Self {
-            payload: json!({ "content": output.content }),
-            classification: OutputClassification::WorkspaceLocal,
-        }
-    }
 }
 
 #[async_trait]
