@@ -1,0 +1,15 @@
+[package]
+name = "loong-tools"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+kernel.workspace = true
+schemars.workspace = true
+serde.workspace = true
+tool_host.workspace = true
+
+[lints]
+workspace = true

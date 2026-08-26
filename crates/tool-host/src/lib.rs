@@ -5,7 +5,6 @@
 //! exposes narrow access facades such as [`fs`](ToolContext::fs).
 
 pub mod tool;
-pub mod tools;
 
 pub use tool::{
     InvocationParams, RegisteredTool, RegistrationError, ToolContext, ToolError, ToolHost,

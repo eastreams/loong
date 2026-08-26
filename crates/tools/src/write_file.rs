@@ -1,7 +1,7 @@
-use crate::{ToolContext, ToolHost, ToolImpl};
 use async_trait::async_trait;
 use kernel::access::fs::FsWriteError;
 use schemars::JsonSchema;
+use tool_host::{ToolContext, ToolHost, ToolImpl};
 
 pub struct WriteFileTool;
 

@@ -849,6 +849,7 @@ dependencies = [
  "loong-kernel",
  "loong-provider",
  "loong-tool-host",
+ "loong-tools",
  "serde_json",
  "tokio",
 ]
@@ -941,6 +942,17 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "loong-tools"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "loong-kernel",
+ "loong-tool-host",
+ "schemars",
+ "serde",
 ]
 
 [[package]]

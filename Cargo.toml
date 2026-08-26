@@ -3,6 +3,7 @@ members = [
     "apps/loong",
     "crates/actor",
     "crates/tool-host",
+    "crates/tools",
     "crates/actor-macros",
     "crates/agent",
     "crates/context",
@@ -25,6 +26,7 @@ unsafe_code = "forbid"
 contracts = { path = "crates/contracts", package = "loong-contracts" }
 kernel = { path = "crates/kernel", package = "loong-kernel" }
 tool_host = { path = "crates/tool-host", package = "loong-tool-host" }
+tools = { path = "crates/tools", package = "loong-tools" }
 context = { path = "crates/context", package = "loong-context" }
 agent = { path = "crates/agent", package = "loong-agent" }
 loac = { path = "crates/actor" }

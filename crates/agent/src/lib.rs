@@ -62,8 +62,8 @@ impl AgentProfile for FileIoProfile {
     }
 
     fn register_tools(&self, registry: &mut ToolRegistry) {
-        let _ = registry.register("read_file".to_owned(), tool_host::tools::ReadFileTool);
-        let _ = registry.register("write_file".to_owned(), tool_host::tools::WriteFileTool);
+        let _ = registry.register("read_file".to_owned(), tools::ReadFileTool);
+        let _ = registry.register("write_file".to_owned(), tools::WriteFileTool);
     }
 }
 
