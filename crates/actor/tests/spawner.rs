@@ -74,3 +74,24 @@ async fn dropping_an_unstarted_spawner_closes_its_address() {
     let error = ponger_ref.call(Ping).await.unwrap_err();
     assert!(matches!(error, CallError::Closed));
 }
+
+#[tokio::test]
+async fn dropping_an_unstarted_spawner_fails_pre_admitted_calls() {
+    use std::time::Duration;
+
+    let spawner = <Ponger as Actor>::spawner();
+    let ponger_ref = spawner.actor_ref();
+
+    // Admit a call synchronously, before the spawner is dropped.
+    let response = ponger_ref.try_call(Ping).expect("admission should succeed");
+
+    drop(spawner);
+
+    let result = tokio::time::timeout(Duration::from_secs(1), response)
+        .await
+        .expect("pre-admitted call should be failed by spawner drop, not hang");
+    assert!(matches!(
+        result,
+        Err(CallError::Closed | CallError::BeforeDispatch(_))
+    ));
+}
