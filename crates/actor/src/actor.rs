@@ -46,6 +46,31 @@ pub trait Actor:
     /// Owned input used to construct this actor.
     type SpawnArgs: Send + 'static;
 
+    /// Creates an address-first spawner for this actor.
+    ///
+    /// The spawner opens this actor's mailbox and supervision state before
+    /// [`SpawnArgs`](Self::SpawnArgs) exist, so callers can obtain the
+    /// [`ActorRef`](crate::ActorRef) first and pass it to other actors before
+    /// constructing this one. Start it with
+    /// [`ActorSpawner::spawn`](crate::ActorSpawner::spawn).
+    fn spawner() -> crate::ActorSpawner<Self>
+    where
+        Self: Sized,
+    {
+        crate::ActorSpawner::<Self>::new()
+    }
+
+    /// Creates an address-first spawner with explicit [`SpawnOptions`].
+    ///
+    /// This is the [`spawner`](Self::spawner) counterpart to
+    /// [`spawn_with`](crate::spawn_with).
+    fn spawner_with(options: crate::SpawnOptions<Self>) -> crate::ActorSpawner<Self>
+    where
+        Self: Sized,
+    {
+        crate::ActorSpawner::<Self>::with_options(options)
+    }
+
     /// Constructs the actor before its first handler dispatch.
     ///
     /// Initialization alone does not close mailbox admission.

@@ -79,7 +79,73 @@ pub fn spawn<A: Actor>(args: A::SpawnArgs) -> ActorOwner<A> {
 /// This function requires an active Tokio runtime.
 #[must_use = "dropping the returned owner requests Kill"]
 pub fn spawn_with<A: Actor>(args: A::SpawnArgs, options: SpawnOptions<A>) -> ActorOwner<A> {
-    ActorOwner(PreparedActor::new(args, options).start_root())
+    ActorSpawner::<A>::with_options(options).spawn(args)
+}
+
+/// An address-first actor spawner.
+///
+/// Creating it opens the actor's mailbox and supervision state, so
+/// [`actor_ref`](Self::actor_ref) is available before the actor itself is
+/// constructed. Call [`spawn`](Self::spawn) with the actor's [`Actor::SpawnArgs`]
+/// to construct and start it. Dropping an unstarted spawner requests `Kill` on
+/// the preallocated address, so waiting callers observe [`CallError::Closed`]
+/// instead of hanging.
+#[must_use = "dropping an unstarted spawner requests Kill on its address"]
+pub struct ActorSpawner<A: Actor> {
+    unstarted: Option<task::Unstarted<A>>,
+    started: bool,
+}
+
+impl<A: Actor> ActorSpawner<A> {
+    /// Creates an unstarted spawner with the actor's default [`SpawnOptions`].
+    pub fn new() -> Self {
+        Self::with_options(SpawnOptions::<A>::default())
+    }
+
+    /// Creates an unstarted spawner with explicit [`SpawnOptions`].
+    pub fn with_options(options: SpawnOptions<A>) -> Self {
+        Self {
+            unstarted: Some(task::Unstarted::new(options)),
+            started: false,
+        }
+    }
+
+    /// Returns the actor's address before the actor is constructed or started.
+    pub fn actor_ref(&self) -> ActorRef<A> {
+        self.unstarted
+            .as_ref()
+            .expect("an actor spawner can only be started once")
+            .actor_ref()
+    }
+
+    /// Constructs and starts the actor, returning its lifecycle owner.
+    ///
+    /// This consumes the spawner. The preallocated address remains valid; any
+    /// calls admitted before this point wait for initialization as usual.
+    pub fn spawn(mut self, args: A::SpawnArgs) -> ActorOwner<A> {
+        self.started = true;
+        let unstarted = self
+            .unstarted
+            .take()
+            .expect("an actor spawner can only be started once");
+        ActorOwner(unstarted.prepare(args).start_root())
+    }
+}
+
+impl<A: Actor> Default for ActorSpawner<A> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<A: Actor> Drop for ActorSpawner<A> {
+    fn drop(&mut self) {
+        if !self.started
+            && let Some(unstarted) = &self.unstarted
+        {
+            unstarted.actor_ref().request_shutdown(Shutdown::Kill);
+        }
+    }
 }
 
 /// The unique lifecycle owner of a root actor.

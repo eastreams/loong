@@ -9,19 +9,57 @@ pub struct PreparedActor<A: Actor> {
     future: ErasedFuture<'static, ExitStatus>,
 }
 
-impl<A: Actor> PreparedActor<A> {
-    pub(crate) fn new(args: A::SpawnArgs, options: SpawnOptions<A>) -> Self {
+/// Actor communication state opened before spawn args exist.
+///
+/// The spawner creates this first so callers can hand out the actor address
+/// before constructing the actor. The state cannot schedule actor code until
+/// [`prepare`](Self::prepare) supplies the spawn args.
+pub(crate) struct Unstarted<A: Actor> {
+    actor_ref: ActorRef<A>,
+    inbox: ActorInbox<A>,
+    scheduler: ActorScheduler<A>,
+    children: A::Children,
+}
+
+impl<A: Actor> Unstarted<A> {
+    pub(crate) fn new(options: SpawnOptions<A>) -> Self {
         // Resolve borrowed options before any value enters the spawned task.
         let (inner, inbox, scheduler) = ActorInner::open(&options);
         let actor_ref = ActorRef::new(inner);
 
+        Self {
+            actor_ref,
+            inbox,
+            scheduler,
+            children: <A as SupervisionConfig>::open_children(&options),
+        }
+    }
+
+    pub(crate) fn actor_ref(&self) -> ActorRef<A> {
+        self.actor_ref.clone()
+    }
+
+    pub(crate) fn prepare(self, args: A::SpawnArgs) -> PreparedActor<A> {
+        let Self {
+            actor_ref,
+            inbox,
+            scheduler,
+            children,
+        } = self;
+
         let state = ScopeState {
             actor_ref: actor_ref.clone(),
-            children: <A as SupervisionConfig>::open_children(&options),
+            children,
         };
         let future = Box::pin(run_actor(args, state, inbox, scheduler));
 
-        Self { actor_ref, future }
+        PreparedActor { actor_ref, future }
+    }
+}
+
+impl<A: Actor> PreparedActor<A> {
+    pub(crate) fn new(args: A::SpawnArgs, options: SpawnOptions<A>) -> Self {
+        Unstarted::new(options).prepare(args)
     }
 
     /// Returns the actor address without scheduling actor code.

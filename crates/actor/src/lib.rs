@@ -255,7 +255,9 @@ pub use reply::{
     InterleavedFutureExt, IntoReply, IntoStreamReply, Items, ReplyExt, StreamKind, StreamMessage,
     StreamReply, SyncKind,
 };
-pub use runtime::{ActorOwner, ActorScope, SpawnOptions, StopScope, spawn, spawn_with};
+pub use runtime::{
+    ActorOwner, ActorScope, ActorSpawner, SpawnOptions, StopScope, spawn, spawn_with,
+};
 pub use transport::MessageConfig;
 pub use writer::Writer;
 
@@ -289,7 +291,7 @@ pub mod __private {
 /// remain explicit imports so operational behavior stays visible at call sites.
 pub mod prelude {
     pub use crate::{
-        Actor, ActorFuture, ActorFutureExt, ActorScope, DynamicChildrenOptions,
+        Actor, ActorFuture, ActorFutureExt, ActorScope, ActorSpawner, DynamicChildrenOptions,
         DynamicInterleavingOptions, DynamicMailboxOptions, Handler, HasChildren, HasInterleaving,
         HasMailbox, HasReply, InterleavedFutureExt, IntoActorFuture, IntoReply, IntoStreamReply,
         Items, Message, ReplyExt, StopScope, StreamHandler, StreamMessage, StreamReply,
