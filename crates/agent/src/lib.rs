@@ -14,12 +14,14 @@ use tool_host::{InvocationParams, ToolRegistry};
 
 mod builder;
 mod channel;
+mod channel_tool;
+mod resource;
+mod tool_set;
 
-pub use builder::{
-    AgentBuilder, AgentHandle, BuildError, FileTools, Resource, ResourceNeed, ToolSet,
-    WorkspaceRoot,
-};
+pub use builder::{AgentBuilder, AgentHandle, BuildError};
 pub use channel::{ChannelError, ChannelTarget};
+pub use resource::{Resource, ResourceNeed, WorkspaceRoot};
+pub use tool_set::{FileTools, ToolSet};
 
 /// Writer that receives streamed provider items.
 pub type ProviderOut = mpsc::Sender<StreamItem>;

@@ -19,71 +19,10 @@ use provider::Provider;
 use tool_host::{RegistrationError, ToolRegistry};
 
 use super::{Agent, ContextStore, ProviderOut};
-use crate::channel::{ChannelTarget, ChannelTool};
-
-/// A singleton resource provided to tools, keyed by its Rust type.
-pub trait Resource: 'static + Send + Sync {
-    /// Stable name used in error messages.
-    const NAME: &'static str;
-}
-
-/// The workspace root available to filesystem tools.
-pub struct WorkspaceRoot(pub PathBuf);
-
-impl Resource for WorkspaceRoot {
-    const NAME: &'static str = "WorkspaceRoot";
-}
-
-/// A tool set's declared dependency on one resource type.
-#[derive(Debug, Clone, Copy)]
-pub struct ResourceNeed {
-    name: &'static str,
-    check: fn(&AnyMap) -> bool,
-}
-
-impl ResourceNeed {
-    #[must_use]
-    pub fn of<R: Resource>() -> Self {
-        Self {
-            name: R::NAME,
-            check: |resources| resources.contains::<R>(),
-        }
-    }
-}
-
-/// A collection of tools registered into one agent.
-pub trait ToolSet: Send + Sync + 'static {
-    /// Stable tool-set name used in error messages.
-    fn name(&self) -> &'static str;
-
-    /// Registers the concrete tools into the agent's registry.
-    fn register(&self, registry: &mut ToolRegistry) -> Result<(), RegistrationError>;
-
-    /// Declares the resources this tool set needs at spawn time.
-    fn needs(&self) -> Vec<ResourceNeed> {
-        Vec::new()
-    }
-}
-
-/// The built-in filesystem tool set: `read_file` and `write_file`.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct FileTools;
-
-impl ToolSet for FileTools {
-    fn name(&self) -> &'static str {
-        "FileTools"
-    }
-
-    fn register(&self, registry: &mut ToolRegistry) -> Result<(), RegistrationError> {
-        registry.register("read_file".to_owned(), tools::ReadFileTool)?;
-        registry.register("write_file".to_owned(), tools::WriteFileTool)?;
-        Ok(())
-    }
-
-    fn needs(&self) -> Vec<ResourceNeed> {
-        vec![ResourceNeed::of::<WorkspaceRoot>()]
-    }
-}
+use crate::channel::ChannelTarget;
+use crate::channel_tool::ChannelTool;
+use crate::resource::WorkspaceRoot;
+use crate::tool_set::ToolSet;
 
 /// Why agent assembly failed.
 #[derive(Debug, thiserror::Error)]
@@ -154,9 +93,9 @@ impl<C, P> AgentBuilder<C, P> {
     fn validate(&self) -> Result<(), BuildError> {
         for tool_set in &self.tools {
             for need in tool_set.needs() {
-                if !(need.check)(&self.resources) {
+                if !need.is_satisfied_by(&self.resources) {
                     return Err(BuildError::MissingResource {
-                        resource: need.name,
+                        resource: need.name(),
                         tool_set: tool_set.name(),
                     });
                 }
