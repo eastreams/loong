@@ -4,6 +4,11 @@
 //! that every registered tool set receives the resources it declares, such as
 //! [`WorkspaceRoot`] for [`FileTools`]. Validation happens at [`spawn`](
 //! AgentBuilder::spawn), so `with_*` methods stay infallible.
+//!
+//! The builder also type-encodes the required actor state: `STORE_SET` and
+//! `PROVIDER_SET` advance as [`with_store`](AgentBuilder::with_store) and
+//! [`with_provider`](AgentBuilder::with_provider) are called, and
+//! [`spawn`](AgentBuilder::spawn) only exists once both are `true`.
 
 use std::{
     path::{Path, PathBuf},
@@ -26,10 +31,6 @@ use crate::tool_set::ToolSet;
 /// Why agent assembly failed.
 #[derive(Debug, thiserror::Error)]
 pub enum BuildError {
-    #[error("missing context store; call `with_store` before `spawn`")]
-    MissingStore,
-    #[error("missing provider; call `with_provider` before `spawn`")]
-    MissingProvider,
     #[error("missing resource `{resource}` required by `{tool_set}`")]
     MissingResource {
         resource: &'static str,
@@ -45,9 +46,11 @@ pub enum BuildError {
 /// [`Agent::builder`](super::Agent::builder). Tool sets declare resource needs
 /// and [`spawn`](Self::spawn) validates them before starting the actor.
 ///
-/// `C` and `P` are inferred by [`spawn`](Self::spawn), so callers normally
-/// never name them.
-pub struct AgentBuilder<C, P> {
+/// `C` and `P` are inferred by [`with_store`](Self::with_store) and
+/// [`with_provider`](Self::with_provider). The `const bool` parameters track
+/// whether the required store and provider are present, so `spawn` only
+/// type-checks after both are set.
+pub struct AgentBuilder<C, P, const STORE_SET: bool = false, const PROVIDER_SET: bool = false> {
     facade: Facade,
     resources: AnyMap,
     tools: Vec<Box<dyn ToolSet>>,
@@ -57,7 +60,7 @@ pub struct AgentBuilder<C, P> {
     provider: Option<P>,
 }
 
-impl<C, P> AgentBuilder<C, P> {
+impl<C, P> AgentBuilder<C, P, false, false> {
     #[must_use]
     pub fn new(facade: Facade) -> Self {
         Self {
@@ -70,25 +73,43 @@ impl<C, P> AgentBuilder<C, P> {
             provider: None,
         }
     }
+}
 
+impl<C, P, const STORE_SET: bool, const PROVIDER_SET: bool>
+    AgentBuilder<C, P, STORE_SET, PROVIDER_SET>
+{
     #[must_use]
     pub fn with<T: ToolSet>(mut self, tools: T) -> Self {
         self.tools.push(Box::new(tools));
         self
     }
 
-    /// Sets the agent's context store.
+    /// Sets the agent's context store and marks it present in the builder type.
     #[must_use]
-    pub fn with_store(mut self, store: C) -> Self {
-        self.store = Some(store);
-        self
+    pub fn with_store(self, store: C) -> AgentBuilder<C, P, true, PROVIDER_SET> {
+        AgentBuilder {
+            facade: self.facade,
+            resources: self.resources,
+            tools: self.tools,
+            channels: self.channels,
+            system_prompt: self.system_prompt,
+            store: Some(store),
+            provider: self.provider,
+        }
     }
 
-    /// Sets the agent's provider.
+    /// Sets the agent's provider and marks it present in the builder type.
     #[must_use]
-    pub fn with_provider(mut self, provider: P) -> Self {
-        self.provider = Some(provider);
-        self
+    pub fn with_provider(self, provider: P) -> AgentBuilder<C, P, STORE_SET, true> {
+        AgentBuilder {
+            facade: self.facade,
+            resources: self.resources,
+            tools: self.tools,
+            channels: self.channels,
+            system_prompt: self.system_prompt,
+            store: self.store,
+            provider: Some(provider),
+        }
     }
 
     /// Registers one named channel as a tool. The channel name is the tool
@@ -125,13 +146,15 @@ impl<C, P> AgentBuilder<C, P> {
         }
         Ok(())
     }
+}
 
+impl<C, P> AgentBuilder<C, P, true, true>
+where
+    C: ContextStore + 'static,
+    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
+{
     /// Validates the assembled tools and resources, then starts the agent.
-    pub fn spawn(self) -> Result<AgentHandle<C, P>, BuildError>
-    where
-        C: ContextStore + 'static,
-        P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
-    {
+    pub fn spawn(self) -> Result<AgentHandle<C, P>, BuildError> {
         self.validate()?;
 
         let Self {
@@ -144,8 +167,8 @@ impl<C, P> AgentBuilder<C, P> {
             provider,
         } = self;
 
-        let store = store.ok_or(BuildError::MissingStore)?;
-        let provider = provider.ok_or(BuildError::MissingProvider)?;
+        let store = store.expect("STORE_SET=true guarantees a store");
+        let provider = provider.expect("PROVIDER_SET=true guarantees a provider");
 
         let mut registry = ToolRegistry::new(facade);
         for tool_set in &tools {

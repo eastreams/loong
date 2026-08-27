@@ -57,7 +57,7 @@ where
     /// without naming the generic parameters.
     #[must_use]
     pub fn builder(facade: Facade) -> AgentBuilder<C, P> {
-        AgentBuilder::new(facade)
+        AgentBuilder::<C, P>::new(facade)
     }
 }
 
