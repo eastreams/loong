@@ -133,6 +133,11 @@ impl<C, P, const STORE_SET: bool, const PROVIDER_SET: bool>
         self
     }
 
+    /// Resource needs are currently checked against an [`AnyMap`] at runtime
+    /// because `ToolSet::needs()` reports them as values. Once Rust
+    /// specialization stabilizes, resource requirements can be lifted to the
+    /// type level and checked at compile time, just like `STORE_SET` and
+    /// `PROVIDER_SET`.
     fn validate(&self) -> Result<(), BuildError> {
         for tool_set in &self.tools {
             for need in tool_set.needs() {
