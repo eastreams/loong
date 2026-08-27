@@ -27,7 +27,7 @@ pub struct PolicyContext {
 
 impl PolicyContext {
     #[must_use]
-    pub const fn new(capabilities: Capabilities) -> Self {
+    pub(crate) const fn new(capabilities: Capabilities) -> Self {
         Self { capabilities }
     }
 }
