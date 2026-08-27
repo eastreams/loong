@@ -1,7 +1,7 @@
 //! Type-erased named channels between agents.
 //!
 //! A channel is an application-level protocol, not a single `loac` message
-//! capability. It hides the concrete [`Agent<C, P, K>`](super::Agent) type
+//! capability. It hides the concrete [`Agent<C, P>`](super::Agent) type
 //! behind one stable trait object and can grow methods (for example `cancel`
 //! or `status`) without changing how channels are registered.
 
@@ -11,7 +11,7 @@ use contracts::provider::{Request, StreamItem};
 use loac::ActorRef;
 use provider::StreamError;
 
-use super::{Agent, AgentProfile, ContextStore, Prompt, Provider, ProviderOut};
+use super::{Agent, ContextStore, Prompt, Provider, ProviderOut};
 
 /// Why a channel call failed.
 #[derive(Debug, thiserror::Error)]
@@ -44,11 +44,10 @@ impl ChannelTarget for Arc<dyn ChannelTarget> {
     }
 }
 
-impl<C, P, K> ChannelTarget for ActorRef<Agent<C, P, K>>
+impl<C, P> ChannelTarget for ActorRef<Agent<C, P>>
 where
     C: ContextStore + 'static,
     P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
-    K: AgentProfile,
 {
     fn ask(
         &self,

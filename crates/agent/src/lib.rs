@@ -1,9 +1,8 @@
 //! Agent-side types for the `loong` product.
 
-use std::{marker::PhantomData, path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 
 use context::ContextStore;
-use contracts::capability::{Capabilities, Capability};
 use contracts::provider::{Request, StreamItem};
 use contracts::transcript::{Role, TranscriptItem};
 use loac::prelude::*;
@@ -19,114 +18,22 @@ pub use channel::{ChannelError, ChannelTarget};
 /// Writer that receives streamed provider items.
 pub type ProviderOut = mpsc::Sender<StreamItem>;
 
-/// A typed agent role.
-///
-/// Profiles own the tool set, capability envelope, and system prompt for one
-/// kind of agent. Spawn [`Agent<C, P, K>`](Agent) with the profile as the last
-/// spawn argument, or use a type alias such as [`FileIoAgent`].
-pub trait AgentProfile: Send + Sync + 'static {
-    /// Stable profile name used in spans and errors.
-    fn name(&self) -> &'static str;
-
-    /// Capability ceiling for this agent kind.
-    fn capabilities(&self) -> Capabilities {
-        Capabilities::empty()
-    }
-
-    /// System prompt prepended to provider requests when the transcript does
-    /// not already start with a system message.
-    fn system_prompt(&self) -> Option<String> {
-        None
-    }
-
-    /// Registers the tools this agent kind may call.
-    fn register_tools(&self, _registry: &mut ToolRegistry) {}
-}
-
-/// File I/O agent profile: read and write files inside the workspace.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct FileIoProfile;
-
-impl AgentProfile for FileIoProfile {
-    fn name(&self) -> &'static str {
-        "file_io"
-    }
-
-    fn capabilities(&self) -> Capabilities {
-        Capabilities::empty()
-            .with(Capability::FsRead)
-            .with(Capability::FsWrite)
-    }
-
-    fn system_prompt(&self) -> Option<String> {
-        Some(
-            "You are a file I/O agent. Use read_file and write_file for workspace files."
-                .to_owned(),
-        )
-    }
-
-    fn register_tools(&self, registry: &mut ToolRegistry) {
-        let _ = registry.register("read_file".to_owned(), tools::ReadFileTool);
-        let _ = registry.register("write_file".to_owned(), tools::WriteFileTool);
-    }
-}
-
-/// Planning agent profile: no tools, planning system prompt.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct PlanProfile;
-
-impl AgentProfile for PlanProfile {
-    fn name(&self) -> &'static str {
-        "plan"
-    }
-
-    fn system_prompt(&self) -> Option<String> {
-        Some("You are a planning agent. Produce concise, ordered plans.".to_owned())
-    }
-}
-
-/// Supervisor agent profile placeholder.
-///
-/// Delegation to worker agents lands later; this profile currently only owns a
-/// supervisor system prompt.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct SupervisorProfile;
-
-impl AgentProfile for SupervisorProfile {
-    fn name(&self) -> &'static str {
-        "supervisor"
-    }
-
-    fn system_prompt(&self) -> Option<String> {
-        Some("You are a supervisor agent. Coordinate workers and tools.".to_owned())
-    }
-}
-
-/// File I/O agent type alias.
-pub type FileIoAgent<C, P> = Agent<C, P, FileIoProfile>;
-/// Planning agent type alias.
-pub type PlanAgent<C, P> = Agent<C, P, PlanProfile>;
-/// Supervisor agent type alias.
-pub type SupervisorAgent<C, P> = Agent<C, P, SupervisorProfile>;
-
 /// Agent actor that composes context storage, an upstream provider, a tool
-/// host, a workspace root, and a role profile.
+/// host, a workspace root, and an optional system prompt.
 ///
 /// `P: Clone` keeps stream handlers able to capture the provider they were
 /// started with, so switching the actor's provider never interrupts streams
 /// that are already running.
-pub struct Agent<C, P, K>
+pub struct Agent<C, P>
 where
     C: ContextStore,
     P: Provider<Request, StreamItem, ProviderOut> + Clone,
-    K: AgentProfile,
 {
     store: C,
     provider: P,
     registry: Arc<ToolRegistry>,
     workspace_root: PathBuf,
     system_prompt: Option<String>,
-    _profile: PhantomData<fn() -> K>,
 }
 
 /// Replaces the provider used by subsequent streams.
@@ -158,17 +65,15 @@ pub struct Prompt {
 struct CommitTranscript(Vec<TranscriptItem>);
 
 #[actor(mailbox)]
-impl<C, P, K> Actor for Agent<C, P, K>
+impl<C, P> Actor for Agent<C, P>
 where
     C: ContextStore + 'static,
     P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
-    K: AgentProfile,
 {
-    type SpawnArgs = (C, P, ToolRegistry, PathBuf, K);
+    type SpawnArgs = (C, P, ToolRegistry, PathBuf, Option<String>);
 
     async fn init(args: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
-        let (store, provider, registry, workspace_root, profile) = args;
-        let system_prompt = profile.system_prompt();
+        let (store, provider, registry, workspace_root, system_prompt) = args;
 
         Self {
             store,
@@ -176,27 +81,24 @@ where
             registry: Arc::new(registry),
             workspace_root,
             system_prompt,
-            _profile: PhantomData,
         }
     }
 }
 
-impl<C, P, K> SyncHandler<SwitchProvider<P>> for Agent<C, P, K>
+impl<C, P> SyncHandler<SwitchProvider<P>> for Agent<C, P>
 where
     C: ContextStore + 'static,
     P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
-    K: AgentProfile,
 {
     fn handle(&mut self, message: SwitchProvider<P>, _scope: &mut ActorScope<'_, Self>) {
         self.provider = message.0;
     }
 }
 
-impl<C, P, K> SyncHandler<CommitTranscript> for Agent<C, P, K>
+impl<C, P> SyncHandler<CommitTranscript> for Agent<C, P>
 where
     C: ContextStore + 'static,
     P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
-    K: AgentProfile,
 {
     fn handle(&mut self, message: CommitTranscript, _scope: &mut ActorScope<'_, Self>) {
         let _ = self.store.append(message.0);
@@ -232,18 +134,17 @@ fn split_stream_items(items: Vec<StreamItem>) -> (String, Vec<PendingToolCall>) 
     (text, calls)
 }
 
-impl<C, P, K> StreamHandler<Prompt> for Agent<C, P, K>
+impl<C, P> StreamHandler<Prompt> for Agent<C, P>
 where
     C: ContextStore + 'static,
     P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
-    K: AgentProfile,
 {
     fn handle<W>(
         &mut self,
         message: Prompt,
         mut out: W,
         scope: &mut ActorScope<'_, Self>,
-    ) -> impl loac::IntoStreamReply<Self, Prompt> + use<C, P, K, W>
+    ) -> impl loac::IntoStreamReply<Self, Prompt> + use<C, P, W>
     where
         W: loac::Writer<StreamItem> + Send + 'static,
     {

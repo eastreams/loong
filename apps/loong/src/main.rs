@@ -7,8 +7,9 @@
 use std::env;
 use std::io::Write;
 
-use agent::{AgentProfile, FileIoAgent, FileIoProfile, Prompt, SwitchProvider};
+use agent::{Agent, Prompt, SwitchProvider};
 use context::memory::MemoryStore;
+use contracts::capability::{Capabilities, Capability};
 use contracts::provider::StreamItem;
 use kernel::{Facade, Kernel, policy::engine::PolicyEngine};
 use loac::Shutdown;
@@ -24,18 +25,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = OpenAiConfig::new(base_url.clone(), api_key.clone(), model.clone());
 
-    let profile = FileIoProfile;
+    let capabilities = Capabilities::empty()
+        .with(Capability::FsRead)
+        .with(Capability::FsWrite);
     let kernel_owner = loac::spawn::<Kernel>(PolicyEngine::allow_capabilities());
-    let facade = Facade::new(kernel_owner.actor_ref(), profile.capabilities());
+    let facade = Facade::new(kernel_owner.actor_ref(), capabilities);
     let mut registry = ToolRegistry::new(facade);
-    profile.register_tools(&mut registry);
+    let _ = registry.register("read_file".to_owned(), tools::ReadFileTool);
+    let _ = registry.register("write_file".to_owned(), tools::WriteFileTool);
     let workspace_root = env_or("LOONG_WORKSPACE", ".");
-    let owner = loac::spawn::<FileIoAgent<_, _>>((
+    let owner = loac::spawn::<Agent<MemoryStore, OpenAiProvider>>((
         MemoryStore::new(),
         OpenAiProvider::new(config),
         registry,
         workspace_root.into(),
-        profile,
+        Some(
+            "You are a file I/O agent. Use read_file and write_file for workspace files."
+                .to_owned(),
+        ),
     ));
     let agent_ref = owner.actor_ref();
 

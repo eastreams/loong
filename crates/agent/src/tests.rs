@@ -1,6 +1,7 @@
 use super::*;
 use async_trait::async_trait;
 use context::{ContextSnapshot, ContextStore, memory::MemoryStore};
+use contracts::capability::{Capabilities, Capability};
 use contracts::transcript::{Role, TranscriptItem};
 use kernel::{Facade, Kernel, policy::engine::PolicyEngine};
 use loac::{ExitReason, Shutdown, Writer};
@@ -9,6 +10,10 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
 };
+
+const PLAN_SYSTEM_PROMPT: &str = "You are a planning agent. Produce concise, ordered plans.";
+const FILE_IO_SYSTEM_PROMPT: &str =
+    "You are a file I/O agent. Use read_file and write_file for workspace files.";
 
 fn temp_workspace() -> PathBuf {
     let path = std::env::temp_dir().join(format!(
@@ -25,18 +30,20 @@ fn temp_workspace() -> PathBuf {
 
 fn plan_registry() -> (loac::ActorOwner<Kernel>, ToolRegistry) {
     let kernel_owner = loac::spawn::<Kernel>(PolicyEngine::allow_capabilities());
-    let profile = PlanProfile;
-    let facade = Facade::new(kernel_owner.actor_ref(), profile.capabilities());
+    let facade = Facade::new(kernel_owner.actor_ref(), Capabilities::empty());
     let registry = ToolRegistry::new(facade);
     (kernel_owner, registry)
 }
 
 fn file_io_registry() -> (loac::ActorOwner<Kernel>, ToolRegistry) {
     let kernel_owner = loac::spawn::<Kernel>(PolicyEngine::allow_capabilities());
-    let profile = FileIoProfile;
-    let facade = Facade::new(kernel_owner.actor_ref(), profile.capabilities());
+    let capabilities = Capabilities::empty()
+        .with(Capability::FsRead)
+        .with(Capability::FsWrite);
+    let facade = Facade::new(kernel_owner.actor_ref(), capabilities);
     let mut registry = ToolRegistry::new(facade);
-    profile.register_tools(&mut registry);
+    let _ = registry.register("read_file".to_owned(), tools::ReadFileTool);
+    let _ = registry.register("write_file".to_owned(), tools::WriteFileTool);
     (kernel_owner, registry)
 }
 
@@ -74,12 +81,12 @@ impl Provider<Request, StreamItem, ProviderOut> for NonCloneProvider {
 async fn switch_provider_message_is_accepted() {
     let (kernel_owner, registry) = plan_registry();
     let workspace = temp_workspace();
-    let owner = loac::spawn::<PlanAgent<MemoryStore, DummyProvider>>((
+    let owner = loac::spawn::<Agent<MemoryStore, DummyProvider>>((
         MemoryStore::new(),
         DummyProvider,
         registry,
         workspace,
-        PlanProfile,
+        Some(PLAN_SYSTEM_PROMPT.to_owned()),
     ));
     let actor_ref = owner.actor_ref();
 
@@ -94,12 +101,12 @@ async fn switch_provider_message_is_accepted() {
 async fn switch_provider_accepts_arc_of_non_clone_provider() {
     let (kernel_owner, registry) = plan_registry();
     let workspace = temp_workspace();
-    let owner = loac::spawn::<PlanAgent<MemoryStore, Arc<NonCloneProvider>>>((
+    let owner = loac::spawn::<Agent<MemoryStore, Arc<NonCloneProvider>>>((
         MemoryStore::new(),
         Arc::new(NonCloneProvider),
         registry,
         workspace,
-        PlanProfile,
+        Some(PLAN_SYSTEM_PROMPT.to_owned()),
     ));
     let actor_ref = owner.actor_ref();
 
@@ -194,12 +201,12 @@ async fn prompt_streams_and_appends_context() {
     let (kernel_owner, registry) = plan_registry();
     let workspace = temp_workspace();
     let store = SharedStore(Arc::new(Mutex::new(MemoryStore::new())));
-    let owner = loac::spawn::<PlanAgent<SharedStore, EchoProvider>>((
+    let owner = loac::spawn::<Agent<SharedStore, EchoProvider>>((
         store.clone(),
         EchoProvider,
         registry,
         workspace,
-        PlanProfile,
+        Some(PLAN_SYSTEM_PROMPT.to_owned()),
     ));
     let actor_ref = owner.actor_ref();
 
@@ -250,14 +257,14 @@ async fn prompt_executes_tool_calls_and_continues() {
     std::fs::write(workspace.join("hello.txt"), "hello").unwrap();
 
     let store = SharedStore(Arc::new(Mutex::new(MemoryStore::new())));
-    let owner = loac::spawn::<FileIoAgent<SharedStore, ToolCallProvider>>((
+    let owner = loac::spawn::<Agent<SharedStore, ToolCallProvider>>((
         store.clone(),
         ToolCallProvider {
             calls: Arc::new(AtomicUsize::new(0)),
         },
         registry,
         workspace,
-        FileIoProfile,
+        Some(FILE_IO_SYSTEM_PROMPT.to_owned()),
     ));
     let actor_ref = owner.actor_ref();
 
@@ -322,12 +329,12 @@ async fn prompt_executes_tool_calls_and_continues() {
 async fn channel_target_ask_collects_streamed_text() {
     let (kernel_owner, registry) = plan_registry();
     let workspace = temp_workspace();
-    let owner = loac::spawn::<PlanAgent<MemoryStore, EchoProvider>>((
+    let owner = loac::spawn::<Agent<MemoryStore, EchoProvider>>((
         MemoryStore::new(),
         EchoProvider,
         registry,
         workspace,
-        PlanProfile,
+        Some(PLAN_SYSTEM_PROMPT.to_owned()),
     ));
     let actor_ref = owner.actor_ref();
 

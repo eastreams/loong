@@ -6,7 +6,6 @@ version.workspace = true
 
 [dependencies]
 tool_host.workspace = true
-tools.workspace = true
 context.workspace = true
 contracts.workspace = true
 loac.workspace = true
@@ -21,4 +20,5 @@ workspace = true
 [dev-dependencies]
 async-trait.workspace = true
 kernel.workspace = true
+tools.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

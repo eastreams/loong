@@ -17,6 +17,7 @@ kernel.workspace = true
 loac.workspace = true
 provider.workspace = true
 provider-openai.workspace = true
+tools.workspace = true
 tokio = { workspace = true, features = ["io-std", "macros", "rt-multi-thread", "sync"] }
 
 [lints]
