@@ -4,9 +4,8 @@
 //! directly. Tools implement [`ToolImpl`] and receive a [`ToolContext`] that
 //! exposes narrow access facades such as [`fs`](ToolContext::fs).
 
+mod registry;
 pub mod tool;
 
-pub use tool::{
-    InvocationParams, RegisteredTool, RegistrationError, ToolContext, ToolError, ToolHost,
-    ToolImpl, ToolRegistration, ToolRegistry, ToolRegistryContext,
-};
+pub use registry::{RegisteredTool, ToolRegistration, ToolRegistry, ToolRegistryContext};
+pub use tool::{InvocationParams, RegistrationError, ToolContext, ToolError, ToolHost, ToolImpl};
