@@ -1,6 +1,6 @@
 //! Agent-side types for the `loong` product.
 
-use std::{path::PathBuf, sync::Arc};
+use std::path::PathBuf;
 
 use context::ContextStore;
 use contracts::provider::{Request, StreamItem};
@@ -39,7 +39,7 @@ where
 {
     store: C,
     provider: P,
-    registry: Arc<ToolRegistry>,
+    registry: ToolRegistry,
     workspace_root: PathBuf,
     system_prompt: Option<String>,
 }
@@ -103,7 +103,7 @@ where
         Self {
             store,
             provider,
-            registry: Arc::new(registry),
+            registry,
             workspace_root,
             system_prompt,
         }
@@ -174,7 +174,7 @@ where
         W: loac::Writer<StreamItem> + Send + 'static,
     {
         let provider = self.provider.clone();
-        let registry = Arc::clone(&self.registry);
+        let registry = self.registry.snapshot();
         let workspace_root = self.workspace_root.clone();
         let system_prompt = self.system_prompt.clone();
         let myself = scope.myself().clone();

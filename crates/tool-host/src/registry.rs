@@ -1,7 +1,7 @@
-//! Tool registry: type-erased tool handles and the concrete [`ToolRegistry`]
-//! host the agent invokes.
+//! Tool registry: type-erased tool handles, the concrete [`ToolRegistry`]
+//! host the agent invokes, and the immutable [`ToolSnapshot`] readers use.
 
-use std::{collections::BTreeMap, marker::PhantomData, path::Path};
+use std::{collections::BTreeMap, marker::PhantomData, path::Path, sync::Arc};
 
 use async_trait::async_trait;
 use contracts::tool::ToolSpec;
@@ -11,6 +11,9 @@ use serde_json::Value;
 use crate::tool::{
     InvocationParams, RegistrationError, ToolContext, ToolError, ToolHost, ToolImpl,
 };
+
+/// Immutable index of registered tools shared by snapshots.
+type ToolIndex = BTreeMap<String, Arc<RegisteredTool<ToolRegistry>>>;
 
 /// Registered metadata for a tool.
 #[derive(Debug, Clone)]
@@ -106,9 +109,13 @@ where
 }
 
 /// The concrete tool host for the loong agent.
+///
+/// The actor owns one registry and is the only writer. Register and unregister
+/// therefore take `&mut self` and use copy-on-write so readers that already
+/// took a snapshot keep their immutable view.
 pub struct ToolRegistry {
     facade: Facade,
-    tools: BTreeMap<String, RegisteredTool<ToolRegistry>>,
+    tools: Arc<ToolIndex>,
 }
 
 impl ToolRegistry {
@@ -116,13 +123,26 @@ impl ToolRegistry {
     pub fn new(facade: Facade) -> Self {
         Self {
             facade,
-            tools: BTreeMap::new(),
+            tools: Arc::new(BTreeMap::new()),
         }
     }
 
     #[must_use]
     pub fn facade(&self) -> &Facade {
         &self.facade
+    }
+
+    /// Returns an immutable snapshot for stream tasks.
+    ///
+    /// The snapshot clones the current index pointer, not the map. Later
+    /// registrations or removals publish a new index and never mutate the old
+    /// one, so the snapshot stays valid for the whole prompt loop.
+    #[must_use]
+    pub fn snapshot(&self) -> ToolSnapshot {
+        ToolSnapshot {
+            facade: self.facade.clone(),
+            tools: Arc::clone(&self.tools),
+        }
     }
 
     pub fn register<T: ToolImpl<Self>>(
@@ -133,11 +153,49 @@ impl ToolRegistry {
         if self.tools.contains_key(&name) {
             return Err(RegistrationError::Duplicate(name));
         }
-        let registered = RegisteredTool::from_tool(tool)?;
-        self.tools.insert(name, registered);
+        let registered = Arc::new(RegisteredTool::from_tool(tool)?);
+
+        let mut new_tools = (*self.tools).clone();
+        new_tools.insert(name, registered);
+        self.tools = Arc::new(new_tools);
         Ok(())
     }
 
+    pub fn unregister(&mut self, name: &str) -> Option<Arc<RegisteredTool<ToolRegistry>>> {
+        let removed = self.tools.get(name).cloned()?;
+
+        let mut new_tools = (*self.tools).clone();
+        new_tools.remove(name);
+        self.tools = Arc::new(new_tools);
+        Some(removed)
+    }
+
+    #[must_use]
+    pub fn tool_specs(&self) -> Vec<ToolSpec> {
+        self.snapshot().tool_specs()
+    }
+
+    pub async fn invoke(
+        &self,
+        name: &str,
+        params: &InvocationParams,
+        payload: Value,
+    ) -> Result<Value, ToolError> {
+        self.snapshot().invoke(name, params, payload).await
+    }
+}
+
+/// Immutable, owned tool index snapshot passed into stream tasks.
+///
+/// Snapshots never change after they are created. They hold the facade needed
+/// to build per-call tool contexts, so they can invoke tools without borrowing
+/// the actor or the mutable registry.
+pub struct ToolSnapshot {
+    facade: Facade,
+    tools: Arc<ToolIndex>,
+}
+
+impl ToolSnapshot {
     #[must_use]
     pub fn tool_specs(&self) -> Vec<ToolSpec> {
         self.tools
@@ -155,24 +213,25 @@ impl ToolRegistry {
         let registered = self
             .tools
             .get(name)
+            .cloned()
             .ok_or_else(|| ToolError::UnknownTool(name.to_owned()))?;
         let ctx = ToolRegistryContext {
-            registry: self,
+            facade: &self.facade,
             workspace_root: &params.workspace_root,
         };
         registered.invoke(&ctx, payload).await
     }
 }
 
-/// Per-call tool context backed by the tool registry.
+/// Per-call tool context backed by a registry snapshot or the registry itself.
 pub struct ToolRegistryContext<'a> {
-    registry: &'a ToolRegistry,
+    facade: &'a Facade,
     workspace_root: &'a Path,
 }
 
 impl ToolContext<ToolRegistry> for ToolRegistryContext<'_> {
     fn facade(&self) -> &Facade {
-        self.registry.facade()
+        self.facade
     }
 
     fn workspace_root(&self) -> &Path {

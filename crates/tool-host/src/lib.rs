@@ -7,5 +7,7 @@
 mod registry;
 pub mod tool;
 
-pub use registry::{RegisteredTool, ToolRegistration, ToolRegistry, ToolRegistryContext};
+pub use registry::{
+    RegisteredTool, ToolRegistration, ToolRegistry, ToolRegistryContext, ToolSnapshot,
+};
 pub use tool::{InvocationParams, RegistrationError, ToolContext, ToolError, ToolHost, ToolImpl};
