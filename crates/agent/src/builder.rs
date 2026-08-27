@@ -1,4 +1,4 @@
-//! Runtime-checked assembly for [`AgentRuntime`](super::AgentRuntime).
+//! Runtime-checked assembly for [`Agent`](super::Agent).
 //!
 //! The builder keeps capabilities at the [`Facade`] boundary and validates
 //! that every registered tool set receives the resources it declares, such as
@@ -6,6 +6,7 @@
 //! AgentBuilder::spawn), so `with_*` methods stay infallible.
 
 use std::{
+    marker::PhantomData,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -17,7 +18,7 @@ use loac::{ActorOwner, ActorRef, ExitStatus, Shutdown, ShutdownStatus, spawn};
 use provider::Provider;
 use tool_host::{RegistrationError, ToolRegistry};
 
-use super::{AgentRuntime, ContextStore, ProviderOut};
+use super::{Agent, ContextStore, ProviderOut};
 use crate::channel::ChannelTarget;
 use crate::channel_tool::ChannelTool;
 use crate::resource::WorkspaceRoot;
@@ -40,15 +41,19 @@ pub enum BuildError {
 /// Capabilities enter through the [`Facade`] passed to
 /// [`Agent::builder`](super::Agent::builder). Tool sets declare resource needs
 /// and [`spawn`](Self::spawn) validates them before starting the actor.
-pub struct AgentBuilder {
+///
+/// `C` and `P` are inferred by [`spawn`](Self::spawn), so callers normally
+/// never name them.
+pub struct AgentBuilder<C, P> {
     facade: Facade,
     resources: AnyMap,
     tools: Vec<Box<dyn ToolSet>>,
     channels: Vec<(&'static str, Arc<dyn ChannelTarget>)>,
     system_prompt: Option<String>,
+    _marker: PhantomData<fn() -> (C, P)>,
 }
 
-impl AgentBuilder {
+impl<C, P> AgentBuilder<C, P> {
     #[must_use]
     pub fn new(facade: Facade) -> Self {
         Self {
@@ -57,6 +62,7 @@ impl AgentBuilder {
             tools: Vec::new(),
             channels: Vec::new(),
             system_prompt: None,
+            _marker: PhantomData,
         }
     }
 
@@ -102,9 +108,7 @@ impl AgentBuilder {
     }
 
     /// Validates the assembled tools and resources, then starts the agent.
-    ///
-    /// The context store and provider types are inferred from the arguments.
-    pub fn spawn<C, P>(self, store: C, provider: P) -> Result<AgentHandle<C, P>, BuildError>
+    pub fn spawn(self, store: C, provider: P) -> Result<AgentHandle<C, P>, BuildError>
     where
         C: ContextStore + 'static,
         P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
@@ -117,6 +121,7 @@ impl AgentBuilder {
             tools,
             channels,
             system_prompt,
+            _marker,
         } = self;
 
         let mut registry = ToolRegistry::new(facade);
@@ -136,7 +141,7 @@ impl AgentBuilder {
             .unwrap_or_else(|| PathBuf::from("."));
 
         let owner =
-            spawn::<AgentRuntime<C, P>>((store, provider, registry, workspace_root, system_prompt));
+            spawn::<Agent<C, P>>((store, provider, registry, workspace_root, system_prompt));
         let actor_ref = owner.actor_ref();
 
         Ok(AgentHandle { owner, actor_ref })
@@ -149,8 +154,8 @@ where
     C: ContextStore + 'static,
     P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
 {
-    owner: ActorOwner<AgentRuntime<C, P>>,
-    actor_ref: ActorRef<AgentRuntime<C, P>>,
+    owner: ActorOwner<Agent<C, P>>,
+    actor_ref: ActorRef<Agent<C, P>>,
 }
 
 impl<C, P> AgentHandle<C, P>
@@ -159,7 +164,7 @@ where
     P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
 {
     #[must_use]
-    pub fn actor_ref(&self) -> ActorRef<AgentRuntime<C, P>> {
+    pub fn actor_ref(&self) -> ActorRef<Agent<C, P>> {
         self.actor_ref.clone()
     }
 
