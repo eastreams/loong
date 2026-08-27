@@ -26,13 +26,28 @@ pub use tool_set::{FileTools, ToolSet};
 /// Writer that receives streamed provider items.
 pub type ProviderOut = mpsc::Sender<StreamItem>;
 
+/// Assembly entry point for agents.
+///
+/// [`Agent::builder`] returns an [`AgentBuilder`] with no generic parameters;
+/// [`AgentBuilder::spawn`] infers the context store and provider types from
+/// its arguments, so callers never write `Agent::<Store, Provider>::...`.
+pub struct Agent;
+
+impl Agent {
+    /// Returns a builder that assembles one agent with explicit resources.
+    #[must_use]
+    pub fn builder(facade: Facade) -> AgentBuilder {
+        AgentBuilder::new(facade)
+    }
+}
+
 /// Agent actor that composes context storage, an upstream provider, a tool
 /// host, a workspace root, and an optional system prompt.
 ///
 /// `P: Clone` keeps stream handlers able to capture the provider they were
 /// started with, so switching the actor's provider never interrupts streams
 /// that are already running.
-pub struct Agent<C, P>
+pub struct AgentRuntime<C, P>
 where
     C: ContextStore,
     P: Provider<Request, StreamItem, ProviderOut> + Clone,
@@ -42,18 +57,6 @@ where
     registry: Arc<ToolRegistry>,
     workspace_root: PathBuf,
     system_prompt: Option<String>,
-}
-
-impl<C, P> Agent<C, P>
-where
-    C: ContextStore,
-    P: Provider<Request, StreamItem, ProviderOut> + Clone,
-{
-    /// Returns a builder that assembles one agent with explicit resources.
-    #[must_use]
-    pub fn builder(facade: Facade) -> AgentBuilder<C, P> {
-        AgentBuilder::new(facade)
-    }
 }
 
 /// Replaces the provider used by subsequent streams.
@@ -85,7 +88,7 @@ pub struct Prompt {
 struct CommitTranscript(Vec<TranscriptItem>);
 
 #[actor(mailbox)]
-impl<C, P> Actor for Agent<C, P>
+impl<C, P> Actor for AgentRuntime<C, P>
 where
     C: ContextStore + 'static,
     P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
@@ -105,7 +108,7 @@ where
     }
 }
 
-impl<C, P> SyncHandler<SwitchProvider<P>> for Agent<C, P>
+impl<C, P> SyncHandler<SwitchProvider<P>> for AgentRuntime<C, P>
 where
     C: ContextStore + 'static,
     P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
@@ -115,7 +118,7 @@ where
     }
 }
 
-impl<C, P> SyncHandler<CommitTranscript> for Agent<C, P>
+impl<C, P> SyncHandler<CommitTranscript> for AgentRuntime<C, P>
 where
     C: ContextStore + 'static,
     P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
@@ -154,7 +157,7 @@ fn split_stream_items(items: Vec<StreamItem>) -> (String, Vec<PendingToolCall>) 
     (text, calls)
 }
 
-impl<C, P> StreamHandler<Prompt> for Agent<C, P>
+impl<C, P> StreamHandler<Prompt> for AgentRuntime<C, P>
 where
     C: ContextStore + 'static,
     P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,

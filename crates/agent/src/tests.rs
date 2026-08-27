@@ -76,7 +76,7 @@ impl Provider<Request, StreamItem, ProviderOut> for NonCloneProvider {
 #[tokio::test]
 async fn switch_provider_message_is_accepted() {
     let (kernel_owner, facade) = plan_facade();
-    let owner = Agent::<MemoryStore, DummyProvider>::builder(facade)
+    let owner = Agent::builder(facade)
         .with_system_prompt(PLAN_SYSTEM_PROMPT)
         .spawn(MemoryStore::new(), DummyProvider)
         .unwrap();
@@ -92,7 +92,7 @@ async fn switch_provider_message_is_accepted() {
 #[tokio::test]
 async fn switch_provider_accepts_arc_of_non_clone_provider() {
     let (kernel_owner, facade) = plan_facade();
-    let owner = Agent::<MemoryStore, Arc<NonCloneProvider>>::builder(facade)
+    let owner = Agent::builder(facade)
         .with_system_prompt(PLAN_SYSTEM_PROMPT)
         .spawn(MemoryStore::new(), Arc::new(NonCloneProvider))
         .unwrap();
@@ -188,7 +188,7 @@ impl Provider<Request, StreamItem, ProviderOut> for EchoProvider {
 async fn prompt_streams_and_appends_context() {
     let (kernel_owner, facade) = plan_facade();
     let store = SharedStore(Arc::new(Mutex::new(MemoryStore::new())));
-    let owner = Agent::<SharedStore, EchoProvider>::builder(facade)
+    let owner = Agent::builder(facade)
         .with_system_prompt(PLAN_SYSTEM_PROMPT)
         .spawn(store.clone(), EchoProvider)
         .unwrap();
@@ -241,7 +241,7 @@ async fn prompt_executes_tool_calls_and_continues() {
     std::fs::write(workspace.join("hello.txt"), "hello").unwrap();
 
     let store = SharedStore(Arc::new(Mutex::new(MemoryStore::new())));
-    let owner = Agent::<SharedStore, ToolCallProvider>::builder(facade)
+    let owner = Agent::builder(facade)
         .with(FileTools)
         .with_workspace_root(&workspace)
         .with_system_prompt(FILE_IO_SYSTEM_PROMPT)
@@ -314,7 +314,7 @@ async fn prompt_executes_tool_calls_and_continues() {
 #[tokio::test]
 async fn channel_target_ask_collects_streamed_text() {
     let (kernel_owner, facade) = plan_facade();
-    let owner = Agent::<MemoryStore, EchoProvider>::builder(facade)
+    let owner = Agent::builder(facade)
         .with_system_prompt(PLAN_SYSTEM_PROMPT)
         .spawn(MemoryStore::new(), EchoProvider)
         .unwrap();
@@ -332,7 +332,7 @@ async fn channel_target_ask_collects_streamed_text() {
 async fn builder_rejects_file_tools_without_workspace_root() {
     let (kernel_owner, facade) = file_io_facade();
 
-    let result = Agent::<MemoryStore, DummyProvider>::builder(facade)
+    let result = Agent::builder(facade)
         .with(FileTools)
         .spawn(MemoryStore::new(), DummyProvider);
 

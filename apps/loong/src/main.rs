@@ -30,7 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let kernel_owner = loac::spawn::<Kernel>(PolicyEngine::allow_capabilities());
     let facade = Facade::new(kernel_owner.actor_ref(), capabilities);
     let workspace_root = env_or("LOONG_WORKSPACE", ".");
-    let owner = Agent::<MemoryStore, OpenAiProvider>::builder(facade)
+    let owner = Agent::builder(facade)
         .with(FileTools)
         .with_workspace_root(&workspace_root)
         .with_system_prompt(
