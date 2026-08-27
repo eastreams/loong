@@ -1,11 +1,18 @@
 //! Minimal `loong` chat loop.
 //!
-//! This is a wiring-only CLI. It spawns one agent with an in-memory context
-//! store and one OpenAI-compatible provider, then feeds stdin lines as user
-//! prompts and prints streamed replies.
+//! This is a wiring-only CLI. It spawns two agents:
+//! - a supervisor agent that answers the user directly and owns no file
+//!   tools;
+//! - a file I/O agent behind a named channel tool, so every file operation is
+//!   delegated by the supervisor.
+//!
+//! Both agents use an in-memory context store and one OpenAI-compatible
+//! provider. Stdin lines are fed to the supervisor as prompts and streamed
+//! replies are printed.
 
 use std::env;
 use std::io::Write;
+use std::sync::Arc;
 
 use agent::{Agent, FileTools, Prompt, SwitchProvider};
 use context::memory::MemoryStore;
@@ -30,11 +37,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let kernel_owner = loac::spawn::<Kernel>(PolicyEngine::allow_capabilities());
     let facade = Facade::new(kernel_owner.actor_ref(), capabilities);
     let workspace_root = env_or("LOONG_WORKSPACE", ".");
-    let owner = Agent::builder(facade)
+
+    let file_io_owner = Agent::builder(facade.clone())
         .with(FileTools)
         .with_workspace_root(&workspace_root)
         .with_system_prompt(
             "You are a file I/O agent. Use read_file and write_file for workspace files.",
+        )
+        .with_store(MemoryStore::new())
+        .with_provider(OpenAiProvider::new(config.clone()))
+        .spawn()?;
+    let file_io_ref = file_io_owner.actor_ref();
+
+    let file_io_channel: Arc<dyn agent::ChannelTarget> = Arc::new(file_io_ref.clone());
+    let owner = Agent::builder(facade)
+        .with_channel("file_io", file_io_channel)
+        .with_system_prompt(
+            "You are a supervisor agent. You do not read or write files yourself. \
+             When the user needs file work, delegate it to the file_io agent by \
+             calling the file_io tool with a clear instruction prompt, then report \
+             its answer.",
         )
         .with_store(MemoryStore::new())
         .with_provider(OpenAiProvider::new(config))
@@ -62,6 +84,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let config =
                 OpenAiConfig::new(base_url.clone(), api_key.clone(), new_model.to_string());
             agent_ref
+                .call(SwitchProvider(OpenAiProvider::new(config.clone())))
+                .await?;
+            file_io_ref
                 .call(SwitchProvider(OpenAiProvider::new(config)))
                 .await?;
             println!("switched to {new_model}");
@@ -95,6 +120,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let _ = owner.shutdown(Shutdown::Drain).await;
+    let _ = file_io_owner.shutdown(Shutdown::Drain).await;
     let _ = kernel_owner.shutdown(Shutdown::Drain).await;
     Ok(())
 }
