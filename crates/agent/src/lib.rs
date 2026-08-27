@@ -16,7 +16,7 @@ mod builder;
 mod channel;
 
 pub use builder::{
-    AgentBuilder, AgentHandle, BuildError, FileTools, Resource, ResourceNeed, Resources, ToolSet,
+    AgentBuilder, AgentHandle, BuildError, FileTools, Resource, ResourceNeed, ToolSet,
     WorkspaceRoot,
 };
 pub use channel::{ChannelError, ChannelTarget};

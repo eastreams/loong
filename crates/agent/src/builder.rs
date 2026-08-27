@@ -6,13 +6,12 @@
 //! AgentBuilder::spawn), so `with_*` methods stay infallible.
 
 use std::{
-    any::{Any, TypeId},
-    collections::HashMap,
     marker::PhantomData,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
+use anymap2::AnyMap;
 use contracts::provider::{Request, StreamItem};
 use kernel::Facade;
 use loac::{ActorOwner, ActorRef, ExitStatus, Shutdown, ShutdownStatus, spawn};
@@ -35,45 +34,19 @@ impl Resource for WorkspaceRoot {
     const NAME: &'static str = "WorkspaceRoot";
 }
 
-/// A type-keyed resource store.
-///
-/// Singleton resources such as [`WorkspaceRoot`] are inserted by type and
-/// looked up by type. Named multi-instance resources such as agent channels are
-/// registered as tools instead of living here.
-#[derive(Default)]
-pub struct Resources {
-    values: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
-}
-
-impl Resources {
-    pub fn insert<R: Resource>(&mut self, resource: R) {
-        self.values.insert(TypeId::of::<R>(), Box::new(resource));
-    }
-
-    pub fn get<R: Resource>(&self) -> Option<&R> {
-        self.values
-            .get(&TypeId::of::<R>())
-            .and_then(|value| value.downcast_ref::<R>())
-    }
-
-    fn contains(&self, type_id: TypeId) -> bool {
-        self.values.contains_key(&type_id)
-    }
-}
-
 /// A tool set's declared dependency on one resource type.
 #[derive(Debug, Clone, Copy)]
 pub struct ResourceNeed {
-    type_id: TypeId,
     name: &'static str,
+    check: fn(&AnyMap) -> bool,
 }
 
 impl ResourceNeed {
     #[must_use]
     pub fn of<R: Resource>() -> Self {
         Self {
-            type_id: TypeId::of::<R>(),
             name: R::NAME,
+            check: |resources| resources.contains::<R>(),
         }
     }
 }
@@ -131,7 +104,7 @@ pub enum BuildError {
 /// and [`spawn`](Self::spawn) validates them before starting the actor.
 pub struct AgentBuilder<C, P> {
     facade: Facade,
-    resources: Resources,
+    resources: AnyMap,
     tools: Vec<Box<dyn ToolSet>>,
     channels: Vec<(&'static str, Arc<dyn ChannelTarget>)>,
     system_prompt: Option<String>,
@@ -143,7 +116,7 @@ impl<C, P> AgentBuilder<C, P> {
     pub fn new(facade: Facade) -> Self {
         Self {
             facade,
-            resources: Resources::default(),
+            resources: AnyMap::new(),
             tools: Vec::new(),
             channels: Vec::new(),
             system_prompt: None,
@@ -181,7 +154,7 @@ impl<C, P> AgentBuilder<C, P> {
     fn validate(&self) -> Result<(), BuildError> {
         for tool_set in &self.tools {
             for need in tool_set.needs() {
-                if !self.resources.contains(need.type_id) {
+                if !(need.check)(&self.resources) {
                     return Err(BuildError::MissingResource {
                         resource: need.name,
                         tool_set: tool_set.name(),
