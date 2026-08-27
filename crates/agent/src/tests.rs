@@ -317,3 +317,24 @@ async fn prompt_executes_tool_calls_and_continues() {
     assert_eq!(status.reason(), ExitReason::Drained);
     let _ = kernel_owner.shutdown(Shutdown::Drain).await;
 }
+
+#[tokio::test]
+async fn channel_target_ask_collects_streamed_text() {
+    let (kernel_owner, registry) = plan_registry();
+    let workspace = temp_workspace();
+    let owner = loac::spawn::<PlanAgent<MemoryStore, EchoProvider>>((
+        MemoryStore::new(),
+        EchoProvider,
+        registry,
+        workspace,
+        PlanProfile,
+    ));
+    let actor_ref = owner.actor_ref();
+
+    let answer = actor_ref.ask("hi".to_string()).await.unwrap();
+    assert_eq!(answer, "hello");
+
+    let status = owner.shutdown(Shutdown::Drain).await;
+    assert_eq!(status.reason(), ExitReason::Drained);
+    let _ = kernel_owner.shutdown(Shutdown::Drain).await;
+}

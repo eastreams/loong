@@ -12,6 +12,10 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tool_host::{InvocationParams, ToolRegistry};
 
+mod channel;
+
+pub use channel::{ChannelError, ChannelTarget};
+
 /// Writer that receives streamed provider items.
 pub type ProviderOut = mpsc::Sender<StreamItem>;
 
