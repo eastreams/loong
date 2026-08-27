@@ -1,6 +1,6 @@
 //! Agent-side types for the `loong` product.
 
-use std::path::PathBuf;
+use std::{marker::PhantomData, path::PathBuf, sync::Arc};
 
 use context::ContextStore;
 use contracts::provider::{Request, StreamItem};
@@ -9,7 +9,7 @@ use kernel::Facade;
 use loac::prelude::*;
 use provider::{Provider, StreamError};
 use serde_json::Value;
-use tokio::sync::mpsc;
+use tokio::sync::{Semaphore, mpsc};
 use tool_host::{InvocationParams, ToolRegistry};
 
 mod builder;
@@ -42,6 +42,7 @@ where
     registry: ToolRegistry,
     workspace_root: PathBuf,
     system_prompt: Option<String>,
+    prompt_gate: Arc<Semaphore>,
 }
 
 impl<C, P> Agent<C, P>
@@ -89,6 +90,29 @@ pub struct Prompt {
 #[message(reply = ())]
 struct CommitTranscript(Vec<TranscriptItem>);
 
+/// Asks the actor to append one user message and prepare everything the prompt
+/// loop needs: the store snapshot, provider clone, registry snapshot,
+/// workspace root, and system prompt.
+///
+/// `Prompt` streams wait on a one-permit gate, then send this self-message.
+/// Preparation therefore runs in mailbox order at the moment the prompt
+/// actually starts, not when the prompt message was first dispatched.
+#[derive(loac::Message)]
+#[message(reply = PreparedPrompt<P>)]
+struct PreparePrompt<P> {
+    text: String,
+    _marker: PhantomData<fn() -> P>,
+}
+
+/// Owned inputs for one prompt loop.
+struct PreparedPrompt<P> {
+    messages: Vec<TranscriptItem>,
+    provider: P,
+    registry: tool_host::ToolSnapshot,
+    workspace_root: PathBuf,
+    system_prompt: Option<String>,
+}
+
 #[actor(mailbox)]
 impl<C, P> Actor for Agent<C, P>
 where
@@ -106,6 +130,7 @@ where
             registry,
             workspace_root,
             system_prompt,
+            prompt_gate: Arc::new(Semaphore::new(1)),
         }
     }
 }
@@ -127,6 +152,32 @@ where
 {
     fn handle(&mut self, message: CommitTranscript, _scope: &mut ActorScope<'_, Self>) {
         let _ = self.store.append(message.0);
+    }
+}
+
+impl<C, P> SyncHandler<PreparePrompt<P>> for Agent<C, P>
+where
+    C: ContextStore + 'static,
+    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
+{
+    fn handle(
+        &mut self,
+        message: PreparePrompt<P>,
+        _scope: &mut ActorScope<'_, Self>,
+    ) -> PreparedPrompt<P> {
+        let user_item = TranscriptItem::Message {
+            role: Role::User,
+            text: message.text,
+        };
+        let _ = self.store.append(vec![user_item]);
+
+        PreparedPrompt {
+            messages: self.store.snapshot().items,
+            provider: self.provider.clone(),
+            registry: self.registry.snapshot(),
+            workspace_root: self.workspace_root.clone(),
+            system_prompt: self.system_prompt.clone(),
+        }
     }
 }
 
@@ -173,21 +224,42 @@ where
     where
         W: loac::Writer<StreamItem> + Send + 'static,
     {
-        let provider = self.provider.clone();
-        let registry = self.registry.snapshot();
-        let workspace_root = self.workspace_root.clone();
-        let system_prompt = self.system_prompt.clone();
+        let prompt_gate = Arc::clone(&self.prompt_gate);
         let myself = scope.myself().clone();
 
-        let user_item = TranscriptItem::Message {
-            role: Role::User,
-            text: message.text,
-        };
-        let _ = self.store.append(vec![user_item]);
-        let snapshot = self.store.snapshot().items;
-
         async move {
-            let mut messages = snapshot;
+            // Prompts are serialized through this gate without blocking the
+            // actor mailbox. Control messages (SwitchProvider, future
+            // BindChannel/UnbindChannel, child exits) keep dispatching while a
+            // prompt loop runs; they only affect prompts that start later.
+            let _permit = prompt_gate
+                .acquire()
+                .await
+                .expect("the prompt gate is never closed");
+
+            let prepared = myself
+                .call(PreparePrompt::<P> {
+                    text: message.text,
+                    _marker: PhantomData,
+                })
+                .await
+                .map_err(|error| {
+                    StreamError::rejected(
+                        format!("agent could not prepare prompt: {error}"),
+                        Request {
+                            messages: Vec::new(),
+                            tools: Vec::new(),
+                        },
+                    )
+                })?;
+
+            let PreparedPrompt {
+                mut messages,
+                provider,
+                registry,
+                workspace_root,
+                system_prompt,
+            } = prepared;
 
             if let Some(system_prompt) = system_prompt {
                 let has_system = messages.iter().any(|item| {
