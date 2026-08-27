@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, marker::PhantomData, path::Path};
 
 use async_trait::async_trait;
-use contracts::{capability::Capabilities, tool::ToolSpec};
+use contracts::tool::ToolSpec;
 use kernel::{Facade, access::fs::FsAccess};
 use schemars::{JsonSchema, Schema};
 use serde_json::Value;
@@ -11,18 +11,13 @@ use thiserror::Error;
 #[derive(Debug, Clone)]
 pub struct InvocationParams {
     pub workspace_root: std::path::PathBuf,
-    pub capabilities_override: Option<Capabilities>,
 }
 
 impl InvocationParams {
     #[must_use]
-    pub fn new(
-        workspace_root: impl AsRef<Path>,
-        capabilities_override: Option<Capabilities>,
-    ) -> Self {
+    pub fn new(workspace_root: impl AsRef<Path>) -> Self {
         Self {
             workspace_root: workspace_root.as_ref().to_path_buf(),
-            capabilities_override,
         }
     }
 }

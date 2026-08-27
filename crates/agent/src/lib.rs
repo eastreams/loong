@@ -333,7 +333,7 @@ where
 
                 for call in calls {
                     let payload = serde_json::from_str(&call.arguments).unwrap_or(Value::Null);
-                    let params = InvocationParams::new(&workspace_root, None);
+                    let params = InvocationParams::new(&workspace_root);
                     let output = match registry.invoke(&call.name, &params, payload).await {
                         Ok(value) => value.to_string(),
                         Err(error) => format!("tool error: {error}"),
