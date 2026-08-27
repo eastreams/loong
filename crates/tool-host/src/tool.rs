@@ -1,3 +1,6 @@
+//! Tool contract: invocation parameters, errors, and the [`ToolImpl`]
+//! / [`ToolHost`] traits shared by every tool implementation.
+
 use std::path::Path;
 
 use async_trait::async_trait;

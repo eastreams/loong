@@ -1,4 +1,4 @@
-//! OpenAI-compatible SSE chunk model and streaming tool-call assembly.
+//! SSE chunk parsing and streaming tool-call assembly.
 
 use serde::Deserialize;
 

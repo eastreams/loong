@@ -4,6 +4,7 @@
 //! chat completion endpoint and emits [`contracts::provider::StreamItem`]s.
 
 mod client;
-mod model;
+mod request;
+mod sse;
 
 pub use client::{OpenAiConfig, OpenAiProvider};
