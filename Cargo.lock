@@ -850,6 +850,8 @@ dependencies = [
  "loong-provider",
  "loong-tool-host",
  "loong-tools",
+ "schemars",
+ "serde",
  "serde_json",
  "thiserror",
  "tokio",
@@ -867,7 +869,6 @@ dependencies = [
  "loong-provider",
  "loong-provider-openai",
  "loong-tool-host",
- "loong-tools",
  "tokio",
 ]
 

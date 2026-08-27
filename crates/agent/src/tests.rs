@@ -28,23 +28,19 @@ fn temp_workspace() -> PathBuf {
     path
 }
 
-fn plan_registry() -> (loac::ActorOwner<Kernel>, ToolRegistry) {
+fn plan_facade() -> (loac::ActorOwner<Kernel>, Facade) {
     let kernel_owner = loac::spawn::<Kernel>(PolicyEngine::allow_capabilities());
     let facade = Facade::new(kernel_owner.actor_ref(), Capabilities::empty());
-    let registry = ToolRegistry::new(facade);
-    (kernel_owner, registry)
+    (kernel_owner, facade)
 }
 
-fn file_io_registry() -> (loac::ActorOwner<Kernel>, ToolRegistry) {
+fn file_io_facade() -> (loac::ActorOwner<Kernel>, Facade) {
     let kernel_owner = loac::spawn::<Kernel>(PolicyEngine::allow_capabilities());
     let capabilities = Capabilities::empty()
         .with(Capability::FsRead)
         .with(Capability::FsWrite);
     let facade = Facade::new(kernel_owner.actor_ref(), capabilities);
-    let mut registry = ToolRegistry::new(facade);
-    let _ = registry.register("read_file".to_owned(), tools::ReadFileTool);
-    let _ = registry.register("write_file".to_owned(), tools::WriteFileTool);
-    (kernel_owner, registry)
+    (kernel_owner, facade)
 }
 
 #[derive(Clone)]
@@ -79,15 +75,11 @@ impl Provider<Request, StreamItem, ProviderOut> for NonCloneProvider {
 
 #[tokio::test]
 async fn switch_provider_message_is_accepted() {
-    let (kernel_owner, registry) = plan_registry();
-    let workspace = temp_workspace();
-    let owner = loac::spawn::<Agent<MemoryStore, DummyProvider>>((
-        MemoryStore::new(),
-        DummyProvider,
-        registry,
-        workspace,
-        Some(PLAN_SYSTEM_PROMPT.to_owned()),
-    ));
+    let (kernel_owner, facade) = plan_facade();
+    let owner = Agent::<MemoryStore, DummyProvider>::builder(facade)
+        .with_system_prompt(PLAN_SYSTEM_PROMPT)
+        .spawn(MemoryStore::new(), DummyProvider)
+        .unwrap();
     let actor_ref = owner.actor_ref();
 
     actor_ref.call(SwitchProvider(DummyProvider)).await.unwrap();
@@ -99,15 +91,11 @@ async fn switch_provider_message_is_accepted() {
 
 #[tokio::test]
 async fn switch_provider_accepts_arc_of_non_clone_provider() {
-    let (kernel_owner, registry) = plan_registry();
-    let workspace = temp_workspace();
-    let owner = loac::spawn::<Agent<MemoryStore, Arc<NonCloneProvider>>>((
-        MemoryStore::new(),
-        Arc::new(NonCloneProvider),
-        registry,
-        workspace,
-        Some(PLAN_SYSTEM_PROMPT.to_owned()),
-    ));
+    let (kernel_owner, facade) = plan_facade();
+    let owner = Agent::<MemoryStore, Arc<NonCloneProvider>>::builder(facade)
+        .with_system_prompt(PLAN_SYSTEM_PROMPT)
+        .spawn(MemoryStore::new(), Arc::new(NonCloneProvider))
+        .unwrap();
     let actor_ref = owner.actor_ref();
 
     actor_ref
@@ -198,16 +186,12 @@ impl Provider<Request, StreamItem, ProviderOut> for EchoProvider {
 
 #[tokio::test]
 async fn prompt_streams_and_appends_context() {
-    let (kernel_owner, registry) = plan_registry();
-    let workspace = temp_workspace();
+    let (kernel_owner, facade) = plan_facade();
     let store = SharedStore(Arc::new(Mutex::new(MemoryStore::new())));
-    let owner = loac::spawn::<Agent<SharedStore, EchoProvider>>((
-        store.clone(),
-        EchoProvider,
-        registry,
-        workspace,
-        Some(PLAN_SYSTEM_PROMPT.to_owned()),
-    ));
+    let owner = Agent::<SharedStore, EchoProvider>::builder(facade)
+        .with_system_prompt(PLAN_SYSTEM_PROMPT)
+        .spawn(store.clone(), EchoProvider)
+        .unwrap();
     let actor_ref = owner.actor_ref();
 
     let mut reply = actor_ref
@@ -252,20 +236,22 @@ async fn prompt_streams_and_appends_context() {
 
 #[tokio::test]
 async fn prompt_executes_tool_calls_and_continues() {
-    let (kernel_owner, registry) = file_io_registry();
+    let (kernel_owner, facade) = file_io_facade();
     let workspace = temp_workspace();
     std::fs::write(workspace.join("hello.txt"), "hello").unwrap();
 
     let store = SharedStore(Arc::new(Mutex::new(MemoryStore::new())));
-    let owner = loac::spawn::<Agent<SharedStore, ToolCallProvider>>((
-        store.clone(),
-        ToolCallProvider {
-            calls: Arc::new(AtomicUsize::new(0)),
-        },
-        registry,
-        workspace,
-        Some(FILE_IO_SYSTEM_PROMPT.to_owned()),
-    ));
+    let owner = Agent::<SharedStore, ToolCallProvider>::builder(facade)
+        .with(FileTools)
+        .with_workspace_root(&workspace)
+        .with_system_prompt(FILE_IO_SYSTEM_PROMPT)
+        .spawn(
+            store.clone(),
+            ToolCallProvider {
+                calls: Arc::new(AtomicUsize::new(0)),
+            },
+        )
+        .unwrap();
     let actor_ref = owner.actor_ref();
 
     let mut reply = actor_ref
@@ -327,15 +313,11 @@ async fn prompt_executes_tool_calls_and_continues() {
 
 #[tokio::test]
 async fn channel_target_ask_collects_streamed_text() {
-    let (kernel_owner, registry) = plan_registry();
-    let workspace = temp_workspace();
-    let owner = loac::spawn::<Agent<MemoryStore, EchoProvider>>((
-        MemoryStore::new(),
-        EchoProvider,
-        registry,
-        workspace,
-        Some(PLAN_SYSTEM_PROMPT.to_owned()),
-    ));
+    let (kernel_owner, facade) = plan_facade();
+    let owner = Agent::<MemoryStore, EchoProvider>::builder(facade)
+        .with_system_prompt(PLAN_SYSTEM_PROMPT)
+        .spawn(MemoryStore::new(), EchoProvider)
+        .unwrap();
     let actor_ref = owner.actor_ref();
 
     let answer = actor_ref.ask("hi".to_string()).await.unwrap();
@@ -343,5 +325,18 @@ async fn channel_target_ask_collects_streamed_text() {
 
     let status = owner.shutdown(Shutdown::Drain).await;
     assert_eq!(status.reason(), ExitReason::Drained);
+    let _ = kernel_owner.shutdown(Shutdown::Drain).await;
+}
+
+#[tokio::test]
+async fn builder_rejects_file_tools_without_workspace_root() {
+    let (kernel_owner, facade) = file_io_facade();
+
+    let result = Agent::<MemoryStore, DummyProvider>::builder(facade)
+        .with(FileTools)
+        .spawn(MemoryStore::new(), DummyProvider);
+
+    assert!(matches!(result, Err(BuildError::MissingResource { .. })));
+
     let _ = kernel_owner.shutdown(Shutdown::Drain).await;
 }

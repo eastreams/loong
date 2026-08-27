@@ -5,14 +5,20 @@ use std::{path::PathBuf, sync::Arc};
 use context::ContextStore;
 use contracts::provider::{Request, StreamItem};
 use contracts::transcript::{Role, TranscriptItem};
+use kernel::Facade;
 use loac::prelude::*;
 use provider::{Provider, StreamError};
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tool_host::{InvocationParams, ToolRegistry};
 
+mod builder;
 mod channel;
 
+pub use builder::{
+    AgentBuilder, AgentHandle, BuildError, FileTools, Resource, ResourceNeed, Resources, ToolSet,
+    WorkspaceRoot,
+};
 pub use channel::{ChannelError, ChannelTarget};
 
 /// Writer that receives streamed provider items.
@@ -34,6 +40,18 @@ where
     registry: Arc<ToolRegistry>,
     workspace_root: PathBuf,
     system_prompt: Option<String>,
+}
+
+impl<C, P> Agent<C, P>
+where
+    C: ContextStore,
+    P: Provider<Request, StreamItem, ProviderOut> + Clone,
+{
+    /// Returns a builder that assembles one agent with explicit resources.
+    #[must_use]
+    pub fn builder(facade: Facade) -> AgentBuilder<C, P> {
+        AgentBuilder::new(facade)
+    }
 }
 
 /// Replaces the provider used by subsequent streams.

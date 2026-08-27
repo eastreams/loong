@@ -7,7 +7,7 @@
 use std::env;
 use std::io::Write;
 
-use agent::{Agent, Prompt, SwitchProvider};
+use agent::{Agent, FileTools, Prompt, SwitchProvider};
 use context::memory::MemoryStore;
 use contracts::capability::{Capabilities, Capability};
 use contracts::provider::StreamItem;
@@ -15,7 +15,6 @@ use kernel::{Facade, Kernel, policy::engine::PolicyEngine};
 use loac::Shutdown;
 use provider_openai::{OpenAiConfig, OpenAiProvider};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tool_host::ToolRegistry;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -30,20 +29,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(Capability::FsWrite);
     let kernel_owner = loac::spawn::<Kernel>(PolicyEngine::allow_capabilities());
     let facade = Facade::new(kernel_owner.actor_ref(), capabilities);
-    let mut registry = ToolRegistry::new(facade);
-    let _ = registry.register("read_file".to_owned(), tools::ReadFileTool);
-    let _ = registry.register("write_file".to_owned(), tools::WriteFileTool);
     let workspace_root = env_or("LOONG_WORKSPACE", ".");
-    let owner = loac::spawn::<Agent<MemoryStore, OpenAiProvider>>((
-        MemoryStore::new(),
-        OpenAiProvider::new(config),
-        registry,
-        workspace_root.into(),
-        Some(
-            "You are a file I/O agent. Use read_file and write_file for workspace files."
-                .to_owned(),
-        ),
-    ));
+    let owner = Agent::<MemoryStore, OpenAiProvider>::builder(facade)
+        .with(FileTools)
+        .with_workspace_root(&workspace_root)
+        .with_system_prompt(
+            "You are a file I/O agent. Use read_file and write_file for workspace files.",
+        )
+        .spawn(MemoryStore::new(), OpenAiProvider::new(config))?;
     let agent_ref = owner.actor_ref();
 
     let stdin = BufReader::new(tokio::io::stdin());
