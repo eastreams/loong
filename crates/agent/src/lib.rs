@@ -51,9 +51,10 @@ where
 {
     /// Returns a builder that assembles one agent with explicit resources.
     ///
-    /// `C` and `P` are inferred from [`AgentBuilder::spawn`], so callers can
-    /// write `Agent::builder(facade).spawn(store, provider)` without naming
-    /// the generic parameters.
+    /// `C` and `P` are inferred from [`AgentBuilder::with_store`] and
+    /// [`AgentBuilder::with_provider`], so callers can write
+    /// `Agent::builder(facade).with_store(store).with_provider(provider).spawn()`
+    /// without naming the generic parameters.
     #[must_use]
     pub fn builder(facade: Facade) -> AgentBuilder<C, P> {
         AgentBuilder::new(facade)

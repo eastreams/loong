@@ -78,7 +78,9 @@ async fn switch_provider_message_is_accepted() {
     let (kernel_owner, facade) = plan_facade();
     let owner = Agent::builder(facade)
         .with_system_prompt(PLAN_SYSTEM_PROMPT)
-        .spawn(MemoryStore::new(), DummyProvider)
+        .with_store(MemoryStore::new())
+        .with_provider(DummyProvider)
+        .spawn()
         .unwrap();
     let actor_ref = owner.actor_ref();
 
@@ -94,7 +96,9 @@ async fn switch_provider_accepts_arc_of_non_clone_provider() {
     let (kernel_owner, facade) = plan_facade();
     let owner = Agent::builder(facade)
         .with_system_prompt(PLAN_SYSTEM_PROMPT)
-        .spawn(MemoryStore::new(), Arc::new(NonCloneProvider))
+        .with_store(MemoryStore::new())
+        .with_provider(Arc::new(NonCloneProvider))
+        .spawn()
         .unwrap();
     let actor_ref = owner.actor_ref();
 
@@ -190,7 +194,9 @@ async fn prompt_streams_and_appends_context() {
     let store = SharedStore(Arc::new(Mutex::new(MemoryStore::new())));
     let owner = Agent::builder(facade)
         .with_system_prompt(PLAN_SYSTEM_PROMPT)
-        .spawn(store.clone(), EchoProvider)
+        .with_store(store.clone())
+        .with_provider(EchoProvider)
+        .spawn()
         .unwrap();
     let actor_ref = owner.actor_ref();
 
@@ -245,12 +251,11 @@ async fn prompt_executes_tool_calls_and_continues() {
         .with(FileTools)
         .with_workspace_root(&workspace)
         .with_system_prompt(FILE_IO_SYSTEM_PROMPT)
-        .spawn(
-            store.clone(),
-            ToolCallProvider {
-                calls: Arc::new(AtomicUsize::new(0)),
-            },
-        )
+        .with_store(store.clone())
+        .with_provider(ToolCallProvider {
+            calls: Arc::new(AtomicUsize::new(0)),
+        })
+        .spawn()
         .unwrap();
     let actor_ref = owner.actor_ref();
 
@@ -316,7 +321,9 @@ async fn channel_target_ask_collects_streamed_text() {
     let (kernel_owner, facade) = plan_facade();
     let owner = Agent::builder(facade)
         .with_system_prompt(PLAN_SYSTEM_PROMPT)
-        .spawn(MemoryStore::new(), EchoProvider)
+        .with_store(MemoryStore::new())
+        .with_provider(EchoProvider)
+        .spawn()
         .unwrap();
     let actor_ref = owner.actor_ref();
 
@@ -334,7 +341,9 @@ async fn builder_rejects_file_tools_without_workspace_root() {
 
     let result = Agent::builder(facade)
         .with(FileTools)
-        .spawn(MemoryStore::new(), DummyProvider);
+        .with_store(MemoryStore::new())
+        .with_provider(DummyProvider)
+        .spawn();
 
     assert!(matches!(result, Err(BuildError::MissingResource { .. })));
 

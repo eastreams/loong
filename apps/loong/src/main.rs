@@ -36,7 +36,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_system_prompt(
             "You are a file I/O agent. Use read_file and write_file for workspace files.",
         )
-        .spawn(MemoryStore::new(), OpenAiProvider::new(config))?;
+        .with_store(MemoryStore::new())
+        .with_provider(OpenAiProvider::new(config))
+        .spawn()?;
     let agent_ref = owner.actor_ref();
 
     let stdin = BufReader::new(tokio::io::stdin());

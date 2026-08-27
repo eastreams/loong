@@ -6,7 +6,6 @@
 //! AgentBuilder::spawn), so `with_*` methods stay infallible.
 
 use std::{
-    marker::PhantomData,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -27,6 +26,10 @@ use crate::tool_set::ToolSet;
 /// Why agent assembly failed.
 #[derive(Debug, thiserror::Error)]
 pub enum BuildError {
+    #[error("missing context store; call `with_store` before `spawn`")]
+    MissingStore,
+    #[error("missing provider; call `with_provider` before `spawn`")]
+    MissingProvider,
     #[error("missing resource `{resource}` required by `{tool_set}`")]
     MissingResource {
         resource: &'static str,
@@ -50,7 +53,8 @@ pub struct AgentBuilder<C, P> {
     tools: Vec<Box<dyn ToolSet>>,
     channels: Vec<(&'static str, Arc<dyn ChannelTarget>)>,
     system_prompt: Option<String>,
-    _marker: PhantomData<fn() -> (C, P)>,
+    store: Option<C>,
+    provider: Option<P>,
 }
 
 impl<C, P> AgentBuilder<C, P> {
@@ -62,13 +66,28 @@ impl<C, P> AgentBuilder<C, P> {
             tools: Vec::new(),
             channels: Vec::new(),
             system_prompt: None,
-            _marker: PhantomData,
+            store: None,
+            provider: None,
         }
     }
 
     #[must_use]
     pub fn with<T: ToolSet>(mut self, tools: T) -> Self {
         self.tools.push(Box::new(tools));
+        self
+    }
+
+    /// Sets the agent's context store.
+    #[must_use]
+    pub fn with_store(mut self, store: C) -> Self {
+        self.store = Some(store);
+        self
+    }
+
+    /// Sets the agent's provider.
+    #[must_use]
+    pub fn with_provider(mut self, provider: P) -> Self {
+        self.provider = Some(provider);
         self
     }
 
@@ -108,7 +127,7 @@ impl<C, P> AgentBuilder<C, P> {
     }
 
     /// Validates the assembled tools and resources, then starts the agent.
-    pub fn spawn(self, store: C, provider: P) -> Result<AgentHandle<C, P>, BuildError>
+    pub fn spawn(self) -> Result<AgentHandle<C, P>, BuildError>
     where
         C: ContextStore + 'static,
         P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
@@ -121,8 +140,12 @@ impl<C, P> AgentBuilder<C, P> {
             tools,
             channels,
             system_prompt,
-            _marker,
+            store,
+            provider,
         } = self;
+
+        let store = store.ok_or(BuildError::MissingStore)?;
+        let provider = provider.ok_or(BuildError::MissingProvider)?;
 
         let mut registry = ToolRegistry::new(facade);
         for tool_set in &tools {
