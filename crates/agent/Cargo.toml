@@ -5,7 +5,6 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-anymap2 = "0.13.0"
 async-trait.workspace = true
 context.workspace = true
 contracts.workspace = true

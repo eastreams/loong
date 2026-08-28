@@ -31,7 +31,7 @@ impl ToolImpl for ReadFileTool {
 
     async fn execute(
         &self,
-        ctx: &dyn ToolContext,
+        ctx: &ToolContext<'_>,
         input: Self::Input,
     ) -> Result<Self::Output, Self::Error> {
         let bytes = ctx.fs().read(&input.path).await?;

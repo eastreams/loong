@@ -10,6 +10,9 @@
 pub mod access;
 pub mod actors;
 pub mod policy;
+pub mod resource;
+
+use std::sync::Arc;
 
 use loac::{ActorRef, CallError, prelude::*};
 
@@ -19,6 +22,7 @@ use thiserror::Error;
 use crate::policy::PolicyContext;
 use crate::policy::action::{ActionMeta, Denied, Granted};
 use crate::policy::engine::PolicyEngine;
+use crate::resource::Resources;
 
 pub struct Kernel {
     policy_engine: PolicyEngine,
@@ -60,6 +64,7 @@ impl<A: ActionMeta> SyncHandler<PolicyEvent<A>> for Kernel {
 pub struct Facade {
     handle: ActorRef<Kernel>,
     capabilities: Capabilities,
+    resources: Arc<Resources>,
 }
 
 #[derive(Debug, Error)]
@@ -79,16 +84,33 @@ impl Facade {
         Self {
             handle,
             capabilities: capabilities.into_iter().collect(),
+            resources: Arc::new(Resources::new()),
         }
     }
 
+    /// Returns a facade with the supplied resources.
+    ///
+    /// Resources are fixed when an agent is assembled, so this consumes the
+    /// current facade and returns a new one with the same kernel handle and
+    /// capability ceiling.
+    #[must_use]
+    pub fn with_resources(self, resources: Resources) -> Self {
+        Self {
+            resources: Arc::new(resources),
+            ..self
+        }
+    }
+
+    #[must_use]
+    pub fn resources(&self) -> &Resources {
+        self.resources.as_ref()
+    }
+
     pub async fn grant<A: ActionMeta>(&self, action: A) -> Result<Granted<A>, GrantSendError> {
+        let context = PolicyContext::new(self.capabilities, Arc::clone(&self.resources));
         Ok(self
             .handle
-            .call(PolicyEvent {
-                action,
-                context: PolicyContext::new(self.capabilities),
-            })
+            .call(PolicyEvent { action, context })
             .await??)
     }
 }

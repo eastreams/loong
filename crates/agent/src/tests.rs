@@ -6,6 +6,7 @@ use contracts::transcript::{Role, TranscriptItem};
 use kernel::{Facade, Kernel, policy::engine::PolicyEngine};
 use loac::{ExitReason, Shutdown, Writer};
 use provider::{Provider, StreamError};
+use std::path::PathBuf;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicUsize, Ordering},

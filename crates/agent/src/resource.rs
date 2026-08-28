@@ -1,27 +1,12 @@
-//! Typed singleton resources that tool sets can require.
+//! Tool-set resource declarations.
 
-use std::path::PathBuf;
-
-use anymap2::AnyMap;
-
-/// A singleton resource provided to tools, keyed by its Rust type.
-pub trait Resource: 'static + Send + Sync {
-    /// Stable name used in error messages.
-    const NAME: &'static str;
-}
-
-/// The workspace root available to filesystem tools.
-pub struct WorkspaceRoot(pub PathBuf);
-
-impl Resource for WorkspaceRoot {
-    const NAME: &'static str = "WorkspaceRoot";
-}
+pub use kernel::resource::{Resource, Resources, WorkspaceRoot};
 
 /// A tool set's declared dependency on one resource type.
 #[derive(Debug, Clone, Copy)]
 pub struct ResourceNeed {
     name: &'static str,
-    check: fn(&AnyMap) -> bool,
+    check: fn(&Resources) -> bool,
 }
 
 impl ResourceNeed {
@@ -38,7 +23,7 @@ impl ResourceNeed {
         self.name
     }
 
-    pub(crate) fn is_satisfied_by(&self, resources: &AnyMap) -> bool {
+    pub(crate) fn is_satisfied_by(&self, resources: &Resources) -> bool {
         (self.check)(resources)
     }
 }

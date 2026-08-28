@@ -45,7 +45,7 @@ impl ToolImpl for ChannelTool {
 
     async fn execute(
         &self,
-        _ctx: &dyn ToolContext,
+        _ctx: &ToolContext<'_>,
         input: Self::Input,
     ) -> Result<Self::Output, Self::Error> {
         self.target.ask(input.prompt).await

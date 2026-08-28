@@ -8,10 +8,13 @@
 pub mod action;
 pub mod engine;
 
+use std::sync::Arc;
+
 use contracts::capability::Capabilities;
 use contracts::policy::PolicyResult;
 
 use crate::policy::action::ActionMeta;
+use crate::resource::Resources;
 
 /// Immutable facts supplied for one policy evaluation.
 ///
@@ -20,15 +23,23 @@ use crate::policy::action::ActionMeta;
 /// Policy configuration remains in the policy instance or engine; handles and
 /// services stay outside this value.
 #[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct PolicyContext {
     pub capabilities: Capabilities,
+    /// Operational resources fixed at agent assembly time. Policies may read
+    /// these to evaluate actions (for example a workspace boundary), but
+    /// resources are not capabilities: they never expand the capability
+    /// ceiling.
+    pub resources: Arc<Resources>,
 }
 
 impl PolicyContext {
     #[must_use]
-    pub(crate) const fn new(capabilities: Capabilities) -> Self {
-        Self { capabilities }
+    pub(crate) fn new(capabilities: Capabilities, resources: Arc<Resources>) -> Self {
+        Self {
+            capabilities,
+            resources,
+        }
     }
 }
 

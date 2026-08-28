@@ -1,14 +1,14 @@
 //! Tool registry: type-erased tool handles, the concrete [`ToolRegistry`]
 //! host the agent invokes, and the immutable [`ToolSnapshot`] readers use.
 
-use std::{collections::BTreeMap, path::Path, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
 use contracts::tool::ToolSpec;
 use kernel::Facade;
 use serde_json::Value;
 
-use crate::tool::{InvocationParams, RegistrationError, ToolContext, ToolError, ToolImpl};
+use crate::tool::{RegistrationError, ToolContext, ToolError, ToolImpl};
 
 /// Immutable index of registered tools shared by snapshots.
 type ToolIndex = BTreeMap<String, Arc<RegisteredTool>>;
@@ -35,7 +35,7 @@ impl ToolRegistration {
 
 #[async_trait]
 trait ToolAdapter: Send + Sync {
-    async fn invoke(&self, ctx: &dyn ToolContext, payload: Value) -> Result<Value, ToolError>;
+    async fn invoke(&self, ctx: &ToolContext<'_>, payload: Value) -> Result<Value, ToolError>;
 }
 
 /// Type-erased tool handle stored in the registry.
@@ -64,7 +64,7 @@ impl RegisteredTool {
         self.registration.spec()
     }
 
-    pub async fn invoke(&self, ctx: &dyn ToolContext, payload: Value) -> Result<Value, ToolError> {
+    pub async fn invoke(&self, ctx: &ToolContext<'_>, payload: Value) -> Result<Value, ToolError> {
         self.adapter.invoke(ctx, payload).await
     }
 }
@@ -81,7 +81,7 @@ impl<T: ToolImpl> CoreToolAdapter<T> {
 
 #[async_trait]
 impl<T: ToolImpl> ToolAdapter for CoreToolAdapter<T> {
-    async fn invoke(&self, ctx: &dyn ToolContext, payload: Value) -> Result<Value, ToolError> {
+    async fn invoke(&self, ctx: &ToolContext<'_>, payload: Value) -> Result<Value, ToolError> {
         let input = self
             .inner
             .parse_input(payload)
@@ -162,13 +162,8 @@ impl ToolRegistry {
         self.snapshot().tool_specs()
     }
 
-    pub async fn invoke(
-        &self,
-        name: &str,
-        params: &InvocationParams,
-        payload: Value,
-    ) -> Result<Value, ToolError> {
-        self.snapshot().invoke(name, params, payload).await
+    pub async fn invoke(&self, name: &str, payload: Value) -> Result<Value, ToolError> {
+        self.snapshot().invoke(name, payload).await
     }
 }
 
@@ -191,37 +186,13 @@ impl ToolSnapshot {
             .collect()
     }
 
-    pub async fn invoke(
-        &self,
-        name: &str,
-        params: &InvocationParams,
-        payload: Value,
-    ) -> Result<Value, ToolError> {
+    pub async fn invoke(&self, name: &str, payload: Value) -> Result<Value, ToolError> {
         let registered = self
             .tools
             .get(name)
             .cloned()
             .ok_or_else(|| ToolError::UnknownTool(name.to_owned()))?;
-        let ctx = ToolRegistryContext {
-            facade: &self.facade,
-            workspace_root: &params.workspace_root,
-        };
+        let ctx = ToolContext::new(&self.facade);
         registered.invoke(&ctx, payload).await
-    }
-}
-
-/// Per-call tool context backed by a registry snapshot or the registry itself.
-pub struct ToolRegistryContext<'a> {
-    facade: &'a Facade,
-    workspace_root: &'a Path,
-}
-
-impl ToolContext for ToolRegistryContext<'_> {
-    fn facade(&self) -> &Facade {
-        self.facade
-    }
-
-    fn workspace_root(&self) -> &Path {
-        self.workspace_root
     }
 }

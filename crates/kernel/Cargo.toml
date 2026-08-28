@@ -12,6 +12,7 @@ async-trait.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "fs", "net", "time"] }
 thiserror.workspace = true
 serde_json.workspace = true
+anymap2 = "0.13.0"
 
 [lints]
 workspace = true

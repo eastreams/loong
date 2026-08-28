@@ -16,8 +16,8 @@ use std::{
     sync::Arc,
 };
 
-use anymap2::AnyMap;
 use contracts::provider::{Request, StreamItem};
+use kernel::resource::{Resources, WorkspaceRoot};
 use kernel::Facade;
 use provider::Provider;
 use tool_host::{RegistrationError, ToolRegistry};
@@ -25,7 +25,6 @@ use tool_host::{RegistrationError, ToolRegistry};
 use super::{Agent, ContextStore, ProviderOut};
 use crate::channel::ChannelTarget;
 use crate::channel_tool::ChannelTool;
-use crate::resource::WorkspaceRoot;
 use crate::tool_set::ToolSet;
 
 /// Why agent assembly failed.
@@ -52,7 +51,7 @@ pub enum BuildError {
 /// type-checks after both are set.
 pub struct AgentBuilder<C, P, const STORE_SET: bool = false, const PROVIDER_SET: bool = false> {
     facade: Facade,
-    resources: AnyMap,
+    resources: Resources,
     tools: Vec<Box<dyn ToolSet>>,
     channels: Vec<(&'static str, Arc<dyn ChannelTarget>)>,
     system_prompt: Option<String>,
@@ -65,7 +64,7 @@ impl<C, P> AgentBuilder<C, P, false, false> {
     pub fn new(facade: Facade) -> Self {
         Self {
             facade,
-            resources: AnyMap::new(),
+            resources: Resources::new(),
             tools: Vec::new(),
             channels: Vec::new(),
             system_prompt: None,
@@ -133,8 +132,8 @@ impl<C, P, const STORE_SET: bool, const PROVIDER_SET: bool>
         self
     }
 
-    /// Resource needs are currently checked against an [`AnyMap`] at runtime
-    /// because `ToolSet::needs()` reports them as values. Once Rust
+    /// Resource needs are currently checked against a [`Resources`] value at
+    /// runtime because `ToolSet::needs()` reports them as values. Once Rust
     /// specialization stabilizes, resource requirements can be lifted to the
     /// type level and checked at compile time, just like `STORE_SET` and
     /// `PROVIDER_SET`.
@@ -175,6 +174,12 @@ where
         let store = store.expect("STORE_SET=true guarantees a store");
         let provider = provider.expect("PROVIDER_SET=true guarantees a provider");
 
+        let mut resources = resources;
+        if !resources.contains::<WorkspaceRoot>() {
+            resources.insert(WorkspaceRoot(PathBuf::from(".")));
+        }
+        let facade = facade.with_resources(resources);
+
         let mut registry = ToolRegistry::new(facade);
         for tool_set in &tools {
             tool_set.register(&mut registry)?;
@@ -186,16 +191,10 @@ where
             )?;
         }
 
-        let workspace_root = resources
-            .get::<WorkspaceRoot>()
-            .map(|root| root.0.clone())
-            .unwrap_or_else(|| PathBuf::from("."));
-
         Ok(Agent {
             store,
             provider,
             registry,
-            workspace_root,
             system_prompt,
             prompt_queue: VecDeque::new(),
             active: None,

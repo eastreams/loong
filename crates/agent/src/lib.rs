@@ -4,7 +4,6 @@ use std::{
     collections::VecDeque,
     future::Future,
     marker::PhantomData,
-    path::PathBuf,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
@@ -21,7 +20,7 @@ use provider::{Provider, StreamError};
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
-use tool_host::{InvocationParams, ToolError, ToolRegistry, ToolSnapshot};
+use tool_host::{ToolError, ToolRegistry, ToolSnapshot};
 
 mod builder;
 mod channel;
@@ -31,7 +30,7 @@ mod tool_set;
 
 pub use builder::{AgentBuilder, BuildError};
 pub use channel::{ChannelError, ChannelTarget};
-pub use resource::{Resource, ResourceNeed, WorkspaceRoot};
+pub use resource::{Resource, ResourceNeed, Resources, WorkspaceRoot};
 pub use tool_set::{FileTools, ToolSet};
 
 /// Writer that receives streamed provider items.
@@ -63,7 +62,6 @@ where
     store: C,
     provider: P,
     registry: ToolRegistry,
-    workspace_root: PathBuf,
     system_prompt: Option<String>,
     /// Prompts that have been accepted by the mailbox but not started yet.
     ///
@@ -109,7 +107,6 @@ where
             messages: self.store.snapshot().items,
             provider: self.provider.clone(),
             registry: Arc::new(self.registry.snapshot()),
-            workspace_root: self.workspace_root.clone(),
             system_prompt: self.system_prompt.clone(),
             cancellation,
         }
@@ -206,7 +203,6 @@ struct PreparedPrompt<P> {
     messages: Vec<TranscriptItem>,
     provider: P,
     registry: Arc<ToolSnapshot>,
-    workspace_root: PathBuf,
     system_prompt: Option<String>,
     cancellation: CancellationToken,
 }
@@ -255,7 +251,6 @@ struct LoopData<P, W> {
     messages: Vec<TranscriptItem>,
     provider: P,
     registry: Arc<ToolSnapshot>,
-    workspace_root: PathBuf,
     tools: Vec<ToolSpec>,
     cancellation: CancellationToken,
     pending_calls: VecDeque<PendingToolCall>,
@@ -268,7 +263,6 @@ impl<P, W> LoopData<P, W> {
             mut messages,
             provider,
             registry,
-            workspace_root,
             system_prompt,
             cancellation,
         } = prepared;
@@ -301,7 +295,6 @@ impl<P, W> LoopData<P, W> {
             messages,
             provider,
             registry,
-            workspace_root,
             tools,
             cancellation,
             pending_calls: VecDeque::new(),
@@ -427,7 +420,6 @@ where
         messages,
         provider,
         registry,
-        workspace_root,
         tools,
         cancellation,
         pending_calls: _,
@@ -465,7 +457,6 @@ where
                         messages,
                         provider,
                         registry,
-                        workspace_root,
                         tools,
                         cancellation,
                         pending_calls: VecDeque::new(),
@@ -486,16 +477,14 @@ where
     W: Writer<StreamItem> + Send + 'static,
 {
     let payload = serde_json::from_str(&call.arguments).unwrap_or(Value::Null);
-    let workspace_root = data.workspace_root.clone();
     let registry = Arc::clone(&data.registry);
     let cancellation = data.cancellation.clone();
     let call_name = call.name.clone();
 
     Box::pin(async move {
-        let params = InvocationParams::new(workspace_root);
         tokio::select! {
             biased;
-            result = async { registry.invoke(&call_name, &params, payload).await } => {
+            result = async { registry.invoke(&call_name, payload).await } => {
                 ToolOutcome::Completed { data: Box::new(data), result }
             }
             _ = cancellation.cancelled() => ToolOutcome::Cancelled,
