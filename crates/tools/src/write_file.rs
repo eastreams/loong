@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use async_trait::async_trait;
 use kernel::access::fs::FsWriteError;
 use schemars::JsonSchema;
@@ -22,12 +24,12 @@ impl ToolImpl for WriteFileTool {
     type Output = WriteFileOutput;
     type Error = FsWriteError;
 
-    fn name(&self) -> &str {
-        "write_file"
+    fn name(&self) -> Cow<'_, str> {
+        Cow::Borrowed("write_file")
     }
 
-    fn description(&self) -> &'static str {
-        "Write a text file inside the workspace"
+    fn description(&self) -> Cow<'_, str> {
+        Cow::Borrowed("Write a text file inside the workspace")
     }
 
     async fn execute(

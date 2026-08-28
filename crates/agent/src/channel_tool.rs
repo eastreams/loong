@@ -1,6 +1,6 @@
 //! Tool adapter that exposes one named channel as a callable tool.
 
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -38,12 +38,12 @@ impl ToolImpl for ChannelTool {
     type Output = String;
     type Error = ChannelError;
 
-    fn name(&self) -> &str {
-        &self.name
+    fn name(&self) -> Cow<'_, str> {
+        Cow::Borrowed(&self.name)
     }
 
-    fn description(&self) -> &'static str {
-        "Ask another agent a prompt and return its streamed answer."
+    fn description(&self) -> Cow<'_, str> {
+        Cow::Borrowed("Ask another agent a prompt and return its streamed answer.")
     }
 
     async fn execute(

@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use async_trait::async_trait;
 use kernel::access::fs::FsReadError;
 use schemars::JsonSchema;
@@ -21,12 +23,12 @@ impl ToolImpl for ReadFileTool {
     type Output = ReadFileOutput;
     type Error = FsReadError;
 
-    fn name(&self) -> &str {
-        "read_file"
+    fn name(&self) -> Cow<'_, str> {
+        Cow::Borrowed("read_file")
     }
 
-    fn description(&self) -> &'static str {
-        "Read a text file inside the workspace"
+    fn description(&self) -> Cow<'_, str> {
+        Cow::Borrowed("Read a text file inside the workspace")
     }
 
     async fn execute(

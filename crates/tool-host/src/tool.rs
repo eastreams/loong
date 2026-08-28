@@ -1,7 +1,7 @@
 //! Tool contract: errors, the per-call [`ToolContext`], and the [`ToolImpl`]
 //! trait shared by every tool implementation.
 
-use std::path::Path;
+use std::{borrow::Cow, path::Path};
 
 use async_trait::async_trait;
 use contracts::tool::ToolSpec;
@@ -94,14 +94,14 @@ pub trait ToolImpl: Send + Sync + 'static {
     type Output: JsonSchema + serde::Serialize + Send + 'static;
     type Error: std::error::Error + Send + Sync + 'static;
 
-    fn name(&self) -> &str;
+    fn name(&self) -> Cow<'_, str>;
 
-    fn description(&self) -> &'static str;
+    fn description(&self) -> Cow<'_, str>;
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
-            name: self.name().to_owned().into(),
-            description: self.description().into(),
+            name: Cow::Owned(self.name().into_owned()),
+            description: Cow::Owned(self.description().into_owned()),
             input_schema: root_schema::<Self::Input>(),
             output_schema: root_schema::<Self::Output>(),
         }
