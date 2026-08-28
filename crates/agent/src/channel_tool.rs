@@ -18,14 +18,17 @@ pub struct ChannelPromptInput {
 /// Concrete tool registered by [`AgentBuilder::with_channel`](
 /// super::builder::AgentBuilder::with_channel).
 pub struct ChannelTool {
-    name: &'static str,
+    name: String,
     target: Arc<dyn ChannelTarget>,
 }
 
 impl ChannelTool {
     #[must_use]
-    pub fn new(name: &'static str, target: Arc<dyn ChannelTarget>) -> Self {
-        Self { name, target }
+    pub fn new(name: impl Into<String>, target: Arc<dyn ChannelTarget>) -> Self {
+        Self {
+            name: name.into(),
+            target,
+        }
     }
 }
 
@@ -36,7 +39,7 @@ impl ToolImpl for ChannelTool {
     type Error = ChannelError;
 
     fn name(&self) -> &str {
-        self.name
+        &self.name
     }
 
     fn description(&self) -> &'static str {

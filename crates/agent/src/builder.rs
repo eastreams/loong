@@ -53,7 +53,7 @@ pub struct AgentBuilder<C, P, const STORE_SET: bool = false, const PROVIDER_SET:
     facade: Facade,
     resources: Resources,
     tools: Vec<Box<dyn ToolSet>>,
-    channels: Vec<(&'static str, Arc<dyn ChannelTarget>)>,
+    channels: Vec<(String, Arc<dyn ChannelTarget>)>,
     system_prompt: Option<String>,
     store: Option<C>,
     provider: Option<P>,
@@ -114,8 +114,8 @@ impl<C, P, const STORE_SET: bool, const PROVIDER_SET: bool>
     /// Registers one named channel as a tool. The channel name is the tool
     /// name the model sees.
     #[must_use]
-    pub fn with_channel(mut self, name: &'static str, target: Arc<dyn ChannelTarget>) -> Self {
-        self.channels.push((name, target));
+    pub fn with_channel(mut self, name: impl Into<String>, target: Arc<dyn ChannelTarget>) -> Self {
+        self.channels.push((name.into(), target));
         self
     }
 
@@ -186,8 +186,8 @@ where
         }
         for (name, target) in &channels {
             registry.register(
-                (*name).to_owned(),
-                ChannelTool::new(name, Arc::clone(target)),
+                name.clone(),
+                ChannelTool::new(name.clone(), Arc::clone(target)),
             )?;
         }
 
