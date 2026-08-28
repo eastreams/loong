@@ -28,12 +28,14 @@ use crate::channel::ChannelTarget;
 use crate::channel_tool::ChannelTool;
 use crate::tool_set::ToolSet;
 
-/// Spawns one child agent and registers it as a named channel tool.
+/// Spawns one child agent and returns its type-erased channel.
 ///
 /// The child type is erased behind this trait so one parent can own child
 /// agents with different store/provider types. Each child is started in the
 /// parent actor's [`init`](loac::Actor::init), which gives the parent runtime
-/// ownership of the child lifetime.
+/// ownership of the child lifetime. The returned channel is the child's
+/// `Arc<dyn ChannelTarget>`; the parent init uses it directly to register the
+/// named channel tool.
 pub(crate) trait SubagentSpawner<C, P>: Send
 where
     C: ContextStore + 'static,
@@ -41,7 +43,7 @@ where
 {
     fn name(&self) -> &str;
 
-    fn spawn(self: Box<Self>, scope: &mut ActorScope<'_, Agent<C, P>>, registry: &mut ToolRegistry);
+    fn spawn(self: Box<Self>, scope: &mut ActorScope<'_, Agent<C, P>>) -> Arc<dyn ChannelTarget>;
 }
 
 /// [`SubagentSpawner`] for a fully built child [`Agent`].
@@ -66,20 +68,12 @@ where
         &self.name
     }
 
-    fn spawn(
-        self: Box<Self>,
-        scope: &mut ActorScope<'_, Agent<C, P>>,
-        registry: &mut ToolRegistry,
-    ) {
+    fn spawn(self: Box<Self>, scope: &mut ActorScope<'_, Agent<C, P>>) -> Arc<dyn ChannelTarget> {
         let this = *self;
         let child = scope
             .spawn_child::<Agent<C2, P2>>(this.agent)
             .unwrap_or_else(|_| unreachable!("unbounded children accept every subagent"));
-        let target: Arc<dyn ChannelTarget> = Arc::new(child.into_actor_ref());
-        let tool = ChannelTool::new(this.name.clone(), target);
-        registry
-            .register(this.name, tool)
-            .expect("builder validated unique subagent channel name");
+        Arc::new(child.into_actor_ref())
     }
 }
 

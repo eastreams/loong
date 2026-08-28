@@ -525,7 +525,12 @@ where
     async fn init(agent: Self::SpawnArgs, scope: &mut ActorScope<'_, Self>) -> Self {
         let mut agent = agent;
         for subagent in std::mem::take(&mut agent.subagents) {
-            subagent.spawn(scope, &mut agent.registry);
+            let name = subagent.name().to_owned();
+            let target = subagent.spawn(scope);
+            agent
+                .registry
+                .register(name.clone(), ChannelTool::new(name, target))
+                .expect("builder validated unique subagent channel name");
         }
         agent
     }
