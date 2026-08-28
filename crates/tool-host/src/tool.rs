@@ -5,9 +5,9 @@ use std::path::Path;
 
 use async_trait::async_trait;
 use contracts::tool::ToolSpec;
+use kernel::Facade;
 use kernel::access::fs::FsAccess;
 use kernel::resource::{Resource, Resources, WorkspaceRoot};
-use kernel::Facade;
 use schemars::{JsonSchema, Schema};
 use serde_json::Value;
 use thiserror::Error;

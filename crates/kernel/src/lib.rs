@@ -108,10 +108,7 @@ impl Facade {
 
     pub async fn grant<A: ActionMeta>(&self, action: A) -> Result<Granted<A>, GrantSendError> {
         let context = PolicyContext::new(self.capabilities, Arc::clone(&self.resources));
-        Ok(self
-            .handle
-            .call(PolicyEvent { action, context })
-            .await??)
+        Ok(self.handle.call(PolicyEvent { action, context }).await??)
     }
 }
 

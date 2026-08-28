@@ -17,8 +17,8 @@ use std::{
 };
 
 use contracts::provider::{Request, StreamItem};
-use kernel::resource::{Resources, WorkspaceRoot};
 use kernel::Facade;
+use kernel::resource::{Resources, WorkspaceRoot};
 use provider::Provider;
 use tool_host::{RegistrationError, ToolRegistry};
 
