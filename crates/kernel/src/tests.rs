@@ -26,7 +26,7 @@ impl ActionMeta for TestAction {
 #[tokio::test]
 async fn explicit_capability_policy_grants_unique_ids() {
     let owner = loac::spawn::<Kernel>(PolicyEngine::allow_capabilities());
-    let facade = Facade::new(owner.actor_ref(), Capability::FsRead.into());
+    let facade = Facade::new(owner.actor_ref(), Capability::FsRead);
 
     let first = facade.grant(TestAction).await.unwrap();
     let second = facade.grant(TestAction).await.unwrap();

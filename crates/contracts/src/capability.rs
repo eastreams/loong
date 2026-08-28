@@ -74,6 +74,15 @@ define_capabilities! {
     FsWrite = 1 => "fs.write",
 }
 
+impl IntoIterator for Capability {
+    type Item = Capability;
+    type IntoIter = core::iter::Once<Capability>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        core::iter::once(self)
+    }
+}
+
 impl Serialize for Capability {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -160,6 +169,14 @@ impl From<Capability> for Capabilities {
     }
 }
 
+impl Extend<Capability> for Capabilities {
+    fn extend<T: IntoIterator<Item = Capability>>(&mut self, iter: T) {
+        for cap in iter.into_iter() {
+            *self = self.with(cap);
+        }
+    }
+}
+
 impl Serialize for Capabilities {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -191,6 +208,18 @@ impl JsonSchema for Capabilities {
 
     fn json_schema(generator: &mut SchemaGenerator) -> Schema {
         <BTreeSet<Capability>>::json_schema(generator)
+    }
+}
+
+impl IntoIterator for Capabilities {
+    type Item = Capability;
+    type IntoIter = CapabilitiesIntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        CapabilitiesIntoIter {
+            remaining: self,
+            byte_index: 0,
+        }
     }
 }
 
@@ -229,18 +258,6 @@ impl Iterator for CapabilitiesIntoIter {
 }
 
 impl FusedIterator for CapabilitiesIntoIter {}
-
-impl IntoIterator for Capabilities {
-    type Item = Capability;
-    type IntoIter = CapabilitiesIntoIter;
-
-    fn into_iter(self) -> Self::IntoIter {
-        CapabilitiesIntoIter {
-            remaining: self,
-            byte_index: 0,
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests;

@@ -13,7 +13,7 @@ pub mod policy;
 
 use loac::{ActorRef, CallError, prelude::*};
 
-use contracts::capability::Capabilities;
+use contracts::capability::{Capabilities, Capability};
 use thiserror::Error;
 
 use crate::policy::PolicyContext;
@@ -72,10 +72,13 @@ pub enum GrantSendError {
 
 impl Facade {
     #[must_use]
-    pub fn new(handle: ActorRef<Kernel>, capabilities: Capabilities) -> Self {
+    pub fn new(
+        handle: ActorRef<Kernel>,
+        capabilities: impl IntoIterator<Item = Capability>,
+    ) -> Self {
         Self {
             handle,
-            capabilities,
+            capabilities: capabilities.into_iter().collect(),
         }
     }
 
