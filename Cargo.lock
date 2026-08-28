@@ -862,6 +862,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

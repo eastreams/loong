@@ -16,7 +16,8 @@ schemars.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["macros", "sync"] }
+tokio-util = "0.7.19"
 tool_host.workspace = true
 tools.workspace = true
 
@@ -24,4 +25,4 @@ tools.workspace = true
 workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

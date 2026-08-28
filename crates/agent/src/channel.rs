@@ -9,17 +9,16 @@ use std::{future::Future, pin::Pin, sync::Arc};
 
 use contracts::provider::{Request, StreamItem};
 use loac::ActorRef;
-use provider::StreamError;
 
-use super::{Agent, ContextStore, Prompt, Provider, ProviderOut};
+use super::{Agent, ContextStore, Prompt, PromptError, Provider, ProviderOut};
 
 /// Why a channel call failed.
 #[derive(Debug, thiserror::Error)]
 pub enum ChannelError {
     #[error("channel call failed: {0}")]
     Call(#[from] loac::CallError),
-    #[error("channel stream failed: {0}")]
-    Stream(#[from] StreamError<Request>),
+    #[error("channel prompt failed: {0}")]
+    Prompt(#[from] PromptError),
 }
 
 /// A type-erased endpoint for one named agent channel.

@@ -2,15 +2,16 @@
 //!
 //! The builder keeps capabilities at the [`Facade`] boundary and validates
 //! that every registered tool set receives the resources it declares, such as
-//! [`WorkspaceRoot`] for [`FileTools`]. Validation happens at [`spawn`](
-//! AgentBuilder::spawn), so `with_*` methods stay infallible.
+//! [`WorkspaceRoot`] for [`FileTools`]. Validation happens at [`build`](
+//! AgentBuilder::build), so `with_*` methods stay infallible.
 //!
 //! The builder also type-encodes the required actor state: `STORE_SET` and
 //! `PROVIDER_SET` advance as [`with_store`](AgentBuilder::with_store) and
 //! [`with_provider`](AgentBuilder::with_provider) are called, and
-//! [`spawn`](AgentBuilder::spawn) only exists once both are `true`.
+//! [`build`](AgentBuilder::build) only exists once both are `true`.
 
 use std::{
+    collections::VecDeque,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -18,7 +19,6 @@ use std::{
 use anymap2::AnyMap;
 use contracts::provider::{Request, StreamItem};
 use kernel::Facade;
-use loac::{ActorOwner, spawn};
 use provider::Provider;
 use tool_host::{RegistrationError, ToolRegistry};
 
@@ -158,11 +158,8 @@ where
     C: ContextStore + 'static,
     P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
 {
-    /// Validates the assembled tools and resources, then starts the agent.
-    ///
-    /// The returned owner derefs to the agent's [`ActorRef`], so address
-    /// methods can be called directly on it.
-    pub fn spawn(self) -> Result<ActorOwner<Agent<C, P>>, BuildError> {
+    /// Validates the assembled tools and resources, then builds the actor.
+    pub fn build(self) -> Result<Agent<C, P>, BuildError> {
         self.validate()?;
 
         let Self {
@@ -194,9 +191,14 @@ where
             .map(|root| root.0.clone())
             .unwrap_or_else(|| PathBuf::from("."));
 
-        let owner =
-            spawn::<Agent<C, P>>((store, provider, registry, workspace_root, system_prompt));
-
-        Ok(owner)
+        Ok(Agent {
+            store,
+            provider,
+            registry,
+            workspace_root,
+            system_prompt,
+            prompt_queue: VecDeque::new(),
+            active: None,
+        })
     }
 }

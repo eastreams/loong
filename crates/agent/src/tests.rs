@@ -10,6 +10,7 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
 };
+use tokio::sync::{Notify, watch};
 
 const PLAN_SYSTEM_PROMPT: &str = "You are a planning agent. Produce concise, ordered plans.";
 const FILE_IO_SYSTEM_PROMPT: &str =
@@ -80,11 +81,11 @@ async fn switch_provider_message_is_accepted() {
         .with_system_prompt(PLAN_SYSTEM_PROMPT)
         .with_store(MemoryStore::new())
         .with_provider(DummyProvider)
-        .spawn()
-        .unwrap();
-    let actor_ref = owner.actor_ref();
+        .build()
+        .unwrap()
+        .spawn();
 
-    actor_ref.call(SwitchProvider(DummyProvider)).await.unwrap();
+    owner.call(SwitchProvider(DummyProvider)).await.unwrap();
 
     let status = owner.shutdown(Shutdown::Drain).await;
     assert_eq!(status.reason(), ExitReason::Drained);
@@ -98,11 +99,11 @@ async fn switch_provider_accepts_arc_of_non_clone_provider() {
         .with_system_prompt(PLAN_SYSTEM_PROMPT)
         .with_store(MemoryStore::new())
         .with_provider(Arc::new(NonCloneProvider))
-        .spawn()
-        .unwrap();
-    let actor_ref = owner.actor_ref();
+        .build()
+        .unwrap()
+        .spawn();
 
-    actor_ref
+    owner
         .call(SwitchProvider(Arc::new(NonCloneProvider)))
         .await
         .unwrap();
@@ -196,11 +197,11 @@ async fn prompt_streams_and_appends_context() {
         .with_system_prompt(PLAN_SYSTEM_PROMPT)
         .with_store(store.clone())
         .with_provider(EchoProvider)
-        .spawn()
-        .unwrap();
-    let actor_ref = owner.actor_ref();
+        .build()
+        .unwrap()
+        .spawn();
 
-    let mut reply = actor_ref
+    let mut reply = owner
         .call(Prompt {
             text: "hi".to_string(),
         })
@@ -255,11 +256,11 @@ async fn prompt_executes_tool_calls_and_continues() {
         .with_provider(ToolCallProvider {
             calls: Arc::new(AtomicUsize::new(0)),
         })
-        .spawn()
-        .unwrap();
-    let actor_ref = owner.actor_ref();
+        .build()
+        .unwrap()
+        .spawn();
 
-    let mut reply = actor_ref
+    let mut reply = owner
         .call(Prompt {
             text: "read hello.txt".to_string(),
         })
@@ -323,11 +324,11 @@ async fn channel_target_ask_collects_streamed_text() {
         .with_system_prompt(PLAN_SYSTEM_PROMPT)
         .with_store(MemoryStore::new())
         .with_provider(EchoProvider)
-        .spawn()
-        .unwrap();
-    let actor_ref = owner.actor_ref();
+        .build()
+        .unwrap()
+        .spawn();
 
-    let answer = actor_ref.ask("hi".to_string()).await.unwrap();
+    let answer = owner.ask("hi".to_string()).await.unwrap();
     assert_eq!(answer, "hello");
 
     let status = owner.shutdown(Shutdown::Drain).await;
@@ -343,9 +344,320 @@ async fn builder_rejects_file_tools_without_workspace_root() {
         .with(FileTools)
         .with_store(MemoryStore::new())
         .with_provider(DummyProvider)
-        .spawn();
+        .build();
 
     assert!(matches!(result, Err(BuildError::MissingResource { .. })));
 
     let _ = kernel_owner.shutdown(Shutdown::Drain).await;
+}
+
+#[derive(Clone)]
+struct GatedProvider {
+    started: Arc<watch::Sender<bool>>,
+    gate: Arc<Notify>,
+}
+
+#[async_trait]
+impl Provider<Request, StreamItem, ProviderOut> for GatedProvider {
+    async fn stream(
+        &self,
+        _req: Request,
+        out: &mut ProviderOut,
+    ) -> Result<(), StreamError<Request>> {
+        let _ = self.started.send(true);
+        out.write(StreamItem::Text {
+            delta: "partial".to_string(),
+        })
+        .await
+        .unwrap();
+        self.gate.notified().await;
+        out.write(StreamItem::Text {
+            delta: "done".to_string(),
+        })
+        .await
+        .unwrap();
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+struct RecordingProvider {
+    starts: Arc<Mutex<Vec<String>>>,
+    gate: Arc<Notify>,
+}
+
+#[async_trait]
+impl Provider<Request, StreamItem, ProviderOut> for RecordingProvider {
+    async fn stream(
+        &self,
+        req: Request,
+        out: &mut ProviderOut,
+    ) -> Result<(), StreamError<Request>> {
+        let user = match req.messages.last() {
+            Some(TranscriptItem::Message { text, .. }) => text.clone(),
+            _ => String::new(),
+        };
+        self.starts.lock().unwrap().push(user);
+        self.gate.notified().await;
+        out.write(StreamItem::Text {
+            delta: "done".to_string(),
+        })
+        .await
+        .unwrap();
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn cancel_active_prompt_interrupts_it_with_cancelled() {
+    let (kernel_owner, facade) = plan_facade();
+    let (started_tx, started_rx) = watch::channel(false);
+    let owner = Agent::builder(facade)
+        .with_system_prompt(PLAN_SYSTEM_PROMPT)
+        .with_store(MemoryStore::new())
+        .with_provider(GatedProvider {
+            started: Arc::new(started_tx),
+            gate: Arc::new(Notify::new()),
+        })
+        .build()
+        .unwrap()
+        .spawn();
+
+    let mut reply = owner
+        .call(Prompt {
+            text: "hi".to_string(),
+        })
+        .await
+        .unwrap();
+
+    let mut started_rx = started_rx;
+    started_rx.wait_for(|started| *started).await.unwrap();
+
+    let item = reply.recv().await.unwrap();
+    assert!(matches!(item, StreamItem::Text { .. }));
+
+    owner.call(CancelActivePrompt).await.unwrap();
+
+    while reply.recv().await.is_some() {}
+    match reply.finish().await.unwrap() {
+        Err(PromptError::Cancelled) => {}
+        other => panic!("expected Cancelled, got {other:?}"),
+    }
+
+    let status = owner.shutdown(Shutdown::Drain).await;
+    assert_eq!(status.reason(), ExitReason::Drained);
+    let _ = kernel_owner.shutdown(Shutdown::Drain).await;
+}
+
+#[tokio::test]
+async fn cancel_queued_prompt_returns_cancelled() {
+    let (kernel_owner, facade) = plan_facade();
+    let (started_tx, started_rx) = watch::channel(false);
+    let owner = Agent::builder(facade)
+        .with_system_prompt(PLAN_SYSTEM_PROMPT)
+        .with_store(MemoryStore::new())
+        .with_provider(GatedProvider {
+            started: Arc::new(started_tx),
+            gate: Arc::new(Notify::new()),
+        })
+        .build()
+        .unwrap()
+        .spawn();
+
+    let mut first = owner
+        .call(Prompt {
+            text: "first".to_string(),
+        })
+        .await
+        .unwrap();
+
+    let mut started_rx = started_rx;
+    started_rx.wait_for(|started| *started).await.unwrap();
+    let _ = first.recv().await.unwrap();
+
+    let mut second = owner
+        .call(Prompt {
+            text: "second".to_string(),
+        })
+        .await
+        .unwrap();
+
+    owner.call(CancelQueuedPrompts).await.unwrap();
+
+    while second.recv().await.is_some() {}
+    match second.finish().await.unwrap() {
+        Err(PromptError::Cancelled) => {}
+        other => panic!("expected queued prompt to be Cancelled, got {other:?}"),
+    }
+
+    owner.call(CancelActivePrompt).await.unwrap();
+    while first.recv().await.is_some() {}
+    match first.finish().await.unwrap() {
+        Err(PromptError::Cancelled) => {}
+        other => panic!("expected active prompt to be Cancelled, got {other:?}"),
+    }
+
+    let status = owner.shutdown(Shutdown::Drain).await;
+    assert_eq!(status.reason(), ExitReason::Drained);
+    let _ = kernel_owner.shutdown(Shutdown::Drain).await;
+}
+
+#[tokio::test]
+async fn queued_prompts_start_in_fifo_order() {
+    let (kernel_owner, facade) = plan_facade();
+    let starts = Arc::new(Mutex::new(Vec::new()));
+    let gate = Arc::new(Notify::new());
+    let owner = Agent::builder(facade)
+        .with_system_prompt(PLAN_SYSTEM_PROMPT)
+        .with_store(MemoryStore::new())
+        .with_provider(RecordingProvider {
+            starts: Arc::clone(&starts),
+            gate: Arc::clone(&gate),
+        })
+        .build()
+        .unwrap()
+        .spawn();
+
+    let mut first = owner
+        .call(Prompt {
+            text: "first".to_string(),
+        })
+        .await
+        .unwrap();
+    let mut second = owner
+        .call(Prompt {
+            text: "second".to_string(),
+        })
+        .await
+        .unwrap();
+    let mut third = owner
+        .call(Prompt {
+            text: "third".to_string(),
+        })
+        .await
+        .unwrap();
+
+    wait_for_starts(&starts, 1).await;
+    gate.notify_one();
+    wait_for_starts(&starts, 2).await;
+
+    let mut text = String::new();
+    while let Some(item) = first.recv().await {
+        if let StreamItem::Text { delta } = item {
+            text.push_str(&delta);
+        }
+    }
+    first.finish().await.unwrap().unwrap();
+    assert_eq!(text, "done");
+
+    gate.notify_one();
+    wait_for_starts(&starts, 3).await;
+
+    let mut text = String::new();
+    while let Some(item) = second.recv().await {
+        if let StreamItem::Text { delta } = item {
+            text.push_str(&delta);
+        }
+    }
+    second.finish().await.unwrap().unwrap();
+    assert_eq!(text, "done");
+
+    gate.notify_one();
+    let mut text = String::new();
+    while let Some(item) = third.recv().await {
+        if let StreamItem::Text { delta } = item {
+            text.push_str(&delta);
+        }
+    }
+    third.finish().await.unwrap().unwrap();
+    assert_eq!(text, "done");
+
+    assert_eq!(
+        *starts.lock().unwrap(),
+        vec![
+            "first".to_string(),
+            "second".to_string(),
+            "third".to_string()
+        ]
+    );
+
+    let status = owner.shutdown(Shutdown::Drain).await;
+    assert_eq!(status.reason(), ExitReason::Drained);
+    let _ = kernel_owner.shutdown(Shutdown::Drain).await;
+}
+
+#[tokio::test]
+async fn drain_finishes_active_and_cancels_queued() {
+    let (kernel_owner, facade) = plan_facade();
+    let (started_tx, started_rx) = watch::channel(false);
+    let gate = Arc::new(Notify::new());
+    let owner = Agent::builder(facade)
+        .with_system_prompt(PLAN_SYSTEM_PROMPT)
+        .with_store(MemoryStore::new())
+        .with_provider(GatedProvider {
+            started: Arc::new(started_tx),
+            gate: Arc::clone(&gate),
+        })
+        .build()
+        .unwrap()
+        .spawn();
+
+    let mut first = owner
+        .call(Prompt {
+            text: "first".to_string(),
+        })
+        .await
+        .unwrap();
+
+    let mut started_rx = started_rx;
+    started_rx.wait_for(|started| *started).await.unwrap();
+    let mut text = String::new();
+    let item = first.recv().await.unwrap();
+    if let StreamItem::Text { delta } = item {
+        text.push_str(&delta);
+    }
+    assert_eq!(text, "partial");
+
+    let mut second = owner
+        .call(Prompt {
+            text: "second".to_string(),
+        })
+        .await
+        .unwrap();
+
+    // Close admission while `first` is still active and `second` is queued.
+    owner.request_shutdown(Shutdown::Drain);
+
+    // Let the active prompt finish and commit directly; its handoff then
+    // observes the closed admission and cancels the queue instead of starting
+    // the next prompt.
+    gate.notify_one();
+
+    while let Some(item) = first.recv().await {
+        if let StreamItem::Text { delta } = item {
+            text.push_str(&delta);
+        }
+    }
+    first.finish().await.unwrap().unwrap();
+    assert_eq!(text, "partialdone");
+
+    while second.recv().await.is_some() {}
+    match second.finish().await.unwrap() {
+        Err(PromptError::Cancelled) => {}
+        other => panic!("expected queued prompt to be Cancelled during Drain, got {other:?}"),
+    }
+
+    let status = owner.shutdown(Shutdown::Drain).await;
+    assert_eq!(status.reason(), ExitReason::Drained);
+    let _ = kernel_owner.shutdown(Shutdown::Drain).await;
+}
+
+async fn wait_for_starts(starts: &Arc<Mutex<Vec<String>>>, len: usize) {
+    for _ in 0..1000 {
+        if starts.lock().unwrap().len() >= len {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+    panic!("timed out waiting for {len} started prompt(s)");
 }

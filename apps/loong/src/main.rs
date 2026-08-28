@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use agent::{Agent, FileTools, Prompt, SwitchProvider};
 use context::memory::MemoryStore;
-use contracts::capability::{Capabilities, Capability};
+use contracts::capability::Capability;
 use contracts::provider::StreamItem;
 use kernel::{Facade, Kernel, policy::engine::PolicyEngine};
 use loac::Shutdown;
@@ -31,14 +31,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = OpenAiConfig::new(base_url.clone(), api_key.clone(), model.clone());
 
-    let capabilities = Capabilities::empty()
-        .with(Capability::FsRead)
-        .with(Capability::FsWrite);
-    let kernel_owner = loac::spawn::<Kernel>(PolicyEngine::allow_capabilities());
-    let facade = Facade::new(kernel_owner.actor_ref(), capabilities);
+    let kernel = loac::spawn::<Kernel>(PolicyEngine::allow_capabilities());
+    let facade = Facade::new(
+        kernel.actor_ref(),
+        [Capability::FsRead, Capability::FsWrite],
+    );
     let workspace_root = env_or("LOONG_WORKSPACE", ".");
 
-    let file_io_owner = Agent::builder(facade.clone())
+    let file_io = Agent::builder(facade.clone())
         .with(FileTools)
         .with_workspace_root(&workspace_root)
         .with_system_prompt(
@@ -46,28 +46,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .with_store(MemoryStore::new())
         .with_provider(OpenAiProvider::new(config.clone()))
-        .spawn()?;
-    let file_io_ref = file_io_owner.actor_ref();
+        .build()?
+        .spawn();
 
-    let file_io_channel: Arc<dyn agent::ChannelTarget> = Arc::new(file_io_ref.clone());
     let owner = Agent::builder(facade)
-        .with_channel("file_io", file_io_channel)
+        .with_channel("file_io", Arc::new(file_io.actor_ref()))
         .with_system_prompt(
             "You are a supervisor agent. You do not read or write files yourself. \
              When the user needs file work, delegate it to the file_io agent by \
-             calling the file_io tool with a clear instruction prompt, then report \
-             its answer.",
+             calling the file_io tool with a clear instruction prompt in English, \
+             then report its answer.",
         )
         .with_store(MemoryStore::new())
         .with_provider(OpenAiProvider::new(config))
-        .spawn()?;
-    let agent_ref = owner.actor_ref();
+        .build()?
+        .spawn();
 
     let stdin = BufReader::new(tokio::io::stdin());
     let mut lines = stdin.lines();
 
-    show_prompt();
-    while let Some(line) = lines.next_line().await? {
+    loop {
+        show_prompt();
+        let Some(line) = lines.next_line().await? else {
+            break;
+        };
         let line = line.trim().to_string();
         if line.is_empty() {
             continue;
@@ -75,7 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if line == "/quit" || line == "/exit" {
             break;
         }
-        if let Some(new_model) = line.strip_prefix("/model ") {
+        if let Some(new_model) = line.strip_prefix("/model") {
             let new_model = new_model.trim();
             if new_model.is_empty() {
                 eprintln!("usage: /model <model>");
@@ -83,17 +85,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             let config =
                 OpenAiConfig::new(base_url.clone(), api_key.clone(), new_model.to_string());
-            agent_ref
+            owner
                 .call(SwitchProvider(OpenAiProvider::new(config.clone())))
                 .await?;
-            file_io_ref
+            file_io
                 .call(SwitchProvider(OpenAiProvider::new(config)))
                 .await?;
             println!("switched to {new_model}");
             continue;
         }
 
-        let mut reply = agent_ref.call(Prompt { text: line.clone() }).await?;
+        let mut reply = owner.call(Prompt { text: line.clone() }).await?;
 
         while let Some(item) = reply.recv().await {
             match item {
@@ -113,15 +115,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         match reply.finish().await? {
             Ok(()) => {}
-            Err(error) => eprintln!("\nstream error: {error}"),
+            Err(error) => eprintln!("\nprompt error: {error}"),
         }
         println!();
-        show_prompt();
     }
 
     let _ = owner.shutdown(Shutdown::Drain).await;
-    let _ = file_io_owner.shutdown(Shutdown::Drain).await;
-    let _ = kernel_owner.shutdown(Shutdown::Drain).await;
+    let _ = file_io.shutdown(Shutdown::Drain).await;
+    let _ = kernel.shutdown(Shutdown::Drain).await;
     Ok(())
 }
 
