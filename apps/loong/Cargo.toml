@@ -18,6 +18,8 @@ loac.workspace = true
 provider.workspace = true
 provider-openai.workspace = true
 tokio = { workspace = true, features = ["io-std", "macros", "rt-multi-thread", "sync"] }
+crossterm = { version = "0.29", features = ["event-stream"] }
+futures = "0.3"
 
 [lints]
 workspace = true

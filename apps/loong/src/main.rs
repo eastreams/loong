@@ -14,10 +14,13 @@ use std::env;
 use std::io::Write;
 use std::sync::Arc;
 
-use agent::{Agent, FileTools, Prompt, SwitchProvider};
+use agent::{Agent, CancelActivePrompt, FileTools, Prompt, SwitchProvider};
 use context::memory::MemoryStore;
 use contracts::capability::Capability;
 use contracts::provider::StreamItem;
+use crossterm::event::{Event, EventStream, KeyCode, KeyEvent};
+use crossterm::terminal;
+use futures::StreamExt;
 use kernel::{Facade, Kernel, policy::engine::PolicyEngine};
 use loac::Shutdown;
 use provider_openai::{OpenAiConfig, OpenAiProvider};
@@ -97,28 +100,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut reply = owner.call(Prompt { text: line.clone() }).await?;
 
-        while let Some(item) = reply.recv().await {
-            match item {
-                StreamItem::Text { delta } => {
-                    print!("{delta}");
-                    let _ = std::io::stdout().flush();
+        {
+            // Raw mode lets us read an ESC keypress while the reply streams.
+            // The guard restores cooked mode at the end of this block even if
+            // streaming is cancelled or a read fails. When stdin is not a TTY
+            // (for example piped input), raw mode is unavailable and the
+            // fallback below streams without ESC handling.
+            let raw_mode = RawModeGuard::enter().ok();
+
+            if let Some(_raw_mode) = raw_mode {
+                let mut keys = EventStream::new();
+
+                loop {
+                    tokio::select! {
+                        maybe_item = reply.recv() => {
+                            let Some(item) = maybe_item else {
+                                break;
+                            };
+                            print_stream_item(item);
+                        }
+                        maybe_event = keys.next() => {
+                            if let Some(Ok(Event::Key(KeyEvent { code: KeyCode::Esc, .. }))) = maybe_event {
+                                // Idempotent: cancelling an already-cancelled or
+                                // finished prompt is a no-op in the agent.
+                                owner.call(CancelActivePrompt).await?;
+                                println!("\n[interrupted]");
+                            }
+                        }
+                    }
                 }
-                StreamItem::ReasoningDelta { .. } => {}
-                StreamItem::ToolCall {
-                    id,
-                    name,
-                    arguments,
-                } => {
-                    println!("\n[tool_call {name}] id={id} args={arguments}");
+            } else {
+                while let Some(item) = reply.recv().await {
+                    print_stream_item(item);
                 }
             }
-        }
 
-        match reply.finish().await? {
-            Ok(()) => {}
-            Err(error) => eprintln!("\nprompt error: {error}"),
+            match reply.finish().await? {
+                Ok(()) => {}
+                Err(error) => eprintln!("\nprompt error: {error}"),
+            }
+            println!();
         }
-        println!();
     }
 
     let _ = owner.shutdown(Shutdown::Drain).await;
@@ -137,4 +159,40 @@ fn env_or(key: &str, default: &str) -> String {
 fn show_prompt() {
     print!("loong> ");
     let _ = std::io::stdout().flush();
+}
+
+fn print_stream_item(item: StreamItem) {
+    match item {
+        StreamItem::Text { delta } => {
+            print!("{delta}");
+            let _ = std::io::stdout().flush();
+        }
+        StreamItem::ReasoningDelta { .. } => {}
+        StreamItem::ToolCall {
+            id,
+            name,
+            arguments,
+        } => {
+            println!("\n[tool_call {name}] id={id} args={arguments}");
+        }
+    }
+}
+
+/// RAII guard that leaves the terminal in raw mode until it is dropped.
+///
+/// Raw mode is only active while a reply streams. Line input outside this
+/// block runs in the usual cooked mode.
+struct RawModeGuard;
+
+impl RawModeGuard {
+    fn enter() -> std::io::Result<Self> {
+        terminal::enable_raw_mode()?;
+        Ok(Self)
+    }
+}
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        let _ = terminal::disable_raw_mode();
+    }
 }
