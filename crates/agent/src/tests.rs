@@ -191,6 +191,38 @@ impl Provider<Request, StreamItem, ProviderOut> for EchoProvider {
 }
 
 #[derive(Clone)]
+struct SubagentToolCallProvider {
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl Provider<Request, StreamItem, ProviderOut> for SubagentToolCallProvider {
+    async fn stream(
+        &self,
+        _req: Request,
+        out: &mut ProviderOut,
+    ) -> Result<(), StreamError<Request>> {
+        let call = self.calls.fetch_add(1, Ordering::SeqCst);
+        if call == 0 {
+            out.write(StreamItem::ToolCall {
+                id: "call_1".to_string(),
+                name: "child".to_string(),
+                arguments: "{\"prompt\":\"hi\"}".to_string(),
+            })
+            .await
+            .unwrap();
+        } else {
+            out.write(StreamItem::Text {
+                delta: "done".to_string(),
+            })
+            .await
+            .unwrap();
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
 struct ReasoningProvider;
 
 #[async_trait]
@@ -408,6 +440,64 @@ async fn channel_target_ask_collects_streamed_text() {
 
     let answer = owner.ask("hi".to_string()).await.unwrap();
     assert_eq!(answer, "hello");
+
+    let status = owner.shutdown(Shutdown::Drain).await;
+    assert_eq!(status.reason(), ExitReason::Drained);
+    let _ = kernel_owner.shutdown(Shutdown::Drain).await;
+}
+
+#[tokio::test]
+async fn subagent_registers_as_named_channel_tool() {
+    let (kernel_owner, facade) = plan_facade();
+    let child = Agent::builder(facade.clone())
+        .with_system_prompt(PLAN_SYSTEM_PROMPT)
+        .with_store(MemoryStore::new())
+        .with_provider(EchoProvider)
+        .build()
+        .unwrap();
+
+    let store = SharedStore(Arc::new(Mutex::new(MemoryStore::new())));
+    let owner = Agent::builder(facade)
+        .with_system_prompt(PLAN_SYSTEM_PROMPT)
+        .with_store(store.clone())
+        .with_provider(SubagentToolCallProvider {
+            calls: Arc::new(AtomicUsize::new(0)),
+        })
+        .with_subagent("child", child)
+        .build()
+        .unwrap()
+        .spawn();
+
+    let mut reply = owner
+        .call(Prompt {
+            text: "ask child".to_string(),
+        })
+        .await
+        .unwrap();
+
+    let mut text = String::new();
+    let mut tool_names = Vec::new();
+    while let Some(item) = reply.recv().await {
+        match item {
+            StreamItem::ToolCall { name, .. } => tool_names.push(name),
+            StreamItem::Text { delta } => text.push_str(&delta),
+            StreamItem::ReasoningDelta { .. } => {}
+        }
+    }
+    reply.finish().await.unwrap().unwrap();
+
+    assert_eq!(tool_names, vec!["child".to_string()]);
+    assert_eq!(text, "done");
+
+    let snapshot = store.snapshot();
+    assert_eq!(snapshot.items.len(), 4);
+    assert_eq!(
+        snapshot.items[2],
+        TranscriptItem::ToolResult {
+            call_id: "call_1".to_string(),
+            output: "\"hello\"".to_string(),
+        }
+    );
 
     let status = owner.shutdown(Shutdown::Drain).await;
     assert_eq!(status.reason(), ExitReason::Drained);

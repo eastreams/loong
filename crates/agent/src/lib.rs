@@ -62,6 +62,7 @@ where
     store: C,
     provider: P,
     registry: ToolRegistry,
+    subagents: Vec<Box<dyn crate::builder::SubagentSpawner<C, P>>>,
     system_prompt: Option<String>,
     /// Prompts that have been accepted by the mailbox but not started yet.
     ///
@@ -492,7 +493,7 @@ where
     })
 }
 
-#[actor(mailbox, interleaved = unbounded)]
+#[actor(mailbox, interleaved = unbounded, children = unbounded)]
 impl<C, P> Actor for Agent<C, P>
 where
     C: ContextStore + 'static,
@@ -500,7 +501,11 @@ where
 {
     type SpawnArgs = Self;
 
-    async fn init(agent: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
+    async fn init(agent: Self::SpawnArgs, scope: &mut ActorScope<'_, Self>) -> Self {
+        let mut agent = agent;
+        for subagent in std::mem::take(&mut agent.subagents) {
+            subagent.spawn(scope, &mut agent.registry);
+        }
         agent
     }
 }

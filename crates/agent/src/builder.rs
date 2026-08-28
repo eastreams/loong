@@ -11,7 +11,7 @@
 //! [`build`](AgentBuilder::build) only exists once both are `true`.
 
 use std::{
-    collections::VecDeque,
+    collections::{BTreeSet, VecDeque},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -19,6 +19,7 @@ use std::{
 use contracts::provider::{Request, StreamItem};
 use kernel::Facade;
 use kernel::resource::{Resources, WorkspaceRoot};
+use loac::{ActorScope, HasChildren};
 use provider::Provider;
 use tool_host::{RegistrationError, ToolRegistry};
 
@@ -26,6 +27,61 @@ use super::{Agent, ContextStore, ProviderOut};
 use crate::channel::ChannelTarget;
 use crate::channel_tool::ChannelTool;
 use crate::tool_set::ToolSet;
+
+/// Spawns one child agent and registers it as a named channel tool.
+///
+/// The child type is erased behind this trait so one parent can own child
+/// agents with different store/provider types. Each child is started in the
+/// parent actor's [`init`](loac::Actor::init), which gives the parent runtime
+/// ownership of the child lifetime.
+pub(crate) trait SubagentSpawner<C, P>: Send
+where
+    C: ContextStore + 'static,
+    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
+{
+    fn name(&self) -> &str;
+
+    fn spawn(self: Box<Self>, scope: &mut ActorScope<'_, Agent<C, P>>, registry: &mut ToolRegistry);
+}
+
+/// [`SubagentSpawner`] for a fully built child [`Agent`].
+struct ChannelSubagent<C2, P2>
+where
+    C2: ContextStore,
+    P2: Provider<Request, StreamItem, ProviderOut> + Clone,
+{
+    name: String,
+    agent: Agent<C2, P2>,
+}
+
+impl<C, P, C2, P2> SubagentSpawner<C, P> for ChannelSubagent<C2, P2>
+where
+    C: ContextStore + 'static,
+    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
+    C2: ContextStore + 'static,
+    P2: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
+    Agent<C, P>: HasChildren,
+{
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn spawn(
+        self: Box<Self>,
+        scope: &mut ActorScope<'_, Agent<C, P>>,
+        registry: &mut ToolRegistry,
+    ) {
+        let this = *self;
+        let child = scope
+            .spawn_child::<Agent<C2, P2>>(this.agent)
+            .unwrap_or_else(|_| unreachable!("unbounded children accept every subagent"));
+        let target: Arc<dyn ChannelTarget> = Arc::new(child.into_actor_ref());
+        let tool = ChannelTool::new(this.name.clone(), target);
+        registry
+            .register(this.name, tool)
+            .expect("builder validated unique subagent channel name");
+    }
+}
 
 /// Why agent assembly failed.
 #[derive(Debug, thiserror::Error)]
@@ -35,6 +91,8 @@ pub enum BuildError {
         resource: &'static str,
         tool_set: &'static str,
     },
+    #[error("duplicate channel or subagent {0:?}")]
+    DuplicateChannel(String),
     #[error("tool registration failed: {0}")]
     Registration(#[from] RegistrationError),
 }
@@ -54,6 +112,7 @@ pub struct AgentBuilder<C, P, const STORE_SET: bool = false, const PROVIDER_SET:
     resources: Resources,
     tools: Vec<Box<dyn ToolSet>>,
     channels: Vec<(String, Arc<dyn ChannelTarget>)>,
+    subagents: Vec<Box<dyn SubagentSpawner<C, P>>>,
     system_prompt: Option<String>,
     store: Option<C>,
     provider: Option<P>,
@@ -67,6 +126,7 @@ impl<C, P> AgentBuilder<C, P, false, false> {
             resources: Resources::new(),
             tools: Vec::new(),
             channels: Vec::new(),
+            subagents: Vec::new(),
             system_prompt: None,
             store: None,
             provider: None,
@@ -91,6 +151,7 @@ impl<C, P, const STORE_SET: bool, const PROVIDER_SET: bool>
             resources: self.resources,
             tools: self.tools,
             channels: self.channels,
+            subagents: self.subagents,
             system_prompt: self.system_prompt,
             store: Some(store),
             provider: self.provider,
@@ -105,6 +166,7 @@ impl<C, P, const STORE_SET: bool, const PROVIDER_SET: bool>
             resources: self.resources,
             tools: self.tools,
             channels: self.channels,
+            subagents: self.subagents,
             system_prompt: self.system_prompt,
             store: self.store,
             provider: Some(provider),
@@ -116,6 +178,26 @@ impl<C, P, const STORE_SET: bool, const PROVIDER_SET: bool>
     #[must_use]
     pub fn with_channel(mut self, name: impl Into<String>, target: Arc<dyn ChannelTarget>) -> Self {
         self.channels.push((name.into(), target));
+        self
+    }
+
+    /// Registers one fully built child agent as a named channel tool.
+    ///
+    /// The child is spawned inside the parent actor's init, so the parent
+    /// runtime owns its lifetime and shuts it down with the parent. The child
+    /// keeps its own store, provider, tools, and resources.
+    #[must_use]
+    pub fn with_subagent<C2, P2>(mut self, name: impl Into<String>, agent: Agent<C2, P2>) -> Self
+    where
+        C: ContextStore + 'static,
+        P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
+        C2: ContextStore + 'static,
+        P2: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
+    {
+        self.subagents.push(Box::new(ChannelSubagent {
+            name: name.into(),
+            agent,
+        }));
         self
     }
 
@@ -166,10 +248,24 @@ where
             resources,
             tools,
             channels,
+            subagents,
             system_prompt,
             store,
             provider,
         } = self;
+
+        let mut names = BTreeSet::new();
+        for (name, _) in &channels {
+            if !names.insert(name.clone()) {
+                return Err(BuildError::DuplicateChannel(name.clone()));
+            }
+        }
+        for subagent in &subagents {
+            let name = subagent.name().to_owned();
+            if !names.insert(name.clone()) {
+                return Err(BuildError::DuplicateChannel(name));
+            }
+        }
 
         let store = store.expect("STORE_SET=true guarantees a store");
         let provider = provider.expect("PROVIDER_SET=true guarantees a provider");
@@ -195,6 +291,7 @@ where
             store,
             provider,
             registry,
+            subagents,
             system_prompt,
             prompt_queue: VecDeque::new(),
             active: None,
