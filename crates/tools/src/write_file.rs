@@ -22,7 +22,7 @@ impl ToolImpl for WriteFileTool {
     type Output = WriteFileOutput;
     type Error = FsWriteError;
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "write_file"
     }
 

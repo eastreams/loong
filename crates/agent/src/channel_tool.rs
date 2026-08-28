@@ -35,7 +35,7 @@ impl ToolImpl for ChannelTool {
     type Output = String;
     type Error = ChannelError;
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         self.name
     }
 

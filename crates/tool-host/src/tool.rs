@@ -94,13 +94,13 @@ pub trait ToolImpl: Send + Sync + 'static {
     type Output: JsonSchema + serde::Serialize + Send + 'static;
     type Error: std::error::Error + Send + Sync + 'static;
 
-    fn name(&self) -> &'static str;
+    fn name(&self) -> &str;
 
     fn description(&self) -> &'static str;
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
-            name: self.name().into(),
+            name: self.name().to_owned().into(),
             description: self.description().into(),
             input_schema: root_schema::<Self::Input>(),
             output_schema: root_schema::<Self::Output>(),

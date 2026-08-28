@@ -21,7 +21,7 @@ impl ToolImpl for ReadFileTool {
     type Output = ReadFileOutput;
     type Error = FsReadError;
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "read_file"
     }
 
