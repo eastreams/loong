@@ -18,7 +18,7 @@ use std::{
 use anymap2::AnyMap;
 use contracts::provider::{Request, StreamItem};
 use kernel::Facade;
-use loac::{ActorOwner, ActorRef, ExitStatus, Shutdown, ShutdownStatus, spawn};
+use loac::{ActorOwner, spawn};
 use provider::Provider;
 use tool_host::{RegistrationError, ToolRegistry};
 
@@ -159,7 +159,10 @@ where
     P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
 {
     /// Validates the assembled tools and resources, then starts the agent.
-    pub fn spawn(self) -> Result<AgentHandle<C, P>, BuildError> {
+    ///
+    /// The returned owner derefs to the agent's [`ActorRef`], so address
+    /// methods can be called directly on it.
+    pub fn spawn(self) -> Result<ActorOwner<Agent<C, P>>, BuildError> {
         self.validate()?;
 
         let Self {
@@ -193,46 +196,7 @@ where
 
         let owner =
             spawn::<Agent<C, P>>((store, provider, registry, workspace_root, system_prompt));
-        let actor_ref = owner.actor_ref();
 
-        Ok(AgentHandle { owner, actor_ref })
-    }
-}
-
-/// Owned handle returned by [`AgentBuilder::spawn`].
-pub struct AgentHandle<C, P>
-where
-    C: ContextStore + 'static,
-    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
-{
-    owner: ActorOwner<Agent<C, P>>,
-    actor_ref: ActorRef<Agent<C, P>>,
-}
-
-impl<C, P> AgentHandle<C, P>
-where
-    C: ContextStore + 'static,
-    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
-{
-    #[must_use]
-    pub fn actor_ref(&self) -> ActorRef<Agent<C, P>> {
-        self.actor_ref.clone()
-    }
-
-    pub fn request_shutdown(&self, shutdown: Shutdown) -> ShutdownStatus {
-        self.owner.request_shutdown(shutdown)
-    }
-
-    #[must_use]
-    pub fn exit_status(&self) -> Option<ExitStatus> {
-        self.owner.exit_status()
-    }
-
-    pub async fn wait(&mut self) -> ExitStatus {
-        self.owner.wait().await
-    }
-
-    pub async fn shutdown(self, shutdown: Shutdown) -> ExitStatus {
-        self.owner.shutdown(shutdown).await
+        Ok(owner)
     }
 }
