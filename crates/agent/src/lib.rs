@@ -16,7 +16,7 @@ use contracts::tool::ToolSpec;
 use contracts::transcript::{Role, TranscriptItem};
 use kernel::Facade;
 use loac::prelude::*;
-use loac::{ActorOwner, ActorRef};
+use loac::{ActorOwner, ActorRef, HasChildren, HasMailbox, Shutdown};
 use provider::{Provider, StreamError};
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
@@ -63,7 +63,6 @@ where
     store: C,
     provider: P,
     registry: ToolRegistry,
-    subagents: Vec<Box<dyn crate::builder::SubagentSpawner<C, P>>>,
     system_prompt: Option<String>,
     /// Prompts that have been accepted by the mailbox but not started yet.
     ///
@@ -209,6 +208,22 @@ pub struct BindChannel {
 #[message(reply = Option<Arc<RegisteredTool>>)]
 pub struct UnbindChannel {
     pub name: String,
+}
+
+/// Spawns one fully built child agent under the parent runtime.
+///
+/// The child is started with `spawn_child`, registered as a named channel
+/// tool, and the typed child address is returned so the caller can send the
+/// child any message it supports (for example `SwitchProvider`).
+#[derive(loac::Message)]
+#[message(reply = Result<ActorRef<Agent<C2, P2>>, RegistrationError>)]
+pub struct SpawnSubagent<C2, P2>
+where
+    C2: ContextStore + 'static,
+    P2: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
+{
+    pub name: String,
+    pub agent: Agent<C2, P2>,
 }
 
 /// One-way self-message a finished prompt sends before its final value.
@@ -522,16 +537,7 @@ where
 {
     type SpawnArgs = Self;
 
-    async fn init(agent: Self::SpawnArgs, scope: &mut ActorScope<'_, Self>) -> Self {
-        let mut agent = agent;
-        for subagent in std::mem::take(&mut agent.subagents) {
-            let name = subagent.name().to_owned();
-            let target = subagent.spawn(scope);
-            agent
-                .registry
-                .register(name.clone(), ChannelTool::new(name, target))
-                .expect("builder validated unique subagent channel name");
-        }
+    async fn init(agent: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
         agent
     }
 }
@@ -618,6 +624,38 @@ where
         _scope: &mut ActorScope<'_, Self>,
     ) -> Option<Arc<RegisteredTool>> {
         self.registry.unregister(&message.name)
+    }
+}
+
+impl<C, P, C2, P2> SyncHandler<SpawnSubagent<C2, P2>> for Agent<C, P>
+where
+    C: ContextStore + 'static,
+    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
+    C2: ContextStore + 'static,
+    P2: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
+    Agent<C, P>: HasChildren + HasMailbox,
+{
+    fn handle(
+        &mut self,
+        message: SpawnSubagent<C2, P2>,
+        scope: &mut ActorScope<'_, Self>,
+    ) -> Result<ActorRef<Agent<C2, P2>>, RegistrationError> {
+        let SpawnSubagent { name, agent } = message;
+        let child = scope
+            .spawn_child::<Agent<C2, P2>>(agent)
+            .unwrap_or_else(|_| unreachable!("unbounded children accept every subagent"));
+        let actor_ref = child.actor_ref().clone();
+        let registered = self.registry.register(
+            name.clone(),
+            ChannelTool::new(name.clone(), Arc::new(actor_ref.clone())),
+        );
+        match registered {
+            Ok(()) => Ok(actor_ref),
+            Err(error) => {
+                actor_ref.request_shutdown(Shutdown::Kill);
+                Err(error)
+            }
+        }
     }
 }
 

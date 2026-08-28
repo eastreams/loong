@@ -447,7 +447,7 @@ async fn channel_target_ask_collects_streamed_text() {
 }
 
 #[tokio::test]
-async fn subagent_registers_as_named_channel_tool() {
+async fn spawn_subagent_registers_as_named_channel_tool() {
     let (kernel_owner, facade) = plan_facade();
     let child = Agent::builder(facade.clone())
         .with_system_prompt(PLAN_SYSTEM_PROMPT)
@@ -463,10 +463,19 @@ async fn subagent_registers_as_named_channel_tool() {
         .with_provider(SubagentToolCallProvider {
             calls: Arc::new(AtomicUsize::new(0)),
         })
-        .with_subagent("child", child)
         .build()
         .unwrap()
         .spawn();
+
+    let child_ref = owner
+        .call(SpawnSubagent {
+            name: "child".to_string(),
+            agent: child,
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(child_ref.ask("hi".to_string()).await.unwrap(), "hello");
 
     let mut reply = owner
         .call(Prompt {
