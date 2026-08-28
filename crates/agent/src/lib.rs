@@ -1,6 +1,7 @@
 //! Agent-side types for the `loong` product.
 
 use std::{
+    borrow::Cow,
     collections::VecDeque,
     future::Future,
     marker::PhantomData,
@@ -11,10 +12,12 @@ use std::{
 
 use crate::channel_tool::ChannelTool;
 use context::ContextStore;
+use contracts::capability::{Capabilities, Capability};
 use contracts::provider::{Request, StreamItem};
 use contracts::tool::ToolSpec;
 use contracts::transcript::{Role, TranscriptItem};
-use kernel::Facade;
+use kernel::policy::action::ActionMeta;
+use kernel::{Facade, GrantSendError};
 use loac::prelude::*;
 use loac::{ActorOwner, ActorRef, HasChildren, HasMailbox, Shutdown};
 use provider::{Provider, StreamError};
@@ -210,13 +213,57 @@ pub struct UnbindChannel {
     pub name: String,
 }
 
+/// The policy action for spawning a subagent.
+///
+/// Spawning a child actor is a governed side effect: the handler asks the
+/// kernel for a [`Granted`](kernel::policy::action::Granted) proof before it
+/// calls `spawn_child`. The action carries the child's channel name, system
+/// prompt, tool specs, and capability ceiling so policy can reason about the
+/// whole child rather than only its name.
+#[derive(Debug, Clone)]
+pub struct SpawnSubagentAction {
+    pub name: String,
+    pub system_prompt: Option<String>,
+    pub tools: Vec<ToolSpec>,
+    pub capabilities: Capabilities,
+}
+
+impl ActionMeta for SpawnSubagentAction {
+    fn name(&self) -> Cow<'_, str> {
+        Cow::Borrowed("agent.spawn_subagent")
+    }
+
+    fn payload(&self) -> Cow<'_, Value> {
+        Cow::Owned(serde_json::json!({
+            "name": self.name,
+            "system_prompt": self.system_prompt,
+            "tools": self.tools,
+            "capabilities": self.capabilities,
+        }))
+    }
+
+    fn required_capabilities(&self) -> Capabilities {
+        self.capabilities.with(Capability::SpawnSubagent)
+    }
+}
+
+/// Why spawning a subagent failed.
+#[derive(Debug, thiserror::Error)]
+pub enum SpawnSubagentError {
+    #[error(transparent)]
+    Denied(#[from] GrantSendError),
+    #[error(transparent)]
+    Registration(#[from] RegistrationError),
+}
+
 /// Spawns one fully built child agent under the parent runtime.
 ///
 /// The child is started with `spawn_child`, registered as a named channel
 /// tool, and the typed child address is returned so the caller can send the
-/// child any message it supports (for example `SwitchProvider`).
+/// child any message it supports (for example `SwitchProvider`). The spawn
+/// first goes through policy as a [`SpawnSubagentAction`].
 #[derive(loac::Message)]
-#[message(reply = Result<ActorRef<Agent<C2, P2>>, RegistrationError>)]
+#[message(reply = Result<ActorRef<Agent<C2, P2>>, SpawnSubagentError>)]
 pub struct SpawnSubagent<C2, P2>
 where
     C2: ContextStore + 'static,
@@ -627,35 +674,60 @@ where
     }
 }
 
-impl<C, P, C2, P2> SyncHandler<SpawnSubagent<C2, P2>> for Agent<C, P>
+impl<C, P, C2, P2> Handler<SpawnSubagent<C2, P2>> for Agent<C, P>
 where
     C: ContextStore + 'static,
     P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
     C2: ContextStore + 'static,
     P2: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
-    Agent<C, P>: HasChildren + HasMailbox,
+    Agent<C, P>: HasChildren + HasInterleaving + HasMailbox,
 {
     fn handle(
         &mut self,
         message: SpawnSubagent<C2, P2>,
-        scope: &mut ActorScope<'_, Self>,
-    ) -> Result<ActorRef<Agent<C2, P2>>, RegistrationError> {
+        _scope: &mut ActorScope<'_, Self>,
+    ) -> impl IntoReply<Self, SpawnSubagent<C2, P2>> + use<C, P, C2, P2> {
+        let facade = self.registry.facade().clone();
         let SpawnSubagent { name, agent } = message;
-        let child = scope
-            .spawn_child::<Agent<C2, P2>>(agent)
-            .unwrap_or_else(|_| unreachable!("unbounded children accept every subagent"));
-        let actor_ref = child.actor_ref().clone();
-        let registered = self.registry.register(
-            name.clone(),
-            ChannelTool::new(name.clone(), Arc::new(actor_ref.clone())),
-        );
-        match registered {
-            Ok(()) => Ok(actor_ref),
-            Err(error) => {
-                actor_ref.request_shutdown(Shutdown::Kill);
-                Err(error)
-            }
-        }
+        let action = SpawnSubagentAction {
+            name: name.clone(),
+            system_prompt: agent.system_prompt.clone(),
+            tools: agent.registry.tool_specs(),
+            capabilities: agent.registry.facade().capabilities(),
+        };
+
+        async move { facade.grant(action).await }
+            .into_actor()
+            .then(
+                move |granted, actor: &mut Agent<C, P>, scope: &mut ActorScope<'_, Agent<C, P>>| {
+                    let result = match granted {
+                        Ok(granted) => {
+                            let (_, action) = granted.into_parts();
+                            debug_assert_eq!(action.name, name);
+                            let child =
+                                scope
+                                    .spawn_child::<Agent<C2, P2>>(agent)
+                                    .unwrap_or_else(|_| {
+                                        unreachable!("unbounded children accept every subagent")
+                                    });
+                            let actor_ref = child.actor_ref().clone();
+                            match actor.registry.register(
+                                name.clone(),
+                                ChannelTool::new(name.clone(), Arc::new(actor_ref.clone())),
+                            ) {
+                                Ok(()) => Ok(actor_ref),
+                                Err(error) => {
+                                    actor_ref.request_shutdown(Shutdown::Kill);
+                                    Err(SpawnSubagentError::Registration(error))
+                                }
+                            }
+                        }
+                        Err(error) => Err(SpawnSubagentError::Denied(error)),
+                    };
+                    std::future::ready(result).into_actor()
+                },
+            )
+            .interleaved()
     }
 }
 

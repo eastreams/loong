@@ -98,7 +98,11 @@ fn capabilities_schema_describes_the_wire_set() -> serde_json::Result<()> {
     );
     assert_eq!(
         schema.pointer("/$defs/Capability/enum"),
-        Some(&serde_json::json!(["fs.read", "fs.write"]))
+        Some(&serde_json::json!([
+            "fs.read",
+            "fs.write",
+            "agent.spawn_subagent"
+        ]))
     );
     Ok(())
 }

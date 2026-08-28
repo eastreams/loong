@@ -45,6 +45,13 @@ fn file_io_facade() -> (loac::ActorOwner<Kernel>, Facade) {
     (kernel_owner, facade)
 }
 
+fn spawn_subagent_facade() -> (loac::ActorOwner<Kernel>, Facade) {
+    let kernel_owner = loac::spawn::<Kernel>(PolicyEngine::allow_capabilities());
+    let capabilities = Capabilities::empty().with(Capability::SpawnSubagent);
+    let facade = Facade::new(kernel_owner.actor_ref(), capabilities);
+    (kernel_owner, facade)
+}
+
 #[derive(Clone)]
 struct DummyProvider;
 
@@ -448,7 +455,7 @@ async fn channel_target_ask_collects_streamed_text() {
 
 #[tokio::test]
 async fn spawn_subagent_registers_as_named_channel_tool() {
-    let (kernel_owner, facade) = plan_facade();
+    let (kernel_owner, facade) = spawn_subagent_facade();
     let child = Agent::builder(facade.clone())
         .with_system_prompt(PLAN_SYSTEM_PROMPT)
         .with_store(MemoryStore::new())
@@ -507,6 +514,38 @@ async fn spawn_subagent_registers_as_named_channel_tool() {
             output: "\"hello\"".to_string(),
         }
     );
+
+    let status = owner.shutdown(Shutdown::Drain).await;
+    assert_eq!(status.reason(), ExitReason::Drained);
+    let _ = kernel_owner.shutdown(Shutdown::Drain).await;
+}
+
+#[tokio::test]
+async fn spawn_subagent_denied_without_capability() {
+    let (kernel_owner, facade) = plan_facade();
+    let child = Agent::builder(facade.clone())
+        .with_system_prompt(PLAN_SYSTEM_PROMPT)
+        .with_store(MemoryStore::new())
+        .with_provider(EchoProvider)
+        .build()
+        .unwrap();
+
+    let owner = Agent::builder(facade)
+        .with_system_prompt(PLAN_SYSTEM_PROMPT)
+        .with_store(MemoryStore::new())
+        .with_provider(EchoProvider)
+        .build()
+        .unwrap()
+        .spawn();
+
+    let result = owner
+        .call(SpawnSubagent {
+            name: "child".to_string(),
+            agent: child,
+        })
+        .await
+        .unwrap();
+    assert!(matches!(result, Err(SpawnSubagentError::Denied(_))));
 
     let status = owner.shutdown(Shutdown::Drain).await;
     assert_eq!(status.reason(), ExitReason::Drained);

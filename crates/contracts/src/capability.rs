@@ -72,6 +72,7 @@ macro_rules! define_capabilities {
 define_capabilities! {
     FsRead = 0 => "fs.read",
     FsWrite = 1 => "fs.write",
+    SpawnSubagent = 2 => "agent.spawn_subagent",
 }
 
 impl IntoIterator for Capability {
