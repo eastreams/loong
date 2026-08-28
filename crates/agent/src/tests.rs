@@ -505,6 +505,66 @@ async fn subagent_registers_as_named_channel_tool() {
 }
 
 #[tokio::test]
+async fn bind_unbind_channel_updates_runtime_tools() {
+    let (kernel_owner, facade) = plan_facade();
+    let target_owner = Agent::builder(facade.clone())
+        .with_system_prompt(PLAN_SYSTEM_PROMPT)
+        .with_store(MemoryStore::new())
+        .with_provider(EchoProvider)
+        .build()
+        .unwrap()
+        .spawn();
+
+    let owner = Agent::builder(facade)
+        .with_system_prompt(PLAN_SYSTEM_PROMPT)
+        .with_store(MemoryStore::new())
+        .with_provider(EchoProvider)
+        .build()
+        .unwrap()
+        .spawn();
+
+    let target: Arc<dyn ChannelTarget> = Arc::new(target_owner.actor_ref());
+    owner
+        .call(BindChannel {
+            name: "child".to_string(),
+            target: target.clone(),
+        })
+        .await
+        .unwrap()
+        .unwrap();
+
+    let duplicate = owner
+        .call(BindChannel {
+            name: "child".to_string(),
+            target,
+        })
+        .await
+        .unwrap();
+    assert!(duplicate.is_err());
+
+    let removed = owner
+        .call(UnbindChannel {
+            name: "child".to_string(),
+        })
+        .await
+        .unwrap();
+    assert!(removed.is_some());
+
+    let removed_again = owner
+        .call(UnbindChannel {
+            name: "child".to_string(),
+        })
+        .await
+        .unwrap();
+    assert!(removed_again.is_none());
+
+    let status = owner.shutdown(Shutdown::Drain).await;
+    assert_eq!(status.reason(), ExitReason::Drained);
+    let _ = target_owner.shutdown(Shutdown::Drain).await;
+    let _ = kernel_owner.shutdown(Shutdown::Drain).await;
+}
+
+#[tokio::test]
 async fn builder_rejects_file_tools_without_workspace_root() {
     let (kernel_owner, facade) = file_io_facade();
 

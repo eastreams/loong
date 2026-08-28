@@ -9,6 +9,7 @@ use std::{
     task::{Context, Poll},
 };
 
+use crate::channel_tool::ChannelTool;
 use context::ContextStore;
 use contracts::provider::{Request, StreamItem};
 use contracts::tool::ToolSpec;
@@ -20,7 +21,7 @@ use provider::{Provider, StreamError};
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
-use tool_host::{ToolError, ToolRegistry, ToolSnapshot};
+use tool_host::{RegisteredTool, RegistrationError, ToolError, ToolRegistry, ToolSnapshot};
 
 mod builder;
 mod channel;
@@ -189,6 +190,26 @@ pub struct CancelActivePrompt;
 #[derive(loac::Message)]
 #[message(reply = ())]
 pub struct CancelAllPrompts;
+
+/// Registers one named channel as a tool at runtime.
+///
+/// The channel name must not collide with an existing tool, channel, or
+/// subagent. The returned error preserves the registration failure and the
+/// channel is not added.
+#[derive(loac::Message)]
+#[message(reply = Result<(), RegistrationError>)]
+pub struct BindChannel {
+    pub name: String,
+    pub target: Arc<dyn ChannelTarget>,
+}
+
+/// Removes one named channel tool registered by [`BindChannel`] or
+/// [`AgentBuilder::with_channel`](super::builder::AgentBuilder::with_channel).
+#[derive(loac::Message)]
+#[message(reply = Option<Arc<RegisteredTool>>)]
+pub struct UnbindChannel {
+    pub name: String,
+}
 
 /// One-way self-message a finished prompt sends before its final value.
 ///
@@ -562,6 +583,36 @@ where
         if let Some(token) = &self.active {
             token.cancel();
         }
+    }
+}
+
+impl<C, P> SyncHandler<BindChannel> for Agent<C, P>
+where
+    C: ContextStore + 'static,
+    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
+{
+    fn handle(
+        &mut self,
+        message: BindChannel,
+        _scope: &mut ActorScope<'_, Self>,
+    ) -> Result<(), RegistrationError> {
+        let BindChannel { name, target } = message;
+        self.registry
+            .register(name.clone(), ChannelTool::new(name, target))
+    }
+}
+
+impl<C, P> SyncHandler<UnbindChannel> for Agent<C, P>
+where
+    C: ContextStore + 'static,
+    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
+{
+    fn handle(
+        &mut self,
+        message: UnbindChannel,
+        _scope: &mut ActorScope<'_, Self>,
+    ) -> Option<Arc<RegisteredTool>> {
+        self.registry.unregister(&message.name)
     }
 }
 
