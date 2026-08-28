@@ -28,6 +28,7 @@ fn message(role: Role, text: &str) -> TranscriptItem {
     TranscriptItem::Message {
         role,
         text: text.to_owned(),
+        reasoning_content: None,
     }
 }
 
@@ -36,6 +37,7 @@ fn tool_call(call_id: String, name: &str, arguments: &str) -> TranscriptItem {
         call_id,
         name: name.to_owned(),
         arguments: arguments.to_owned(),
+        reasoning_content: None,
     }
 }
 
@@ -86,6 +88,7 @@ fn disk_store_satisfies_the_contract_and_replays() {
         TranscriptItem::Message {
             role: Role::User,
             text: "again".to_owned(),
+            reasoning_content: None,
         }
     );
     drop(store);
@@ -137,6 +140,7 @@ fn torn_head_line_does_not_break_replay() {
         TranscriptItem::Message {
             role: Role::User,
             text: "after".to_owned(),
+            reasoning_content: None,
         }
     );
     drop(store);
@@ -199,6 +203,7 @@ fn replace_publishes_a_new_head_and_keeps_the_old_one() {
         TranscriptItem::Message {
             role: Role::User,
             text: "v2".to_owned(),
+            reasoning_content: None,
         }
     );
 
@@ -219,6 +224,7 @@ fn replace_publishes_a_new_head_and_keeps_the_old_one() {
         TranscriptItem::Message {
             role: Role::User,
             text: "v3".to_owned(),
+            reasoning_content: None,
         }
     );
     drop(store);

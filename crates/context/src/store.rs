@@ -30,10 +30,28 @@ impl ContextSnapshot {
 /// Counts the characters that a tokenizer would see in one item.
 fn usage_of(item: &TranscriptItem) -> usize {
     match item {
-        TranscriptItem::Message { text, .. } => text.chars().count(),
+        TranscriptItem::Message {
+            text,
+            reasoning_content,
+            ..
+        } => {
+            text.chars().count()
+                + reasoning_content
+                    .as_ref()
+                    .map_or(0, |reasoning| reasoning.chars().count())
+        }
         TranscriptItem::ToolCall {
-            name, arguments, ..
-        } => name.chars().count() + arguments.chars().count(),
+            name,
+            arguments,
+            reasoning_content,
+            ..
+        } => {
+            name.chars().count()
+                + arguments.chars().count()
+                + reasoning_content
+                    .as_ref()
+                    .map_or(0, |reasoning| reasoning.chars().count())
+        }
         TranscriptItem::ToolResult { output, .. } => output.chars().count(),
     }
 }

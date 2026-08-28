@@ -144,6 +144,16 @@ where
                 .map_err(|_| StreamError::disconnected("writer closed mid-stream"))?;
             }
 
+            if let Some(reasoning) = delta.reasoning_content.as_deref()
+                && !reasoning.is_empty()
+            {
+                out.write(StreamItem::ReasoningDelta {
+                    delta: reasoning.to_owned(),
+                })
+                .await
+                .map_err(|_| StreamError::disconnected("writer closed mid-stream"))?;
+            }
+
             if let Some(tool_deltas) = delta.tool_calls.as_deref() {
                 apply_tool_deltas(&mut tool_calls, tool_deltas);
             }

@@ -24,7 +24,16 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TranscriptItem {
     /// Plain text from one participant.
-    Message { role: Role, text: String },
+    ///
+    /// `reasoning_content` is the optional model thinking stream that
+    /// thinking-mode upstreams require callers to pass back verbatim on
+    /// the next request. It is only present on assistant turns.
+    Message {
+        role: Role,
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning_content: Option<String>,
+    },
     /// The assistant asked a tool to run.
     ///
     /// `call_id` links this call to its eventual `ToolResult`.
@@ -34,6 +43,10 @@ pub enum TranscriptItem {
         call_id: String,
         name: String,
         arguments: String,
+        /// Set on the first tool call of an assistant turn when the
+        /// upstream streamed reasoning before emitting tool calls.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning_content: Option<String>,
     },
     /// A tool finished and produced output.
     ///

@@ -16,11 +16,13 @@ fn sample() -> Vec<TranscriptItem> {
         TranscriptItem::Message {
             role: Role::System,
             text: "be terse".to_string(),
+            reasoning_content: None,
         },
         TranscriptItem::ToolCall {
             call_id: id.clone(),
             name: "echo".to_string(),
             arguments: json!({"text": "hi"}).to_string(),
+            reasoning_content: None,
         },
         TranscriptItem::ToolResult {
             call_id: id,

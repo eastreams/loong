@@ -21,6 +21,7 @@ fn request() -> Request {
         messages: vec![TranscriptItem::Message {
             role: Role::User,
             text: "hi".to_string(),
+            reasoning_content: None,
         }],
         tools: Vec::new(),
     }
@@ -37,6 +38,11 @@ async fn spawn_server(app: Router) -> String {
 
 fn text_event(delta: &str) -> Event {
     Event::default().data(json!({ "choices": [{ "delta": { "content": delta } }] }).to_string())
+}
+
+fn reasoning_event(delta: &str) -> Event {
+    Event::default()
+        .data(json!({ "choices": [{ "delta": { "reasoning_content": delta } }] }).to_string())
 }
 
 fn tool_call_event(
@@ -63,6 +69,14 @@ async fn sse_text() -> Sse<impl stream::Stream<Item = Result<Event, Infallible>>
     Sse::new(stream::iter(vec![
         Ok(text_event("Hel")),
         Ok(text_event("lo")),
+        Ok(Event::default().data("[DONE]")),
+    ]))
+}
+
+async fn sse_reasoning() -> Sse<impl stream::Stream<Item = Result<Event, Infallible>>> {
+    Sse::new(stream::iter(vec![
+        Ok(reasoning_event("think")),
+        Ok(reasoning_event(" more")),
         Ok(Event::default().data("[DONE]")),
     ]))
 }
@@ -106,6 +120,33 @@ async fn streams_text_deltas() {
         rx.recv().await,
         Some(StreamItem::Text {
             delta: "lo".to_string()
+        })
+    );
+    assert_eq!(rx.recv().await, None);
+}
+
+#[tokio::test]
+async fn streams_reasoning_deltas() {
+    let app = Router::new().route("/chat/completions", post(sse_reasoning));
+    let base_url = spawn_server(app).await;
+
+    let provider = OpenAiProvider::new(OpenAiConfig::new(base_url, "test-key", "gpt-test"));
+    let (mut tx, mut rx) = mpsc::channel(16);
+
+    let result = provider.stream(request(), &mut tx).await;
+    drop(tx);
+
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(
+        rx.recv().await,
+        Some(StreamItem::ReasoningDelta {
+            delta: "think".to_string()
+        })
+    );
+    assert_eq!(
+        rx.recv().await,
+        Some(StreamItem::ReasoningDelta {
+            delta: " more".to_string()
         })
     );
     assert_eq!(rx.recv().await, None);

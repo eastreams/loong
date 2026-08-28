@@ -51,6 +51,7 @@ pub(super) struct OpenAiChoice {
 #[derive(Debug, Deserialize)]
 pub(super) struct OpenAiDelta {
     pub(super) content: Option<String>,
+    pub(super) reasoning_content: Option<String>,
     pub(super) tool_calls: Option<Vec<OpenAiToolCallDelta>>,
 }
 

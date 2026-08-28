@@ -103,6 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     print!("{delta}");
                     let _ = std::io::stdout().flush();
                 }
+                StreamItem::ReasoningDelta { .. } => {}
                 StreamItem::ToolCall {
                     id,
                     name,

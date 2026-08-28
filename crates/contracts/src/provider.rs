@@ -35,6 +35,15 @@ pub enum StreamItem {
         /// The delta text.
         delta: String,
     },
+    /// One model-reasoning delta from a thinking-mode upstream.
+    ///
+    /// These deltas are not shown to the user, but upstreams require
+    /// the accumulated reasoning to be passed back verbatim on the
+    /// next request for the same assistant turn.
+    ReasoningDelta {
+        /// The reasoning delta.
+        delta: String,
+    },
     /// One complete assistant tool call.
     ///
     /// Streaming adapters reassemble tool-call deltas before emitting, so

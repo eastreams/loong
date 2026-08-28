@@ -189,6 +189,30 @@ impl Provider<Request, StreamItem, ProviderOut> for EchoProvider {
     }
 }
 
+#[derive(Clone)]
+struct ReasoningProvider;
+
+#[async_trait]
+impl Provider<Request, StreamItem, ProviderOut> for ReasoningProvider {
+    async fn stream(
+        &self,
+        _req: Request,
+        out: &mut ProviderOut,
+    ) -> Result<(), StreamError<Request>> {
+        out.write(StreamItem::ReasoningDelta {
+            delta: "think".to_string(),
+        })
+        .await
+        .unwrap();
+        out.write(StreamItem::Text {
+            delta: "hello".to_string(),
+        })
+        .await
+        .unwrap();
+        Ok(())
+    }
+}
+
 #[tokio::test]
 async fn prompt_streams_and_appends_context() {
     let (kernel_owner, facade) = plan_facade();
@@ -212,6 +236,7 @@ async fn prompt_streams_and_appends_context() {
     while let Some(item) = reply.recv().await {
         match item {
             StreamItem::Text { delta } => text.push_str(&delta),
+            StreamItem::ReasoningDelta { .. } => {}
             StreamItem::ToolCall { .. } => panic!("unexpected tool call"),
         }
     }
@@ -226,6 +251,7 @@ async fn prompt_streams_and_appends_context() {
         TranscriptItem::Message {
             role: Role::User,
             text: "hi".to_string(),
+            reasoning_content: None,
         }
     );
     assert_eq!(
@@ -233,6 +259,53 @@ async fn prompt_streams_and_appends_context() {
         TranscriptItem::Message {
             role: Role::Assistant,
             text: "hello".to_string(),
+            reasoning_content: None,
+        }
+    );
+
+    let status = owner.shutdown(Shutdown::Drain).await;
+    assert_eq!(status.reason(), ExitReason::Drained);
+    let _ = kernel_owner.shutdown(Shutdown::Drain).await;
+}
+
+#[tokio::test]
+async fn reasoning_deltas_are_committed_to_transcript() {
+    let (kernel_owner, facade) = plan_facade();
+    let store = SharedStore(Arc::new(Mutex::new(MemoryStore::new())));
+    let owner = Agent::builder(facade)
+        .with_system_prompt(PLAN_SYSTEM_PROMPT)
+        .with_store(store.clone())
+        .with_provider(ReasoningProvider)
+        .build()
+        .unwrap()
+        .spawn();
+
+    let mut reply = owner
+        .call(Prompt {
+            text: "hi".to_string(),
+        })
+        .await
+        .unwrap();
+
+    let mut text = String::new();
+    while let Some(item) = reply.recv().await {
+        match item {
+            StreamItem::Text { delta } => text.push_str(&delta),
+            StreamItem::ReasoningDelta { .. } => {}
+            StreamItem::ToolCall { .. } => panic!("unexpected tool call"),
+        }
+    }
+    reply.finish().await.unwrap().unwrap();
+
+    assert_eq!(text, "hello");
+    let snapshot = store.snapshot();
+    assert_eq!(snapshot.items.len(), 2);
+    assert_eq!(
+        snapshot.items[1],
+        TranscriptItem::Message {
+            role: Role::Assistant,
+            text: "hello".to_string(),
+            reasoning_content: Some("think".to_string()),
         }
     );
 
@@ -272,6 +345,7 @@ async fn prompt_executes_tool_calls_and_continues() {
     while let Some(item) = reply.recv().await {
         match item {
             StreamItem::Text { delta } => text.push_str(&delta),
+            StreamItem::ReasoningDelta { .. } => {}
             StreamItem::ToolCall { name, .. } => tool_names.push(name),
         }
     }
@@ -287,6 +361,7 @@ async fn prompt_executes_tool_calls_and_continues() {
         TranscriptItem::Message {
             role: Role::User,
             text: "read hello.txt".to_string(),
+            reasoning_content: None,
         }
     );
     assert_eq!(
@@ -295,6 +370,7 @@ async fn prompt_executes_tool_calls_and_continues() {
             call_id: "call_1".to_string(),
             name: "read_file".to_string(),
             arguments: "{\"path\":\"hello.txt\"}".to_string(),
+            reasoning_content: None,
         }
     );
     assert_eq!(
@@ -309,6 +385,7 @@ async fn prompt_executes_tool_calls_and_continues() {
         TranscriptItem::Message {
             role: Role::Assistant,
             text: "hello".to_string(),
+            reasoning_content: None,
         }
     );
 

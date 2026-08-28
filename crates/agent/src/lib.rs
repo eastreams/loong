@@ -101,6 +101,7 @@ where
         let user_item = TranscriptItem::Message {
             role: Role::User,
             text,
+            reasoning_content: None,
         };
         let _ = self.store.append(vec![user_item]);
 
@@ -224,12 +225,14 @@ struct PendingToolCall {
     arguments: String,
 }
 
-fn split_stream_items(items: Vec<StreamItem>) -> (String, Vec<PendingToolCall>) {
+fn split_stream_items(items: Vec<StreamItem>) -> (String, String, Vec<PendingToolCall>) {
+    let mut reasoning = String::new();
     let mut text = String::new();
     let mut calls = Vec::new();
 
     for item in items {
         match item {
+            StreamItem::ReasoningDelta { delta } => reasoning.push_str(&delta),
             StreamItem::Text { delta } => text.push_str(&delta),
             StreamItem::ToolCall {
                 id,
@@ -243,7 +246,7 @@ fn split_stream_items(items: Vec<StreamItem>) -> (String, Vec<PendingToolCall>) 
         }
     }
 
-    (text, calls)
+    (reasoning, text, calls)
 }
 
 /// All mutable prompt-loop state, moved through the stage futures so the
@@ -286,6 +289,7 @@ impl<P, W> LoopData<P, W> {
                     TranscriptItem::Message {
                         role: Role::System,
                         text: system_prompt,
+                        reasoning_content: None,
                     },
                 );
             }
@@ -650,20 +654,31 @@ where
                         result,
                         items,
                     }) => {
-                        let (text, calls) = split_stream_items(items);
+                        let (reasoning, text, calls) = split_stream_items(items);
+                        let reasoning = (!reasoning.is_empty()).then_some(reasoning);
 
                         let mut assistant_items = Vec::new();
-                        if !text.is_empty() {
+                        if !text.is_empty() || (calls.is_empty() && reasoning.is_some()) {
                             assistant_items.push(TranscriptItem::Message {
                                 role: Role::Assistant,
                                 text,
+                                reasoning_content: if calls.is_empty() {
+                                    reasoning.clone()
+                                } else {
+                                    None
+                                },
                             });
                         }
-                        for call in &calls {
+                        for (index, call) in calls.iter().enumerate() {
                             assistant_items.push(TranscriptItem::ToolCall {
                                 call_id: call.id.clone(),
                                 name: call.name.clone(),
                                 arguments: call.arguments.clone(),
+                                reasoning_content: if index == 0 {
+                                    reasoning.clone()
+                                } else {
+                                    None
+                                },
                             });
                         }
 
