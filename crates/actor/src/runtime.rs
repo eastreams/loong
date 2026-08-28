@@ -1,6 +1,7 @@
 use std::{
     fmt,
     future::Future,
+    ops::Deref,
     panic::{self, AssertUnwindSafe},
     pin::Pin,
     sync::Arc,
@@ -155,8 +156,19 @@ impl<A: Actor> Drop for ActorSpawner<A> {
 /// Self::shutdown) or [`wait`](Self::wait) when confirmed normal-path subtree
 /// termination matters. [`ExitStatus`] separates the actor's reason from its
 /// subtree guarantee.
+///
+/// It derefs to [`ActorRef`], so address methods can be called directly on an
+/// owner while it is still alive.
 #[must_use = "dropping an actor owner requests Kill"]
 pub struct ActorOwner<A: Actor>(ActorRef<A>);
+
+impl<A: Actor> Deref for ActorOwner<A> {
+    type Target = ActorRef<A>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 impl<A: Actor> ActorOwner<A> {
     /// Returns a cloneable, non-owning address.
