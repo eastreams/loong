@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use kernel::access::fs::FsWriteError;
 use schemars::JsonSchema;
-use tool_host::{ToolContext, ToolHost, ToolImpl};
+use tool_host::{ToolContext, ToolImpl};
 
 pub struct WriteFileTool;
 
@@ -17,7 +17,7 @@ pub struct WriteFileOutput {
 }
 
 #[async_trait]
-impl<H: ToolHost> ToolImpl<H> for WriteFileTool {
+impl ToolImpl for WriteFileTool {
     type Input = WriteFileInput;
     type Output = WriteFileOutput;
     type Error = FsWriteError;
@@ -32,7 +32,7 @@ impl<H: ToolHost> ToolImpl<H> for WriteFileTool {
 
     async fn execute(
         &self,
-        ctx: &H::ToolCx<'_>,
+        ctx: &dyn ToolContext,
         input: Self::Input,
     ) -> Result<Self::Output, Self::Error> {
         let path = input.path.clone();

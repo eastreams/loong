@@ -1,5 +1,5 @@
 //! Tool contract: invocation parameters, errors, and the [`ToolImpl`]
-//! / [`ToolHost`] traits shared by every tool implementation.
+//! trait shared by every tool implementation.
 
 use std::path::Path;
 
@@ -58,7 +58,7 @@ fn root_schema<T: JsonSchema>() -> Schema {
 }
 
 /// The trusted handle supplied to one tool invocation.
-pub trait ToolContext<H: ToolHost>: Sync {
+pub trait ToolContext: Sync {
     fn facade(&self) -> &Facade;
     fn workspace_root(&self) -> &Path;
 
@@ -67,24 +67,9 @@ pub trait ToolContext<H: ToolHost>: Sync {
     }
 }
 
-/// The tool host boundary the agent calls.
-#[async_trait]
-pub trait ToolHost: Send + Sync + Sized + 'static {
-    type ToolCx<'a>: ToolContext<Self>
-    where
-        Self: 'a;
-
-    async fn invoke(
-        &self,
-        name: &str,
-        params: &InvocationParams,
-        payload: Value,
-    ) -> Result<Value, ToolError>;
-}
-
 /// A concrete tool implementation.
 #[async_trait]
-pub trait ToolImpl<H: ToolHost>: Send + Sync + 'static {
+pub trait ToolImpl: Send + Sync + 'static {
     type Input: JsonSchema + serde::de::DeserializeOwned + Send + 'static;
     type Output: JsonSchema + serde::Serialize + Send + 'static;
     type Error: std::error::Error + Send + Sync + 'static;
@@ -108,7 +93,7 @@ pub trait ToolImpl<H: ToolHost>: Send + Sync + 'static {
 
     async fn execute(
         &self,
-        ctx: &H::ToolCx<'_>,
+        ctx: &dyn ToolContext,
         input: Self::Input,
     ) -> Result<Self::Output, Self::Error>;
 }

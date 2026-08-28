@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use kernel::access::fs::FsReadError;
 use schemars::JsonSchema;
-use tool_host::{ToolContext, ToolHost, ToolImpl};
+use tool_host::{ToolContext, ToolImpl};
 
 pub struct ReadFileTool;
 
@@ -16,7 +16,7 @@ pub struct ReadFileOutput {
 }
 
 #[async_trait]
-impl<H: ToolHost> ToolImpl<H> for ReadFileTool {
+impl ToolImpl for ReadFileTool {
     type Input = ReadFileInput;
     type Output = ReadFileOutput;
     type Error = FsReadError;
@@ -31,7 +31,7 @@ impl<H: ToolHost> ToolImpl<H> for ReadFileTool {
 
     async fn execute(
         &self,
-        ctx: &H::ToolCx<'_>,
+        ctx: &dyn ToolContext,
         input: Self::Input,
     ) -> Result<Self::Output, Self::Error> {
         let bytes = ctx.fs().read(&input.path).await?;

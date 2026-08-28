@@ -1,19 +1,17 @@
 //! Tool registry: type-erased tool handles, the concrete [`ToolRegistry`]
 //! host the agent invokes, and the immutable [`ToolSnapshot`] readers use.
 
-use std::{collections::BTreeMap, marker::PhantomData, path::Path, sync::Arc};
+use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 use async_trait::async_trait;
 use contracts::tool::ToolSpec;
 use kernel::Facade;
 use serde_json::Value;
 
-use crate::tool::{
-    InvocationParams, RegistrationError, ToolContext, ToolError, ToolHost, ToolImpl,
-};
+use crate::tool::{InvocationParams, RegistrationError, ToolContext, ToolError, ToolImpl};
 
 /// Immutable index of registered tools shared by snapshots.
-type ToolIndex = BTreeMap<String, Arc<RegisteredTool<ToolRegistry>>>;
+type ToolIndex = BTreeMap<String, Arc<RegisteredTool>>;
 
 /// Registered metadata for a tool.
 #[derive(Debug, Clone)]
@@ -36,21 +34,18 @@ impl ToolRegistration {
 }
 
 #[async_trait]
-trait ToolAdapter<H: ToolHost>: Send + Sync {
-    async fn invoke(&self, ctx: &H::ToolCx<'_>, payload: Value) -> Result<Value, ToolError>;
+trait ToolAdapter: Send + Sync {
+    async fn invoke(&self, ctx: &dyn ToolContext, payload: Value) -> Result<Value, ToolError>;
 }
 
 /// Type-erased tool handle stored in the registry.
-pub struct RegisteredTool<H: ToolHost> {
+pub struct RegisteredTool {
     registration: ToolRegistration,
-    adapter: Box<dyn ToolAdapter<H>>,
+    adapter: Box<dyn ToolAdapter>,
 }
 
-impl<H: ToolHost> RegisteredTool<H> {
-    pub fn from_tool<T: ToolImpl<H>>(tool: T) -> Result<Self, RegistrationError>
-    where
-        H: 'static,
-    {
+impl RegisteredTool {
+    pub fn from_tool<T: ToolImpl>(tool: T) -> Result<Self, RegistrationError> {
         let registration = ToolRegistration::new(tool.spec())?;
         let adapter = Box::new(CoreToolAdapter::new(tool));
         Ok(Self {
@@ -69,32 +64,24 @@ impl<H: ToolHost> RegisteredTool<H> {
         self.registration.spec()
     }
 
-    pub async fn invoke(&self, ctx: &H::ToolCx<'_>, payload: Value) -> Result<Value, ToolError> {
+    pub async fn invoke(&self, ctx: &dyn ToolContext, payload: Value) -> Result<Value, ToolError> {
         self.adapter.invoke(ctx, payload).await
     }
 }
 
-struct CoreToolAdapter<H: ToolHost, T: ToolImpl<H>> {
+struct CoreToolAdapter<T> {
     inner: T,
-    _marker: PhantomData<fn() -> H>,
 }
 
-impl<H: ToolHost, T: ToolImpl<H>> CoreToolAdapter<H, T> {
+impl<T: ToolImpl> CoreToolAdapter<T> {
     fn new(inner: T) -> Self {
-        Self {
-            inner,
-            _marker: PhantomData,
-        }
+        Self { inner }
     }
 }
 
 #[async_trait]
-impl<H, T> ToolAdapter<H> for CoreToolAdapter<H, T>
-where
-    H: ToolHost,
-    T: ToolImpl<H>,
-{
-    async fn invoke(&self, ctx: &H::ToolCx<'_>, payload: Value) -> Result<Value, ToolError> {
+impl<T: ToolImpl> ToolAdapter for CoreToolAdapter<T> {
+    async fn invoke(&self, ctx: &dyn ToolContext, payload: Value) -> Result<Value, ToolError> {
         let input = self
             .inner
             .parse_input(payload)
@@ -145,7 +132,7 @@ impl ToolRegistry {
         }
     }
 
-    pub fn register<T: ToolImpl<Self>>(
+    pub fn register<T: ToolImpl>(
         &mut self,
         name: String,
         tool: T,
@@ -161,7 +148,7 @@ impl ToolRegistry {
         Ok(())
     }
 
-    pub fn unregister(&mut self, name: &str) -> Option<Arc<RegisteredTool<ToolRegistry>>> {
+    pub fn unregister(&mut self, name: &str) -> Option<Arc<RegisteredTool>> {
         let removed = self.tools.get(name).cloned()?;
 
         let mut new_tools = (*self.tools).clone();
@@ -229,29 +216,12 @@ pub struct ToolRegistryContext<'a> {
     workspace_root: &'a Path,
 }
 
-impl ToolContext<ToolRegistry> for ToolRegistryContext<'_> {
+impl ToolContext for ToolRegistryContext<'_> {
     fn facade(&self) -> &Facade {
         self.facade
     }
 
     fn workspace_root(&self) -> &Path {
         self.workspace_root
-    }
-}
-
-#[async_trait]
-impl ToolHost for ToolRegistry {
-    type ToolCx<'a>
-        = ToolRegistryContext<'a>
-    where
-        Self: 'a;
-
-    async fn invoke(
-        &self,
-        name: &str,
-        params: &InvocationParams,
-        payload: Value,
-    ) -> Result<Value, ToolError> {
-        ToolRegistry::invoke(self, name, params, payload).await
     }
 }

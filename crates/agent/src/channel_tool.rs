@@ -5,7 +5,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tool_host::{ToolImpl, ToolRegistry};
+use tool_host::{ToolContext, ToolImpl};
 
 use crate::channel::{ChannelError, ChannelTarget};
 
@@ -30,7 +30,7 @@ impl ChannelTool {
 }
 
 #[async_trait]
-impl ToolImpl<ToolRegistry> for ChannelTool {
+impl ToolImpl for ChannelTool {
     type Input = ChannelPromptInput;
     type Output = String;
     type Error = ChannelError;
@@ -45,7 +45,7 @@ impl ToolImpl<ToolRegistry> for ChannelTool {
 
     async fn execute(
         &self,
-        _ctx: &<ToolRegistry as tool_host::ToolHost>::ToolCx<'_>,
+        _ctx: &dyn ToolContext,
         input: Self::Input,
     ) -> Result<Self::Output, Self::Error> {
         self.target.ask(input.prompt).await

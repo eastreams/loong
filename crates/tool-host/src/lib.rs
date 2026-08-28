@@ -10,4 +10,4 @@ pub mod tool;
 pub use registry::{
     RegisteredTool, ToolRegistration, ToolRegistry, ToolRegistryContext, ToolSnapshot,
 };
-pub use tool::{InvocationParams, RegistrationError, ToolContext, ToolError, ToolHost, ToolImpl};
+pub use tool::{InvocationParams, RegistrationError, ToolContext, ToolError, ToolImpl};
