@@ -93,7 +93,10 @@ async fn switch_provider_message_is_accepted() {
         .unwrap()
         .spawn();
 
-    owner.call(SwitchProvider(DummyProvider)).await.unwrap();
+    owner
+        .call(SwitchProvider(Arc::new(DummyProvider)))
+        .await
+        .unwrap();
 
     let status = owner.shutdown(Shutdown::Drain).await;
     assert_eq!(status.reason(), ExitReason::Drained);

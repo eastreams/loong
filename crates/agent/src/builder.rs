@@ -1,14 +1,4 @@
 //! Runtime-checked assembly for [`Agent`](super::Agent).
-//!
-//! The builder keeps capabilities at the [`Facade`] boundary and validates
-//! that every registered tool set receives the resources it declares, such as
-//! [`WorkspaceRoot`] for [`FileTools`]. Validation happens at [`build`](
-//! AgentBuilder::build), so `with_*` methods stay infallible.
-//!
-//! The builder also type-encodes the required actor state: `STORE_SET` and
-//! `PROVIDER_SET` advance as [`with_store`](AgentBuilder::with_store) and
-//! [`with_provider`](AgentBuilder::with_provider) are called, and
-//! [`build`](AgentBuilder::build) only exists once both are `true`.
 
 use std::{
     collections::{BTreeSet, VecDeque},
@@ -22,7 +12,7 @@ use kernel::resource::{Resources, WorkspaceRoot};
 use provider::Provider;
 use tool_host::{RegistrationError, ToolRegistry};
 
-use super::{Agent, ContextStore, ProviderOut};
+use super::{Agent, AgentProvider, ContextStore, ProviderOut};
 use crate::channel::ChannelTarget;
 use crate::channel_tool::ChannelTool;
 use crate::tool_set::ToolSet;
@@ -42,26 +32,17 @@ pub enum BuildError {
 }
 
 /// Runtime-checked agent builder.
-///
-/// Capabilities enter through the [`Facade`] passed to
-/// [`Agent::builder`](super::Agent::builder). Tool sets declare resource needs
-/// and [`spawn`](Self::spawn) validates them before starting the actor.
-///
-/// `C` and `P` are inferred by [`with_store`](Self::with_store) and
-/// [`with_provider`](Self::with_provider). The `const bool` parameters track
-/// whether the required store and provider are present, so `spawn` only
-/// type-checks after both are set.
-pub struct AgentBuilder<C, P, const STORE_SET: bool = false, const PROVIDER_SET: bool = false> {
+pub struct AgentBuilder<const STORE_SET: bool = false, const PROVIDER_SET: bool = false> {
     facade: Facade,
     resources: Resources,
     tools: Vec<Box<dyn ToolSet>>,
     channels: Vec<(String, Arc<dyn ChannelTarget>)>,
     system_prompt: Option<String>,
-    store: Option<C>,
-    provider: Option<P>,
+    store: Option<Box<dyn ContextStore>>,
+    provider: Option<AgentProvider>,
 }
 
-impl<C, P> AgentBuilder<C, P, false, false> {
+impl AgentBuilder<false, false> {
     #[must_use]
     pub fn new(facade: Facade) -> Self {
         Self {
@@ -76,9 +57,7 @@ impl<C, P> AgentBuilder<C, P, false, false> {
     }
 }
 
-impl<C, P, const STORE_SET: bool, const PROVIDER_SET: bool>
-    AgentBuilder<C, P, STORE_SET, PROVIDER_SET>
-{
+impl<const STORE_SET: bool, const PROVIDER_SET: bool> AgentBuilder<STORE_SET, PROVIDER_SET> {
     #[must_use]
     pub fn with<T: ToolSet>(mut self, tools: T) -> Self {
         self.tools.push(Box::new(tools));
@@ -87,21 +66,27 @@ impl<C, P, const STORE_SET: bool, const PROVIDER_SET: bool>
 
     /// Sets the agent's context store and marks it present in the builder type.
     #[must_use]
-    pub fn with_store(self, store: C) -> AgentBuilder<C, P, true, PROVIDER_SET> {
+    pub fn with_store(
+        self,
+        store: impl ContextStore + 'static,
+    ) -> AgentBuilder<true, PROVIDER_SET> {
         AgentBuilder {
             facade: self.facade,
             resources: self.resources,
             tools: self.tools,
             channels: self.channels,
             system_prompt: self.system_prompt,
-            store: Some(store),
+            store: Some(Box::new(store)),
             provider: self.provider,
         }
     }
 
     /// Sets the agent's provider and marks it present in the builder type.
     #[must_use]
-    pub fn with_provider(self, provider: P) -> AgentBuilder<C, P, STORE_SET, true> {
+    pub fn with_provider<P>(self, provider: P) -> AgentBuilder<STORE_SET, true>
+    where
+        P: Provider<Request, StreamItem, ProviderOut> + 'static,
+    {
         AgentBuilder {
             facade: self.facade,
             resources: self.resources,
@@ -109,7 +94,7 @@ impl<C, P, const STORE_SET: bool, const PROVIDER_SET: bool>
             channels: self.channels,
             system_prompt: self.system_prompt,
             store: self.store,
-            provider: Some(provider),
+            provider: Some(Arc::new(provider)),
         }
     }
 
@@ -134,11 +119,6 @@ impl<C, P, const STORE_SET: bool, const PROVIDER_SET: bool>
         self
     }
 
-    /// Resource needs are currently checked against a [`Resources`] value at
-    /// runtime because `ToolSet::needs()` reports them as values. Once Rust
-    /// specialization stabilizes, resource requirements can be lifted to the
-    /// type level and checked at compile time, just like `STORE_SET` and
-    /// `PROVIDER_SET`.
     fn validate(&self) -> Result<(), BuildError> {
         for tool_set in &self.tools {
             for need in tool_set.needs() {
@@ -154,13 +134,9 @@ impl<C, P, const STORE_SET: bool, const PROVIDER_SET: bool>
     }
 }
 
-impl<C, P> AgentBuilder<C, P, true, true>
-where
-    C: ContextStore + 'static,
-    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
-{
+impl AgentBuilder<true, true> {
     /// Validates the assembled tools and resources, then builds the actor.
-    pub fn build(self) -> Result<Agent<C, P>, BuildError> {
+    pub fn build(self) -> Result<Agent, BuildError> {
         self.validate()?;
 
         let Self {

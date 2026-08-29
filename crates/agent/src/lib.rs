@@ -1,10 +1,12 @@
 //! Agent-side types for the `loong` product.
+//!
+//! [`Agent`] is a concrete actor, not a generic family: its context store and
+//! provider are type-erased behind [`AgentProvider`] and `Box<dyn ContextStore>`
+//! so the rest of the system can hold one actor type.
 
 use std::{
-    borrow::Cow,
     collections::VecDeque,
     future::Future,
-    marker::PhantomData,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
@@ -19,8 +21,8 @@ use contracts::transcript::{Role, TranscriptItem};
 use kernel::policy::action::ActionMeta;
 use kernel::{Facade, GrantSendError};
 use loac::prelude::*;
-use loac::{ActorOwner, ActorRef, HasChildren, HasMailbox, Shutdown};
-use provider::{Provider, StreamError};
+use loac::{ActorOwner, ActorRef, Shutdown};
+use provider::Provider;
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -37,6 +39,9 @@ pub use channel::{ChannelError, ChannelTarget};
 pub use resource::{Resource, ResourceNeed, Resources, WorkspaceRoot};
 pub use tool_set::{FileTools, ToolSet};
 
+/// Type-erased provider used by agents.
+pub type AgentProvider = Arc<dyn Provider<Request, StreamItem, ProviderOut>>;
+
 /// Writer that receives streamed provider items.
 pub type ProviderOut = mpsc::Sender<StreamItem>;
 
@@ -49,29 +54,21 @@ pub enum PromptError {
     Cancelled,
     /// The provider stream failed.
     #[error("provider stream failed: {0}")]
-    Provider(Box<StreamError<Request>>),
+    Provider(Box<provider::StreamError<Request>>),
 }
 
 /// Agent actor that composes context storage, an upstream provider, a tool
-/// host, a workspace root, and an optional system prompt.
-///
-/// `P: Clone` keeps stream handlers able to capture the provider they were
-/// started with, so switching the actor's provider never interrupts streams
-/// that are already running.
-pub struct Agent<C, P>
-where
-    C: ContextStore,
-    P: Provider<Request, StreamItem, ProviderOut> + Clone,
-{
-    store: C,
-    provider: P,
+/// host, and an optional system prompt.
+pub struct Agent {
+    store: Box<dyn ContextStore>,
+    provider: AgentProvider,
     registry: ToolRegistry,
     system_prompt: Option<String>,
     /// Prompts that have been accepted by the mailbox but not started yet.
     ///
     /// All reads and writes happen in actor contexts (mailbox handlers and
     /// [`PromptLoop`] polls), so no lock is needed.
-    prompt_queue: VecDeque<QueuedPrompt<P>>,
+    prompt_queue: VecDeque<QueuedPrompt>,
     /// Cancellation token for the prompt currently running, if any.
     ///
     /// The slot stays `Some` until the running prompt has observed its
@@ -80,26 +77,22 @@ where
     active: Option<CancellationToken>,
 }
 
-impl<C, P> Agent<C, P>
-where
-    C: ContextStore,
-    P: Provider<Request, StreamItem, ProviderOut> + Clone,
-{
+impl Agent {
     /// Returns a builder that assembles one agent with explicit resources.
-    ///
-    /// `C` and `P` are inferred from [`AgentBuilder::with_store`] and
-    /// [`AgentBuilder::with_provider`], so callers can write
-    /// `Agent::builder(facade).with_store(store).with_provider(provider).build()?.spawn()`
-    /// without naming the generic parameters.
     #[must_use]
-    pub fn builder(facade: Facade) -> AgentBuilder<C, P> {
-        AgentBuilder::<C, P>::new(facade)
+    pub fn builder(facade: Facade) -> AgentBuilder {
+        AgentBuilder::new(facade)
+    }
+
+    /// Starts this agent actor and returns its lifecycle owner.
+    pub fn spawn(self) -> ActorOwner<Self> {
+        loac::spawn::<Self>(self)
     }
 
     /// Appends the user message, then snapshots everything the next prompt
     /// loop needs. Runs only in actor contexts, so preparation happens in
     /// mailbox order at the moment the prompt actually starts.
-    fn prepare(&mut self, text: String, cancellation: CancellationToken) -> PreparedPrompt<P> {
+    fn prepare(&mut self, text: String, cancellation: CancellationToken) -> PreparedPrompt {
         let user_item = TranscriptItem::Message {
             role: Role::User,
             text,
@@ -117,11 +110,6 @@ where
     }
 
     /// Starts the next queued prompt, if any.
-    ///
-    /// On success the next prompt future's oneshot fires with a prepared plan
-    /// and `active` points at the new prompt's cancellation token. On a stale
-    /// queue entry (its future is already gone) the entry is discarded without
-    /// starting anything.
     fn start_next_prompt(&mut self) {
         loop {
             let Some(next) = self.prompt_queue.pop_front() else {
@@ -146,30 +134,12 @@ where
     }
 }
 
-impl<C, P> Agent<C, P>
-where
-    C: ContextStore + 'static,
-    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
-{
-    /// Starts this agent actor and returns its lifecycle owner.
-    pub fn spawn(self) -> ActorOwner<Self> {
-        loac::spawn::<Self>(self)
-    }
-}
-
 /// Replaces the provider used by subsequent streams.
-///
-/// The frontend builds a new provider (for example an OpenAI provider with a
-/// different model) and sends it to the agent. Streams that already started
-/// hold their own clone, so they keep their original provider.
 #[derive(loac::Message)]
 #[message(reply = ())]
-pub struct SwitchProvider<P>(pub P);
+pub struct SwitchProvider(pub AgentProvider);
 
 /// Asks the agent to stream a provider reply for one user message.
-///
-/// The agent appends the user message to its context store, then runs the
-/// provider/tool loop until the model returns text without tool calls.
 #[derive(loac::Message)]
 #[message(stream = StreamItem, reply = Result<(), PromptError>)]
 pub struct Prompt {
@@ -182,8 +152,7 @@ pub struct Prompt {
 #[message(reply = ())]
 pub struct CancelQueuedPrompts;
 
-/// Cancels the active prompt, if any. The next queued prompt starts once the
-/// cancelled prompt has observed its cancellation and handed the turn back.
+/// Cancels the active prompt, if any.
 #[derive(loac::Message)]
 #[message(reply = ())]
 pub struct CancelActivePrompt;
@@ -194,10 +163,6 @@ pub struct CancelActivePrompt;
 pub struct CancelAllPrompts;
 
 /// Registers one named channel as a tool at runtime.
-///
-/// The channel name must not collide with an existing tool, channel, or
-/// subagent. The returned error preserves the registration failure and the
-/// channel is not added.
 #[derive(loac::Message)]
 #[message(reply = Result<(), RegistrationError>)]
 pub struct BindChannel {
@@ -205,8 +170,7 @@ pub struct BindChannel {
     pub target: Arc<dyn ChannelTarget>,
 }
 
-/// Removes one named channel tool registered by [`BindChannel`] or
-/// [`AgentBuilder::with_channel`](super::builder::AgentBuilder::with_channel).
+/// Removes one named channel tool.
 #[derive(loac::Message)]
 #[message(reply = Option<Arc<RegisteredTool>>)]
 pub struct UnbindChannel {
@@ -214,12 +178,6 @@ pub struct UnbindChannel {
 }
 
 /// The policy action for spawning a subagent.
-///
-/// Spawning a child actor is a governed side effect: the handler asks the
-/// kernel for a [`Granted`](kernel::policy::action::Granted) proof before it
-/// calls `spawn_child`. The action carries the child's channel name, system
-/// prompt, tool specs, and capability ceiling so policy can reason about the
-/// whole child rather than only its name.
 #[derive(Debug, Clone)]
 pub struct SpawnSubagentAction {
     pub name: String,
@@ -229,12 +187,12 @@ pub struct SpawnSubagentAction {
 }
 
 impl ActionMeta for SpawnSubagentAction {
-    fn name(&self) -> Cow<'_, str> {
-        Cow::Borrowed("agent.spawn_subagent")
+    fn name(&self) -> std::borrow::Cow<'_, str> {
+        std::borrow::Cow::Borrowed("agent.spawn_subagent")
     }
 
-    fn payload(&self) -> Cow<'_, Value> {
-        Cow::Owned(serde_json::json!({
+    fn payload(&self) -> std::borrow::Cow<'_, Value> {
+        std::borrow::Cow::Owned(serde_json::json!({
             "name": self.name,
             "system_prompt": self.system_prompt,
             "tools": self.tools,
@@ -257,44 +215,31 @@ pub enum SpawnSubagentError {
 }
 
 /// Spawns one fully built child agent under the parent runtime.
-///
-/// The child is started with `spawn_child`, registered as a named channel
-/// tool, and the typed child address is returned so the caller can send the
-/// child any message it supports (for example `SwitchProvider`). The spawn
-/// first goes through policy as a [`SpawnSubagentAction`].
 #[derive(loac::Message)]
-#[message(reply = Result<ActorRef<Agent<C2, P2>>, SpawnSubagentError>)]
-pub struct SpawnSubagent<C2, P2>
-where
-    C2: ContextStore + 'static,
-    P2: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
-{
+#[message(reply = Result<ActorRef<Agent>, SpawnSubagentError>)]
+pub struct SpawnSubagent {
     pub name: String,
-    pub agent: Agent<C2, P2>,
+    pub agent: Agent,
 }
 
 /// One-way self-message a finished prompt sends before its final value.
-///
-/// Sending this through the mailbox keeps next-prompt handoff ordered by the
-/// actor, and admission failure is how a finishing prompt observes shutdown:
-/// once admission is closed it clears the queue instead of starting new work.
 #[derive(loac::Message)]
 #[message(reply = ())]
-struct PrepareNextPrompt<P>(PhantomData<fn() -> P>);
+struct PrepareNextPrompt;
 
 /// Owned inputs for one prompt loop.
-struct PreparedPrompt<P> {
+struct PreparedPrompt {
     messages: Vec<TranscriptItem>,
-    provider: P,
+    provider: AgentProvider,
     registry: Arc<ToolSnapshot>,
     system_prompt: Option<String>,
     cancellation: CancellationToken,
 }
 
 /// Queue entry for a prompt whose reply future is waiting for a start signal.
-struct QueuedPrompt<P> {
+struct QueuedPrompt {
     text: String,
-    start_tx: oneshot::Sender<PreparedPrompt<P>>,
+    start_tx: oneshot::Sender<PreparedPrompt>,
 }
 
 /// One provider-issued tool call awaiting execution.
@@ -330,10 +275,10 @@ fn split_stream_items(items: Vec<StreamItem>) -> (String, String, Vec<PendingToo
 }
 
 /// All mutable prompt-loop state, moved through the stage futures so the
-/// [`PromptLoop`] struct itself stays [`Unpin`] regardless of `P` and `W`.
-struct LoopData<P, W> {
+/// [`PromptLoop`] struct itself stays [`Unpin`] regardless of `W`.
+struct LoopData<W> {
     messages: Vec<TranscriptItem>,
-    provider: P,
+    provider: AgentProvider,
     registry: Arc<ToolSnapshot>,
     tools: Vec<ToolSpec>,
     cancellation: CancellationToken,
@@ -341,8 +286,8 @@ struct LoopData<P, W> {
     out: W,
 }
 
-impl<P, W> LoopData<P, W> {
-    fn from_prepared(prepared: PreparedPrompt<P>, out: W) -> Self {
+impl<W> LoopData<W> {
+    fn from_prepared(prepared: PreparedPrompt, out: W) -> Self {
         let PreparedPrompt {
             mut messages,
             provider,
@@ -387,42 +332,42 @@ impl<P, W> LoopData<P, W> {
     }
 }
 
-enum WaitStartOutcome<P, W> {
-    Started(PreparedPrompt<P>, W),
+enum WaitStartOutcome<W> {
+    Started(PreparedPrompt, W),
     Cancelled,
 }
 
-enum RoundOutcome<P, W> {
+enum RoundOutcome<W> {
     Completed {
-        data: Box<LoopData<P, W>>,
-        result: Result<(), StreamError<Request>>,
+        data: Box<LoopData<W>>,
+        result: Result<(), provider::StreamError<Request>>,
         items: Vec<StreamItem>,
     },
     Cancelled,
 }
 
-enum ToolOutcome<P, W> {
+enum ToolOutcome<W> {
     Completed {
-        data: Box<LoopData<P, W>>,
+        data: Box<LoopData<W>>,
         result: Result<Value, ToolError>,
     },
     Cancelled,
 }
 
-type WaitStartFuture<P, W> = Pin<Box<dyn Future<Output = WaitStartOutcome<P, W>> + Send>>;
-type RoundFuture<P, W> = Pin<Box<dyn Future<Output = RoundOutcome<P, W>> + Send>>;
-type ToolFuture<P, W> = Pin<Box<dyn Future<Output = ToolOutcome<P, W>> + Send>>;
+type WaitStartFuture<W> = Pin<Box<dyn Future<Output = WaitStartOutcome<W>> + Send>>;
+type RoundFuture<W> = Pin<Box<dyn Future<Output = RoundOutcome<W>> + Send>>;
+type ToolFuture<W> = Pin<Box<dyn Future<Output = ToolOutcome<W>> + Send>>;
 type HandoffFuture = Pin<Box<dyn Future<Output = bool> + Send>>;
 
-enum PromptStage<P, W> {
+enum PromptStage<W> {
     WaitStart {
-        future: WaitStartFuture<P, W>,
+        future: WaitStartFuture<W>,
     },
     Round {
-        future: RoundFuture<P, W>,
+        future: RoundFuture<W>,
     },
     Tool {
-        future: ToolFuture<P, W>,
+        future: ToolFuture<W>,
         call: PendingToolCall,
     },
     Handoff {
@@ -433,33 +378,19 @@ enum PromptStage<P, W> {
 }
 
 /// Actor-native prompt state machine.
-///
-/// It waits for the actor to prepare its plan, then alternates provider rounds
-/// and tool invocations. Transcript commits happen directly through the actor
-/// borrow in `poll`, never through the mailbox, so a graceful shutdown lets the
-/// active prompt finish and commit completely. Cancellation is cooperative:
-/// each stage future selects on the prompt's [`CancellationToken`].
-struct PromptLoop<C, P, W>
+struct PromptLoop<W>
 where
-    C: ContextStore + 'static,
-    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
     W: Writer<StreamItem> + Send + 'static,
 {
-    stage: PromptStage<P, W>,
-    myself: ActorRef<Agent<C, P>>,
+    stage: PromptStage<W>,
+    myself: ActorRef<Agent>,
 }
 
-impl<C, P, W> PromptLoop<C, P, W>
+impl<W> PromptLoop<W>
 where
-    C: ContextStore + 'static,
-    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
     W: Writer<StreamItem> + Send + 'static,
 {
-    fn new(
-        start_rx: oneshot::Receiver<PreparedPrompt<P>>,
-        out: W,
-        myself: ActorRef<Agent<C, P>>,
-    ) -> Self {
+    fn new(start_rx: oneshot::Receiver<PreparedPrompt>, out: W, myself: ActorRef<Agent>) -> Self {
         Self {
             stage: PromptStage::WaitStart {
                 future: build_wait_start_future(start_rx, out),
@@ -470,21 +401,15 @@ where
 
     fn build_handoff_future(&self) -> HandoffFuture {
         let myself = self.myself.clone();
-        Box::pin(async move {
-            myself
-                .send(PrepareNextPrompt::<P>(PhantomData))
-                .await
-                .is_ok()
-        })
+        Box::pin(async move { myself.send(PrepareNextPrompt).await.is_ok() })
     }
 }
 
-fn build_wait_start_future<P, W>(
-    start_rx: oneshot::Receiver<PreparedPrompt<P>>,
+fn build_wait_start_future<W>(
+    start_rx: oneshot::Receiver<PreparedPrompt>,
     out: W,
-) -> WaitStartFuture<P, W>
+) -> WaitStartFuture<W>
 where
-    P: Send + 'static,
     W: Writer<StreamItem> + Send + 'static,
 {
     Box::pin(async move {
@@ -495,9 +420,8 @@ where
     })
 }
 
-fn build_round_future<P, W>(data: LoopData<P, W>) -> RoundFuture<P, W>
+fn build_round_future<W>(data: LoopData<W>) -> RoundFuture<W>
 where
-    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
     W: Writer<StreamItem> + Send + 'static,
 {
     let LoopData {
@@ -555,9 +479,8 @@ where
     })
 }
 
-fn build_tool_future<P, W>(data: LoopData<P, W>, call: PendingToolCall) -> ToolFuture<P, W>
+fn build_tool_future<W>(data: LoopData<W>, call: PendingToolCall) -> ToolFuture<W>
 where
-    P: Send + 'static,
     W: Writer<StreamItem> + Send + 'static,
 {
     let payload = serde_json::from_str(&call.arguments).unwrap_or(Value::Null);
@@ -577,11 +500,7 @@ where
 }
 
 #[actor(mailbox, interleaved = unbounded, children = unbounded)]
-impl<C, P> Actor for Agent<C, P>
-where
-    C: ContextStore + 'static,
-    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
-{
+impl Actor for Agent {
     type SpawnArgs = Self;
 
     async fn init(agent: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
@@ -589,41 +508,25 @@ where
     }
 }
 
-impl<C, P> SyncHandler<SwitchProvider<P>> for Agent<C, P>
-where
-    C: ContextStore + 'static,
-    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
-{
-    fn handle(&mut self, message: SwitchProvider<P>, _scope: &mut ActorScope<'_, Self>) {
+impl SyncHandler<SwitchProvider> for Agent {
+    fn handle(&mut self, message: SwitchProvider, _scope: &mut ActorScope<'_, Self>) {
         self.provider = message.0;
     }
 }
 
-impl<C, P> SyncHandler<PrepareNextPrompt<P>> for Agent<C, P>
-where
-    C: ContextStore + 'static,
-    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
-{
-    fn handle(&mut self, _message: PrepareNextPrompt<P>, _scope: &mut ActorScope<'_, Self>) {
+impl SyncHandler<PrepareNextPrompt> for Agent {
+    fn handle(&mut self, _message: PrepareNextPrompt, _scope: &mut ActorScope<'_, Self>) {
         self.start_next_prompt();
     }
 }
 
-impl<C, P> SyncHandler<CancelQueuedPrompts> for Agent<C, P>
-where
-    C: ContextStore + 'static,
-    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
-{
+impl SyncHandler<CancelQueuedPrompts> for Agent {
     fn handle(&mut self, _message: CancelQueuedPrompts, _scope: &mut ActorScope<'_, Self>) {
         self.prompt_queue.clear();
     }
 }
 
-impl<C, P> SyncHandler<CancelActivePrompt> for Agent<C, P>
-where
-    C: ContextStore + 'static,
-    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
-{
+impl SyncHandler<CancelActivePrompt> for Agent {
     fn handle(&mut self, _message: CancelActivePrompt, _scope: &mut ActorScope<'_, Self>) {
         if let Some(token) = &self.active {
             token.cancel();
@@ -631,11 +534,7 @@ where
     }
 }
 
-impl<C, P> SyncHandler<CancelAllPrompts> for Agent<C, P>
-where
-    C: ContextStore + 'static,
-    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
-{
+impl SyncHandler<CancelAllPrompts> for Agent {
     fn handle(&mut self, _message: CancelAllPrompts, _scope: &mut ActorScope<'_, Self>) {
         self.prompt_queue.clear();
         if let Some(token) = &self.active {
@@ -644,11 +543,7 @@ where
     }
 }
 
-impl<C, P> SyncHandler<BindChannel> for Agent<C, P>
-where
-    C: ContextStore + 'static,
-    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
-{
+impl SyncHandler<BindChannel> for Agent {
     fn handle(
         &mut self,
         message: BindChannel,
@@ -660,11 +555,7 @@ where
     }
 }
 
-impl<C, P> SyncHandler<UnbindChannel> for Agent<C, P>
-where
-    C: ContextStore + 'static,
-    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
-{
+impl SyncHandler<UnbindChannel> for Agent {
     fn handle(
         &mut self,
         message: UnbindChannel,
@@ -674,19 +565,12 @@ where
     }
 }
 
-impl<C, P, C2, P2> Handler<SpawnSubagent<C2, P2>> for Agent<C, P>
-where
-    C: ContextStore + 'static,
-    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
-    C2: ContextStore + 'static,
-    P2: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
-    Agent<C, P>: HasChildren + HasInterleaving + HasMailbox,
-{
+impl Handler<SpawnSubagent> for Agent {
     fn handle(
         &mut self,
-        message: SpawnSubagent<C2, P2>,
+        message: SpawnSubagent,
         _scope: &mut ActorScope<'_, Self>,
-    ) -> impl IntoReply<Self, SpawnSubagent<C2, P2>> + use<C, P, C2, P2> {
+    ) -> impl IntoReply<Self, SpawnSubagent> + use<> {
         let facade = self.registry.facade().clone();
         let SpawnSubagent { name, agent } = message;
         let action = SpawnSubagentAction {
@@ -699,17 +583,14 @@ where
         async move { facade.grant(action).await }
             .into_actor()
             .then(
-                move |granted, actor: &mut Agent<C, P>, scope: &mut ActorScope<'_, Agent<C, P>>| {
+                move |granted, actor: &mut Agent, scope: &mut ActorScope<'_, Agent>| {
                     let result = match granted {
                         Ok(granted) => {
                             let (_, action) = granted.into_parts();
                             debug_assert_eq!(action.name, name);
-                            let child =
-                                scope
-                                    .spawn_child::<Agent<C2, P2>>(agent)
-                                    .unwrap_or_else(|_| {
-                                        unreachable!("unbounded children accept every subagent")
-                                    });
+                            let child = scope.spawn_child::<Agent>(agent).unwrap_or_else(|_| {
+                                unreachable!("unbounded children accept every subagent")
+                            });
                             let actor_ref = child.actor_ref().clone();
                             match actor.registry.register(
                                 name.clone(),
@@ -731,19 +612,15 @@ where
     }
 }
 
-impl<C, P> StreamHandler<Prompt> for Agent<C, P>
-where
-    C: ContextStore + 'static,
-    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
-{
+impl StreamHandler<Prompt> for Agent {
     fn handle<W>(
         &mut self,
         message: Prompt,
         out: W,
         scope: &mut ActorScope<'_, Self>,
-    ) -> impl loac::IntoStreamReply<Self, Prompt> + use<C, P, W>
+    ) -> impl IntoStreamReply<Self, Prompt> + use<W>
     where
-        W: loac::Writer<StreamItem> + Send + 'static,
+        W: Writer<StreamItem> + Send + 'static,
     {
         let (start_tx, start_rx) = oneshot::channel();
         self.prompt_queue.push_back(QueuedPrompt {
@@ -760,18 +637,16 @@ where
     }
 }
 
-impl<C, P, W> ActorFuture<Agent<C, P>> for PromptLoop<C, P, W>
+impl<W> ActorFuture<Agent> for PromptLoop<W>
 where
-    C: ContextStore + 'static,
-    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
     W: Writer<StreamItem> + Send + 'static,
 {
     type Output = Result<(), PromptError>;
 
     fn poll(
         self: Pin<&mut Self>,
-        actor: &mut Agent<C, P>,
-        _scope: &mut ActorScope<'_, Agent<C, P>>,
+        actor: &mut Agent,
+        _scope: &mut ActorScope<'_, Agent>,
         cx: &mut Context<'_>,
     ) -> Poll<Self::Output> {
         let this = self.get_mut();

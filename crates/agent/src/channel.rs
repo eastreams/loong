@@ -1,16 +1,11 @@
 //! Type-erased named channels between agents.
-//!
-//! A channel is an application-level protocol, not a single `loac` message
-//! capability. It hides the concrete [`Agent<C, P>`](super::Agent) type
-//! behind one stable trait object and can grow methods (for example `cancel`
-//! or `status`) without changing how channels are registered.
 
 use std::{future::Future, pin::Pin, sync::Arc};
 
-use contracts::provider::{Request, StreamItem};
+use contracts::provider::StreamItem;
 use loac::ActorRef;
 
-use super::{Agent, ContextStore, Prompt, PromptError, Provider, ProviderOut};
+use super::{Agent, Prompt, PromptError};
 
 /// Why a channel call failed.
 #[derive(Debug, thiserror::Error)]
@@ -22,12 +17,7 @@ pub enum ChannelError {
 }
 
 /// A type-erased endpoint for one named agent channel.
-///
-/// Channels are looked up by name at registration time. This trait keeps the
-/// target agent's concrete type out of that lookup, while `ask` still streams
-/// the target's reply and collects it into one final answer.
 pub trait ChannelTarget: Send + Sync {
-    /// Asks the target agent one prompt and returns its streamed text.
     fn ask(
         &self,
         text: String,
@@ -43,11 +33,7 @@ impl ChannelTarget for Arc<dyn ChannelTarget> {
     }
 }
 
-impl<C, P> ChannelTarget for ActorRef<Agent<C, P>>
-where
-    C: ContextStore + 'static,
-    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
-{
+impl ChannelTarget for ActorRef<Agent> {
     fn ask(
         &self,
         text: String,

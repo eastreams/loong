@@ -154,10 +154,12 @@ async fn run_chat(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let config =
                 OpenAiConfig::new(cli.base_url.clone(), cli.api_key.clone(), model.clone());
             owner
-                .call(SwitchProvider(OpenAiProvider::new(config.clone())))
+                .call(SwitchProvider(Arc::new(OpenAiProvider::new(
+                    config.clone(),
+                ))))
                 .await?;
             file_io
-                .call(SwitchProvider(OpenAiProvider::new(config)))
+                .call(SwitchProvider(Arc::new(OpenAiProvider::new(config))))
                 .await?;
             println!("switched to {new_model}");
             continue;
@@ -258,11 +260,11 @@ async fn run_workflow(
                 Capability::SpawnSubagent,
             ],
         );
-        let provider = OpenAiProvider::new(OpenAiConfig::new(
+        let provider = Arc::new(OpenAiProvider::new(OpenAiConfig::new(
             cli.base_url.clone(),
             cli.api_key.clone(),
             model.clone(),
-        ));
+        )));
 
         let workflow = Workflow::new(facade, provider, &cli.workspace)
             .with_max_workers(max_workers)

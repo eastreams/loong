@@ -8,15 +8,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use agent::{
-    Agent, BindChannel, BuildError, FileTools, Prompt, PromptError, ProviderOut, SpawnSubagent,
+    Agent, AgentProvider, BindChannel, BuildError, FileTools, Prompt, PromptError, SpawnSubagent,
     SpawnSubagentError,
 };
 use context::memory::MemoryStore;
 use contracts::capability::Capabilities;
-use contracts::provider::{Request, StreamItem};
+use contracts::provider::StreamItem;
 use kernel::Facade;
 use loac::{ActorOwner, ActorRef, Shutdown};
-use provider::Provider;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -89,19 +88,23 @@ pub enum WorkflowError {
 }
 
 /// Workflow assembly options.
-pub struct Workflow<P> {
+pub struct Workflow {
     root_facade: Facade,
     empty_facade: Facade,
-    provider: P,
+    provider: AgentProvider,
     workspace_root: PathBuf,
     max_workers: usize,
     max_review_rounds: usize,
     max_llm_retries: usize,
 }
 
-impl<P> Workflow<P> {
+impl Workflow {
     #[must_use]
-    pub fn new(facade: Facade, provider: P, workspace_root: impl Into<PathBuf>) -> Self {
+    pub fn new(
+        facade: Facade,
+        provider: AgentProvider,
+        workspace_root: impl Into<PathBuf>,
+    ) -> Self {
         let empty_facade = facade.clone().narrow(Capabilities::empty());
         Self {
             root_facade: facade,
@@ -134,10 +137,7 @@ impl<P> Workflow<P> {
 
     /// Spawns the reviewer root and the planner child. Workers are spawned
     /// later by [`WorkflowHandle::run`] once the plan is known.
-    pub async fn spawn(self) -> Result<WorkflowHandle<P>, WorkflowError>
-    where
-        P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
-    {
+    pub async fn spawn(self) -> Result<WorkflowHandle, WorkflowError> {
         let reviewer_agent = Agent::builder(self.root_facade.clone())
             .with(FileTools)
             .with_workspace_root(&self.workspace_root)
@@ -173,23 +173,17 @@ impl<P> Workflow<P> {
 }
 
 /// A running workflow.
-pub struct WorkflowHandle<P>
-where
-    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
-{
-    reviewer_owner: ActorOwner<Agent<MemoryStore, P>>,
-    planner_ref: ActorRef<Agent<MemoryStore, P>>,
-    provider: P,
+pub struct WorkflowHandle {
+    reviewer_owner: ActorOwner<Agent>,
+    planner_ref: ActorRef<Agent>,
+    provider: AgentProvider,
     empty_facade: Facade,
     max_workers: usize,
     max_review_rounds: usize,
     max_llm_retries: usize,
 }
 
-impl<P> WorkflowHandle<P>
-where
-    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
-{
+impl WorkflowHandle {
     /// Runs the workflow once for one user request.
     ///
     /// This is intentionally single-shot: workers are spawned from the plan
@@ -326,14 +320,11 @@ where
     }
 }
 
-async fn ask_agent<P>(
-    target: &ActorRef<Agent<MemoryStore, P>>,
+async fn ask_agent(
+    target: &ActorRef<Agent>,
     text: String,
     retries: usize,
-) -> Result<String, WorkflowError>
-where
-    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
-{
+) -> Result<String, WorkflowError> {
     let mut prompt = text;
     for attempt in 0..=retries {
         let mut reply = target
@@ -363,15 +354,12 @@ where
     unreachable!("ask_agent retry loop always returns")
 }
 
-async fn ask_for_plan<P>(
-    target: &ActorRef<Agent<MemoryStore, P>>,
+async fn ask_for_plan(
+    target: &ActorRef<Agent>,
     mut prompt: String,
     max_workers: usize,
     retries: usize,
-) -> Result<Plan, WorkflowError>
-where
-    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
-{
+) -> Result<Plan, WorkflowError> {
     for _ in 0..=retries {
         let text = ask_agent(target, prompt.clone(), retries).await?;
         match parse_json::<Plan>(&text) {
@@ -393,14 +381,11 @@ where
     Err(WorkflowError::PlanRetryExhausted)
 }
 
-async fn ask_for_review<P>(
-    target: &ActorRef<Agent<MemoryStore, P>>,
+async fn ask_for_review(
+    target: &ActorRef<Agent>,
     mut prompt: String,
     retries: usize,
-) -> Result<PlanReview, WorkflowError>
-where
-    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
-{
+) -> Result<PlanReview, WorkflowError> {
     for _ in 0..=retries {
         let text = ask_agent(target, prompt.clone(), retries).await?;
         match parse_json::<PlanReview>(&text) {
@@ -466,6 +451,7 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
 
+    use agent::ProviderOut;
     use async_trait::async_trait;
     use contracts::capability::{Capabilities, Capability};
     use contracts::provider::{Request, StreamItem};
@@ -520,7 +506,10 @@ mod tests {
             ]))),
         };
 
-        let handle = Workflow::new(facade, provider, ".").spawn().await.unwrap();
+        let handle = Workflow::new(facade, Arc::new(provider), ".")
+            .spawn()
+            .await
+            .unwrap();
         let answer = handle.run("do it".to_string()).await.unwrap();
         assert_eq!(answer, "final answer");
 
