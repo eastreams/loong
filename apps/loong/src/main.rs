@@ -65,6 +65,11 @@ enum Command {
         /// Maximum plan/final review rounds.
         #[arg(long, default_value_t = 3)]
         max_review_rounds: usize,
+
+        /// Maximum retries when the planner/reviewer returns invalid JSON or
+        /// an invalid plan.
+        #[arg(long, default_value_t = 3)]
+        max_llm_retries: usize,
     },
 }
 
@@ -78,7 +83,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::Workflow {
             max_workers,
             max_review_rounds,
-        } => run_workflow(cli, max_workers, max_review_rounds).await,
+            max_llm_retries,
+        } => run_workflow(cli, max_workers, max_review_rounds, max_llm_retries).await,
     }
 }
 
@@ -205,6 +211,7 @@ async fn run_workflow(
     cli: Cli,
     max_workers: usize,
     max_review_rounds: usize,
+    max_llm_retries: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut model = cli.model.clone();
 
@@ -252,7 +259,8 @@ async fn run_workflow(
 
         let workflow = Workflow::new(facade, provider, &cli.workspace)
             .with_max_workers(max_workers)
-            .with_max_review_rounds(max_review_rounds);
+            .with_max_review_rounds(max_review_rounds)
+            .with_max_llm_retries(max_llm_retries);
 
         let handle = workflow.spawn().await?;
         let answer = handle.run(line).await?;

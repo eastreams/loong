@@ -72,10 +72,10 @@ pub enum WorkflowError {
     Call(#[from] loac::CallError),
     #[error("prompt failed: {0}")]
     Prompt(#[from] PromptError),
-    #[error("plan parse failed: {0}")]
-    PlanParse(#[source] serde_json::Error),
-    #[error("review parse failed: {0}")]
-    ReviewParse(#[source] serde_json::Error),
+    #[error("planner did not produce a valid plan after retries")]
+    PlanRetryExhausted,
+    #[error("reviewer did not produce valid review JSON after retries")]
+    ReviewRetryExhausted,
     #[error("invalid plan: {0}")]
     InvalidPlan(String),
     #[error("spawn worker failed: {0}")]
@@ -96,6 +96,7 @@ pub struct Workflow<P> {
     workspace_root: PathBuf,
     max_workers: usize,
     max_review_rounds: usize,
+    max_llm_retries: usize,
 }
 
 impl<P> Workflow<P> {
@@ -109,6 +110,7 @@ impl<P> Workflow<P> {
             workspace_root: workspace_root.into(),
             max_workers: 8,
             max_review_rounds: 3,
+            max_llm_retries: 3,
         }
     }
 
@@ -121,6 +123,12 @@ impl<P> Workflow<P> {
     #[must_use]
     pub fn with_max_review_rounds(mut self, max_review_rounds: usize) -> Self {
         self.max_review_rounds = max_review_rounds;
+        self
+    }
+
+    #[must_use]
+    pub fn with_max_llm_retries(mut self, max_llm_retries: usize) -> Self {
+        self.max_llm_retries = max_llm_retries;
         self
     }
 
@@ -159,6 +167,7 @@ impl<P> Workflow<P> {
             empty_facade: self.empty_facade,
             max_workers: self.max_workers,
             max_review_rounds: self.max_review_rounds,
+            max_llm_retries: self.max_llm_retries,
         })
     }
 }
@@ -174,6 +183,7 @@ where
     empty_facade: Facade,
     max_workers: usize,
     max_review_rounds: usize,
+    max_llm_retries: usize,
 }
 
 impl<P> WorkflowHandle<P>
@@ -213,10 +223,13 @@ where
              workers must be between 1 and {}.",
             self.max_workers
         );
-        let text = ask_agent(&self.planner_ref, prompt).await?;
-        let plan = parse_json::<Plan>(&text).map_err(WorkflowError::PlanParse)?;
-        validate_plan(&plan, self.max_workers)?;
-        Ok(plan)
+        ask_for_plan(
+            &self.planner_ref,
+            prompt,
+            self.max_workers,
+            self.max_llm_retries,
+        )
+        .await
     }
 
     async fn review_plan(&self, mut plan: Plan) -> Result<Plan, WorkflowError> {
@@ -227,9 +240,8 @@ where
                  {{\"approved\": true}} or {{\"approved\": false, \"feedback\": \"...\"}}.",
                 serde_json::to_string(&plan).expect("plan serializes as JSON")
             );
-            let review_text = ask_agent(&self.reviewer_owner, review_prompt).await?;
             let review =
-                parse_json::<PlanReview>(&review_text).map_err(WorkflowError::ReviewParse)?;
+                ask_for_review(&self.reviewer_owner, review_prompt, self.max_llm_retries).await?;
             if review.approved {
                 approved = true;
                 break;
@@ -243,9 +255,13 @@ where
                  Revise the plan and respond ONLY with JSON in the same schema.",
                 serde_json::to_string(&plan).expect("plan serializes as JSON")
             );
-            let revised_text = ask_agent(&self.planner_ref, revise_prompt).await?;
-            plan = parse_json::<Plan>(&revised_text).map_err(WorkflowError::PlanParse)?;
-            validate_plan(&plan, self.max_workers)?;
+            plan = ask_for_plan(
+                &self.planner_ref,
+                revise_prompt,
+                self.max_workers,
+                self.max_llm_retries,
+            )
+            .await?;
         }
 
         if approved {
@@ -289,9 +305,8 @@ where
                 "Review this final answer:\n{answer}\n\nRespond ONLY with JSON: \
                  {{\"approved\": true}} or {{\"approved\": false, \"feedback\": \"...\"}}."
             );
-            let review_text = ask_agent(&self.reviewer_owner, review_prompt).await?;
             let review =
-                parse_json::<PlanReview>(&review_text).map_err(WorkflowError::ReviewParse)?;
+                ask_for_review(&self.reviewer_owner, review_prompt, self.max_llm_retries).await?;
             if review.approved {
                 return Ok(answer);
             }
@@ -326,6 +341,59 @@ where
     }
     reply.finish().await??;
     Ok(answer)
+}
+
+async fn ask_for_plan<P>(
+    target: &ActorRef<Agent<MemoryStore, P>>,
+    mut prompt: String,
+    max_workers: usize,
+    retries: usize,
+) -> Result<Plan, WorkflowError>
+where
+    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
+{
+    for _ in 0..=retries {
+        let text = ask_agent(target, prompt.clone()).await?;
+        match parse_json::<Plan>(&text) {
+            Ok(plan) => match validate_plan(&plan, max_workers) {
+                Ok(()) => return Ok(plan),
+                Err(error) => {
+                    prompt = format!(
+                        "Your plan was invalid: {error}\nRespond ONLY with JSON in the same schema."
+                    );
+                }
+            },
+            Err(error) => {
+                prompt = format!(
+                    "Your plan JSON was invalid: {error}\nRespond ONLY with JSON in the same schema."
+                );
+            }
+        }
+    }
+    Err(WorkflowError::PlanRetryExhausted)
+}
+
+async fn ask_for_review<P>(
+    target: &ActorRef<Agent<MemoryStore, P>>,
+    mut prompt: String,
+    retries: usize,
+) -> Result<PlanReview, WorkflowError>
+where
+    P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
+{
+    for _ in 0..=retries {
+        let text = ask_agent(target, prompt.clone()).await?;
+        match parse_json::<PlanReview>(&text) {
+            Ok(review) => return Ok(review),
+            Err(error) => {
+                prompt = format!(
+                    "Your review JSON was invalid: {error}\nRespond ONLY with JSON: \
+                     {{\"approved\": true}} or {{\"approved\": false, \"feedback\": \"...\"}}."
+                );
+            }
+        }
+    }
+    Err(WorkflowError::ReviewRetryExhausted)
 }
 
 fn validate_plan(plan: &Plan, max_workers: usize) -> Result<(), WorkflowError> {
