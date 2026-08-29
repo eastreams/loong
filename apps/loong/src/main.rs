@@ -74,7 +74,14 @@ enum Command {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() {
+    if let Err(error) = run().await {
+        eprintln!("error: {error}");
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     let command = cli.command.clone().unwrap_or(Command::Chat);
 
@@ -262,10 +269,21 @@ async fn run_workflow(
             .with_max_review_rounds(max_review_rounds)
             .with_max_llm_retries(max_llm_retries);
 
-        let handle = workflow.spawn().await?;
-        let answer = handle.run(line).await?;
-        println!("{answer}");
+        let handle = match workflow.spawn().await {
+            Ok(handle) => handle,
+            Err(error) => {
+                eprintln!("workflow error: {error}");
+                continue;
+            }
+        };
+
+        let result = handle.run(line).await;
         let _ = handle.shutdown().await;
+
+        match result {
+            Ok(answer) => println!("{answer}"),
+            Err(error) => eprintln!("workflow error: {error}"),
+        }
     }
 
     let _ = kernel.shutdown(Shutdown::Drain).await;

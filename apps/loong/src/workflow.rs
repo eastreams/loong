@@ -205,7 +205,8 @@ where
         let execute_prompt = format!(
             "Execute the following tasks using the worker_i tools, then synthesize a final answer.\nTasks:\n{tasks_json}"
         );
-        let final_answer = ask_agent(&self.planner_ref, execute_prompt).await?;
+        let final_answer =
+            ask_agent(&self.planner_ref, execute_prompt, self.max_llm_retries).await?;
 
         self.review_final(final_answer).await
     }
@@ -318,7 +319,7 @@ where
                 "Your final answer was rejected with this feedback:\n{feedback}\n\nPrevious answer:\n{answer}\n\n\
                  Revise the final answer and respond with plain text."
             );
-            answer = ask_agent(&self.planner_ref, revise_prompt).await?;
+            answer = ask_agent(&self.planner_ref, revise_prompt, self.max_llm_retries).await?;
         }
 
         Err(WorkflowError::FinalReviewExhausted)
@@ -328,19 +329,38 @@ where
 async fn ask_agent<P>(
     target: &ActorRef<Agent<MemoryStore, P>>,
     text: String,
+    retries: usize,
 ) -> Result<String, WorkflowError>
 where
     P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
 {
-    let mut reply = target.call(Prompt { text }).await?;
-    let mut answer = String::new();
-    while let Some(item) = reply.recv().await {
-        if let StreamItem::Text { delta } = item {
-            answer.push_str(&delta);
+    let mut prompt = text;
+    for attempt in 0..=retries {
+        let mut reply = target
+            .call(Prompt {
+                text: prompt.clone(),
+            })
+            .await?;
+        let mut answer = String::new();
+        while let Some(item) = reply.recv().await {
+            if let StreamItem::Text { delta } = item {
+                answer.push_str(&delta);
+            }
+        }
+        match reply.finish().await? {
+            Ok(()) => return Ok(answer),
+            Err(PromptError::Provider(error)) => {
+                if attempt == retries {
+                    return Err(PromptError::Provider(error).into());
+                }
+                prompt = format!(
+                    "{prompt}\n\n(The previous attempt failed with an upstream provider error: {error}; please try again.)"
+                );
+            }
+            Err(error) => return Err(error.into()),
         }
     }
-    reply.finish().await??;
-    Ok(answer)
+    unreachable!("ask_agent retry loop always returns")
 }
 
 async fn ask_for_plan<P>(
@@ -353,7 +373,7 @@ where
     P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
 {
     for _ in 0..=retries {
-        let text = ask_agent(target, prompt.clone()).await?;
+        let text = ask_agent(target, prompt.clone(), retries).await?;
         match parse_json::<Plan>(&text) {
             Ok(plan) => match validate_plan(&plan, max_workers) {
                 Ok(()) => return Ok(plan),
@@ -382,7 +402,7 @@ where
     P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
 {
     for _ in 0..=retries {
-        let text = ask_agent(target, prompt.clone()).await?;
+        let text = ask_agent(target, prompt.clone(), retries).await?;
         match parse_json::<PlanReview>(&text) {
             Ok(review) => return Ok(review),
             Err(error) => {
