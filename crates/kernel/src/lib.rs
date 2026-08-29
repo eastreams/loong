@@ -111,6 +111,21 @@ impl Facade {
         self.capabilities
     }
 
+    /// Returns a facade whose capability ceiling is the intersection of the
+    /// current ceiling and `capabilities`.
+    ///
+    /// This can only reduce the ceiling, so a caller cannot use it to grant
+    /// itself new capabilities. Workflow assembly uses it to derive empty
+    /// sandbox facades for planner and worker agents from a capability-owning
+    /// root facade.
+    #[must_use]
+    pub fn narrow(self, capabilities: Capabilities) -> Self {
+        Self {
+            capabilities: self.capabilities.intersection(capabilities),
+            ..self
+        }
+    }
+
     pub async fn grant<A: ActionMeta>(&self, action: A) -> Result<Granted<A>, GrantSendError> {
         let context = PolicyContext::new(self.capabilities, Arc::clone(&self.resources));
         Ok(self.handle.call(PolicyEvent { action, context }).await??)

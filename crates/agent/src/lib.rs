@@ -31,11 +31,13 @@ mod channel;
 mod channel_tool;
 mod resource;
 mod tool_set;
+mod workflow;
 
 pub use builder::{AgentBuilder, BuildError};
 pub use channel::{ChannelError, ChannelTarget};
 pub use resource::{Resource, ResourceNeed, Resources, WorkspaceRoot};
 pub use tool_set::{FileTools, ToolSet};
+pub use workflow::{Plan, WorkerTask, Workflow, WorkflowError, WorkflowHandle};
 
 /// Writer that receives streamed provider items.
 pub type ProviderOut = mpsc::Sender<StreamItem>;
