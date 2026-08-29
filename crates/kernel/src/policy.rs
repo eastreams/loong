@@ -44,9 +44,13 @@ impl PolicyContext {
 }
 
 pub trait Policy<A: ActionMeta>: Send + Sync {
+    fn name(&self) -> &'static str;
+
     fn evaluate(&self, context: &PolicyContext, action: &A) -> PolicyResult;
 }
 
 pub trait PolicyAny: Send + Sync {
+    fn name(&self) -> &'static str;
+
     fn evaluate(&self, context: &PolicyContext, action: &dyn ActionMeta) -> PolicyResult;
 }
