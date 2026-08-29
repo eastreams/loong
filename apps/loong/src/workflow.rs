@@ -1,21 +1,17 @@
-//! Planner / reviewer / workers workflow.
-//!
-//! This is an application-layer orchestration built directly from the agent
-//! primitives: reviewer is the root and only capability holder, planner and
-//! workers are sandboxed children, and worker count is decided after planning.
+//! Planner / reviewer / workers workflow actor.
 
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use agent::{
     Agent, AgentProvider, BindChannel, BuildError, FileTools, Prompt, PromptError, SpawnSubagent,
     SpawnSubagentError,
 };
 use context::memory::MemoryStore;
-use contracts::capability::Capabilities;
+use contracts::capability::{Capabilities, Capability};
 use contracts::provider::StreamItem;
 use kernel::Facade;
-use loac::{ActorOwner, ActorRef, Shutdown};
+use loac::prelude::*;
+use loac::{ActorOwner, ActorRef};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -87,8 +83,15 @@ pub enum WorkflowError {
     FinalReviewExhausted,
 }
 
+/// Asks the workflow to run one goal.
+#[derive(loac::Message)]
+#[message(stream = StreamItem, reply = Result<(), WorkflowError>)]
+pub struct RunGoal {
+    pub goal: String,
+}
+
 /// Workflow assembly options.
-pub struct Workflow {
+pub struct WorkflowBuilder {
     root_facade: Facade,
     empty_facade: Facade,
     provider: AgentProvider,
@@ -98,7 +101,7 @@ pub struct Workflow {
     max_llm_retries: usize,
 }
 
-impl Workflow {
+impl WorkflowBuilder {
     #[must_use]
     pub fn new(
         facade: Facade,
@@ -135,46 +138,14 @@ impl Workflow {
         self
     }
 
-    /// Spawns the reviewer root and the planner child. Workers are spawned
-    /// later by [`WorkflowHandle::run`] once the plan is known.
-    pub async fn spawn(self) -> Result<WorkflowHandle, WorkflowError> {
-        let reviewer_agent = Agent::builder(self.root_facade.clone())
-            .with(FileTools)
-            .with_workspace_root(&self.workspace_root)
-            .with_system_prompt(REVIEWER_SYSTEM_PROMPT)
-            .with_store(MemoryStore::new())
-            .with_provider(self.provider.clone())
-            .build()?;
-        let reviewer_owner = reviewer_agent.spawn();
-
-        let planner_agent = Agent::builder(self.empty_facade.clone())
-            .with_channel("reviewer", Arc::new(reviewer_owner.actor_ref()))
-            .with_system_prompt(PLANNER_SYSTEM_PROMPT)
-            .with_store(MemoryStore::new())
-            .with_provider(self.provider.clone())
-            .build()?;
-        let planner_ref = reviewer_owner
-            .call(SpawnSubagent {
-                name: "planner".to_string(),
-                agent: planner_agent,
-            })
-            .await??;
-
-        Ok(WorkflowHandle {
-            reviewer_owner,
-            planner_ref,
-            provider: self.provider,
-            empty_facade: self.empty_facade,
-            max_workers: self.max_workers,
-            max_review_rounds: self.max_review_rounds,
-            max_llm_retries: self.max_llm_retries,
-        })
+    pub fn spawn(self) -> ActorOwner<Workflow> {
+        loac::spawn::<Workflow>(self)
     }
 }
 
-/// A running workflow.
-pub struct WorkflowHandle {
-    reviewer_owner: ActorOwner<Agent>,
+/// The workflow actor.
+pub struct Workflow {
+    reviewer_ref: ActorRef<Agent>,
     planner_ref: ActorRef<Agent>,
     provider: AgentProvider,
     empty_facade: Facade,
@@ -183,141 +154,262 @@ pub struct WorkflowHandle {
     max_llm_retries: usize,
 }
 
-impl WorkflowHandle {
-    /// Runs the workflow once for one user request.
-    ///
-    /// This is intentionally single-shot: workers are spawned from the plan
-    /// and bound into the planner during this call. Run a fresh workflow for a
-    /// new request.
-    pub async fn run(&self, request: String) -> Result<String, WorkflowError> {
-        let plan = self.plan(request).await?;
-        let plan = self.review_plan(plan).await?;
-        self.spawn_workers(&plan).await?;
+impl Workflow {
+    #[must_use]
+    pub fn builder(
+        facade: Facade,
+        provider: AgentProvider,
+        workspace_root: impl Into<PathBuf>,
+    ) -> WorkflowBuilder {
+        WorkflowBuilder::new(facade, provider, workspace_root)
+    }
+}
 
-        let tasks_json =
-            serde_json::to_string(&plan.tasks).expect("worker tasks serialize as JSON");
-        let execute_prompt = format!(
-            "Execute the following tasks using the worker_i tools, then synthesize a final answer.\nTasks:\n{tasks_json}"
+#[actor(mailbox, interleaved = unbounded, children = unbounded)]
+impl Actor for Workflow {
+    type SpawnArgs = WorkflowBuilder;
+
+    async fn init(builder: Self::SpawnArgs, scope: &mut ActorScope<'_, Self>) -> Self {
+        let reviewer_facade = builder.root_facade.clone().narrow(
+            Capabilities::empty()
+                .with(Capability::FsRead)
+                .with(Capability::FsWrite)
+                .with(Capability::SpawnSubagent),
         );
-        let final_answer =
-            ask_agent(&self.planner_ref, execute_prompt, self.max_llm_retries).await?;
+        let reviewer_agent = Agent::builder(reviewer_facade)
+            .with(FileTools)
+            .with_workspace_root(&builder.workspace_root)
+            .with_system_prompt(REVIEWER_SYSTEM_PROMPT)
+            .with_store(MemoryStore::new())
+            .with_provider(builder.provider.clone())
+            .build()
+            .expect("reviewer agent is valid");
+        let reviewer = scope
+            .spawn_child::<Agent>(reviewer_agent)
+            .unwrap_or_else(|_| unreachable!("unbounded children accept reviewer"));
+        let reviewer_ref = reviewer.actor_ref().clone();
 
-        self.review_final(final_answer).await
+        let planner_agent = Agent::builder(builder.empty_facade.clone())
+            .with_channel("reviewer", Arc::new(reviewer_ref.clone()))
+            .with_system_prompt(PLANNER_SYSTEM_PROMPT)
+            .with_store(MemoryStore::new())
+            .with_provider(builder.provider.clone())
+            .build()
+            .expect("planner agent is valid");
+        let planner = scope
+            .spawn_child::<Agent>(planner_agent)
+            .unwrap_or_else(|_| unreachable!("unbounded children accept planner"));
+        let planner_ref = planner.actor_ref().clone();
+
+        Self {
+            reviewer_ref,
+            planner_ref,
+            provider: builder.provider,
+            empty_facade: builder.empty_facade,
+            max_workers: builder.max_workers,
+            max_review_rounds: builder.max_review_rounds,
+            max_llm_retries: builder.max_llm_retries,
+        }
     }
+}
 
-    /// Shuts down the reviewer root; the runtime takes planner and workers
-    /// with it.
-    pub async fn shutdown(self) -> loac::ExitStatus {
-        self.reviewer_owner.shutdown(Shutdown::Drain).await
-    }
+impl StreamHandler<RunGoal> for Workflow {
+    fn handle<W>(
+        &mut self,
+        message: RunGoal,
+        out: W,
+        _scope: &mut ActorScope<'_, Self>,
+    ) -> impl IntoStreamReply<Self, RunGoal> + use<W>
+    where
+        W: Writer<StreamItem> + Send + 'static,
+    {
+        let planner_ref = self.planner_ref.clone();
+        let reviewer_ref = self.reviewer_ref.clone();
+        let provider = self.provider.clone();
+        let empty_facade = self.empty_facade.clone();
+        let max_workers = self.max_workers;
+        let max_review_rounds = self.max_review_rounds;
+        let max_llm_retries = self.max_llm_retries;
 
-    async fn plan(&self, request: String) -> Result<Plan, WorkflowError> {
-        let prompt = format!(
-            "Task:\n{request}\n\nProduce an execution plan. Respond ONLY with JSON, no markdown:\n\
-             {{\"workers\": <n>, \"tasks\": [{{\"worker\": <i>, \"prompt\": \"...\"}}]}}\n\
-             workers must be between 1 and {}.",
-            self.max_workers
-        );
-        ask_for_plan(
-            &self.planner_ref,
-            prompt,
-            self.max_workers,
-            self.max_llm_retries,
-        )
-        .await
-    }
-
-    async fn review_plan(&self, mut plan: Plan) -> Result<Plan, WorkflowError> {
-        let mut approved = false;
-        for _ in 0..self.max_review_rounds {
-            let review_prompt = format!(
-                "Review this plan JSON:\n{}\n\nRespond ONLY with JSON: \
-                 {{\"approved\": true}} or {{\"approved\": false, \"feedback\": \"...\"}}.",
-                serde_json::to_string(&plan).expect("plan serializes as JSON")
-            );
-            let review =
-                ask_for_review(&self.reviewer_owner, review_prompt, self.max_llm_retries).await?;
-            if review.approved {
-                approved = true;
-                break;
-            }
-
-            let feedback = review
-                .feedback
-                .unwrap_or_else(|| "No feedback provided.".to_string());
-            let revise_prompt = format!(
-                "Your plan was rejected with this feedback:\n{feedback}\n\nOriginal plan:\n{}\n\n\
-                 Revise the plan and respond ONLY with JSON in the same schema.",
-                serde_json::to_string(&plan).expect("plan serializes as JSON")
-            );
-            plan = ask_for_plan(
-                &self.planner_ref,
-                revise_prompt,
-                self.max_workers,
-                self.max_llm_retries,
+        async move {
+            let result = run_workflow(
+                &planner_ref,
+                &reviewer_ref,
+                &provider,
+                &empty_facade,
+                max_workers,
+                max_review_rounds,
+                max_llm_retries,
+                message.goal,
             )
-            .await?;
-        }
+            .await;
 
-        if approved {
-            Ok(plan)
-        } else {
-            Err(WorkflowError::PlanReviewExhausted)
-        }
-    }
-
-    async fn spawn_workers(&self, plan: &Plan) -> Result<(), WorkflowError> {
-        for index in 0..plan.workers {
-            let name = format!("worker_{index}");
-            let worker_agent = Agent::builder(self.empty_facade.clone())
-                .with_channel("reviewer", Arc::new(self.reviewer_owner.actor_ref()))
-                .with_system_prompt(worker_system_prompt(index))
-                .with_store(MemoryStore::new())
-                .with_provider(self.provider.clone())
-                .build()?;
-
-            let worker_ref = self
-                .reviewer_owner
-                .call(SpawnSubagent {
-                    name: name.clone(),
-                    agent: worker_agent,
-                })
-                .await??;
-
-            self.planner_ref
-                .call(BindChannel {
-                    name,
-                    target: Arc::new(worker_ref),
-                })
-                .await??;
-        }
-        Ok(())
-    }
-
-    async fn review_final(&self, mut answer: String) -> Result<String, WorkflowError> {
-        for _ in 0..self.max_review_rounds {
-            let review_prompt = format!(
-                "Review this final answer:\n{answer}\n\nRespond ONLY with JSON: \
-                 {{\"approved\": true}} or {{\"approved\": false, \"feedback\": \"...\"}}."
-            );
-            let review =
-                ask_for_review(&self.reviewer_owner, review_prompt, self.max_llm_retries).await?;
-            if review.approved {
-                return Ok(answer);
+            match result {
+                Ok(answer) => {
+                    let mut out = out;
+                    let _ = out.write(StreamItem::Text { delta: answer }).await;
+                    Ok(())
+                }
+                Err(error) => Err(error),
             }
+        }
+    }
+}
 
-            let feedback = review
-                .feedback
-                .unwrap_or_else(|| "No feedback provided.".to_string());
-            let revise_prompt = format!(
-                "Your final answer was rejected with this feedback:\n{feedback}\n\nPrevious answer:\n{answer}\n\n\
-                 Revise the final answer and respond with plain text."
-            );
-            answer = ask_agent(&self.planner_ref, revise_prompt, self.max_llm_retries).await?;
+#[allow(clippy::too_many_arguments)]
+async fn run_workflow(
+    planner_ref: &ActorRef<Agent>,
+    reviewer_ref: &ActorRef<Agent>,
+    provider: &AgentProvider,
+    empty_facade: &Facade,
+    max_workers: usize,
+    max_review_rounds: usize,
+    max_llm_retries: usize,
+    request: String,
+) -> Result<String, WorkflowError> {
+    let plan = plan(planner_ref, request, max_workers, max_llm_retries).await?;
+    let plan = review_plan(
+        planner_ref,
+        reviewer_ref,
+        plan,
+        max_workers,
+        max_review_rounds,
+        max_llm_retries,
+    )
+    .await?;
+    spawn_workers(reviewer_ref, planner_ref, provider, empty_facade, &plan).await?;
+
+    let tasks_json = serde_json::to_string(&plan.tasks).expect("worker tasks serialize as JSON");
+    let execute_prompt = format!(
+        "Execute the following tasks using the worker_i tools, then synthesize a final answer.\nTasks:\n{tasks_json}"
+    );
+    let final_answer = ask_agent(planner_ref, execute_prompt, max_llm_retries).await?;
+
+    review_final(
+        planner_ref,
+        reviewer_ref,
+        final_answer,
+        max_review_rounds,
+        max_llm_retries,
+    )
+    .await
+}
+
+async fn plan(
+    planner_ref: &ActorRef<Agent>,
+    request: String,
+    max_workers: usize,
+    retries: usize,
+) -> Result<Plan, WorkflowError> {
+    let prompt = format!(
+        "Task:\n{request}\n\nProduce an execution plan. Respond ONLY with JSON, no markdown:\n\
+         {{\"workers\": <n>, \"tasks\": [{{\"worker\": <i>, \"prompt\": \"...\"}}]}}\n\
+         workers must be between 1 and {}.",
+        max_workers
+    );
+    ask_for_plan(planner_ref, prompt, max_workers, retries).await
+}
+
+async fn review_plan(
+    planner_ref: &ActorRef<Agent>,
+    reviewer_ref: &ActorRef<Agent>,
+    mut plan: Plan,
+    max_workers: usize,
+    max_review_rounds: usize,
+    retries: usize,
+) -> Result<Plan, WorkflowError> {
+    let mut approved = false;
+    for _ in 0..max_review_rounds {
+        let review_prompt = format!(
+            "Review this plan JSON:\n{}\n\nRespond ONLY with JSON: \
+             {{\"approved\": true}} or {{\"approved\": false, \"feedback\": \"...\"}}.",
+            serde_json::to_string(&plan).expect("plan serializes as JSON")
+        );
+        let review = ask_for_review(reviewer_ref, review_prompt, retries).await?;
+        if review.approved {
+            approved = true;
+            break;
         }
 
-        Err(WorkflowError::FinalReviewExhausted)
+        let feedback = review
+            .feedback
+            .unwrap_or_else(|| "No feedback provided.".to_string());
+        let revise_prompt = format!(
+            "Your plan was rejected with this feedback:\n{feedback}\n\nOriginal plan:\n{}\n\n\
+             Revise the plan and respond ONLY with JSON in the same schema.",
+            serde_json::to_string(&plan).expect("plan serializes as JSON")
+        );
+        plan = ask_for_plan(planner_ref, revise_prompt, max_workers, retries).await?;
     }
+
+    if approved {
+        Ok(plan)
+    } else {
+        Err(WorkflowError::PlanReviewExhausted)
+    }
+}
+
+async fn spawn_workers(
+    reviewer_ref: &ActorRef<Agent>,
+    planner_ref: &ActorRef<Agent>,
+    provider: &AgentProvider,
+    empty_facade: &Facade,
+    plan: &Plan,
+) -> Result<(), WorkflowError> {
+    for index in 0..plan.workers {
+        let name = format!("worker_{index}");
+        let worker_agent = Agent::builder(empty_facade.clone())
+            .with_channel("reviewer", Arc::new(reviewer_ref.clone()))
+            .with_system_prompt(worker_system_prompt(index))
+            .with_store(MemoryStore::new())
+            .with_provider(provider.clone())
+            .build()?;
+
+        let worker_ref = reviewer_ref
+            .call(SpawnSubagent {
+                name: name.clone(),
+                agent: worker_agent,
+            })
+            .await??;
+
+        planner_ref
+            .call(BindChannel {
+                name,
+                target: Arc::new(worker_ref),
+            })
+            .await??;
+    }
+    Ok(())
+}
+
+async fn review_final(
+    planner_ref: &ActorRef<Agent>,
+    reviewer_ref: &ActorRef<Agent>,
+    mut answer: String,
+    max_review_rounds: usize,
+    retries: usize,
+) -> Result<String, WorkflowError> {
+    for _ in 0..max_review_rounds {
+        let review_prompt = format!(
+            "Review this final answer:\n{answer}\n\nRespond ONLY with JSON: \
+             {{\"approved\": true}} or {{\"approved\": false, \"feedback\": \"...\"}}."
+        );
+        let review = ask_for_review(reviewer_ref, review_prompt, retries).await?;
+        if review.approved {
+            return Ok(answer);
+        }
+
+        let feedback = review
+            .feedback
+            .unwrap_or_else(|| "No feedback provided.".to_string());
+        let revise_prompt = format!(
+            "Your final answer was rejected with this feedback:\n{feedback}\n\nPrevious answer:\n{answer}\n\n\
+             Revise the final answer and respond with plain text."
+        );
+        answer = ask_agent(planner_ref, revise_prompt, retries).await?;
+    }
+
+    Err(WorkflowError::FinalReviewExhausted)
 }
 
 async fn ask_agent(
@@ -506,14 +598,23 @@ mod tests {
             ]))),
         };
 
-        let handle = Workflow::new(facade, Arc::new(provider), ".")
-            .spawn()
+        let owner = Workflow::builder(facade, Arc::new(provider), ".").spawn();
+        let mut reply = owner
+            .call(RunGoal {
+                goal: "do it".to_string(),
+            })
             .await
             .unwrap();
-        let answer = handle.run("do it".to_string()).await.unwrap();
+        let mut answer = String::new();
+        while let Some(item) = reply.recv().await {
+            if let StreamItem::Text { delta } = item {
+                answer.push_str(&delta);
+            }
+        }
+        reply.finish().await.unwrap().unwrap();
         assert_eq!(answer, "final answer");
 
-        let status = handle.shutdown().await;
+        let status = owner.shutdown(Shutdown::Drain).await;
         assert_eq!(status.reason(), loac::ExitReason::Drained);
         let _ = kernel_owner.shutdown(Shutdown::Drain).await;
     }
