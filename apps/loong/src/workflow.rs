@@ -1,19 +1,16 @@
 //! Planner / reviewer / workers workflow.
 //!
-//! The reviewer is the root agent and the only capability holder. It owns the
-//! planner and every worker as child actors. The planner and workers are
-//! sandboxed (empty capability ceiling); any file side effect must go through
-//! the reviewer's channel.
-//!
-//! Worker count is not fixed at assembly time. A `WorkflowHandle::run` first
-//! asks the planner for a plan, has the reviewer approve or revise it, and
-//! only then spawns the number of workers the approved plan requires. Each
-//! worker is bound into the planner as a `worker_i` channel tool before the
-//! execution prompt starts.
+//! This is an application-layer orchestration built directly from the agent
+//! primitives: reviewer is the root and only capability holder, planner and
+//! workers are sandboxed children, and worker count is decided after planning.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use agent::{
+    Agent, BindChannel, BuildError, FileTools, Prompt, PromptError, ProviderOut, SpawnSubagent,
+    SpawnSubagentError,
+};
 use context::memory::MemoryStore;
 use contracts::capability::Capabilities;
 use contracts::provider::{Request, StreamItem};
@@ -22,11 +19,6 @@ use loac::{ActorOwner, ActorRef, Shutdown};
 use provider::Provider;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-
-use crate::{
-    Agent, BindChannel, BuildError, FileTools, Prompt, PromptError, ProviderOut, SpawnSubagent,
-    SpawnSubagentError,
-};
 
 const REVIEWER_SYSTEM_PROMPT: &str = "\
 You are the reviewer and the only agent that owns file capabilities and file tools. \
@@ -98,7 +90,8 @@ pub enum WorkflowError {
 
 /// Workflow assembly options.
 pub struct Workflow<P> {
-    facade: Facade,
+    root_facade: Facade,
+    empty_facade: Facade,
     provider: P,
     workspace_root: PathBuf,
     max_workers: usize,
@@ -108,8 +101,10 @@ pub struct Workflow<P> {
 impl<P> Workflow<P> {
     #[must_use]
     pub fn new(facade: Facade, provider: P, workspace_root: impl Into<PathBuf>) -> Self {
+        let empty_facade = facade.clone().narrow(Capabilities::empty());
         Self {
-            facade,
+            root_facade: facade,
+            empty_facade,
             provider,
             workspace_root: workspace_root.into(),
             max_workers: 8,
@@ -130,31 +125,27 @@ impl<P> Workflow<P> {
     }
 
     /// Spawns the reviewer root and the planner child. Workers are spawned
-    /// later by [`WorkflowHandle::run`], after the plan is known.
+    /// later by [`WorkflowHandle::run`] once the plan is known.
     pub async fn spawn(self) -> Result<WorkflowHandle<P>, WorkflowError>
     where
         P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
     {
-        let reviewer_agent = Agent::builder(self.facade.clone())
+        let reviewer_agent = Agent::builder(self.root_facade.clone())
             .with(FileTools)
             .with_workspace_root(&self.workspace_root)
             .with_system_prompt(REVIEWER_SYSTEM_PROMPT)
             .with_store(MemoryStore::new())
             .with_provider(self.provider.clone())
             .build()?;
-
         let reviewer_owner = reviewer_agent.spawn();
-        let reviewer_ref = reviewer_owner.actor_ref();
 
-        let empty_facade = self.facade.clone().narrow(Capabilities::empty());
-        let planner_agent = Agent::builder(empty_facade.clone())
-            .with_channel("reviewer", Arc::new(reviewer_ref.clone()))
+        let planner_agent = Agent::builder(self.empty_facade.clone())
+            .with_channel("reviewer", Arc::new(reviewer_owner.actor_ref()))
             .with_system_prompt(PLANNER_SYSTEM_PROMPT)
             .with_store(MemoryStore::new())
             .with_provider(self.provider.clone())
             .build()?;
-
-        let planner_ref = reviewer_ref
+        let planner_ref = reviewer_owner
             .call(SpawnSubagent {
                 name: "planner".to_string(),
                 agent: planner_agent,
@@ -163,10 +154,9 @@ impl<P> Workflow<P> {
 
         Ok(WorkflowHandle {
             reviewer_owner,
-            reviewer_ref,
             planner_ref,
             provider: self.provider,
-            empty_facade,
+            empty_facade: self.empty_facade,
             max_workers: self.max_workers,
             max_review_rounds: self.max_review_rounds,
         })
@@ -179,7 +169,6 @@ where
     P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
 {
     reviewer_owner: ActorOwner<Agent<MemoryStore, P>>,
-    reviewer_ref: ActorRef<Agent<MemoryStore, P>>,
     planner_ref: ActorRef<Agent<MemoryStore, P>>,
     provider: P,
     empty_facade: Facade,
@@ -191,16 +180,6 @@ impl<P> WorkflowHandle<P>
 where
     P: Provider<Request, StreamItem, ProviderOut> + Clone + 'static,
 {
-    #[must_use]
-    pub fn reviewer_ref(&self) -> &ActorRef<Agent<MemoryStore, P>> {
-        &self.reviewer_ref
-    }
-
-    #[must_use]
-    pub fn planner_ref(&self) -> &ActorRef<Agent<MemoryStore, P>> {
-        &self.planner_ref
-    }
-
     /// Runs the workflow once for one user request.
     ///
     /// This is intentionally single-shot: workers are spawned from the plan
@@ -248,7 +227,7 @@ where
                  {{\"approved\": true}} or {{\"approved\": false, \"feedback\": \"...\"}}.",
                 serde_json::to_string(&plan).expect("plan serializes as JSON")
             );
-            let review_text = ask_agent(&self.reviewer_ref, review_prompt).await?;
+            let review_text = ask_agent(&self.reviewer_owner, review_prompt).await?;
             let review =
                 parse_json::<PlanReview>(&review_text).map_err(WorkflowError::ReviewParse)?;
             if review.approved {
@@ -280,14 +259,14 @@ where
         for index in 0..plan.workers {
             let name = format!("worker_{index}");
             let worker_agent = Agent::builder(self.empty_facade.clone())
-                .with_channel("reviewer", Arc::new(self.reviewer_ref.clone()))
+                .with_channel("reviewer", Arc::new(self.reviewer_owner.actor_ref()))
                 .with_system_prompt(worker_system_prompt(index))
                 .with_store(MemoryStore::new())
                 .with_provider(self.provider.clone())
                 .build()?;
 
             let worker_ref = self
-                .reviewer_ref
+                .reviewer_owner
                 .call(SpawnSubagent {
                     name: name.clone(),
                     agent: worker_agent,
@@ -310,7 +289,7 @@ where
                 "Review this final answer:\n{answer}\n\nRespond ONLY with JSON: \
                  {{\"approved\": true}} or {{\"approved\": false, \"feedback\": \"...\"}}."
             );
-            let review_text = ask_agent(&self.reviewer_ref, review_prompt).await?;
+            let review_text = ask_agent(&self.reviewer_owner, review_prompt).await?;
             let review =
                 parse_json::<PlanReview>(&review_text).map_err(WorkflowError::ReviewParse)?;
             if review.approved {

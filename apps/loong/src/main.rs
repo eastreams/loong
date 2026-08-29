@@ -1,20 +1,15 @@
-//! Minimal `loong` chat loop.
+//! Minimal `loong` CLI.
 //!
-//! This is a wiring-only CLI. It spawns two agents:
-//! - a supervisor agent that answers the user directly and owns no file
-//!   tools;
-//! - a file I/O agent behind a named channel tool, so every file operation is
-//!   delegated by the supervisor.
-//!
-//! Both agents use an in-memory context store and one OpenAI-compatible
-//! provider. Stdin lines are fed to the supervisor as prompts and streamed
-//! replies are printed.
+//! Two modes:
+//! - `chat`: one supervisor agent that delegates file work to one file_io
+//!   agent;
+//! - `workflow`: planner / reviewer / workers workflow.
 
-use std::env;
 use std::io::Write;
 use std::sync::Arc;
 
 use agent::{Agent, CancelActivePrompt, FileTools, Prompt, SwitchProvider};
+use clap::{Parser, Subcommand};
 use context::memory::MemoryStore;
 use contracts::capability::Capability;
 use contracts::provider::StreamItem;
@@ -26,24 +21,80 @@ use loac::Shutdown;
 use provider_openai::{OpenAiConfig, OpenAiProvider};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
+mod workflow;
+
+use workflow::Workflow;
+
+#[derive(Parser)]
+#[command(name = "loong")]
+struct Cli {
+    /// OpenAI-compatible base URL.
+    #[arg(
+        long,
+        env = "LOONG_OPENAI_BASE_URL",
+        default_value = "https://api.openai.com/v1"
+    )]
+    base_url: String,
+
+    /// OpenAI-compatible API key.
+    #[arg(long, env = "LOONG_OPENAI_API_KEY", default_value = "")]
+    api_key: String,
+
+    /// Model name.
+    #[arg(long, env = "LOONG_OPENAI_MODEL", default_value = "gpt-4o-mini")]
+    model: String,
+
+    /// Workspace root for file tools.
+    #[arg(long, env = "LOONG_WORKSPACE", default_value = ".")]
+    workspace: String,
+
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Clone, Subcommand)]
+enum Command {
+    /// One supervisor agent that delegates file work to one file_io agent.
+    Chat,
+    /// Planner / reviewer / workers workflow.
+    Workflow {
+        /// Maximum number of workers a plan may request.
+        #[arg(long, default_value_t = 8)]
+        max_workers: usize,
+
+        /// Maximum plan/final review rounds.
+        #[arg(long, default_value_t = 3)]
+        max_review_rounds: usize,
+    },
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let base_url = env_or("LOONG_OPENAI_BASE_URL", "https://api.openai.com/v1");
-    let api_key = env_or("LOONG_OPENAI_API_KEY", "");
-    let model = env_or("LOONG_OPENAI_MODEL", "gpt-4o-mini");
+    let cli = Cli::parse();
+    let command = cli.command.clone().unwrap_or(Command::Chat);
 
-    let config = OpenAiConfig::new(base_url.clone(), api_key.clone(), model.clone());
+    match command {
+        Command::Chat => run_chat(cli).await,
+        Command::Workflow {
+            max_workers,
+            max_review_rounds,
+        } => run_workflow(cli, max_workers, max_review_rounds).await,
+    }
+}
+
+async fn run_chat(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+    let mut model = cli.model.clone();
+    let config = OpenAiConfig::new(cli.base_url.clone(), cli.api_key.clone(), model.clone());
 
     let kernel = loac::spawn::<Kernel>(PolicyEngine::allow_capabilities());
     let facade = Facade::new(
         kernel.actor_ref(),
         [Capability::FsRead, Capability::FsWrite],
     );
-    let workspace_root = env_or("LOONG_WORKSPACE", ".");
 
     let file_io = Agent::builder(facade.clone())
         .with(FileTools)
-        .with_workspace_root(&workspace_root)
+        .with_workspace_root(&cli.workspace)
         .with_system_prompt(
             "You are a file I/O agent. Use read_file and write_file for workspace files.",
         )
@@ -86,8 +137,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 eprintln!("usage: /model <model>");
                 continue;
             }
+            model = new_model.to_string();
             let config =
-                OpenAiConfig::new(base_url.clone(), api_key.clone(), new_model.to_string());
+                OpenAiConfig::new(cli.base_url.clone(), cli.api_key.clone(), model.clone());
             owner
                 .call(SwitchProvider(OpenAiProvider::new(config.clone())))
                 .await?;
@@ -149,11 +201,67 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn env_or(key: &str, default: &str) -> String {
-    env::var(key)
-        .ok()
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| default.to_string())
+async fn run_workflow(
+    cli: Cli,
+    max_workers: usize,
+    max_review_rounds: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut model = cli.model.clone();
+
+    let kernel = loac::spawn::<Kernel>(PolicyEngine::allow_capabilities());
+
+    let stdin = BufReader::new(tokio::io::stdin());
+    let mut lines = stdin.lines();
+
+    loop {
+        show_prompt();
+        let Some(line) = lines.next_line().await? else {
+            break;
+        };
+        let line = line.trim().to_string();
+        if line.is_empty() {
+            continue;
+        }
+        if line == "/quit" || line == "/exit" {
+            break;
+        }
+        if let Some(new_model) = line.strip_prefix("/model") {
+            let new_model = new_model.trim();
+            if new_model.is_empty() {
+                eprintln!("usage: /model <model>");
+                continue;
+            }
+            model = new_model.to_string();
+            println!("switched to {new_model}");
+            continue;
+        }
+
+        let facade = Facade::new(
+            kernel.actor_ref(),
+            [
+                Capability::FsRead,
+                Capability::FsWrite,
+                Capability::SpawnSubagent,
+            ],
+        );
+        let provider = OpenAiProvider::new(OpenAiConfig::new(
+            cli.base_url.clone(),
+            cli.api_key.clone(),
+            model.clone(),
+        ));
+
+        let workflow = Workflow::new(facade, provider, &cli.workspace)
+            .with_max_workers(max_workers)
+            .with_max_review_rounds(max_review_rounds);
+
+        let handle = workflow.spawn().await?;
+        let answer = handle.run(line).await?;
+        println!("{answer}");
+        let _ = handle.shutdown().await;
+    }
+
+    let _ = kernel.shutdown(Shutdown::Drain).await;
+    Ok(())
 }
 
 fn show_prompt() {

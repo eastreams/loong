@@ -18,6 +18,11 @@ loac.workspace = true
 provider.workspace = true
 provider-openai.workspace = true
 tokio = { workspace = true, features = ["io-std", "macros", "rt-multi-thread", "sync"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+clap = { version = "4.5", features = ["derive", "env"] }
+async-trait.workspace = true
 crossterm = { version = "0.29", features = ["event-stream"] }
 futures = "0.3"
 
