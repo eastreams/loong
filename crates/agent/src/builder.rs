@@ -183,6 +183,7 @@ impl AgentBuilder<true, true> {
             system_prompt,
             prompt_queue: VecDeque::new(),
             active: None,
+            draining: false,
         })
     }
 }
