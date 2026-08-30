@@ -180,19 +180,14 @@ async fn run_chat(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
                 loop {
                     tokio::select! {
-                        maybe_item = reply.recv() => {
-                            let Some(item) = maybe_item else {
-                                break;
-                            };
+                        Some(item) = reply.recv() => {
                             print_stream_item(item);
                         }
-                        maybe_event = keys.next() => {
-                            if let Some(Ok(Event::Key(KeyEvent { code: KeyCode::Esc, .. }))) = maybe_event {
-                                // Idempotent: cancelling an already-cancelled or
-                                // finished prompt is a no-op in the agent.
-                                owner.call(CancelActivePrompt).await?;
-                                println!("\n[interrupted]");
-                            }
+                        Some(Ok(Event::Key(KeyEvent { code: KeyCode::Esc, .. }))) = keys.next() => {
+                            // Idempotent: cancelling an already-cancelled or
+                            // finished prompt is a no-op in the agent.
+                            owner.call(CancelActivePrompt).await?;
+                            println!("\n[interrupted]");
                         }
                     }
                 }
