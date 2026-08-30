@@ -180,7 +180,10 @@ async fn run_chat(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
                 loop {
                     tokio::select! {
-                        Some(item) = reply.recv() => {
+                        maybe_item = reply.recv() => {
+                            let Some(item) = maybe_item else {
+                                break;
+                            };
                             print_stream_item(item);
                         }
                         Some(Ok(Event::Key(KeyEvent { code: KeyCode::Esc, .. }))) = keys.next() => {
