@@ -19,8 +19,10 @@ use anymap2::SendSyncAnyMap;
 use contracts::policy::{PolicyDecision, PolicyDecisionFinal, PolicyDecisionMiddle, PolicyResult};
 use uuid::Uuid;
 
+use contracts::capability::Capabilities;
+
 use super::{
-    Policy, PolicyAny, PolicyContext,
+    Policy, PolicyAny,
     action::{ActionMeta, Denied, Granted},
 };
 
@@ -116,7 +118,6 @@ impl PolicyEngine {
     #[must_use]
     pub fn allow_capabilities() -> Self {
         let mut engine = Self::new();
-        engine.append_inbound(CapabilityEnvelopePolicy);
         engine.append_outbound(AllowAllPolicy);
         engine
     }
@@ -185,11 +186,39 @@ impl PolicyEngine {
     }
 
     /// Evaluates `action` and returns the full audit report.
-    pub fn decide<A: ActionMeta>(&self, context: &PolicyContext, action: &A) -> PolicyReport {
+    pub fn decide<A: ActionMeta>(&self, capabilities: &Capabilities, action: &A) -> PolicyReport {
         let mut evaluations = Vec::new();
 
+        let envelope_result = if capabilities.covers(action.required_capabilities()) {
+            PolicyResult {
+                decision: PolicyDecision::Middle(PolicyDecisionMiddle::Abstain),
+                reason: None,
+            }
+        } else {
+            return PolicyReport {
+                evaluations: vec![PolicyEvaluation {
+                    stage: "envelope",
+                    policy_id: 0,
+                    policy_name: "policy.capability_envelope",
+                    result: PolicyResult {
+                        decision: PolicyDecision::Final(PolicyDecisionFinal::Deny),
+                        reason: Some("action exceeds declared capability envelope".into()),
+                    },
+                }],
+                outcome: PolicyReportOutcome::Deny {
+                    reason: Some("action exceeds declared capability envelope".into()),
+                },
+            };
+        };
+        evaluations.push(PolicyEvaluation {
+            stage: "envelope",
+            policy_id: 0,
+            policy_name: "policy.capability_envelope",
+            result: envelope_result,
+        });
+
         for policy in &self.inbound {
-            let result = policy.inner.evaluate(context, action);
+            let result = policy.inner.evaluate(action);
             evaluations.push(PolicyEvaluation {
                 stage: "inbound",
                 policy_id: policy.id,
@@ -230,7 +259,7 @@ impl PolicyEngine {
             .get::<VecDeque<RegisteredActionPolicy<A>>>()
         {
             for policy in policies {
-                let result = policy.inner.evaluate(context, action);
+                let result = policy.inner.evaluate(action);
                 evaluations.push(PolicyEvaluation {
                     stage: "action",
                     policy_id: policy.id,
@@ -268,7 +297,7 @@ impl PolicyEngine {
         }
 
         for policy in &self.outbound {
-            let result = policy.inner.evaluate(context, action);
+            let result = policy.inner.evaluate(action);
             evaluations.push(PolicyEvaluation {
                 stage: "outbound",
                 policy_id: policy.id,
@@ -314,10 +343,10 @@ impl PolicyEngine {
 
     pub(crate) fn grant<A: ActionMeta>(
         &mut self,
-        context: PolicyContext,
+        capabilities: Capabilities,
         action: A,
     ) -> Result<Granted<A>, Denied> {
-        let report = self.decide(&context, &action);
+        let report = self.decide(&capabilities, &action);
         match report.outcome {
             PolicyReportOutcome::Allow { .. } => {
                 let Some(next_grant) = self.next_grant.checked_add(1) else {
@@ -348,30 +377,6 @@ impl PolicyEngine {
     }
 }
 
-/// Inbound filter: the action's required capabilities must fit the caller's
-/// ceiling.
-pub struct CapabilityEnvelopePolicy;
-
-impl PolicyAny for CapabilityEnvelopePolicy {
-    fn name(&self) -> &'static str {
-        "policy.capability_envelope"
-    }
-
-    fn evaluate(&self, context: &PolicyContext, action: &dyn ActionMeta) -> PolicyResult {
-        if context.capabilities.covers(action.required_capabilities()) {
-            PolicyResult {
-                decision: PolicyDecision::Middle(PolicyDecisionMiddle::Abstain),
-                reason: None,
-            }
-        } else {
-            PolicyResult {
-                decision: PolicyDecision::Final(PolicyDecisionFinal::Deny),
-                reason: Some("action exceeds declared capability envelope".into()),
-            }
-        }
-    }
-}
-
 /// Outbound default: grant anything that reached this stage.
 pub struct AllowAllPolicy;
 
@@ -380,7 +385,7 @@ impl PolicyAny for AllowAllPolicy {
         "policy.default_allow"
     }
 
-    fn evaluate(&self, _context: &PolicyContext, _action: &dyn ActionMeta) -> PolicyResult {
+    fn evaluate(&self, _action: &dyn ActionMeta) -> PolicyResult {
         PolicyResult {
             decision: PolicyDecision::Final(PolicyDecisionFinal::Allow),
             reason: None,
@@ -423,7 +428,7 @@ mod tests {
             "test.skip_inbound"
         }
 
-        fn evaluate(&self, _ctx: &PolicyContext, _action: &dyn ActionMeta) -> PolicyResult {
+        fn evaluate(&self, _action: &dyn ActionMeta) -> PolicyResult {
             PolicyResult {
                 decision: PolicyDecision::Middle(PolicyDecisionMiddle::SkipChain),
                 reason: None,
@@ -438,7 +443,7 @@ mod tests {
             "test.deny_inbound"
         }
 
-        fn evaluate(&self, _ctx: &PolicyContext, _action: &dyn ActionMeta) -> PolicyResult {
+        fn evaluate(&self, _action: &dyn ActionMeta) -> PolicyResult {
             PolicyResult {
                 decision: PolicyDecision::Final(PolicyDecisionFinal::Deny),
                 reason: Some("inbound denied".into()),
@@ -453,7 +458,7 @@ mod tests {
             "test.allow_action"
         }
 
-        fn evaluate(&self, _ctx: &PolicyContext, _action: &TestAction) -> PolicyResult {
+        fn evaluate(&self, _action: &TestAction) -> PolicyResult {
             PolicyResult {
                 decision: PolicyDecision::Final(PolicyDecisionFinal::Allow),
                 reason: Some("action allowed".into()),
@@ -464,14 +469,10 @@ mod tests {
     #[test]
     fn allow_capabilities_grants_within_envelope_and_denies_outside() {
         let mut engine = PolicyEngine::allow_capabilities();
-        let ctx = PolicyContext::new(
-            Capability::FsRead.into(),
-            std::sync::Arc::new(crate::resource::Resources::new()),
-        );
 
         let granted = engine
             .grant(
-                ctx.clone(),
+                Capability::FsRead.into(),
                 TestAction {
                     caps: Capability::FsRead.into(),
                 },
@@ -481,7 +482,7 @@ mod tests {
 
         let denied = engine
             .grant(
-                ctx,
+                Capability::FsRead.into(),
                 TestAction {
                     caps: Capability::FsWrite.into(),
                 },
@@ -497,19 +498,16 @@ mod tests {
         engine.append_inbound(DenyInbound);
         engine.append_outbound(AllowAllPolicy);
 
-        let ctx = PolicyContext::new(
-            Capabilities::empty(),
-            std::sync::Arc::new(crate::resource::Resources::new()),
-        );
         let action = TestAction {
             caps: Capabilities::empty(),
         };
 
-        let report = engine.decide(&ctx, &action);
+        let report = engine.decide(&Capabilities::empty(), &action);
         assert!(matches!(report.outcome, PolicyReportOutcome::Allow { .. }));
-        assert_eq!(report.evaluations.len(), 2);
-        assert_eq!(report.evaluations[0].stage, "inbound");
-        assert_eq!(report.evaluations[1].stage, "outbound");
+        assert_eq!(report.evaluations.len(), 3);
+        assert_eq!(report.evaluations[0].stage, "envelope");
+        assert_eq!(report.evaluations[1].stage, "inbound");
+        assert_eq!(report.evaluations[2].stage, "outbound");
     }
 
     #[test]
@@ -517,30 +515,22 @@ mod tests {
         let mut engine = PolicyEngine::new();
         engine.append_action::<TestAction, _>(AllowTestAction);
 
-        let ctx = PolicyContext::new(
-            Capabilities::empty(),
-            std::sync::Arc::new(crate::resource::Resources::new()),
-        );
         let action = TestAction {
             caps: Capabilities::empty(),
         };
 
-        let report = engine.decide(&ctx, &action);
+        let report = engine.decide(&Capabilities::empty(), &action);
         assert!(matches!(report.outcome, PolicyReportOutcome::Allow { .. }));
     }
 
     #[test]
     fn empty_engine_denies_without_match() {
         let engine = PolicyEngine::new();
-        let ctx = PolicyContext::new(
-            Capabilities::empty(),
-            std::sync::Arc::new(crate::resource::Resources::new()),
-        );
         let action = TestAction {
             caps: Capabilities::empty(),
         };
 
-        let report = engine.decide(&ctx, &action);
+        let report = engine.decide(&Capabilities::empty(), &action);
         assert!(matches!(report.outcome, PolicyReportOutcome::Deny { .. }));
     }
 }

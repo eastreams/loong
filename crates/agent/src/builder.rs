@@ -8,7 +8,6 @@ use std::{
 
 use contracts::provider::{Request, StreamItem};
 use kernel::Facade;
-use kernel::resource::{Resources, WorkspaceRoot};
 use provider::Provider;
 use tool_host::{RegistrationError, ToolRegistry};
 
@@ -20,11 +19,6 @@ use crate::tool_set::ToolSet;
 /// Why agent assembly failed.
 #[derive(Debug, thiserror::Error)]
 pub enum BuildError {
-    #[error("missing resource `{resource}` required by `{tool_set}`")]
-    MissingResource {
-        resource: &'static str,
-        tool_set: &'static str,
-    },
     #[error("duplicate channel {0:?}")]
     DuplicateChannel(String),
     #[error("tool registration failed: {0}")]
@@ -34,7 +28,7 @@ pub enum BuildError {
 /// Runtime-checked agent builder.
 pub struct AgentBuilder<const STORE_SET: bool = false, const PROVIDER_SET: bool = false> {
     facade: Facade,
-    resources: Resources,
+    workspace_root: PathBuf,
     tools: Vec<Box<dyn ToolSet>>,
     channels: Vec<(String, Arc<dyn ChannelTarget>)>,
     system_prompt: Option<String>,
@@ -47,7 +41,7 @@ impl AgentBuilder<false, false> {
     pub fn new(facade: Facade) -> Self {
         Self {
             facade,
-            resources: Resources::new(),
+            workspace_root: PathBuf::from("."),
             tools: Vec::new(),
             channels: Vec::new(),
             system_prompt: None,
@@ -72,7 +66,7 @@ impl<const STORE_SET: bool, const PROVIDER_SET: bool> AgentBuilder<STORE_SET, PR
     ) -> AgentBuilder<true, PROVIDER_SET> {
         AgentBuilder {
             facade: self.facade,
-            resources: self.resources,
+            workspace_root: self.workspace_root,
             tools: self.tools,
             channels: self.channels,
             system_prompt: self.system_prompt,
@@ -89,7 +83,7 @@ impl<const STORE_SET: bool, const PROVIDER_SET: bool> AgentBuilder<STORE_SET, PR
     {
         AgentBuilder {
             facade: self.facade,
-            resources: self.resources,
+            workspace_root: self.workspace_root,
             tools: self.tools,
             channels: self.channels,
             system_prompt: self.system_prompt,
@@ -108,8 +102,7 @@ impl<const STORE_SET: bool, const PROVIDER_SET: bool> AgentBuilder<STORE_SET, PR
 
     #[must_use]
     pub fn with_workspace_root(mut self, root: impl AsRef<Path>) -> Self {
-        self.resources
-            .insert(WorkspaceRoot(root.as_ref().to_path_buf()));
+        self.workspace_root = root.as_ref().to_path_buf();
         self
     }
 
@@ -118,30 +111,14 @@ impl<const STORE_SET: bool, const PROVIDER_SET: bool> AgentBuilder<STORE_SET, PR
         self.system_prompt = Some(prompt.into());
         self
     }
-
-    fn validate(&self) -> Result<(), BuildError> {
-        for tool_set in &self.tools {
-            for need in tool_set.needs() {
-                if !need.is_satisfied_by(&self.resources) {
-                    return Err(BuildError::MissingResource {
-                        resource: need.name(),
-                        tool_set: tool_set.name(),
-                    });
-                }
-            }
-        }
-        Ok(())
-    }
 }
 
 impl AgentBuilder<true, true> {
-    /// Validates the assembled tools and resources, then builds the actor.
+    /// Builds the actor.
     pub fn build(self) -> Result<Agent, BuildError> {
-        self.validate()?;
-
         let Self {
             facade,
-            resources,
+            workspace_root,
             tools,
             channels,
             system_prompt,
@@ -159,13 +136,7 @@ impl AgentBuilder<true, true> {
         let store = store.expect("STORE_SET=true guarantees a store");
         let provider = provider.expect("PROVIDER_SET=true guarantees a provider");
 
-        let mut resources = resources;
-        if !resources.contains::<WorkspaceRoot>() {
-            resources.insert(WorkspaceRoot(PathBuf::from(".")));
-        }
-        let facade = facade.with_resources(resources);
-
-        let mut registry = ToolRegistry::new(facade);
+        let mut registry = ToolRegistry::new(facade, workspace_root);
         for tool_set in &tools {
             tool_set.register(&mut registry)?;
         }

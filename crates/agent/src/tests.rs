@@ -616,7 +616,7 @@ async fn bind_unbind_channel_updates_runtime_tools() {
 }
 
 #[tokio::test]
-async fn builder_rejects_file_tools_without_workspace_root() {
+async fn builder_defaults_workspace_root_for_file_tools() {
     let (kernel_owner, facade) = file_io_facade();
 
     let result = Agent::builder(facade)
@@ -625,7 +625,7 @@ async fn builder_rejects_file_tools_without_workspace_root() {
         .with_provider(DummyProvider)
         .build();
 
-    assert!(matches!(result, Err(BuildError::MissingResource { .. })));
+    assert!(result.is_ok());
 
     let _ = kernel_owner.shutdown(Shutdown::Drain).await;
 }

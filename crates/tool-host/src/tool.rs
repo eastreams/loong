@@ -7,7 +7,6 @@ use async_trait::async_trait;
 use contracts::tool::ToolSpec;
 use kernel::Facade;
 use kernel::access::fs::FsAccess;
-use kernel::resource::{Resource, Resources, WorkspaceRoot};
 use schemars::{JsonSchema, Schema};
 use serde_json::Value;
 use thiserror::Error;
@@ -52,11 +51,15 @@ fn root_schema<T: JsonSchema>() -> Schema {
 /// tools.
 pub struct ToolContext<'a> {
     facade: &'a Facade,
+    workspace_root: &'a Path,
 }
 
 impl<'a> ToolContext<'a> {
-    pub(crate) fn new(facade: &'a Facade) -> Self {
-        Self { facade }
+    pub(crate) fn new(facade: &'a Facade, workspace_root: &'a Path) -> Self {
+        Self {
+            facade,
+            workspace_root,
+        }
     }
 
     #[must_use]
@@ -65,25 +68,13 @@ impl<'a> ToolContext<'a> {
     }
 
     #[must_use]
-    pub fn resources(&self) -> &Resources {
-        self.facade.resources()
-    }
-
-    #[must_use]
-    pub fn resource<R: Resource>(&self) -> Option<&R> {
-        self.resources().get::<R>()
-    }
-
-    #[must_use]
     pub fn workspace_root(&self) -> &Path {
-        self.resource::<WorkspaceRoot>()
-            .map(|root| root.0.as_path())
-            .expect("WorkspaceRoot resource is missing from tool context")
+        self.workspace_root
     }
 
     #[must_use]
     pub fn fs(&self) -> FsAccess<'_> {
-        FsAccess::new(self.facade, self.workspace_root())
+        FsAccess::new(self.facade, self.workspace_root)
     }
 }
 

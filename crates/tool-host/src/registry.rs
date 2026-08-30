@@ -1,7 +1,7 @@
 //! Tool registry: type-erased tool handles, the concrete [`ToolRegistry`]
 //! host the agent invokes, and the immutable [`ToolSnapshot`] readers use.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
 use contracts::tool::ToolSpec;
@@ -102,14 +102,16 @@ impl<T: ToolImpl> ToolAdapter for CoreToolAdapter<T> {
 /// took a snapshot keep their immutable view.
 pub struct ToolRegistry {
     facade: Facade,
+    workspace_root: PathBuf,
     tools: Arc<ToolIndex>,
 }
 
 impl ToolRegistry {
     #[must_use]
-    pub fn new(facade: Facade) -> Self {
+    pub fn new(facade: Facade, workspace_root: impl Into<PathBuf>) -> Self {
         Self {
             facade,
+            workspace_root: workspace_root.into(),
             tools: Arc::new(BTreeMap::new()),
         }
     }
@@ -128,6 +130,7 @@ impl ToolRegistry {
     pub fn snapshot(&self) -> ToolSnapshot {
         ToolSnapshot {
             facade: self.facade.clone(),
+            workspace_root: self.workspace_root.clone(),
             tools: Arc::clone(&self.tools),
         }
     }
@@ -174,6 +177,7 @@ impl ToolRegistry {
 /// the actor or the mutable registry.
 pub struct ToolSnapshot {
     facade: Facade,
+    workspace_root: PathBuf,
     tools: Arc<ToolIndex>,
 }
 
@@ -192,7 +196,7 @@ impl ToolSnapshot {
             .get(name)
             .cloned()
             .ok_or_else(|| ToolError::UnknownTool(name.to_owned()))?;
-        let ctx = ToolContext::new(&self.facade);
+        let ctx = ToolContext::new(&self.facade, &self.workspace_root);
         registered.invoke(&ctx, payload).await
     }
 }
