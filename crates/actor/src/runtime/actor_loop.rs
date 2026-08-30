@@ -42,6 +42,13 @@ pub(crate) async fn run_actor<A: Actor>(
         match control.mode() {
             Mode::Running => {}
             Mode::Draining => {
+                match panic::catch_unwind(AssertUnwindSafe(|| actor.on_shutdown(Shutdown::Drain))) {
+                    Ok(()) => {}
+                    Err(payload) => {
+                        control.contain_panic(payload);
+                        return fail_actor(&mut state, &mut inbox, &owned, &mut scheduler).await;
+                    }
+                }
                 return drain_actor(
                     &mut actor,
                     &mut state,
@@ -53,6 +60,13 @@ pub(crate) async fn run_actor<A: Actor>(
                 .await;
             }
             Mode::Stopping => {
+                match panic::catch_unwind(AssertUnwindSafe(|| actor.on_shutdown(Shutdown::Stop))) {
+                    Ok(()) => {}
+                    Err(payload) => {
+                        control.contain_panic(payload);
+                        return fail_actor(&mut state, &mut inbox, &owned, &mut scheduler).await;
+                    }
+                }
                 return stop_actor(
                     &mut actor,
                     &mut state,

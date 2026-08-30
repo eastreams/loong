@@ -3,7 +3,7 @@ use std::future::Future;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
-    ActorScope, ChildExit, ExitReason, StopScope, Writer,
+    ActorScope, ChildExit, ExitReason, Shutdown, StopScope, Writer,
     config::SupervisionConfig,
     reply::{IntoReply, IntoStreamReply, ReplyExt, StreamDispatch, StreamMessage, SyncKind},
     scheduling::{InterleavedScheduler, ReplyScheduler, SchedulerProfile},
@@ -111,6 +111,17 @@ pub trait Actor:
         let _ = scope;
         std::future::ready(())
     }
+
+    /// Observes that Stop or Drain has committed, before replies drain.
+    ///
+    /// The runtime calls this hook synchronously in the actor task exactly
+    /// once, when the actor loop observes the graceful shutdown mode. It runs
+    /// before already-dispatched replies are drained, so the actor can cancel
+    /// background loops or signal them to exit at their next turn boundary.
+    ///
+    /// Kill, panic, abort, and executor cancellation never call this hook. A
+    /// panic inside the hook fails the actor.
+    fn on_shutdown(&mut self, _shutdown: Shutdown) {}
 
     /// Performs post-order cleanup for a successful Stop or Drain.
     ///
