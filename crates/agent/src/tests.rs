@@ -866,6 +866,82 @@ async fn queued_prompts_start_in_fifo_order() {
 }
 
 #[tokio::test]
+async fn steer_applies_before_next_queued_turn_starts() {
+    let (kernel_owner, facade) = plan_facade();
+    let (started_tx, started_rx) = watch::channel(false);
+    let gate = Arc::new(Notify::new());
+    let owner = Agent::builder(facade)
+        .with_system_prompt(PLAN_SYSTEM_PROMPT)
+        .with_store(MemoryStore::new())
+        .with_provider(GatedProvider {
+            started: Arc::new(started_tx),
+            gate: Arc::clone(&gate),
+        })
+        .build()
+        .unwrap()
+        .spawn();
+
+    let mut first = owner
+        .call(Prompt {
+            text: "first".to_string(),
+        })
+        .await
+        .unwrap();
+
+    let mut started_rx = started_rx;
+    started_rx.wait_for(|started| *started).await.unwrap();
+    let item = first.recv().await.unwrap();
+    if let StreamItem::Text { delta } = item {
+        assert_eq!(delta, "partial");
+    } else {
+        panic!("expected text");
+    }
+
+    // Steer arrives while the first turn is still running.
+    owner
+        .call(SwitchProvider(Arc::new(EchoProvider)))
+        .await
+        .unwrap();
+
+    let mut second = owner
+        .call(Prompt {
+            text: "second".to_string(),
+        })
+        .await
+        .unwrap();
+
+    // Let the first turn finish; the boundary marker must apply the switch
+    // before the second turn starts.
+    gate.notify_one();
+    let mut text = String::from("partial");
+    while let Some(item) = first.recv().await {
+        if let StreamItem::Text { delta } = item {
+            text.push_str(&delta);
+        }
+    }
+    first.finish().await.unwrap().unwrap();
+    assert_eq!(text, "partialdone");
+
+    let collected = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        let mut text = String::new();
+        while let Some(item) = second.recv().await {
+            if let StreamItem::Text { delta } = item {
+                text.push_str(&delta);
+            }
+        }
+        second.finish().await.unwrap().unwrap();
+        text
+    })
+    .await
+    .expect("second turn should start with the switched provider");
+    assert_eq!(collected, "hello");
+
+    let status = owner.shutdown(Shutdown::Drain).await;
+    assert_eq!(status.reason(), ExitReason::Drained);
+    let _ = kernel_owner.shutdown(Shutdown::Drain).await;
+}
+
+#[tokio::test]
 async fn drain_finishes_active_and_cancels_queued() {
     let (kernel_owner, facade) = plan_facade();
     let (started_tx, started_rx) = watch::channel(false);

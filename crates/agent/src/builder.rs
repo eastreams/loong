@@ -154,6 +154,9 @@ impl AgentBuilder<true, true> {
             system_prompt,
             prompt_queue: VecDeque::new(),
             active: None,
+            current_turn: None,
+            turn_epoch: 0,
+            turn_watch: tokio::sync::watch::channel(0).0,
             draining: false,
         })
     }
