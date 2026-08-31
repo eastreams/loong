@@ -24,7 +24,7 @@ use loac::prelude::*;
 use loac::{ActorOwner, ActorRef, Shutdown};
 use provider::Provider;
 use serde_json::Value;
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tool_host::{RegisteredTool, RegistrationError, ToolError, ToolRegistry, ToolSnapshot};
 
@@ -65,7 +65,7 @@ pub struct Agent {
     /// Prompts that have been accepted by the mailbox but not started yet.
     ///
     /// All reads and writes happen in actor contexts (mailbox handlers and
-    /// [`AgentLoop`] polls), so no lock is needed.
+    /// [`PromptLoop`] polls), so no lock is needed.
     prompt_queue: VecDeque<QueuedPrompt>,
     /// Cancellation token for the prompt currently running, if any.
     ///
@@ -73,14 +73,8 @@ pub struct Agent {
     /// cancellation and handed the turn to the next queued prompt, which keeps
     /// new `Prompt` messages queued instead of overlapping the old loop.
     active: Option<CancellationToken>,
-    /// The next turn, prepared by [`Agent::start_next_prompt`] and waiting for
-    /// [`AgentLoop`] to poll it.
-    current_turn: Option<QueuedTurn>,
-    /// Bumped at every turn end; waiters use it for `this_turn.await`.
-    turn_epoch: u64,
-    turn_watch: watch::Sender<u64>,
-    /// Set once by [`Actor::on_shutdown`]; makes [`AgentLoop`] exit when it
-    /// runs out of queued work.
+    /// Set once by `Actor::on_shutdown`; stops queued prompts from starting
+    /// and lets the running one finish.
     draining: bool,
 }
 
@@ -116,34 +110,32 @@ impl Agent {
         }
     }
 
-    /// Starts the next queued prompt, if any and if no turn is active.
-    ///
-    /// Called from the mailbox (`PrepareNextPrompt`, first `Prompt`) so the
-    /// start decision is FIFO-ordered with every steer message admitted before
-    /// it.
+    /// Starts the next queued prompt, if any.
     fn start_next_prompt(&mut self) {
-        if self.draining || self.active.is_some() || self.current_turn.is_some() {
+        if self.draining {
+            self.active = None;
             return;
         }
-        let Some(queued) = self.prompt_queue.pop_front() else {
+        loop {
+            let Some(next) = self.prompt_queue.pop_front() else {
+                self.active = None;
+                return;
+            };
+
+            if next.start_tx.is_closed() {
+                self.active = None;
+                continue;
+            }
+
+            let cancellation = CancellationToken::new();
+            let prepared = self.prepare(next.text, cancellation.clone());
+            if next.start_tx.send(prepared).is_err() {
+                self.active = None;
+                continue;
+            }
+            self.active = Some(cancellation);
             return;
-        };
-
-        let cancellation = CancellationToken::new();
-        let prepared = self.prepare(queued.text, cancellation.clone());
-        self.active = Some(cancellation);
-        self.current_turn = Some(QueuedTurn {
-            prepared,
-            item_tx: queued.item_tx,
-            final_tx: queued.final_tx,
-        });
-    }
-
-    /// Marks one turn as finished: bump the epoch so `this_turn.await` waiters
-    /// wake up.
-    fn finish_turn(&mut self) {
-        self.turn_epoch += 1;
-        self.turn_watch.send_replace(self.turn_epoch);
+        }
     }
 }
 
@@ -235,28 +227,24 @@ pub struct SpawnSubagent {
     pub agent: Agent,
 }
 
-/// One queued prompt waiting for the fixed loop.
-struct QueuedPrompt {
-    text: String,
-    item_tx: mpsc::Sender<StreamItem>,
-    final_tx: oneshot::Sender<Result<(), PromptError>>,
-}
+/// One-way self-message a finished prompt sends before its final value.
+#[derive(loac::Message)]
+#[message(reply = ())]
+struct PrepareNextPrompt;
 
-/// A turn that has been prepared by the mailbox and is waiting for
-/// [`AgentLoop`] to poll it.
-struct QueuedTurn {
-    prepared: PreparedPrompt,
-    item_tx: mpsc::Sender<StreamItem>,
-    final_tx: oneshot::Sender<Result<(), PromptError>>,
-}
-
-/// Owned inputs for one turn.
+/// Owned inputs for one prompt loop.
 struct PreparedPrompt {
     messages: Vec<TranscriptItem>,
     provider: AgentProvider,
     registry: Arc<ToolSnapshot>,
     system_prompt: Option<String>,
     cancellation: CancellationToken,
+}
+
+/// Queue entry for a prompt whose reply future is waiting for a start signal.
+struct QueuedPrompt {
+    text: String,
+    start_tx: oneshot::Sender<PreparedPrompt>,
 }
 
 /// One provider-issued tool call awaiting execution.
@@ -291,7 +279,8 @@ fn split_stream_items(items: Vec<StreamItem>) -> (String, String, Vec<PendingToo
     (reasoning, text, calls)
 }
 
-/// All mutable turn state, moved through the stage futures.
+/// All mutable prompt-loop state, moved through the stage futures so the
+/// [`PromptLoop`] struct itself stays [`Unpin`] regardless of `W`.
 struct LoopData<W> {
     messages: Vec<TranscriptItem>,
     provider: AgentProvider,
@@ -348,6 +337,11 @@ impl<W> LoopData<W> {
     }
 }
 
+enum WaitStartOutcome<W> {
+    Started(PreparedPrompt, W),
+    Cancelled,
+}
+
 enum RoundOutcome<W> {
     Completed {
         data: Box<LoopData<W>>,
@@ -365,8 +359,71 @@ enum ToolOutcome<W> {
     Cancelled,
 }
 
+type WaitStartFuture<W> = Pin<Box<dyn Future<Output = WaitStartOutcome<W>> + Send>>;
 type RoundFuture<W> = Pin<Box<dyn Future<Output = RoundOutcome<W>> + Send>>;
 type ToolFuture<W> = Pin<Box<dyn Future<Output = ToolOutcome<W>> + Send>>;
+type HandoffFuture = Pin<Box<dyn Future<Output = bool> + Send>>;
+
+enum PromptStage<W> {
+    WaitStart {
+        future: WaitStartFuture<W>,
+    },
+    Round {
+        future: RoundFuture<W>,
+    },
+    Tool {
+        future: ToolFuture<W>,
+        call: PendingToolCall,
+    },
+    Handoff {
+        future: HandoffFuture,
+        result: Result<(), PromptError>,
+    },
+    Complete,
+}
+
+/// Actor-native prompt state machine.
+struct PromptLoop<W>
+where
+    W: Writer<StreamItem> + Send + 'static,
+{
+    stage: PromptStage<W>,
+    myself: ActorRef<Agent>,
+}
+
+impl<W> PromptLoop<W>
+where
+    W: Writer<StreamItem> + Send + 'static,
+{
+    fn new(start_rx: oneshot::Receiver<PreparedPrompt>, out: W, myself: ActorRef<Agent>) -> Self {
+        Self {
+            stage: PromptStage::WaitStart {
+                future: build_wait_start_future(start_rx, out),
+            },
+            myself,
+        }
+    }
+
+    fn build_handoff_future(&self) -> HandoffFuture {
+        let myself = self.myself.clone();
+        Box::pin(async move { myself.send(PrepareNextPrompt).await.is_ok() })
+    }
+}
+
+fn build_wait_start_future<W>(
+    start_rx: oneshot::Receiver<PreparedPrompt>,
+    out: W,
+) -> WaitStartFuture<W>
+where
+    W: Writer<StreamItem> + Send + 'static,
+{
+    Box::pin(async move {
+        match start_rx.await {
+            Ok(prepared) => WaitStartOutcome::Started(prepared, out),
+            Err(_) => WaitStartOutcome::Cancelled,
+        }
+    })
+}
 
 fn build_round_future<W>(data: LoopData<W>) -> RoundFuture<W>
 where
@@ -447,91 +504,31 @@ where
     })
 }
 
-type HandoffFuture = Pin<Box<dyn Future<Output = bool> + Send>>;
-
-enum AgentLoopStage {
-    Idle,
-    Round {
-        future: RoundFuture<mpsc::Sender<StreamItem>>,
-        final_tx: oneshot::Sender<Result<(), PromptError>>,
-    },
-    Tool {
-        future: ToolFuture<mpsc::Sender<StreamItem>>,
-        call: PendingToolCall,
-        final_tx: oneshot::Sender<Result<(), PromptError>>,
-    },
-    Handoff {
-        future: HandoffFuture,
-    },
-}
-
-/// The fixed prompt-loop driver.
-struct AgentLoop {
-    stage: AgentLoopStage,
-    myself: ActorRef<Agent>,
-}
-
-impl AgentLoop {
-    fn new(myself: ActorRef<Agent>) -> Self {
-        Self {
-            stage: AgentLoopStage::Idle,
-            myself,
-        }
-    }
-
-    fn build_handoff_future(&self) -> HandoffFuture {
-        let myself = self.myself.clone();
-        Box::pin(async move { myself.send(PrepareNextPrompt).await.is_ok() })
-    }
-}
-
-/// Starts the fixed [`AgentLoop`].
-#[derive(loac::Message)]
-#[message(reply = ())]
-struct EnsureLoop;
-
 #[actor(mailbox, interleaved = unbounded, children = unbounded)]
 impl Actor for Agent {
     type SpawnArgs = Self;
 
-    async fn init(agent: Self::SpawnArgs, scope: &mut ActorScope<'_, Self>) -> Self {
-        let myself = scope.myself().clone();
-        myself
-            .send(EnsureLoop)
-            .await
-            .expect("self admission is open");
+    async fn init(agent: Self::SpawnArgs, _scope: &mut ActorScope<'_, Self>) -> Self {
         agent
     }
 
     fn on_shutdown(&mut self, _shutdown: Shutdown) {
         self.draining = true;
-    }
-}
-
-impl Handler<EnsureLoop> for Agent {
-    fn handle(
-        &mut self,
-        _message: EnsureLoop,
-        scope: &mut ActorScope<'_, Self>,
-    ) -> impl IntoReply<Self, EnsureLoop> + use<> {
-        AgentLoop::new(scope.myself().clone()).interleaved()
-    }
-}
-
-/// Mailbox-ordered boundary marker sent after every finished turn.
-#[derive(loac::Message)]
-#[message(reply = ())]
-struct PrepareNextPrompt;
-
-impl SyncHandler<PrepareNextPrompt> for Agent {
-    fn handle(&mut self, _message: PrepareNextPrompt, _scope: &mut ActorScope<'_, Self>) {
-        self.start_next_prompt();
+        // Dropping start senders wakes waiting PromptLoop futures with
+        // Cancelled instead of letting them wait forever during Drain.
+        self.prompt_queue.clear();
     }
 }
 
 impl SyncHandler<SwitchProvider> for Agent {
     fn handle(&mut self, message: SwitchProvider, _scope: &mut ActorScope<'_, Self>) {
         self.provider = message.0;
+    }
+}
+
+impl SyncHandler<PrepareNextPrompt> for Agent {
+    fn handle(&mut self, _message: PrepareNextPrompt, _scope: &mut ActorScope<'_, Self>) {
+        self.start_next_prompt();
     }
 }
 
@@ -632,89 +629,71 @@ impl StreamHandler<Prompt> for Agent {
         &mut self,
         message: Prompt,
         out: W,
-        _scope: &mut ActorScope<'_, Self>,
+        scope: &mut ActorScope<'_, Self>,
     ) -> impl IntoStreamReply<Self, Prompt> + use<W>
     where
         W: Writer<StreamItem> + Send + 'static,
     {
-        let (item_tx, mut item_rx) = mpsc::channel::<StreamItem>(8);
-        let (final_tx, final_rx) = oneshot::channel();
-
+        let (start_tx, start_rx) = oneshot::channel();
         self.prompt_queue.push_back(QueuedPrompt {
             text: message.text,
-            item_tx,
-            final_tx,
+            start_tx,
         });
 
-        if self.active.is_none() && self.current_turn.is_none() {
+        if self.active.is_none() {
             self.start_next_prompt();
         }
 
-        async move {
-            let mut out = out;
-            while let Some(item) = item_rx.recv().await {
-                let _ = out.write(item).await;
-            }
-            match final_rx.await {
-                Ok(result) => result,
-                Err(_) => Err(PromptError::Cancelled),
-            }
-        }
+        let myself = scope.myself().clone();
+        PromptLoop::new(start_rx, out, myself).interleaved()
     }
 }
 
-impl ActorFuture<Agent> for AgentLoop {
-    type Output = ();
+impl<W> ActorFuture<Agent> for PromptLoop<W>
+where
+    W: Writer<StreamItem> + Send + 'static,
+{
+    type Output = Result<(), PromptError>;
 
     fn poll(
         self: Pin<&mut Self>,
         actor: &mut Agent,
         _scope: &mut ActorScope<'_, Agent>,
         cx: &mut Context<'_>,
-    ) -> Poll<()> {
+    ) -> Poll<Self::Output> {
         let this = self.get_mut();
 
         loop {
-            let mut stage = AgentLoopStage::Idle;
+            let mut stage = PromptStage::Complete;
             std::mem::swap(&mut this.stage, &mut stage);
 
             match stage {
-                AgentLoopStage::Idle => {
-                    if actor.draining {
-                        if let Some(turn) = actor.current_turn.take() {
-                            let _ = turn.final_tx.send(Err(PromptError::Cancelled));
-                        }
-                        while let Some(queued) = actor.prompt_queue.pop_front() {
-                            let _ = queued.final_tx.send(Err(PromptError::Cancelled));
-                        }
-                        actor.active = None;
-                        return Poll::Ready(());
-                    }
-                    if let Some(turn) = actor.current_turn.take() {
-                        let data = LoopData::from_prepared(turn.prepared, turn.item_tx);
-                        this.stage = AgentLoopStage::Round {
-                            future: build_round_future(data),
-                            final_tx: turn.final_tx,
-                        };
-                    } else {
-                        actor.active = None;
+                PromptStage::WaitStart { mut future } => match future.as_mut().poll(cx) {
+                    Poll::Pending => {
+                        this.stage = PromptStage::WaitStart { future };
                         return Poll::Pending;
                     }
-                }
-                AgentLoopStage::Round {
-                    mut future,
-                    final_tx,
-                } => match future.as_mut().poll(cx) {
+                    Poll::Ready(WaitStartOutcome::Cancelled) => {
+                        return Poll::Ready(Err(PromptError::Cancelled));
+                    }
+                    Poll::Ready(WaitStartOutcome::Started(prepared, out)) => {
+                        let data = LoopData::from_prepared(prepared, out);
+                        this.stage = PromptStage::Round {
+                            future: build_round_future(data),
+                        };
+                    }
+                },
+                PromptStage::Round { mut future } => match future.as_mut().poll(cx) {
                     Poll::Pending => {
-                        this.stage = AgentLoopStage::Round { future, final_tx };
+                        this.stage = PromptStage::Round { future };
                         return Poll::Pending;
                     }
                     Poll::Ready(RoundOutcome::Cancelled) => {
-                        let _ = final_tx.send(Err(PromptError::Cancelled));
-                        actor.active = None;
-                        actor.finish_turn();
-                        this.stage = AgentLoopStage::Handoff {
-                            future: this.build_handoff_future(),
+                        let result = Err(PromptError::Cancelled);
+                        let handoff = this.build_handoff_future();
+                        this.stage = PromptStage::Handoff {
+                            future: handoff,
+                            result,
                         };
                     }
                     Poll::Ready(RoundOutcome::Completed {
@@ -758,11 +737,10 @@ impl ActorFuture<Agent> for AgentLoop {
                         if calls.is_empty() {
                             let result =
                                 result.map_err(|error| PromptError::Provider(Box::new(error)));
-                            let _ = final_tx.send(result);
-                            actor.active = None;
-                            actor.finish_turn();
-                            this.stage = AgentLoopStage::Handoff {
-                                future: this.build_handoff_future(),
+                            let handoff = this.build_handoff_future();
+                            this.stage = PromptStage::Handoff {
+                                future: handoff,
+                                result,
                             };
                         } else {
                             data.pending_calls = calls.into();
@@ -771,33 +749,24 @@ impl ActorFuture<Agent> for AgentLoop {
                                 .pop_front()
                                 .expect("the round produced tool calls");
                             let stage_call = call.clone();
-                            this.stage = AgentLoopStage::Tool {
+                            this.stage = PromptStage::Tool {
                                 future: build_tool_future(*data, call),
                                 call: stage_call,
-                                final_tx,
                             };
                         }
                     }
                 },
-                AgentLoopStage::Tool {
-                    mut future,
-                    call,
-                    final_tx,
-                } => match future.as_mut().poll(cx) {
+                PromptStage::Tool { mut future, call } => match future.as_mut().poll(cx) {
                     Poll::Pending => {
-                        this.stage = AgentLoopStage::Tool {
-                            future,
-                            call,
-                            final_tx,
-                        };
+                        this.stage = PromptStage::Tool { future, call };
                         return Poll::Pending;
                     }
                     Poll::Ready(ToolOutcome::Cancelled) => {
-                        let _ = final_tx.send(Err(PromptError::Cancelled));
-                        actor.active = None;
-                        actor.finish_turn();
-                        this.stage = AgentLoopStage::Handoff {
-                            future: this.build_handoff_future(),
+                        let result = Err(PromptError::Cancelled);
+                        let handoff = this.build_handoff_future();
+                        this.stage = PromptStage::Handoff {
+                            future: handoff,
+                            result,
                         };
                     }
                     Poll::Ready(ToolOutcome::Completed { mut data, result }) => {
@@ -813,9 +782,8 @@ impl ActorFuture<Agent> for AgentLoop {
                         data.messages.push(item);
 
                         if data.pending_calls.is_empty() {
-                            this.stage = AgentLoopStage::Round {
+                            this.stage = PromptStage::Round {
                                 future: build_round_future(*data),
-                                final_tx,
                             };
                         } else {
                             let next_call = data
@@ -823,26 +791,29 @@ impl ActorFuture<Agent> for AgentLoop {
                                 .pop_front()
                                 .expect("a pending tool call exists");
                             let stage_call = next_call.clone();
-                            this.stage = AgentLoopStage::Tool {
+                            this.stage = PromptStage::Tool {
                                 future: build_tool_future(*data, next_call),
                                 call: stage_call,
-                                final_tx,
                             };
                         }
                     }
                 },
-                AgentLoopStage::Handoff { mut future } => match future.as_mut().poll(cx) {
+                PromptStage::Handoff { mut future, result } => match future.as_mut().poll(cx) {
                     Poll::Pending => {
-                        this.stage = AgentLoopStage::Handoff { future };
+                        this.stage = PromptStage::Handoff { future, result };
                         return Poll::Pending;
                     }
-                    Poll::Ready(_) => {
-                        this.stage = AgentLoopStage::Idle;
+                    Poll::Ready(true) => return Poll::Ready(result),
+                    Poll::Ready(false) => {
+                        actor.prompt_queue.clear();
+                        return Poll::Ready(result);
                     }
                 },
+                PromptStage::Complete => unreachable!("Complete is only a poll placeholder"),
             }
         }
     }
 }
+
 #[cfg(test)]
 mod tests;
