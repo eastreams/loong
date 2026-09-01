@@ -34,11 +34,12 @@ impl<A: Actor> Cx<'_, A> {
         }
     }
 
-    /// Runs `f` with temporary `&mut A` and [`ActorScope`] borrows together.
+    /// Runs `f` with temporary `&mut A` and [`ActorScope`] borrows.
     ///
-    /// The higher-ranked closure signature prevents either borrow from
-    /// escaping the call. Do not call this from any task other than the actor
-    /// task that owns the reply future.
+    /// Use `_` for the borrow you do not need. The higher-ranked closure
+    /// signature prevents either borrow from escaping the call. Do not call
+    /// this from any task other than the actor task that owns the reply
+    /// future.
     pub fn with<R>(
         &mut self,
         f: impl for<'a> FnOnce(&'a mut A, &'a mut ActorScope<'a, A>) -> R,
@@ -52,24 +53,10 @@ impl<A: Actor> Cx<'_, A> {
         let mut scope = state.actor_scope();
         f(actor, &mut scope)
     }
-
-    /// Runs `f` with a temporary `&mut A`.
-    ///
-    /// The higher-ranked closure signature prevents the mutable borrow from
-    /// escaping the call. Do not call this from any task other than the actor
-    /// task that owns the reply future.
-    pub fn with_actor<R>(&mut self, f: impl for<'a> FnOnce(&'a mut A) -> R) -> R {
-        self.with(|actor, _| f(actor))
-    }
-
-    /// Runs `f` with a temporary [`ActorScope`].
-    pub fn with_scope<R>(&mut self, f: impl for<'a> FnOnce(&'a mut ActorScope<'a, A>) -> R) -> R {
-        self.with(|_, scope| f(scope))
-    }
 }
 
 // SAFETY: the runtime polls the owning future on the actor task, and every
-// dereference happens inside `with` / `with_actor` / `with_scope` while the
-// actor task has exclusive access. The phantom lifetime does not correspond to
-// an actual borrow that could race with another thread.
+// dereference happens inside `with` while the actor task has exclusive access.
+// The phantom lifetime does not correspond to an actual borrow that could race
+// with another thread.
 unsafe impl<A: Actor> Send for Cx<'_, A> {}

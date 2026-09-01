@@ -1,5 +1,5 @@
 //! Reply futures with `cx`: a plain `Future` that can still touch actor state
-//! inside synchronous `with_actor` / `with_scope` scopes.
+//! inside synchronous `with` scopes.
 
 use loac::prelude::*;
 
@@ -21,7 +21,7 @@ struct AddAfterYield(u64);
 impl Handler<AddAfterYield> for Accumulator {
     async fn handle(message: AddAfterYield, mut cx: Cx<'_, Self>) -> u64 {
         tokio::task::yield_now().await;
-        cx.with_actor(|actor| {
+        cx.with(|actor, _| {
             actor.0 += message.0;
             actor.0
         })
@@ -43,7 +43,7 @@ impl StreamHandler<StreamAndCount> for Accumulator {
             }
             tokio::task::yield_now().await;
         }
-        cx.with_actor(|actor| {
+        cx.with(|actor, _| {
             actor.0 += 1;
             actor.0
         })

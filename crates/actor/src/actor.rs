@@ -375,11 +375,10 @@ pub trait DispatchHandler<M: Message, K: crate::reply::ReplyKind = SyncKind>: Ha
 ///
 /// This is the primary handler trait. The runtime polls the returned future on
 /// the actor's interleaved lane, so dispatch through this trait requires
-/// [`HasInterleaving`]. Inside the future, use [`Cx::with`] for combined
-/// actor and scope access, or [`Cx::with_actor`] / [`Cx::with_scope`] for a
-/// single temporary borrow. Those methods
-/// return before any `await`; neither the actor nor scope borrow can escape
-/// their call.
+/// [`HasInterleaving`]. Inside the future, use [`Cx::with`] for temporary
+/// actor and scope access; pass `_` for the borrow you do not need. `with`
+/// returns before any `await`; neither the actor nor scope borrow can escape
+/// its call.
 ///
 /// A unit reply needs no explicit return expression:
 ///
@@ -404,7 +403,7 @@ pub trait DispatchHandler<M: Message, K: crate::reply::ReplyKind = SyncKind>: Ha
 ///
 /// impl Handler<Notify> for Worker {
 ///     async fn handle(_message: Notify, mut cx: Cx<'_, Self>) {
-///         cx.with_actor(|actor| actor.notifications += 1);
+///         cx.with(|actor, _| actor.notifications += 1);
 ///     }
 /// }
 /// ```

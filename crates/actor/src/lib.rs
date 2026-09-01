@@ -35,7 +35,7 @@
 //!
 //! impl Handler<Add> for Counter {
 //!     async fn handle(message: Add, mut cx: Cx<'_, Self>) -> u64 {
-//!         cx.with_actor(|actor| {
+//!         cx.with(|actor, _| {
 //!             actor.0 += message.0;
 //!             actor.0
 //!         })
