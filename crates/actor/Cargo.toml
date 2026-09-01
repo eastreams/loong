@@ -47,6 +47,10 @@ name = "stream_to"
 path = "examples/stream_to.rs"
 
 [[example]]
+name = "cx_reply"
+path = "examples/cx_reply.rs"
+
+[[example]]
 name = "actor_configuration"
 path = "examples/configuration/actor_configuration.rs"
 

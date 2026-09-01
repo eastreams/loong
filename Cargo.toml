@@ -20,7 +20,7 @@ license = "MIT"
 version = "0.2.0"
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "warn"
 
 [workspace.dependencies]
 contracts = { path = "crates/contracts", package = "loong-contracts" }

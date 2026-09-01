@@ -1,4 +1,4 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 #![deny(missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
 
@@ -218,6 +218,7 @@ extern crate self as loac;
 
 use std::{future::Future, pin::Pin};
 
+mod access;
 mod actor;
 mod address;
 mod config;
@@ -233,6 +234,7 @@ pub mod supervision;
 pub mod transport;
 mod writer;
 
+pub use access::ActorAccess;
 pub use actor::{
     Actor, Handler, HasChildren, HasInterleaving, HasMailbox, HasReply, Message, StreamHandler,
     SyncHandler,
@@ -252,8 +254,8 @@ pub use lifecycle::{
 };
 pub use loac_macros::{Message, actor};
 pub use reply::{
-    InterleavedFutureExt, IntoReply, IntoStreamReply, Items, ReplyExt, StreamKind, StreamMessage,
-    StreamReply, SyncKind,
+    CxReply, CxStream, InterleavedFutureExt, IntoReply, IntoStreamReply, Items, ReplyExt,
+    StreamKind, StreamMessage, StreamReply, SyncKind,
 };
 pub use runtime::{
     ActorOwner, ActorScope, ActorSpawner, SpawnOptions, StopScope, spawn, spawn_with,
@@ -291,11 +293,12 @@ pub mod __private {
 /// remain explicit imports so operational behavior stays visible at call sites.
 pub mod prelude {
     pub use crate::{
-        Actor, ActorFuture, ActorFutureExt, ActorScope, ActorSpawner, DynamicChildrenOptions,
-        DynamicInterleavingOptions, DynamicMailboxOptions, Handler, HasChildren, HasInterleaving,
-        HasMailbox, HasReply, InterleavedFutureExt, IntoActorFuture, IntoReply, IntoStreamReply,
-        Items, Message, ReplyExt, StopScope, StreamHandler, StreamMessage, StreamReply,
-        SyncHandler, Writer, actor, reply,
+        Actor, ActorFuture, ActorFutureExt, ActorScope, ActorSpawner, CxReply, CxStream,
+        DynamicChildrenOptions, DynamicInterleavingOptions, DynamicMailboxOptions, Handler,
+        HasChildren, HasInterleaving, HasMailbox, HasReply,
+        InterleavedFutureExt, IntoActorFuture, IntoReply, IntoStreamReply, Items, Message,
+        ReplyExt, StopScope, StreamHandler, StreamMessage, StreamReply, SyncHandler, Writer,
+        actor, reply,
     };
 }
 
