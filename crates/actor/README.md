@@ -105,18 +105,39 @@ Dynamic options expose [`with_max_children`](https://docs.rs/loac/latest/loac/tr
 
 See the [attribute reference](https://docs.rs/loac/latest/loac/attr.actor.html) for syntax and constraints.
 
+## Message Shapes
+
+`#[derive(Message)]` supports four message shapes.
+
+| Attribute | Handler trait | Caller receives |
+| --- | --- | --- |
+| `#[message(reply = Type)]` | [`Handler`](https://docs.rs/loac/latest/loac/trait.Handler.html) or [`RawHandler`](https://docs.rs/loac/latest/loac/trait.RawHandler.html) | `Type` |
+| `#[message(stream = Item, reply = Final)]` | [`StreamHandler`](https://docs.rs/loac/latest/loac/trait.StreamHandler.html) or [`RawStreamHandler`](https://docs.rs/loac/latest/loac/trait.RawStreamHandler.html) | `StreamReply<Item, Final>` |
+| `#[message(raw = Type)]` | [`RawHandler`](https://docs.rs/loac/latest/loac/trait.RawHandler.html) | `Type` |
+| `#[message(raw_stream = Item, reply = Final)]` | [`RawStreamHandler`](https://docs.rs/loac/latest/loac/trait.RawStreamHandler.html) | `StreamReply<Item, Final>` |
+
+Without `reply` the message is send-only. With `reply` it implements
+`HasReply` and can be used with `ActorRef::call`. Reply and final types
+default to `()` when omitted. The `raw` and `raw_stream` shapes skip the
+`Handler` / `StreamHandler` blanket adaptation and let the implementation
+choose an explicit reply strategy.
+
 ## Reply Modes
 
 | Strategy | Selected by | Actor progress while the reply runs |
 | --- | --- | --- |
 | ready | [`value.ready()`](https://docs.rs/loac/latest/loac/trait.ReplyExt.html#method.ready) from a [`RawHandler`](https://docs.rs/loac/latest/loac/trait.RawHandler.html) or [`RawStreamHandler`](https://docs.rs/loac/latest/loac/trait.RawStreamHandler.html) | The reply is already complete during dispatch. |
 | owned | A bare `Future` from a [`RawHandler`](https://docs.rs/loac/latest/loac/trait.RawHandler.html) or [`RawStreamHandler`](https://docs.rs/loac/latest/loac/trait.RawStreamHandler.html) | A Tokio task runs it beside all actor work. |
-| interleaved | [`Handler`](https://docs.rs/loac/latest/loac/trait.Handler.html) async fn, [`StreamHandler`](https://docs.rs/loac/latest/loac/trait.StreamHandler.html) async fn, or `future.interleaved()` | The actor task polls it fairly with mailbox, lifecycle, and other interleaved work. |
-| exclusive | `future.exclusive()` from a [`RawHandler`](https://docs.rs/loac/latest/loac/trait.RawHandler.html) or [`RawStreamHandler`](https://docs.rs/loac/latest/loac/trait.RawStreamHandler.html) | Mailbox and actor-aware work pause until it finishes; owned tasks continue. |
+| interleaved | [`Handler`](https://docs.rs/loac/latest/loac/trait.Handler.html) async fn, [`StreamHandler`](https://docs.rs/loac/latest/loac/trait.StreamHandler.html) async fn, `future.interleaved()`, or [`ActorScope::cx_reply`](https://docs.rs/loac/latest/loac/struct.ActorScope.html#method.cx_reply) / [`ActorScope::cx_stream`](https://docs.rs/loac/latest/loac/struct.ActorScope.html#method.cx_stream) | The actor task polls it fairly with mailbox, lifecycle, and other interleaved work. |
+| exclusive | `future.exclusive()`, [`ActorScope::cx_exclusive`](https://docs.rs/loac/latest/loac/struct.ActorScope.html#method.cx_exclusive), or [`ActorScope::cx_stream_exclusive`](https://docs.rs/loac/latest/loac/struct.ActorScope.html#method.cx_stream_exclusive) from a [`RawHandler`](https://docs.rs/loac/latest/loac/trait.RawHandler.html) or [`RawStreamHandler`](https://docs.rs/loac/latest/loac/trait.RawStreamHandler.html) | Mailbox and actor-aware work pause until it finishes; owned tasks continue. |
 
 `Handler` and `StreamHandler` always select interleaved scheduling, so they
 require `interleaved`. `RawHandler` and `RawStreamHandler` may select any
 strategy. `ready` and `exclusive` need no interleaving capability.
+
+The `cx` constructors on [`ActorScope`](https://docs.rs/loac/latest/loac/struct.ActorScope.html)
+pair `Cx` access with an explicit scheduling lane.
+Call [`cx_reply`](https://docs.rs/loac/latest/loac/struct.ActorScope.html#method.cx_reply) / [`cx_stream`](https://docs.rs/loac/latest/loac/struct.ActorScope.html#method.cx_stream) inside a raw handler for an interleaved cx future, and [`cx_exclusive`](https://docs.rs/loac/latest/loac/struct.ActorScope.html#method.cx_exclusive) / [`cx_stream_exclusive`](https://docs.rs/loac/latest/loac/struct.ActorScope.html#method.cx_stream_exclusive) for an exclusive cx future. Inside the returned future, call `Cx::with` for temporary actor and scope access.
 
 Stream messages use `#[message(stream = Item, reply = Final)]`. The runtime
 creates a bounded item channel and returns the receiver to the caller as a

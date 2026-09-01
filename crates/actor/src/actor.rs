@@ -279,11 +279,22 @@ where
 
 /// A typed request accepted by an actor.
 ///
-/// Declare one with `#[derive(Message)]`.
-/// The derive defaults its reply type to `()`.
-/// Without `#[message(reply = Type)]` the message is send-only and does not
-/// implement [`HasReply`], so it cannot be passed to [`crate::ActorRef::call`].
-/// Add `#[message(reply = Type)]` to make it callable.
+/// Declare one with `#[derive(Message)]`. The derive supports four shapes:
+///
+/// - `#[message(reply = Type)]` makes an ordinary callable message handled by
+///   [`crate::Handler`] or [`crate::RawHandler`].
+/// - `#[message(stream = Item, reply = Final)]` makes a stream message handled
+///   by [`crate::StreamHandler`] or [`crate::RawStreamHandler`].
+/// - `#[message(raw = Type)]` makes an ordinary message handled by
+///   [`crate::RawHandler`].
+/// - `#[message(raw_stream = Item, reply = Final)]` makes a stream message
+///   handled by [`crate::RawStreamHandler`].
+///
+/// The reply type defaults to `()` and is omitted for send-only messages.
+/// Without `reply` the message does not implement [`HasReply`], so it cannot
+/// be passed to [`crate::ActorRef::call`]. The `stream` shapes make
+/// [`crate::ActorRef::call`] return [`crate::reply::StreamReply`].
+/// See the derive macro documentation for the full attribute syntax.
 pub trait Message: Send + 'static {
     /// The typed value eventually returned to the caller.
     ///

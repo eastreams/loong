@@ -117,16 +117,26 @@
 //!
 //! # Messages
 //!
-//! Derive [`Message`] for each accepted request type.
-//! A message with `#[message(reply = Type)]` implements [`HasReply`] and can be
-//! used with [`ActorRef::call`]; without the attribute it is send-only and
-//! accepts only [`ActorRef::send`]. [`Message::Reply`] defaults to `()` either
-//! way.
+//! Derive [`Message`] for each accepted request type. The derive supports four
+//! message shapes:
 //!
-//! Implement [`Handler<M>`](Handler) for an actor-access `cx` reply future.
-//! Implement [`RawHandler<M>`](RawHandler) when a reply must choose an explicit
-//! scheduling strategy such as [`ReplyExt::exclusive`] or
-//! [`ReplyExt::ready`].
+//! | Attribute | Handler trait | Caller receives |
+//! | --- | --- | --- |
+//! | `#[message(reply = Type)]` | [`Handler`] or [`RawHandler`] | `Type` |
+//! | `#[message(stream = Item, reply = Final)]` | [`StreamHandler`] or [`RawStreamHandler`] | [`StreamReply`]`<Item, Final>` |
+//! | `#[message(raw = Type)]` | [`RawHandler`] | `Type` |
+//! | `#[message(raw_stream = Item, reply = Final)]` | [`RawStreamHandler`] | [`StreamReply`]`<Item, Final>` |
+//!
+//! Without an attribute the message is send-only and accepts only
+//! [`ActorRef::send`]. With `reply` it implements [`HasReply`] and can be used
+//! with [`ActorRef::call`]; the reply type defaults to `()` when omitted.
+//! Stream messages are handled by [`StreamHandler`] or [`RawStreamHandler`];
+//! their final reply type also defaults to `()` when omitted. The `raw` and
+//! `raw_stream` shapes are ordinary messages that skip the [`Handler`] /
+//! [`StreamHandler`] blanket adaptation and let the implementation choose an
+//! explicit strategy. See the [`Message`] derive macro documentation for the
+//! full attribute syntax.
+//!
 //! One actor may handle many message types.
 //!
 //! [`ActorRef::call`] waits for acceptance and a typed reply.
@@ -145,13 +155,20 @@
 //! | --- | --- | --- |
 //! | ready | [`value.ready()`](ReplyExt::ready) from a [`RawHandler`] or [`RawStreamHandler`] | The reply is already complete during dispatch |
 //! | owned | A bare [`Future`] from a [`RawHandler`] or [`RawStreamHandler`] | A Tokio task runs it beside all actor work |
-//! | interleaved | [`Handler`] async fn, [`StreamHandler`] async fn, or [`future.interleaved()`](InterleavedFutureExt::interleaved) | The actor task polls it fairly with mailbox, lifecycle, and other interleaved work |
-//! | exclusive | [`future.exclusive()`](ReplyExt::exclusive) from a [`RawHandler`] or [`RawStreamHandler`] | Mailbox and actor-aware work pause until it finishes; owned tasks continue |
+//! | interleaved | [`Handler`] async fn, [`StreamHandler`] async fn, [`future.interleaved()`](InterleavedFutureExt::interleaved), or [`ActorScope::cx_reply`] / [`ActorScope::cx_stream`] | The actor task polls it fairly with mailbox, lifecycle, and other interleaved work |
+//! | exclusive | [`future.exclusive()`](ReplyExt::exclusive), [`ActorScope::cx_exclusive`], or [`ActorScope::cx_stream_exclusive`] from a [`RawHandler`] or [`RawStreamHandler`] | Mailbox and actor-aware work pause until it finishes; owned tasks continue |
 //!
 //! [`Handler`] and [`StreamHandler`] always select interleaved scheduling, so
 //! they require [`HasInterleaving`]. [`RawHandler`] and [`RawStreamHandler`]
 //! may select any strategy. `ready` and `exclusive` need no interleaving
 //! capability.
+//!
+//! The `cx` constructors on [`ActorScope`] pair [`Cx`] access with an explicit
+//! scheduling lane. Use [`ActorScope::cx_reply`] / [`ActorScope::cx_stream`]
+//! for interleaved replies, and [`ActorScope::cx_exclusive`] /
+//! [`ActorScope::cx_stream_exclusive`] for exclusive replies. Call them inside
+//! a [`RawHandler`] or [`RawStreamHandler`] implementation; the returned future
+//! accesses actor and scope through [`Cx::with`].
 //! See [`reply`] for cancellation, panic, and scheduling details.
 //! See [`scheduling`] for built-in scheduling profiles.
 //!
