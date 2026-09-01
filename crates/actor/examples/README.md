@@ -1,15 +1,15 @@
 # Examples for loac
 
 These examples are small, executable guides to `loac`.
-Start with [`sync_handler`](sync_handler.rs).
+Start with [`cx_reply`](cx_reply.rs).
 
 Run an example from the workspace root:
 
 ```console
-cargo run -p loac --example sync_handler
+cargo run -p loac --example cx_reply
 ```
 
-Replace `sync_handler` with any target listed below.
+Replace `cx_reply` with any target listed below.
 Most examples print nothing.
 Their assertions check the demonstrated behavior.
 `streaming` prints receive times to show items arriving during production.
@@ -18,10 +18,12 @@ Their assertions check the demonstrated behavior.
 
 | Example | Focus |
 | --- | --- |
-| [`sync_handler`](sync_handler.rs) | Immediate replies, one-way messages, and root shutdown. |
+| [`cx_reply`](cx_reply.rs) | Primary `Handler` and `StreamHandler` with actor-access `cx` futures. |
+| [`raw_reply`](raw/raw_reply.rs) | Immediate replies, one-way messages, and root shutdown. |
 
-Prefer `SyncHandler<M>` for an immediate reply.
-It is equivalent to returning `.ready()` from `Handler<M>`.
+Prefer `Handler<M>` with an async `cx` future.
+Use `RawHandler<M>` when the reply must select an explicit strategy,
+such as returning `.ready()` during dispatch.
 
 ## Streaming
 
@@ -31,9 +33,9 @@ creates a bounded item channel and returns the receiver side to the caller as a
 
 | Example | Focus |
 | --- | --- |
-| [`streaming`](streaming.rs) | The basic owned stream: a bare future writes items. |
-| [`stream_strategies`](stream_strategies.rs) | Owned, ready/`Either`, exclusive, and interleaved stream scheduling. |
-| [`stream_to`](stream_to.rs) | Caller-provided writers: `call_to`/`send_to` with an mpsc sender and an `ActorRef`. |
+| [`stream_to`](stream_to.rs) | Primary `StreamHandler`: caller-provided writers through `call_to`/`send_to`. |
+| [`streaming`](raw/streaming.rs) | Raw stream: a bare future writes items through the runtime channel. |
+| [`stream_strategies`](raw/stream_strategies.rs) | Raw stream scheduling: owned, ready/`Either`, exclusive, and interleaved. |
 
 `call` returns a `StreamReply`. Read items with `recv` or `items`, then `finish`
 returns the final value. The item stream closes when the handler drops the
@@ -64,11 +66,11 @@ A reply strategy controls actor progress after handler dispatch.
 
 | Example | Focus |
 | --- | --- |
-| [`explicit_replies`](replies/explicit_replies.rs) | Select ready or owned work at runtime. |
-| [`interleaved_reply`](replies/interleaved_reply.rs) | Let mailbox work progress between actor-aware polls. |
-| [`exclusive_reply`](replies/exclusive_reply.rs) | Pause mailbox work until actor-aware work completes. |
+| [`explicit_replies`](raw/replies/explicit_replies.rs) | Select ready or owned work at runtime. |
+| [`interleaved_reply`](raw/replies/interleaved_reply.rs) | Let mailbox work progress between actor-aware polls. |
+| [`exclusive_reply`](raw/replies/exclusive_reply.rs) | Pause mailbox work until actor-aware work completes. |
 
-Use `SyncHandler` when the reply is already available.
+Use `RawHandler<M>` when the reply needs an explicit strategy.
 Return a bare `Future` for independent async work.
 Use `interleaved` for cooperative actor-aware work.
 Use `exclusive` when that work requires actor isolation.

@@ -31,16 +31,16 @@ tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "time"] }
 trybuild = "1.0.118"
 
 [[example]]
-name = "sync_handler"
-path = "examples/sync_handler.rs"
+name = "raw_reply"
+path = "examples/raw/raw_reply.rs"
 
 [[example]]
 name = "streaming"
-path = "examples/streaming.rs"
+path = "examples/raw/streaming.rs"
 
 [[example]]
 name = "stream_strategies"
-path = "examples/stream_strategies.rs"
+path = "examples/raw/stream_strategies.rs"
 
 [[example]]
 name = "stream_to"
@@ -60,15 +60,15 @@ path = "examples/configuration/const_generic_configuration.rs"
 
 [[example]]
 name = "explicit_replies"
-path = "examples/replies/explicit_replies.rs"
+path = "examples/raw/replies/explicit_replies.rs"
 
 [[example]]
 name = "interleaved_reply"
-path = "examples/replies/interleaved_reply.rs"
+path = "examples/raw/replies/interleaved_reply.rs"
 
 [[example]]
 name = "exclusive_reply"
-path = "examples/replies/exclusive_reply.rs"
+path = "examples/raw/replies/exclusive_reply.rs"
 
 [[example]]
 name = "top_level_actors"
