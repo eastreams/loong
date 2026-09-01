@@ -46,7 +46,7 @@ mod message;
 /// | --- | --- | --- |
 /// | `mailbox` | Enables typed public messaging | Nothing |
 /// | `mailbox_budget = E` | Limits consecutive message dispatch | `mailbox` |
-/// | `interleaved` | Enables interleaved actor-aware replies | `mailbox` |
+/// | `interleaved` | Enables `Handler`/`StreamHandler` dispatch and interleaved actor-aware replies | `mailbox` |
 /// | `children` | Enables direct child actor ownership | Nothing |
 ///
 /// `mailbox`, `interleaved`, and `children` share five forms:
@@ -86,6 +86,7 @@ mod message;
 ///
 /// # Interleaved replies
 ///
+/// `Handler` and `StreamHandler` dispatch requires this capability.
 /// The limit counts active interleaved replies.
 /// At the limit, queued messages pause before handler dispatch.
 /// Their reply modes are not known yet.
@@ -133,6 +134,12 @@ pub fn actor(args: TokenStream, input: TokenStream) -> TokenStream {
 /// `loac::call` then returns `loac::StreamReply<Item, Final>`, and the message
 /// is handled by implementing `loac::StreamHandler`. The final reply type
 /// defaults to `()` when only `stream` is present.
+///
+/// Use `#[message(raw = Type)]` for an ordinary message handled by
+/// `loac::RawHandler`, and `#[message(raw_stream = Item, reply = Final)]` for
+/// a stream message handled by `loac::RawStreamHandler`. Raw handlers choose
+/// an explicit reply strategy. The final reply type defaults to `()` when
+/// only `raw_stream` is present.
 ///
 /// Generic parameters and existing `where` predicates are preserved. The derive
 /// adds `Send + 'static` bounds to the message type and every selected reply

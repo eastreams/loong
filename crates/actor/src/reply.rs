@@ -208,9 +208,10 @@ pub struct Exclusive<F> {
 }
 
 /// An interleaved plain-Future reply that may access actor state through the
-/// [`ActorAccess`](crate::ActorAccess) handle captured by the future.
+/// [`Cx`](crate::Cx) handle captured by the future.
 ///
-/// Created by [`ActorScope::cx_reply`](crate::ActorScope::cx_reply).
+/// Created by [`Handler`](crate::Handler) dispatch, or manually through
+/// [`ActorScope::cx_reply`](crate::ActorScope::cx_reply).
 #[must_use = "a reply must be returned from a handler"]
 pub struct CxReply<A, R> {
     pub(crate) future: std::pin::Pin<Box<dyn Future<Output = R> + Send + 'static>>,
@@ -219,7 +220,8 @@ pub struct CxReply<A, R> {
 
 /// Streaming counterpart of [`CxReply`].
 ///
-/// Created by [`ActorScope::cx_stream`](crate::ActorScope::cx_stream).
+/// Created by [`StreamHandler`](crate::StreamHandler) dispatch, or manually
+/// through [`ActorScope::cx_stream`](crate::ActorScope::cx_stream).
 #[must_use = "a reply must be returned from a handler"]
 pub struct CxStream<A, R> {
     pub(crate) future: std::pin::Pin<Box<dyn Future<Output = R> + Send + 'static>>,
@@ -279,7 +281,7 @@ where
 }
 
 /// A stream-final scheduling strategy returned by a
-/// [`StreamHandler`](crate::StreamHandler).
+/// [`RawStreamHandler`](crate::RawStreamHandler).
 ///
 /// This is the streaming counterpart of [`IntoReply`]: a bare [`Future`] with
 /// output `M::Final` selects owned scheduling, [`Ready`] completes the final

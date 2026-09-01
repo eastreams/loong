@@ -11,8 +11,9 @@ use std::{marker::PhantomData, ptr::NonNull};
 
 use crate::{Actor, ActorScope, runtime::ScopeState};
 
-/// Owned access handle handed to [`ActorScope::cx_reply`] and
-/// [`ActorScope::cx_stream`] futures.
+/// Owned access handle used by [`Handler`](crate::Handler) and
+/// [`StreamHandler`](crate::StreamHandler) futures, and by the explicit
+/// [`ActorScope::cx_reply`] / [`ActorScope::cx_stream`] constructors.
 ///
 /// The handle carries a phantom lifetime so safe code cannot store it in a
 /// `'static` location (thread locals, detached tasks, globals). It is `Send`
@@ -72,6 +73,3 @@ impl<A: Actor> Cx<'_, A> {
 // actor task has exclusive access. The phantom lifetime does not correspond to
 // an actual borrow that could race with another thread.
 unsafe impl<A: Actor> Send for Cx<'_, A> {}
-
-/// Backwards-compatible alias for [`Cx`].
-pub type ActorAccess<'a, A> = Cx<'a, A>;

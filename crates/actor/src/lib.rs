@@ -74,7 +74,7 @@
 //! | --- | --- | --- |
 //! | `mailbox` | Enables typed [`send`](ActorRef::send) and [`call`](ActorRef::call) | Messaging methods are unavailable |
 //! | `mailbox_budget = E` | Limits consecutive message dispatch | Uses `16` with a mailbox |
-//! | `interleaved` | Enables [`interleaved`](InterleavedFutureExt::interleaved) replies | The method is unavailable |
+//! | `interleaved` | Enables [`Handler`]/[`StreamHandler`] dispatch and [`interleaved`](InterleavedFutureExt::interleaved) replies | The methods are unavailable |
 //! | `children` | Enables [`spawn_child`](ActorScope::spawn_child) | The method is unavailable |
 //!
 //! `mailbox`, `interleaved`, and `children` support three limit profiles.
@@ -235,7 +235,7 @@ pub mod supervision;
 pub mod transport;
 mod writer;
 
-pub use access::{ActorAccess, Cx};
+pub use access::Cx;
 pub use actor::{
     Actor, DispatchHandler, Handler, HasChildren, HasInterleaving, HasMailbox, HasReply, Message,
     RawHandler, RawStreamHandler, StreamHandler,

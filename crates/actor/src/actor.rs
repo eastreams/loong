@@ -297,7 +297,7 @@ pub trait Message: Send + 'static {
     /// Ordinary messages use [`reply::SyncKind`](crate::reply::SyncKind).
     /// Messages derived with `#[message(stream = ...)]` use
     /// [`reply::StreamKind`](crate::reply::StreamKind). The runtime reads this
-    /// kind when choosing a [`Handler`] implementation.
+    /// kind when selecting the [`DispatchHandler`] implementation.
     type Kind: crate::reply::ReplyKind;
 }
 
@@ -375,8 +375,9 @@ pub trait DispatchHandler<M: Message, K: crate::reply::ReplyKind = SyncKind>: Ha
 ///
 /// This is the primary handler trait. The runtime polls the returned future on
 /// the actor's interleaved lane, so dispatch through this trait requires
-/// [`HasInterleaving`]. Inside the future, use [`Cx::with_actor`] and
-/// [`Cx::with_scope`] for temporary actor and scope access. Those methods
+/// [`HasInterleaving`]. Inside the future, use [`Cx::with`] for combined
+/// actor and scope access, or [`Cx::with_actor`] / [`Cx::with_scope`] for a
+/// single temporary borrow. Those methods
 /// return before any `await`; neither the actor nor scope borrow can escape
 /// their call.
 ///
