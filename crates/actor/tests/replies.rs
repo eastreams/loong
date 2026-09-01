@@ -68,6 +68,8 @@ struct ExclusiveGate {
 mod basic;
 #[path = "replies/cancellation.rs"]
 mod cancellation;
+#[path = "replies/cx_exclusive.rs"]
+mod cx_exclusive;
 #[path = "replies/exclusive.rs"]
 mod exclusive;
 #[path = "replies/fairness.rs"]
