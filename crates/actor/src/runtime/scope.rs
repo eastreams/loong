@@ -119,12 +119,19 @@ impl<A: Actor> ActorScope<'_, A> {
         self.state.actor_ref.request_shutdown(shutdown)
     }
 
-    /// Builds a plain-Future reply that may access actor and scope through the
-    /// returned [`Cx`] handle.
+    /// Builds an interleaved plain-Future reply that may access actor and
+    /// scope through the returned [`Cx`] handle.
     ///
-    /// The closure must return a boxed future tied to the handle lifetime.
-    /// The runtime erases that lifetime internally; safe code cannot store the
-    /// handle in a `'static` location.
+    /// Use this inside [`RawHandler`](crate::RawHandler) when the reply should
+    /// use cx-style access and interleaved scheduling. Interleaved scheduling
+    /// requires [`HasInterleaving`](crate::HasInterleaving); use
+    /// [`cx_exclusive`](Self::cx_exclusive) for the exclusive counterpart.
+    ///
+    /// The closure receives a [`Cx`] handle and must return a boxed future
+    /// tied to the handle lifetime. Inside that future, call
+    /// [`Cx::with`](crate::Cx::with) for temporary actor and scope access.
+    /// The runtime erases the future lifetime internally; safe code cannot
+    /// store the handle in a `'static` location.
     #[allow(unsafe_code)]
     pub fn cx_reply<R, F>(&mut self, actor: &mut A, f: F) -> crate::reply::CxReply<A, R>
     where
@@ -143,7 +150,12 @@ impl<A: Actor> ActorScope<'_, A> {
         }
     }
 
-    /// Streaming counterpart of [`ActorScope::cx_reply`].
+    /// Streaming interleaved counterpart of [`ActorScope::cx_reply`].
+    ///
+    /// Use this inside [`RawStreamHandler`](crate::RawStreamHandler) when the
+    /// stream-final reply should use cx-style access and interleaved
+    /// scheduling. See [`cx_stream_exclusive`](Self::cx_stream_exclusive) for
+    /// the exclusive counterpart.
     #[allow(unsafe_code)]
     pub fn cx_stream<R, F>(&mut self, actor: &mut A, f: F) -> crate::reply::CxStream<A, R>
     where
@@ -157,6 +169,65 @@ impl<A: Actor> ActorScope<'_, A> {
         let future: std::pin::Pin<Box<dyn std::future::Future<Output = R> + Send + 'static>> =
             unsafe { std::mem::transmute(future) };
         crate::reply::CxStream {
+            future,
+            _actor: std::marker::PhantomData,
+        }
+    }
+
+    /// Builds an exclusive plain-Future reply that may access actor and scope
+    /// through the returned [`Cx`] handle.
+    ///
+    /// Use this inside [`RawHandler`](crate::RawHandler) when the reply should
+    /// use cx-style access and exclusive scheduling. Exclusive scheduling
+    /// pauses mailbox dispatch and other actor-aware work until the future
+    /// finishes; owned tasks may continue. It does not require
+    /// [`HasInterleaving`](crate::HasInterleaving).
+    ///
+    /// The closure receives a [`Cx`] handle and must return a boxed future
+    /// tied to the handle lifetime. Inside that future, call
+    /// [`Cx::with`](crate::Cx::with) for temporary actor and scope access.
+    /// The runtime erases the future lifetime internally; safe code cannot
+    /// store the handle in a `'static` location.
+    #[allow(unsafe_code)]
+    pub fn cx_exclusive<R, F>(&mut self, actor: &mut A, f: F) -> crate::reply::CxExclusive<A, R>
+    where
+        F: for<'a> FnOnce(
+            Cx<'a, A>,
+        )
+            -> std::pin::Pin<Box<dyn std::future::Future<Output = R> + Send + 'a>>,
+    {
+        let cx = Cx::new(actor, self.state);
+        let future = f(cx);
+        let future: std::pin::Pin<Box<dyn std::future::Future<Output = R> + Send + 'static>> =
+            unsafe { std::mem::transmute(future) };
+        crate::reply::CxExclusive {
+            future,
+            _actor: std::marker::PhantomData,
+        }
+    }
+
+    /// Streaming exclusive counterpart of [`ActorScope::cx_exclusive`].
+    ///
+    /// Use this inside [`RawStreamHandler`](crate::RawStreamHandler) when the
+    /// stream-final reply should use cx-style access and exclusive
+    /// scheduling.
+    #[allow(unsafe_code)]
+    pub fn cx_stream_exclusive<R, F>(
+        &mut self,
+        actor: &mut A,
+        f: F,
+    ) -> crate::reply::CxStreamExclusive<A, R>
+    where
+        F: for<'a> FnOnce(
+            Cx<'a, A>,
+        )
+            -> std::pin::Pin<Box<dyn std::future::Future<Output = R> + Send + 'a>>,
+    {
+        let cx = Cx::new(actor, self.state);
+        let future = f(cx);
+        let future: std::pin::Pin<Box<dyn std::future::Future<Output = R> + Send + 'static>> =
+            unsafe { std::mem::transmute(future) };
+        crate::reply::CxStreamExclusive {
             future,
             _actor: std::marker::PhantomData,
         }

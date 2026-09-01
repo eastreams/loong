@@ -257,8 +257,9 @@ pub use lifecycle::{
 };
 pub use loac_macros::{Message, actor};
 pub use reply::{
-    CxReply, CxStream, InterleavedFutureExt, IntoReply, IntoStreamReply, Items, RawKind,
-    RawStreamKind, ReplyExt, StreamKind, StreamMessage, StreamReply, SyncKind,
+    CxExclusive, CxReply, CxStream, CxStreamExclusive, InterleavedFutureExt, IntoReply,
+    IntoStreamReply, Items, RawKind, RawStreamKind, ReplyExt, StreamKind, StreamMessage,
+    StreamReply, SyncKind,
 };
 pub use runtime::{
     ActorOwner, ActorScope, ActorSpawner, SpawnOptions, StopScope, spawn, spawn_with,
@@ -296,12 +297,12 @@ pub mod __private {
 /// remain explicit imports so operational behavior stays visible at call sites.
 pub mod prelude {
     pub use crate::{
-        Actor, ActorFuture, ActorFutureExt, ActorScope, ActorSpawner, Cx, CxReply, CxStream,
-        DispatchHandler, DynamicChildrenOptions, DynamicInterleavingOptions, DynamicMailboxOptions,
-        Handler, HasChildren, HasInterleaving, HasMailbox, HasReply, InterleavedFutureExt,
-        IntoActorFuture, IntoReply, IntoStreamReply, Items, Message, RawHandler, RawKind,
-        RawStreamHandler, RawStreamKind, ReplyExt, StopScope, StreamHandler, StreamMessage,
-        StreamReply, SyncKind, Writer, actor, reply,
+        Actor, ActorFuture, ActorFutureExt, ActorScope, ActorSpawner, Cx, CxExclusive, CxReply,
+        CxStream, CxStreamExclusive, DispatchHandler, DynamicChildrenOptions,
+        DynamicInterleavingOptions, DynamicMailboxOptions, Handler, HasChildren, HasInterleaving,
+        HasMailbox, HasReply, InterleavedFutureExt, IntoActorFuture, IntoReply, IntoStreamReply,
+        Items, Message, RawHandler, RawKind, RawStreamHandler, RawStreamKind, ReplyExt, StopScope,
+        StreamHandler, StreamMessage, StreamReply, SyncKind, Writer, actor, reply,
     };
 }
 

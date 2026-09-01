@@ -228,6 +228,28 @@ pub struct CxStream<A, R> {
     pub(crate) _actor: PhantomData<fn() -> A>,
 }
 
+/// An exclusive plain-Future reply that may access actor state through the
+/// [`Cx`](crate::Cx) handle captured by the future.
+///
+/// Created by [`ActorScope::cx_exclusive`](crate::ActorScope::cx_exclusive).
+/// While this future runs, mailbox dispatch and other actor-aware work pause;
+/// owned tasks may continue.
+#[must_use = "a reply must be returned from a handler"]
+pub struct CxExclusive<A, R> {
+    pub(crate) future: std::pin::Pin<Box<dyn Future<Output = R> + Send + 'static>>,
+    pub(crate) _actor: PhantomData<fn() -> A>,
+}
+
+/// Streaming exclusive counterpart of [`CxStream`].
+///
+/// Created by
+/// [`ActorScope::cx_stream_exclusive`](crate::ActorScope::cx_stream_exclusive).
+#[must_use = "a reply must be returned from a handler"]
+pub struct CxStreamExclusive<A, R> {
+    pub(crate) future: std::pin::Pin<Box<dyn Future<Output = R> + Send + 'static>>,
+    pub(crate) _actor: PhantomData<fn() -> A>,
+}
+
 /// One of two statically known reply strategies.
 ///
 /// `Either` lets a handler choose a concrete scheduling mode at runtime without
@@ -612,6 +634,26 @@ pub(crate) mod sealed {
         }
     }
 
+    impl<A, M> HandleReply<A, M> for CxExclusive<A, M::Reply>
+    where
+        A: HasMailbox,
+        M: Message,
+        M::Reply: Send + 'static,
+    {
+        fn handle(
+            self,
+            _owned: &OwnedTasks<A>,
+            scheduler: &mut ActorScheduler<A>,
+            reply: DispatchReply<'_, A, M::Reply>,
+        ) {
+            use crate::IntoActorFuture;
+            scheduler.__push_exclusive(
+                Seal,
+                CompleteReply::new(self.future.into_actor(), reply.into_owned()),
+            );
+        }
+    }
+
     impl<A, M, L, R> HandleReply<A, M> for Either<L, R>
     where
         A: Actor,
@@ -726,6 +768,23 @@ pub(crate) mod sealed {
         }
     }
 
+    impl<A, M> HandleStream<A, M> for CxStreamExclusive<A, M::Final>
+    where
+        A: HasMailbox,
+        M: StreamReplyMessage,
+        M::Final: Send + 'static,
+    {
+        fn handle_stream(
+            self,
+            _owned: &OwnedTasks<A>,
+            scheduler: &mut ActorScheduler<A>,
+            final_tx: oneshot::Sender<M::Final>,
+        ) {
+            use crate::IntoActorFuture;
+            scheduler.__push_exclusive(Seal, FinishStream::new(self.future.into_actor(), final_tx));
+        }
+    }
+
     impl<A, M, L, R> HandleStream<A, M> for Either<L, R>
     where
         A: Actor,
@@ -837,6 +896,26 @@ pub(crate) mod sealed {
         ) {
             use crate::IntoActorFuture;
             scheduler.__push_interleaved(
+                Seal,
+                CompleteReply::new(self.future.into_actor(), reply.into_owned()),
+            );
+        }
+    }
+
+    impl<A, M> HandleStreamCall<A, M> for CxStreamExclusive<A, M::Final>
+    where
+        A: HasMailbox,
+        M: StreamReplyMessage,
+        M::Final: Send + 'static,
+    {
+        fn handle_stream_call(
+            self,
+            _owned: &OwnedTasks<A>,
+            scheduler: &mut ActorScheduler<A>,
+            reply: DispatchReply<'_, A, M::Final>,
+        ) {
+            use crate::IntoActorFuture;
+            scheduler.__push_exclusive(
                 Seal,
                 CompleteReply::new(self.future.into_actor(), reply.into_owned()),
             );
