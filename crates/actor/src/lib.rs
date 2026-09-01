@@ -138,20 +138,22 @@
 //!
 //! # Reply progress
 //!
-//! A reply mode controls actor progress after handler dispatch.
+//! After dispatch, a handler returns a reply strategy. The strategy controls
+//! how the reply runs beside the rest of the actor.
 //!
-//! | Selection | Actor progress while awaiting the reply |
-//! | --- | --- |
-//! | [`Handler`] async `cx` future | The runtime polls it on the interleaved lane; requires [`HasInterleaving`] |
-//! | [`RawHandler`] with [`ready`](ReplyExt::ready) | The reply finishes during dispatch |
-//! | A bare [`Future`] | Other actor work continues beside an owned Tokio task |
-//! | [`interleaved`](InterleavedFutureExt::interleaved) | Eligible actor work continues between polls |
-//! | [`exclusive`](ReplyExt::exclusive) | Other actor-local work pauses; owned tasks may continue |
+//! | Strategy | Selected by | Actor progress while the reply runs |
+//! | --- | --- | --- |
+//! | ready | [`value.ready()`](ReplyExt::ready) from a [`RawHandler`] or [`RawStreamHandler`] | The reply is already complete during dispatch |
+//! | owned | A bare [`Future`] from a [`RawHandler`] or [`RawStreamHandler`] | A Tokio task runs it beside all actor work |
+//! | interleaved | [`Handler`] async fn, [`StreamHandler`] async fn, or [`future.interleaved()`](InterleavedFutureExt::interleaved) | The actor task polls it fairly with mailbox, lifecycle, and other interleaved work |
+//! | exclusive | [`future.exclusive()`](ReplyExt::exclusive) from a [`RawHandler`] or [`RawStreamHandler`] | Mailbox and actor-aware work pause until it finishes; owned tasks continue |
 //!
-//! Interleaved replies require [`HasInterleaving`].
-//! Exclusive replies require no interleaving capability.
-//! See [`reply`] for cancellation, panic, and scheduling behavior.
-//! See [`scheduling`] for the built-in scheduling profiles.
+//! [`Handler`] and [`StreamHandler`] always select interleaved scheduling, so
+//! they require [`HasInterleaving`]. [`RawHandler`] and [`RawStreamHandler`]
+//! may select any strategy. `ready` and `exclusive` need no interleaving
+//! capability.
+//! See [`reply`] for cancellation, panic, and scheduling details.
+//! See [`scheduling`] for built-in scheduling profiles.
 //!
 //! # Ownership and child actors
 //!

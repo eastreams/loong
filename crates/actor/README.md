@@ -107,13 +107,16 @@ See the [attribute reference](https://docs.rs/loac/latest/loac/attr.actor.html) 
 
 ## Reply Modes
 
-| Selection | Actor progress while awaiting the reply |
-| --- | --- |
-| [`Handler`](https://docs.rs/loac/latest/loac/trait.Handler.html) async `cx` future | The runtime polls it on the interleaved lane; requires `interleaved`. |
-| [`RawHandler`](https://docs.rs/loac/latest/loac/trait.RawHandler.html) with [`ready`](https://docs.rs/loac/latest/loac/trait.ReplyExt.html#method.ready) | The reply finishes during dispatch. |
-| A bare `Future` | An owned Tokio task continues beside actor work. |
-| `interleaved` | Eligible actor work continues between polls. |
-| `exclusive` | Other actor-local work pauses. Owned tasks continue. |
+| Strategy | Selected by | Actor progress while the reply runs |
+| --- | --- | --- |
+| ready | [`value.ready()`](https://docs.rs/loac/latest/loac/trait.ReplyExt.html#method.ready) from a [`RawHandler`](https://docs.rs/loac/latest/loac/trait.RawHandler.html) or [`RawStreamHandler`](https://docs.rs/loac/latest/loac/trait.RawStreamHandler.html) | The reply is already complete during dispatch. |
+| owned | A bare `Future` from a [`RawHandler`](https://docs.rs/loac/latest/loac/trait.RawHandler.html) or [`RawStreamHandler`](https://docs.rs/loac/latest/loac/trait.RawStreamHandler.html) | A Tokio task runs it beside all actor work. |
+| interleaved | [`Handler`](https://docs.rs/loac/latest/loac/trait.Handler.html) async fn, [`StreamHandler`](https://docs.rs/loac/latest/loac/trait.StreamHandler.html) async fn, or `future.interleaved()` | The actor task polls it fairly with mailbox, lifecycle, and other interleaved work. |
+| exclusive | `future.exclusive()` from a [`RawHandler`](https://docs.rs/loac/latest/loac/trait.RawHandler.html) or [`RawStreamHandler`](https://docs.rs/loac/latest/loac/trait.RawStreamHandler.html) | Mailbox and actor-aware work pause until it finishes; owned tasks continue. |
+
+`Handler` and `StreamHandler` always select interleaved scheduling, so they
+require `interleaved`. `RawHandler` and `RawStreamHandler` may select any
+strategy. `ready` and `exclusive` need no interleaving capability.
 
 Stream messages use `#[message(stream = Item, reply = Final)]`. The runtime
 creates a bounded item channel and returns the receiver to the caller as a
