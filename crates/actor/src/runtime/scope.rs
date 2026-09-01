@@ -154,8 +154,10 @@ impl<A: Actor> ActorScope<'_, A> {
     ///
     /// Use this inside [`RawStreamHandler`](crate::RawStreamHandler) when the
     /// stream-final reply should use cx-style access and interleaved
-    /// scheduling. See [`cx_stream_exclusive`](Self::cx_stream_exclusive) for
-    /// the exclusive counterpart.
+    /// scheduling. Interleaved scheduling requires
+    /// [`HasInterleaving`](crate::HasInterleaving); see
+    /// [`cx_stream_exclusive`](Self::cx_stream_exclusive) for the exclusive
+    /// counterpart.
     #[allow(unsafe_code)]
     pub fn cx_stream<R, F>(&mut self, actor: &mut A, f: F) -> crate::reply::CxStream<A, R>
     where
@@ -209,8 +211,11 @@ impl<A: Actor> ActorScope<'_, A> {
     /// Streaming exclusive counterpart of [`ActorScope::cx_exclusive`].
     ///
     /// Use this inside [`RawStreamHandler`](crate::RawStreamHandler) when the
-    /// stream-final reply should use cx-style access and exclusive
-    /// scheduling.
+    /// stream-final reply should use cx-style access and exclusive scheduling.
+    /// Exclusive scheduling pauses mailbox dispatch and other actor-aware work
+    /// until the final future finishes; owned tasks may continue. It does not
+    /// require [`HasInterleaving`](crate::HasInterleaving). The returned future
+    /// may also capture the item writer passed to the raw stream handler.
     #[allow(unsafe_code)]
     pub fn cx_stream_exclusive<R, F>(
         &mut self,

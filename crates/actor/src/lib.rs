@@ -122,17 +122,17 @@
 //!
 //! | Attribute | Handler trait | Caller receives |
 //! | --- | --- | --- |
-//! | `#[message(reply = Type)]` | [`Handler`] or [`RawHandler`] | `Type` |
-//! | `#[message(stream = Item, reply = Final)]` | [`StreamHandler`] or [`RawStreamHandler`] | [`StreamReply`]`<Item, Final>` |
+//! | `#[message(reply = Type)]` | [`Handler`] | `Type` |
+//! | `#[message(stream = Item, reply = Final)]` | [`StreamHandler`] | [`StreamReply`]`<Item, Final>` |
 //! | `#[message(raw = Type)]` | [`RawHandler`] | `Type` |
 //! | `#[message(raw_stream = Item, reply = Final)]` | [`RawStreamHandler`] | [`StreamReply`]`<Item, Final>` |
 //!
 //! Without an attribute the message is send-only and accepts only
 //! [`ActorRef::send`]. With `reply` it implements [`HasReply`] and can be used
 //! with [`ActorRef::call`]; the reply type defaults to `()` when omitted.
-//! Stream messages are handled by [`StreamHandler`] or [`RawStreamHandler`];
-//! their final reply type also defaults to `()` when omitted. The `raw` and
-//! `raw_stream` shapes are ordinary messages that skip the [`Handler`] /
+//! Stream messages are handled by [`StreamHandler`] and stream messages with
+//! `raw_stream` by [`RawStreamHandler`]; their final reply type also defaults to
+//! `()` when omitted. The `raw` and `raw_stream` shapes skip the [`Handler`] /
 //! [`StreamHandler`] blanket adaptation and let the implementation choose an
 //! explicit strategy. See the [`Message`] derive macro documentation for the
 //! full attribute syntax.
@@ -155,7 +155,7 @@
 //! | --- | --- | --- |
 //! | ready | [`value.ready()`](ReplyExt::ready) from a [`RawHandler`] or [`RawStreamHandler`] | The reply is already complete during dispatch |
 //! | owned | A bare [`Future`] from a [`RawHandler`] or [`RawStreamHandler`] | A Tokio task runs it beside all actor work |
-//! | interleaved | [`Handler`] async fn, [`StreamHandler`] async fn, [`future.interleaved()`](InterleavedFutureExt::interleaved), or [`ActorScope::cx_reply`] / [`ActorScope::cx_stream`] | The actor task polls it fairly with mailbox, lifecycle, and other interleaved work |
+//! | interleaved | [`Handler`] async fn, [`StreamHandler`] async fn, [`future.interleaved()`](InterleavedFutureExt::interleaved), or [`ActorScope::cx_reply`] / [`ActorScope::cx_stream`] from a [`RawHandler`] or [`RawStreamHandler`] | The actor task polls it fairly with mailbox, lifecycle, and other interleaved work |
 //! | exclusive | [`future.exclusive()`](ReplyExt::exclusive), [`ActorScope::cx_exclusive`], or [`ActorScope::cx_stream_exclusive`] from a [`RawHandler`] or [`RawStreamHandler`] | Mailbox and actor-aware work pause until it finishes; owned tasks continue |
 //!
 //! [`Handler`] and [`StreamHandler`] always select interleaved scheduling, so

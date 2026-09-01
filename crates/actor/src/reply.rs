@@ -218,10 +218,13 @@ pub struct CxReply<A, R> {
     pub(crate) _actor: PhantomData<fn() -> A>,
 }
 
-/// Streaming counterpart of [`CxReply`].
+/// Streaming interleaved counterpart of [`CxReply`].
 ///
-/// Created by [`StreamHandler`](crate::StreamHandler) dispatch, or manually
-/// through [`ActorScope::cx_stream`](crate::ActorScope::cx_stream).
+/// This is the stream-final reply strategy created by
+/// [`StreamHandler`](crate::StreamHandler) dispatch, or manually through
+/// [`ActorScope::cx_stream`](crate::ActorScope::cx_stream). While this future
+/// runs, the actor task polls it on the interleaved lane; the future may access
+/// actor state through the [`Cx`](crate::Cx) handle captured by the future.
 #[must_use = "a reply must be returned from a handler"]
 pub struct CxStream<A, R> {
     pub(crate) future: std::pin::Pin<Box<dyn Future<Output = R> + Send + 'static>>,
@@ -242,8 +245,11 @@ pub struct CxExclusive<A, R> {
 
 /// Streaming exclusive counterpart of [`CxStream`].
 ///
-/// Created by
+/// This is the stream-final reply strategy created by
 /// [`ActorScope::cx_stream_exclusive`](crate::ActorScope::cx_stream_exclusive).
+/// While this future runs, mailbox dispatch and other actor-aware work pause;
+/// owned tasks may continue. The future may access actor state through the
+/// [`Cx`](crate::Cx) handle captured by the future.
 #[must_use = "a reply must be returned from a handler"]
 pub struct CxStreamExclusive<A, R> {
     pub(crate) future: std::pin::Pin<Box<dyn Future<Output = R> + Send + 'static>>,

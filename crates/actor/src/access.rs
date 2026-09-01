@@ -13,7 +13,9 @@ use crate::{Actor, ActorScope, runtime::ScopeState};
 
 /// Owned access handle used by [`Handler`](crate::Handler) and
 /// [`StreamHandler`](crate::StreamHandler) futures, and by the explicit
-/// [`ActorScope::cx_reply`] / [`ActorScope::cx_stream`] constructors.
+/// [`ActorScope::cx_reply`] / [`ActorScope::cx_stream`] interleaved and
+/// [`ActorScope::cx_exclusive`] / [`ActorScope::cx_stream_exclusive`]
+/// exclusive constructors.
 ///
 /// The handle carries a phantom lifetime so safe code cannot store it in a
 /// `'static` location (thread locals, detached tasks, globals). It is `Send`

@@ -282,17 +282,17 @@ where
 /// Declare one with `#[derive(Message)]`. The derive supports four shapes:
 ///
 /// - `#[message(reply = Type)]` makes an ordinary callable message handled by
-///   [`crate::Handler`] or [`crate::RawHandler`].
+///   [`crate::Handler`].
 /// - `#[message(stream = Item, reply = Final)]` makes a stream message handled
-///   by [`crate::StreamHandler`] or [`crate::RawStreamHandler`].
+///   by [`crate::StreamHandler`].
 /// - `#[message(raw = Type)]` makes an ordinary message handled by
 ///   [`crate::RawHandler`].
 /// - `#[message(raw_stream = Item, reply = Final)]` makes a stream message
 ///   handled by [`crate::RawStreamHandler`].
 ///
-/// The reply type defaults to `()` and is omitted for send-only messages.
-/// Without `reply` the message does not implement [`HasReply`], so it cannot
-/// be passed to [`crate::ActorRef::call`]. The `stream` shapes make
+/// The reply type defaults to `()` whenever the attribute omits it. Without
+/// `reply` the message does not implement [`HasReply`], so it cannot be passed
+/// to [`crate::ActorRef::call`]. The `stream` shapes make
 /// [`crate::ActorRef::call`] return [`crate::reply::StreamReply`].
 /// See the derive macro documentation for the full attribute syntax.
 pub trait Message: Send + 'static {
@@ -307,8 +307,12 @@ pub trait Message: Send + 'static {
     ///
     /// Ordinary messages use [`reply::SyncKind`](crate::reply::SyncKind).
     /// Messages derived with `#[message(stream = ...)]` use
-    /// [`reply::StreamKind`](crate::reply::StreamKind). The runtime reads this
-    /// kind when selecting the [`DispatchHandler`] implementation.
+    /// [`reply::StreamKind`](crate::reply::StreamKind). Explicit-strategy
+    /// messages use [`reply::RawKind`](crate::reply::RawKind) for
+    /// `#[message(raw = ...)]` and
+    /// [`reply::RawStreamKind`](crate::reply::RawStreamKind) for
+    /// `#[message(raw_stream = ...)]`. The runtime reads this kind when
+    /// selecting the [`DispatchHandler`] implementation.
     type Kind: crate::reply::ReplyKind;
 }
 
