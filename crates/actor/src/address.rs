@@ -1,15 +1,14 @@
 use std::{fmt, future::Future, pin::Pin, sync::Arc, task};
 
 use crate::{
-    Actor, CallError, ExitStatus, Handler, HasReply, Message, SendError, SendToError, Shutdown,
-    ShutdownStatus, StreamHandler, StreamMessage, TryCallError, TryCallErrorKind, TrySendError,
-    TrySendErrorKind, Writer,
-    actor::HasMailbox,
+    Actor, CallError, DispatchHandler, ExitStatus, HasReply, Message, SendError, SendToError,
+    Shutdown, ShutdownStatus, StreamHandler, StreamMessage, TryCallError, TryCallErrorKind,
+    TrySendError, TrySendErrorKind, Writer,
+    actor::{HasInterleaving, HasMailbox},
     mailbox::{
         ActorInner, CallEnvelope, Mode, ReplyReceiver, SendEnvelope, StreamToEnvelope,
         poll_with_panic_safe_waker,
     },
-    reply::SyncKind,
     transport::{MessageConfig, MessageReservation, MessageSender, TryReserveError},
 };
 
@@ -65,14 +64,14 @@ pub trait Recipient<M: Message>: Send + Sync + private::Sealed {
         message: M,
     ) -> Pin<Box<dyn Future<Output = Result<(), SendError<M>>> + Send + 'a>>
     where
-        M: Message<Reply = (), Kind = SyncKind>;
+        M: Message<Reply = ()>;
 
     /// Attempts immediate admission of a one-way message.
     ///
     /// It follows [`ActorRef::try_send`] admission and error rules.
     fn try_send(&self, message: M) -> Result<(), TrySendError<M>>
     where
-        M: Message<Reply = (), Kind = SyncKind>;
+        M: Message<Reply = ()>;
 }
 
 impl<A: Actor> private::Sealed for ActorRef<A> {}
@@ -90,7 +89,7 @@ impl<A: Actor> ActorRef<A> {
     /// for unit-reply `M`, also send it. It has no lifecycle methods.
     pub fn recipient<M>(&self) -> Arc<dyn Recipient<M>>
     where
-        A: Handler<M, M::Kind>,
+        A: DispatchHandler<M, M::Kind>,
         M: Message,
     {
         let recipient: Arc<dyn Recipient<M>> = Arc::new(self.clone());
@@ -121,7 +120,7 @@ impl<A: Actor> ActorRef<A> {
     /// the call; if dispatch already began, the handler still continues.
     pub async fn call<M>(&self, message: M) -> Result<M::Reply, CallError>
     where
-        A: Handler<M, M::Kind>,
+        A: DispatchHandler<M, M::Kind>,
         M: Message + HasReply,
     {
         let response = match self.try_call(message) {
@@ -163,7 +162,7 @@ impl<A: Actor> ActorRef<A> {
     /// continues.
     pub async fn call_to<M, W>(&self, message: M, out: W) -> Result<M::Final, CallError>
     where
-        A: StreamHandler<M>,
+        A: StreamHandler<M> + HasInterleaving,
         M: StreamMessage,
         W: Writer<M::Item> + Send + 'static,
     {
@@ -201,8 +200,8 @@ impl<A: Actor> ActorRef<A> {
     /// [`try_send`](Self::try_send) when capacity failure must return the message.
     pub async fn send<M>(&self, message: M) -> Result<(), SendError<M>>
     where
-        A: Handler<M>,
-        M: Message<Reply = (), Kind = SyncKind>,
+        A: DispatchHandler<M, M::Kind>,
+        M: Message<Reply = ()>,
     {
         match self.try_send(message) {
             Ok(()) => Ok(()),
@@ -232,7 +231,7 @@ impl<A: Actor> ActorRef<A> {
     /// `out`; the final value is produced and dropped.
     pub async fn send_to<M, W>(&self, message: M, out: W) -> Result<(), SendToError<M, W>>
     where
-        A: StreamHandler<M>,
+        A: StreamHandler<M> + HasInterleaving,
         M: StreamMessage,
         W: Writer<M::Item> + Send + 'static,
     {
@@ -259,7 +258,7 @@ impl<A: Actor> ActorRef<A> {
     /// [`TryCallErrorKind::Closed`] means lifecycle shutdown had closed admission.
     pub fn try_call<M>(&self, message: M) -> Result<Response<M::Reply>, TryCallError<M>>
     where
-        A: Handler<M, M::Kind>,
+        A: DispatchHandler<M, M::Kind>,
         M: Message + HasReply,
     {
         let inner = &self.0;
@@ -298,8 +297,8 @@ impl<A: Actor> ActorRef<A> {
     /// [`TrySendErrorKind::Closed`] means lifecycle shutdown had closed admission.
     pub fn try_send<M>(&self, message: M) -> Result<(), TrySendError<M>>
     where
-        A: Handler<M>,
-        M: Message<Reply = (), Kind = SyncKind>,
+        A: DispatchHandler<M, M::Kind>,
+        M: Message<Reply = ()>,
     {
         let inner = &self.0;
 
@@ -364,7 +363,7 @@ impl<A: Actor> ActorRef<A> {
     /// Builds and admits a call with either reservation ownership shape.
     fn admit_call<M, R>(&self, reservation: R, message: M) -> Result<Response<M::Reply>, M>
     where
-        A: Handler<M, M::Kind>,
+        A: DispatchHandler<M, M::Kind>,
         M: Message,
         R: MessageReservation<A>,
     {
@@ -382,8 +381,8 @@ impl<A: Actor> ActorRef<A> {
     /// Builds and admits a one-way envelope with either reservation shape.
     fn admit_send<M, R>(&self, reservation: R, message: M) -> Result<(), M>
     where
-        A: Handler<M>,
-        M: Message<Reply = (), Kind = SyncKind>,
+        A: DispatchHandler<M, M::Kind>,
+        M: Message<Reply = ()>,
         R: MessageReservation<A>,
     {
         let envelope = Box::new(SendEnvelope::new(message));
@@ -404,7 +403,7 @@ impl<A: Actor> ActorRef<A> {
         out: W,
     ) -> Result<Response<M::Final>, (M, W)>
     where
-        A: StreamHandler<M>,
+        A: StreamHandler<M> + HasInterleaving,
         M: StreamMessage,
         W: Writer<M::Item> + Send + 'static,
         R: MessageReservation<A>,
@@ -423,7 +422,7 @@ impl<A: Actor> ActorRef<A> {
     /// Builds and admits a one-way stream envelope carrying a caller writer.
     fn admit_stream_send<M, W, R>(&self, reservation: R, message: M, out: W) -> Result<(), (M, W)>
     where
-        A: StreamHandler<M>,
+        A: StreamHandler<M> + HasInterleaving,
         M: StreamMessage,
         W: Writer<M::Item> + Send + 'static,
         R: MessageReservation<A>,
@@ -517,7 +516,7 @@ impl<A: Actor> fmt::Debug for ActorRef<A> {
 
 impl<A, M> Recipient<M> for ActorRef<A>
 where
-    A: Actor + Handler<M, M::Kind>,
+    A: Actor + DispatchHandler<M, M::Kind>,
     M: Message,
 {
     fn call<'a>(
@@ -542,14 +541,14 @@ where
         message: M,
     ) -> Pin<Box<dyn Future<Output = Result<(), SendError<M>>> + Send + 'a>>
     where
-        M: Message<Reply = (), Kind = SyncKind>,
+        M: Message<Reply = ()>,
     {
         Box::pin(ActorRef::send(self, message))
     }
 
     fn try_send(&self, message: M) -> Result<(), TrySendError<M>>
     where
-        M: Message<Reply = (), Kind = SyncKind>,
+        M: Message<Reply = ()>,
     {
         ActorRef::try_send(self, message)
     }
@@ -578,14 +577,14 @@ impl<M: Message> Recipient<M> for Arc<dyn Recipient<M>> {
         message: M,
     ) -> Pin<Box<dyn Future<Output = Result<(), SendError<M>>> + Send + 'a>>
     where
-        M: Message<Reply = (), Kind = SyncKind>,
+        M: Message<Reply = ()>,
     {
         self.as_ref().send(message)
     }
 
     fn try_send(&self, message: M) -> Result<(), TrySendError<M>>
     where
-        M: Message<Reply = (), Kind = SyncKind>,
+        M: Message<Reply = ()>,
     {
         self.as_ref().try_send(message)
     }
@@ -595,7 +594,7 @@ impl<M: Message> Recipient<M> for Arc<dyn Recipient<M>> {
 // from `send`'s `SendError` when admission is closed.
 impl<M, R> Writer<M> for R
 where
-    M: Message<Reply = (), Kind = SyncKind>,
+    M: Message<Reply = ()>,
     R: Recipient<M>,
 {
     async fn write(&mut self, item: M) -> Result<(), M> {

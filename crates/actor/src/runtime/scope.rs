@@ -1,5 +1,5 @@
-use crate::ActorAccess;
 use super::*;
+use crate::access::Cx;
 
 // Runtime ownership stays private.
 // Public scope views expose only phase-valid capabilities.
@@ -120,7 +120,7 @@ impl<A: Actor> ActorScope<'_, A> {
     }
 
     /// Builds a plain-Future reply that may access actor and scope through the
-    /// returned [`ActorAccess`] handle.
+    /// returned [`Cx`] handle.
     ///
     /// The closure must return a boxed future tied to the handle lifetime.
     /// The runtime erases that lifetime internally; safe code cannot store the
@@ -129,14 +129,14 @@ impl<A: Actor> ActorScope<'_, A> {
     pub fn cx_reply<R, F>(&mut self, actor: &mut A, f: F) -> crate::reply::CxReply<A, R>
     where
         F: for<'a> FnOnce(
-            ActorAccess<'a, A>,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = R> + Send + 'a>>,
+            Cx<'a, A>,
+        )
+            -> std::pin::Pin<Box<dyn std::future::Future<Output = R> + Send + 'a>>,
     {
-        let cx = ActorAccess::new(actor, self.state);
+        let cx = Cx::new(actor, self.state);
         let future = f(cx);
-        let future: std::pin::Pin<
-            Box<dyn std::future::Future<Output = R> + Send + 'static>,
-        > = unsafe { std::mem::transmute(future) };
+        let future: std::pin::Pin<Box<dyn std::future::Future<Output = R> + Send + 'static>> =
+            unsafe { std::mem::transmute(future) };
         crate::reply::CxReply {
             future,
             _actor: std::marker::PhantomData,
@@ -148,14 +148,14 @@ impl<A: Actor> ActorScope<'_, A> {
     pub fn cx_stream<R, F>(&mut self, actor: &mut A, f: F) -> crate::reply::CxStream<A, R>
     where
         F: for<'a> FnOnce(
-            ActorAccess<'a, A>,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = R> + Send + 'a>>,
+            Cx<'a, A>,
+        )
+            -> std::pin::Pin<Box<dyn std::future::Future<Output = R> + Send + 'a>>,
     {
-        let cx = ActorAccess::new(actor, self.state);
+        let cx = Cx::new(actor, self.state);
         let future = f(cx);
-        let future: std::pin::Pin<
-            Box<dyn std::future::Future<Output = R> + Send + 'static>,
-        > = unsafe { std::mem::transmute(future) };
+        let future: std::pin::Pin<Box<dyn std::future::Future<Output = R> + Send + 'static>> =
+            unsafe { std::mem::transmute(future) };
         crate::reply::CxStream {
             future,
             _actor: std::marker::PhantomData,

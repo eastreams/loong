@@ -13,14 +13,14 @@
 //! # Quick start
 //!
 //! This actor accepts typed `Add` requests.
-//! [`SyncHandler`] produces each reply during message dispatch.
+//! [`Handler`] produces each reply through an actor-access `cx` future.
 //!
 //! ```
 //! use loac::{ExitReason, Shutdown, prelude::*};
 //!
 //! struct Counter(u64);
 //!
-//! #[actor(mailbox)]
+//! #[actor(mailbox, interleaved = unbounded)]
 //! impl Actor for Counter {
 //!     type SpawnArgs = u64;
 //!
@@ -33,14 +33,12 @@
 //! #[message(reply = u64)]
 //! struct Add(u64);
 //!
-//! impl SyncHandler<Add> for Counter {
-//!     fn handle(
-//!         &mut self,
-//!         message: Add,
-//!         _scope: &mut ActorScope<'_, Self>,
-//!     ) -> u64 {
-//!         self.0 += message.0;
-//!         self.0
+//! impl Handler<Add> for Counter {
+//!     async fn handle(message: Add, mut cx: Cx<'_, Self>) -> u64 {
+//!         cx.with_actor(|actor| {
+//!             actor.0 += message.0;
+//!             actor.0
+//!         })
 //!     }
 //! }
 //!
@@ -125,8 +123,10 @@
 //! accepts only [`ActorRef::send`]. [`Message::Reply`] defaults to `()` either
 //! way.
 //!
-//! Implement [`SyncHandler<M>`](SyncHandler) for an immediate reply.
-//! Implement [`Handler<M>`](Handler) for asynchronous reply work.
+//! Implement [`Handler<M>`](Handler) for an actor-access `cx` reply future.
+//! Implement [`RawHandler<M>`](RawHandler) when a reply must choose an explicit
+//! scheduling strategy such as [`ReplyExt::exclusive`](ReplyExt::exclusive) or
+//! [`ReplyExt::ready`](ReplyExt::ready).
 //! One actor may handle many message types.
 //!
 //! [`ActorRef::call`] waits for acceptance and a typed reply.
@@ -142,7 +142,7 @@
 //!
 //! | Selection | Actor progress while awaiting the reply |
 //! | --- | --- |
-//! | [`SyncHandler`] or [`ready`](ReplyExt::ready) | The reply finishes during dispatch |
+//! | [`Handler`] with an immediate `async fn` or [`ready`](ReplyExt::ready) | The reply finishes during dispatch |
 //! | A bare [`Future`] | Other actor work continues beside an owned Tokio task |
 //! | [`interleaved`](InterleavedFutureExt::interleaved) | Eligible actor work continues between polls |
 //! | [`exclusive`](ReplyExt::exclusive) | Other actor-local work pauses; owned tasks may continue |
@@ -234,10 +234,10 @@ pub mod supervision;
 pub mod transport;
 mod writer;
 
-pub use access::ActorAccess;
+pub use access::{ActorAccess, Cx};
 pub use actor::{
-    Actor, Handler, HasChildren, HasInterleaving, HasMailbox, HasReply, Message, StreamHandler,
-    SyncHandler,
+    Actor, DispatchHandler, Handler, HasChildren, HasInterleaving, HasMailbox, HasReply, Message,
+    RawHandler, RawStreamHandler, StreamHandler,
 };
 pub use address::{ActorRef, Recipient, Response};
 pub use config::{
@@ -254,8 +254,8 @@ pub use lifecycle::{
 };
 pub use loac_macros::{Message, actor};
 pub use reply::{
-    CxReply, CxStream, InterleavedFutureExt, IntoReply, IntoStreamReply, Items, ReplyExt,
-    StreamKind, StreamMessage, StreamReply, SyncKind,
+    CxReply, CxStream, InterleavedFutureExt, IntoReply, IntoStreamReply, Items, RawKind,
+    RawStreamKind, ReplyExt, StreamKind, StreamMessage, StreamReply, SyncKind,
 };
 pub use runtime::{
     ActorOwner, ActorScope, ActorSpawner, SpawnOptions, StopScope, spawn, spawn_with,
@@ -293,12 +293,12 @@ pub mod __private {
 /// remain explicit imports so operational behavior stays visible at call sites.
 pub mod prelude {
     pub use crate::{
-        Actor, ActorFuture, ActorFutureExt, ActorScope, ActorSpawner, CxReply, CxStream,
-        DynamicChildrenOptions, DynamicInterleavingOptions, DynamicMailboxOptions, Handler,
-        HasChildren, HasInterleaving, HasMailbox, HasReply,
-        InterleavedFutureExt, IntoActorFuture, IntoReply, IntoStreamReply, Items, Message,
-        ReplyExt, StopScope, StreamHandler, StreamMessage, StreamReply, SyncHandler, Writer,
-        actor, reply,
+        Actor, ActorFuture, ActorFutureExt, ActorScope, ActorSpawner, Cx, CxReply, CxStream,
+        DispatchHandler, DynamicChildrenOptions, DynamicInterleavingOptions, DynamicMailboxOptions,
+        Handler, HasChildren, HasInterleaving, HasMailbox, HasReply, InterleavedFutureExt,
+        IntoActorFuture, IntoReply, IntoStreamReply, Items, Message, RawHandler, RawKind,
+        RawStreamHandler, RawStreamKind, ReplyExt, StopScope, StreamHandler, StreamMessage,
+        StreamReply, SyncKind, Writer, actor, reply,
     };
 }
 

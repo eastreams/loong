@@ -2,7 +2,7 @@
 
 //! Owned actor/scope access for borrow-free reply futures.
 //!
-//! `ActorAccess` is the unsafe capsule that lets a reply be a plain [`Future`]
+//! `Cx` is the unsafe capsule that lets a reply be a plain [`Future`]
 //! while still touching actor state inside synchronous scopes. The runtime
 //! creates one handle per reply and polls that reply only on the actor task,
 //! serially with every other actor-aware future and mailbox dispatch.
@@ -18,15 +18,15 @@ use crate::{Actor, ActorScope, runtime::ScopeState};
 /// `'static` location (thread locals, detached tasks, globals). It is `Send`
 /// because the runtime only polls the owning future on the actor task; the raw
 /// pointers are never dereferenced concurrently.
-pub struct ActorAccess<'a, A: Actor + 'a> {
+pub struct Cx<'a, A: Actor + 'a> {
     actor: NonNull<A>,
     scope: NonNull<ScopeState<A>>,
     _lifetime: PhantomData<&'a mut A>,
 }
 
-impl<A: Actor> ActorAccess<'_, A> {
-    pub(crate) fn new<'a>(actor: &'a mut A, scope: &'a mut ScopeState<A>) -> ActorAccess<'a, A> {
-        ActorAccess {
+impl<A: Actor> Cx<'_, A> {
+    pub(crate) fn new<'a>(actor: &'a mut A, scope: &'a mut ScopeState<A>) -> Cx<'a, A> {
+        Cx {
             actor: NonNull::from(actor),
             scope: NonNull::from(scope),
             _lifetime: PhantomData,
@@ -60,5 +60,7 @@ impl<A: Actor> ActorAccess<'_, A> {
 // dereference happens inside `with_actor` / `with_scope` while the actor task
 // has exclusive access. The phantom lifetime does not correspond to an actual
 // borrow that could race with another thread.
-unsafe impl<A: Actor> Send for ActorAccess<'_, A> {}
+unsafe impl<A: Actor> Send for Cx<'_, A> {}
 
+/// Backwards-compatible alias for [`Cx`].
+pub type ActorAccess<'a, A> = Cx<'a, A>;

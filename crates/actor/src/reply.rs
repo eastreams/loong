@@ -1,6 +1,6 @@
 //! Reply scheduling strategies.
 //!
-//! A [`Handler`](crate::Handler) chooses one strategy before returning.
+//! A [`RawHandler`](crate::RawHandler) chooses one strategy before returning.
 //! [`ReplyExt::ready`] completes during dispatch.
 //! A bare [`Future`] starts an owned Tokio task.
 //! [`InterleavedFutureExt::interleaved`] requires [`HasInterleaving`].
@@ -9,7 +9,8 @@
 //! Unbounded configurations may retain arbitrarily many active replies.
 //! [`ReplyExt::exclusive`] pauses other actor-aware work.
 //! Exclusive scheduling needs no interleaving capability.
-//! [`SyncHandler`](crate::SyncHandler) selects ready scheduling automatically.
+//! [`Handler`](crate::Handler) schedules cx futures on the interleaved lane
+//! automatically.
 //!
 //! A bare `Future<Output = M::Reply> + Send + 'static` selects owned scheduling.
 //! It cannot retain actor or scope borrows from its handler.
@@ -65,9 +66,10 @@ mod private {
 
 /// Selects the reply channel shape a [`Message`] uses.
 ///
-/// [`Handler`](crate::Handler) is generic over this kind. The runtime uses the
-/// message's [`Message::Kind`] to select the matching handler implementation.
-/// Two kind values make the sync and stream handler blanket impls disjoint.
+/// [`DispatchHandler`](crate::DispatchHandler) is generic over this kind. The
+/// runtime uses the message's [`Message::Kind`] to select the matching
+/// dispatch implementation. Distinct kind values keep the public handler
+/// blanket impls disjoint.
 pub trait ReplyKind: private::Sealed + Send + 'static {}
 
 /// The ordinary reply kind: one typed value returned to the caller.
@@ -82,6 +84,23 @@ pub struct StreamKind;
 impl private::Sealed for StreamKind {}
 impl ReplyKind for StreamKind {}
 
+/// The raw ordinary reply kind: explicit reply strategy selection.
+///
+/// Messages with this kind are handled by [`RawHandler`](crate::RawHandler).
+pub struct RawKind;
+
+impl private::Sealed for RawKind {}
+impl ReplyKind for RawKind {}
+
+/// The raw streaming reply kind: explicit stream-final strategy selection.
+///
+/// Stream messages with this kind are handled by
+/// [`RawStreamHandler`](crate::RawStreamHandler).
+pub struct RawStreamKind;
+
+impl private::Sealed for RawStreamKind {}
+impl ReplyKind for RawStreamKind {}
+
 /// Extension methods that select explicit reply scheduling strategies.
 ///
 /// These methods wrap values without boxing or spawning.
@@ -95,9 +114,8 @@ pub trait ReplyExt: Sized {
     /// Dispatch may wait for configured interleaved capacity.
     /// The runtime learns the strategy only after calling the handler.
     ///
-    /// Prefer [`SyncHandler`](crate::SyncHandler) when every invocation returns
-    /// an immediate value. Use this method inside [`Handler`](crate::Handler)
-    /// when runtime branching requires explicit ready scheduling.
+    /// Use this method inside [`RawHandler`](crate::RawHandler) when runtime
+    /// branching requires explicit ready scheduling.
     ///
     /// Prefer `value.ready()` for an already-produced value.
     /// [`std::future::ready(value)`](std::future::ready) creates an ordinary [`Future`].
@@ -275,7 +293,7 @@ where
 ///
 /// The trait is sealed so the stream-final sender and scheduler access stay
 /// private to the runtime.
-pub trait IntoStreamReply<A: Actor, M: StreamMessage>:
+pub trait IntoStreamReply<A: Actor, M: StreamReplyMessage>:
     sealed::HandleStream<A, M> + sealed::HandleStreamCall<A, M>
 {
 }
@@ -283,7 +301,7 @@ pub trait IntoStreamReply<A: Actor, M: StreamMessage>:
 impl<A, M, T> IntoStreamReply<A, M> for T
 where
     A: Actor,
-    M: StreamMessage,
+    M: StreamReplyMessage,
     T: sealed::HandleStream<A, M> + sealed::HandleStreamCall<A, M>,
 {
 }
@@ -360,18 +378,28 @@ impl<Item> futures_util::Stream for Items<'_, Item> {
     }
 }
 
-/// A [`Message`] whose reply is a stream of items plus a final value.
+/// A stream-shaped reply: items plus a final value.
 ///
-/// The derive implements this when `#[message(stream = Item, reply = Final)]`
-/// is present. The blanket [`StreamHandler`](crate::StreamHandler) adaptation
-/// targets [`Handler<M, StreamKind>`](crate::Handler).
-pub trait StreamMessage:
-    Message<Kind = StreamKind, Reply = StreamReply<Self::Item, Self::Final>>
-{
+/// This is the kind-agnostic shape shared by normal stream messages and raw
+/// stream messages. [`IntoStreamReply`] and the stream reply scheduling
+/// machinery are generic over this shape.
+pub trait StreamReplyMessage: Message<Reply = StreamReply<Self::Item, Self::Final>> {
     /// Type of each streamed item.
     type Item: Send + 'static;
     /// Type of the final value delivered after the stream ends.
     type Final: Send + 'static;
+}
+
+/// A [`Message`] whose reply is a stream of items plus a final value.
+///
+/// The derive implements this when `#[message(stream = Item, reply = Final)]`
+/// is present. The blanket [`StreamHandler`](crate::StreamHandler) adaptation
+/// targets [`DispatchHandler<M, StreamKind>`](crate::DispatchHandler).
+/// Raw stream messages use `StreamMessage<RawStreamKind>` and adapt to
+/// [`RawStreamHandler`](crate::RawStreamHandler).
+pub trait StreamMessage<Kind: ReplyKind = StreamKind>:
+    StreamReplyMessage + Message<Kind = Kind>
+{
 }
 
 pub(crate) struct StreamDispatch<S, Item, Final> {
@@ -400,7 +428,7 @@ impl<S, Item, Final> StreamDispatch<S, Item, Final> {
 impl<A, M, S> sealed::HandleReply<A, M> for StreamDispatch<S, M::Item, M::Final>
 where
     A: Actor,
-    M: StreamMessage,
+    M: StreamReplyMessage,
     S: sealed::HandleStream<A, M>,
 {
     fn handle(
@@ -606,7 +634,7 @@ pub(crate) mod sealed {
     ///
     /// The caller reply is already completed with a [`StreamReply`] before
     /// this is called; only final-value production remains to be scheduled.
-    pub trait HandleStream<A: Actor, M: StreamMessage> {
+    pub trait HandleStream<A: Actor, M: StreamReplyMessage> {
         fn handle_stream(
             self,
             owned: &OwnedTasks<A>,
@@ -618,7 +646,7 @@ pub(crate) mod sealed {
     impl<A, M> HandleStream<A, M> for Ready<M::Final>
     where
         A: Actor,
-        M: StreamMessage,
+        M: StreamReplyMessage,
     {
         fn handle_stream(
             self,
@@ -633,7 +661,7 @@ pub(crate) mod sealed {
     impl<A, M, F> HandleStream<A, M> for F
     where
         A: Actor,
-        M: StreamMessage,
+        M: StreamReplyMessage,
         F: Future<Output = M::Final> + Send + 'static,
     {
         fn handle_stream(
@@ -649,7 +677,7 @@ pub(crate) mod sealed {
     impl<A, M, F> HandleStream<A, M> for Interleaved<A, F>
     where
         A: HasInterleaving,
-        M: StreamMessage,
+        M: StreamReplyMessage,
         F: ActorFuture<A, Output = M::Final> + Send + 'static,
     {
         fn handle_stream(
@@ -665,7 +693,7 @@ pub(crate) mod sealed {
     impl<A, M, F> HandleStream<A, M> for Exclusive<F>
     where
         A: HasMailbox,
-        M: StreamMessage,
+        M: StreamReplyMessage,
         F: ActorFuture<A, Output = M::Final> + Send + 'static,
     {
         fn handle_stream(
@@ -681,7 +709,7 @@ pub(crate) mod sealed {
     impl<A, M> HandleStream<A, M> for CxStream<A, M::Final>
     where
         A: HasInterleaving,
-        M: StreamMessage,
+        M: StreamReplyMessage,
         M::Final: Send + 'static,
     {
         fn handle_stream(
@@ -691,14 +719,15 @@ pub(crate) mod sealed {
             final_tx: oneshot::Sender<M::Final>,
         ) {
             use crate::IntoActorFuture;
-            scheduler.__push_interleaved(Seal, FinishStream::new(self.future.into_actor(), final_tx));
+            scheduler
+                .__push_interleaved(Seal, FinishStream::new(self.future.into_actor(), final_tx));
         }
     }
 
     impl<A, M, L, R> HandleStream<A, M> for Either<L, R>
     where
         A: Actor,
-        M: StreamMessage,
+        M: StreamReplyMessage,
         L: HandleStream<A, M>,
         R: HandleStream<A, M>,
     {
@@ -720,7 +749,7 @@ pub(crate) mod sealed {
     /// Used when the caller supplies the item writer, so there is no
     /// [`StreamReply`] handle to complete. The final value is delivered through
     /// the ordinary call reply path instead.
-    pub trait HandleStreamCall<A: Actor, M: StreamMessage> {
+    pub trait HandleStreamCall<A: Actor, M: StreamReplyMessage> {
         fn handle_stream_call(
             self,
             owned: &OwnedTasks<A>,
@@ -732,7 +761,7 @@ pub(crate) mod sealed {
     impl<A, M> HandleStreamCall<A, M> for Ready<M::Final>
     where
         A: Actor,
-        M: StreamMessage,
+        M: StreamReplyMessage,
     {
         fn handle_stream_call(
             self,
@@ -747,7 +776,7 @@ pub(crate) mod sealed {
     impl<A, M, F> HandleStreamCall<A, M> for F
     where
         A: Actor,
-        M: StreamMessage,
+        M: StreamReplyMessage,
         F: Future<Output = M::Final> + Send + 'static,
     {
         fn handle_stream_call(
@@ -763,7 +792,7 @@ pub(crate) mod sealed {
     impl<A, M, F> HandleStreamCall<A, M> for Interleaved<A, F>
     where
         A: HasInterleaving,
-        M: StreamMessage,
+        M: StreamReplyMessage,
         F: ActorFuture<A, Output = M::Final> + Send + 'static,
     {
         fn handle_stream_call(
@@ -779,7 +808,7 @@ pub(crate) mod sealed {
     impl<A, M, F> HandleStreamCall<A, M> for Exclusive<F>
     where
         A: HasMailbox,
-        M: StreamMessage,
+        M: StreamReplyMessage,
         F: ActorFuture<A, Output = M::Final> + Send + 'static,
     {
         fn handle_stream_call(
@@ -795,7 +824,7 @@ pub(crate) mod sealed {
     impl<A, M> HandleStreamCall<A, M> for CxStream<A, M::Final>
     where
         A: HasInterleaving,
-        M: StreamMessage,
+        M: StreamReplyMessage,
         M::Final: Send + 'static,
     {
         fn handle_stream_call(
@@ -815,7 +844,7 @@ pub(crate) mod sealed {
     impl<A, M, L, R> HandleStreamCall<A, M> for Either<L, R>
     where
         A: Actor,
-        M: StreamMessage,
+        M: StreamReplyMessage,
         L: HandleStreamCall<A, M>,
         R: HandleStreamCall<A, M>,
     {

@@ -6,8 +6,12 @@ use std::{
 
 use tokio::sync::oneshot;
 
+use std::{future::Future, pin::Pin};
+
 use crate::{
-    Actor, ActorScope, CallError, Handler, Message, StreamHandler, StreamMessage, Writer,
+    Actor, ActorScope, CallError, DispatchHandler, HasInterleaving, Message, StreamHandler,
+    StreamMessage, Writer,
+    access::Cx,
     owned::OwnedTasks,
     reply::sealed::{HandleReply, HandleStreamCall},
     scheduling::ActorScheduler,
@@ -182,7 +186,7 @@ impl<M: Message> CallEnvelope<M> {
 
 impl<A, M> Envelope<A> for CallEnvelope<M>
 where
-    A: Handler<M, M::Kind>,
+    A: DispatchHandler<M, M::Kind>,
     M: Message,
 {
     fn dispatch(
@@ -243,7 +247,7 @@ impl<M: Message<Reply = ()>> SendEnvelope<M> {
 
 impl<A, M> Envelope<A> for SendEnvelope<M>
 where
-    A: Handler<M>,
+    A: DispatchHandler<M, M::Kind>,
     M: Message<Reply = ()>,
 {
     fn dispatch(
@@ -337,9 +341,10 @@ impl<M: StreamMessage, W> StreamToEnvelope<M, W> {
     }
 }
 
+#[allow(unsafe_code)]
 impl<A, M, W> Envelope<A> for StreamToEnvelope<M, W>
 where
-    A: StreamHandler<M>,
+    A: StreamHandler<M> + HasInterleaving,
     M: StreamMessage,
     W: Writer<M::Item> + Send + 'static,
 {
@@ -379,8 +384,16 @@ where
             None => DispatchReply::one_way(permit),
         };
 
-        let strategy = <A as StreamHandler<M>>::handle(actor, message, out, scope);
-        strategy.handle_stream_call(owned, scheduler, reply);
+        let cx = Cx::new(actor, scope.state);
+        let future = Box::pin(<A as StreamHandler<M>>::handle(message, out, cx))
+            as Pin<Box<dyn Future<Output = M::Final> + Send + '_>>;
+        let future: Pin<Box<dyn Future<Output = M::Final> + Send + 'static>> =
+            unsafe { std::mem::transmute(future) };
+        let strategy = crate::reply::CxStream {
+            future,
+            _actor: std::marker::PhantomData,
+        };
+        HandleStreamCall::<A, M>::handle_stream_call(strategy, owned, scheduler, reply);
     }
 
     fn discard(self: Box<Self>, control: &Control) {

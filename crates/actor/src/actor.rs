@@ -1,11 +1,15 @@
-use std::future::Future;
+use std::{future::Future, pin::Pin};
 
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
     ActorScope, ChildExit, ExitReason, Shutdown, StopScope, Writer,
+    access::Cx,
     config::SupervisionConfig,
-    reply::{IntoReply, IntoStreamReply, ReplyExt, StreamDispatch, StreamMessage, SyncKind},
+    reply::{
+        CxReply, CxStream, IntoReply, IntoStreamReply, RawKind, RawStreamKind, StreamDispatch,
+        StreamKind, StreamMessage, SyncKind,
+    },
     scheduling::{InterleavedScheduler, ReplyScheduler, SchedulerProfile},
     transport::{MessageConfig, MessageInbox, MessageSender, RuntimeInbox},
 };
@@ -304,65 +308,20 @@ pub trait Message: Send + 'static {
 /// [`crate::ActorRef::try_call`] are unavailable for it.
 pub trait HasReply: Message {}
 
-/// Handles one message by producing its reply before returning.
+/// Internal dispatch shape for one message type.
 ///
-/// Use this trait when no asynchronous reply work remains. The runtime adapts
-/// it to [`Handler`] and submits the returned value with
-/// [`ReplyExt::ready`](crate::ReplyExt::ready).
+/// The runtime uses this raw shape after pairing a message with its
+/// [`Message::Kind`]. Public handlers are adapted to it through blanket impls:
 ///
-/// `Sync` describes reply production. It does not permit blocking the actor
-/// task. The method runs inside the synchronous dispatch turn. It inherits the
-/// panic and Kill behavior documented by [`Handler::handle`].
+/// - [`Handler`] adapts [`SyncKind`] messages.
+/// - [`StreamHandler`] adapts [`StreamKind`] stream messages.
+/// - [`RawHandler`] adapts [`RawKind`](crate::reply::RawKind) messages.
+/// - [`RawStreamHandler`] adapts [`RawStreamKind`](crate::reply::RawStreamKind)
+///   stream messages.
 ///
-/// Implement either `SyncHandler<M>` or `Handler<M>` for one actor and message
-/// pair. The blanket adaptation makes implementing both a conflicting impl.
-///
-/// A unit reply needs no explicit return expression:
-///
-/// ```
-/// use loac::{Actor, ActorScope, Handler, Message, SyncHandler, actor};
-///
-/// struct Worker {
-///     notifications: usize,
-/// }
-///
-/// #[actor(mailbox)]
-/// impl Actor for Worker {
-///     type SpawnArgs = Self;
-///
-///     async fn init(actor: Self, _scope: &mut ActorScope<'_, Self>) -> Self {
-///         actor
-///     }
-/// }
-///
-/// #[derive(Message)]
-/// struct Notify;
-///
-/// impl SyncHandler<Notify> for Worker {
-///     fn handle(&mut self, _message: Notify, _scope: &mut ActorScope<'_, Self>) {
-///         self.notifications += 1;
-///     }
-/// }
-///
-/// fn accepts_handler<A: Handler<Notify>>() {}
-/// accepts_handler::<Worker>();
-/// ```
-pub trait SyncHandler<M: Message>: HasMailbox {
-    /// Processes `message` and returns its completed reply value.
-    fn handle(&mut self, message: M, scope: &mut ActorScope<'_, Self>) -> M::Reply;
-}
-
-/// Handles one message type for an [`Actor`].
-///
-/// Use [`SyncHandler`] when `handle` produces the reply before returning.
-///
-/// One actor may implement this trait for any number of message types. The
-/// runtime erases each request only after pairing the concrete message with its
-/// concrete reply channel, so no downcast is involved. Each implementation
-/// statically selects one concrete reply representation while keeping its type
-/// opaque. Mailbox FIFO determines the order in which eligible handlers are
-/// dispatched; asynchronous replies may complete in a different order.
-pub trait Handler<M: Message, K: crate::reply::ReplyKind = SyncKind>: HasMailbox {
+/// Do not implement this trait directly; implement one of the public handler
+/// traits above instead.
+pub trait DispatchHandler<M: Message, K: crate::reply::ReplyKind = SyncKind>: HasMailbox {
     /// Synchronously starts handling `message` and chooses its reply semantics.
     ///
     /// The runtime calls this method after the request commits to dispatch.
@@ -374,10 +333,11 @@ pub trait Handler<M: Message, K: crate::reply::ReplyKind = SyncKind>: HasMailbox
     /// actor, and cancels its other active and queued work.
     ///
     /// The `K` parameter selects the reply channel shape. [`SyncKind`] is the
-    /// default for `Handler<M>` and is used by ordinary messages.
-    /// [`crate::reply::StreamKind`] is used by stream messages and is selected
-    /// automatically when the message implements
-    /// [`StreamMessage`](crate::reply::StreamMessage).
+    /// default for ordinary messages. [`StreamKind`] is used by stream messages
+    /// and is selected automatically when the message implements
+    /// [`StreamMessage`](crate::reply::StreamMessage). [`RawKind`] and
+    /// [`RawStreamKind`](crate::reply::RawStreamKind) select explicit raw reply
+    /// strategies.
     ///
     /// The precise `use<Self, M, K>` capture list excludes the lifetimes of this
     /// invocation's `&mut self` and `scope` borrows. A returned asynchronous reply
@@ -390,7 +350,7 @@ pub trait Handler<M: Message, K: crate::reply::ReplyKind = SyncKind>: HasMailbox
     /// borrow:
     ///
     /// ```
-    /// use loac::{ActorScope, Handler, IntoReply, Message};
+    /// use loac::{ActorScope, DispatchHandler, IntoReply, Message};
     ///
     /// fn detach_reply<A, M>(
     ///     actor: &mut A,
@@ -398,7 +358,7 @@ pub trait Handler<M: Message, K: crate::reply::ReplyKind = SyncKind>: HasMailbox
     ///     scope: &mut ActorScope<'_, A>,
     /// ) -> impl IntoReply<A, M> + use<A, M>
     /// where
-    ///     A: Handler<M>,
+    ///     A: DispatchHandler<M>,
     ///     M: Message,
     /// {
     ///     actor.handle(message, scope)
@@ -411,9 +371,54 @@ pub trait Handler<M: Message, K: crate::reply::ReplyKind = SyncKind>: HasMailbox
     ) -> impl IntoReply<Self, M> + use<Self, M, K>;
 }
 
-impl<A, M> Handler<M, SyncKind> for A
+/// Handles one message with an actor-access `cx` future.
+///
+/// This is the primary handler trait. The runtime polls the returned future on
+/// the actor's interleaved lane, so dispatch through this trait requires
+/// [`HasInterleaving`]. Inside the future, use [`Cx::with_actor`] and
+/// [`Cx::with_scope`] for temporary actor and scope access. Those methods
+/// return before any `await`; neither the actor nor scope borrow can escape
+/// their call.
+///
+/// A unit reply needs no explicit return expression:
+///
+/// ```
+/// use loac::{Actor, ActorScope, Cx, Handler, Message, actor};
+///
+/// struct Worker {
+///     notifications: usize,
+/// }
+///
+/// #[actor(mailbox, interleaved = unbounded)]
+/// impl Actor for Worker {
+///     type SpawnArgs = Self;
+///
+///     async fn init(actor: Self, _scope: &mut ActorScope<'_, Self>) -> Self {
+///         actor
+///     }
+/// }
+///
+/// #[derive(Message)]
+/// struct Notify;
+///
+/// impl Handler<Notify> for Worker {
+///     async fn handle(_message: Notify, mut cx: Cx<'_, Self>) {
+///         cx.with_actor(|actor| actor.notifications += 1);
+///     }
+/// }
+/// ```
+pub trait Handler<M: Message>: HasMailbox {
+    /// Starts handling `message` and returns the reply-producing future.
+    ///
+    /// The future is polled on the actor's interleaved lane. `cx` provides
+    /// temporary synchronous actor and scope access.
+    fn handle<'a>(message: M, cx: Cx<'a, Self>) -> impl Future<Output = M::Reply> + Send + 'a;
+}
+
+#[allow(unsafe_code)]
+impl<A, M> DispatchHandler<M, SyncKind> for A
 where
-    A: SyncHandler<M>,
+    A: Handler<M> + HasInterleaving,
     M: Message<Kind = SyncKind>,
 {
     fn handle(
@@ -421,45 +426,124 @@ where
         message: M,
         scope: &mut ActorScope<'_, Self>,
     ) -> impl IntoReply<Self, M> + use<A, M> {
-        <A as SyncHandler<M>>::handle(self, message, scope).ready()
+        let cx = Cx::new(self, scope.state);
+        let future = Box::pin(<A as Handler<M>>::handle(message, cx))
+            as Pin<Box<dyn Future<Output = M::Reply> + Send + '_>>;
+        let future: Pin<Box<dyn Future<Output = M::Reply> + Send + 'static>> =
+            unsafe { std::mem::transmute(future) };
+        CxReply {
+            future,
+            _actor: std::marker::PhantomData,
+        }
     }
 }
 
-/// Handles a stream message by writing items to an automatically created
-/// channel.
+/// Handles one message with an explicit reply strategy.
+///
+/// Implement this trait when a handler must choose among [`IntoReply`]
+/// strategies such as [`ReplyExt::ready`](crate::ReplyExt::ready),
+/// [`ReplyExt::exclusive`](crate::ReplyExt::exclusive), a bare future, or
+/// [`Either`](crate::reply::Either). The message's [`Message::Kind`] must be
+/// [`RawKind`](crate::reply::RawKind), selected by `#[message(raw = Type)]`.
+///
+/// Prefer [`Handler`] when an `async fn` with [`Cx`] is enough.
+pub trait RawHandler<M: Message>: HasMailbox {
+    /// Synchronously starts handling `message` and chooses its reply semantics.
+    ///
+    /// The returned [`IntoReply`] strategy selects owned, exclusive, or
+    /// interleaved scheduling.
+    fn handle(
+        &mut self,
+        message: M,
+        scope: &mut ActorScope<'_, Self>,
+    ) -> impl IntoReply<Self, M> + use<Self, M>;
+}
+
+impl<A, M> DispatchHandler<M, RawKind> for A
+where
+    A: RawHandler<M>,
+    M: Message<Kind = RawKind>,
+{
+    fn handle(
+        &mut self,
+        message: M,
+        scope: &mut ActorScope<'_, Self>,
+    ) -> impl IntoReply<Self, M> + use<A, M> {
+        <A as RawHandler<M>>::handle(self, message, scope)
+    }
+}
+
+/// Handles a stream message with an actor-access `cx` future.
 ///
 /// The runtime creates a bounded item channel and a final-value channel before
 /// calling [`handle`](Self::handle). The returned future owns the sender side
 /// and produces the final value; the caller receives the
 /// [`StreamReply`](crate::reply::StreamReply) handle.
 ///
-/// This trait adapts to [`Handler<M, StreamKind>`](Handler) exactly like
-/// [`SyncHandler`] adapts to ordinary `Handler<M>`. Implementing both
-/// `StreamHandler<M>` and `Handler<M, StreamKind>` for the same actor and
-/// message pair is therefore a conflicting impl.
+/// The runtime polls the returned future on the actor's interleaved lane, so
+/// dispatch through this trait requires [`HasInterleaving`].
+/// `out` is the runtime-created item writer. The writer type is generic so
+/// handler implementations stay compatible with future writer implementations;
+/// the runtime currently passes a `tokio::sync::mpsc` sender. Dropping `out`
+/// closes the caller's item stream.
 pub trait StreamHandler<M>: HasMailbox
 where
     M: StreamMessage,
 {
+    /// Starts producing stream items and returns the final reply future.
+    ///
+    /// `cx` provides temporary synchronous actor and scope access.
+    fn handle<'a, W>(
+        message: M,
+        out: W,
+        cx: Cx<'a, Self>,
+    ) -> impl Future<Output = M::Final> + Send + 'a
+    where
+        W: Writer<M::Item> + Send + 'static;
+}
+
+#[allow(unsafe_code)]
+impl<A, M> DispatchHandler<M, StreamKind> for A
+where
+    A: StreamHandler<M> + HasInterleaving,
+    M: StreamMessage,
+{
+    fn handle(
+        &mut self,
+        message: M,
+        scope: &mut ActorScope<'_, Self>,
+    ) -> impl IntoReply<Self, M> + use<A, M> {
+        let (item_tx, item_rx) = mpsc::channel::<M::Item>(8);
+        let (final_tx, final_rx) = oneshot::channel::<M::Final>();
+        let cx = Cx::new(self, scope.state);
+        let future = Box::pin(<A as StreamHandler<M>>::handle(message, item_tx, cx))
+            as Pin<Box<dyn Future<Output = M::Final> + Send + '_>>;
+        let future: Pin<Box<dyn Future<Output = M::Final> + Send + 'static>> =
+            unsafe { std::mem::transmute(future) };
+        let strategy = CxStream {
+            future,
+            _actor: std::marker::PhantomData,
+        };
+        StreamDispatch::new(strategy, item_rx, final_tx, final_rx)
+    }
+}
+
+/// Handles a stream message with an explicit final reply strategy.
+///
+/// Implement this trait when a stream handler must choose among
+/// [`IntoStreamReply`] strategies such as a bare final future,
+/// [`ReplyExt::ready`](crate::ReplyExt::ready),
+/// [`ReplyExt::exclusive`](crate::ReplyExt::exclusive), or
+/// [`Either`](crate::reply::Either). The message kind must be
+/// [`RawStreamKind`](crate::reply::RawStreamKind), selected by
+/// `#[message(raw_stream = Item, reply = Final)]`.
+pub trait RawStreamHandler<M>: HasMailbox
+where
+    M: StreamMessage<RawStreamKind>,
+{
     /// Starts producing stream items and returns the final reply strategy.
     ///
-    /// `out` is the runtime-created item writer. The writer type is generic so
-    /// handler implementations stay compatible with future writer
-    /// implementations; the runtime currently passes a `tokio::sync::mpsc`
-    /// sender. Dropping `out` closes the caller's item stream.
-    ///
-    /// The returned [`IntoStreamReply`] selects final-value scheduling, just
-    /// like [`IntoReply`] for ordinary messages:
-    ///
-    /// - A bare [`Future`] with output `M::Final` runs as an owned task.
-    /// - [`ReplyExt::ready`] completes the final value immediately and closes
-    ///   the item stream; useful as one [`Either`](crate::reply::Either)
-    ///   branch when the handler decides not to stream.
-    /// - [`ReplyExt::exclusive`] runs a [`crate::ActorFuture`] with the mailbox
-    ///   paused; the future keeps the writer and may keep producing items.
-    /// - [`crate::InterleavedFutureExt::interleaved`] runs a [`crate::ActorFuture`]
-    ///   fairly with other actor work and requires [`crate::HasInterleaving`].
-    /// - [`Either`](crate::reply::Either) chooses between two strategies.
+    /// This is the explicit-strategy counterpart of [`StreamHandler::handle`].
     fn handle<W>(
         &mut self,
         message: M,
@@ -470,11 +554,10 @@ where
         W: Writer<M::Item> + Send + 'static;
 }
 
-/// Crate-private concrete writer dispatch for stream handlers.
-impl<A, M> Handler<M, crate::reply::StreamKind> for A
+impl<A, M> DispatchHandler<M, RawStreamKind> for A
 where
-    A: StreamHandler<M>,
-    M: StreamMessage,
+    A: RawStreamHandler<M>,
+    M: StreamMessage<RawStreamKind>,
 {
     fn handle(
         &mut self,
@@ -483,7 +566,7 @@ where
     ) -> impl IntoReply<Self, M> + use<A, M> {
         let (item_tx, item_rx) = mpsc::channel::<M::Item>(8);
         let (final_tx, final_rx) = oneshot::channel::<M::Final>();
-        let strategy = <A as StreamHandler<M>>::handle(self, message, item_tx, scope);
+        let strategy = <A as RawStreamHandler<M>>::handle(self, message, item_tx, scope);
         StreamDispatch::new(strategy, item_rx, final_tx, final_rx)
     }
 }

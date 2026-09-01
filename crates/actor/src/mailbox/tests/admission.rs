@@ -11,7 +11,7 @@ use std::{
 use tokio::sync::oneshot;
 
 use crate::{
-    Actor, ActorConfig, ActorScope, CallError, ExitReason, Handler, Message, ReplyExt, Shutdown,
+    Actor, ActorConfig, ActorScope, CallError, ExitReason, Message, RawHandler, ReplyExt, Shutdown,
     ShutdownStatus, owned::OwnedTasks, scheduling::ActorScheduler, transport::MessageSender,
 };
 
@@ -89,6 +89,7 @@ fn open<A: Actor>() -> (Arc<ActorInner<A>>, ActorInbox<A>) {
 }
 
 #[derive(Message)]
+#[message(raw = ())]
 struct RecoverMessage(Arc<AtomicUsize>);
 
 impl Drop for RecoverMessage {
@@ -97,7 +98,7 @@ impl Drop for RecoverMessage {
     }
 }
 
-impl Handler<RecoverMessage> for TestActor {
+impl RawHandler<RecoverMessage> for TestActor {
     fn handle(
         &mut self,
         _message: RecoverMessage,
@@ -275,6 +276,7 @@ fn raw_call_envelope_drop_has_no_lifecycle_callback() {
 }
 
 #[derive(Message)]
+#[message(raw = ())]
 struct PanicDropMessage(Arc<AtomicBool>);
 
 impl Drop for PanicDropMessage {
@@ -284,7 +286,7 @@ impl Drop for PanicDropMessage {
     }
 }
 
-impl Handler<PanicDropMessage> for TestActor {
+impl RawHandler<PanicDropMessage> for TestActor {
     fn handle(
         &mut self,
         _message: PanicDropMessage,

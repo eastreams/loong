@@ -16,7 +16,8 @@ use tokio::sync::oneshot;
 
 use crate::{
     Actor, ActorConfig, ActorRef, ActorScope, ChildExit, ChildId, ExitReason, ExitStatus,
-    IntoActorFuture, Message, MessageConfig, Shutdown, ShutdownStatus, SubtreeStatus, SyncHandler,
+    IntoActorFuture, Message, MessageConfig, RawHandler, ReplyExt, Shutdown, ShutdownStatus,
+    SubtreeStatus,
     actor::HasMailbox,
     mailbox::{ActorInbox, ActorInner, Control, Envelope, Mode},
     owned::OwnedTasks,
@@ -268,11 +269,17 @@ impl Actor for AbortChildParent {
 }
 
 #[derive(Message)]
-#[message(reply = ())]
+#[message(raw = ())]
 struct Ping;
 
-impl SyncHandler<Ping> for AbortChildParent {
-    fn handle(&mut self, _message: Ping, _scope: &mut ActorScope<Self>) {}
+impl RawHandler<Ping> for AbortChildParent {
+    fn handle(
+        &mut self,
+        _message: Ping,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl crate::IntoReply<Self, Ping> + use<> {
+        ().ready()
+    }
 }
 
 struct ControlledChildExit {
