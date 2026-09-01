@@ -1,7 +1,7 @@
 use std::{future, sync::mpsc as std_mpsc, time::Duration};
 
 use loac::{
-    ActorScope, CallError, ExitReason, Handler, IntoActorFuture, Message, ReplyExt, Shutdown,
+    ActorScope, CallError, ExitReason, IntoActorFuture, Message, RawHandler, ReplyExt, Shutdown,
     ShutdownStatus,
 };
 use tokio::sync::oneshot;
@@ -12,14 +12,14 @@ use super::{
 };
 
 #[derive(Message)]
-#[message(reply = ())]
+#[message(raw = ())]
 struct Interruptible {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
     dropped: DropSignal,
 }
 
-impl Handler<Interruptible> for LifecycleActor {
+impl RawHandler<Interruptible> for LifecycleActor {
     fn handle(
         &mut self,
         message: Interruptible,
@@ -36,7 +36,7 @@ impl Handler<Interruptible> for LifecycleActor {
 }
 
 #[derive(Message)]
-#[message(reply = ())]
+#[message(raw = ())]
 struct OwnedInterruptible {
     entered: oneshot::Sender<()>,
     drop_barrier: DropBarrier,
@@ -56,7 +56,7 @@ impl Drop for DropBarrier {
     }
 }
 
-impl Handler<OwnedInterruptible> for LifecycleActor {
+impl RawHandler<OwnedInterruptible> for LifecycleActor {
     fn handle(
         &mut self,
         message: OwnedInterruptible,
@@ -71,10 +71,10 @@ impl Handler<OwnedInterruptible> for LifecycleActor {
 }
 
 #[derive(Message)]
-#[message(reply = ())]
+#[message(raw = ())]
 struct KillBeforeReady;
 
-impl Handler<KillBeforeReady> for LifecycleActor {
+impl RawHandler<KillBeforeReady> for LifecycleActor {
     fn handle(
         &mut self,
         _message: KillBeforeReady,

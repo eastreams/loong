@@ -1,14 +1,15 @@
 use std::num::NonZeroUsize;
 
 use loac::{
-    Actor, ActorOwner, ActorScope, ExitReason, Handler, Message, Shutdown, SpawnOptions,
-    SyncHandler, TrySendErrorKind, actor, spawn_with,
+    Actor, ActorOwner, ActorScope, ExitReason, Message, RawHandler, ReplyExt, Shutdown,
+    SpawnOptions, TrySendErrorKind, actor, spawn_with,
 };
 use tokio::sync::oneshot;
 
 use super::support::watchdog;
 
 #[derive(Message)]
+#[message(raw = ())]
 struct Ping;
 
 struct DynamicActor;
@@ -23,8 +24,15 @@ impl Actor for DynamicActor {
     }
 }
 
-impl SyncHandler<Ping> for DynamicActor {
-    fn handle(&mut self, _message: Ping, _scope: &mut ActorScope<Self>) {}
+impl RawHandler<Ping> for DynamicActor {
+    fn handle(
+        &mut self,
+        _message: Ping,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loac::IntoReply<Self, Ping> + use<> {
+        let __reply = {};
+        __reply.ready()
+    }
 }
 
 struct CustomDynamicActor;
@@ -39,8 +47,15 @@ impl Actor for CustomDynamicActor {
     }
 }
 
-impl SyncHandler<Ping> for CustomDynamicActor {
-    fn handle(&mut self, _message: Ping, _scope: &mut ActorScope<Self>) {}
+impl RawHandler<Ping> for CustomDynamicActor {
+    fn handle(
+        &mut self,
+        _message: Ping,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loac::IntoReply<Self, Ping> + use<> {
+        let __reply = {};
+        __reply.ready()
+    }
 }
 
 struct FixedActor;
@@ -55,8 +70,15 @@ impl Actor for FixedActor {
     }
 }
 
-impl SyncHandler<Ping> for FixedActor {
-    fn handle(&mut self, _message: Ping, _scope: &mut ActorScope<Self>) {}
+impl RawHandler<Ping> for FixedActor {
+    fn handle(
+        &mut self,
+        _message: Ping,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loac::IntoReply<Self, Ping> + use<> {
+        let __reply = {};
+        __reply.ready()
+    }
 }
 
 struct UnboundedActor;
@@ -71,13 +93,20 @@ impl Actor for UnboundedActor {
     }
 }
 
-impl SyncHandler<Ping> for UnboundedActor {
-    fn handle(&mut self, _message: Ping, _scope: &mut ActorScope<Self>) {}
+impl RawHandler<Ping> for UnboundedActor {
+    fn handle(
+        &mut self,
+        _message: Ping,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loac::IntoReply<Self, Ping> + use<> {
+        let __reply = {};
+        __reply.ready()
+    }
 }
 
 async fn assert_bounded_capacity<A>(owner: ActorOwner<A>, capacity: usize)
 where
-    A: Handler<Ping>,
+    A: RawHandler<Ping>,
 {
     let actor = owner.actor_ref();
     for _ in 0..capacity {

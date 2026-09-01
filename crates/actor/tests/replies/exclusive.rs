@@ -27,7 +27,7 @@ impl Actor for ExclusiveActor {
     }
 }
 
-impl Handler<PendingOwned> for ExclusiveActor {
+impl RawHandler<PendingOwned> for ExclusiveActor {
     fn handle(
         &mut self,
         message: PendingOwned,
@@ -41,13 +41,13 @@ impl Handler<PendingOwned> for ExclusiveActor {
 }
 
 #[derive(Message)]
-#[message(reply = ())]
+#[message(raw = ())]
 struct InterleavedGate {
     dispatched: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
 }
 
-impl Handler<InterleavedGate> for ExclusiveActor {
+impl RawHandler<InterleavedGate> for ExclusiveActor {
     fn handle(
         &mut self,
         message: InterleavedGate,
@@ -60,7 +60,7 @@ impl Handler<InterleavedGate> for ExclusiveActor {
     }
 }
 
-impl Handler<ExclusiveGate> for ExclusiveActor {
+impl RawHandler<ExclusiveGate> for ExclusiveActor {
     fn handle(
         &mut self,
         message: ExclusiveGate,
@@ -76,10 +76,10 @@ impl Handler<ExclusiveGate> for ExclusiveActor {
 }
 
 #[derive(Message)]
-#[message(reply = ())]
+#[message(raw = ())]
 struct Mark(oneshot::Sender<()>);
 
-impl Handler<Mark> for ExclusiveActor {
+impl RawHandler<Mark> for ExclusiveActor {
     fn handle(
         &mut self,
         message: Mark,

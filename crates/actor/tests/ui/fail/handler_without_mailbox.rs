@@ -1,5 +1,5 @@
 // A handler requires the actor to expose a public mailbox.
-use loac::{Actor, ActorScope, Handler, ReplyExt};
+use loac::{Actor, ActorScope, Cx, Handler};
 
 struct Bare;
 
@@ -16,13 +16,7 @@ impl Actor for Bare {
 struct Ping;
 
 impl Handler<Ping> for Bare {
-    fn handle(
-        &mut self,
-        _message: Ping,
-        _scope: &mut ActorScope<'_, Self>,
-    ) -> impl loac::IntoReply<Self, Ping> + use<> {
-        ().ready()
-    }
+    async fn handle(_message: Ping, _cx: Cx<'_, Self>) {}
 }
 
 fn main() {}

@@ -18,8 +18,7 @@ use std::{
 };
 
 use loac::{
-    Actor, ActorScope, Handler, IntoActorFuture, Message, ReplyExt, SpawnOptions, SyncHandler,
-    actor,
+    Actor, ActorScope, IntoActorFuture, Message, RawHandler, ReplyExt, SpawnOptions, actor,
 };
 use tokio::sync::oneshot;
 
@@ -39,13 +38,13 @@ impl Actor for SerialActor {
 }
 
 #[derive(Message)]
-#[message(reply = ())]
+#[message(raw = ())]
 struct Block {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
 }
 
-impl Handler<Block> for SerialActor {
+impl RawHandler<Block> for SerialActor {
     fn handle(
         &mut self,
         message: Block,
@@ -61,10 +60,10 @@ impl Handler<Block> for SerialActor {
 }
 
 #[derive(Message)]
-#[message(reply = u8)]
+#[message(raw = u8)]
 struct Record(u8);
 
-impl Handler<Record> for SerialActor {
+impl RawHandler<Record> for SerialActor {
     fn handle(
         &mut self,
         message: Record,
@@ -76,11 +75,19 @@ impl Handler<Record> for SerialActor {
 }
 
 #[derive(Message)]
+#[message(raw = ())]
 struct Notify(u8);
 
-impl SyncHandler<Notify> for SerialActor {
-    fn handle(&mut self, message: Notify, _scope: &mut ActorScope<Self>) {
-        lock(&self.committed).push(message.0);
+impl RawHandler<Notify> for SerialActor {
+    fn handle(
+        &mut self,
+        message: Notify,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loac::IntoReply<Self, Notify> + use<> {
+        let __reply = {
+            lock(&self.committed).push(message.0);
+        };
+        __reply.ready()
     }
 }
 

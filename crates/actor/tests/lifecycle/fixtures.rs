@@ -4,7 +4,7 @@ use std::{
 };
 
 use loac::{
-    Actor, ActorFutureExt, ActorScope, ExitReason, Handler, IntoActorFuture, Message, ReplyExt,
+    Actor, ActorFutureExt, ActorScope, ExitReason, IntoActorFuture, Message, RawHandler, ReplyExt,
     SpawnOptions, StopScope, actor, spawn_with,
 };
 use tokio::sync::oneshot;
@@ -38,7 +38,7 @@ impl Actor for LifecycleActor {
 }
 
 #[derive(Message)]
-#[message(reply = u8)]
+#[message(raw = u8)]
 pub(super) struct Step {
     pub(super) id: u8,
     pub(super) entered: Option<oneshot::Sender<()>>,
@@ -55,7 +55,7 @@ impl Step {
     }
 }
 
-impl Handler<Step> for LifecycleActor {
+impl RawHandler<Step> for LifecycleActor {
     fn handle(
         &mut self,
         mut message: Step,

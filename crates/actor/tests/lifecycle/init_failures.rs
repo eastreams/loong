@@ -9,15 +9,15 @@ use std::{
 };
 
 use loac::{
-    Actor, ActorScope, CallError, ExitReason, Handler, Message, ReplyExt, Shutdown, ShutdownStatus,
-    StopScope, SubtreeStatus, TryCallErrorKind, actor,
+    Actor, ActorScope, CallError, ExitReason, Message, RawHandler, ReplyExt, Shutdown,
+    ShutdownStatus, StopScope, SubtreeStatus, TryCallErrorKind, actor,
 };
 use tokio::sync::oneshot;
 
 use super::{fixtures::DropSignal, support::watchdog};
 
 #[derive(Message)]
-#[message(reply = ())]
+#[message(raw = ())]
 struct InitPing;
 
 struct NeverReadyArgs {
@@ -50,7 +50,7 @@ impl Drop for NeverReadyInit {
     }
 }
 
-impl Handler<InitPing> for NeverReadyInit {
+impl RawHandler<InitPing> for NeverReadyInit {
     fn handle(
         &mut self,
         _message: InitPing,
@@ -153,7 +153,7 @@ impl Actor for InitChild {
     }
 }
 
-impl Handler<InitPing> for InitChild {
+impl RawHandler<InitPing> for InitChild {
     fn handle(
         &mut self,
         _message: InitPing,
@@ -279,7 +279,7 @@ impl Actor for PanicInit {
     }
 }
 
-impl Handler<InitPing> for PanicInit {
+impl RawHandler<InitPing> for PanicInit {
     fn handle(
         &mut self,
         _message: InitPing,

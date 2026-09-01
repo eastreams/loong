@@ -17,12 +17,17 @@ impl Actor for Worker {
 }
 
 #[derive(Message)]
-#[message(reply = u64)]
+#[message(raw = u64)]
 struct Multiply(u64);
 
-impl SyncHandler<Multiply> for Worker {
-    fn handle(&mut self, message: Multiply, _scope: &mut ActorScope<Self>) -> u64 {
-        self.factor * message.0
+impl RawHandler<Multiply> for Worker {
+    fn handle(
+        &mut self,
+        message: Multiply,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loac::IntoReply<Self, Multiply> + use<> {
+        let __reply = { self.factor * message.0 };
+        __reply.ready()
     }
 }
 

@@ -7,9 +7,9 @@ use std::{
 };
 
 use loac::{
-    Actor, ActorConfig, ActorFuture, ActorFutureExt, ActorScope, ExitReason, Handler, HasChildren,
+    Actor, ActorConfig, ActorFuture, ActorFutureExt, ActorScope, ExitReason, HasChildren,
     HasInterleaving, InterleavedFutureExt, IntoActorFuture, IntoReply, Message, MessageConfig,
-    Shutdown, SupervisionConfig, SyncHandler, scheduling, spawn_with, supervision,
+    RawHandler, ReplyExt, Shutdown, SupervisionConfig, scheduling, spawn_with, supervision,
     transport::{
         ErasedEnvelope, MessageInbox, MessageReservation, MessageSender, RuntimeInbox,
         TryReserveError,
@@ -248,10 +248,10 @@ impl Actor for ManualUnbounded {
 }
 
 #[derive(Message)]
-#[message(reply = u64)]
+#[message(raw = u64)]
 struct Add(u64);
 
-impl Handler<Add> for ManualActor {
+impl RawHandler<Add> for ManualActor {
     fn handle(
         &mut self,
         message: Add,
@@ -267,11 +267,19 @@ impl Handler<Add> for ManualActor {
 }
 
 #[derive(Debug, Message)]
+#[message(raw = ())]
 struct Notify(u64);
 
-impl SyncHandler<Notify> for ManualActor {
-    fn handle(&mut self, message: Notify, _scope: &mut ActorScope<'_, Self>) {
-        self.0 += message.0;
+impl RawHandler<Notify> for ManualActor {
+    fn handle(
+        &mut self,
+        message: Notify,
+        _scope: &mut ActorScope<'_, Self>,
+    ) -> impl loac::IntoReply<Self, Notify> + use<> {
+        let __reply = {
+            self.0 += message.0;
+        };
+        __reply.ready()
     }
 }
 

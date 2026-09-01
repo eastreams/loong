@@ -1,8 +1,8 @@
 use std::sync::{Arc, Barrier};
 
 use loac::{
-    Actor, ActorScope, CallError, ExitReason, Handler, Message, ReplyExt, Shutdown, ShutdownStatus,
-    StopScope, actor,
+    Actor, ActorScope, CallError, ExitReason, Message, RawHandler, ReplyExt, Shutdown,
+    ShutdownStatus, StopScope, actor,
 };
 use tokio::sync::oneshot;
 
@@ -20,10 +20,10 @@ impl Actor for PanicActor {
 }
 
 #[derive(Message)]
-#[message(reply = ())]
+#[message(raw = ())]
 struct PanicNow;
 
-impl Handler<PanicNow> for PanicActor {
+impl RawHandler<PanicNow> for PanicActor {
     fn handle(
         &mut self,
         _message: PanicNow,
@@ -50,13 +50,13 @@ async fn handler_panics_are_contained_and_reported() {
 }
 
 #[derive(Message)]
-#[message(reply = ())]
+#[message(raw = ())]
 struct PanicAfterBarrier {
     entered: oneshot::Sender<()>,
     barrier: Arc<Barrier>,
 }
 
-impl Handler<PanicAfterBarrier> for PanicActor {
+impl RawHandler<PanicAfterBarrier> for PanicActor {
     fn handle(
         &mut self,
         message: PanicAfterBarrier,

@@ -1,9 +1,9 @@
 //! A message without an explicit reply is send-only; `call` must not compile.
-use loac::{Actor, ActorScope, SyncHandler};
+use loac::{Actor, ActorScope, Cx, Handler};
 
 struct Echo;
 
-#[loac::actor(mailbox)]
+#[loac::actor(mailbox, interleaved = unbounded)]
 impl Actor for Echo {
     type SpawnArgs = ();
 
@@ -15,8 +15,8 @@ impl Actor for Echo {
 #[derive(loac::Message)]
 struct Ping;
 
-impl SyncHandler<Ping> for Echo {
-    fn handle(&mut self, _message: Ping, _scope: &mut ActorScope<'_, Self>) {}
+impl Handler<Ping> for Echo {
+    async fn handle(_message: Ping, _cx: Cx<'_, Self>) {}
 }
 
 fn main() {

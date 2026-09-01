@@ -13,7 +13,7 @@ use std::{
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use loac::{
-    Actor, ActorOwner, ActorRef, ActorScope, ExitReason, Handler, Message, ReplyExt, Response,
+    Actor, ActorOwner, ActorRef, ActorScope, ExitReason, Message, RawHandler, ReplyExt, Response,
     Shutdown, SpawnOptions, TryCallErrorKind, spawn_with,
 };
 
@@ -31,10 +31,10 @@ impl Actor for MailboxActor {
 }
 
 #[derive(Message)]
-#[message(reply = ())]
+#[message(raw = ())]
 struct ReadyTraffic;
 
-impl Handler<ReadyTraffic> for MailboxActor {
+impl RawHandler<ReadyTraffic> for MailboxActor {
     fn handle(
         &mut self,
         _message: ReadyTraffic,

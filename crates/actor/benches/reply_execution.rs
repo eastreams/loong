@@ -29,9 +29,8 @@ use std::{
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use loac::{
-    Actor, ActorOwner, ActorRef, ActorScope, ExitReason, Handler, InterleavedFutureExt,
-    IntoActorFuture, Message, ReplyExt, Response, Shutdown, SpawnOptions, TryCallErrorKind,
-    spawn_with,
+    Actor, ActorOwner, ActorRef, ActorScope, ExitReason, InterleavedFutureExt, IntoActorFuture,
+    Message, RawHandler, ReplyExt, Response, Shutdown, SpawnOptions, TryCallErrorKind, spawn_with,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -110,13 +109,13 @@ impl Actor for ReplyActor {
 }
 
 #[derive(Message)]
-#[message(reply = ())]
+#[message(raw = ())]
 struct OwnedReply {
     started: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
 }
 
-impl Handler<OwnedReply> for ReplyActor {
+impl RawHandler<OwnedReply> for ReplyActor {
     fn handle(
         &mut self,
         message: OwnedReply,
@@ -130,13 +129,13 @@ impl Handler<OwnedReply> for ReplyActor {
 }
 
 #[derive(Message)]
-#[message(reply = ())]
+#[message(raw = ())]
 struct InterleavedReply {
     started: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
 }
 
-impl Handler<InterleavedReply> for ReplyActor {
+impl RawHandler<InterleavedReply> for ReplyActor {
     fn handle(
         &mut self,
         message: InterleavedReply,
@@ -181,10 +180,10 @@ impl Future for WakeProbe {
 }
 
 #[derive(Message)]
-#[message(reply = ())]
+#[message(raw = ())]
 struct OwnedWakeProbe(WakeProbe);
 
-impl Handler<OwnedWakeProbe> for ReplyActor {
+impl RawHandler<OwnedWakeProbe> for ReplyActor {
     fn handle(
         &mut self,
         message: OwnedWakeProbe,
@@ -195,10 +194,10 @@ impl Handler<OwnedWakeProbe> for ReplyActor {
 }
 
 #[derive(Message)]
-#[message(reply = ())]
+#[message(raw = ())]
 struct InterleavedWakeProbe(WakeProbe);
 
-impl Handler<InterleavedWakeProbe> for ReplyActor {
+impl RawHandler<InterleavedWakeProbe> for ReplyActor {
     fn handle(
         &mut self,
         message: InterleavedWakeProbe,
@@ -209,10 +208,10 @@ impl Handler<InterleavedWakeProbe> for ReplyActor {
 }
 
 #[derive(Message)]
-#[message(reply = ())]
+#[message(raw = ())]
 struct MailboxBacklog;
 
-impl Handler<MailboxBacklog> for ReplyActor {
+impl RawHandler<MailboxBacklog> for ReplyActor {
     fn handle(
         &mut self,
         _message: MailboxBacklog,
@@ -223,13 +222,13 @@ impl Handler<MailboxBacklog> for ReplyActor {
 }
 
 #[derive(Message)]
-#[message(reply = ())]
+#[message(raw = ())]
 struct MailboxTurnTrigger {
     commands: mpsc::Sender<WakeCommand>,
     completed: oneshot::Sender<Duration>,
 }
 
-impl Handler<MailboxTurnTrigger> for ReplyActor {
+impl RawHandler<MailboxTurnTrigger> for ReplyActor {
     fn handle(
         &mut self,
         message: MailboxTurnTrigger,
@@ -250,13 +249,13 @@ impl Handler<MailboxTurnTrigger> for ReplyActor {
 }
 
 #[derive(Message)]
-#[message(reply = ())]
+#[message(raw = ())]
 struct StageMailboxBacklog {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
 }
 
-impl Handler<StageMailboxBacklog> for ReplyActor {
+impl RawHandler<StageMailboxBacklog> for ReplyActor {
     fn handle(
         &mut self,
         message: StageMailboxBacklog,

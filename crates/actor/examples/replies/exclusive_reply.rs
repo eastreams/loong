@@ -17,14 +17,14 @@ impl Actor for Counter {
 }
 
 #[derive(Message)]
-#[message(reply = u64)]
+#[message(raw = u64)]
 struct AddAfter {
     amount: u64,
     started: oneshot::Sender<()>,
     resume: oneshot::Receiver<()>,
 }
 
-impl Handler<AddAfter> for Counter {
+impl RawHandler<AddAfter> for Counter {
     fn handle(
         &mut self,
         message: AddAfter,
@@ -51,10 +51,10 @@ impl Handler<AddAfter> for Counter {
 }
 
 #[derive(Message)]
-#[message(reply = u64)]
+#[message(raw = u64)]
 struct Read;
 
-impl Handler<Read> for Counter {
+impl RawHandler<Read> for Counter {
     fn handle(
         &mut self,
         _message: Read,

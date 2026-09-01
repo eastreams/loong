@@ -18,10 +18,10 @@ impl Actor for Provider {
 }
 
 #[derive(Message)]
-#[message(stream = u8)]
+#[message(raw_stream = u8)]
 struct Subscribe;
 
-impl StreamHandler<Subscribe> for Provider {
+impl RawStreamHandler<Subscribe> for Provider {
     fn handle<W>(
         &mut self,
         _message: Subscribe,

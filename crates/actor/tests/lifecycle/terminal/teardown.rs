@@ -7,8 +7,8 @@ use std::{
 };
 
 use loac::{
-    Actor, ActorFuture, ActorScope, CallError, ExitReason, Handler, InterleavedFutureExt, Message,
-    ReplyExt, SubtreeStatus, actor,
+    Actor, ActorFuture, ActorScope, CallError, ExitReason, InterleavedFutureExt, Message,
+    RawHandler, ReplyExt, SubtreeStatus, actor,
 };
 use tokio::sync::oneshot;
 
@@ -25,7 +25,7 @@ impl Actor for PendingInit {
 }
 
 #[derive(Message)]
-#[message(reply = ())]
+#[message(raw = ())]
 struct QueuedDrop {
     dropped: Arc<AtomicBool>,
     dropped_while_unwinding: Arc<AtomicBool>,
@@ -41,7 +41,7 @@ impl Drop for QueuedDrop {
     }
 }
 
-impl Handler<QueuedDrop> for PendingInit {
+impl RawHandler<QueuedDrop> for PendingInit {
     fn handle(
         &mut self,
         _message: QueuedDrop,
@@ -128,7 +128,7 @@ impl Actor for PendingInterleavedActor {
 }
 
 #[derive(Message)]
-#[message(reply = ())]
+#[message(raw = ())]
 struct PendingInterleavedDrop {
     entered: Option<oneshot::Sender<()>>,
     drops: Arc<AtomicUsize>,
@@ -160,7 +160,7 @@ impl Drop for PendingInterleavedDrop {
     }
 }
 
-impl Handler<PendingInterleavedDrop> for PendingInterleavedActor {
+impl RawHandler<PendingInterleavedDrop> for PendingInterleavedActor {
     fn handle(
         &mut self,
         message: PendingInterleavedDrop,

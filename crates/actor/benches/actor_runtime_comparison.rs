@@ -5,7 +5,7 @@ use std::{
 };
 
 use actix::Actor as _;
-use loac::{ActorOwner, ActorRef, prelude::*};
+use loac::{ActorOwner, ActorRef, RawHandler, ReplyExt, prelude::*};
 use oorandom::Rand64;
 use serde::Serialize;
 
@@ -22,7 +22,7 @@ const BOOTSTRAP_SEED: u64 = 0x100a_2026;
 const CONFIDENCE_LEVEL: f64 = 0.95;
 
 #[derive(Message)]
-#[message(reply = u64)]
+#[message(raw = u64)]
 struct Ready;
 
 impl actix::Message for Ready {
@@ -30,6 +30,7 @@ impl actix::Message for Ready {
 }
 
 #[derive(Message)]
+#[message(raw = ())]
 struct Notify;
 
 impl actix::Message for Notify {
@@ -37,7 +38,7 @@ impl actix::Message for Notify {
 }
 
 #[derive(Message)]
-#[message(reply = u64)]
+#[message(raw = u64)]
 struct Barrier;
 
 impl actix::Message for Barrier {
@@ -57,21 +58,38 @@ impl Actor for LoongActor {
     }
 }
 
-impl SyncHandler<Ready> for LoongActor {
-    fn handle(&mut self, _message: Ready, _scope: &mut ActorScope<Self>) -> u64 {
-        1
+impl RawHandler<Ready> for LoongActor {
+    fn handle(
+        &mut self,
+        _message: Ready,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loac::IntoReply<Self, Ready> + use<> {
+        let __reply = { 1 };
+        __reply.ready()
     }
 }
 
-impl SyncHandler<Notify> for LoongActor {
-    fn handle(&mut self, _message: Notify, _scope: &mut ActorScope<Self>) {
-        self.handled += 1;
+impl RawHandler<Notify> for LoongActor {
+    fn handle(
+        &mut self,
+        _message: Notify,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loac::IntoReply<Self, Notify> + use<> {
+        let __reply = {
+            self.handled += 1;
+        };
+        __reply.ready()
     }
 }
 
-impl SyncHandler<Barrier> for LoongActor {
-    fn handle(&mut self, _message: Barrier, _scope: &mut ActorScope<Self>) -> u64 {
-        self.handled
+impl RawHandler<Barrier> for LoongActor {
+    fn handle(
+        &mut self,
+        _message: Barrier,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loac::IntoReply<Self, Barrier> + use<> {
+        let __reply = { self.handled };
+        __reply.ready()
     }
 }
 

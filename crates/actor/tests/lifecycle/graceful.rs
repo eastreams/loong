@@ -1,6 +1,7 @@
 use loac::{
-    Actor, ActorFutureExt, ActorScope, CallError, ExitReason, Handler, InterleavedFutureExt,
-    IntoActorFuture, Message, ReplyExt, Shutdown, ShutdownStatus, TryCallErrorKind, actor,
+    Actor, ActorFutureExt, ActorScope, CallError, ExitReason, InterleavedFutureExt,
+    IntoActorFuture, Message, RawHandler, ReplyExt, Shutdown, ShutdownStatus, TryCallErrorKind,
+    actor,
 };
 use tokio::sync::oneshot;
 
@@ -10,10 +11,10 @@ use super::{
 };
 
 #[derive(Message)]
-#[message(reply = ())]
+#[message(raw = ())]
 struct StopFromExclusive;
 
-impl Handler<StopFromExclusive> for LifecycleActor {
+impl RawHandler<StopFromExclusive> for LifecycleActor {
     fn handle(
         &mut self,
         _message: StopFromExclusive,
@@ -147,14 +148,14 @@ impl Actor for InterleavedDrainActor {
 }
 
 #[derive(Message)]
-#[message(reply = u8)]
+#[message(raw = u8)]
 struct InterleavedDrainStep {
     id: u8,
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
 }
 
-impl Handler<InterleavedDrainStep> for InterleavedDrainActor {
+impl RawHandler<InterleavedDrainStep> for InterleavedDrainActor {
     fn handle(
         &mut self,
         message: InterleavedDrainStep,

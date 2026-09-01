@@ -12,13 +12,20 @@ impl Actor for Counter {
 }
 
 #[derive(Message)]
-#[message(reply = u8)]
+#[message(raw = u8)]
 struct Increment;
 
-impl SyncHandler<Increment> for Counter {
-    fn handle(&mut self, _message: Increment, _scope: &mut ActorScope<Self>) -> u8 {
-        self.0 += 1;
-        self.0
+impl RawHandler<Increment> for Counter {
+    fn handle(
+        &mut self,
+        _message: Increment,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loac::IntoReply<Self, Increment> + use<> {
+        let __reply = {
+            self.0 += 1;
+            self.0
+        };
+        __reply.ready()
     }
 }
 
@@ -36,10 +43,10 @@ async fn sync_handler_mutates_actor_and_replies_immediately() {
 }
 
 #[derive(Message)]
-#[message(reply = u8)]
+#[message(raw = u8)]
 struct ChooseReply(bool);
 
-impl Handler<ChooseReply> for Counter {
+impl RawHandler<ChooseReply> for Counter {
     fn handle(
         &mut self,
         message: ChooseReply,

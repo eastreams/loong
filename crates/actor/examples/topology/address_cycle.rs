@@ -1,7 +1,7 @@
 //! Builds a parent-child address cycle during scope-based initialization.
 //! The parent runtime owns the child; both actors keep non-owning addresses.
 
-use loac::{ActorRef, prelude::*};
+use loac::{ActorRef, RawHandler, ReplyExt, prelude::*};
 use tokio::sync::oneshot;
 
 struct Parent {
@@ -36,47 +36,71 @@ impl Actor for Child {
 }
 
 #[derive(Message)]
+#[message(raw = ())]
 struct Start {
     completed: oneshot::Sender<()>,
 }
 
 #[derive(Message)]
+#[message(raw = ())]
 struct VisitChild {
     completed: oneshot::Sender<()>,
 }
 
 #[derive(Message)]
+#[message(raw = ())]
 struct ReturnToParent {
     completed: oneshot::Sender<()>,
 }
 
-impl SyncHandler<Start> for Parent {
-    fn handle(&mut self, message: Start, _scope: &mut ActorScope<Self>) {
-        assert!(
-            self.child
-                .try_send(VisitChild {
-                    completed: message.completed,
-                })
-                .is_ok()
-        );
+impl RawHandler<Start> for Parent {
+    fn handle(
+        &mut self,
+        message: Start,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loac::IntoReply<Self, Start> + use<> {
+        let __reply = {
+            assert!(
+                self.child
+                    .try_send(VisitChild {
+                        completed: message.completed,
+                    })
+                    .is_ok()
+            );
+        };
+        __reply.ready()
     }
 }
 
-impl SyncHandler<VisitChild> for Child {
-    fn handle(&mut self, message: VisitChild, _scope: &mut ActorScope<Self>) {
-        assert!(
-            self.parent
-                .try_send(ReturnToParent {
-                    completed: message.completed,
-                })
-                .is_ok()
-        );
+impl RawHandler<VisitChild> for Child {
+    fn handle(
+        &mut self,
+        message: VisitChild,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loac::IntoReply<Self, VisitChild> + use<> {
+        let __reply = {
+            assert!(
+                self.parent
+                    .try_send(ReturnToParent {
+                        completed: message.completed,
+                    })
+                    .is_ok()
+            );
+        };
+        __reply.ready()
     }
 }
 
-impl SyncHandler<ReturnToParent> for Parent {
-    fn handle(&mut self, message: ReturnToParent, _scope: &mut ActorScope<Self>) {
-        let _ = message.completed.send(());
+impl RawHandler<ReturnToParent> for Parent {
+    fn handle(
+        &mut self,
+        message: ReturnToParent,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loac::IntoReply<Self, ReturnToParent> + use<> {
+        let __reply = {
+            let _ = message.completed.send(());
+        };
+        __reply.ready()
     }
 }
 

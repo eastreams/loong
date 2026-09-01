@@ -16,12 +16,16 @@ impl<const N: usize> Actor for Service<N> {
 }
 
 #[derive(Message)]
-#[message(reply = usize)]
+#[message(raw = usize)]
 struct ReadTypeParameter;
 
-impl<const N: usize> SyncHandler<ReadTypeParameter> for Service<N> {
-    fn handle(&mut self, _message: ReadTypeParameter, _scope: &mut ActorScope<Self>) -> usize {
-        N
+impl<const N: usize> RawHandler<ReadTypeParameter> for Service<N> {
+    fn handle(
+        &mut self,
+        _message: ReadTypeParameter,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loac::IntoReply<Self, ReadTypeParameter> + use<N> {
+        N.ready()
     }
 }
 

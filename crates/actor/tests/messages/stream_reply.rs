@@ -1,7 +1,7 @@
 use futures_util::StreamExt;
 use loac::{
-    Actor, ActorScope, ExitReason, InterleavedFutureExt, IntoActorFuture, Message, ReplyExt,
-    Shutdown, StreamHandler, actor,
+    Actor, ActorScope, ExitReason, InterleavedFutureExt, IntoActorFuture, Message,
+    RawStreamHandler, ReplyExt, Shutdown, actor,
 };
 
 use super::support::watchdog;
@@ -18,10 +18,10 @@ impl Actor for StreamActor {
 }
 
 #[derive(Message)]
-#[message(stream = u8, reply = u8)]
+#[message(raw_stream = u8, reply = u8)]
 struct StreamNumbers(u8);
 
-impl StreamHandler<StreamNumbers> for StreamActor {
+impl RawStreamHandler<StreamNumbers> for StreamActor {
     fn handle<W>(
         &mut self,
         message: StreamNumbers,
@@ -54,10 +54,10 @@ impl Actor for ExclusiveStreamActor {
 }
 
 #[derive(Message)]
-#[message(stream = u8, reply = u8)]
+#[message(raw_stream = u8, reply = u8)]
 struct ExclusiveStreamNumbers(u8);
 
-impl StreamHandler<ExclusiveStreamNumbers> for ExclusiveStreamActor {
+impl RawStreamHandler<ExclusiveStreamNumbers> for ExclusiveStreamActor {
     fn handle<W>(
         &mut self,
         message: ExclusiveStreamNumbers,
@@ -92,10 +92,10 @@ impl Actor for InterleavedStreamActor {
 }
 
 #[derive(Message)]
-#[message(stream = u8, reply = u8)]
+#[message(raw_stream = u8, reply = u8)]
 struct InterleavedStreamNumbers(u8);
 
-impl StreamHandler<InterleavedStreamNumbers> for InterleavedStreamActor {
+impl RawStreamHandler<InterleavedStreamNumbers> for InterleavedStreamActor {
     fn handle<W>(
         &mut self,
         message: InterleavedStreamNumbers,
@@ -130,10 +130,10 @@ impl Actor for BranchStreamActor {
 }
 
 #[derive(Message)]
-#[message(stream = u8, reply = u8)]
+#[message(raw_stream = u8, reply = u8)]
 struct BranchStream(u8);
 
-impl StreamHandler<BranchStream> for BranchStreamActor {
+impl RawStreamHandler<BranchStream> for BranchStreamActor {
     fn handle<W>(
         &mut self,
         message: BranchStream,

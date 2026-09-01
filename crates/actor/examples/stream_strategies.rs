@@ -21,7 +21,7 @@ use std::time::Duration;
 use loac::prelude::*;
 
 #[derive(Message)]
-#[message(stream = u8, reply = u8)]
+#[message(raw_stream = u8, reply = u8)]
 struct OwnedStream(u8);
 
 struct OwnedProvider;
@@ -35,7 +35,7 @@ impl Actor for OwnedProvider {
     }
 }
 
-impl StreamHandler<OwnedStream> for OwnedProvider {
+impl RawStreamHandler<OwnedStream> for OwnedProvider {
     fn handle<W>(
         &mut self,
         message: OwnedStream,
@@ -59,7 +59,7 @@ impl StreamHandler<OwnedStream> for OwnedProvider {
 }
 
 #[derive(Message)]
-#[message(stream = u8, reply = u8)]
+#[message(raw_stream = u8, reply = u8)]
 struct BranchStream(u8);
 
 struct BranchProvider;
@@ -73,7 +73,7 @@ impl Actor for BranchProvider {
     }
 }
 
-impl StreamHandler<BranchStream> for BranchProvider {
+impl RawStreamHandler<BranchStream> for BranchProvider {
     fn handle<W>(
         &mut self,
         message: BranchStream,
@@ -102,7 +102,7 @@ impl StreamHandler<BranchStream> for BranchProvider {
 }
 
 #[derive(Message)]
-#[message(stream = u8, reply = u8)]
+#[message(raw_stream = u8, reply = u8)]
 struct ExclusiveStream(u8);
 
 struct ExclusiveProvider;
@@ -116,7 +116,7 @@ impl Actor for ExclusiveProvider {
     }
 }
 
-impl StreamHandler<ExclusiveStream> for ExclusiveProvider {
+impl RawStreamHandler<ExclusiveStream> for ExclusiveProvider {
     fn handle<W>(
         &mut self,
         message: ExclusiveStream,
@@ -142,7 +142,7 @@ impl StreamHandler<ExclusiveStream> for ExclusiveProvider {
 }
 
 #[derive(Message)]
-#[message(stream = u8, reply = u8)]
+#[message(raw_stream = u8, reply = u8)]
 struct InterleavedStream;
 
 struct InterleavedProvider {
@@ -158,7 +158,7 @@ impl Actor for InterleavedProvider {
     }
 }
 
-impl StreamHandler<InterleavedStream> for InterleavedProvider {
+impl RawStreamHandler<InterleavedStream> for InterleavedProvider {
     fn handle<W>(
         &mut self,
         _message: InterleavedStream,

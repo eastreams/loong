@@ -12,10 +12,10 @@ impl Actor for SelfCaller {
 }
 
 #[derive(Message)]
-#[message(reply = u8)]
+#[message(raw = u8)]
 struct Echo(u8);
 
-impl Handler<Echo> for SelfCaller {
+impl RawHandler<Echo> for SelfCaller {
     fn handle(
         &mut self,
         message: Echo,
@@ -26,10 +26,10 @@ impl Handler<Echo> for SelfCaller {
 }
 
 #[derive(Message)]
-#[message(reply = u8)]
+#[message(raw = u8)]
 struct OwnedSelfCall(u8);
 
-impl Handler<OwnedSelfCall> for SelfCaller {
+impl RawHandler<OwnedSelfCall> for SelfCaller {
     fn handle(
         &mut self,
         message: OwnedSelfCall,
@@ -41,10 +41,10 @@ impl Handler<OwnedSelfCall> for SelfCaller {
 }
 
 #[derive(Message)]
-#[message(reply = u8)]
+#[message(raw = u8)]
 struct InterleavedSelfCall(u8);
 
-impl Handler<InterleavedSelfCall> for SelfCaller {
+impl RawHandler<InterleavedSelfCall> for SelfCaller {
     fn handle(
         &mut self,
         message: InterleavedSelfCall,
@@ -58,13 +58,13 @@ impl Handler<InterleavedSelfCall> for SelfCaller {
 }
 
 #[derive(Message)]
-#[message(reply = ())]
+#[message(raw = ())]
 struct ExclusiveSelfCall {
     observed: oneshot::Sender<Response<u8>>,
     polled: oneshot::Sender<()>,
 }
 
-impl Handler<ExclusiveSelfCall> for SelfCaller {
+impl RawHandler<ExclusiveSelfCall> for SelfCaller {
     fn handle(
         &mut self,
         message: ExclusiveSelfCall,

@@ -1,11 +1,14 @@
-use loac::{Actor, ActorScope, ExitReason, Message, Shutdown, StreamHandler, SyncHandler, actor};
+use loac::{
+    Actor, ActorScope, Cx, ExitReason, Message, RawHandler, ReplyExt, Shutdown, StreamHandler,
+    actor,
+};
 use tokio::sync::mpsc;
 
 use super::support::watchdog;
 
 struct StreamActor;
 
-#[actor(mailbox)]
+#[actor(mailbox, interleaved = unbounded)]
 impl Actor for StreamActor {
     type SpawnArgs = ();
 
@@ -19,27 +22,21 @@ impl Actor for StreamActor {
 struct StreamNumbers(u8);
 
 impl StreamHandler<StreamNumbers> for StreamActor {
-    fn handle<W>(
-        &mut self,
-        message: StreamNumbers,
-        mut out: W,
-        _scope: &mut ActorScope<'_, Self>,
-    ) -> impl loac::IntoStreamReply<Self, StreamNumbers> + use<W>
+    async fn handle<W>(message: StreamNumbers, mut out: W, _cx: Cx<'_, Self>) -> u8
     where
         W: loac::Writer<u8> + Send + 'static,
     {
-        async move {
-            for item in 0..message.0 {
-                if out.write(item).await.is_err() {
-                    break;
-                }
+        for item in 0..message.0 {
+            if out.write(item).await.is_err() {
+                break;
             }
-            message.0
         }
+        message.0
     }
 }
 
 #[derive(Message)]
+#[message(raw = ())]
 struct Item(u8);
 
 struct ItemReceiver {
@@ -55,19 +52,31 @@ impl Actor for ItemReceiver {
     }
 }
 
-impl SyncHandler<Item> for ItemReceiver {
-    fn handle(&mut self, message: Item, _scope: &mut ActorScope<'_, Self>) {
-        self.items.push(message.0);
+impl RawHandler<Item> for ItemReceiver {
+    fn handle(
+        &mut self,
+        message: Item,
+        _scope: &mut ActorScope<'_, Self>,
+    ) -> impl loac::IntoReply<Self, Item> + use<> {
+        let __reply = {
+            self.items.push(message.0);
+        };
+        __reply.ready()
     }
 }
 
 #[derive(Message)]
-#[message(reply = Vec<u8>)]
+#[message(raw = Vec<u8>)]
 struct Dump;
 
-impl SyncHandler<Dump> for ItemReceiver {
-    fn handle(&mut self, _message: Dump, _scope: &mut ActorScope<'_, Self>) -> Vec<u8> {
-        std::mem::take(&mut self.items)
+impl RawHandler<Dump> for ItemReceiver {
+    fn handle(
+        &mut self,
+        _message: Dump,
+        _scope: &mut ActorScope<'_, Self>,
+    ) -> impl loac::IntoReply<Self, Dump> + use<> {
+        let __reply = { std::mem::take(&mut self.items) };
+        __reply.ready()
     }
 }
 
@@ -76,23 +85,16 @@ impl SyncHandler<Dump> for ItemReceiver {
 struct StreamToActor(u8);
 
 impl StreamHandler<StreamToActor> for StreamActor {
-    fn handle<W>(
-        &mut self,
-        message: StreamToActor,
-        mut out: W,
-        _scope: &mut ActorScope<'_, Self>,
-    ) -> impl loac::IntoStreamReply<Self, StreamToActor> + use<W>
+    async fn handle<W>(message: StreamToActor, mut out: W, _cx: Cx<'_, Self>) -> u8
     where
         W: loac::Writer<Item> + Send + 'static,
     {
-        async move {
-            for value in 0..message.0 {
-                if out.write(Item(value)).await.is_err() {
-                    break;
-                }
+        for value in 0..message.0 {
+            if out.write(Item(value)).await.is_err() {
+                break;
             }
-            message.0
         }
+        message.0
     }
 }
 

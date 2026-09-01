@@ -1,4 +1,4 @@
-//! Uses `SyncHandler` when a reply is complete during dispatch.
+//! Uses `RawHandler` when a reply is complete during dispatch.
 
 use loac::prelude::*;
 
@@ -14,22 +14,32 @@ impl Actor for Counter {
 }
 
 #[derive(Message)]
-#[message(reply = u64)]
+#[message(raw = u64)]
 struct Add(u64);
 
-impl SyncHandler<Add> for Counter {
-    fn handle(&mut self, message: Add, _scope: &mut ActorScope<Self>) -> u64 {
+impl RawHandler<Add> for Counter {
+    fn handle(
+        &mut self,
+        message: Add,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loac::IntoReply<Self, Add> + use<> {
         self.0 += message.0;
-        self.0
+        self.0.ready()
     }
 }
 
 #[derive(Message)]
+#[message(raw = ())]
 struct Reset;
 
-impl SyncHandler<Reset> for Counter {
-    fn handle(&mut self, _message: Reset, _scope: &mut ActorScope<Self>) {
+impl RawHandler<Reset> for Counter {
+    fn handle(
+        &mut self,
+        _message: Reset,
+        _scope: &mut ActorScope<Self>,
+    ) -> impl loac::IntoReply<Self, Reset> + use<> {
         self.0 = 0;
+        ().ready()
     }
 }
 

@@ -19,19 +19,11 @@ impl Actor for Accumulator {
 struct AddAfterYield(u64);
 
 impl Handler<AddAfterYield> for Accumulator {
-    fn handle(
-        &mut self,
-        message: AddAfterYield,
-        scope: &mut ActorScope<'_, Self>,
-    ) -> impl IntoReply<Self, AddAfterYield> + use<> {
-        scope.cx_reply(self, |mut cx| {
-            Box::pin(async move {
-                tokio::task::yield_now().await;
-                cx.with_actor(|actor| {
-                    actor.0 += message.0;
-                    actor.0
-                })
-            })
+    async fn handle(message: AddAfterYield, mut cx: Cx<'_, Self>) -> u64 {
+        tokio::task::yield_now().await;
+        cx.with_actor(|actor| {
+            actor.0 += message.0;
+            actor.0
         })
     }
 }
@@ -41,28 +33,19 @@ impl Handler<AddAfterYield> for Accumulator {
 struct StreamAndCount(u8);
 
 impl StreamHandler<StreamAndCount> for Accumulator {
-    fn handle<W>(
-        &mut self,
-        message: StreamAndCount,
-        mut out: W,
-        scope: &mut ActorScope<'_, Self>,
-    ) -> impl IntoStreamReply<Self, StreamAndCount> + use<W>
+    async fn handle<W>(message: StreamAndCount, mut out: W, mut cx: Cx<'_, Self>) -> u64
     where
         W: Writer<u8> + Send + 'static,
     {
-        scope.cx_stream(self, |mut cx| {
-            Box::pin(async move {
-                for item in 0..message.0 {
-                    if out.write(item).await.is_err() {
-                        break;
-                    }
-                    tokio::task::yield_now().await;
-                }
-                cx.with_actor(|actor| {
-                    actor.0 += 1;
-                    actor.0
-                })
-            })
+        for item in 0..message.0 {
+            if out.write(item).await.is_err() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        cx.with_actor(|actor| {
+            actor.0 += 1;
+            actor.0
         })
     }
 }

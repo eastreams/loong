@@ -11,8 +11,8 @@ use std::{
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use loac::{
-    Actor, ActorRef, ActorScope, Handler, InterleavedFutureExt, IntoActorFuture, Message, ReplyExt,
-    Shutdown,
+    Actor, ActorRef, ActorScope, InterleavedFutureExt, IntoActorFuture, Message, RawHandler,
+    ReplyExt, Shutdown,
 };
 
 struct ReplyActor;
@@ -38,10 +38,10 @@ impl Actor for UnboundedReplyActor {
 }
 
 #[derive(Message)]
-#[message(reply = u64)]
+#[message(raw = u64)]
 struct Ready;
 
-impl Handler<Ready> for ReplyActor {
+impl RawHandler<Ready> for ReplyActor {
     fn handle(
         &mut self,
         _message: Ready,
@@ -52,10 +52,10 @@ impl Handler<Ready> for ReplyActor {
 }
 
 #[derive(Message)]
-#[message(reply = u64)]
+#[message(raw = u64)]
 struct Owned;
 
-impl Handler<Owned> for ReplyActor {
+impl RawHandler<Owned> for ReplyActor {
     fn handle(
         &mut self,
         _message: Owned,
@@ -66,10 +66,10 @@ impl Handler<Owned> for ReplyActor {
 }
 
 #[derive(Message)]
-#[message(reply = u64)]
+#[message(raw = u64)]
 struct Interleaved;
 
-impl Handler<Interleaved> for ReplyActor {
+impl RawHandler<Interleaved> for ReplyActor {
     fn handle(
         &mut self,
         _message: Interleaved,
@@ -79,7 +79,7 @@ impl Handler<Interleaved> for ReplyActor {
     }
 }
 
-impl Handler<Interleaved> for UnboundedReplyActor {
+impl RawHandler<Interleaved> for UnboundedReplyActor {
     fn handle(
         &mut self,
         _message: Interleaved,
@@ -90,10 +90,10 @@ impl Handler<Interleaved> for UnboundedReplyActor {
 }
 
 #[derive(Message)]
-#[message(reply = u64)]
+#[message(raw = u64)]
 struct Exclusive;
 
-impl Handler<Exclusive> for ReplyActor {
+impl RawHandler<Exclusive> for ReplyActor {
     fn handle(
         &mut self,
         _message: Exclusive,
@@ -111,7 +111,7 @@ enum MeasuredProfile {
 
 async fn measure_round_trip<A>(actor: &ActorRef<A>, measured: bool) -> Duration
 where
-    A: Handler<Interleaved>,
+    A: RawHandler<Interleaved>,
 {
     let started = Instant::now();
     let reply = actor

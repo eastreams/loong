@@ -1,4 +1,4 @@
-use loac::{Actor, ActorScope, ExitReason, Handler, Message, ReplyExt, Shutdown, actor};
+use loac::{Actor, ActorScope, ExitReason, Message, RawHandler, ReplyExt, Shutdown, actor};
 use tokio::sync::mpsc;
 
 use super::support::watchdog;
@@ -15,10 +15,10 @@ impl Actor for Calculator {
 }
 
 #[derive(Message)]
-#[message(reply = u64)]
+#[message(raw = u64)]
 struct Add(u64);
 
-impl Handler<Add> for Calculator {
+impl RawHandler<Add> for Calculator {
     fn handle(
         &mut self,
         message: Add,
@@ -30,10 +30,10 @@ impl Handler<Add> for Calculator {
 }
 
 #[derive(Message)]
-#[message(reply = String)]
+#[message(raw = String)]
 struct Describe;
 
-impl Handler<Describe> for Calculator {
+impl RawHandler<Describe> for Calculator {
     fn handle(
         &mut self,
         _message: Describe,
@@ -58,10 +58,10 @@ async fn one_actor_handles_multiple_typed_message_replies() {
 }
 
 #[derive(Message)]
-#[message(reply = mpsc::Receiver<u8>)]
+#[message(raw = mpsc::Receiver<u8>)]
 struct Events;
 
-impl Handler<Events> for Calculator {
+impl RawHandler<Events> for Calculator {
     fn handle(
         &mut self,
         _message: Events,

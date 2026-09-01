@@ -7,8 +7,8 @@ use std::sync::{
 use std::task::Poll;
 
 use loac::{
-    Actor, ActorScope, CallError, Child, ChildExit, ExitReason, Handler, InterleavedFutureExt,
-    IntoActorFuture, Message, ReplyExt, Shutdown, SubtreeStatus, actor,
+    Actor, ActorScope, CallError, Child, ChildExit, ExitReason, InterleavedFutureExt,
+    IntoActorFuture, Message, RawHandler, ReplyExt, Shutdown, SubtreeStatus, actor,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -29,10 +29,10 @@ impl Actor for ChildActor {
 }
 
 #[derive(Message)]
-#[message(reply = ())]
+#[message(raw = ())]
 struct StopSelf;
 
-impl Handler<StopSelf> for ChildActor {
+impl RawHandler<StopSelf> for ChildActor {
     fn handle(
         &mut self,
         _message: StopSelf,
@@ -44,10 +44,10 @@ impl Handler<StopSelf> for ChildActor {
 }
 
 #[derive(Message)]
-#[message(reply = ())]
+#[message(raw = ())]
 struct PanicSelf;
 
-impl Handler<PanicSelf> for ChildActor {
+impl RawHandler<PanicSelf> for ChildActor {
     fn handle(
         &mut self,
         _message: PanicSelf,
@@ -95,10 +95,10 @@ impl Actor for Supervisor {
 }
 
 #[derive(Message)]
-#[message(reply = usize)]
+#[message(raw = usize)]
 struct Observed;
 
-impl Handler<Observed> for Supervisor {
+impl RawHandler<Observed> for Supervisor {
     fn handle(
         &mut self,
         _message: Observed,
@@ -109,10 +109,10 @@ impl Handler<Observed> for Supervisor {
 }
 
 #[derive(Message)]
-#[message(reply = ())]
+#[message(raw = ())]
 struct ChildExitBarrier;
 
-impl Handler<ChildExitBarrier> for Supervisor {
+impl RawHandler<ChildExitBarrier> for Supervisor {
     fn handle(
         &mut self,
         _message: ChildExitBarrier,
