@@ -125,8 +125,8 @@
 //!
 //! Implement [`Handler<M>`](Handler) for an actor-access `cx` reply future.
 //! Implement [`RawHandler<M>`](RawHandler) when a reply must choose an explicit
-//! scheduling strategy such as [`ReplyExt::exclusive`](ReplyExt::exclusive) or
-//! [`ReplyExt::ready`](ReplyExt::ready).
+//! scheduling strategy such as [`ReplyExt::exclusive`] or
+//! [`ReplyExt::ready`].
 //! One actor may handle many message types.
 //!
 //! [`ActorRef::call`] waits for acceptance and a typed reply.

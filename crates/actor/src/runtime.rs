@@ -89,7 +89,7 @@ pub fn spawn_with<A: Actor>(args: A::SpawnArgs, options: SpawnOptions<A>) -> Act
 /// [`actor_ref`](Self::actor_ref) is available before the actor itself is
 /// constructed. Call [`spawn`](Self::spawn) with the actor's [`Actor::SpawnArgs`]
 /// to construct and start it. Dropping an unstarted spawner requests `Kill` on
-/// the preallocated address, so waiting callers observe [`CallError::Closed`]
+/// the preallocated address, so waiting callers observe [`CallError::Closed`](crate::CallError::Closed)
 /// instead of hanging.
 #[must_use = "dropping an unstarted spawner requests Kill on its address"]
 pub struct ActorSpawner<A: Actor> {

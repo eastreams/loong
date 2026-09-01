@@ -41,7 +41,7 @@
 //! Reply completion and Kill share one lifecycle decision.
 //! Completion first delivers `Ok`.
 //! Kill first reports
-//! [`CallError::DuringDispatch`](crate::CallError::DuringDispatch).
+//! [`CallError::DuringDispatch`].
 
 use std::{
     future::Future,
@@ -127,7 +127,7 @@ pub trait ReplyExt: Sized {
     ///
     /// Kill can commit after dispatch begins but before this value is submitted,
     /// including from the handler itself. In that case the caller receives
-    /// [`CallError::DuringDispatch`](crate::CallError::DuringDispatch), and the
+    /// [`CallError::DuringDispatch`], and the
     /// value is dropped.
     fn ready(self) -> Ready<Self> {
         Ready { value: self }

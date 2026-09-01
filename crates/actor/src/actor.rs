@@ -64,7 +64,7 @@ pub trait Actor:
         crate::ActorSpawner::<Self>::new()
     }
 
-    /// Creates an address-first spawner with explicit [`SpawnOptions`].
+    /// Creates an address-first spawner with explicit [`SpawnOptions`](crate::SpawnOptions).
     ///
     /// This is the [`spawner`](Self::spawner) counterpart to
     /// [`spawn_with`](crate::spawn_with).
