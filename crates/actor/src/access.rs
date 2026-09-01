@@ -18,7 +18,7 @@ use crate::{Actor, ActorScope, runtime::ScopeState};
 /// `'static` location (thread locals, detached tasks, globals). It is `Send`
 /// because the runtime only polls the owning future on the actor task; the raw
 /// pointers are never dereferenced concurrently.
-pub struct ActorAccess<'a, A: Actor> {
+pub struct ActorAccess<'a, A: Actor + 'a> {
     actor: NonNull<A>,
     scope: NonNull<ScopeState<A>>,
     _lifetime: PhantomData<&'a mut A>,
@@ -61,3 +61,4 @@ impl<A: Actor> ActorAccess<'_, A> {
 // has exclusive access. The phantom lifetime does not correspond to an actual
 // borrow that could race with another thread.
 unsafe impl<A: Actor> Send for ActorAccess<'_, A> {}
+
