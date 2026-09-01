@@ -13,7 +13,7 @@ use loac::{ExitReason, Shutdown, SubtreeStatus, prelude::*};
 
 struct Counter(u64);
 
-#[actor(mailbox)]
+#[actor(mailbox, interleaved = unbounded)]
 impl Actor for Counter {
     type SpawnArgs = u64;
 
@@ -26,14 +26,12 @@ impl Actor for Counter {
 #[message(reply = u64)]
 struct Add(u64);
 
-impl SyncHandler<Add> for Counter {
-    fn handle(
-        &mut self,
-        message: Add,
-        _scope: &mut ActorScope<'_, Self>,
-    ) -> u64 {
-        self.0 += message.0;
-        self.0
+impl Handler<Add> for Counter {
+    async fn handle(message: Add, mut cx: Cx<'_, Self>) -> u64 {
+        cx.with_actor(|actor| {
+            actor.0 += message.0;
+            actor.0
+        })
     }
 }
 
@@ -111,12 +109,17 @@ See the [attribute reference](https://docs.rs/loac/latest/loac/attr.actor.html) 
 
 | Selection | Actor progress while awaiting the reply |
 | --- | --- |
-| [`SyncHandler`](https://docs.rs/loac/latest/loac/trait.SyncHandler.html) or [`ready`](https://docs.rs/loac/latest/loac/trait.ReplyExt.html#method.ready) | The reply finishes during dispatch. |
+| [`Handler`](https://docs.rs/loac/latest/loac/trait.Handler.html) async `cx` future | The runtime polls it on the interleaved lane; requires `interleaved`. |
+| [`RawHandler`](https://docs.rs/loac/latest/loac/trait.RawHandler.html) with [`ready`](https://docs.rs/loac/latest/loac/trait.ReplyExt.html#method.ready) | The reply finishes during dispatch. |
 | A bare `Future` | An owned Tokio task continues beside actor work. |
 | `interleaved` | Eligible actor work continues between polls. |
 | `exclusive` | Other actor-local work pauses. Owned tasks continue. |
 
-Streaming composes on a bounded channel: the subscriber owns the receiver, the message carries the sender, and the reply's owned task produces the items. The stream ends when that task stops. A runtime-driven stream reply mode is outside the current contract.
+Stream messages use `#[message(stream = Item, reply = Final)]`. The runtime
+creates a bounded item channel and returns the receiver to the caller as a
+`StreamReply`. `StreamHandler` produces items from an async `cx` future polled
+on the interleaved lane. `RawStreamHandler` selects an explicit stream-final
+strategy. The item stream ends when the handler drops its writer.
 
 ## Lifecycle and Shutdown
 

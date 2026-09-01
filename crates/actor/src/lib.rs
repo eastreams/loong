@@ -142,7 +142,8 @@
 //!
 //! | Selection | Actor progress while awaiting the reply |
 //! | --- | --- |
-//! | [`Handler`] with an immediate `async fn` or [`ready`](ReplyExt::ready) | The reply finishes during dispatch |
+//! | [`Handler`] async `cx` future | The runtime polls it on the interleaved lane; requires [`HasInterleaving`] |
+//! | [`RawHandler`] with [`ready`](ReplyExt::ready) | The reply finishes during dispatch |
 //! | A bare [`Future`] | Other actor work continues beside an owned Tokio task |
 //! | [`interleaved`](InterleavedFutureExt::interleaved) | Eligible actor work continues between polls |
 //! | [`exclusive`](ReplyExt::exclusive) | Other actor-local work pauses; owned tasks may continue |
