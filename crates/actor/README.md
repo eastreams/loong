@@ -38,10 +38,9 @@ impl Handler<Add> for Counter {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let owner = loac::spawn::<Counter>(0);
-    let counter = owner.actor_ref();
 
-    assert_eq!(counter.call(Add(2)).await?, 2);
-    assert_eq!(counter.call(Add(3)).await?, 5);
+    assert_eq!(owner.call(Add(2)).await?, 2);
+    assert_eq!(owner.call(Add(3)).await?, 5);
     let status = owner.shutdown(Shutdown::Drain).await;
     assert_eq!(status.reason(), ExitReason::Drained);
     assert_eq!(status.subtree(), SubtreeStatus::Terminated);
