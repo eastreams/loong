@@ -74,6 +74,7 @@ A reply strategy controls actor progress after handler dispatch.
 | [`explicit_replies`](raw/replies/explicit_replies.rs) | Select ready or owned work at runtime. |
 | [`interleaved_reply`](raw/replies/interleaved_reply.rs) | Let mailbox work progress between actor-aware polls. |
 | [`exclusive_reply`](raw/replies/exclusive_reply.rs) | Pause mailbox work until actor-aware work completes. |
+| [`cx_exclusive`](raw/cx_exclusive.rs) | Build raw-handler cx futures on the exclusive lane (`cx_exclusive`, `cx_stream_exclusive`). |
 
 Use `RawHandler<M>` when the reply needs an explicit strategy.
 Return a bare `Future` for independent async work.

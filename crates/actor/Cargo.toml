@@ -71,6 +71,10 @@ name = "exclusive_reply"
 path = "examples/raw/replies/exclusive_reply.rs"
 
 [[example]]
+name = "cx_exclusive"
+path = "examples/raw/cx_exclusive.rs"
+
+[[example]]
 name = "top_level_actors"
 path = "examples/topology/top_level_actors.rs"
 
