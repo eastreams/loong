@@ -35,7 +35,7 @@ impl RawHandler<OwnedSelfCall> for SelfCaller {
         message: OwnedSelfCall,
         scope: &mut ActorScope<Self>,
     ) -> impl loac::IntoReply<Self, OwnedSelfCall> + use<> {
-        let response = scope.myself().try_call(Echo(message.0)).unwrap();
+        let response = scope.try_call(Echo(message.0)).unwrap();
         async move { response.await.unwrap() }
     }
 }
@@ -50,7 +50,7 @@ impl RawHandler<InterleavedSelfCall> for SelfCaller {
         message: InterleavedSelfCall,
         scope: &mut ActorScope<Self>,
     ) -> impl loac::IntoReply<Self, InterleavedSelfCall> + use<> {
-        let response = scope.myself().try_call(Echo(message.0)).unwrap();
+        let response = scope.try_call(Echo(message.0)).unwrap();
         async move { response.await.unwrap() }
             .into_actor()
             .interleaved()
@@ -70,8 +70,8 @@ impl RawHandler<ExclusiveSelfCall> for SelfCaller {
         message: ExclusiveSelfCall,
         scope: &mut ActorScope<Self>,
     ) -> impl loac::IntoReply<Self, ExclusiveSelfCall> + use<> {
-        let awaited = scope.myself().try_call(Echo(1)).unwrap();
-        let observed = scope.myself().try_call(Echo(2)).unwrap();
+        let awaited = scope.try_call(Echo(1)).unwrap();
+        let observed = scope.try_call(Echo(2)).unwrap();
         let _ = message.observed.send(observed);
         async move {
             let _ = message.polled.send(());

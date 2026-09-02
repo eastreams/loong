@@ -60,6 +60,14 @@ impl<A: Actor> StopScope<'_, A> {
     }
 }
 
+impl<A: Actor> Deref for StopScope<'_, A> {
+    type Target = ActorRef<A>;
+
+    fn deref(&self) -> &Self::Target {
+        self.actor_ref
+    }
+}
+
 impl<A: Actor> fmt::Debug for StopScope<'_, A> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -236,6 +244,14 @@ impl<A: Actor> ActorScope<'_, A> {
             future,
             _actor: std::marker::PhantomData,
         }
+    }
+}
+
+impl<A: Actor> Deref for ActorScope<'_, A> {
+    type Target = ActorRef<A>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.state.actor_ref
     }
 }
 
