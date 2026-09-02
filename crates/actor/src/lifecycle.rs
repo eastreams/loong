@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, ops::Deref};
 
 use slotmap::DefaultKey;
 
@@ -246,6 +246,14 @@ impl<A: Actor> Child<A> {
     /// Returns the child actor's message address.
     pub fn into_actor_ref(self) -> ActorRef<A> {
         self.actor_ref
+    }
+}
+
+impl<A: Actor> Deref for Child<A> {
+    type Target = ActorRef<A>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.actor_ref
     }
 }
 

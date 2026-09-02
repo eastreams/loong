@@ -158,15 +158,12 @@ async fn clean_child_exit_is_reported_exactly_once() {
     let supervisor = owner.actor_ref();
     let child = watchdog(child_rx).await.unwrap();
 
-    assert_eq!(watchdog(child.actor_ref().call(StopSelf)).await, Ok(()));
+    assert_eq!(watchdog(child.call(StopSelf)).await, Ok(()));
     let event = watchdog(events.recv()).await.unwrap();
     // The spawn receipt must identify its matching parent event.
     assert_eq!(event.child(), child.id());
     assert_eq!(event.status().reason(), ExitReason::Stopped);
-    assert_eq!(
-        watchdog(child.actor_ref().closed()).await.reason(),
-        ExitReason::Stopped
-    );
+    assert_eq!(watchdog(child.closed()).await.reason(), ExitReason::Stopped);
 
     // The barrier remains pending across a child-exit scheduling opportunity, so
     // a duplicate queued behind the first hook cannot hide behind mailbox work.
@@ -189,7 +186,7 @@ async fn child_exiting_during_init_keeps_its_registered_identity() {
 
     assert_eq!(event.child(), child.id());
     assert_eq!(event.status().reason(), ExitReason::Stopped);
-    assert_eq!(watchdog(child.actor_ref().closed()).await, event.status());
+    assert_eq!(watchdog(child.closed()).await, event.status());
     assert_eq!(
         watchdog(owner.shutdown(Shutdown::Stop)).await.reason(),
         ExitReason::Stopped
@@ -204,7 +201,7 @@ async fn child_panic_is_reported_without_stopping_the_parent() {
     let child = watchdog(child_rx).await.unwrap();
 
     assert_eq!(
-        watchdog(child.actor_ref().call(PanicSelf)).await,
+        watchdog(child.call(PanicSelf)).await,
         Err(CallError::DuringDispatch(ExitReason::Panicked))
     );
     let event = watchdog(events.recv()).await.unwrap();
@@ -213,7 +210,7 @@ async fn child_panic_is_reported_without_stopping_the_parent() {
     let child_status = event.status();
     assert_eq!(child_status.reason(), ExitReason::Panicked);
     assert_eq!(child_status.subtree(), SubtreeStatus::Terminated);
-    assert_eq!(watchdog(child.actor_ref().closed()).await, child_status);
+    assert_eq!(watchdog(child.closed()).await, child_status);
     assert_eq!(watchdog(supervisor.call(Observed)).await.unwrap(), 1);
 
     let parent_status = watchdog(owner.shutdown(Shutdown::Stop)).await;
@@ -229,16 +226,13 @@ async fn child_kill_is_reported_without_stopping_the_parent() {
     let child = watchdog(child_rx).await.unwrap();
 
     assert_eq!(
-        child.actor_ref().request_shutdown(Shutdown::Kill),
+        child.request_shutdown(Shutdown::Kill),
         loac::ShutdownStatus::Requested
     );
     let event = watchdog(events.recv()).await.unwrap();
     assert_eq!(event.child(), child.id());
     assert_eq!(event.status().reason(), ExitReason::Killed);
-    assert_eq!(
-        watchdog(child.actor_ref().closed()).await.reason(),
-        ExitReason::Killed
-    );
+    assert_eq!(watchdog(child.closed()).await.reason(), ExitReason::Killed);
     assert_eq!(watchdog(supervisor.call(Observed)).await.unwrap(), 1);
 
     let parent_status = watchdog(owner.shutdown(Shutdown::Stop)).await;
