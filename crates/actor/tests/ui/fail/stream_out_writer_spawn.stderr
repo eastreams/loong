@@ -1,0 +1,16 @@
+error[E0521]: borrowed data escapes outside of associated function
+  --> tests/ui/fail/stream_out_writer_spawn.rs:28:9
+   |
+20 |       async fn handle<'a, W>(
+   |                       -- lifetime `'a` defined here
+21 |           _message: StreamNumbers,
+22 |           mut out: StreamOut<'a, W>,
+   |           ------- `out` is a reference that is only valid in the associated function body
+...
+28 | /         tokio::spawn(async move {
+29 | |             let _ = out.write(1).await;
+30 | |         });
+   | |          ^
+   | |          |
+   | |__________`out` escapes the associated function body here
+   |            argument requires that `'a` must outlive `'static`

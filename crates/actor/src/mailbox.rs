@@ -10,7 +10,7 @@ use std::{future::Future, pin::Pin};
 
 use crate::{
     Actor, ActorScope, CallError, DispatchHandler, HasInterleaving, Message, StreamHandler,
-    StreamMessage, Writer,
+    StreamMessage, StreamOut, Writer,
     access::Cx,
     owned::OwnedTasks,
     reply::sealed::{HandleReply, HandleStreamCall},
@@ -385,6 +385,7 @@ where
         };
 
         let cx = Cx::new(actor, scope.state);
+        let out = StreamOut::new(out);
         let future = Box::pin(<A as StreamHandler<M>>::handle(message, out, cx))
             as Pin<Box<dyn Future<Output = M::Final> + Send + '_>>;
         let future: Pin<Box<dyn Future<Output = M::Final> + Send + 'static>> =

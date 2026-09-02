@@ -281,7 +281,7 @@ pub use runtime::{
     ActorOwner, ActorScope, ActorSpawner, SpawnOptions, StopScope, spawn, spawn_with,
 };
 pub use transport::MessageConfig;
-pub use writer::Writer;
+pub use writer::{StreamOut, Writer};
 
 // The macro references these through `__private`.
 // The root re-export keeps rustc diagnostics free of `__private` paths.
@@ -318,7 +318,7 @@ pub mod prelude {
         DynamicInterleavingOptions, DynamicMailboxOptions, Handler, HasChildren, HasInterleaving,
         HasMailbox, HasReply, InterleavedFutureExt, IntoActorFuture, IntoReply, IntoStreamReply,
         Items, Message, RawHandler, RawKind, RawStreamHandler, RawStreamKind, ReplyExt, StopScope,
-        StreamHandler, StreamMessage, StreamReply, SyncKind, Writer, actor, reply,
+        StreamHandler, StreamMessage, StreamOut, StreamReply, SyncKind, Writer, actor, reply,
     };
 }
 

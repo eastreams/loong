@@ -33,9 +33,13 @@ impl Handler<AddAfterYield> for Accumulator {
 struct StreamAndCount(u8);
 
 impl StreamHandler<StreamAndCount> for Accumulator {
-    async fn handle<W>(message: StreamAndCount, mut out: W, mut cx: Cx<'_, Self>) -> u64
+    async fn handle<'a, W>(
+        message: StreamAndCount,
+        mut out: StreamOut<'a, W>,
+        mut cx: Cx<'a, Self>,
+    ) -> u64
     where
-        W: Writer<u8> + Send + 'static,
+        W: Writer<u8> + Send + 'a,
     {
         for item in 0..message.0 {
             if out.write(item).await.is_err() {

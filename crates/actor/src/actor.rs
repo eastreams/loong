@@ -3,7 +3,7 @@ use std::{future::Future, pin::Pin};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
-    ActorScope, ChildExit, ExitReason, Shutdown, StopScope, Writer,
+    ActorScope, ChildExit, ExitReason, Shutdown, StopScope, StreamOut, Writer,
     access::Cx,
     config::SupervisionConfig,
     reply::{
@@ -497,10 +497,9 @@ where
 ///
 /// The runtime polls the returned future on the actor's interleaved lane, so
 /// dispatch through this trait requires [`HasInterleaving`].
-/// `out` is the runtime-created item writer. The writer type is generic so
-/// handler implementations stay compatible with future writer implementations;
-/// the runtime currently passes a `tokio::sync::mpsc` sender. Dropping `out`
-/// closes the caller's item stream.
+/// `out` is the runtime-created item writer wrapped in [`StreamOut`]. The
+/// wrapper ties the writer to the handler future's borrow, so it cannot be
+/// moved into a `'static` task; dropping it closes the caller's item stream.
 pub trait StreamHandler<M>: HasMailbox
 where
     M: StreamMessage,
@@ -510,11 +509,11 @@ where
     /// `cx` provides temporary synchronous actor and scope access.
     fn handle<'a, W>(
         message: M,
-        out: W,
+        out: StreamOut<'a, W>,
         cx: Cx<'a, Self>,
     ) -> impl Future<Output = M::Final> + Send + 'a
     where
-        W: Writer<M::Item> + Send + 'static;
+        W: Writer<M::Item> + Send + 'a;
 }
 
 #[allow(unsafe_code)]
@@ -531,7 +530,8 @@ where
         let (item_tx, item_rx) = mpsc::channel::<M::Item>(8);
         let (final_tx, final_rx) = oneshot::channel::<M::Final>();
         let cx = Cx::new(self, scope.state);
-        let future = Box::pin(<A as StreamHandler<M>>::handle(message, item_tx, cx))
+        let out = StreamOut::new(item_tx);
+        let future = Box::pin(<A as StreamHandler<M>>::handle(message, out, cx))
             as Pin<Box<dyn Future<Output = M::Final> + Send + '_>>;
         let future: Pin<Box<dyn Future<Output = M::Final> + Send + 'static>> =
             unsafe { std::mem::transmute(future) };

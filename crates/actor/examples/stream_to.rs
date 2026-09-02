@@ -28,9 +28,13 @@ impl Actor for StreamActor {
 struct StreamNumbers(u8);
 
 impl StreamHandler<StreamNumbers> for StreamActor {
-    async fn handle<W>(message: StreamNumbers, mut out: W, _cx: Cx<'_, Self>) -> u8
+    async fn handle<'a, W>(
+        message: StreamNumbers,
+        mut out: StreamOut<'a, W>,
+        _cx: Cx<'a, Self>,
+    ) -> u8
     where
-        W: loac::Writer<u8> + Send + 'static,
+        W: loac::Writer<u8> + Send + 'a,
     {
         for item in 0..message.0 {
             if out.write(item).await.is_err() {
@@ -88,9 +92,13 @@ impl RawHandler<Dump> for ItemReceiver {
 struct StreamToActor(u8);
 
 impl StreamHandler<StreamToActor> for StreamActor {
-    async fn handle<W>(message: StreamToActor, mut out: W, _cx: Cx<'_, Self>) -> u8
+    async fn handle<'a, W>(
+        message: StreamToActor,
+        mut out: StreamOut<'a, W>,
+        _cx: Cx<'a, Self>,
+    ) -> u8
     where
-        W: loac::Writer<Item> + Send + 'static,
+        W: loac::Writer<Item> + Send + 'a,
     {
         for value in 0..message.0 {
             if out.write(Item(value)).await.is_err() {
