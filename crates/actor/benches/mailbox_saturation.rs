@@ -81,9 +81,9 @@ async fn drain(responses: Vec<Response<()>>) {
 
 async fn measure_saturated_try_call_full(iters: u64, capacity: usize) -> Duration {
     let owner = spawn_benchmark_actor(capacity);
-    let actor = owner.actor_ref();
-    warm_up(&actor).await;
-    let queued = fill_mailbox(&actor, capacity);
+    let actor = &owner;
+    warm_up(actor).await;
+    let queued = fill_mailbox(actor, capacity);
 
     let probe = actor
         .try_call(ReadyTraffic)
@@ -110,12 +110,12 @@ async fn measure_saturated_try_call_full(iters: u64, capacity: usize) -> Duratio
 
 async fn measure_saturated_ready_drain(iters: u64, capacity: usize) -> Duration {
     let owner = spawn_benchmark_actor(capacity);
-    let actor = owner.actor_ref();
-    warm_up(&actor).await;
+    let actor = &owner;
+    warm_up(actor).await;
     let mut measured = Duration::ZERO;
 
     for _ in 0..iters {
-        let queued = fill_mailbox(&actor, capacity);
+        let queued = fill_mailbox(actor, capacity);
         let started = Instant::now();
         drain(queued).await;
         measured += started.elapsed();

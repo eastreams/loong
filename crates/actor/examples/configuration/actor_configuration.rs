@@ -48,7 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_mailbox_capacity(NonZeroUsize::new(64).expect("capacity is non-zero"));
 
     let owner = loac::spawn_with::<Service>((), options);
-    assert_eq!(owner.actor_ref().call(HealthCheck).await?, "ready");
+    assert_eq!(owner.call(HealthCheck).await?, "ready");
 
     assert_eq!(
         owner.shutdown(loac::Shutdown::Drain).await.reason(),

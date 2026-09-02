@@ -105,10 +105,9 @@ impl StreamHandler<StreamToActor> for StreamActor {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // `call_to` with an mpsc sender: the caller owns the item channel.
     let owner = loac::spawn::<StreamActor>(());
-    let actor = owner.actor_ref();
 
     let (tx, mut rx) = mpsc::channel::<u8>(8);
-    let final_value = actor.call_to(StreamNumbers(3), tx).await?;
+    let final_value = owner.call_to(StreamNumbers(3), tx).await?;
     assert_eq!(final_value, 3);
     assert_eq!(rx.recv().await, Some(0));
     assert_eq!(rx.recv().await, Some(1));
@@ -118,10 +117,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // `send_to` is one-way: admission commits, and the final value is dropped.
     let owner = loac::spawn::<StreamActor>(());
-    let actor = owner.actor_ref();
 
     let (tx, mut rx) = mpsc::channel::<u8>(8);
-    actor.send_to(StreamNumbers(3), tx).await?;
+    owner.send_to(StreamNumbers(3), tx).await?;
     assert_eq!(rx.recv().await, Some(0));
     assert_eq!(rx.recv().await, Some(1));
     assert_eq!(rx.recv().await, Some(2));
@@ -130,15 +128,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // `ActorRef` itself is a `Writer`, so items can stream actor-to-actor.
     let stream_owner = loac::spawn::<StreamActor>(());
-    let stream_actor = stream_owner.actor_ref();
     let receiver_owner = loac::spawn::<ItemReceiver>(());
     let receiver = receiver_owner.actor_ref();
 
-    let final_value = stream_actor
+    let final_value = stream_owner
         .call_to(StreamToActor(3), receiver.clone())
         .await?;
     assert_eq!(final_value, 3);
-    let items = receiver.call(Dump).await?;
+    let items = receiver_owner.call(Dump).await?;
     assert_eq!(items, vec![0, 1, 2]);
 
     drain(stream_owner).await;

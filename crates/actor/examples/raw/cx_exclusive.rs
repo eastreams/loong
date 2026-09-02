@@ -97,18 +97,17 @@ impl RawStreamHandler<StreamExclusive> for Counter {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let owner = loac::spawn::<Counter>(0);
-    let counter = owner.actor_ref();
     let (started_tx, started_rx) = oneshot::channel();
     let (resume_tx, resume_rx) = oneshot::channel();
 
-    let addition = counter.try_call(AddExclusive {
+    let addition = owner.try_call(AddExclusive {
         amount: 5,
         started: started_tx,
         resume: resume_rx,
     })?;
     started_rx.await?;
 
-    let mut read = counter.try_call(Read)?;
+    let mut read = owner.try_call(Read)?;
     assert!(
         tokio::time::timeout(Duration::from_millis(10), &mut read)
             .await
@@ -122,12 +121,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(addition.await?, 5);
     assert_eq!(read.await?, 5);
 
-    let mut stream = counter.call(StreamExclusive).await?;
+    let mut stream = owner.call(StreamExclusive).await?;
     assert_eq!(stream.recv().await, Some(6));
     assert_eq!(stream.recv().await, None);
     assert_eq!(stream.finish().await?, 6);
 
-    assert_eq!(counter.call(Read).await?, 6);
+    assert_eq!(owner.call(Read).await?, 6);
     let status = owner.shutdown(loac::Shutdown::Drain).await;
     assert_eq!(status.reason(), loac::ExitReason::Drained);
     Ok(())

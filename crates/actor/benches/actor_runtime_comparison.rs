@@ -5,7 +5,7 @@ use std::{
 };
 
 use actix::Actor as _;
-use loac::{ActorOwner, ActorRef, RawHandler, ReplyExt, prelude::*};
+use loac::{ActorOwner, RawHandler, ReplyExt, prelude::*};
 use oorandom::Rand64;
 use serde::Serialize;
 
@@ -197,7 +197,6 @@ enum Implementation {
 struct RuntimePair {
     loong_runtime: tokio::runtime::Runtime,
     loong_owner: ActorOwner<LoongActor>,
-    loac: ActorRef<LoongActor>,
     loong_handled: u64,
     actix_system: actix::SystemRunner,
     actix_actor: actix::Addr<ActixActor>,
@@ -210,7 +209,6 @@ impl RuntimePair {
             .build()
             .expect("the Loong benchmark runtime builds");
         let loong_owner = loong_runtime.block_on(async { loac::spawn::<LoongActor>(()) });
-        let loac = loong_owner.actor_ref();
 
         let actix_system = actix::System::with_tokio_rt(|| {
             tokio::runtime::Builder::new_current_thread()
@@ -221,7 +219,7 @@ impl RuntimePair {
 
         assert_eq!(
             loong_runtime
-                .block_on(loac.call(Ready))
+                .block_on(loong_owner.call(Ready))
                 .expect("the Loong actor starts"),
             1
         );
@@ -234,7 +232,6 @@ impl RuntimePair {
         Self {
             loong_runtime,
             loong_owner,
-            loac,
             loong_handled: 0,
             actix_system,
             actix_actor,
@@ -255,7 +252,7 @@ impl RuntimePair {
     }
 
     fn measure_loong(&mut self, workload: Workload, iterations: u64) -> Duration {
-        let actor = &self.loac;
+        let actor = &self.loong_owner;
         match workload {
             Workload::ReadyRequestReply => self.loong_runtime.block_on(async {
                 let started = Instant::now();

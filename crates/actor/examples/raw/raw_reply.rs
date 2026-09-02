@@ -46,11 +46,10 @@ impl RawHandler<Reset> for Counter {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let owner = loac::spawn::<Counter>(1);
-    let counter = owner.actor_ref();
 
-    assert_eq!(counter.call(Add(2)).await?, 3);
-    counter.send(Reset).await?;
-    assert_eq!(counter.call(Add(4)).await?, 4);
+    assert_eq!(owner.call(Add(2)).await?, 3);
+    owner.send(Reset).await?;
+    assert_eq!(owner.call(Add(4)).await?, 4);
 
     assert_eq!(
         owner.shutdown(loac::Shutdown::Drain).await.reason(),

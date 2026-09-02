@@ -67,18 +67,17 @@ impl RawHandler<Read> for Counter {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let owner = loac::spawn::<Counter>(10);
-    let counter = owner.actor_ref();
     let (started_tx, started_rx) = oneshot::channel();
     let (resume_tx, resume_rx) = oneshot::channel();
 
-    let addition = counter.try_call(AddAfter {
+    let addition = owner.try_call(AddAfter {
         amount: 5,
         started: started_tx,
         resume: resume_rx,
     })?;
     started_rx.await?;
 
-    let mut read = counter.try_call(Read)?;
+    let mut read = owner.try_call(Read)?;
     assert!(
         tokio::time::timeout(Duration::from_millis(10), &mut read)
             .await

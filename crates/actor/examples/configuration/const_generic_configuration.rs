@@ -32,7 +32,7 @@ impl<const N: usize> RawHandler<ReadTypeParameter> for Service<N> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let owner = loac::spawn::<Service<8>>(());
-    assert_eq!(owner.actor_ref().call(ReadTypeParameter).await?, 8);
+    assert_eq!(owner.call(ReadTypeParameter).await?, 8);
 
     assert_eq!(
         owner.shutdown(loac::Shutdown::Drain).await.reason(),

@@ -35,16 +35,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let first_owner = loac::spawn::<Worker>(2);
     let second_owner = loac::spawn::<Worker>(3);
     let first = first_owner.actor_ref();
-    let second = second_owner.actor_ref();
 
     let (first_result, second_result) =
-        tokio::join!(first.call(Multiply(5)), second.call(Multiply(5)));
+        tokio::join!(first.call(Multiply(5)), second_owner.call(Multiply(5)));
     assert_eq!(first_result?, 10);
     assert_eq!(second_result?, 15);
 
     drop(first_owner);
     assert_eq!(first.closed().await.reason(), loac::ExitReason::Killed);
-    assert_eq!(second.call(Multiply(4)).await?, 12);
+    assert_eq!(second_owner.call(Multiply(4)).await?, 12);
     assert_eq!(
         second_owner.shutdown(loac::Shutdown::Drain).await.reason(),
         loac::ExitReason::Drained

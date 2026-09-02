@@ -124,21 +124,21 @@ fn main() {
         .build()
         .expect("the benchmark runtime builds");
     let owner = runtime.block_on(async { loac::spawn::<ReplyActor>(()) });
-    let actor = owner.actor_ref();
+    let actor = &owner;
 
-    run_calls(&runtime, &actor, WARMUP_CALLS, || Ready);
-    run_calls(&runtime, &actor, WARMUP_CALLS, || Owned);
-    run_calls(&runtime, &actor, WARMUP_CALLS, || Interleaved);
-    run_calls(&runtime, &actor, WARMUP_CALLS, || Exclusive);
+    run_calls(&runtime, actor, WARMUP_CALLS, || Ready);
+    run_calls(&runtime, actor, WARMUP_CALLS, || Owned);
+    run_calls(&runtime, actor, WARMUP_CALLS, || Interleaved);
+    run_calls(&runtime, actor, WARMUP_CALLS, || Exclusive);
 
     let samples = [
-        ("ready", measure_calls(&runtime, &actor, || Ready)),
-        ("owned", measure_calls(&runtime, &actor, || Owned)),
+        ("ready", measure_calls(&runtime, actor, || Ready)),
+        ("owned", measure_calls(&runtime, actor, || Owned)),
         (
             "interleaved",
-            measure_calls(&runtime, &actor, || Interleaved),
+            measure_calls(&runtime, actor, || Interleaved),
         ),
-        ("exclusive", measure_calls(&runtime, &actor, || Exclusive)),
+        ("exclusive", measure_calls(&runtime, actor, || Exclusive)),
     ];
 
     println!("reply allocations ({MEASURED_CALLS} calls per mode)");

@@ -102,9 +102,8 @@ impl RawHandler<ReturnToParent> for Parent {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (completed_tx, completed_rx) = oneshot::channel();
     let owner = loac::spawn::<Parent>(());
-    let parent = owner.actor_ref();
 
-    parent
+    owner
         .send(Start {
             completed: completed_tx,
         })

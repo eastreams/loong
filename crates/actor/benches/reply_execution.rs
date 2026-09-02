@@ -335,12 +335,12 @@ async fn install_wake_probes(
 
 async fn measure_complete_all(iters: u64, active: usize, execution: ReplyExecution) -> Duration {
     let owner = spawn_benchmark_actor(active, execution.max_interleaved(active));
-    let actor = owner.actor_ref();
+    let actor = &owner;
     let mut measured = Duration::ZERO;
 
     for _ in 0..iters {
         // Dispatch and first-poll setup stay outside the accumulated duration.
-        let (releases, responses) = install_pending(&actor, active, execution).await;
+        let (releases, responses) = install_pending(actor, active, execution).await;
         let started = Instant::now();
         for release in releases {
             release
@@ -366,8 +366,8 @@ async fn measure_single_wake_to_target_poll(
     execution: ReplyExecution,
 ) -> Duration {
     let owner = spawn_benchmark_actor(active, execution.max_interleaved(active));
-    let actor = owner.actor_ref();
-    let (commands, responses) = install_wake_probes(&actor, active, execution).await;
+    let actor = &owner;
+    let (commands, responses) = install_wake_probes(actor, active, execution).await;
     let mut measured = Duration::ZERO;
     let mut index = 0;
 
@@ -412,8 +412,8 @@ async fn measure_mailbox_turn_to_target_poll_under_backlog(
             // A pending probe needs capacity for staging dispatch.
             .with_max_in_flight(execution.max_interleaved(2)),
     );
-    let actor = owner.actor_ref();
-    let (mut commands, probe_responses) = install_wake_probes(&actor, 1, execution).await;
+    let actor = &owner;
+    let (mut commands, probe_responses) = install_wake_probes(actor, 1, execution).await;
     let commands = commands.pop().expect("one wake probe was installed");
     let mut measured = Duration::ZERO;
 

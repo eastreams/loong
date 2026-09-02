@@ -53,11 +53,10 @@ impl StreamHandler<StreamAndCount> for Accumulator {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let owner = loac::spawn::<Accumulator>(40);
-    let actor = owner.actor_ref();
 
-    assert_eq!(actor.call(AddAfterYield(2)).await?, 42);
+    assert_eq!(owner.call(AddAfterYield(2)).await?, 42);
 
-    let mut reply = actor.call(StreamAndCount(3)).await?;
+    let mut reply = owner.call(StreamAndCount(3)).await?;
     let mut items = Vec::new();
     while let Some(item) = reply.recv().await {
         items.push(item);

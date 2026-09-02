@@ -193,8 +193,7 @@ impl RawStreamHandler<InterleavedStream> for InterleavedProvider {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let owner = loac::spawn::<OwnedProvider>(());
-    let provider = owner.actor_ref();
-    let mut reply = provider.call(OwnedStream(3)).await?;
+    let mut reply = owner.call(OwnedStream(3)).await?;
     assert_eq!(reply.recv().await, Some(0));
     assert_eq!(reply.recv().await, Some(1));
     assert_eq!(reply.recv().await, Some(2));
@@ -203,13 +202,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     drain(owner).await;
 
     let owner = loac::spawn::<BranchProvider>(());
-    let provider = owner.actor_ref();
 
-    let mut reply = provider.call(BranchStream(0)).await?;
+    let mut reply = owner.call(BranchStream(0)).await?;
     assert_eq!(reply.recv().await, None);
     assert_eq!(reply.finish().await?, 0);
 
-    let mut reply = provider.call(BranchStream(2)).await?;
+    let mut reply = owner.call(BranchStream(2)).await?;
     assert_eq!(reply.recv().await, Some(0));
     assert_eq!(reply.recv().await, Some(1));
     assert_eq!(reply.recv().await, None);
@@ -217,8 +215,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     drain(owner).await;
 
     let owner = loac::spawn::<ExclusiveProvider>(());
-    let provider = owner.actor_ref();
-    let mut reply = provider.call(ExclusiveStream(3)).await?;
+    let mut reply = owner.call(ExclusiveStream(3)).await?;
     assert_eq!(reply.recv().await, Some(0));
     assert_eq!(reply.recv().await, Some(1));
     assert_eq!(reply.recv().await, Some(2));
@@ -227,8 +224,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     drain(owner).await;
 
     let owner = loac::spawn::<InterleavedProvider>(10);
-    let provider = owner.actor_ref();
-    let mut reply = provider.call(InterleavedStream).await?;
+    let mut reply = owner.call(InterleavedStream).await?;
     assert_eq!(reply.recv().await, Some(10));
     assert_eq!(reply.recv().await, Some(11));
     assert_eq!(reply.recv().await, Some(12));

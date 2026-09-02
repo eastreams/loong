@@ -85,9 +85,8 @@ impl RawHandler<ReviewTask> for Team {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let owner = loac::spawn::<Team>(());
-    let team = owner.actor_ref();
 
-    let reports = team.call(ReviewTask("actor runtime")).await?;
+    let reports = owner.call(ReviewTask("actor runtime")).await?;
     let reports = reports?;
     assert_eq!(
         reports,

@@ -46,12 +46,11 @@ impl RawStreamHandler<Subscribe> for Provider {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let owner = loac::spawn::<Provider>(());
-    let provider = owner.actor_ref();
 
     let t0 = tokio::time::Instant::now();
 
     // The runtime creates the item channel; `call` returns the receiver side.
-    let mut stream = provider.call(Subscribe).await?;
+    let mut stream = owner.call(Subscribe).await?;
 
     // Intervals run slightly longer than the sleep: Tokio timer overshoot
     // is stable and accumulates across items.
