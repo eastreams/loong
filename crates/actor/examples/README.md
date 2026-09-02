@@ -25,6 +25,11 @@ Prefer `Handler<M>` with an async `cx` future.
 Use `RawHandler<M>` when the reply must select an explicit strategy,
 such as returning `.ready()` during dispatch.
 
+For raw handlers that still want cx-style access, `ActorScope` provides
+`cx_reply` / `cx_stream` for interleaved lane replies and
+`cx_exclusive` / `cx_stream_exclusive` for exclusive lane replies.
+Call them inside the handler and use `Cx::with` inside the returned future.
+
 ## Streaming
 
 A stream message derives `#[message(stream = Item, reply = Final)]`. The runtime

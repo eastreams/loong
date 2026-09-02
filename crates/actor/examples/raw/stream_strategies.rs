@@ -1,7 +1,7 @@
 //! Streaming reply scheduling strategies.
 //!
-//! Each provider below handles a `#[message(stream = ...)]` message with a
-//! different [`IntoStreamReply`] strategy. Run with:
+//! Each provider below handles a `#[message(raw_stream = ...)]` message with
+//! a different [`IntoStreamReply`] strategy. Run with:
 //!
 //! ```console
 //! cargo run -p loac --example stream_strategies
