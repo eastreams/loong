@@ -1,4 +1,8 @@
-//! Lets mailbox work progress between polls of an interleaved reply.
+//! Builds a raw-handler cx future on the interleaved lane.
+//!
+//! `scope.cx_reply` pairs `Cx::with` access with interleaved scheduling:
+//! the actor task polls the returned future fairly with mailbox work, so a
+//! waiting reply does not block `Read` from making progress.
 
 use loac::prelude::*;
 use tokio::sync::oneshot;
@@ -25,21 +29,20 @@ impl RawHandler<AddAfter> for Counter {
     fn handle(
         &mut self,
         message: AddAfter,
-        _scope: &mut ActorScope<Self>,
+        scope: &mut ActorScope<Self>,
     ) -> impl IntoReply<Self, AddAfter> + use<> {
-        async move {
-            message
-                .resume
-                .await
-                .expect("the example retains the resume sender");
-            message.amount
-        }
-        .into_actor()
-        .map(|amount, actor: &mut Self, _scope| {
-            actor.0 += amount;
-            actor.0
+        scope.cx_reply(self, move |mut cx| {
+            Box::pin(async move {
+                let _ = message
+                    .resume
+                    .await
+                    .expect("the example retains the resume sender");
+                cx.with(|actor, _| {
+                    actor.0 += message.amount;
+                    actor.0
+                })
+            })
         })
-        .interleaved()
     }
 }
 

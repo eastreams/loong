@@ -26,8 +26,7 @@ impl RawHandler<Multiply> for Worker {
         message: Multiply,
         _scope: &mut ActorScope<Self>,
     ) -> impl loac::IntoReply<Self, Multiply> + use<> {
-        let __reply = { self.factor * message.0 };
-        __reply.ready()
+        (self.factor * message.0).ready()
     }
 }
 

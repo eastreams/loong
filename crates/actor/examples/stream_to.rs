@@ -64,10 +64,8 @@ impl RawHandler<Item> for ItemReceiver {
         message: Item,
         _scope: &mut ActorScope<'_, Self>,
     ) -> impl loac::IntoReply<Self, Item> + use<> {
-        let __reply = {
-            self.items.push(message.0);
-        };
-        __reply.ready()
+        self.items.push(message.0);
+        ().ready()
     }
 }
 
@@ -81,8 +79,7 @@ impl RawHandler<Dump> for ItemReceiver {
         _message: Dump,
         _scope: &mut ActorScope<'_, Self>,
     ) -> impl loac::IntoReply<Self, Dump> + use<> {
-        let __reply = { std::mem::take(&mut self.items) };
-        __reply.ready()
+        std::mem::take(&mut self.items).ready()
     }
 }
 

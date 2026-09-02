@@ -31,13 +31,11 @@ impl RawHandler<Review> for Agent {
         message: Review,
         _scope: &mut ActorScope<Self>,
     ) -> impl loac::IntoReply<Self, Review> + use<> {
-        let __reply = {
-            Report {
-                agent: self.0,
-                subject: message.0,
-            }
-        };
-        __reply.ready()
+        Report {
+            agent: self.0,
+            subject: message.0,
+        }
+        .ready()
     }
 }
 

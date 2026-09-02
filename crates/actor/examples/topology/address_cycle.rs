@@ -59,16 +59,14 @@ impl RawHandler<Start> for Parent {
         message: Start,
         _scope: &mut ActorScope<Self>,
     ) -> impl loac::IntoReply<Self, Start> + use<> {
-        let __reply = {
-            assert!(
-                self.child
-                    .try_send(VisitChild {
-                        completed: message.completed,
-                    })
-                    .is_ok()
-            );
-        };
-        __reply.ready()
+        assert!(
+            self.child
+                .try_send(VisitChild {
+                    completed: message.completed,
+                })
+                .is_ok()
+        );
+        ().ready()
     }
 }
 
@@ -78,16 +76,14 @@ impl RawHandler<VisitChild> for Child {
         message: VisitChild,
         _scope: &mut ActorScope<Self>,
     ) -> impl loac::IntoReply<Self, VisitChild> + use<> {
-        let __reply = {
-            assert!(
-                self.parent
-                    .try_send(ReturnToParent {
-                        completed: message.completed,
-                    })
-                    .is_ok()
-            );
-        };
-        __reply.ready()
+        assert!(
+            self.parent
+                .try_send(ReturnToParent {
+                    completed: message.completed,
+                })
+                .is_ok()
+        );
+        ().ready()
     }
 }
 
@@ -97,10 +93,8 @@ impl RawHandler<ReturnToParent> for Parent {
         message: ReturnToParent,
         _scope: &mut ActorScope<Self>,
     ) -> impl loac::IntoReply<Self, ReturnToParent> + use<> {
-        let __reply = {
-            let _ = message.completed.send(());
-        };
-        __reply.ready()
+        let _ = message.completed.send(());
+        ().ready()
     }
 }
 

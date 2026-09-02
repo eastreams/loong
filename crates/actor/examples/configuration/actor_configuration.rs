@@ -38,8 +38,7 @@ impl RawHandler<HealthCheck> for Service {
         _message: HealthCheck,
         _scope: &mut ActorScope<Self>,
     ) -> impl loac::IntoReply<Self, HealthCheck> + use<> {
-        let __reply = { "ready" };
-        __reply.ready()
+        "ready".ready()
     }
 }
 

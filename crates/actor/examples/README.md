@@ -72,7 +72,7 @@ A reply strategy controls actor progress after handler dispatch.
 | Example | Focus |
 | --- | --- |
 | [`explicit_replies`](raw/replies/explicit_replies.rs) | Select ready or owned work at runtime. |
-| [`interleaved_reply`](raw/replies/interleaved_reply.rs) | Let mailbox work progress between actor-aware polls. |
+| [`interleaved_reply`](raw/replies/interleaved_reply.rs) | Build a raw-handler cx future on the interleaved lane (`cx_reply`). |
 | [`exclusive_reply`](raw/replies/exclusive_reply.rs) | Pause mailbox work until actor-aware work completes. |
 | [`cx_exclusive`](raw/cx_exclusive.rs) | Build raw-handler cx futures on the exclusive lane (`cx_exclusive`, `cx_stream_exclusive`). |
 
