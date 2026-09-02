@@ -38,6 +38,14 @@ pub(crate) async fn run_actor<A: Actor>(
         }
     };
 
+    // The scheduler owns every actor-aware reply future, and those futures may
+    // still hold `Cx` handles into `actor` and `state` when they are dropped.
+    // Re-bind `scheduler` as a local declared after `actor` so async-fn drop
+    // glue releases it before `actor` on every exit path, including an aborted
+    // actor task. Otherwise an abort could drop the actor first and let a
+    // future's `Drop` call `Cx::with` through dangling pointers.
+    let mut scheduler = scheduler;
+
     loop {
         match control.mode() {
             Mode::Running => {}
