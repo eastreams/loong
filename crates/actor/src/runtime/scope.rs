@@ -150,6 +150,10 @@ impl<A: Actor> ActorScope<'_, A> {
     {
         let cx = Cx::new(actor, self.state);
         let future = f(cx);
+        // SAFETY: the future's `'_` lifetime comes only from the `Cx` handle,
+        // whose lifetime is a phantom over raw actor/scope pointers. The reply
+        // is polled only on the actor task and is dropped before the actor or
+        // scope state is torn down.
         let future: std::pin::Pin<Box<dyn std::future::Future<Output = R> + Send + 'static>> =
             unsafe { std::mem::transmute(future) };
         crate::reply::CxReply {
@@ -176,6 +180,10 @@ impl<A: Actor> ActorScope<'_, A> {
     {
         let cx = Cx::new(actor, self.state);
         let future = f(cx);
+        // SAFETY: the future's `'_` lifetime comes only from the `Cx` handle,
+        // whose lifetime is a phantom over raw actor/scope pointers. The reply
+        // is polled only on the actor task and is dropped before the actor or
+        // scope state is torn down.
         let future: std::pin::Pin<Box<dyn std::future::Future<Output = R> + Send + 'static>> =
             unsafe { std::mem::transmute(future) };
         crate::reply::CxStream {
@@ -208,6 +216,10 @@ impl<A: Actor> ActorScope<'_, A> {
     {
         let cx = Cx::new(actor, self.state);
         let future = f(cx);
+        // SAFETY: the future's `'_` lifetime comes only from the `Cx` handle,
+        // whose lifetime is a phantom over raw actor/scope pointers. The reply
+        // is polled only on the actor task and is dropped before the actor or
+        // scope state is torn down.
         let future: std::pin::Pin<Box<dyn std::future::Future<Output = R> + Send + 'static>> =
             unsafe { std::mem::transmute(future) };
         crate::reply::CxExclusive {
@@ -238,6 +250,10 @@ impl<A: Actor> ActorScope<'_, A> {
     {
         let cx = Cx::new(actor, self.state);
         let future = f(cx);
+        // SAFETY: the future's `'_` lifetime comes only from the `Cx` handle,
+        // whose lifetime is a phantom over raw actor/scope pointers. The reply
+        // is polled only on the actor task and is dropped before the actor or
+        // scope state is torn down.
         let future: std::pin::Pin<Box<dyn std::future::Future<Output = R> + Send + 'static>> =
             unsafe { std::mem::transmute(future) };
         crate::reply::CxStreamExclusive {

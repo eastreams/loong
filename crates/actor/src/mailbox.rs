@@ -388,6 +388,11 @@ where
         let out = StreamOut::new(out);
         let future = Box::pin(<A as StreamHandler<M>>::handle(message, out, cx))
             as Pin<Box<dyn Future<Output = M::Final> + Send + '_>>;
+        // SAFETY: the future's `'_` lifetime comes only from the `Cx` handle
+        // and the `StreamOut` wrapper, both of which carry phantom lifetimes
+        // over raw actor/scope pointers and the owned item writer. The reply is
+        // polled only on the actor task and is dropped before the actor or
+        // scope state is torn down.
         let future: Pin<Box<dyn Future<Output = M::Final> + Send + 'static>> =
             unsafe { std::mem::transmute(future) };
         let strategy = crate::reply::CxStream {
