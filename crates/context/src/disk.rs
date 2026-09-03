@@ -70,7 +70,7 @@ impl DiskStore {
     ///
     /// Returns `Ok` only when no other live store holds the same base path;
     /// [`OpenError::InUse`] reports a conflict. The lock's scope and lifetime
-    /// are documented on [`DiskStore`](crate::disk::DiskStore).
+    /// are documented on [`DiskStore`].
     pub fn open(base: PathBuf) -> Result<Self, OpenError> {
         fs::create_dir_all(&base)?;
         let lock = log::open_lock_file(&base)?;

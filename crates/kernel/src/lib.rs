@@ -1,7 +1,7 @@
 //! Connects domain access to the application.
 //!
 //! [`Kernel`] is the policy actor: it evaluates [`PolicyEvent`] messages
-//! against a [`PolicyEngine`](policy::engine::PolicyEngine) and returns either
+//! against a [`PolicyEngine`] and returns either
 //! a [`Granted`] proof or a [`Denied`] refusal. [`Facade`] is the trusted
 //! handle that application and access code use to reach that actor, and the
 //! [`access`] module exposes narrow domain-operation APIs on top of the
