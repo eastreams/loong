@@ -33,19 +33,21 @@ impl Actor for Kernel {
 }
 
 #[derive(Message)]
-#[message(reply = Result<Granted<A>, Denied>)]
+#[message(raw = Result<Granted<A>, Denied>)]
 pub struct PolicyEvent<A: ActionMeta> {
     action: A,
     capabilities: Capabilities,
 }
 
-impl<A: ActionMeta> SyncHandler<PolicyEvent<A>> for Kernel {
+impl<A: ActionMeta> RawHandler<PolicyEvent<A>> for Kernel {
     fn handle(
         &mut self,
         msg: PolicyEvent<A>,
         _scope: &mut ActorScope<Self>,
-    ) -> Result<Granted<A>, Denied> {
-        self.policy_engine.grant(msg.capabilities, msg.action)
+    ) -> impl IntoReply<Self, PolicyEvent<A>> + use<A> {
+        self.policy_engine
+            .grant(msg.capabilities, msg.action)
+            .ready()
     }
 }
 

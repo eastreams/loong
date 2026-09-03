@@ -141,12 +141,12 @@ impl Agent {
 
 /// Replaces the provider used by subsequent streams.
 #[derive(loac::Message)]
-#[message(reply = ())]
+#[message(raw = ())]
 pub struct SwitchProvider(pub AgentProvider);
 
 /// Asks the agent to stream a provider reply for one user message.
 #[derive(loac::Message)]
-#[message(stream = StreamItem, reply = Result<(), PromptError>)]
+#[message(raw_stream = StreamItem, reply = Result<(), PromptError>)]
 pub struct Prompt {
     /// The user message to append and send.
     pub text: String,
@@ -154,22 +154,22 @@ pub struct Prompt {
 
 /// Cancels all prompts that are queued but not started yet.
 #[derive(loac::Message)]
-#[message(reply = ())]
+#[message(raw = ())]
 pub struct CancelQueuedPrompts;
 
 /// Cancels the active prompt, if any.
 #[derive(loac::Message)]
-#[message(reply = ())]
+#[message(raw = ())]
 pub struct CancelActivePrompt;
 
 /// Cancels both queued prompts and the active prompt.
 #[derive(loac::Message)]
-#[message(reply = ())]
+#[message(raw = ())]
 pub struct CancelAllPrompts;
 
 /// Registers one named channel as a tool at runtime.
 #[derive(loac::Message)]
-#[message(reply = Result<(), RegistrationError>)]
+#[message(raw = Result<(), RegistrationError>)]
 pub struct BindChannel {
     pub name: String,
     pub target: Arc<dyn ChannelTarget>,
@@ -177,7 +177,7 @@ pub struct BindChannel {
 
 /// Removes one named channel tool.
 #[derive(loac::Message)]
-#[message(reply = Option<Arc<RegisteredTool>>)]
+#[message(raw = Option<Arc<RegisteredTool>>)]
 pub struct UnbindChannel {
     pub name: String,
 }
@@ -221,7 +221,7 @@ pub enum SpawnSubagentError {
 
 /// Spawns one fully built child agent under the parent runtime.
 #[derive(loac::Message)]
-#[message(reply = Result<ActorRef<Agent>, SpawnSubagentError>)]
+#[message(raw = Result<ActorRef<Agent>, SpawnSubagentError>)]
 pub struct SpawnSubagent {
     pub name: String,
     pub agent: Agent,
@@ -229,7 +229,7 @@ pub struct SpawnSubagent {
 
 /// One-way self-message a finished prompt sends before its final value.
 #[derive(loac::Message)]
-#[message(reply = ())]
+#[message(raw = ())]
 struct PrepareNextPrompt;
 
 /// Owned inputs for one prompt loop.
@@ -520,64 +520,90 @@ impl Actor for Agent {
     }
 }
 
-impl SyncHandler<SwitchProvider> for Agent {
-    fn handle(&mut self, message: SwitchProvider, _scope: &mut ActorScope<'_, Self>) {
+impl RawHandler<SwitchProvider> for Agent {
+    fn handle(
+        &mut self,
+        message: SwitchProvider,
+        _scope: &mut ActorScope<'_, Self>,
+    ) -> impl IntoReply<Self, SwitchProvider> + use<> {
         self.provider = message.0;
+        ().ready()
     }
 }
 
-impl SyncHandler<PrepareNextPrompt> for Agent {
-    fn handle(&mut self, _message: PrepareNextPrompt, _scope: &mut ActorScope<'_, Self>) {
+impl RawHandler<PrepareNextPrompt> for Agent {
+    fn handle(
+        &mut self,
+        _message: PrepareNextPrompt,
+        _scope: &mut ActorScope<'_, Self>,
+    ) -> impl IntoReply<Self, PrepareNextPrompt> + use<> {
         self.start_next_prompt();
+        ().ready()
     }
 }
 
-impl SyncHandler<CancelQueuedPrompts> for Agent {
-    fn handle(&mut self, _message: CancelQueuedPrompts, _scope: &mut ActorScope<'_, Self>) {
+impl RawHandler<CancelQueuedPrompts> for Agent {
+    fn handle(
+        &mut self,
+        _message: CancelQueuedPrompts,
+        _scope: &mut ActorScope<'_, Self>,
+    ) -> impl IntoReply<Self, CancelQueuedPrompts> + use<> {
         self.prompt_queue.clear();
+        ().ready()
     }
 }
 
-impl SyncHandler<CancelActivePrompt> for Agent {
-    fn handle(&mut self, _message: CancelActivePrompt, _scope: &mut ActorScope<'_, Self>) {
+impl RawHandler<CancelActivePrompt> for Agent {
+    fn handle(
+        &mut self,
+        _message: CancelActivePrompt,
+        _scope: &mut ActorScope<'_, Self>,
+    ) -> impl IntoReply<Self, CancelActivePrompt> + use<> {
         if let Some(token) = &self.active {
             token.cancel();
         }
+        ().ready()
     }
 }
 
-impl SyncHandler<CancelAllPrompts> for Agent {
-    fn handle(&mut self, _message: CancelAllPrompts, _scope: &mut ActorScope<'_, Self>) {
+impl RawHandler<CancelAllPrompts> for Agent {
+    fn handle(
+        &mut self,
+        _message: CancelAllPrompts,
+        _scope: &mut ActorScope<'_, Self>,
+    ) -> impl IntoReply<Self, CancelAllPrompts> + use<> {
         self.prompt_queue.clear();
         if let Some(token) = &self.active {
             token.cancel();
         }
+        ().ready()
     }
 }
 
-impl SyncHandler<BindChannel> for Agent {
+impl RawHandler<BindChannel> for Agent {
     fn handle(
         &mut self,
         message: BindChannel,
         _scope: &mut ActorScope<'_, Self>,
-    ) -> Result<(), RegistrationError> {
+    ) -> impl IntoReply<Self, BindChannel> + use<> {
         let BindChannel { name, target } = message;
         self.registry
             .register(name.clone(), ChannelTool::new(name, target))
+            .ready()
     }
 }
 
-impl SyncHandler<UnbindChannel> for Agent {
+impl RawHandler<UnbindChannel> for Agent {
     fn handle(
         &mut self,
         message: UnbindChannel,
         _scope: &mut ActorScope<'_, Self>,
-    ) -> Option<Arc<RegisteredTool>> {
-        self.registry.unregister(&message.name)
+    ) -> impl IntoReply<Self, UnbindChannel> + use<> {
+        self.registry.unregister(&message.name).ready()
     }
 }
 
-impl Handler<SpawnSubagent> for Agent {
+impl RawHandler<SpawnSubagent> for Agent {
     fn handle(
         &mut self,
         message: SpawnSubagent,
@@ -624,7 +650,7 @@ impl Handler<SpawnSubagent> for Agent {
     }
 }
 
-impl StreamHandler<Prompt> for Agent {
+impl RawStreamHandler<Prompt> for Agent {
     fn handle<W>(
         &mut self,
         message: Prompt,

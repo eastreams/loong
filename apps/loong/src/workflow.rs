@@ -85,7 +85,7 @@ pub enum WorkflowError {
 
 /// Asks the workflow to run one goal.
 #[derive(loac::Message)]
-#[message(stream = StreamItem, reply = Result<(), WorkflowError>)]
+#[message(raw_stream = StreamItem, reply = Result<(), WorkflowError>)]
 pub struct RunGoal {
     pub goal: String,
 }
@@ -213,7 +213,7 @@ impl Actor for Workflow {
     }
 }
 
-impl StreamHandler<RunGoal> for Workflow {
+impl RawStreamHandler<RunGoal> for Workflow {
     fn handle<W>(
         &mut self,
         message: RunGoal,
