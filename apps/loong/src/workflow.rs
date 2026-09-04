@@ -22,6 +22,28 @@ use crate::{
     print_stream_item,
 };
 
+/// The workflow actor.
+pub struct Workflow {
+    reviewer_ref: ActorRef<Agent>,
+    planner_ref: ActorRef<Agent>,
+    provider: ProviderConfig,
+    empty_facade: Facade,
+    max_workers: usize,
+    max_review_rounds: usize,
+    max_llm_retries: usize,
+}
+
+impl Workflow {
+    #[must_use]
+    pub fn builder(
+        facade: Facade,
+        provider: ProviderConfig,
+        workspace_root: impl Into<PathBuf>,
+    ) -> WorkflowBuilder {
+        WorkflowBuilder::new(facade, provider, workspace_root)
+    }
+}
+
 const REVIEWER_SYSTEM_PROMPT: &str = "\
 You are the reviewer and the only agent that owns file capabilities and file tools. \
 When asked to review a plan or a final answer, respond ONLY with JSON, no markdown: \
@@ -149,28 +171,6 @@ impl WorkflowBuilder {
 
     pub fn spawn(self) -> ActorOwner<Workflow> {
         loac::spawn::<Workflow>(self)
-    }
-}
-
-/// The workflow actor.
-pub struct Workflow {
-    reviewer_ref: ActorRef<Agent>,
-    planner_ref: ActorRef<Agent>,
-    provider: ProviderConfig,
-    empty_facade: Facade,
-    max_workers: usize,
-    max_review_rounds: usize,
-    max_llm_retries: usize,
-}
-
-impl Workflow {
-    #[must_use]
-    pub fn builder(
-        facade: Facade,
-        provider: ProviderConfig,
-        workspace_root: impl Into<PathBuf>,
-    ) -> WorkflowBuilder {
-        WorkflowBuilder::new(facade, provider, workspace_root)
     }
 }
 

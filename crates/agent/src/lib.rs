@@ -33,28 +33,6 @@ mod channel;
 mod channel_tool;
 mod tool_set;
 
-pub use builder::{AgentBuilder, BuildError};
-pub use channel::{ChannelError, ChannelTarget};
-pub use tool_set::{FileTools, ToolSet};
-
-/// Type-erased provider used by agents.
-pub type AgentProvider = Arc<dyn Provider<Request, StreamItem, ProviderOut>>;
-
-/// Writer that receives streamed provider items.
-pub type ProviderOut = mpsc::Sender<StreamItem>;
-
-/// Why a prompt finished without success.
-#[derive(Debug, thiserror::Error)]
-pub enum PromptError {
-    /// The prompt was cancelled before it could finish, so its transcript
-    /// may be incomplete.
-    #[error("prompt cancelled")]
-    Cancelled,
-    /// The provider stream failed.
-    #[error("provider stream failed: {0}")]
-    Provider(Box<provider::StreamError<Request>>),
-}
-
 /// Agent actor that composes context storage, an upstream provider, a tool
 /// host, and an optional system prompt.
 pub struct Agent {
@@ -137,6 +115,28 @@ impl Agent {
             return;
         }
     }
+}
+
+pub use builder::{AgentBuilder, BuildError};
+pub use channel::{ChannelError, ChannelTarget};
+pub use tool_set::{FileTools, ToolSet};
+
+/// Type-erased provider used by agents.
+pub type AgentProvider = Arc<dyn Provider<Request, StreamItem, ProviderOut>>;
+
+/// Writer that receives streamed provider items.
+pub type ProviderOut = mpsc::Sender<StreamItem>;
+
+/// Why a prompt finished without success.
+#[derive(Debug, thiserror::Error)]
+pub enum PromptError {
+    /// The prompt was cancelled before it could finish, so its transcript
+    /// may be incomplete.
+    #[error("prompt cancelled")]
+    Cancelled,
+    /// The provider stream failed.
+    #[error("provider stream failed: {0}")]
+    Provider(Box<provider::StreamError<Request>>),
 }
 
 /// Replaces the provider used by subsequent streams.
