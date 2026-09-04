@@ -5,12 +5,13 @@ use contracts::provider::{Request, StreamItem};
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
 use provider::{Provider, StreamError};
+use serde::{Deserialize, Serialize};
 
 use crate::request::build_body;
 use crate::sse::{OpenAiChunk, ToolCallBuilder, apply_tool_deltas};
 
 /// Configuration for one OpenAI-compatible endpoint.
-#[derive(Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenAiConfig {
     /// Base URL, for example `https://api.openai.com/v1`.
     pub base_url: String,

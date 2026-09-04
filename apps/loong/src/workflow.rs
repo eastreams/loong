@@ -1,18 +1,18 @@
 //! Planner / reviewer / workers workflow actor.
 
-use std::{path::PathBuf, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use agent::{
-    Agent, AgentProvider, BindChannel, BuildError, FileTools, Prompt, PromptError, SpawnSubagent,
+    Agent, BindChannel, BuildError, ChannelTarget, Prompt, PromptError, SpawnSubagent,
     SpawnSubagentError,
 };
-use context::memory::MemoryStore;
+use config::{AgentConfig, ConfigError, ProviderConfig, StoreConfig, ToolConfig};
 use contracts::capability::{Capabilities, Capability};
 use contracts::provider::StreamItem;
 use kernel::{Facade, Kernel, policy::engine::PolicyEngine};
 use loac::prelude::*;
 use loac::{ActorOwner, ActorRef, Shutdown};
-use provider_openai::{OpenAiConfig, OpenAiProvider};
+use provider_openai::OpenAiConfig;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -70,6 +70,8 @@ struct PlanReview {
 pub enum WorkflowError {
     #[error("agent build failed: {0}")]
     Build(#[from] BuildError),
+    #[error("agent config failed: {0}")]
+    Config(#[from] ConfigError),
     #[error("actor call failed: {0}")]
     Call(#[from] loac::CallError),
     #[error("prompt failed: {0}")]
@@ -101,7 +103,7 @@ pub struct RunGoal {
 pub struct WorkflowBuilder {
     root_facade: Facade,
     empty_facade: Facade,
-    provider: AgentProvider,
+    provider: ProviderConfig,
     workspace_root: PathBuf,
     max_workers: usize,
     max_review_rounds: usize,
@@ -112,7 +114,7 @@ impl WorkflowBuilder {
     #[must_use]
     pub fn new(
         facade: Facade,
-        provider: AgentProvider,
+        provider: ProviderConfig,
         workspace_root: impl Into<PathBuf>,
     ) -> Self {
         let empty_facade = facade.clone().narrow(Capabilities::empty());
@@ -154,7 +156,7 @@ impl WorkflowBuilder {
 pub struct Workflow {
     reviewer_ref: ActorRef<Agent>,
     planner_ref: ActorRef<Agent>,
-    provider: AgentProvider,
+    provider: ProviderConfig,
     empty_facade: Facade,
     max_workers: usize,
     max_review_rounds: usize,
@@ -165,7 +167,7 @@ impl Workflow {
     #[must_use]
     pub fn builder(
         facade: Facade,
-        provider: AgentProvider,
+        provider: ProviderConfig,
         workspace_root: impl Into<PathBuf>,
     ) -> WorkflowBuilder {
         WorkflowBuilder::new(facade, provider, workspace_root)
@@ -177,32 +179,44 @@ impl Actor for Workflow {
     type SpawnArgs = WorkflowBuilder;
 
     async fn init(builder: Self::SpawnArgs, scope: &mut ActorScope<'_, Self>) -> Self {
-        let reviewer_facade = builder.root_facade.clone().narrow(
-            Capabilities::empty()
-                .with(Capability::FsRead)
-                .with(Capability::FsWrite)
-                .with(Capability::SpawnSubagent),
-        );
-        let reviewer_agent = Agent::builder(reviewer_facade)
-            .with(FileTools)
-            .with_workspace_root(&builder.workspace_root)
-            .with_system_prompt(REVIEWER_SYSTEM_PROMPT)
-            .with_store(MemoryStore::new())
-            .with_provider(builder.provider.clone())
-            .build()
-            .expect("reviewer agent is valid");
+        let reviewer_caps = Capabilities::empty()
+            .with(Capability::FsRead)
+            .with(Capability::FsWrite)
+            .with(Capability::SpawnSubagent);
+        let reviewer_facade = builder.root_facade.clone().narrow(reviewer_caps);
+        let no_channels: HashMap<String, Arc<dyn ChannelTarget>> = HashMap::new();
+        let reviewer_agent = AgentConfig {
+            name: "reviewer".into(),
+            system_prompt: Some(REVIEWER_SYSTEM_PROMPT.into()),
+            workspace_root: builder.workspace_root.clone(),
+            capabilities: reviewer_caps,
+            store: StoreConfig::Memory,
+            provider: builder.provider.clone(),
+            tools: vec![ToolConfig::FileTools],
+            channels: vec![],
+        }
+        .build(reviewer_facade, &no_channels)
+        .expect("reviewer agent is valid");
         let reviewer = scope
             .spawn_child::<Agent>(reviewer_agent)
             .unwrap_or_else(|_| unreachable!("unbounded children accept reviewer"));
         let reviewer_ref = reviewer.actor_ref().clone();
 
-        let planner_agent = Agent::builder(builder.empty_facade.clone())
-            .with_channel("reviewer", Arc::new(reviewer_ref.clone()))
-            .with_system_prompt(PLANNER_SYSTEM_PROMPT)
-            .with_store(MemoryStore::new())
-            .with_provider(builder.provider.clone())
-            .build()
-            .expect("planner agent is valid");
+        let mut channels: HashMap<String, Arc<dyn ChannelTarget>> = HashMap::new();
+        channels.insert("reviewer".into(), Arc::new(reviewer_ref.clone()));
+
+        let planner_agent = AgentConfig {
+            name: "planner".into(),
+            system_prompt: Some(PLANNER_SYSTEM_PROMPT.into()),
+            workspace_root: builder.workspace_root.clone(),
+            capabilities: Capabilities::empty(),
+            store: StoreConfig::Memory,
+            provider: builder.provider.clone(),
+            tools: vec![],
+            channels: vec!["reviewer".into()],
+        }
+        .build(builder.empty_facade.clone(), &channels)
+        .expect("planner agent is valid");
         let planner = scope
             .spawn_child::<Agent>(planner_agent)
             .unwrap_or_else(|_| unreachable!("unbounded children accept planner"));
@@ -267,7 +281,7 @@ impl RawStreamHandler<RunGoal> for Workflow {
 async fn run_workflow(
     planner_ref: &ActorRef<Agent>,
     reviewer_ref: &ActorRef<Agent>,
-    provider: &AgentProvider,
+    provider: &ProviderConfig,
     empty_facade: &Facade,
     max_workers: usize,
     max_review_rounds: usize,
@@ -359,18 +373,25 @@ async fn review_plan(
 async fn spawn_workers(
     reviewer_ref: &ActorRef<Agent>,
     planner_ref: &ActorRef<Agent>,
-    provider: &AgentProvider,
+    provider: &ProviderConfig,
     empty_facade: &Facade,
     plan: &Plan,
 ) -> Result<(), WorkflowError> {
     for index in 0..plan.workers {
         let name = format!("worker_{index}");
-        let worker_agent = Agent::builder(empty_facade.clone())
-            .with_channel("reviewer", Arc::new(reviewer_ref.clone()))
-            .with_system_prompt(worker_system_prompt(index))
-            .with_store(MemoryStore::new())
-            .with_provider(provider.clone())
-            .build()?;
+        let mut channels: HashMap<String, Arc<dyn ChannelTarget>> = HashMap::new();
+        channels.insert("reviewer".into(), Arc::new(reviewer_ref.clone()));
+        let worker_agent = AgentConfig {
+            name: name.clone(),
+            system_prompt: Some(worker_system_prompt(index)),
+            workspace_root: PathBuf::from("."),
+            capabilities: Capabilities::empty(),
+            store: StoreConfig::Memory,
+            provider: provider.clone(),
+            tools: vec![],
+            channels: vec!["reviewer".into()],
+        }
+        .build(empty_facade.clone(), &channels)?;
 
         let worker_ref = reviewer_ref
             .call(SpawnSubagent {
@@ -573,11 +594,11 @@ pub(crate) async fn run(
                         Capability::SpawnSubagent,
                     ],
                 );
-                let provider = Arc::new(OpenAiProvider::new(OpenAiConfig::new(
+                let provider = ProviderConfig::OpenAi(OpenAiConfig::new(
                     cli.base_url.clone(),
                     cli.api_key.clone(),
                     model.clone(),
-                )));
+                ));
 
                 let workflow = Workflow::builder(facade, provider, &cli.workspace)
                     .with_max_workers(max_workers)
@@ -672,7 +693,8 @@ mod tests {
             ]))),
         };
 
-        let owner = Workflow::builder(facade, Arc::new(provider), ".").spawn();
+        let owner =
+            Workflow::builder(facade, ProviderConfig::Resolved(Arc::new(provider)), ".").spawn();
         let mut reply = owner
             .call(RunGoal {
                 goal: "do it".to_string(),

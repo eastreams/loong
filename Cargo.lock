@@ -1044,6 +1044,7 @@ dependencies = [
  "futures",
  "loac",
  "loong-agent",
+ "loong-config",
  "loong-context",
  "loong-contracts",
  "loong-kernel",
@@ -1054,6 +1055,20 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+]
+
+[[package]]
+name = "loong-config"
+version = "0.2.0"
+dependencies = [
+ "loac",
+ "loong-agent",
+ "loong-context",
+ "loong-contracts",
+ "loong-kernel",
+ "loong-provider-openai",
+ "serde",
+ "thiserror",
 ]
 
 [[package]]

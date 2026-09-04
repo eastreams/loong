@@ -1,14 +1,14 @@
 //! Chat mode: one supervisor agent that delegates file work to one file_io
 //! agent.
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
-use agent::{Agent, CancelActivePrompt, FileTools, Prompt, SwitchProvider};
-use context::memory::MemoryStore;
-use contracts::capability::Capability;
+use agent::{CancelActivePrompt, ChannelTarget, Prompt, SwitchProvider};
+use config::{AgentConfig, ProviderConfig, StoreConfig, ToolConfig};
+use contracts::capability::{Capabilities, Capability};
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent};
 use futures::StreamExt;
-use kernel::{Facade, Kernel, policy::engine::PolicyEngine};
+use kernel::{Kernel, policy::engine::PolicyEngine};
 use loac::Shutdown;
 use provider_openai::{OpenAiConfig, OpenAiProvider};
 
@@ -21,36 +21,46 @@ use crate::{
 pub(crate) async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let mut model = cli.model.clone();
     let config = OpenAiConfig::new(cli.base_url.clone(), cli.api_key.clone(), model.clone());
+    let capabilities = [Capability::FsRead, Capability::FsWrite]
+        .into_iter()
+        .collect::<Capabilities>();
 
     let kernel = loac::spawn::<Kernel>(PolicyEngine::allow_capabilities());
-    let facade = Facade::new(
-        kernel.actor_ref(),
-        [Capability::FsRead, Capability::FsWrite],
-    );
 
-    let file_io = Agent::builder(facade.clone())
-        .with(FileTools)
-        .with_workspace_root(&cli.workspace)
-        .with_system_prompt(
-            "You are a file I/O agent. Use read_file and write_file for workspace files.",
-        )
-        .with_store(MemoryStore::new())
-        .with_provider(OpenAiProvider::new(config.clone()))
-        .build()?
-        .spawn();
+    let file_io = AgentConfig {
+        name: "file_io".into(),
+        system_prompt: Some(
+            "You are a file I/O agent. Use read_file and write_file for workspace files.".into(),
+        ),
+        workspace_root: cli.workspace.clone().into(),
+        capabilities,
+        store: StoreConfig::Memory,
+        provider: ProviderConfig::OpenAi(config.clone()),
+        tools: vec![ToolConfig::FileTools],
+        channels: vec![],
+    }
+    .spawn_from_kernel(kernel.actor_ref(), &HashMap::new())?;
 
-    let owner = Agent::builder(facade)
-        .with_channel("file_io", Arc::new(file_io.actor_ref()))
-        .with_system_prompt(
+    let mut channels: HashMap<String, Arc<dyn ChannelTarget>> = HashMap::new();
+    channels.insert("file_io".into(), Arc::new(file_io.actor_ref()));
+
+    let owner = AgentConfig {
+        name: "owner".into(),
+        system_prompt: Some(
             "You are a supervisor agent. You do not read or write files yourself. \
              When the user needs file work, delegate it to the file_io agent by \
              calling the file_io tool with a clear instruction prompt in English, \
-             then report its answer.",
-        )
-        .with_store(MemoryStore::new())
-        .with_provider(OpenAiProvider::new(config))
-        .build()?
-        .spawn();
+             then report its answer."
+                .into(),
+        ),
+        workspace_root: cli.workspace.clone().into(),
+        capabilities,
+        store: StoreConfig::Memory,
+        provider: ProviderConfig::OpenAi(config),
+        tools: vec![],
+        channels: vec!["file_io".into()],
+    }
+    .spawn_from_kernel(kernel.actor_ref(), &channels)?;
 
     let mut input = StdinUserInput::new(tokio::io::stdin());
 

@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 tool_host.workspace = true
 agent.workspace = true
+config.workspace = true
 context.workspace = true
 contracts.workspace = true
 kernel.workspace = true

@@ -2,6 +2,7 @@
 members = [
     "apps/loong",
     "crates/actor",
+    "crates/config",
     "crates/tool-host",
     "crates/tools",
     "crates/actor-macros",
@@ -32,6 +33,7 @@ agent = { path = "crates/agent", package = "loong-agent" }
 loac = { path = "crates/actor" }
 provider = { path = "crates/provider", package = "loong-provider" }
 provider-openai = { path = "crates/provider-openai", package = "loong-provider-openai" }
+config = { path = "crates/config", package = "loong-config" }
 
 bincode = "1.3.3"
 schemars = "1.2.1"

@@ -1,0 +1,18 @@
+[package]
+name = "loong-config"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+agent.workspace = true
+context.workspace = true
+contracts.workspace = true
+kernel.workspace = true
+loac.workspace = true
+provider-openai.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
