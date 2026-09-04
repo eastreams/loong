@@ -19,10 +19,11 @@ use futures::StreamExt;
 use kernel::{Facade, Kernel, policy::engine::PolicyEngine};
 use loac::Shutdown;
 use provider_openai::{OpenAiConfig, OpenAiProvider};
-use tokio::io::{AsyncBufReadExt, BufReader, Lines, Stdin};
 
+mod input;
 mod workflow;
 
+use input::{StdinUserInput, UserCommand};
 use workflow::{RunGoal, Workflow};
 
 #[derive(Parser)]
@@ -71,62 +72,6 @@ enum Command {
         #[arg(long, default_value_t = 3)]
         max_llm_retries: usize,
     },
-}
-
-/// One parsed user interaction.
-enum UserCommand {
-    /// Send a prompt to the active agent or workflow.
-    Prompt(String),
-    /// Switch the model used by subsequent prompts.
-    SwitchModel(String),
-    /// End the interactive session.
-    Quit,
-}
-
-/// Async source of cooked line input, parsed into [`UserCommand`]s.
-///
-/// This is the local analogue of a [`provider::Provider`]: it streams user
-/// commands out of stdin instead of model replies out of an upstream.
-struct StdinUserInput {
-    lines: Lines<BufReader<Stdin>>,
-}
-
-impl StdinUserInput {
-    fn new(stdin: Stdin) -> Self {
-        Self {
-            lines: BufReader::new(stdin).lines(),
-        }
-    }
-
-    /// Reads lines until one parses into a command, then returns it.
-    ///
-    /// `None` means stdin reached EOF. Empty lines and invalid `/model`
-    /// invocations are skipped with the same prompt/error behavior as the
-    /// previous hand-written loops.
-    async fn next(&mut self) -> Result<Option<UserCommand>, std::io::Error> {
-        loop {
-            show_prompt();
-            let Some(line) = self.lines.next_line().await? else {
-                return Ok(None);
-            };
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-            if line == "/quit" || line == "/exit" {
-                return Ok(Some(UserCommand::Quit));
-            }
-            if let Some(model) = line.strip_prefix("/model") {
-                let model = model.trim();
-                if model.is_empty() {
-                    eprintln!("usage: /model <model>");
-                    continue;
-                }
-                return Ok(Some(UserCommand::SwitchModel(model.to_string())));
-            }
-            return Ok(Some(UserCommand::Prompt(line.to_string())));
-        }
-    }
 }
 
 #[tokio::main]
