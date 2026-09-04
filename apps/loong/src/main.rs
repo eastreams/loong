@@ -19,7 +19,7 @@ use futures::StreamExt;
 use kernel::{Facade, Kernel, policy::engine::PolicyEngine};
 use loac::Shutdown;
 use provider_openai::{OpenAiConfig, OpenAiProvider};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, BufReader, Lines, Stdin};
 
 mod workflow;
 
@@ -71,6 +71,62 @@ enum Command {
         #[arg(long, default_value_t = 3)]
         max_llm_retries: usize,
     },
+}
+
+/// One parsed user interaction.
+enum UserCommand {
+    /// Send a prompt to the active agent or workflow.
+    Prompt(String),
+    /// Switch the model used by subsequent prompts.
+    SwitchModel(String),
+    /// End the interactive session.
+    Quit,
+}
+
+/// Async source of cooked line input, parsed into [`UserCommand`]s.
+///
+/// This is the local analogue of a [`provider::Provider`]: it streams user
+/// commands out of stdin instead of model replies out of an upstream.
+struct StdinUserInput {
+    lines: Lines<BufReader<Stdin>>,
+}
+
+impl StdinUserInput {
+    fn new(stdin: Stdin) -> Self {
+        Self {
+            lines: BufReader::new(stdin).lines(),
+        }
+    }
+
+    /// Reads lines until one parses into a command, then returns it.
+    ///
+    /// `None` means stdin reached EOF. Empty lines and invalid `/model`
+    /// invocations are skipped with the same prompt/error behavior as the
+    /// previous hand-written loops.
+    async fn next(&mut self) -> Result<Option<UserCommand>, std::io::Error> {
+        loop {
+            show_prompt();
+            let Some(line) = self.lines.next_line().await? else {
+                return Ok(None);
+            };
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if line == "/quit" || line == "/exit" {
+                return Ok(Some(UserCommand::Quit));
+            }
+            if let Some(model) = line.strip_prefix("/model") {
+                let model = model.trim();
+                if model.is_empty() {
+                    eprintln!("usage: /model <model>");
+                    continue;
+                }
+                return Ok(Some(UserCommand::SwitchModel(model.to_string())));
+            }
+            return Ok(Some(UserCommand::Prompt(line.to_string())));
+        }
+    }
 }
 
 #[tokio::main]
@@ -129,82 +185,68 @@ async fn run_chat(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         .build()?
         .spawn();
 
-    let stdin = BufReader::new(tokio::io::stdin());
-    let mut lines = stdin.lines();
+    let mut input = StdinUserInput::new(tokio::io::stdin());
 
-    loop {
-        show_prompt();
-        let Some(line) = lines.next_line().await? else {
-            break;
-        };
-        let line = line.trim().to_string();
-        if line.is_empty() {
-            continue;
-        }
-        if line == "/quit" || line == "/exit" {
-            break;
-        }
-        if let Some(new_model) = line.strip_prefix("/model") {
-            let new_model = new_model.trim();
-            if new_model.is_empty() {
-                eprintln!("usage: /model <model>");
-                continue;
+    while let Some(command) = input.next().await? {
+        match command {
+            UserCommand::Quit => break,
+            UserCommand::SwitchModel(new_model) => {
+                model = new_model.clone();
+                let config =
+                    OpenAiConfig::new(cli.base_url.clone(), cli.api_key.clone(), model.clone());
+                owner
+                    .call(SwitchProvider(Arc::new(OpenAiProvider::new(
+                        config.clone(),
+                    ))))
+                    .await?;
+                file_io
+                    .call(SwitchProvider(Arc::new(OpenAiProvider::new(config))))
+                    .await?;
+                println!("switched to {new_model}");
             }
-            model = new_model.to_string();
-            let config =
-                OpenAiConfig::new(cli.base_url.clone(), cli.api_key.clone(), model.clone());
-            owner
-                .call(SwitchProvider(Arc::new(OpenAiProvider::new(
-                    config.clone(),
-                ))))
-                .await?;
-            file_io
-                .call(SwitchProvider(Arc::new(OpenAiProvider::new(config))))
-                .await?;
-            println!("switched to {new_model}");
-            continue;
-        }
+            UserCommand::Prompt(text) => {
+                let mut reply = owner.call(Prompt { text }).await?;
 
-        let mut reply = owner.call(Prompt { text: line.clone() }).await?;
+                {
+                    // Raw mode lets us read an ESC keypress while the reply streams.
+                    // The guard restores cooked mode at the end of this block even if
+                    // streaming is cancelled or a read fails. When stdin is not a TTY
+                    // (for example piped input), raw mode is unavailable and the
+                    // fallback below streams without ESC handling.
+                    let raw_mode = RawModeGuard::enter().ok();
 
-        {
-            // Raw mode lets us read an ESC keypress while the reply streams.
-            // The guard restores cooked mode at the end of this block even if
-            // streaming is cancelled or a read fails. When stdin is not a TTY
-            // (for example piped input), raw mode is unavailable and the
-            // fallback below streams without ESC handling.
-            let raw_mode = RawModeGuard::enter().ok();
+                    if let Some(_raw_mode) = raw_mode {
+                        let mut keys = EventStream::new();
 
-            if let Some(_raw_mode) = raw_mode {
-                let mut keys = EventStream::new();
-
-                loop {
-                    tokio::select! {
-                        maybe_item = reply.recv() => {
-                            let Some(item) = maybe_item else {
-                                break;
-                            };
+                        loop {
+                            tokio::select! {
+                                maybe_item = reply.recv() => {
+                                    let Some(item) = maybe_item else {
+                                        break;
+                                    };
+                                    print_stream_item(item);
+                                }
+                                Some(Ok(Event::Key(KeyEvent { code: KeyCode::Esc, .. }))) = keys.next() => {
+                                    // Idempotent: cancelling an already-cancelled or
+                                    // finished prompt is a no-op in the agent.
+                                    owner.call(CancelActivePrompt).await?;
+                                    println!("\n[interrupted]");
+                                }
+                            }
+                        }
+                    } else {
+                        while let Some(item) = reply.recv().await {
                             print_stream_item(item);
                         }
-                        Some(Ok(Event::Key(KeyEvent { code: KeyCode::Esc, .. }))) = keys.next() => {
-                            // Idempotent: cancelling an already-cancelled or
-                            // finished prompt is a no-op in the agent.
-                            owner.call(CancelActivePrompt).await?;
-                            println!("\n[interrupted]");
-                        }
                     }
-                }
-            } else {
-                while let Some(item) = reply.recv().await {
-                    print_stream_item(item);
-                }
-            }
 
-            match reply.finish().await? {
-                Ok(()) => {}
-                Err(error) => eprintln!("\nprompt error: {error}"),
+                    match reply.finish().await? {
+                        Ok(()) => {}
+                        Err(error) => eprintln!("\nprompt error: {error}"),
+                    }
+                    println!();
+                }
             }
-            println!();
         }
     }
 
@@ -224,71 +266,57 @@ async fn run_workflow(
 
     let kernel = loac::spawn::<Kernel>(PolicyEngine::allow_capabilities());
 
-    let stdin = BufReader::new(tokio::io::stdin());
-    let mut lines = stdin.lines();
+    let mut input = StdinUserInput::new(tokio::io::stdin());
 
-    loop {
-        show_prompt();
-        let Some(line) = lines.next_line().await? else {
-            break;
-        };
-        let line = line.trim().to_string();
-        if line.is_empty() {
-            continue;
-        }
-        if line == "/quit" || line == "/exit" {
-            break;
-        }
-        if let Some(new_model) = line.strip_prefix("/model") {
-            let new_model = new_model.trim();
-            if new_model.is_empty() {
-                eprintln!("usage: /model <model>");
-                continue;
+    while let Some(command) = input.next().await? {
+        match command {
+            UserCommand::Quit => break,
+            UserCommand::SwitchModel(new_model) => {
+                model = new_model.clone();
+                println!("switched to {new_model}");
             }
-            model = new_model.to_string();
-            println!("switched to {new_model}");
-            continue;
-        }
+            UserCommand::Prompt(text) => {
+                let facade = Facade::new(
+                    kernel.actor_ref(),
+                    [
+                        Capability::FsRead,
+                        Capability::FsWrite,
+                        Capability::SpawnSubagent,
+                    ],
+                );
+                let provider = Arc::new(OpenAiProvider::new(OpenAiConfig::new(
+                    cli.base_url.clone(),
+                    cli.api_key.clone(),
+                    model.clone(),
+                )));
 
-        let facade = Facade::new(
-            kernel.actor_ref(),
-            [
-                Capability::FsRead,
-                Capability::FsWrite,
-                Capability::SpawnSubagent,
-            ],
-        );
-        let provider = Arc::new(OpenAiProvider::new(OpenAiConfig::new(
-            cli.base_url.clone(),
-            cli.api_key.clone(),
-            model.clone(),
-        )));
+                let workflow = Workflow::builder(facade, provider, &cli.workspace)
+                    .with_max_workers(max_workers)
+                    .with_max_review_rounds(max_review_rounds)
+                    .with_max_llm_retries(max_llm_retries);
+                let owner = workflow.spawn();
 
-        let workflow = Workflow::builder(facade, provider, &cli.workspace)
-            .with_max_workers(max_workers)
-            .with_max_review_rounds(max_review_rounds)
-            .with_max_llm_retries(max_llm_retries);
-        let owner = workflow.spawn();
+                let mut reply = match owner.call(RunGoal { goal: text }).await {
+                    Ok(reply) => reply,
+                    Err(error) => {
+                        eprintln!("workflow error: {error}");
+                        let _ = owner.shutdown(Shutdown::Drain).await;
+                        continue;
+                    }
+                };
 
-        let mut reply = match owner.call(RunGoal { goal: line }).await {
-            Ok(reply) => reply,
-            Err(error) => {
-                eprintln!("workflow error: {error}");
+                while let Some(item) = reply.recv().await {
+                    print_stream_item(item);
+                }
+                match reply.finish().await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => eprintln!("workflow error: {error}"),
+                    Err(error) => eprintln!("workflow error: {error}"),
+                }
+                println!();
                 let _ = owner.shutdown(Shutdown::Drain).await;
-                continue;
             }
-        };
-
-        while let Some(item) = reply.recv().await {
-            print_stream_item(item);
         }
-        match reply.finish().await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => eprintln!("workflow error: {error}"),
-            Err(error) => eprintln!("workflow error: {error}"),
-        }
-        println!();
-        let _ = owner.shutdown(Shutdown::Drain).await;
     }
 
     let _ = kernel.shutdown(Shutdown::Drain).await;
