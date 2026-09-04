@@ -3,7 +3,7 @@
 use tokio::io::{AsyncBufReadExt, BufReader, Lines, Stdin};
 
 /// One parsed user interaction.
-pub(super) enum UserCommand {
+pub(crate) enum UserCommand {
     /// Send a prompt to the active agent or workflow.
     Prompt(String),
     /// Switch the model used by subsequent prompts.
@@ -16,12 +16,12 @@ pub(super) enum UserCommand {
 ///
 /// This is the local analogue of a [`provider::Provider`]: it streams user
 /// commands out of stdin instead of model replies out of an upstream.
-pub(super) struct StdinUserInput {
+pub(crate) struct StdinUserInput {
     lines: Lines<BufReader<Stdin>>,
 }
 
 impl StdinUserInput {
-    pub(super) fn new(stdin: Stdin) -> Self {
+    pub(crate) fn new(stdin: Stdin) -> Self {
         Self {
             lines: BufReader::new(stdin).lines(),
         }
@@ -32,7 +32,7 @@ impl StdinUserInput {
     /// `None` means stdin reached EOF. Empty lines and invalid `/model`
     /// invocations are skipped with the same prompt/error behavior as the
     /// previous hand-written loops.
-    pub(super) async fn next(&mut self) -> Result<Option<UserCommand>, std::io::Error> {
+    pub(crate) async fn next(&mut self) -> Result<Option<UserCommand>, std::io::Error> {
         loop {
             super::show_prompt();
             let Some(line) = self.lines.next_line().await? else {

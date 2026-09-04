@@ -9,11 +9,18 @@ use agent::{
 use context::memory::MemoryStore;
 use contracts::capability::{Capabilities, Capability};
 use contracts::provider::StreamItem;
-use kernel::Facade;
+use kernel::{Facade, Kernel, policy::engine::PolicyEngine};
 use loac::prelude::*;
-use loac::{ActorOwner, ActorRef};
+use loac::{ActorOwner, ActorRef, Shutdown};
+use provider_openai::{OpenAiConfig, OpenAiProvider};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+use crate::{
+    Cli,
+    input::{StdinUserInput, UserCommand},
+    print_stream_item,
+};
 
 const REVIEWER_SYSTEM_PROMPT: &str = "\
 You are the reviewer and the only agent that owns file capabilities and file tools. \
@@ -536,6 +543,73 @@ fn parse_json<T: serde::de::DeserializeOwned>(text: &str) -> Result<T, serde_jso
         return serde_json::from_str(inner.trim());
     }
     serde_json::from_str(trimmed)
+}
+
+pub(crate) async fn run(
+    cli: Cli,
+    max_workers: usize,
+    max_review_rounds: usize,
+    max_llm_retries: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut model = cli.model.clone();
+
+    let kernel = loac::spawn::<Kernel>(PolicyEngine::allow_capabilities());
+
+    let mut input = StdinUserInput::new(tokio::io::stdin());
+
+    while let Some(command) = input.next().await? {
+        match command {
+            UserCommand::Quit => break,
+            UserCommand::SwitchModel(new_model) => {
+                model = new_model.clone();
+                println!("switched to {new_model}");
+            }
+            UserCommand::Prompt(text) => {
+                let facade = Facade::new(
+                    kernel.actor_ref(),
+                    [
+                        Capability::FsRead,
+                        Capability::FsWrite,
+                        Capability::SpawnSubagent,
+                    ],
+                );
+                let provider = Arc::new(OpenAiProvider::new(OpenAiConfig::new(
+                    cli.base_url.clone(),
+                    cli.api_key.clone(),
+                    model.clone(),
+                )));
+
+                let workflow = Workflow::builder(facade, provider, &cli.workspace)
+                    .with_max_workers(max_workers)
+                    .with_max_review_rounds(max_review_rounds)
+                    .with_max_llm_retries(max_llm_retries);
+                let owner = workflow.spawn();
+
+                let mut reply = match owner.call(RunGoal { goal: text }).await {
+                    Ok(reply) => reply,
+                    Err(error) => {
+                        eprintln!("workflow error: {error}");
+                        let _ = owner.shutdown(Shutdown::Drain).await;
+                        continue;
+                    }
+                };
+
+                while let Some(item) = reply.recv().await {
+                    print_stream_item(item);
+                }
+                match reply.finish().await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => eprintln!("workflow error: {error}"),
+                    Err(error) => eprintln!("workflow error: {error}"),
+                }
+                println!();
+                let _ = owner.shutdown(Shutdown::Drain).await;
+            }
+        }
+    }
+
+    let _ = kernel.shutdown(Shutdown::Drain).await;
+    Ok(())
 }
 
 #[cfg(test)]
