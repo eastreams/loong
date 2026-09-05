@@ -159,8 +159,7 @@ impl Capabilities {
 
 impl FromIterator<Capability> for Capabilities {
     fn from_iter<T: IntoIterator<Item = Capability>>(iter: T) -> Self {
-        iter.into_iter()
-            .fold(Self::empty(), |caps, cap| caps.with(cap))
+        iter.into_iter().fold(Self::empty(), Self::with)
     }
 }
 

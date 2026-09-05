@@ -4,7 +4,7 @@
 //! provider are type-erased behind [`AgentProvider`] and `Box<dyn ContextStore>`
 //! so the rest of the system can hold one actor type.
 
-use std::{collections::VecDeque, future::Future, sync::Arc};
+use std::{collections::VecDeque, sync::Arc};
 
 use crate::channel_tool::ChannelTool;
 use context::ContextStore;
@@ -387,194 +387,178 @@ impl Handler<SpawnSubagent> for Agent {
 }
 
 impl StreamHandler<Prompt> for Agent {
-    fn handle<'a, W>(
+    async fn handle<'a, W>(
         message: Prompt,
         mut out: StreamOut<'a, W>,
         mut cx: Cx<'a, Self>,
-    ) -> impl Future<Output = Result<(), PromptError>> + Send + 'a
+    ) -> Result<(), PromptError>
     where
         W: Writer<StreamItem> + Send + 'a,
     {
-        async move {
-            let (start_tx, start_rx) = oneshot::channel();
-            let myself = cx.with(|actor, scope| {
-                actor.prompt_queue.push_back(QueuedPrompt {
-                    text: message.text,
-                    start_tx,
-                });
-                if actor.active.is_none() {
-                    actor.start_next_prompt();
-                }
-                scope.myself().clone()
+        let (start_tx, start_rx) = oneshot::channel();
+        let myself = cx.with(|actor, scope| {
+            actor.prompt_queue.push_back(QueuedPrompt {
+                text: message.text,
+                start_tx,
             });
+            if actor.active.is_none() {
+                actor.start_next_prompt();
+            }
+            scope.myself().clone()
+        });
 
-            let prepared = match start_rx.await {
-                Ok(prepared) => prepared,
-                Err(_) => return Err(PromptError::Cancelled),
+        let Ok(prepared) = start_rx.await else {
+            return Err(PromptError::Cancelled);
+        };
+
+        let mut messages = prepared.messages;
+        let provider = prepared.provider;
+        let registry = prepared.registry;
+        let cancellation = prepared.cancellation;
+
+        if let Some(system_prompt) = prepared.system_prompt {
+            let has_system = messages.iter().any(|item| {
+                matches!(
+                    item,
+                    TranscriptItem::Message {
+                        role: Role::System,
+                        ..
+                    }
+                )
+            });
+            if !has_system {
+                messages.insert(
+                    0,
+                    TranscriptItem::Message {
+                        role: Role::System,
+                        text: system_prompt,
+                        reasoning_content: None,
+                    },
+                );
+            }
+        }
+
+        let tools = registry.tool_specs();
+
+        loop {
+            let request = Request {
+                messages: messages.clone(),
+                tools: tools.clone(),
+            };
+            let (mut local_tx, mut local_rx) = mpsc::channel::<StreamItem>(8);
+            let provider_for_round = provider.clone();
+
+            let mut items = Vec::new();
+            let relay = async {
+                while let Some(item) = local_rx.recv().await {
+                    let _ = out.write(item.clone()).await;
+                    items.push(item);
+                }
+            };
+            let joined = async {
+                tokio::join!(
+                    async move { provider_for_round.stream(request, &mut local_tx).await },
+                    relay,
+                )
             };
 
-            let mut messages = prepared.messages;
-            let provider = prepared.provider;
-            let registry = prepared.registry;
-            let cancellation = prepared.cancellation;
-
-            if let Some(system_prompt) = prepared.system_prompt {
-                let has_system = messages.iter().any(|item| {
-                    matches!(
-                        item,
-                        TranscriptItem::Message {
-                            role: Role::System,
-                            ..
-                        }
-                    )
-                });
-                if !has_system {
-                    messages.insert(
-                        0,
-                        TranscriptItem::Message {
-                            role: Role::System,
-                            text: system_prompt,
-                            reasoning_content: None,
-                        },
-                    );
+            let round_result = {
+                let cancellation = cancellation.clone();
+                tokio::select! {
+                    biased;
+                    result = joined => Some(result),
+                    _ = cancellation.cancelled() => None,
                 }
+            };
+
+            let Some(joined) = round_result else {
+                let handed_off = myself.send(PrepareNextPrompt).await.is_ok();
+                if !handed_off {
+                    cx.with(|actor, _| actor.prompt_queue.clear());
+                }
+                return Err(PromptError::Cancelled);
+            };
+            let (result, ()) = joined;
+
+            let (reasoning, text, calls) = split_stream_items(items);
+            let reasoning = (!reasoning.is_empty()).then_some(reasoning);
+
+            let mut assistant_items = Vec::new();
+            if !text.is_empty() || (calls.is_empty() && reasoning.is_some()) {
+                assistant_items.push(TranscriptItem::Message {
+                    role: Role::Assistant,
+                    text,
+                    reasoning_content: if calls.is_empty() {
+                        reasoning.clone()
+                    } else {
+                        None
+                    },
+                });
+            }
+            for (index, call) in calls.iter().enumerate() {
+                assistant_items.push(TranscriptItem::ToolCall {
+                    call_id: call.id.clone(),
+                    name: call.name.clone(),
+                    arguments: call.arguments.clone(),
+                    reasoning_content: if index == 0 { reasoning.clone() } else { None },
+                });
             }
 
-            let tools = registry.tool_specs();
+            if !assistant_items.is_empty() {
+                let stored = assistant_items.clone();
+                cx.with(|actor, _| {
+                    let _ = actor.store.append(stored);
+                });
+                messages.extend(assistant_items);
+            }
 
-            loop {
-                let request = Request {
-                    messages: messages.clone(),
-                    tools: tools.clone(),
-                };
-                let (mut local_tx, mut local_rx) = mpsc::channel::<StreamItem>(8);
-                let provider_for_round = provider.clone();
+            if calls.is_empty() {
+                let result = result.map_err(|error| PromptError::Provider(Box::new(error)));
+                let handed_off = myself.send(PrepareNextPrompt).await.is_ok();
+                if !handed_off {
+                    cx.with(|actor, _| actor.prompt_queue.clear());
+                }
+                return result;
+            }
 
-                let mut items = Vec::new();
-                let relay = async {
-                    while let Some(item) = local_rx.recv().await {
-                        let _ = out.write(item.clone()).await;
-                        items.push(item);
-                    }
-                };
-                let joined = async {
-                    tokio::join!(
-                        async move { provider_for_round.stream(request, &mut local_tx).await },
-                        relay,
-                    )
-                };
+            let mut pending_calls: VecDeque<PendingToolCall> = calls.into();
 
-                let round_result = {
-                    let cancellation = cancellation.clone();
+            while let Some(call) = pending_calls.pop_front() {
+                let payload = serde_json::from_str(&call.arguments).unwrap_or(Value::Null);
+                let registry_for_tool = Arc::clone(&registry);
+                let cancellation_for_tool = cancellation.clone();
+                let call_name = call.name.clone();
+
+                let tool_result = {
                     tokio::select! {
                         biased;
-                        result = joined => Some(result),
-                        _ = cancellation.cancelled() => None,
+                        result = async move {
+                            registry_for_tool.invoke(&call_name, payload).await
+                        } => Some(result),
+                        _ = cancellation_for_tool.cancelled() => None,
                     }
                 };
 
-                let (result, ()) = match round_result {
-                    Some(joined) => joined,
-                    None => {
-                        let handed_off = myself.send(PrepareNextPrompt).await.is_ok();
-                        if !handed_off {
-                            cx.with(|actor, _| actor.prompt_queue.clear());
-                        }
-                        return Err(PromptError::Cancelled);
-                    }
-                };
-
-                let (reasoning, text, calls) = split_stream_items(items);
-                let reasoning = (!reasoning.is_empty()).then_some(reasoning);
-
-                let mut assistant_items = Vec::new();
-                if !text.is_empty() || (calls.is_empty() && reasoning.is_some()) {
-                    assistant_items.push(TranscriptItem::Message {
-                        role: Role::Assistant,
-                        text,
-                        reasoning_content: if calls.is_empty() {
-                            reasoning.clone()
-                        } else {
-                            None
-                        },
-                    });
-                }
-                for (index, call) in calls.iter().enumerate() {
-                    assistant_items.push(TranscriptItem::ToolCall {
-                        call_id: call.id.clone(),
-                        name: call.name.clone(),
-                        arguments: call.arguments.clone(),
-                        reasoning_content: if index == 0 { reasoning.clone() } else { None },
-                    });
-                }
-
-                if !assistant_items.is_empty() {
-                    let stored = assistant_items.clone();
-                    cx.with(|actor, _| {
-                        let _ = actor.store.append(stored);
-                    });
-                    messages.extend(assistant_items);
-                }
-
-                if calls.is_empty() {
-                    let result = result.map_err(|error| PromptError::Provider(Box::new(error)));
+                let Some(result) = tool_result else {
                     let handed_off = myself.send(PrepareNextPrompt).await.is_ok();
                     if !handed_off {
                         cx.with(|actor, _| actor.prompt_queue.clear());
                     }
-                    return result;
-                }
+                    return Err(PromptError::Cancelled);
+                };
 
-                let mut pending_calls: VecDeque<PendingToolCall> = calls.into();
-
-                loop {
-                    let Some(call) = pending_calls.pop_front() else {
-                        break;
-                    };
-
-                    let payload = serde_json::from_str(&call.arguments).unwrap_or(Value::Null);
-                    let registry_for_tool = Arc::clone(&registry);
-                    let cancellation_for_tool = cancellation.clone();
-                    let call_name = call.name.clone();
-
-                    let tool_result = {
-                        tokio::select! {
-                            biased;
-                            result = async move {
-                                registry_for_tool.invoke(&call_name, payload).await
-                            } => Some(result),
-                            _ = cancellation_for_tool.cancelled() => None,
-                        }
-                    };
-
-                    let result = match tool_result {
-                        Some(result) => result,
-                        None => {
-                            let handed_off = myself.send(PrepareNextPrompt).await.is_ok();
-                            if !handed_off {
-                                cx.with(|actor, _| actor.prompt_queue.clear());
-                            }
-                            return Err(PromptError::Cancelled);
-                        }
-                    };
-
-                    let output = match result {
-                        Ok(value) => value.to_string(),
-                        Err(error) => format!("tool error: {error}"),
-                    };
-                    let item = TranscriptItem::ToolResult {
-                        call_id: call.id,
-                        output,
-                    };
-                    cx.with(|actor, _| {
-                        let _ = actor.store.append(vec![item.clone()]);
-                    });
-                    messages.push(item);
-
-                    if pending_calls.is_empty() {
-                        break;
-                    }
-                }
+                let output = match result {
+                    Ok(value) => value.to_string(),
+                    Err(error) => format!("tool error: {error}"),
+                };
+                let item = TranscriptItem::ToolResult {
+                    call_id: call.id,
+                    output,
+                };
+                cx.with(|actor, _| {
+                    let _ = actor.store.append(vec![item.clone()]);
+                });
+                messages.push(item);
             }
         }
     }

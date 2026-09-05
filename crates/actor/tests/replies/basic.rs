@@ -21,11 +21,8 @@ impl DispatchHandler<Increment> for Counter {
         _message: Increment,
         _scope: &mut ActorScope<Self>,
     ) -> impl loac::IntoReply<Self, Increment> + use<> {
-        let __reply = {
-            self.0 += 1;
-            self.0
-        };
-        __reply.ready()
+        self.0 += 1;
+        self.0.ready()
     }
 }
 

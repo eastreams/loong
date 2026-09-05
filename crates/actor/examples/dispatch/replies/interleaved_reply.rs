@@ -33,7 +33,7 @@ impl DispatchHandler<AddAfter> for Counter {
     ) -> impl IntoReply<Self, AddAfter> + use<> {
         scope.cx_reply(self, move |mut cx| {
             Box::pin(async move {
-                let _ = message
+                message
                     .resume
                     .await
                     .expect("the example retains the resume sender");

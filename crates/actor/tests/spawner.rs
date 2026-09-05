@@ -21,8 +21,7 @@ impl DispatchHandler<Ping> for Ponger {
         _message: Ping,
         _scope: &mut ActorScope<'_, Self>,
     ) -> impl loac::IntoReply<Self, Ping> + use<> {
-        let __reply = { "pong" };
-        __reply.ready()
+        "pong".ready()
     }
 }
 

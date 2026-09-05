@@ -276,10 +276,8 @@ impl DispatchHandler<Notify> for ManualActor {
         message: Notify,
         _scope: &mut ActorScope<'_, Self>,
     ) -> impl loac::IntoReply<Self, Notify> + use<> {
-        let __reply = {
-            self.0 += message.0;
-        };
-        __reply.ready()
+        self.0 += message.0;
+        ().ready()
     }
 }
 

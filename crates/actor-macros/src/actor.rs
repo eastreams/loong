@@ -365,9 +365,10 @@ impl MailboxExpansion {
                 expand_nonzero_const(default, "mailbox capacity must be greater than zero");
             quote!(let _ = #nonzero_default;)
         });
-        let options = match default {
-            Some(default) => quote!(#actor::__private::DynamicMailbox<#default>),
-            None => quote!(#actor::__private::DynamicMailbox),
+        let options = if let Some(default) = default {
+            quote!(#actor::__private::DynamicMailbox<#default>)
+        } else {
+            quote!(#actor::__private::DynamicMailbox)
         };
         Self {
             options,
@@ -432,9 +433,10 @@ impl InterleavingExpansion {
                 expand_nonzero_const(default, "interleaved limit must be greater than zero");
             quote!(let _ = #nonzero_default;)
         });
-        let options = match default {
-            Some(default) => quote!(#actor::__private::DynamicInterleaving<#default>),
-            None => quote!(#actor::__private::DynamicInterleaving),
+        let options = if let Some(default) = default {
+            quote!(#actor::__private::DynamicInterleaving<#default>)
+        } else {
+            quote!(#actor::__private::DynamicInterleaving)
         };
         Self {
             options,
@@ -491,9 +493,10 @@ impl SupervisionExpansion {
                 expand_nonzero_const(default, "child capacity must be greater than zero");
             quote!(let _ = #nonzero_default;)
         });
-        let options = match default {
-            Some(default) => quote!(#actor::__private::DynamicChildren<#default>),
-            None => quote!(#actor::__private::DynamicChildren),
+        let options = if let Some(default) = default {
+            quote!(#actor::__private::DynamicChildren<#default>)
+        } else {
+            quote!(#actor::__private::DynamicChildren)
         };
         Self {
             options,

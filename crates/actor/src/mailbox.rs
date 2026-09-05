@@ -259,12 +259,9 @@ where
         inner: &Arc<ActorInner<A>>,
     ) {
         let Self { message } = *self;
-        let permit = match inner.begin_dispatch() {
-            Ok(permit) => permit,
-            Err(_) => {
-                inner.control.drop_user_value(message);
-                return;
-            }
+        let Ok(permit) = inner.begin_dispatch() else {
+            inner.control.drop_user_value(message);
+            return;
         };
 
         // One-way completion still owns a dispatch permit, so panic and Kill

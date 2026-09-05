@@ -449,7 +449,10 @@ impl<S, Item, Final> StreamDispatch<S, Item, Final> {
     }
 }
 
-#[allow(private_interfaces)]
+#[allow(
+    private_interfaces,
+    reason = "the sealed HandleReply bridge intentionally uses crate-private OwnedTasks and DispatchReply"
+)]
 impl<A, M, S> sealed::HandleReply<A, M> for StreamDispatch<S, M::Item, M::Final>
 where
     A: Actor,

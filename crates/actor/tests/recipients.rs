@@ -51,8 +51,7 @@ impl DispatchHandler<Query> for Left {
         message: Query,
         _scope: &mut ActorScope<Self>,
     ) -> impl loac::IntoReply<Self, Query> + use<> {
-        let __reply = { message.0 + 1 };
-        __reply.ready()
+        (message.0 + 1).ready()
     }
 }
 
@@ -62,8 +61,7 @@ impl DispatchHandler<Query> for Right {
         message: Query,
         _scope: &mut ActorScope<Self>,
     ) -> impl loac::IntoReply<Self, Query> + use<> {
-        let __reply = { message.0 * 2 };
-        __reply.ready()
+        (message.0 * 2).ready()
     }
 }
 
@@ -77,10 +75,8 @@ impl DispatchHandler<Notify> for Left {
         message: Notify,
         _scope: &mut ActorScope<Self>,
     ) -> impl loac::IntoReply<Self, Notify> + use<> {
-        let __reply = {
-            let _ = message.0.send(());
-        };
-        __reply.ready()
+        let _ = message.0.send(());
+        ().ready()
     }
 }
 
@@ -90,10 +86,8 @@ impl DispatchHandler<Notify> for Right {
         message: Notify,
         _scope: &mut ActorScope<Self>,
     ) -> impl loac::IntoReply<Self, Notify> + use<> {
-        let __reply = {
-            let _ = message.0.send(());
-        };
-        __reply.ready()
+        let _ = message.0.send(());
+        ().ready()
     }
 }
 
@@ -191,10 +185,8 @@ impl DispatchHandler<Mark> for GateActor {
         message: Mark,
         _scope: &mut ActorScope<Self>,
     ) -> impl loac::IntoReply<Self, Mark> + use<> {
-        let __reply = {
-            self.seen.fetch_add(message.0 as usize, Ordering::SeqCst);
-        };
-        __reply.ready()
+        self.seen.fetch_add(message.0 as usize, Ordering::SeqCst);
+        ().ready()
     }
 }
 
@@ -208,8 +200,7 @@ impl DispatchHandler<Snapshot> for GateActor {
         _message: Snapshot,
         _scope: &mut ActorScope<Self>,
     ) -> impl loac::IntoReply<Self, Snapshot> + use<> {
-        let __reply = { self.seen.load(Ordering::SeqCst) };
-        __reply.ready()
+        self.seen.load(Ordering::SeqCst).ready()
     }
 }
 

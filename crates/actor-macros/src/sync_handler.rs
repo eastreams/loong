@@ -119,14 +119,11 @@ fn sync_message_arg(trait_path: &syn::Path) -> syn::Result<Option<Type>> {
     let segment = trait_path.segments.last().ok_or_else(|| {
         syn::Error::new_spanned(trait_path, "expected a `SyncHandler<...>` trait path")
     })?;
-    let args = match &segment.arguments {
-        syn::PathArguments::AngleBracketed(args) => args,
-        _ => {
-            return Err(syn::Error::new_spanned(
-                trait_path,
-                "expected `SyncHandler<MessageType>` with a type argument",
-            ));
-        }
+    let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {
+        return Err(syn::Error::new_spanned(
+            trait_path,
+            "expected `SyncHandler<MessageType>` with a type argument",
+        ));
     };
     let mut types = args.args.iter().filter_map(|arg| {
         if let syn::GenericArgument::Type(ty) = arg {

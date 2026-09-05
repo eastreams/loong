@@ -17,9 +17,8 @@ fn segment_reports_the_reserved_character() {
 
 #[test]
 fn segment_error_has_actionable_context() {
-    let error = match ToolPathSegment::try_from("namespace.tool".to_owned()) {
-        Ok(_) => panic!("reserved character should be rejected"),
-        Err(error) => error,
+    let Err(error) = ToolPathSegment::try_from("namespace.tool".to_owned()) else {
+        panic!("reserved character should be rejected")
     };
 
     assert_eq!(

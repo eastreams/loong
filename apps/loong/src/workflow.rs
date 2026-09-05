@@ -235,11 +235,11 @@ impl Actor for Workflow {
 }
 
 impl StreamHandler<RunGoal> for Workflow {
-    fn handle<'a, W>(
+    async fn handle<'a, W>(
         message: RunGoal,
         mut out: StreamOut<'a, W>,
         mut cx: Cx<'a, Self>,
-    ) -> impl Future<Output = Result<(), WorkflowError>> + Send + 'a
+    ) -> Result<(), WorkflowError>
     where
         W: Writer<StreamItem> + Send + 'a,
     {
@@ -263,26 +263,24 @@ impl StreamHandler<RunGoal> for Workflow {
             )
         });
 
-        async move {
-            let result = run_workflow(
-                &planner_ref,
-                &reviewer_ref,
-                &provider,
-                &empty_facade,
-                max_workers,
-                max_review_rounds,
-                max_llm_retries,
-                message.goal,
-            )
-            .await;
+        let result = run_workflow(
+            &planner_ref,
+            &reviewer_ref,
+            &provider,
+            &empty_facade,
+            max_workers,
+            max_review_rounds,
+            max_llm_retries,
+            message.goal,
+        )
+        .await;
 
-            match result {
-                Ok(answer) => {
-                    let _ = out.write(StreamItem::Text { delta: answer }).await;
-                    Ok(())
-                }
-                Err(error) => Err(error),
+        match result {
+            Ok(answer) => {
+                let _ = out.write(StreamItem::Text { delta: answer }).await;
+                Ok(())
             }
+            Err(error) => Err(error),
         }
     }
 }

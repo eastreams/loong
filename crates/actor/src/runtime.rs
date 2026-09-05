@@ -32,16 +32,24 @@ mod task;
 #[cfg(test)]
 mod tests;
 
-#[allow(unused_imports)]
+#[allow(
+    unused_imports,
+    reason = "grouped re-export keeps one import surface for runtime tests and sibling modules"
+)]
 pub(crate) use actor_loop::{DrainTurn, actor_turn, drain_turn, handle_child_exit, run_actor};
-#[allow(unused_imports)]
 pub(crate) use scope::ScopeState;
 pub use scope::{ActorScope, StopScope};
-#[allow(unused_imports)]
+#[allow(
+    unused_imports,
+    reason = "grouped re-export keeps one import surface for runtime tests and sibling modules"
+)]
 pub(crate) use shutdown::{
     DiscardOutcome, TEARDOWN_DROP_BUDGET, close_and_discard, graceful_finish, kill_actor,
 };
-#[allow(unused_imports)]
+#[allow(
+    unused_imports,
+    reason = "grouped re-export keeps one import surface for runtime tests and sibling modules"
+)]
 pub(crate) use task::{
     ActorTask, ActorWorkGuard, ActorWorkState, ExitGuard, PreparedActor, Work, await_actor_work,
     start_child,

@@ -19,14 +19,14 @@ Their assertions check the demonstrated behavior.
 | Example | Focus |
 | --- | --- |
 | [`cx_reply`](cx_reply.rs) | Primary `Handler` and `StreamHandler` with actor-access `cx` futures. |
-| [`raw_reply`](raw/raw_reply.rs) | Immediate replies, one-way messages, and root shutdown. |
+| [`ready_reply`](dispatch/ready_reply.rs) | Immediate ready replies, one-way messages, and root shutdown. |
 
 Prefer `Handler<M>` with an async `cx` future.
-Use `RawHandler<M>` when the reply must select an explicit strategy,
-such as returning `.ready()` during dispatch.
+Implement `DispatchHandler<M>` directly when the reply must select an explicit
+strategy, such as returning `.ready()` during dispatch.
 
-For raw handlers that still want cx-style access, `ActorScope` provides
-`cx_reply` / `cx_stream` for interleaved lane replies and
+For explicit dispatch handlers that still want cx-style access, `ActorScope`
+provides `cx_reply` / `cx_stream` for interleaved lane replies and
 `cx_exclusive` / `cx_stream_exclusive` for exclusive lane replies.
 Call them inside the handler and use `Cx::with` inside the returned future.
 
@@ -39,8 +39,8 @@ creates a bounded item channel and returns the receiver side to the caller as a
 | Example | Focus |
 | --- | --- |
 | [`stream_to`](stream_to.rs) | Primary `StreamHandler`: caller-provided writers through `call_to`/`send_to`. |
-| [`streaming`](raw/streaming.rs) | Raw stream: a bare future writes items through the runtime channel. |
-| [`stream_strategies`](raw/stream_strategies.rs) | Raw stream scheduling: owned, ready/`Either`, exclusive, and interleaved. |
+| [`streaming`](dispatch/streaming.rs) | Explicit stream dispatch: a bare future writes items through the runtime channel. |
+| [`stream_strategies`](dispatch/stream_strategies.rs) | Explicit stream scheduling: owned, ready/`Either`, exclusive, and interleaved. |
 
 `call` returns a `StreamReply`. Read items with `recv` or `items`, then `finish`
 returns the final value. The item stream closes when the handler drops the
@@ -71,12 +71,12 @@ A reply strategy controls actor progress after handler dispatch.
 
 | Example | Focus |
 | --- | --- |
-| [`explicit_replies`](raw/replies/explicit_replies.rs) | Select ready or owned work at runtime. |
-| [`interleaved_reply`](raw/replies/interleaved_reply.rs) | Build a raw-handler cx future on the interleaved lane (`cx_reply`). |
-| [`exclusive_reply`](raw/replies/exclusive_reply.rs) | Pause mailbox work until actor-aware work completes. |
-| [`cx_exclusive`](raw/cx_exclusive.rs) | Build raw-handler cx futures on the exclusive lane (`cx_exclusive`, `cx_stream_exclusive`). |
+| [`explicit_replies`](dispatch/replies/explicit_replies.rs) | Select ready or owned work at runtime. |
+| [`interleaved_reply`](dispatch/replies/interleaved_reply.rs) | Build a dispatch-handler cx future on the interleaved lane (`cx_reply`). |
+| [`exclusive_reply`](dispatch/replies/exclusive_reply.rs) | Pause mailbox work until actor-aware work completes. |
+| [`cx_exclusive`](dispatch/cx_exclusive.rs) | Build dispatch-handler cx futures on the exclusive lane (`cx_exclusive`, `cx_stream_exclusive`). |
 
-Use `RawHandler<M>` when the reply needs an explicit strategy.
+Use `DispatchHandler<M>` when the reply needs an explicit strategy.
 Return a bare `Future` for independent async work.
 Use `interleaved` for cooperative actor-aware work.
 Use `exclusive` when that work requires actor isolation.

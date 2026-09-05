@@ -600,7 +600,7 @@ where
     async fn write(&mut self, item: M) -> Result<(), M> {
         Recipient::send(&*self, item)
             .await
-            .map_err(|error| error.into_message())
+            .map_err(SendError::into_message)
     }
 }
 

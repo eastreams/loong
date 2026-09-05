@@ -84,10 +84,8 @@ impl DispatchHandler<Notify> for SerialActor {
         message: Notify,
         _scope: &mut ActorScope<Self>,
     ) -> impl loac::IntoReply<Self, Notify> + use<> {
-        let __reply = {
-            lock(&self.committed).push(message.0);
-        };
-        __reply.ready()
+        lock(&self.committed).push(message.0);
+        ().ready()
     }
 }
 
