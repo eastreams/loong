@@ -11,8 +11,9 @@ use std::{
 use tokio::sync::oneshot;
 
 use crate::{
-    Actor, ActorConfig, ActorScope, CallError, ExitReason, Message, RawHandler, ReplyExt, Shutdown,
-    ShutdownStatus, owned::OwnedTasks, scheduling::ActorScheduler, transport::MessageSender,
+    Actor, ActorConfig, ActorScope, CallError, DispatchHandler, ExitReason, Message, ReplyExt,
+    Shutdown, ShutdownStatus, owned::OwnedTasks, scheduling::ActorScheduler,
+    transport::MessageSender,
 };
 
 use super::super::{ActorInbox, ActorInner, CallEnvelope, Control, Envelope, Mode};
@@ -89,7 +90,7 @@ fn open<A: Actor>() -> (Arc<ActorInner<A>>, ActorInbox<A>) {
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct RecoverMessage(Arc<AtomicUsize>);
 
 impl Drop for RecoverMessage {
@@ -98,7 +99,7 @@ impl Drop for RecoverMessage {
     }
 }
 
-impl RawHandler<RecoverMessage> for TestActor {
+impl DispatchHandler<RecoverMessage> for TestActor {
     fn handle(
         &mut self,
         _message: RecoverMessage,
@@ -276,7 +277,7 @@ fn raw_call_envelope_drop_has_no_lifecycle_callback() {
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct PanicDropMessage(Arc<AtomicBool>);
 
 impl Drop for PanicDropMessage {
@@ -286,7 +287,7 @@ impl Drop for PanicDropMessage {
     }
 }
 
-impl RawHandler<PanicDropMessage> for TestActor {
+impl DispatchHandler<PanicDropMessage> for TestActor {
     fn handle(
         &mut self,
         _message: PanicDropMessage,

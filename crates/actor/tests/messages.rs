@@ -18,7 +18,7 @@ use std::{
 };
 
 use loac::{
-    Actor, ActorScope, IntoActorFuture, Message, RawHandler, ReplyExt, SpawnOptions, actor,
+    Actor, ActorScope, DispatchHandler, IntoActorFuture, Message, ReplyExt, SpawnOptions, actor,
 };
 use tokio::sync::oneshot;
 
@@ -38,13 +38,13 @@ impl Actor for SerialActor {
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct Block {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
 }
 
-impl RawHandler<Block> for SerialActor {
+impl DispatchHandler<Block> for SerialActor {
     fn handle(
         &mut self,
         message: Block,
@@ -60,10 +60,10 @@ impl RawHandler<Block> for SerialActor {
 }
 
 #[derive(Message)]
-#[message(raw = u8)]
+#[message(reply = u8)]
 struct Record(u8);
 
-impl RawHandler<Record> for SerialActor {
+impl DispatchHandler<Record> for SerialActor {
     fn handle(
         &mut self,
         message: Record,
@@ -75,10 +75,10 @@ impl RawHandler<Record> for SerialActor {
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct Notify(u8);
 
-impl RawHandler<Notify> for SerialActor {
+impl DispatchHandler<Notify> for SerialActor {
     fn handle(
         &mut self,
         message: Notify,

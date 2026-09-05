@@ -17,10 +17,10 @@ impl Actor for Worker {
 }
 
 #[derive(Message)]
-#[message(raw = u64)]
+#[message(reply = u64)]
 struct Multiply(u64);
 
-impl RawHandler<Multiply> for Worker {
+impl DispatchHandler<Multiply> for Worker {
     fn handle(
         &mut self,
         message: Multiply,

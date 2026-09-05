@@ -116,25 +116,28 @@
 //!
 //! # Messages
 //!
-//! Derive [`Message`] for each accepted request type. The derive supports four
+//! Derive [`Message`] for each accepted request type. The derive supports two
 //! message shapes:
 //!
 //! | Attribute | Handler trait | Caller receives |
 //! | --- | --- | --- |
-//! | `#[message(reply = Type)]` | [`Handler`] | `Type` |
+//! | `#[message(reply = Type)]` | [`Handler`] or [`SyncHandler`] | `Type` |
 //! | `#[message(stream = Item, reply = Final)]` | [`StreamHandler`] | [`StreamReply`]`<Item, Final>` |
-//! | `#[message(raw = Type)]` | [`RawHandler`] | `Type` |
-//! | `#[message(raw_stream = Item, reply = Final)]` | [`RawStreamHandler`] | [`StreamReply`]`<Item, Final>` |
 //!
-//! Without an attribute the message is send-only and accepts only
-//! [`ActorRef::send`]. With `reply` it implements [`HasReply`] and can be used
-//! with [`ActorRef::call`]; the reply type defaults to `()` when omitted.
-//! Stream messages are handled by [`StreamHandler`] and stream messages with
-//! `raw_stream` by [`RawStreamHandler`]; their final reply type also defaults to
-//! `()` when omitted. The `raw` and `raw_stream` shapes skip the [`Handler`] /
-//! [`StreamHandler`] blanket adaptation and let the implementation choose an
-//! explicit strategy. See the [`Message`] derive macro documentation for the
-//! full attribute syntax.
+//! Omitting the `#[message(...)]` attribute entirely produces a send-only
+//! message with unit output. Selecting either `reply` or `stream` implements
+//! [`HasReply`] and makes the message callable with [`ActorRef::call`]; the
+//! caller still receives `Result<M::Reply, CallError>`. Reply and final types
+//! default to `()` when omitted. Stream messages are handled by
+//! [`StreamHandler`].
+//!
+//! For a reply already complete during dispatch, implement [`SyncHandler`]
+//! and attach [`#[loac::sync_handler]`](macro@crate::sync_handler) to the
+//! impl. Prefer `reply` and [`Handler`] for ordinary asynchronous request
+//! handling; prefer [`SyncHandler`] only when the handler returns a value
+//! directly. For explicit reply scheduling, implement [`DispatchHandler`]
+//! directly. See the [`Message`] derive macro documentation for the full
+//! attribute syntax.
 //!
 //! One actor may handle many message types.
 //!
@@ -152,22 +155,21 @@
 //!
 //! | Strategy | Selected by | Actor progress while the reply runs |
 //! | --- | --- | --- |
-//! | ready | [`value.ready()`](ReplyExt::ready) from a [`RawHandler`] or [`RawStreamHandler`] | The reply is already complete during dispatch |
-//! | owned | A bare [`Future`] from a [`RawHandler`] or [`RawStreamHandler`] | A Tokio task runs it beside all actor work |
-//! | interleaved | [`Handler`] async fn, [`StreamHandler`] async fn, [`future.interleaved()`](InterleavedFutureExt::interleaved), or [`ActorScope::cx_reply`] / [`ActorScope::cx_stream`] from a [`RawHandler`] or [`RawStreamHandler`] | The actor task polls it fairly with mailbox, lifecycle, and other interleaved work |
-//! | exclusive | [`future.exclusive()`](ReplyExt::exclusive), [`ActorScope::cx_exclusive`], or [`ActorScope::cx_stream_exclusive`] from a [`RawHandler`] or [`RawStreamHandler`] | Mailbox and actor-aware work pause until it finishes; owned tasks continue |
+//! | ready | [`value.ready()`](ReplyExt::ready) from a [`DispatchHandler`] or [`SyncHandler`] | The reply is already complete during dispatch |
+//! | owned | A bare [`Future`] from a [`DispatchHandler`] | A Tokio task runs it beside all actor work |
+//! | interleaved | [`Handler`] async fn, [`StreamHandler`] async fn, [`future.interleaved()`](InterleavedFutureExt::interleaved), or [`ActorScope::cx_reply`] / [`ActorScope::cx_stream`] from a [`DispatchHandler`] | The actor task polls it fairly with mailbox, lifecycle, and other interleaved work |
+//! | exclusive | [`future.exclusive()`](ReplyExt::exclusive), [`ActorScope::cx_exclusive`], or [`ActorScope::cx_stream_exclusive`] from a [`DispatchHandler`] | Mailbox and actor-aware work pause until it finishes; owned tasks continue |
 //!
 //! [`Handler`] and [`StreamHandler`] always select interleaved scheduling, so
-//! they require [`HasInterleaving`]. [`RawHandler`] and [`RawStreamHandler`]
-//! may select any strategy. `ready` and `exclusive` need no interleaving
-//! capability.
+//! they require [`HasInterleaving`]. A [`DispatchHandler`] may select any
+//! strategy. `ready` and `exclusive` need no interleaving capability.
 //!
 //! The `cx` constructors on [`ActorScope`] pair [`Cx`] access with an explicit
 //! scheduling lane. Use [`ActorScope::cx_reply`] / [`ActorScope::cx_stream`]
 //! for interleaved replies, and [`ActorScope::cx_exclusive`] /
 //! [`ActorScope::cx_stream_exclusive`] for exclusive replies. Call them inside
-//! a [`RawHandler`] or [`RawStreamHandler`] implementation; the returned future
-//! accesses actor and scope through [`Cx::with`].
+//! a [`DispatchHandler`] implementation; the returned future accesses actor
+//! and scope through [`Cx::with`].
 //! See [`reply`] for cancellation, panic, and scheduling details.
 //! See [`scheduling`] for built-in scheduling profiles.
 //!
@@ -256,7 +258,7 @@ mod writer;
 pub use access::Cx;
 pub use actor::{
     Actor, DispatchHandler, Handler, HasChildren, HasInterleaving, HasMailbox, HasReply, Message,
-    RawHandler, RawStreamHandler, StreamHandler,
+    StreamHandler, SyncHandler,
 };
 pub use address::{ActorRef, Recipient, Response};
 pub use config::{
@@ -271,11 +273,11 @@ pub use future::{ActorFuture, ActorFutureExt, FutureActor, IntoActorFuture, Map,
 pub use lifecycle::{
     Child, ChildExit, ChildId, ExitReason, ExitStatus, Shutdown, ShutdownStatus, SubtreeStatus,
 };
-pub use loac_macros::{Message, actor};
+pub use loac_macros::{Message, actor, sync_handler};
 pub use reply::{
     CxExclusive, CxReply, CxStream, CxStreamExclusive, InterleavedFutureExt, IntoReply,
-    IntoStreamReply, Items, RawKind, RawStreamKind, ReplyExt, StreamKind, StreamMessage,
-    StreamReply, SyncKind,
+    IntoStreamReply, Items, ReplyExt, SingleKind, StreamDispatch, StreamKind, StreamMessage,
+    StreamReply,
 };
 pub use runtime::{
     ActorOwner, ActorScope, ActorSpawner, SpawnOptions, StopScope, spawn, spawn_with,
@@ -317,8 +319,8 @@ pub mod prelude {
         CxStream, CxStreamExclusive, DispatchHandler, DynamicChildrenOptions,
         DynamicInterleavingOptions, DynamicMailboxOptions, Handler, HasChildren, HasInterleaving,
         HasMailbox, HasReply, InterleavedFutureExt, IntoActorFuture, IntoReply, IntoStreamReply,
-        Items, Message, RawHandler, RawKind, RawStreamHandler, RawStreamKind, ReplyExt, StopScope,
-        StreamHandler, StreamMessage, StreamOut, StreamReply, SyncKind, Writer, actor, reply,
+        Items, Message, ReplyExt, SingleKind, StopScope, StreamHandler, StreamKind, StreamMessage,
+        StreamOut, StreamReply, SyncHandler, Writer, actor, reply, sync_handler,
     };
 }
 

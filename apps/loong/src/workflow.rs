@@ -116,7 +116,7 @@ pub enum WorkflowError {
 
 /// Asks the workflow to run one goal.
 #[derive(loac::Message)]
-#[message(raw_stream = StreamItem, reply = Result<(), WorkflowError>)]
+#[message(stream = StreamItem, reply = Result<(), WorkflowError>)]
 pub struct RunGoal {
     pub goal: String,
 }
@@ -234,23 +234,34 @@ impl Actor for Workflow {
     }
 }
 
-impl RawStreamHandler<RunGoal> for Workflow {
-    fn handle<W>(
-        &mut self,
+impl StreamHandler<RunGoal> for Workflow {
+    fn handle<'a, W>(
         message: RunGoal,
-        out: W,
-        _scope: &mut ActorScope<'_, Self>,
-    ) -> impl IntoStreamReply<Self, RunGoal> + use<W>
+        mut out: StreamOut<'a, W>,
+        mut cx: Cx<'a, Self>,
+    ) -> impl Future<Output = Result<(), WorkflowError>> + Send + 'a
     where
-        W: Writer<StreamItem> + Send + 'static,
+        W: Writer<StreamItem> + Send + 'a,
     {
-        let planner_ref = self.planner_ref.clone();
-        let reviewer_ref = self.reviewer_ref.clone();
-        let provider = self.provider.clone();
-        let empty_facade = self.empty_facade.clone();
-        let max_workers = self.max_workers;
-        let max_review_rounds = self.max_review_rounds;
-        let max_llm_retries = self.max_llm_retries;
+        let (
+            planner_ref,
+            reviewer_ref,
+            provider,
+            empty_facade,
+            max_workers,
+            max_review_rounds,
+            max_llm_retries,
+        ) = cx.with(|actor, _| {
+            (
+                actor.planner_ref.clone(),
+                actor.reviewer_ref.clone(),
+                actor.provider.clone(),
+                actor.empty_facade.clone(),
+                actor.max_workers,
+                actor.max_review_rounds,
+                actor.max_llm_retries,
+            )
+        });
 
         async move {
             let result = run_workflow(
@@ -267,7 +278,6 @@ impl RawStreamHandler<RunGoal> for Workflow {
 
             match result {
                 Ok(answer) => {
-                    let mut out = out;
                     let _ = out.write(StreamItem::Text { delta: answer }).await;
                     Ok(())
                 }

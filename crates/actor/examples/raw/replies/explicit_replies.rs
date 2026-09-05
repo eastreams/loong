@@ -18,10 +18,10 @@ impl Actor for Store {
 }
 
 #[derive(Message)]
-#[message(raw = u64)]
+#[message(reply = u64)]
 struct Lookup(String);
 
-impl RawHandler<Lookup> for Store {
+impl DispatchHandler<Lookup> for Store {
     fn handle(
         &mut self,
         message: Lookup,

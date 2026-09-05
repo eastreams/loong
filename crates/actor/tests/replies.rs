@@ -12,9 +12,9 @@ use std::{
 };
 
 use loac::{
-    Actor, ActorFutureExt, ActorRef, ActorScope, CallError, ChildExit, ExitReason,
-    InterleavedFutureExt, IntoActorFuture, Message, RawHandler, ReplyExt, Response, Shutdown,
-    SpawnOptions, actor, reply, spawn_with,
+    Actor, ActorFutureExt, ActorRef, ActorScope, CallError, ChildExit, DispatchHandler, ExitReason,
+    InterleavedFutureExt, IntoActorFuture, Message, ReplyExt, Response, Shutdown, SpawnOptions,
+    actor, reply, spawn_with,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -25,7 +25,7 @@ async fn poll_once<F: Future>(mut future: Pin<&mut F>) -> Poll<F::Output> {
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct PendingOwned {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
@@ -43,10 +43,10 @@ impl Actor for HookChild {
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct StopChild;
 
-impl RawHandler<StopChild> for HookChild {
+impl DispatchHandler<StopChild> for HookChild {
     fn handle(
         &mut self,
         _message: StopChild,
@@ -58,7 +58,7 @@ impl RawHandler<StopChild> for HookChild {
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct ExclusiveGate {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,

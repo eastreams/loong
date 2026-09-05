@@ -1,6 +1,7 @@
 //! Reply scheduling strategies.
 //!
-//! A [`RawHandler`](crate::RawHandler) chooses one strategy before returning.
+//! A [`DispatchHandler`](crate::DispatchHandler) chooses one strategy before
+//! returning.
 //! [`ReplyExt::ready`] completes during dispatch.
 //! A bare [`Future`] starts an owned Tokio task.
 //! [`InterleavedFutureExt::interleaved`] requires [`HasInterleaving`].
@@ -73,33 +74,16 @@ mod private {
 pub trait ReplyKind: private::Sealed + Send + 'static {}
 
 /// The ordinary reply kind: one typed value returned to the caller.
-pub struct SyncKind;
+pub struct SingleKind;
 
-impl private::Sealed for SyncKind {}
-impl ReplyKind for SyncKind {}
+impl private::Sealed for SingleKind {}
+impl ReplyKind for SingleKind {}
 
 /// The streaming reply kind: a [`StreamReply`] handle returned to the caller.
 pub struct StreamKind;
 
 impl private::Sealed for StreamKind {}
 impl ReplyKind for StreamKind {}
-
-/// The raw ordinary reply kind: explicit reply strategy selection.
-///
-/// Messages with this kind are handled by [`RawHandler`](crate::RawHandler).
-pub struct RawKind;
-
-impl private::Sealed for RawKind {}
-impl ReplyKind for RawKind {}
-
-/// The raw streaming reply kind: explicit stream-final strategy selection.
-///
-/// Stream messages with this kind are handled by
-/// [`RawStreamHandler`](crate::RawStreamHandler).
-pub struct RawStreamKind;
-
-impl private::Sealed for RawStreamKind {}
-impl ReplyKind for RawStreamKind {}
 
 /// Extension methods that select explicit reply scheduling strategies.
 ///
@@ -114,8 +98,8 @@ pub trait ReplyExt: Sized {
     /// Dispatch may wait for configured interleaved capacity.
     /// The runtime learns the strategy only after calling the handler.
     ///
-    /// Use this method inside [`RawHandler`](crate::RawHandler) when runtime
-    /// branching requires explicit ready scheduling.
+    /// Use this method inside [`DispatchHandler`](crate::DispatchHandler) when
+    /// runtime branching requires explicit ready scheduling.
     ///
     /// Prefer `value.ready()` for an already-produced value.
     /// [`std::future::ready(value)`](std::future::ready) creates an ordinary [`Future`].
@@ -308,8 +292,8 @@ where
 {
 }
 
-/// A stream-final scheduling strategy returned by a
-/// [`RawStreamHandler`](crate::RawStreamHandler).
+/// A stream-final scheduling strategy returned by an explicit stream
+/// [`DispatchHandler`](crate::DispatchHandler) implementation.
 ///
 /// This is the streaming counterpart of [`IntoReply`]: a bare [`Future`] with
 /// output `M::Final` selects owned scheduling, [`Ready`] completes the final
@@ -410,9 +394,9 @@ impl<Item> futures_util::Stream for Items<'_, Item> {
 
 /// A stream-shaped reply: items plus a final value.
 ///
-/// This is the kind-agnostic shape shared by normal stream messages and raw
-/// stream messages. [`IntoStreamReply`] and the stream reply scheduling
-/// machinery are generic over this shape.
+/// This is the kind-agnostic shape shared by ordinary and explicit stream
+/// messages. [`IntoStreamReply`] and the stream reply scheduling machinery are
+/// generic over this shape.
 pub trait StreamReplyMessage: Message<Reply = StreamReply<Self::Item, Self::Final>> {
     /// Type of each streamed item.
     type Item: Send + 'static;
@@ -425,14 +409,22 @@ pub trait StreamReplyMessage: Message<Reply = StreamReply<Self::Item, Self::Fina
 /// The derive implements this when `#[message(stream = Item, reply = Final)]`
 /// is present. The blanket [`StreamHandler`](crate::StreamHandler) adaptation
 /// targets [`DispatchHandler<M, StreamKind>`](crate::DispatchHandler).
-/// Raw stream messages use `StreamMessage<RawStreamKind>` and adapt to
-/// [`RawStreamHandler`](crate::RawStreamHandler).
+/// Explicit stream strategies are implemented directly as
+/// [`DispatchHandler<M, StreamKind>`](crate::DispatchHandler) and assemble a
+/// [`StreamDispatch`] with [`StreamDispatch::new`].
 pub trait StreamMessage<Kind: ReplyKind = StreamKind>:
     StreamReplyMessage + Message<Kind = Kind>
 {
 }
 
-pub(crate) struct StreamDispatch<S, Item, Final> {
+/// Channel plumbing for an explicit [`DispatchHandler<M, StreamKind>`](crate::DispatchHandler)
+/// implementation.
+///
+/// Create the item and final channels, build an [`IntoStreamReply`] strategy
+/// that owns the item sender, and wrap them all here. The returned value
+/// implements [`IntoReply`] and completes the caller's
+/// [`StreamReply`] handle.
+pub struct StreamDispatch<S, Item, Final> {
     strategy: S,
     item_rx: mpsc::Receiver<Item>,
     final_tx: oneshot::Sender<Final>,
@@ -440,7 +432,9 @@ pub(crate) struct StreamDispatch<S, Item, Final> {
 }
 
 impl<S, Item, Final> StreamDispatch<S, Item, Final> {
-    pub(crate) fn new(
+    /// Assembles an explicit stream dispatch from a strategy and the item and
+    /// final channels.
+    pub fn new(
         strategy: S,
         item_rx: mpsc::Receiver<Item>,
         final_tx: oneshot::Sender<Final>,
@@ -455,6 +449,7 @@ impl<S, Item, Final> StreamDispatch<S, Item, Final> {
     }
 }
 
+#[allow(private_interfaces)]
 impl<A, M, S> sealed::HandleReply<A, M> for StreamDispatch<S, M::Item, M::Final>
 where
     A: Actor,

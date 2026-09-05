@@ -11,7 +11,7 @@ use std::{
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use loac::{
-    Actor, ActorRef, ActorScope, InterleavedFutureExt, IntoActorFuture, Message, RawHandler,
+    Actor, ActorRef, ActorScope, DispatchHandler, InterleavedFutureExt, IntoActorFuture, Message,
     ReplyExt, Shutdown,
 };
 
@@ -38,10 +38,10 @@ impl Actor for UnboundedReplyActor {
 }
 
 #[derive(Message)]
-#[message(raw = u64)]
+#[message(reply = u64)]
 struct Ready;
 
-impl RawHandler<Ready> for ReplyActor {
+impl DispatchHandler<Ready> for ReplyActor {
     fn handle(
         &mut self,
         _message: Ready,
@@ -52,10 +52,10 @@ impl RawHandler<Ready> for ReplyActor {
 }
 
 #[derive(Message)]
-#[message(raw = u64)]
+#[message(reply = u64)]
 struct Owned;
 
-impl RawHandler<Owned> for ReplyActor {
+impl DispatchHandler<Owned> for ReplyActor {
     fn handle(
         &mut self,
         _message: Owned,
@@ -66,10 +66,10 @@ impl RawHandler<Owned> for ReplyActor {
 }
 
 #[derive(Message)]
-#[message(raw = u64)]
+#[message(reply = u64)]
 struct Interleaved;
 
-impl RawHandler<Interleaved> for ReplyActor {
+impl DispatchHandler<Interleaved> for ReplyActor {
     fn handle(
         &mut self,
         _message: Interleaved,
@@ -79,7 +79,7 @@ impl RawHandler<Interleaved> for ReplyActor {
     }
 }
 
-impl RawHandler<Interleaved> for UnboundedReplyActor {
+impl DispatchHandler<Interleaved> for UnboundedReplyActor {
     fn handle(
         &mut self,
         _message: Interleaved,
@@ -90,10 +90,10 @@ impl RawHandler<Interleaved> for UnboundedReplyActor {
 }
 
 #[derive(Message)]
-#[message(raw = u64)]
+#[message(reply = u64)]
 struct Exclusive;
 
-impl RawHandler<Exclusive> for ReplyActor {
+impl DispatchHandler<Exclusive> for ReplyActor {
     fn handle(
         &mut self,
         _message: Exclusive,
@@ -111,7 +111,7 @@ enum MeasuredProfile {
 
 async fn measure_round_trip<A>(actor: &ActorRef<A>, measured: bool) -> Duration
 where
-    A: RawHandler<Interleaved>,
+    A: DispatchHandler<Interleaved>,
 {
     let started = Instant::now();
     let reply = actor

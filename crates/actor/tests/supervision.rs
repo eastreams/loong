@@ -7,8 +7,8 @@ use std::sync::{
 use std::task::Poll;
 
 use loac::{
-    Actor, ActorScope, CallError, Child, ChildExit, ExitReason, InterleavedFutureExt,
-    IntoActorFuture, Message, RawHandler, ReplyExt, Shutdown, SubtreeStatus, actor,
+    Actor, ActorScope, CallError, Child, ChildExit, DispatchHandler, ExitReason,
+    InterleavedFutureExt, IntoActorFuture, Message, ReplyExt, Shutdown, SubtreeStatus, actor,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -29,10 +29,10 @@ impl Actor for ChildActor {
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct StopSelf;
 
-impl RawHandler<StopSelf> for ChildActor {
+impl DispatchHandler<StopSelf> for ChildActor {
     fn handle(
         &mut self,
         _message: StopSelf,
@@ -44,10 +44,10 @@ impl RawHandler<StopSelf> for ChildActor {
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct PanicSelf;
 
-impl RawHandler<PanicSelf> for ChildActor {
+impl DispatchHandler<PanicSelf> for ChildActor {
     fn handle(
         &mut self,
         _message: PanicSelf,
@@ -95,10 +95,10 @@ impl Actor for Supervisor {
 }
 
 #[derive(Message)]
-#[message(raw = usize)]
+#[message(reply = usize)]
 struct Observed;
 
-impl RawHandler<Observed> for Supervisor {
+impl DispatchHandler<Observed> for Supervisor {
     fn handle(
         &mut self,
         _message: Observed,
@@ -109,10 +109,10 @@ impl RawHandler<Observed> for Supervisor {
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct ChildExitBarrier;
 
-impl RawHandler<ChildExitBarrier> for Supervisor {
+impl DispatchHandler<ChildExitBarrier> for Supervisor {
     fn handle(
         &mut self,
         _message: ChildExitBarrier,

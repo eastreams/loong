@@ -8,7 +8,7 @@ use std::{
 };
 
 use loac::{
-    Actor, ActorScope, CallError, ExitReason, Message, RawHandler, ReplyExt, Shutdown,
+    Actor, ActorScope, CallError, DispatchHandler, ExitReason, Message, ReplyExt, Shutdown,
     ShutdownStatus, StopScope, TrySendErrorKind, actor,
 };
 use tokio::sync::oneshot;
@@ -43,10 +43,10 @@ impl Actor for AdmissionActor {
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct Notify(u8);
 
-impl RawHandler<Notify> for AdmissionActor {
+impl DispatchHandler<Notify> for AdmissionActor {
     fn handle(
         &mut self,
         message: Notify,
@@ -59,10 +59,10 @@ impl RawHandler<Notify> for AdmissionActor {
 }
 
 #[derive(Message)]
-#[message(raw = (u8, usize))]
+#[message(reply = (u8, usize))]
 struct Read;
 
-impl RawHandler<Read> for AdmissionActor {
+impl DispatchHandler<Read> for AdmissionActor {
     fn handle(
         &mut self,
         _message: Read,
@@ -162,10 +162,10 @@ impl Actor for ControlledInit {
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct InitPing;
 
-impl RawHandler<InitPing> for ControlledInit {
+impl DispatchHandler<InitPing> for ControlledInit {
     fn handle(
         &mut self,
         _message: InitPing,

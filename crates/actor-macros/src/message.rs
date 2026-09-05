@@ -17,8 +17,6 @@ pub(super) fn expand(input: TokenStream) -> TokenStream {
 struct MessageOptions {
     reply: Type,
     stream: Option<Type>,
-    raw: Option<Type>,
-    raw_stream: Option<Type>,
     explicit_reply: bool,
 }
 
@@ -26,8 +24,6 @@ fn expand_message(input: &DeriveInput) -> syn::Result<TokenStream2> {
     let MessageOptions {
         reply,
         stream,
-        raw,
-        raw_stream,
         explicit_reply,
     } = message_options(&input.attrs)?;
     let actor = actor_crate_path()?;
@@ -46,27 +42,19 @@ fn expand_message(input: &DeriveInput) -> syn::Result<TokenStream2> {
         predicates.push(parse_quote!(#item: ::core::marker::Send + 'static));
         kind = parse_quote!(#actor::reply::StreamKind);
         reply_ty = parse_quote!(#actor::reply::StreamReply<#item, #reply>);
-    } else if let Some(raw_reply) = &raw {
-        kind = parse_quote!(#actor::reply::RawKind);
-        reply_ty = raw_reply.clone();
-    } else if let Some(item) = &raw_stream {
-        predicates.push(parse_quote!(#item: ::core::marker::Send + 'static));
-        kind = parse_quote!(#actor::reply::RawStreamKind);
-        reply_ty = parse_quote!(#actor::reply::StreamReply<#item, #reply>);
     } else {
-        kind = parse_quote!(#actor::reply::SyncKind);
+        kind = parse_quote!(#actor::reply::SingleKind);
         reply_ty = reply.clone();
     }
 
     let (impl_generics, _, where_clause) = generics.split_for_impl();
 
-    let has_reply_impl =
-        (explicit_reply || stream.is_some() || raw.is_some() || raw_stream.is_some()).then(|| {
-            quote! {
-                #[automatically_derived]
-                impl #impl_generics #actor::HasReply for #message #where_clause {}
-            }
-        });
+    let has_reply_impl = (explicit_reply || stream.is_some()).then(|| {
+        quote! {
+            #[automatically_derived]
+            impl #impl_generics #actor::HasReply for #message #where_clause {}
+        }
+    });
 
     let stream_message_impl = stream.as_ref().map(|item| {
         quote! {
@@ -81,19 +69,6 @@ fn expand_message(input: &DeriveInput) -> syn::Result<TokenStream2> {
         }
     });
 
-    let raw_stream_message_impl = raw_stream.as_ref().map(|item| {
-        quote! {
-            #[automatically_derived]
-            impl #impl_generics #actor::reply::StreamReplyMessage for #message #where_clause {
-                type Item = #item;
-                type Final = #reply;
-            }
-
-            #[automatically_derived]
-            impl #impl_generics #actor::reply::StreamMessage<#actor::reply::RawStreamKind> for #message #where_clause {}
-        }
-    });
-
     Ok(quote! {
         #[automatically_derived]
         impl #impl_generics #actor::Message for #message #where_clause {
@@ -103,7 +78,6 @@ fn expand_message(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
         #has_reply_impl
         #stream_message_impl
-        #raw_stream_message_impl
     })
 }
 
@@ -113,8 +87,6 @@ fn message_options(attrs: &[Attribute]) -> syn::Result<MessageOptions> {
         return Ok(MessageOptions {
             reply: parse_quote!(()),
             stream: None,
-            raw: None,
-            raw_stream: None,
             explicit_reply: false,
         });
     };
@@ -128,8 +100,6 @@ fn message_options(attrs: &[Attribute]) -> syn::Result<MessageOptions> {
 
     let mut reply = None;
     let mut stream = None;
-    let mut raw = None;
-    let mut raw_stream = None;
     attr.parse_nested_meta(|meta| {
         if meta.path.is_ident("reply") {
             if reply.is_some() {
@@ -151,69 +121,22 @@ fn message_options(attrs: &[Attribute]) -> syn::Result<MessageOptions> {
             return Ok(());
         }
 
-        if meta.path.is_ident("raw") {
-            if raw.is_some() {
-                return Err(meta.error("duplicate `raw` option"));
-            }
-            raw = Some(meta.value()?.parse().map_err(|error: syn::Error| {
-                syn::Error::new(error.span(), "expected a Rust type after `raw =`")
-            })?);
-            return Ok(());
-        }
-
-        if meta.path.is_ident("raw_stream") {
-            if raw_stream.is_some() {
-                return Err(meta.error("duplicate `raw_stream` option"));
-            }
-            raw_stream = Some(meta.value()?.parse().map_err(|error: syn::Error| {
-                syn::Error::new(error.span(), "expected a Rust type after `raw_stream =`")
-            })?);
-            return Ok(());
-        }
-
-        Err(meta.error(
-            "unsupported message option; expected `reply = <type>`, `stream = <type>`, `raw = <type>`, or `raw_stream = <type>`",
-        ))
+        Err(meta
+            .error("unsupported message option; expected `reply = <type>` or `stream = <type>`"))
     })?;
 
-    if reply.is_none() && stream.is_none() && raw.is_none() && raw_stream.is_none() {
+    if reply.is_none() && stream.is_none() {
         return Err(syn::Error::new_spanned(
             attr,
-            "expected `reply = <type>`, `stream = <type>`, `raw = <type>`, or `raw_stream = <type>`",
+            "expected `reply = <type>` or `stream = <type>`",
         ));
     }
 
-    if stream.is_some() && (raw.is_some() || raw_stream.is_some()) {
-        return Err(syn::Error::new_spanned(
-            attr,
-            "`stream` cannot be combined with `raw` or `raw_stream`",
-        ));
-    }
-
-    if raw.is_some() && raw_stream.is_some() {
-        return Err(syn::Error::new_spanned(
-            attr,
-            "`raw` cannot be combined with `raw_stream`",
-        ));
-    }
-
-    if raw.is_some() && reply.is_some() {
-        return Err(syn::Error::new_spanned(
-            attr,
-            "`raw` already selects the reply type; remove `reply`",
-        ));
-    }
-
-    let selected_reply = reply
-        .clone()
-        .or_else(|| raw.clone())
-        .unwrap_or_else(|| parse_quote!(()));
+    let selected_reply = reply.clone().unwrap_or_else(|| parse_quote!(()));
 
     Ok(MessageOptions {
         reply: selected_reply,
         stream,
-        raw,
-        raw_stream,
         explicit_reply: reply.is_some(),
     })
 }

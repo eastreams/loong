@@ -17,7 +17,7 @@ impl Actor for Serial {
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct Ping;
 
 struct Pending;
@@ -35,7 +35,7 @@ impl loac::ActorFuture<Serial> for Pending {
     }
 }
 
-impl RawHandler<Ping> for Serial {
+impl DispatchHandler<Ping> for Serial {
     fn handle(
         &mut self,
         _message: Ping,

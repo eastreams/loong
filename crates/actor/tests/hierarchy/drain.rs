@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use loac::{
-    Actor, ActorRef, ActorScope, CallError, ExitReason, IntoActorFuture, Message, RawHandler,
+    Actor, ActorRef, ActorScope, CallError, DispatchHandler, ExitReason, IntoActorFuture, Message,
     ReplyExt, Shutdown, ShutdownStatus, StopScope, actor,
 };
 use tokio::sync::oneshot;
@@ -26,10 +26,10 @@ impl Actor for Worker {
 }
 
 #[derive(Message)]
-#[message(raw = u8)]
+#[message(reply = u8)]
 struct Work(u8);
 
-impl RawHandler<Work> for Worker {
+impl DispatchHandler<Work> for Worker {
     fn handle(
         &mut self,
         message: Work,
@@ -70,13 +70,13 @@ impl Actor for DrainParent {
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct ParentBlock {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
 }
 
-impl RawHandler<ParentBlock> for DrainParent {
+impl DispatchHandler<ParentBlock> for DrainParent {
     fn handle(
         &mut self,
         message: ParentBlock,
@@ -92,10 +92,10 @@ impl RawHandler<ParentBlock> for DrainParent {
 }
 
 #[derive(Message)]
-#[message(raw = Result<u8, CallError>)]
+#[message(reply = Result<u8, CallError>)]
 struct Forward(u8);
 
-impl RawHandler<Forward> for DrainParent {
+impl DispatchHandler<Forward> for DrainParent {
     fn handle(
         &mut self,
         message: Forward,

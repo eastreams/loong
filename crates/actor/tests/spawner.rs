@@ -1,4 +1,4 @@
-use loac::{Actor, ActorScope, CallError, Message, RawHandler, ReplyExt, actor};
+use loac::{Actor, ActorScope, CallError, DispatchHandler, Message, ReplyExt, actor};
 
 struct Ponger;
 
@@ -12,10 +12,10 @@ impl Actor for Ponger {
 }
 
 #[derive(Message)]
-#[message(raw = &'static str)]
+#[message(reply = &'static str)]
 struct Ping;
 
-impl RawHandler<Ping> for Ponger {
+impl DispatchHandler<Ping> for Ponger {
     fn handle(
         &mut self,
         _message: Ping,
@@ -40,10 +40,10 @@ impl Actor for Pinger {
 }
 
 #[derive(Message)]
-#[message(raw = String)]
+#[message(reply = String)]
 struct AskPong;
 
-impl RawHandler<AskPong> for Pinger {
+impl DispatchHandler<AskPong> for Pinger {
     fn handle(
         &mut self,
         _message: AskPong,

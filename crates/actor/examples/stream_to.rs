@@ -46,7 +46,7 @@ impl StreamHandler<StreamNumbers> for StreamActor {
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct Item(u8);
 
 struct ItemReceiver {
@@ -62,7 +62,7 @@ impl Actor for ItemReceiver {
     }
 }
 
-impl RawHandler<Item> for ItemReceiver {
+impl DispatchHandler<Item> for ItemReceiver {
     fn handle(
         &mut self,
         message: Item,
@@ -74,10 +74,10 @@ impl RawHandler<Item> for ItemReceiver {
 }
 
 #[derive(Message)]
-#[message(raw = Vec<u8>)]
+#[message(reply = Vec<u8>)]
 struct Dump;
 
-impl RawHandler<Dump> for ItemReceiver {
+impl DispatchHandler<Dump> for ItemReceiver {
     fn handle(
         &mut self,
         _message: Dump,

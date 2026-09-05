@@ -1,4 +1,5 @@
 use super::*;
+use loac::Writer;
 
 struct CxExclusiveCounter(u8);
 
@@ -12,10 +13,10 @@ impl Actor for CxExclusiveCounter {
 }
 
 #[derive(Message)]
-#[message(raw = u8)]
+#[message(reply = u8)]
 struct CxExclusiveIncrement;
 
-impl RawHandler<CxExclusiveIncrement> for CxExclusiveCounter {
+impl DispatchHandler<CxExclusiveIncrement> for CxExclusiveCounter {
     fn handle(
         &mut self,
         _message: CxExclusiveIncrement,
@@ -46,22 +47,21 @@ async fn cx_exclusive_runs_without_interleaving() {
 }
 
 #[derive(Message)]
-#[message(raw_stream = u8, reply = u8)]
+#[message(stream = u8, reply = u8)]
 struct CxExclusiveStream(u8);
 
-impl loac::RawStreamHandler<CxExclusiveStream> for CxExclusiveCounter {
-    fn handle<W>(
+impl loac::DispatchHandler<CxExclusiveStream, loac::StreamKind> for CxExclusiveCounter {
+    fn handle(
         &mut self,
         message: CxExclusiveStream,
-        mut out: W,
         scope: &mut ActorScope<Self>,
-    ) -> impl loac::IntoStreamReply<Self, CxExclusiveStream> + use<W>
-    where
-        W: loac::Writer<u8> + Send + 'static,
-    {
+    ) -> impl loac::IntoReply<Self, CxExclusiveStream> + use<> {
+        let (item_tx, item_rx) = tokio::sync::mpsc::channel::<u8>(8);
+        let (final_tx, final_rx) = tokio::sync::oneshot::channel::<u8>();
         let base = message.0;
-        scope.cx_stream_exclusive(self, move |mut cx| {
+        let strategy = scope.cx_stream_exclusive(self, move |mut cx| {
             Box::pin(async move {
+                let mut out = item_tx;
                 let doubled = cx.with(|actor, _| {
                     actor.0 += base;
                     actor.0 * 2
@@ -69,7 +69,8 @@ impl loac::RawStreamHandler<CxExclusiveStream> for CxExclusiveCounter {
                 let _ = out.write(doubled).await;
                 doubled
             })
-        })
+        });
+        loac::StreamDispatch::new(strategy, item_rx, final_tx, final_rx)
     }
 }
 

@@ -7,9 +7,9 @@ use std::{
 };
 
 use loac::{
-    Actor, ActorConfig, ActorFuture, ActorFutureExt, ActorScope, ExitReason, HasChildren,
-    HasInterleaving, InterleavedFutureExt, IntoActorFuture, IntoReply, Message, MessageConfig,
-    RawHandler, ReplyExt, Shutdown, SupervisionConfig, scheduling, spawn_with, supervision,
+    Actor, ActorConfig, ActorFuture, ActorFutureExt, ActorScope, DispatchHandler, ExitReason,
+    HasChildren, HasInterleaving, InterleavedFutureExt, IntoActorFuture, IntoReply, Message,
+    MessageConfig, ReplyExt, Shutdown, SupervisionConfig, scheduling, spawn_with, supervision,
     transport::{
         ErasedEnvelope, MessageInbox, MessageReservation, MessageSender, RuntimeInbox,
         TryReserveError,
@@ -248,10 +248,10 @@ impl Actor for ManualUnbounded {
 }
 
 #[derive(Message)]
-#[message(raw = u64)]
+#[message(reply = u64)]
 struct Add(u64);
 
-impl RawHandler<Add> for ManualActor {
+impl DispatchHandler<Add> for ManualActor {
     fn handle(
         &mut self,
         message: Add,
@@ -267,10 +267,10 @@ impl RawHandler<Add> for ManualActor {
 }
 
 #[derive(Debug, Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct Notify(u64);
 
-impl RawHandler<Notify> for ManualActor {
+impl DispatchHandler<Notify> for ManualActor {
     fn handle(
         &mut self,
         message: Notify,

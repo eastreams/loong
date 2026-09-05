@@ -15,8 +15,8 @@ use std::{
 use tokio::sync::oneshot;
 
 use crate::{
-    Actor, ActorConfig, ActorRef, ActorScope, ChildExit, ChildId, ExitReason, ExitStatus,
-    IntoActorFuture, Message, MessageConfig, RawHandler, ReplyExt, Shutdown, ShutdownStatus,
+    Actor, ActorConfig, ActorRef, ActorScope, ChildExit, ChildId, DispatchHandler, ExitReason,
+    ExitStatus, IntoActorFuture, Message, MessageConfig, ReplyExt, Shutdown, ShutdownStatus,
     SubtreeStatus,
     actor::HasMailbox,
     mailbox::{ActorInbox, ActorInner, Control, Envelope, Mode},
@@ -269,10 +269,10 @@ impl Actor for AbortChildParent {
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct Ping;
 
-impl RawHandler<Ping> for AbortChildParent {
+impl DispatchHandler<Ping> for AbortChildParent {
     fn handle(
         &mut self,
         _message: Ping,

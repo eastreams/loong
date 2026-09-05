@@ -1,10 +1,9 @@
-//! Builds raw-handler cx futures on the exclusive lane.
+//! Builds dispatch-handler cx futures on the exclusive lane.
 //!
-//! `RawHandler` and `RawStreamHandler` normally choose an explicit reply
-//! strategy. The `ActorScope` constructors `cx_exclusive` and
-//! `cx_stream_exclusive` keep the `Cx::with` access style while selecting
-//! exclusive scheduling: the actor task polls the returned future with mailbox
-//! dispatch paused, and owned tasks may continue.
+//! A `DispatchHandler` chooses an explicit reply strategy. The `ActorScope`
+//! constructors `cx_exclusive` and `cx_stream_exclusive` keep the `Cx::with`
+//! access style while selecting exclusive scheduling: the actor task polls the
+//! returned future with mailbox dispatch paused, and owned tasks may continue.
 //!
 //! ```console
 //! cargo run -p loac --example cx_exclusive
@@ -27,10 +26,10 @@ impl Actor for Counter {
 }
 
 #[derive(Message)]
-#[message(raw = u64)]
+#[message(reply = u64)]
 struct Read;
 
-impl RawHandler<Read> for Counter {
+impl DispatchHandler<Read> for Counter {
     fn handle(
         &mut self,
         _message: Read,
@@ -41,14 +40,14 @@ impl RawHandler<Read> for Counter {
 }
 
 #[derive(Message)]
-#[message(raw = u64)]
+#[message(reply = u64)]
 struct AddExclusive {
     amount: u64,
     started: oneshot::Sender<()>,
     resume: oneshot::Receiver<()>,
 }
 
-impl RawHandler<AddExclusive> for Counter {
+impl DispatchHandler<AddExclusive> for Counter {
     fn handle(
         &mut self,
         message: AddExclusive,
@@ -68,21 +67,20 @@ impl RawHandler<AddExclusive> for Counter {
 }
 
 #[derive(Message)]
-#[message(raw_stream = u8, reply = u8)]
+#[message(stream = u8, reply = u8)]
 struct StreamExclusive;
 
-impl RawStreamHandler<StreamExclusive> for Counter {
-    fn handle<W>(
+impl DispatchHandler<StreamExclusive, StreamKind> for Counter {
+    fn handle(
         &mut self,
         _message: StreamExclusive,
-        mut out: W,
         scope: &mut ActorScope<Self>,
-    ) -> impl loac::IntoStreamReply<Self, StreamExclusive> + use<W>
-    where
-        W: loac::Writer<u8> + Send + 'static,
-    {
-        scope.cx_stream_exclusive(self, move |mut cx| {
+    ) -> impl loac::IntoReply<Self, StreamExclusive> + use<> {
+        let (item_tx, item_rx) = tokio::sync::mpsc::channel::<u8>(8);
+        let (final_tx, final_rx) = tokio::sync::oneshot::channel::<u8>();
+        let strategy = scope.cx_stream_exclusive(self, move |mut cx| {
             Box::pin(async move {
+                let mut out = item_tx;
                 let next = cx.with(|actor, _| {
                     actor.0 += 1;
                     actor.0 as u8
@@ -90,7 +88,8 @@ impl RawStreamHandler<StreamExclusive> for Counter {
                 let _ = out.write(next).await;
                 next
             })
-        })
+        });
+        loac::StreamDispatch::new(strategy, item_rx, final_tx, final_rx)
     }
 }
 

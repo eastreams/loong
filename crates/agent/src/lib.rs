@@ -4,13 +4,7 @@
 //! provider are type-erased behind [`AgentProvider`] and `Box<dyn ContextStore>`
 //! so the rest of the system can hold one actor type.
 
-use std::{
-    collections::VecDeque,
-    future::Future,
-    pin::Pin,
-    sync::Arc,
-    task::{Context, Poll},
-};
+use std::{collections::VecDeque, future::Future, sync::Arc};
 
 use crate::channel_tool::ChannelTool;
 use context::ContextStore;
@@ -26,7 +20,7 @@ use provider::Provider;
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
-use tool_host::{RegisteredTool, RegistrationError, ToolError, ToolRegistry, ToolSnapshot};
+use tool_host::{RegisteredTool, RegistrationError, ToolRegistry, ToolSnapshot};
 
 mod builder;
 mod channel;
@@ -43,7 +37,7 @@ pub struct Agent {
     /// Prompts that have been accepted by the mailbox but not started yet.
     ///
     /// All reads and writes happen in actor contexts (mailbox handlers and
-    /// [`PromptLoop`] polls), so no lock is needed.
+    /// prompt-future polls), so no lock is needed.
     prompt_queue: VecDeque<QueuedPrompt>,
     /// Cancellation token for the prompt currently running, if any.
     ///
@@ -141,12 +135,12 @@ pub enum PromptError {
 
 /// Replaces the provider used by subsequent streams.
 #[derive(loac::Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 pub struct SwitchProvider(pub AgentProvider);
 
 /// Asks the agent to stream a provider reply for one user message.
 #[derive(loac::Message)]
-#[message(raw_stream = StreamItem, reply = Result<(), PromptError>)]
+#[message(stream = StreamItem, reply = Result<(), PromptError>)]
 pub struct Prompt {
     /// The user message to append and send.
     pub text: String,
@@ -154,22 +148,22 @@ pub struct Prompt {
 
 /// Cancels all prompts that are queued but not started yet.
 #[derive(loac::Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 pub struct CancelQueuedPrompts;
 
 /// Cancels the active prompt, if any.
 #[derive(loac::Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 pub struct CancelActivePrompt;
 
 /// Cancels both queued prompts and the active prompt.
 #[derive(loac::Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 pub struct CancelAllPrompts;
 
 /// Registers one named channel as a tool at runtime.
 #[derive(loac::Message)]
-#[message(raw = Result<(), RegistrationError>)]
+#[message(reply = Result<(), RegistrationError>)]
 pub struct BindChannel {
     pub name: String,
     pub target: Arc<dyn ChannelTarget>,
@@ -177,7 +171,7 @@ pub struct BindChannel {
 
 /// Removes one named channel tool.
 #[derive(loac::Message)]
-#[message(raw = Option<Arc<RegisteredTool>>)]
+#[message(reply = Option<Arc<RegisteredTool>>)]
 pub struct UnbindChannel {
     pub name: String,
 }
@@ -221,7 +215,7 @@ pub enum SpawnSubagentError {
 
 /// Spawns one fully built child agent under the parent runtime.
 #[derive(loac::Message)]
-#[message(raw = Result<ActorRef<Agent>, SpawnSubagentError>)]
+#[message(reply = Result<ActorRef<Agent>, SpawnSubagentError>)]
 pub struct SpawnSubagent {
     pub name: String,
     pub agent: Agent,
@@ -229,7 +223,7 @@ pub struct SpawnSubagent {
 
 /// One-way self-message a finished prompt sends before its final value.
 #[derive(loac::Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct PrepareNextPrompt;
 
 /// Owned inputs for one prompt loop.
@@ -279,231 +273,6 @@ fn split_stream_items(items: Vec<StreamItem>) -> (String, String, Vec<PendingToo
     (reasoning, text, calls)
 }
 
-/// All mutable prompt-loop state, moved through the stage futures so the
-/// [`PromptLoop`] struct itself stays [`Unpin`] regardless of `W`.
-struct LoopData<W> {
-    messages: Vec<TranscriptItem>,
-    provider: AgentProvider,
-    registry: Arc<ToolSnapshot>,
-    tools: Vec<ToolSpec>,
-    cancellation: CancellationToken,
-    pending_calls: VecDeque<PendingToolCall>,
-    out: W,
-}
-
-impl<W> LoopData<W> {
-    fn from_prepared(prepared: PreparedPrompt, out: W) -> Self {
-        let PreparedPrompt {
-            mut messages,
-            provider,
-            registry,
-            system_prompt,
-            cancellation,
-        } = prepared;
-
-        if let Some(system_prompt) = system_prompt {
-            let has_system = messages.iter().any(|item| {
-                matches!(
-                    item,
-                    TranscriptItem::Message {
-                        role: Role::System,
-                        ..
-                    }
-                )
-            });
-            if !has_system {
-                messages.insert(
-                    0,
-                    TranscriptItem::Message {
-                        role: Role::System,
-                        text: system_prompt,
-                        reasoning_content: None,
-                    },
-                );
-            }
-        }
-
-        let tools = registry.tool_specs();
-
-        Self {
-            messages,
-            provider,
-            registry,
-            tools,
-            cancellation,
-            pending_calls: VecDeque::new(),
-            out,
-        }
-    }
-}
-
-enum WaitStartOutcome<W> {
-    Started(PreparedPrompt, W),
-    Cancelled,
-}
-
-enum RoundOutcome<W> {
-    Completed {
-        data: Box<LoopData<W>>,
-        result: Result<(), provider::StreamError<Request>>,
-        items: Vec<StreamItem>,
-    },
-    Cancelled,
-}
-
-enum ToolOutcome<W> {
-    Completed {
-        data: Box<LoopData<W>>,
-        result: Result<Value, ToolError>,
-    },
-    Cancelled,
-}
-
-type WaitStartFuture<W> = Pin<Box<dyn Future<Output = WaitStartOutcome<W>> + Send>>;
-type RoundFuture<W> = Pin<Box<dyn Future<Output = RoundOutcome<W>> + Send>>;
-type ToolFuture<W> = Pin<Box<dyn Future<Output = ToolOutcome<W>> + Send>>;
-type HandoffFuture = Pin<Box<dyn Future<Output = bool> + Send>>;
-
-enum PromptStage<W> {
-    WaitStart {
-        future: WaitStartFuture<W>,
-    },
-    Round {
-        future: RoundFuture<W>,
-    },
-    Tool {
-        future: ToolFuture<W>,
-        call: PendingToolCall,
-    },
-    Handoff {
-        future: HandoffFuture,
-        result: Result<(), PromptError>,
-    },
-    Complete,
-}
-
-/// Actor-native prompt state machine.
-struct PromptLoop<W>
-where
-    W: Writer<StreamItem> + Send + 'static,
-{
-    stage: PromptStage<W>,
-    myself: ActorRef<Agent>,
-}
-
-impl<W> PromptLoop<W>
-where
-    W: Writer<StreamItem> + Send + 'static,
-{
-    fn new(start_rx: oneshot::Receiver<PreparedPrompt>, out: W, myself: ActorRef<Agent>) -> Self {
-        Self {
-            stage: PromptStage::WaitStart {
-                future: build_wait_start_future(start_rx, out),
-            },
-            myself,
-        }
-    }
-
-    fn build_handoff_future(&self) -> HandoffFuture {
-        let myself = self.myself.clone();
-        Box::pin(async move { myself.send(PrepareNextPrompt).await.is_ok() })
-    }
-}
-
-fn build_wait_start_future<W>(
-    start_rx: oneshot::Receiver<PreparedPrompt>,
-    out: W,
-) -> WaitStartFuture<W>
-where
-    W: Writer<StreamItem> + Send + 'static,
-{
-    Box::pin(async move {
-        match start_rx.await {
-            Ok(prepared) => WaitStartOutcome::Started(prepared, out),
-            Err(_) => WaitStartOutcome::Cancelled,
-        }
-    })
-}
-
-fn build_round_future<W>(data: LoopData<W>) -> RoundFuture<W>
-where
-    W: Writer<StreamItem> + Send + 'static,
-{
-    let LoopData {
-        messages,
-        provider,
-        registry,
-        tools,
-        cancellation,
-        pending_calls: _,
-        mut out,
-    } = data;
-
-    let request = Request {
-        messages: messages.clone(),
-        tools: tools.clone(),
-    };
-    let (mut local_tx, mut local_rx) = mpsc::channel::<StreamItem>(8);
-    let provider_for_round = provider.clone();
-
-    Box::pin(async move {
-        let relay = async move {
-            let mut items = Vec::new();
-            while let Some(item) = local_rx.recv().await {
-                let _ = out.write(item.clone()).await;
-                items.push(item);
-            }
-            (out, items)
-        };
-
-        tokio::select! {
-            biased;
-            joined = async {
-                tokio::join!(
-                    async move { provider_for_round.stream(request, &mut local_tx).await },
-                    relay,
-                )
-            } => {
-                let (result, (out, items)) = joined;
-                RoundOutcome::Completed {
-                    data: Box::new(LoopData {
-                        messages,
-                        provider,
-                        registry,
-                        tools,
-                        cancellation,
-                        pending_calls: VecDeque::new(),
-                        out,
-                    }),
-                    result,
-                    items,
-                }
-            }
-            _ = cancellation.cancelled() => RoundOutcome::Cancelled,
-        }
-    })
-}
-
-fn build_tool_future<W>(data: LoopData<W>, call: PendingToolCall) -> ToolFuture<W>
-where
-    W: Writer<StreamItem> + Send + 'static,
-{
-    let payload = serde_json::from_str(&call.arguments).unwrap_or(Value::Null);
-    let registry = Arc::clone(&data.registry);
-    let cancellation = data.cancellation.clone();
-    let call_name = call.name.clone();
-
-    Box::pin(async move {
-        tokio::select! {
-            biased;
-            result = async { registry.invoke(&call_name, payload).await } => {
-                ToolOutcome::Completed { data: Box::new(data), result }
-            }
-            _ = cancellation.cancelled() => ToolOutcome::Cancelled,
-        }
-    })
-}
-
 #[actor(mailbox, interleaved = unbounded, children = unbounded)]
 impl Actor for Agent {
     type SpawnArgs = Self;
@@ -514,328 +283,298 @@ impl Actor for Agent {
 
     fn on_shutdown(&mut self, _shutdown: Shutdown) {
         self.draining = true;
-        // Dropping start senders wakes waiting PromptLoop futures with
+        // Dropping start senders wakes waiting prompt futures with
         // Cancelled instead of letting them wait forever during Drain.
         self.prompt_queue.clear();
     }
 }
 
-impl RawHandler<SwitchProvider> for Agent {
-    fn handle(
-        &mut self,
-        message: SwitchProvider,
-        _scope: &mut ActorScope<'_, Self>,
-    ) -> impl IntoReply<Self, SwitchProvider> + use<> {
-        self.provider = message.0;
-        ().ready()
+impl Handler<SwitchProvider> for Agent {
+    async fn handle(message: SwitchProvider, mut cx: Cx<'_, Self>) {
+        cx.with(|actor, _| actor.provider = message.0);
     }
 }
 
-impl RawHandler<PrepareNextPrompt> for Agent {
-    fn handle(
-        &mut self,
-        _message: PrepareNextPrompt,
-        _scope: &mut ActorScope<'_, Self>,
-    ) -> impl IntoReply<Self, PrepareNextPrompt> + use<> {
-        self.start_next_prompt();
-        ().ready()
+impl Handler<PrepareNextPrompt> for Agent {
+    async fn handle(_message: PrepareNextPrompt, mut cx: Cx<'_, Self>) {
+        cx.with(|actor, _| actor.start_next_prompt());
     }
 }
 
-impl RawHandler<CancelQueuedPrompts> for Agent {
-    fn handle(
-        &mut self,
-        _message: CancelQueuedPrompts,
-        _scope: &mut ActorScope<'_, Self>,
-    ) -> impl IntoReply<Self, CancelQueuedPrompts> + use<> {
-        self.prompt_queue.clear();
-        ().ready()
+impl Handler<CancelQueuedPrompts> for Agent {
+    async fn handle(_message: CancelQueuedPrompts, mut cx: Cx<'_, Self>) {
+        cx.with(|actor, _| actor.prompt_queue.clear());
     }
 }
 
-impl RawHandler<CancelActivePrompt> for Agent {
-    fn handle(
-        &mut self,
-        _message: CancelActivePrompt,
-        _scope: &mut ActorScope<'_, Self>,
-    ) -> impl IntoReply<Self, CancelActivePrompt> + use<> {
-        if let Some(token) = &self.active {
-            token.cancel();
-        }
-        ().ready()
+impl Handler<CancelActivePrompt> for Agent {
+    async fn handle(_message: CancelActivePrompt, mut cx: Cx<'_, Self>) {
+        cx.with(|actor, _| {
+            if let Some(token) = &actor.active {
+                token.cancel();
+            }
+        });
     }
 }
 
-impl RawHandler<CancelAllPrompts> for Agent {
-    fn handle(
-        &mut self,
-        _message: CancelAllPrompts,
-        _scope: &mut ActorScope<'_, Self>,
-    ) -> impl IntoReply<Self, CancelAllPrompts> + use<> {
-        self.prompt_queue.clear();
-        if let Some(token) = &self.active {
-            token.cancel();
-        }
-        ().ready()
+impl Handler<CancelAllPrompts> for Agent {
+    async fn handle(_message: CancelAllPrompts, mut cx: Cx<'_, Self>) {
+        cx.with(|actor, _| {
+            actor.prompt_queue.clear();
+            if let Some(token) = &actor.active {
+                token.cancel();
+            }
+        });
     }
 }
 
-impl RawHandler<BindChannel> for Agent {
-    fn handle(
-        &mut self,
-        message: BindChannel,
-        _scope: &mut ActorScope<'_, Self>,
-    ) -> impl IntoReply<Self, BindChannel> + use<> {
+impl Handler<BindChannel> for Agent {
+    async fn handle(message: BindChannel, mut cx: Cx<'_, Self>) -> Result<(), RegistrationError> {
         let BindChannel { name, target } = message;
-        self.registry
-            .register(name.clone(), ChannelTool::new(name, target))
-            .ready()
+        cx.with(|actor, _| {
+            actor
+                .registry
+                .register(name.clone(), ChannelTool::new(name, target))
+        })
     }
 }
 
-impl RawHandler<UnbindChannel> for Agent {
-    fn handle(
-        &mut self,
-        message: UnbindChannel,
-        _scope: &mut ActorScope<'_, Self>,
-    ) -> impl IntoReply<Self, UnbindChannel> + use<> {
-        self.registry.unregister(&message.name).ready()
+impl Handler<UnbindChannel> for Agent {
+    async fn handle(message: UnbindChannel, mut cx: Cx<'_, Self>) -> Option<Arc<RegisteredTool>> {
+        cx.with(|actor, _| actor.registry.unregister(&message.name))
     }
 }
 
-impl RawHandler<SpawnSubagent> for Agent {
-    fn handle(
-        &mut self,
+impl Handler<SpawnSubagent> for Agent {
+    async fn handle(
         message: SpawnSubagent,
-        _scope: &mut ActorScope<'_, Self>,
-    ) -> impl IntoReply<Self, SpawnSubagent> + use<> {
-        let facade = self.registry.facade().clone();
+        mut cx: Cx<'_, Self>,
+    ) -> Result<ActorRef<Agent>, SpawnSubagentError> {
         let SpawnSubagent { name, agent } = message;
-        let action = SpawnSubagentAction {
-            name: name.clone(),
-            system_prompt: agent.system_prompt.clone(),
-            tools: agent.registry.tool_specs(),
-            capabilities: agent.registry.facade().capabilities(),
-        };
-
-        async move { facade.grant(action).await }
-            .into_actor()
-            .then(
-                move |granted, actor: &mut Agent, scope: &mut ActorScope<'_, Agent>| {
-                    let result = match granted {
-                        Ok(granted) => {
-                            let (_, action) = granted.into_parts();
-                            debug_assert_eq!(action.name, name);
-                            let child = scope.spawn_child::<Agent>(agent).unwrap_or_else(|_| {
-                                unreachable!("unbounded children accept every subagent")
-                            });
-                            let actor_ref = child.actor_ref().clone();
-                            match actor.registry.register(
-                                name.clone(),
-                                ChannelTool::new(name.clone(), Arc::new(actor_ref.clone())),
-                            ) {
-                                Ok(()) => Ok(actor_ref),
-                                Err(error) => {
-                                    actor_ref.request_shutdown(Shutdown::Kill);
-                                    Err(SpawnSubagentError::Registration(error))
-                                }
-                            }
-                        }
-                        Err(error) => Err(SpawnSubagentError::Denied(error)),
-                    };
-                    std::future::ready(result).into_actor()
+        let (facade, action) = cx.with(|actor, _| {
+            (
+                actor.registry.facade().clone(),
+                SpawnSubagentAction {
+                    name: name.clone(),
+                    system_prompt: agent.system_prompt.clone(),
+                    tools: agent.registry.tool_specs(),
+                    capabilities: agent.registry.facade().capabilities(),
                 },
             )
-            .interleaved()
-    }
-}
-
-impl RawStreamHandler<Prompt> for Agent {
-    fn handle<W>(
-        &mut self,
-        message: Prompt,
-        out: W,
-        scope: &mut ActorScope<'_, Self>,
-    ) -> impl IntoStreamReply<Self, Prompt> + use<W>
-    where
-        W: Writer<StreamItem> + Send + 'static,
-    {
-        let (start_tx, start_rx) = oneshot::channel();
-        self.prompt_queue.push_back(QueuedPrompt {
-            text: message.text,
-            start_tx,
         });
 
-        if self.active.is_none() {
-            self.start_next_prompt();
-        }
+        let granted = facade.grant(action).await?;
+        let (_, action) = granted.into_parts();
+        debug_assert_eq!(action.name, name);
 
-        let myself = scope.myself().clone();
-        PromptLoop::new(start_rx, out, myself).interleaved()
+        cx.with(|actor, scope| {
+            let child = scope
+                .spawn_child::<Agent>(agent)
+                .unwrap_or_else(|_| unreachable!("unbounded children accept every subagent"));
+            let actor_ref = child.actor_ref().clone();
+            match actor.registry.register(
+                name.clone(),
+                ChannelTool::new(name, Arc::new(actor_ref.clone())),
+            ) {
+                Ok(()) => Ok(actor_ref),
+                Err(error) => {
+                    actor_ref.request_shutdown(Shutdown::Kill);
+                    Err(SpawnSubagentError::Registration(error))
+                }
+            }
+        })
     }
 }
 
-impl<W> ActorFuture<Agent> for PromptLoop<W>
-where
-    W: Writer<StreamItem> + Send + 'static,
-{
-    type Output = Result<(), PromptError>;
+impl StreamHandler<Prompt> for Agent {
+    fn handle<'a, W>(
+        message: Prompt,
+        mut out: StreamOut<'a, W>,
+        mut cx: Cx<'a, Self>,
+    ) -> impl Future<Output = Result<(), PromptError>> + Send + 'a
+    where
+        W: Writer<StreamItem> + Send + 'a,
+    {
+        async move {
+            let (start_tx, start_rx) = oneshot::channel();
+            let myself = cx.with(|actor, scope| {
+                actor.prompt_queue.push_back(QueuedPrompt {
+                    text: message.text,
+                    start_tx,
+                });
+                if actor.active.is_none() {
+                    actor.start_next_prompt();
+                }
+                scope.myself().clone()
+            });
 
-    fn poll(
-        self: Pin<&mut Self>,
-        actor: &mut Agent,
-        _scope: &mut ActorScope<'_, Agent>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Self::Output> {
-        let this = self.get_mut();
+            let prepared = match start_rx.await {
+                Ok(prepared) => prepared,
+                Err(_) => return Err(PromptError::Cancelled),
+            };
 
-        loop {
-            let mut stage = PromptStage::Complete;
-            std::mem::swap(&mut this.stage, &mut stage);
+            let mut messages = prepared.messages;
+            let provider = prepared.provider;
+            let registry = prepared.registry;
+            let cancellation = prepared.cancellation;
 
-            match stage {
-                PromptStage::WaitStart { mut future } => match future.as_mut().poll(cx) {
-                    Poll::Pending => {
-                        this.stage = PromptStage::WaitStart { future };
-                        return Poll::Pending;
-                    }
-                    Poll::Ready(WaitStartOutcome::Cancelled) => {
-                        return Poll::Ready(Err(PromptError::Cancelled));
-                    }
-                    Poll::Ready(WaitStartOutcome::Started(prepared, out)) => {
-                        let data = LoopData::from_prepared(prepared, out);
-                        this.stage = PromptStage::Round {
-                            future: build_round_future(data),
-                        };
-                    }
-                },
-                PromptStage::Round { mut future } => match future.as_mut().poll(cx) {
-                    Poll::Pending => {
-                        this.stage = PromptStage::Round { future };
-                        return Poll::Pending;
-                    }
-                    Poll::Ready(RoundOutcome::Cancelled) => {
-                        let result = Err(PromptError::Cancelled);
-                        let handoff = this.build_handoff_future();
-                        this.stage = PromptStage::Handoff {
-                            future: handoff,
-                            result,
-                        };
-                    }
-                    Poll::Ready(RoundOutcome::Completed {
-                        mut data,
-                        result,
-                        items,
-                    }) => {
-                        let (reasoning, text, calls) = split_stream_items(items);
-                        let reasoning = (!reasoning.is_empty()).then_some(reasoning);
-
-                        let mut assistant_items = Vec::new();
-                        if !text.is_empty() || (calls.is_empty() && reasoning.is_some()) {
-                            assistant_items.push(TranscriptItem::Message {
-                                role: Role::Assistant,
-                                text,
-                                reasoning_content: if calls.is_empty() {
-                                    reasoning.clone()
-                                } else {
-                                    None
-                                },
-                            });
+            if let Some(system_prompt) = prepared.system_prompt {
+                let has_system = messages.iter().any(|item| {
+                    matches!(
+                        item,
+                        TranscriptItem::Message {
+                            role: Role::System,
+                            ..
                         }
-                        for (index, call) in calls.iter().enumerate() {
-                            assistant_items.push(TranscriptItem::ToolCall {
-                                call_id: call.id.clone(),
-                                name: call.name.clone(),
-                                arguments: call.arguments.clone(),
-                                reasoning_content: if index == 0 {
-                                    reasoning.clone()
-                                } else {
-                                    None
-                                },
-                            });
-                        }
+                    )
+                });
+                if !has_system {
+                    messages.insert(
+                        0,
+                        TranscriptItem::Message {
+                            role: Role::System,
+                            text: system_prompt,
+                            reasoning_content: None,
+                        },
+                    );
+                }
+            }
 
-                        if !assistant_items.is_empty() {
-                            let _ = actor.store.append(assistant_items.clone());
-                            data.messages.extend(assistant_items);
-                        }
+            let tools = registry.tool_specs();
 
-                        if calls.is_empty() {
-                            let result =
-                                result.map_err(|error| PromptError::Provider(Box::new(error)));
-                            let handoff = this.build_handoff_future();
-                            this.stage = PromptStage::Handoff {
-                                future: handoff,
-                                result,
-                            };
+            loop {
+                let request = Request {
+                    messages: messages.clone(),
+                    tools: tools.clone(),
+                };
+                let (mut local_tx, mut local_rx) = mpsc::channel::<StreamItem>(8);
+                let provider_for_round = provider.clone();
+
+                let mut items = Vec::new();
+                let relay = async {
+                    while let Some(item) = local_rx.recv().await {
+                        let _ = out.write(item.clone()).await;
+                        items.push(item);
+                    }
+                };
+                let joined = async {
+                    tokio::join!(
+                        async move { provider_for_round.stream(request, &mut local_tx).await },
+                        relay,
+                    )
+                };
+
+                let round_result = {
+                    let cancellation = cancellation.clone();
+                    tokio::select! {
+                        biased;
+                        result = joined => Some(result),
+                        _ = cancellation.cancelled() => None,
+                    }
+                };
+
+                let (result, ()) = match round_result {
+                    Some(joined) => joined,
+                    None => {
+                        let handed_off = myself.send(PrepareNextPrompt).await.is_ok();
+                        if !handed_off {
+                            cx.with(|actor, _| actor.prompt_queue.clear());
+                        }
+                        return Err(PromptError::Cancelled);
+                    }
+                };
+
+                let (reasoning, text, calls) = split_stream_items(items);
+                let reasoning = (!reasoning.is_empty()).then_some(reasoning);
+
+                let mut assistant_items = Vec::new();
+                if !text.is_empty() || (calls.is_empty() && reasoning.is_some()) {
+                    assistant_items.push(TranscriptItem::Message {
+                        role: Role::Assistant,
+                        text,
+                        reasoning_content: if calls.is_empty() {
+                            reasoning.clone()
                         } else {
-                            data.pending_calls = calls.into();
-                            let call = data
-                                .pending_calls
-                                .pop_front()
-                                .expect("the round produced tool calls");
-                            let stage_call = call.clone();
-                            this.stage = PromptStage::Tool {
-                                future: build_tool_future(*data, call),
-                                call: stage_call,
-                            };
+                            None
+                        },
+                    });
+                }
+                for (index, call) in calls.iter().enumerate() {
+                    assistant_items.push(TranscriptItem::ToolCall {
+                        call_id: call.id.clone(),
+                        name: call.name.clone(),
+                        arguments: call.arguments.clone(),
+                        reasoning_content: if index == 0 { reasoning.clone() } else { None },
+                    });
+                }
+
+                if !assistant_items.is_empty() {
+                    let stored = assistant_items.clone();
+                    cx.with(|actor, _| {
+                        let _ = actor.store.append(stored);
+                    });
+                    messages.extend(assistant_items);
+                }
+
+                if calls.is_empty() {
+                    let result = result.map_err(|error| PromptError::Provider(Box::new(error)));
+                    let handed_off = myself.send(PrepareNextPrompt).await.is_ok();
+                    if !handed_off {
+                        cx.with(|actor, _| actor.prompt_queue.clear());
+                    }
+                    return result;
+                }
+
+                let mut pending_calls: VecDeque<PendingToolCall> = calls.into();
+
+                loop {
+                    let Some(call) = pending_calls.pop_front() else {
+                        break;
+                    };
+
+                    let payload = serde_json::from_str(&call.arguments).unwrap_or(Value::Null);
+                    let registry_for_tool = Arc::clone(&registry);
+                    let cancellation_for_tool = cancellation.clone();
+                    let call_name = call.name.clone();
+
+                    let tool_result = {
+                        tokio::select! {
+                            biased;
+                            result = async move {
+                                registry_for_tool.invoke(&call_name, payload).await
+                            } => Some(result),
+                            _ = cancellation_for_tool.cancelled() => None,
                         }
-                    }
-                },
-                PromptStage::Tool { mut future, call } => match future.as_mut().poll(cx) {
-                    Poll::Pending => {
-                        this.stage = PromptStage::Tool { future, call };
-                        return Poll::Pending;
-                    }
-                    Poll::Ready(ToolOutcome::Cancelled) => {
-                        let result = Err(PromptError::Cancelled);
-                        let handoff = this.build_handoff_future();
-                        this.stage = PromptStage::Handoff {
-                            future: handoff,
-                            result,
-                        };
-                    }
-                    Poll::Ready(ToolOutcome::Completed { mut data, result }) => {
-                        let output = match result {
-                            Ok(value) => value.to_string(),
-                            Err(error) => format!("tool error: {error}"),
-                        };
-                        let item = TranscriptItem::ToolResult {
-                            call_id: call.id,
-                            output,
-                        };
+                    };
+
+                    let result = match tool_result {
+                        Some(result) => result,
+                        None => {
+                            let handed_off = myself.send(PrepareNextPrompt).await.is_ok();
+                            if !handed_off {
+                                cx.with(|actor, _| actor.prompt_queue.clear());
+                            }
+                            return Err(PromptError::Cancelled);
+                        }
+                    };
+
+                    let output = match result {
+                        Ok(value) => value.to_string(),
+                        Err(error) => format!("tool error: {error}"),
+                    };
+                    let item = TranscriptItem::ToolResult {
+                        call_id: call.id,
+                        output,
+                    };
+                    cx.with(|actor, _| {
                         let _ = actor.store.append(vec![item.clone()]);
-                        data.messages.push(item);
+                    });
+                    messages.push(item);
 
-                        if data.pending_calls.is_empty() {
-                            this.stage = PromptStage::Round {
-                                future: build_round_future(*data),
-                            };
-                        } else {
-                            let next_call = data
-                                .pending_calls
-                                .pop_front()
-                                .expect("a pending tool call exists");
-                            let stage_call = next_call.clone();
-                            this.stage = PromptStage::Tool {
-                                future: build_tool_future(*data, next_call),
-                                call: stage_call,
-                            };
-                        }
+                    if pending_calls.is_empty() {
+                        break;
                     }
-                },
-                PromptStage::Handoff { mut future, result } => match future.as_mut().poll(cx) {
-                    Poll::Pending => {
-                        this.stage = PromptStage::Handoff { future, result };
-                        return Poll::Pending;
-                    }
-                    Poll::Ready(true) => return Poll::Ready(result),
-                    Poll::Ready(false) => {
-                        actor.prompt_queue.clear();
-                        return Poll::Ready(result);
-                    }
-                },
-                PromptStage::Complete => unreachable!("Complete is only a poll placeholder"),
+                }
             }
         }
     }

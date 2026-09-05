@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use loac::{
-    Actor, ActorRef, ActorScope, ExitReason, Message, RawHandler, ReplyExt, Shutdown,
+    Actor, ActorRef, ActorScope, DispatchHandler, ExitReason, Message, ReplyExt, Shutdown,
     ShutdownStatus, StopScope, actor,
 };
 use tokio::sync::oneshot;
@@ -51,10 +51,10 @@ impl Actor for LogParent {
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct ParentPing;
 
-impl RawHandler<ParentPing> for LogParent {
+impl DispatchHandler<ParentPing> for LogParent {
     fn handle(
         &mut self,
         _message: ParentPing,

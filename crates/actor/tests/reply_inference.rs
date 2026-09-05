@@ -6,14 +6,14 @@ use std::{
 };
 
 use loac::{
-    Actor, ActorFuture, ActorScope, ExitReason, InterleavedFutureExt, IntoReply, Message,
-    RawHandler, Shutdown, actor,
+    Actor, ActorFuture, ActorScope, DispatchHandler, ExitReason, InterleavedFutureExt, IntoReply,
+    Message, Shutdown, actor,
 };
 
 use support::watchdog;
 
 #[derive(Message)]
-#[message(raw = u8)]
+#[message(reply = u8)]
 struct Read;
 
 struct FirstActor(u8);
@@ -66,7 +66,7 @@ impl ActorFuture<SecondActor> for SharedFuture {
     }
 }
 
-impl RawHandler<Read> for FirstActor {
+impl DispatchHandler<Read> for FirstActor {
     fn handle(
         &mut self,
         _message: Read,
@@ -76,7 +76,7 @@ impl RawHandler<Read> for FirstActor {
     }
 }
 
-impl RawHandler<Read> for SecondActor {
+impl DispatchHandler<Read> for SecondActor {
     fn handle(
         &mut self,
         _message: Read,

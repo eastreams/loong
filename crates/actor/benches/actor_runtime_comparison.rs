@@ -5,7 +5,7 @@ use std::{
 };
 
 use actix::Actor as _;
-use loac::{ActorOwner, RawHandler, ReplyExt, prelude::*};
+use loac::{ActorOwner, DispatchHandler, ReplyExt, prelude::*};
 use oorandom::Rand64;
 use serde::Serialize;
 
@@ -22,7 +22,7 @@ const BOOTSTRAP_SEED: u64 = 0x100a_2026;
 const CONFIDENCE_LEVEL: f64 = 0.95;
 
 #[derive(Message)]
-#[message(raw = u64)]
+#[message(reply = u64)]
 struct Ready;
 
 impl actix::Message for Ready {
@@ -30,7 +30,7 @@ impl actix::Message for Ready {
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct Notify;
 
 impl actix::Message for Notify {
@@ -38,7 +38,7 @@ impl actix::Message for Notify {
 }
 
 #[derive(Message)]
-#[message(raw = u64)]
+#[message(reply = u64)]
 struct Barrier;
 
 impl actix::Message for Barrier {
@@ -58,7 +58,7 @@ impl Actor for LoongActor {
     }
 }
 
-impl RawHandler<Ready> for LoongActor {
+impl DispatchHandler<Ready> for LoongActor {
     fn handle(
         &mut self,
         _message: Ready,
@@ -69,7 +69,7 @@ impl RawHandler<Ready> for LoongActor {
     }
 }
 
-impl RawHandler<Notify> for LoongActor {
+impl DispatchHandler<Notify> for LoongActor {
     fn handle(
         &mut self,
         _message: Notify,
@@ -82,7 +82,7 @@ impl RawHandler<Notify> for LoongActor {
     }
 }
 
-impl RawHandler<Barrier> for LoongActor {
+impl DispatchHandler<Barrier> for LoongActor {
     fn handle(
         &mut self,
         _message: Barrier,

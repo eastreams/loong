@@ -14,10 +14,10 @@ impl Actor for FairActor {
 }
 
 #[derive(Message)]
-#[message(raw = bool)]
+#[message(reply = bool)]
 struct OwnedTaskIdentity;
 
-impl RawHandler<OwnedTaskIdentity> for FairActor {
+impl DispatchHandler<OwnedTaskIdentity> for FairActor {
     fn handle(
         &mut self,
         _message: OwnedTaskIdentity,
@@ -29,14 +29,14 @@ impl RawHandler<OwnedTaskIdentity> for FairActor {
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct ActiveInterleavedReply {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
     completed_at: Arc<AtomicUsize>,
 }
 
-impl RawHandler<ActiveInterleavedReply> for FairActor {
+impl DispatchHandler<ActiveInterleavedReply> for FairActor {
     fn handle(
         &mut self,
         message: ActiveInterleavedReply,
@@ -56,10 +56,10 @@ impl RawHandler<ActiveInterleavedReply> for FairActor {
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct ReadyWork;
 
-impl RawHandler<ReadyWork> for FairActor {
+impl DispatchHandler<ReadyWork> for FairActor {
     fn handle(
         &mut self,
         _message: ReadyWork,
@@ -157,7 +157,7 @@ impl Actor for FairChildExitActor {
     }
 }
 
-impl RawHandler<PendingOwned> for FairChildExitActor {
+impl DispatchHandler<PendingOwned> for FairChildExitActor {
     fn handle(
         &mut self,
         message: PendingOwned,
@@ -170,7 +170,7 @@ impl RawHandler<PendingOwned> for FairChildExitActor {
     }
 }
 
-impl RawHandler<ExclusiveGate> for FairChildExitActor {
+impl DispatchHandler<ExclusiveGate> for FairChildExitActor {
     fn handle(
         &mut self,
         message: ExclusiveGate,
@@ -185,7 +185,7 @@ impl RawHandler<ExclusiveGate> for FairChildExitActor {
     }
 }
 
-impl RawHandler<ReadyWork> for FairChildExitActor {
+impl DispatchHandler<ReadyWork> for FairChildExitActor {
     fn handle(
         &mut self,
         _message: ReadyWork,

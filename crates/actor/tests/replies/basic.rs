@@ -12,10 +12,10 @@ impl Actor for Counter {
 }
 
 #[derive(Message)]
-#[message(raw = u8)]
+#[message(reply = u8)]
 struct Increment;
 
-impl RawHandler<Increment> for Counter {
+impl DispatchHandler<Increment> for Counter {
     fn handle(
         &mut self,
         _message: Increment,
@@ -43,10 +43,10 @@ async fn sync_handler_mutates_actor_and_replies_immediately() {
 }
 
 #[derive(Message)]
-#[message(raw = u8)]
+#[message(reply = u8)]
 struct ChooseReply(bool);
 
-impl RawHandler<ChooseReply> for Counter {
+impl DispatchHandler<ChooseReply> for Counter {
     fn handle(
         &mut self,
         message: ChooseReply,

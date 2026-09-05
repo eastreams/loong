@@ -130,7 +130,7 @@ impl<A: Actor> ActorScope<'_, A> {
     /// Builds an interleaved plain-Future reply that may access actor and
     /// scope through the returned [`Cx`] handle.
     ///
-    /// Use this inside [`RawHandler`](crate::RawHandler) when the reply should
+    /// Use this inside [`DispatchHandler`](crate::DispatchHandler) when the reply should
     /// use cx-style access and interleaved scheduling. Interleaved scheduling
     /// requires [`HasInterleaving`](crate::HasInterleaving); use
     /// [`cx_exclusive`](Self::cx_exclusive) for the exclusive counterpart.
@@ -164,8 +164,8 @@ impl<A: Actor> ActorScope<'_, A> {
 
     /// Streaming interleaved counterpart of [`ActorScope::cx_reply`].
     ///
-    /// Use this inside [`RawStreamHandler`](crate::RawStreamHandler) when the
-    /// stream-final reply should use cx-style access and interleaved
+    /// Use this inside an explicit stream [`DispatchHandler`](crate::DispatchHandler)
+    /// when the stream-final reply should use cx-style access and interleaved
     /// scheduling. Interleaved scheduling requires
     /// [`HasInterleaving`](crate::HasInterleaving); see
     /// [`cx_stream_exclusive`](Self::cx_stream_exclusive) for the exclusive
@@ -195,7 +195,7 @@ impl<A: Actor> ActorScope<'_, A> {
     /// Builds an exclusive plain-Future reply that may access actor and scope
     /// through the returned [`Cx`] handle.
     ///
-    /// Use this inside [`RawHandler`](crate::RawHandler) when the reply should
+    /// Use this inside [`DispatchHandler`](crate::DispatchHandler) when the reply should
     /// use cx-style access and exclusive scheduling. Exclusive scheduling
     /// pauses mailbox dispatch and other actor-aware work until the future
     /// finishes; owned tasks may continue. It does not require
@@ -230,12 +230,12 @@ impl<A: Actor> ActorScope<'_, A> {
 
     /// Streaming exclusive counterpart of [`ActorScope::cx_exclusive`].
     ///
-    /// Use this inside [`RawStreamHandler`](crate::RawStreamHandler) when the
-    /// stream-final reply should use cx-style access and exclusive scheduling.
-    /// Exclusive scheduling pauses mailbox dispatch and other actor-aware work
-    /// until the final future finishes; owned tasks may continue. It does not
-    /// require [`HasInterleaving`](crate::HasInterleaving). The returned future
-    /// may also capture the item writer passed to the raw stream handler.
+    /// Use this inside an explicit stream [`DispatchHandler`](crate::DispatchHandler)
+    /// when the stream-final reply should use cx-style access and exclusive
+    /// scheduling. Exclusive scheduling pauses mailbox dispatch and other
+    /// actor-aware work until the final future finishes; owned tasks may
+    /// continue. It does not require [`HasInterleaving`](crate::HasInterleaving).
+    /// The returned future may also capture the item writer.
     #[allow(unsafe_code)]
     pub fn cx_stream_exclusive<R, F>(
         &mut self,

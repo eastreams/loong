@@ -13,7 +13,7 @@ impl Actor for ProgressActor {
     }
 }
 
-impl RawHandler<PendingOwned> for ProgressActor {
+impl DispatchHandler<PendingOwned> for ProgressActor {
     fn handle(
         &mut self,
         message: PendingOwned,
@@ -27,10 +27,10 @@ impl RawHandler<PendingOwned> for ProgressActor {
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct Record(&'static str);
 
-impl RawHandler<Record> for ProgressActor {
+impl DispatchHandler<Record> for ProgressActor {
     fn handle(
         &mut self,
         message: Record,
@@ -42,17 +42,17 @@ impl RawHandler<Record> for ProgressActor {
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct InterleavedSequence {
     started: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
 }
 
 #[derive(Message)]
-#[message(raw = u8)]
+#[message(reply = u8)]
 struct ThenSequence;
 
-impl RawHandler<ThenSequence> for ProgressActor {
+impl DispatchHandler<ThenSequence> for ProgressActor {
     fn handle(
         &mut self,
         _message: ThenSequence,
@@ -68,7 +68,7 @@ impl RawHandler<ThenSequence> for ProgressActor {
     }
 }
 
-impl RawHandler<InterleavedSequence> for ProgressActor {
+impl DispatchHandler<InterleavedSequence> for ProgressActor {
     fn handle(
         &mut self,
         message: InterleavedSequence,

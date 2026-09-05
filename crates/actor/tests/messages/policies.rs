@@ -1,7 +1,7 @@
 use std::num::NonZeroUsize;
 
 use loac::{
-    Actor, ActorOwner, ActorScope, ExitReason, Message, RawHandler, ReplyExt, Shutdown,
+    Actor, ActorOwner, ActorScope, DispatchHandler, ExitReason, Message, ReplyExt, Shutdown,
     SpawnOptions, TrySendErrorKind, actor, spawn_with,
 };
 use tokio::sync::oneshot;
@@ -9,7 +9,7 @@ use tokio::sync::oneshot;
 use super::support::watchdog;
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct Ping;
 
 struct DynamicActor;
@@ -24,7 +24,7 @@ impl Actor for DynamicActor {
     }
 }
 
-impl RawHandler<Ping> for DynamicActor {
+impl DispatchHandler<Ping> for DynamicActor {
     fn handle(
         &mut self,
         _message: Ping,
@@ -47,7 +47,7 @@ impl Actor for CustomDynamicActor {
     }
 }
 
-impl RawHandler<Ping> for CustomDynamicActor {
+impl DispatchHandler<Ping> for CustomDynamicActor {
     fn handle(
         &mut self,
         _message: Ping,
@@ -70,7 +70,7 @@ impl Actor for FixedActor {
     }
 }
 
-impl RawHandler<Ping> for FixedActor {
+impl DispatchHandler<Ping> for FixedActor {
     fn handle(
         &mut self,
         _message: Ping,
@@ -93,7 +93,7 @@ impl Actor for UnboundedActor {
     }
 }
 
-impl RawHandler<Ping> for UnboundedActor {
+impl DispatchHandler<Ping> for UnboundedActor {
     fn handle(
         &mut self,
         _message: Ping,
@@ -106,7 +106,7 @@ impl RawHandler<Ping> for UnboundedActor {
 
 async fn assert_bounded_capacity<A>(owner: ActorOwner<A>, capacity: usize)
 where
-    A: RawHandler<Ping>,
+    A: DispatchHandler<Ping>,
 {
     let actor = owner.actor_ref();
     for _ in 0..capacity {

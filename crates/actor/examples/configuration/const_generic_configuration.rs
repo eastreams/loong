@@ -16,10 +16,10 @@ impl<const N: usize> Actor for Service<N> {
 }
 
 #[derive(Message)]
-#[message(raw = usize)]
+#[message(reply = usize)]
 struct ReadTypeParameter;
 
-impl<const N: usize> RawHandler<ReadTypeParameter> for Service<N> {
+impl<const N: usize> DispatchHandler<ReadTypeParameter> for Service<N> {
     fn handle(
         &mut self,
         _message: ReadTypeParameter,

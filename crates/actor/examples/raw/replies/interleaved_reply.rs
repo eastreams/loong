@@ -1,4 +1,4 @@
-//! Builds a raw-handler cx future on the interleaved lane.
+//! Builds a dispatch-handler cx future on the interleaved lane.
 //!
 //! `scope.cx_reply` pairs `Cx::with` access with interleaved scheduling:
 //! the actor task polls the returned future fairly with mailbox work, so a
@@ -19,13 +19,13 @@ impl Actor for Counter {
 }
 
 #[derive(Message)]
-#[message(raw = u64)]
+#[message(reply = u64)]
 struct AddAfter {
     amount: u64,
     resume: oneshot::Receiver<()>,
 }
 
-impl RawHandler<AddAfter> for Counter {
+impl DispatchHandler<AddAfter> for Counter {
     fn handle(
         &mut self,
         message: AddAfter,
@@ -47,10 +47,10 @@ impl RawHandler<AddAfter> for Counter {
 }
 
 #[derive(Message)]
-#[message(raw = u64)]
+#[message(reply = u64)]
 struct Read;
 
-impl RawHandler<Read> for Counter {
+impl DispatchHandler<Read> for Counter {
     fn handle(
         &mut self,
         _message: Read,

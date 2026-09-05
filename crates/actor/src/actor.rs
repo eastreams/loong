@@ -6,10 +6,7 @@ use crate::{
     ActorScope, ChildExit, ExitReason, Shutdown, StopScope, StreamOut, Writer,
     access::Cx,
     config::SupervisionConfig,
-    reply::{
-        CxReply, CxStream, IntoReply, IntoStreamReply, RawKind, RawStreamKind, StreamDispatch,
-        StreamKind, StreamMessage, SyncKind,
-    },
+    reply::{CxReply, CxStream, IntoReply, SingleKind, StreamDispatch, StreamKind, StreamMessage},
     scheduling::{InterleavedScheduler, ReplyScheduler, SchedulerProfile},
     transport::{MessageConfig, MessageInbox, MessageSender, RuntimeInbox},
 };
@@ -279,21 +276,21 @@ where
 
 /// A typed request accepted by an actor.
 ///
-/// Declare one with `#[derive(Message)]`. The derive supports four shapes:
+/// Declare one with `#[derive(Message)]`. The derive supports two shapes:
 ///
 /// - `#[message(reply = Type)]` makes an ordinary callable message handled by
-///   [`crate::Handler`].
+///   [`crate::Handler`] or [`crate::SyncHandler`] with
+///   [`#[loac::sync_handler]`](macro@crate::sync_handler).
 /// - `#[message(stream = Item, reply = Final)]` makes a stream message handled
 ///   by [`crate::StreamHandler`].
-/// - `#[message(raw = Type)]` makes an ordinary message handled by
-///   [`crate::RawHandler`].
-/// - `#[message(raw_stream = Item, reply = Final)]` makes a stream message
-///   handled by [`crate::RawStreamHandler`].
 ///
-/// The reply type defaults to `()` whenever the attribute omits it. Without
-/// `reply` the message does not implement [`HasReply`], so it cannot be passed
-/// to [`crate::ActorRef::call`]. The `stream` shapes make
+/// The reply type defaults to `()` whenever the attribute omits it. Selecting
+/// either `reply` or `stream` implements [`HasReply`] and makes the message
+/// callable with [`crate::ActorRef::call`]. Only a message derived without a
+/// `#[message(...)]` attribute is send-only. The `stream` shape makes
 /// [`crate::ActorRef::call`] return [`crate::reply::StreamReply`].
+/// Explicit reply scheduling is still available by implementing
+/// [`DispatchHandler`] directly.
 /// See the derive macro documentation for the full attribute syntax.
 pub trait Message: Send + 'static {
     /// The typed value eventually returned to the caller.
@@ -305,38 +302,43 @@ pub trait Message: Send + 'static {
 
     /// The reply channel shape this message selects.
     ///
-    /// Ordinary messages use [`reply::SyncKind`](crate::reply::SyncKind).
+    /// Ordinary messages use [`reply::SingleKind`](crate::reply::SingleKind).
     /// Messages derived with `#[message(stream = ...)]` use
-    /// [`reply::StreamKind`](crate::reply::StreamKind). Explicit-strategy
-    /// messages use [`reply::RawKind`](crate::reply::RawKind) for
-    /// `#[message(raw = ...)]` and
-    /// [`reply::RawStreamKind`](crate::reply::RawStreamKind) for
-    /// `#[message(raw_stream = ...)]`. The runtime reads this kind when
-    /// selecting the [`DispatchHandler`] implementation.
+    /// [`reply::StreamKind`](crate::reply::StreamKind). The runtime reads this
+    /// kind when selecting the [`DispatchHandler`] implementation.
     type Kind: crate::reply::ReplyKind;
 }
 
 /// Marks a [`Message`] with an explicitly selected reply type.
 ///
-/// `#[derive(Message)]` without `#[message(reply = Type)]` is send-only and
+/// `#[derive(Message)]` implements this trait when either message attribute is
+/// selected: `#[message(reply = Type)]` or `#[message(stream = Item, ...)]`.
+/// A message derived without a `#[message(...)]` attribute is send-only and
 /// does not implement this trait, so [`crate::ActorRef::call`] and
 /// [`crate::ActorRef::try_call`] are unavailable for it.
 pub trait HasReply: Message {}
 
-/// Internal dispatch shape for one message type.
+/// Dispatch shape for one message type.
 ///
-/// The runtime uses this raw shape after pairing a message with its
-/// [`Message::Kind`]. Public handlers are adapted to it through blanket impls:
+/// The runtime selects an implementation from the message's [`Message::Kind`]
+/// after pairing a message with its reply channel. Public handlers are adapted
+/// to it through blanket impls:
 ///
-/// - [`Handler`] adapts [`SyncKind`] messages.
+/// - [`Handler`] adapts [`SingleKind`] messages.
 /// - [`StreamHandler`] adapts [`StreamKind`] stream messages.
-/// - [`RawHandler`] adapts [`RawKind`](crate::reply::RawKind) messages.
-/// - [`RawStreamHandler`] adapts [`RawStreamKind`](crate::reply::RawStreamKind)
-///   stream messages.
 ///
-/// Do not implement this trait directly; implement one of the public handler
-/// traits above instead.
-pub trait DispatchHandler<M: Message, K: crate::reply::ReplyKind = SyncKind>: HasMailbox {
+/// [`SyncHandler`] is not blanket-adapted; attach
+/// [`#[loac::sync_handler]`](macro@crate::sync_handler) to the impl so the
+/// macro can emit a concrete ready dispatch for that message type.
+///
+/// Implement this trait directly as the advanced escape hatch when a handler
+/// must choose among [`IntoReply`] strategies such as
+/// [`ReplyExt::ready`](crate::ReplyExt::ready),
+/// [`ReplyExt::exclusive`](crate::ReplyExt::exclusive), a bare future, or
+/// [`Either`](crate::reply::Either). Prefer [`Handler`] when an `async fn`
+/// with [`Cx`] is enough, and [`SyncHandler`] when the reply is already
+/// complete.
+pub trait DispatchHandler<M: Message, K: crate::reply::ReplyKind = SingleKind>: HasMailbox {
     /// Synchronously starts handling `message` and chooses its reply semantics.
     ///
     /// The runtime calls this method after the request commits to dispatch.
@@ -347,12 +349,10 @@ pub trait DispatchHandler<M: Message, K: crate::reply::ReplyKind = SyncKind>: Ha
     /// not roll back effects that occur here. A panic is contained, fails this
     /// actor, and cancels its other active and queued work.
     ///
-    /// The `K` parameter selects the reply channel shape. [`SyncKind`] is the
+    /// The `K` parameter selects the reply channel shape. [`SingleKind`] is the
     /// default for ordinary messages. [`StreamKind`] is used by stream messages
     /// and is selected automatically when the message implements
-    /// [`StreamMessage`](crate::reply::StreamMessage). [`RawKind`] and
-    /// [`RawStreamKind`](crate::reply::RawStreamKind) select explicit raw reply
-    /// strategies.
+    /// [`StreamMessage`](crate::reply::StreamMessage).
     ///
     /// The precise `use<Self, M, K>` capture list excludes the lifetimes of this
     /// invocation's `&mut self` and `scope` borrows. A returned asynchronous reply
@@ -431,10 +431,10 @@ pub trait Handler<M: Message>: HasMailbox {
 }
 
 #[allow(unsafe_code)]
-impl<A, M> DispatchHandler<M, SyncKind> for A
+impl<A, M> DispatchHandler<M, SingleKind> for A
 where
     A: Handler<M> + HasInterleaving,
-    M: Message<Kind = SyncKind>,
+    M: Message<Kind = SingleKind>,
 {
     fn handle(
         &mut self,
@@ -457,39 +457,17 @@ where
     }
 }
 
-/// Handles one message with an explicit reply strategy.
+/// Handles one message synchronously during dispatch.
 ///
-/// Implement this trait when a handler must choose among [`IntoReply`]
-/// strategies such as [`ReplyExt::ready`](crate::ReplyExt::ready),
-/// [`ReplyExt::exclusive`](crate::ReplyExt::exclusive), a bare future, or
-/// [`Either`](crate::reply::Either). The message's [`Message::Kind`] must be
-/// [`RawKind`](crate::reply::RawKind), selected by `#[message(raw = Type)]`.
+/// Implement this trait when the reply value is already complete by the time
+/// `handle` returns. Attach the [`#[loac::sync_handler]`](macro@crate::sync_handler)
+/// attribute to the impl so the runtime can dispatch it; the macro emits the
+/// ready reply without requiring an interleaving lane.
 ///
-/// Prefer [`Handler`] when an `async fn` with [`Cx`] is enough.
-pub trait RawHandler<M: Message>: HasMailbox {
-    /// Synchronously starts handling `message` and chooses its reply semantics.
-    ///
-    /// The returned [`IntoReply`] strategy selects owned, exclusive, or
-    /// interleaved scheduling.
-    fn handle(
-        &mut self,
-        message: M,
-        scope: &mut ActorScope<'_, Self>,
-    ) -> impl IntoReply<Self, M> + use<Self, M>;
-}
-
-impl<A, M> DispatchHandler<M, RawKind> for A
-where
-    A: RawHandler<M>,
-    M: Message<Kind = RawKind>,
-{
-    fn handle(
-        &mut self,
-        message: M,
-        scope: &mut ActorScope<'_, Self>,
-    ) -> impl IntoReply<Self, M> + use<A, M> {
-        <A as RawHandler<M>>::handle(self, message, scope)
-    }
+/// Use this shape with `#[message(reply = Type)]`.
+pub trait SyncHandler<M: Message>: HasMailbox {
+    /// Produces the completed reply value during synchronous dispatch.
+    fn handle(&mut self, message: M, scope: &mut ActorScope<'_, Self>) -> M::Reply;
 }
 
 /// Handles a stream message with an actor-access `cx` future.
@@ -548,49 +526,6 @@ where
             future,
             _actor: std::marker::PhantomData,
         };
-        StreamDispatch::new(strategy, item_rx, final_tx, final_rx)
-    }
-}
-
-/// Handles a stream message with an explicit final reply strategy.
-///
-/// Implement this trait when a stream handler must choose among
-/// [`IntoStreamReply`] strategies such as a bare final future,
-/// [`ReplyExt::ready`](crate::ReplyExt::ready),
-/// [`ReplyExt::exclusive`](crate::ReplyExt::exclusive), or
-/// [`Either`](crate::reply::Either). The message kind must be
-/// [`RawStreamKind`](crate::reply::RawStreamKind), selected by
-/// `#[message(raw_stream = Item, reply = Final)]`.
-pub trait RawStreamHandler<M>: HasMailbox
-where
-    M: StreamMessage<RawStreamKind>,
-{
-    /// Starts producing stream items and returns the final reply strategy.
-    ///
-    /// This is the explicit-strategy counterpart of [`StreamHandler::handle`].
-    fn handle<W>(
-        &mut self,
-        message: M,
-        out: W,
-        scope: &mut ActorScope<'_, Self>,
-    ) -> impl IntoStreamReply<Self, M> + use<Self, M, W>
-    where
-        W: Writer<M::Item> + Send + 'static;
-}
-
-impl<A, M> DispatchHandler<M, RawStreamKind> for A
-where
-    A: RawStreamHandler<M>,
-    M: StreamMessage<RawStreamKind>,
-{
-    fn handle(
-        &mut self,
-        message: M,
-        scope: &mut ActorScope<'_, Self>,
-    ) -> impl IntoReply<Self, M> + use<A, M> {
-        let (item_tx, item_rx) = mpsc::channel::<M::Item>(8);
-        let (final_tx, final_rx) = oneshot::channel::<M::Final>();
-        let strategy = <A as RawStreamHandler<M>>::handle(self, message, item_tx, scope);
         StreamDispatch::new(strategy, item_rx, final_tx, final_rx)
     }
 }

@@ -1,7 +1,7 @@
 //! Builds a parent-child address cycle during scope-based initialization.
 //! The parent runtime owns the child; both actors keep non-owning addresses.
 
-use loac::{ActorRef, RawHandler, ReplyExt, prelude::*};
+use loac::{ActorRef, DispatchHandler, ReplyExt, prelude::*};
 use tokio::sync::oneshot;
 
 struct Parent {
@@ -36,24 +36,24 @@ impl Actor for Child {
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct Start {
     completed: oneshot::Sender<()>,
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct VisitChild {
     completed: oneshot::Sender<()>,
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct ReturnToParent {
     completed: oneshot::Sender<()>,
 }
 
-impl RawHandler<Start> for Parent {
+impl DispatchHandler<Start> for Parent {
     fn handle(
         &mut self,
         message: Start,
@@ -70,7 +70,7 @@ impl RawHandler<Start> for Parent {
     }
 }
 
-impl RawHandler<VisitChild> for Child {
+impl DispatchHandler<VisitChild> for Child {
     fn handle(
         &mut self,
         message: VisitChild,
@@ -87,7 +87,7 @@ impl RawHandler<VisitChild> for Child {
     }
 }
 
-impl RawHandler<ReturnToParent> for Parent {
+impl DispatchHandler<ReturnToParent> for Parent {
     fn handle(
         &mut self,
         message: ReturnToParent,

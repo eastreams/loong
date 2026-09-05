@@ -8,7 +8,7 @@ use std::{
 };
 
 use loac::{
-    Actor, ActorScope, ExitReason, Message, RawHandler, Recipient, ReplyExt, Shutdown,
+    Actor, ActorScope, DispatchHandler, ExitReason, Message, Recipient, ReplyExt, Shutdown,
     TryCallErrorKind, TrySendErrorKind, actor,
 };
 use tokio::sync::oneshot;
@@ -42,10 +42,10 @@ impl Actor for Right {
 }
 
 #[derive(Message)]
-#[message(raw = u64)]
+#[message(reply = u64)]
 struct Query(u64);
 
-impl RawHandler<Query> for Left {
+impl DispatchHandler<Query> for Left {
     fn handle(
         &mut self,
         message: Query,
@@ -56,7 +56,7 @@ impl RawHandler<Query> for Left {
     }
 }
 
-impl RawHandler<Query> for Right {
+impl DispatchHandler<Query> for Right {
     fn handle(
         &mut self,
         message: Query,
@@ -68,10 +68,10 @@ impl RawHandler<Query> for Right {
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct Notify(oneshot::Sender<()>);
 
-impl RawHandler<Notify> for Left {
+impl DispatchHandler<Notify> for Left {
     fn handle(
         &mut self,
         message: Notify,
@@ -84,7 +84,7 @@ impl RawHandler<Notify> for Left {
     }
 }
 
-impl RawHandler<Notify> for Right {
+impl DispatchHandler<Notify> for Right {
     fn handle(
         &mut self,
         message: Notify,
@@ -146,7 +146,7 @@ impl Actor for GateActor {
 }
 
 #[derive(Message)]
-#[message(raw = u8)]
+#[message(reply = u8)]
 struct SlowQuery {
     value: u8,
     entered: Option<oneshot::Sender<()>>,
@@ -163,7 +163,7 @@ impl SlowQuery {
     }
 }
 
-impl RawHandler<SlowQuery> for GateActor {
+impl DispatchHandler<SlowQuery> for GateActor {
     fn handle(
         &mut self,
         message: SlowQuery,
@@ -182,10 +182,10 @@ impl RawHandler<SlowQuery> for GateActor {
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct Mark(u8);
 
-impl RawHandler<Mark> for GateActor {
+impl DispatchHandler<Mark> for GateActor {
     fn handle(
         &mut self,
         message: Mark,
@@ -199,10 +199,10 @@ impl RawHandler<Mark> for GateActor {
 }
 
 #[derive(Message)]
-#[message(raw = usize)]
+#[message(reply = usize)]
 struct Snapshot;
 
-impl RawHandler<Snapshot> for GateActor {
+impl DispatchHandler<Snapshot> for GateActor {
     fn handle(
         &mut self,
         _message: Snapshot,

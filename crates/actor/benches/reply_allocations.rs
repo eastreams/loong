@@ -13,7 +13,7 @@
 use std::hint::black_box;
 
 use allocation_counter::{AllocationInfo, measure};
-use loac::{ActorRef, RawHandler, ReplyExt, prelude::*};
+use loac::{ActorRef, DispatchHandler, ReplyExt, prelude::*};
 
 const WARMUP_CALLS: usize = 64;
 const MEASURED_CALLS: usize = 10_000;
@@ -30,10 +30,10 @@ impl Actor for ReplyActor {
 }
 
 #[derive(Message)]
-#[message(raw = u64)]
+#[message(reply = u64)]
 struct Ready;
 
-impl RawHandler<Ready> for ReplyActor {
+impl DispatchHandler<Ready> for ReplyActor {
     fn handle(
         &mut self,
         _message: Ready,
@@ -44,10 +44,10 @@ impl RawHandler<Ready> for ReplyActor {
 }
 
 #[derive(Message)]
-#[message(raw = u64)]
+#[message(reply = u64)]
 struct Owned;
 
-impl RawHandler<Owned> for ReplyActor {
+impl DispatchHandler<Owned> for ReplyActor {
     fn handle(
         &mut self,
         _message: Owned,
@@ -60,10 +60,10 @@ impl RawHandler<Owned> for ReplyActor {
 }
 
 #[derive(Message)]
-#[message(raw = u64)]
+#[message(reply = u64)]
 struct Interleaved;
 
-impl RawHandler<Interleaved> for ReplyActor {
+impl DispatchHandler<Interleaved> for ReplyActor {
     fn handle(
         &mut self,
         _message: Interleaved,
@@ -74,10 +74,10 @@ impl RawHandler<Interleaved> for ReplyActor {
 }
 
 #[derive(Message)]
-#[message(raw = u64)]
+#[message(reply = u64)]
 struct Exclusive;
 
-impl RawHandler<Exclusive> for ReplyActor {
+impl DispatchHandler<Exclusive> for ReplyActor {
     fn handle(
         &mut self,
         _message: Exclusive,

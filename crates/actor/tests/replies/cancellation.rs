@@ -17,13 +17,13 @@ impl Actor for CancellationActor {
 struct WorkCancelled;
 
 #[derive(Message)]
-#[message(raw = WorkCancelled)]
+#[message(reply = WorkCancelled)]
 struct CancellableWork {
     started: oneshot::Sender<()>,
     cancellation: CancellationToken,
 }
 
-impl RawHandler<CancellableWork> for CancellationActor {
+impl DispatchHandler<CancellableWork> for CancellationActor {
     fn handle(
         &mut self,
         message: CancellableWork,
@@ -40,12 +40,12 @@ impl RawHandler<CancellableWork> for CancellationActor {
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct CancelWork {
     dispatched: oneshot::Sender<()>,
 }
 
-impl RawHandler<CancelWork> for CancellationActor {
+impl DispatchHandler<CancelWork> for CancellationActor {
     fn handle(
         &mut self,
         message: CancelWork,

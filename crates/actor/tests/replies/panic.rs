@@ -12,13 +12,13 @@ impl Actor for PanicActor {
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct PendingSibling {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
 }
 
-impl RawHandler<PendingSibling> for PanicActor {
+impl DispatchHandler<PendingSibling> for PanicActor {
     fn handle(
         &mut self,
         message: PendingSibling,
@@ -32,14 +32,14 @@ impl RawHandler<PendingSibling> for PanicActor {
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct PanicReply {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct PanicAfterReady;
 
 impl Future for PanicAfterReady {
@@ -56,7 +56,7 @@ impl Drop for PanicAfterReady {
     }
 }
 
-impl RawHandler<PanicAfterReady> for PanicActor {
+impl DispatchHandler<PanicAfterReady> for PanicActor {
     fn handle(
         &mut self,
         message: PanicAfterReady,
@@ -66,7 +66,7 @@ impl RawHandler<PanicAfterReady> for PanicActor {
     }
 }
 
-impl RawHandler<PanicReply> for PanicActor {
+impl DispatchHandler<PanicReply> for PanicActor {
     fn handle(
         &mut self,
         message: PanicReply,

@@ -6,7 +6,7 @@
 
 use std::num::NonZeroUsize;
 
-use loac::{RawHandler, ReplyExt, SpawnOptions, prelude::*};
+use loac::{DispatchHandler, ReplyExt, SpawnOptions, prelude::*};
 
 const DEFAULT_MAILBOX_CAPACITY: usize = 32;
 const MAILBOX_DISPATCH_BUDGET: usize = 8;
@@ -29,10 +29,10 @@ impl Actor for Service {
 }
 
 #[derive(Message)]
-#[message(raw = &'static str)]
+#[message(reply = &'static str)]
 struct HealthCheck;
 
-impl RawHandler<HealthCheck> for Service {
+impl DispatchHandler<HealthCheck> for Service {
     fn handle(
         &mut self,
         _message: HealthCheck,

@@ -4,7 +4,7 @@ use std::{
 };
 
 use loac::{
-    ActorFutureExt, ActorScope, CallError, ExitReason, IntoActorFuture, Message, RawHandler,
+    ActorFutureExt, ActorScope, CallError, DispatchHandler, ExitReason, IntoActorFuture, Message,
     ReplyExt, Shutdown, TryCallErrorKind, TrySendErrorKind, spawn_with,
 };
 
@@ -14,10 +14,10 @@ use super::{
 };
 
 #[derive(Message)]
-#[message(raw = Vec<u8>)]
+#[message(reply = Vec<u8>)]
 struct Snapshot;
 
-impl RawHandler<Snapshot> for SerialActor {
+impl DispatchHandler<Snapshot> for SerialActor {
     fn handle(
         &mut self,
         _message: Snapshot,
@@ -28,14 +28,14 @@ impl RawHandler<Snapshot> for SerialActor {
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct CommitAfterRelease {
     value: u8,
     entered: tokio::sync::oneshot::Sender<()>,
     release: tokio::sync::oneshot::Receiver<()>,
 }
 
-impl RawHandler<CommitAfterRelease> for SerialActor {
+impl DispatchHandler<CommitAfterRelease> for SerialActor {
     fn handle(
         &mut self,
         message: CommitAfterRelease,

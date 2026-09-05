@@ -12,13 +12,13 @@ impl Actor for StopActor {
 }
 
 #[derive(Message)]
-#[message(raw = ())]
+#[message(reply = ())]
 struct StopOwned {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
 }
 
-impl RawHandler<StopOwned> for StopActor {
+impl DispatchHandler<StopOwned> for StopActor {
     fn handle(
         &mut self,
         message: StopOwned,

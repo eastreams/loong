@@ -2,7 +2,7 @@
 //! Each agent is a child actor.
 //! Choose independent roots for independently owned agents.
 
-use loac::{ActorRef, RawHandler, ReplyExt, prelude::*};
+use loac::{ActorRef, DispatchHandler, ReplyExt, prelude::*};
 
 #[derive(Debug, PartialEq, Eq)]
 struct Report {
@@ -22,10 +22,10 @@ impl Actor for Agent {
 }
 
 #[derive(Message)]
-#[message(raw = Report)]
+#[message(reply = Report)]
 struct Review(&'static str);
 
-impl RawHandler<Review> for Agent {
+impl DispatchHandler<Review> for Agent {
     fn handle(
         &mut self,
         message: Review,
@@ -61,10 +61,10 @@ impl Actor for Team {
 }
 
 #[derive(Message)]
-#[message(raw = Result<[Report; 2], loac::CallError>)]
+#[message(reply = Result<[Report; 2], loac::CallError>)]
 struct ReviewTask(&'static str);
 
-impl RawHandler<ReviewTask> for Team {
+impl DispatchHandler<ReviewTask> for Team {
     fn handle(
         &mut self,
         message: ReviewTask,

@@ -1,6 +1,6 @@
 //! Streaming reply scheduling strategies.
 //!
-//! Each provider below handles a `#[message(raw_stream = ...)]` message with
+//! Each provider below handles a `#[message(stream = ...)]` message with
 //! a different [`IntoStreamReply`] strategy. Run with:
 //!
 //! ```console
@@ -21,7 +21,7 @@ use std::time::Duration;
 use loac::prelude::*;
 
 #[derive(Message)]
-#[message(raw_stream = u8, reply = u8)]
+#[message(stream = u8, reply = u8)]
 struct OwnedStream(u8);
 
 struct OwnedProvider;
@@ -35,31 +35,31 @@ impl Actor for OwnedProvider {
     }
 }
 
-impl RawStreamHandler<OwnedStream> for OwnedProvider {
-    fn handle<W>(
+impl DispatchHandler<OwnedStream, StreamKind> for OwnedProvider {
+    fn handle(
         &mut self,
         message: OwnedStream,
-        mut out: W,
         _scope: &mut ActorScope<'_, Self>,
-    ) -> impl loac::IntoStreamReply<Self, OwnedStream> + use<W>
-    where
-        W: loac::Writer<u8> + Send + 'static,
-    {
+    ) -> impl loac::IntoReply<Self, OwnedStream> + use<> {
+        let (item_tx, item_rx) = tokio::sync::mpsc::channel::<u8>(8);
+        let (final_tx, final_rx) = tokio::sync::oneshot::channel::<u8>();
         // A bare future selects owned scheduling: Tokio polls it in a
         // separate task, so a long stream never blocks this actor's mailbox.
-        async move {
+        let strategy = async move {
+            let mut out = item_tx;
             for item in 0..message.0 {
                 if out.write(item).await.is_err() {
                     break;
                 }
             }
             message.0
-        }
+        };
+        loac::StreamDispatch::new(strategy, item_rx, final_tx, final_rx)
     }
 }
 
 #[derive(Message)]
-#[message(raw_stream = u8, reply = u8)]
+#[message(stream = u8, reply = u8)]
 struct BranchStream(u8);
 
 struct BranchProvider;
@@ -73,23 +73,22 @@ impl Actor for BranchProvider {
     }
 }
 
-impl RawStreamHandler<BranchStream> for BranchProvider {
-    fn handle<W>(
+impl DispatchHandler<BranchStream, StreamKind> for BranchProvider {
+    fn handle(
         &mut self,
         message: BranchStream,
-        mut out: W,
         _scope: &mut ActorScope<'_, Self>,
-    ) -> impl loac::IntoStreamReply<Self, BranchStream> + use<W>
-    where
-        W: loac::Writer<u8> + Send + 'static,
-    {
-        if message.0 == 0 {
+    ) -> impl loac::IntoReply<Self, BranchStream> + use<> {
+        let (item_tx, item_rx) = tokio::sync::mpsc::channel::<u8>(8);
+        let (final_tx, final_rx) = tokio::sync::oneshot::channel::<u8>();
+        let strategy = if message.0 == 0 {
             // Ready fast path: final is already known, so no future is
-            // scheduled. Dropping `out` closes the caller's item stream.
+            // scheduled. Dropping `item_tx` closes the caller's item stream.
             loac::reply::Either::Left(message.0.ready())
         } else {
             // Owned branch: stream items, then finish.
             loac::reply::Either::Right(async move {
+                let mut out = item_tx;
                 for item in 0..message.0 {
                     if out.write(item).await.is_err() {
                         break;
@@ -97,12 +96,13 @@ impl RawStreamHandler<BranchStream> for BranchProvider {
                 }
                 message.0
             })
-        }
+        };
+        loac::StreamDispatch::new(strategy, item_rx, final_tx, final_rx)
     }
 }
 
 #[derive(Message)]
-#[message(raw_stream = u8, reply = u8)]
+#[message(stream = u8, reply = u8)]
 struct ExclusiveStream(u8);
 
 struct ExclusiveProvider;
@@ -116,19 +116,18 @@ impl Actor for ExclusiveProvider {
     }
 }
 
-impl RawStreamHandler<ExclusiveStream> for ExclusiveProvider {
-    fn handle<W>(
+impl DispatchHandler<ExclusiveStream, StreamKind> for ExclusiveProvider {
+    fn handle(
         &mut self,
         message: ExclusiveStream,
-        mut out: W,
         _scope: &mut ActorScope<'_, Self>,
-    ) -> impl loac::IntoStreamReply<Self, ExclusiveStream> + use<W>
-    where
-        W: loac::Writer<u8> + Send + 'static,
-    {
+    ) -> impl loac::IntoReply<Self, ExclusiveStream> + use<> {
+        let (item_tx, item_rx) = tokio::sync::mpsc::channel::<u8>(8);
+        let (final_tx, final_rx) = tokio::sync::oneshot::channel::<u8>();
         // An actor-aware future polled by the actor scheduler. The mailbox is
         // paused while it runs, so keep exclusive stream work short.
-        async move {
+        let strategy = async move {
+            let mut out = item_tx;
             for item in 0..message.0 {
                 if out.write(item).await.is_err() {
                     break;
@@ -137,12 +136,13 @@ impl RawStreamHandler<ExclusiveStream> for ExclusiveProvider {
             message.0
         }
         .into_actor()
-        .exclusive()
+        .exclusive();
+        loac::StreamDispatch::new(strategy, item_rx, final_tx, final_rx)
     }
 }
 
 #[derive(Message)]
-#[message(raw_stream = u8, reply = u8)]
+#[message(stream = u8, reply = u8)]
 struct InterleavedStream;
 
 struct InterleavedProvider {
@@ -158,24 +158,22 @@ impl Actor for InterleavedProvider {
     }
 }
 
-impl RawStreamHandler<InterleavedStream> for InterleavedProvider {
-    fn handle<W>(
+impl DispatchHandler<InterleavedStream, StreamKind> for InterleavedProvider {
+    fn handle(
         &mut self,
         _message: InterleavedStream,
-        out: W,
         _scope: &mut ActorScope<'_, Self>,
-    ) -> impl loac::IntoStreamReply<Self, InterleavedStream> + use<W>
-    where
-        W: loac::Writer<u8> + Send + 'static,
-    {
+    ) -> impl loac::IntoReply<Self, InterleavedStream> + use<> {
+        let (item_tx, item_rx) = tokio::sync::mpsc::channel::<u8>(8);
+        let (final_tx, final_rx) = tokio::sync::oneshot::channel::<u8>();
         // Interleaved actor-aware work. The first stage sleeps without holding
         // the mailbox, then `then` reads actor state and returns the second
         // stage that owns the writer and produces the items.
-        async { tokio::time::sleep(Duration::from_millis(10)).await }
+        let strategy = async { tokio::time::sleep(Duration::from_millis(10)).await }
             .into_actor()
             .then(move |(), actor: &mut Self, _scope| {
                 let seed = actor.seed;
-                let mut out = out;
+                let mut out = item_tx;
                 async move {
                     for item in seed..seed + 3 {
                         if out.write(item).await.is_err() {
@@ -186,7 +184,8 @@ impl RawStreamHandler<InterleavedStream> for InterleavedProvider {
                 }
                 .into_actor()
             })
-            .interleaved()
+            .interleaved();
+        loac::StreamDispatch::new(strategy, item_rx, final_tx, final_rx)
     }
 }
 
