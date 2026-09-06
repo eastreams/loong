@@ -20,7 +20,7 @@ pub enum FsReadError {
     Io { path: PathBuf, source: io::Error },
 }
 
-impl<'a> FsAccess<'a> {
+impl FsAccess<'_> {
     #[inline]
     pub async fn read(&self, path: impl AsRef<std::path::Path>) -> Result<Vec<u8>, FsReadError> {
         let path = super::resolve_existing(&self.workspace_root, path.as_ref()).await?;

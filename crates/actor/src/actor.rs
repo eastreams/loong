@@ -427,7 +427,7 @@ pub trait Handler<M: Message>: HasMailbox {
     ///
     /// The future is polled on the actor's interleaved lane. `cx` provides
     /// temporary synchronous actor and scope access.
-    fn handle<'a>(message: M, cx: Cx<'a, Self>) -> impl Future<Output = M::Reply> + Send + 'a;
+    fn handle(message: M, cx: Cx<'_, Self>) -> impl Future<Output = M::Reply> + Send + '_;
 }
 
 #[allow(unsafe_code)]

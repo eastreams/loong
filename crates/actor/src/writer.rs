@@ -30,7 +30,7 @@ pub struct StreamOut<'a, W> {
     _borrow: PhantomData<&'a mut ()>,
 }
 
-impl<'a, W> StreamOut<'a, W> {
+impl<W> StreamOut<'_, W> {
     pub(crate) fn new(inner: W) -> Self {
         Self {
             inner,

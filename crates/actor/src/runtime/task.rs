@@ -236,7 +236,7 @@ pub(crate) struct ActorWorkGuard<'a, F> {
     }
 }
 
-impl<'a, F> ActorWorkGuard<'a, F> {
+impl<F> ActorWorkGuard<'_, F> {
     /// Retires the pinned future and reports a contained Drop panic.
     fn drop_future_panicked(mut self: Pin<&mut Self>) -> bool {
         let this = self.as_mut().project();

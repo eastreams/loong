@@ -20,7 +20,7 @@ pub enum FsWriteError {
     Io { path: PathBuf, source: io::Error },
 }
 
-impl<'a> FsAccess<'a> {
+impl FsAccess<'_> {
     #[inline]
     pub async fn write(
         &self,
