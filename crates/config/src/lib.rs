@@ -6,7 +6,7 @@
 
 use std::{collections::HashMap, fmt, path::PathBuf, sync::Arc};
 
-use agent::{Agent, AgentBuilder, BuildError, ChannelTarget, FileTools};
+use agent::{Agent, AgentBuilder, BuildError, ChannelTarget, FileTools, ProviderSet, StoreSet};
 use context::disk::{DiskStore, OpenError as DiskStoreOpenError};
 use context::memory::MemoryStore;
 use contracts::capability::Capabilities;
@@ -119,7 +119,7 @@ impl AgentConfig {
         &self,
         facade: Facade,
         channels: &HashMap<String, Arc<dyn ChannelTarget>>,
-    ) -> Result<AgentBuilder<true, true>, ConfigError> {
+    ) -> Result<AgentBuilder<StoreSet, ProviderSet>, ConfigError> {
         let mut builder = Agent::builder(facade).with_workspace_root(&self.workspace_root);
         if let Some(prompt) = &self.system_prompt {
             builder = builder.with_system_prompt(prompt.clone());

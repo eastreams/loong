@@ -111,7 +111,7 @@ impl Agent {
     }
 }
 
-pub use builder::{AgentBuilder, BuildError};
+pub use builder::{AgentBuilder, BuildError, ProviderSet, ProviderUnset, StoreSet, StoreUnset};
 pub use channel::{ChannelError, ChannelTarget};
 pub use tool_set::{FileTools, ToolSet};
 

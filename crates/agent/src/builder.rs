@@ -25,18 +25,34 @@ pub enum BuildError {
     Registration(#[from] RegistrationError),
 }
 
+/// Builder state: no context store has been set yet.
+pub struct StoreUnset;
+
+/// Builder state: the context store slot is filled.
+pub struct StoreSet(Box<dyn ContextStore>);
+
+/// Builder state: no provider has been set yet.
+pub struct ProviderUnset;
+
+/// Builder state: the provider slot is filled.
+pub struct ProviderSet(AgentProvider);
+
 /// Runtime-checked agent builder.
-pub struct AgentBuilder<const STORE_SET: bool = false, const PROVIDER_SET: bool = false> {
+///
+/// The store and provider slots are tracked in the type: they are `*Unset`
+/// until the matching `with_*` call fills them, and only a builder with both
+/// slots filled can be [`build`](Self::build).
+pub struct AgentBuilder<S = StoreUnset, P = ProviderUnset> {
     facade: Facade,
     workspace_root: PathBuf,
     tools: Vec<Box<dyn ToolSet>>,
     channels: Vec<(String, Arc<dyn ChannelTarget>)>,
     system_prompt: Option<String>,
-    store: Option<Box<dyn ContextStore>>,
-    provider: Option<AgentProvider>,
+    store: S,
+    provider: P,
 }
 
-impl AgentBuilder<false, false> {
+impl AgentBuilder<StoreUnset, ProviderUnset> {
     #[must_use]
     pub fn new(facade: Facade) -> Self {
         Self {
@@ -45,41 +61,38 @@ impl AgentBuilder<false, false> {
             tools: Vec::new(),
             channels: Vec::new(),
             system_prompt: None,
-            store: None,
-            provider: None,
+            store: StoreUnset,
+            provider: ProviderUnset,
         }
     }
 }
 
-impl<const STORE_SET: bool, const PROVIDER_SET: bool> AgentBuilder<STORE_SET, PROVIDER_SET> {
+impl<S, P> AgentBuilder<S, P> {
     #[must_use]
     pub fn with<T: ToolSet>(mut self, tools: T) -> Self {
         self.tools.push(Box::new(tools));
         self
     }
 
-    /// Sets the agent's context store and marks it present in the builder type.
+    /// Fills the builder's context store slot.
     #[must_use]
-    pub fn with_store(
-        self,
-        store: impl ContextStore + 'static,
-    ) -> AgentBuilder<true, PROVIDER_SET> {
+    pub fn with_store(self, store: impl ContextStore + 'static) -> AgentBuilder<StoreSet, P> {
         AgentBuilder {
             facade: self.facade,
             workspace_root: self.workspace_root,
             tools: self.tools,
             channels: self.channels,
             system_prompt: self.system_prompt,
-            store: Some(Box::new(store)),
+            store: StoreSet(Box::new(store)),
             provider: self.provider,
         }
     }
 
-    /// Sets the agent's provider and marks it present in the builder type.
+    /// Fills the builder's provider slot.
     #[must_use]
-    pub fn with_provider<P>(self, provider: P) -> AgentBuilder<STORE_SET, true>
+    pub fn with_provider<T>(self, provider: T) -> AgentBuilder<S, ProviderSet>
     where
-        P: Provider<Request, StreamItem, ProviderOut> + 'static,
+        T: Provider<Request, StreamItem, ProviderOut> + 'static,
     {
         AgentBuilder {
             facade: self.facade,
@@ -88,7 +101,7 @@ impl<const STORE_SET: bool, const PROVIDER_SET: bool> AgentBuilder<STORE_SET, PR
             channels: self.channels,
             system_prompt: self.system_prompt,
             store: self.store,
-            provider: Some(Arc::new(provider)),
+            provider: ProviderSet(Arc::new(provider)),
         }
     }
 
@@ -113,7 +126,7 @@ impl<const STORE_SET: bool, const PROVIDER_SET: bool> AgentBuilder<STORE_SET, PR
     }
 }
 
-impl AgentBuilder<true, true> {
+impl AgentBuilder<StoreSet, ProviderSet> {
     /// Builds the actor.
     pub fn build(self) -> Result<Agent, BuildError> {
         let Self {
@@ -122,8 +135,8 @@ impl AgentBuilder<true, true> {
             tools,
             channels,
             system_prompt,
-            store,
-            provider,
+            store: StoreSet(store),
+            provider: ProviderSet(provider),
         } = self;
 
         let mut names = BTreeSet::new();
@@ -132,9 +145,6 @@ impl AgentBuilder<true, true> {
                 return Err(BuildError::DuplicateChannel(name.clone()));
             }
         }
-
-        let store = store.expect("STORE_SET=true guarantees a store");
-        let provider = provider.expect("PROVIDER_SET=true guarantees a provider");
 
         let mut registry = ToolRegistry::new(facade, workspace_root);
         for tool_set in &tools {
