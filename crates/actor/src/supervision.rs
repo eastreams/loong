@@ -70,6 +70,7 @@ pub struct Disabled;
 
 impl Disabled {
     /// Creates a disabled profile.
+    #[must_use]
     pub const fn new() -> Self {
         Self
     }
@@ -84,6 +85,7 @@ impl<const N: usize> Fixed<N> {
     /// Creates an empty fixed profile.
     ///
     /// Compilation fails when `N` is zero.
+    #[must_use]
     pub fn new() -> Self {
         const { assert!(N > 0, "child limit must be greater than zero") };
         Self {
@@ -106,6 +108,7 @@ pub struct Dynamic {
 
 impl Dynamic {
     /// Creates an empty profile with one resolved limit.
+    #[must_use]
     pub fn new(limit: NonZeroUsize) -> Self {
         Self {
             state: runtime::ChildSet::new(),
@@ -121,6 +124,7 @@ pub struct Unbounded {
 
 impl Unbounded {
     /// Creates an empty unbounded profile.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             state: runtime::ChildSet::new(),

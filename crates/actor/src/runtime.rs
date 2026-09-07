@@ -152,7 +152,7 @@ impl<A: Actor> Drop for ActorSpawner<A> {
         if !self.started
             && let Some(unstarted) = &self.unstarted
         {
-            unstarted.actor_ref().request_shutdown(Shutdown::Kill);
+            let _ = unstarted.actor_ref().request_shutdown(Shutdown::Kill);
         }
     }
 }
@@ -180,6 +180,7 @@ impl<A: Actor> Deref for ActorOwner<A> {
 
 impl<A: Actor> ActorOwner<A> {
     /// Returns a cloneable, non-owning address.
+    #[must_use]
     pub fn actor_ref(&self) -> ActorRef<A> {
         self.0.clone()
     }
@@ -190,11 +191,13 @@ impl<A: Actor> ActorOwner<A> {
     /// and Drain are first-wins peers, while Kill may upgrade either one. See
     /// [`Shutdown`] for retained work and cleanup behavior, and
     /// [`ShutdownStatus`] for the meaning of the immediate result.
+    #[must_use]
     pub fn request_shutdown(&self, shutdown: Shutdown) -> ShutdownStatus {
         self.0.request_shutdown(shutdown)
     }
 
     /// Returns the terminal status if the actor has already exited.
+    #[must_use]
     pub fn exit_status(&self) -> Option<ExitStatus> {
         self.0.exit_status()
     }
@@ -223,14 +226,14 @@ impl<A: Actor> ActorOwner<A> {
     /// after cancelling a wait, call [`request_shutdown`](Self::request_shutdown)
     /// and apply the deadline to [`wait`](Self::wait) instead.
     pub async fn shutdown(mut self, shutdown: Shutdown) -> ExitStatus {
-        self.request_shutdown(shutdown);
+        let _ = self.request_shutdown(shutdown);
         self.wait().await
     }
 }
 
 impl<A: Actor> Drop for ActorOwner<A> {
     fn drop(&mut self) {
-        self.0.request_shutdown(Shutdown::Kill);
+        let _ = self.0.request_shutdown(Shutdown::Kill);
     }
 }
 

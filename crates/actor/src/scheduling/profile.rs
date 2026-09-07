@@ -75,6 +75,7 @@ pub struct Disabled;
 
 impl Disabled {
     /// Creates a disabled profile.
+    #[must_use]
     pub const fn new() -> Self {
         Self
     }
@@ -91,6 +92,7 @@ pub struct Serial<A: Actor> {
 
 impl<A: Actor> Serial<A> {
     /// Creates an empty serial profile.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             exclusive: Exclusive::new(),
@@ -114,6 +116,7 @@ impl<A: Actor, const N: usize> Fixed<A, N> {
     /// Creates an empty fixed profile.
     ///
     /// Compilation fails when `N` is zero.
+    #[must_use]
     pub fn new() -> Self {
         const { assert!(N > 0, "interleaved limit must be greater than zero") };
         Self {
@@ -135,6 +138,7 @@ pub struct Dynamic<A: Actor> {
 
 impl<A: Actor> Dynamic<A> {
     /// Creates an empty profile with one resolved limit.
+    #[must_use]
     pub fn new(limit: NonZeroUsize) -> Self {
         Self {
             state: InterleavedState::with_limit(DynamicLimit(limit)),
@@ -149,6 +153,7 @@ pub struct Unbounded<A: Actor> {
 
 impl<A: Actor> Unbounded<A> {
     /// Creates an empty unbounded profile.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             state: InterleavedState::with_limit(UnboundedLimit),

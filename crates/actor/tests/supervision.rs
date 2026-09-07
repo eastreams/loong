@@ -22,7 +22,7 @@ impl Actor for ChildActor {
 
     async fn init(exits_during_init: Self::SpawnArgs, scope: &mut ActorScope<'_, Self>) -> Self {
         if exits_during_init {
-            scope.request_shutdown(Shutdown::Stop);
+            let _ = scope.request_shutdown(Shutdown::Stop);
         }
         Self
     }
@@ -38,7 +38,7 @@ impl DispatchHandler<StopSelf> for ChildActor {
         _message: StopSelf,
         scope: &mut ActorScope<'_, Self>,
     ) -> impl loac::IntoReply<Self, StopSelf> + use<> {
-        scope.request_shutdown(Shutdown::Stop);
+        let _ = scope.request_shutdown(Shutdown::Stop);
         ().ready()
     }
 }

@@ -378,7 +378,7 @@ impl Handler<SpawnSubagent> for Agent {
             ) {
                 Ok(()) => Ok(actor_ref),
                 Err(error) => {
-                    actor_ref.request_shutdown(Shutdown::Kill);
+                    let _ = actor_ref.request_shutdown(Shutdown::Kill);
                     Err(SpawnSubagentError::Registration(error))
                 }
             }

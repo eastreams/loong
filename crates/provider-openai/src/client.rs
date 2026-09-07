@@ -43,6 +43,7 @@ pub struct OpenAiProvider {
 }
 
 impl OpenAiProvider {
+    #[must_use]
     pub fn new(config: OpenAiConfig) -> Self {
         Self {
             client: reqwest::Client::new(),
@@ -50,6 +51,7 @@ impl OpenAiProvider {
         }
     }
 
+    #[must_use]
     pub fn with_client(config: OpenAiConfig, client: reqwest::Client) -> Self {
         Self { client, config }
     }

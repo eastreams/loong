@@ -183,6 +183,7 @@ pub struct NoSender;
 
 impl NoSender {
     /// Opens transport storage without a mailbox.
+    #[must_use]
     pub fn open() -> (Self, NoInbox) {
         (Self, NoInbox)
     }
@@ -218,6 +219,7 @@ pub struct BoundedSender<A: Actor>(mpsc::Sender<ErasedEnvelope<A>>);
 impl<A: Actor> BoundedSender<A> {
     /// Opens one bounded transport.
     #[doc(hidden)]
+    #[must_use]
     pub fn open(capacity: NonZeroUsize) -> (Self, BoundedInbox<A>) {
         let (sender, inbox) = mpsc::channel(capacity.get());
         (Self(sender), BoundedInbox(inbox))
@@ -308,6 +310,7 @@ pub struct UnboundedSender<A: Actor>(mpsc::UnboundedSender<ErasedEnvelope<A>>);
 impl<A: Actor> UnboundedSender<A> {
     /// Opens one unbounded transport.
     #[doc(hidden)]
+    #[must_use]
     pub fn open() -> (Self, UnboundedInbox<A>) {
         let (sender, inbox) = mpsc::unbounded_channel();
         (Self(sender), UnboundedInbox(inbox))

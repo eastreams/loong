@@ -87,6 +87,7 @@ impl<A: Actor> ActorRef<A> {
     ///
     /// The returned handle is cloneable and non-owning. It can call `M` and,
     /// for unit-reply `M`, also send it. It has no lifecycle methods.
+    #[must_use]
     pub fn recipient<M>(&self) -> Arc<dyn Recipient<M>>
     where
         A: DispatchHandler<M, M::Kind>,
@@ -328,6 +329,7 @@ impl<A: Actor> ActorRef<A> {
     ///
     /// The unique owner still requests Kill when dropped.
     /// Any handle may submit an earlier lifecycle decision.
+    #[must_use]
     pub fn request_shutdown(&self, shutdown: Shutdown) -> ShutdownStatus {
         self.0.control.request(shutdown)
     }
@@ -336,6 +338,7 @@ impl<A: Actor> ActorRef<A> {
     ///
     /// `None` includes both a running actor and an actor still completing
     /// shutdown. Use [`closed`](Self::closed) to wait for terminal publication.
+    #[must_use]
     pub fn exit_status(&self) -> Option<ExitStatus> {
         self.0.control.exit_status()
     }

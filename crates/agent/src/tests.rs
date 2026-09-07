@@ -981,7 +981,7 @@ async fn drain_finishes_active_and_cancels_queued() {
         .unwrap();
 
     // Close admission while `first` is still active and `second` is queued.
-    owner.request_shutdown(Shutdown::Drain);
+    let _ = owner.request_shutdown(Shutdown::Drain);
 
     // Let the active prompt finish and commit directly; its handoff then
     // observes the closed admission and cancels the queue instead of starting

@@ -27,6 +27,7 @@ pub struct ActorOptions<A, M, I, C> {
 
 impl<A, M, C, const DEFAULT: usize> ActorOptions<A, M, DynamicInterleaving<DEFAULT>, C> {
     /// Sets the maximum number of active interleaved replies.
+    #[must_use]
     pub const fn with_max_in_flight(mut self, max_in_flight: NonZeroUsize) -> Self {
         self.interleaving.max_in_flight = Some(max_in_flight);
         self
@@ -44,6 +45,7 @@ impl<A, M, C, const DEFAULT: usize> ActorOptions<A, M, DynamicInterleaving<DEFAU
 
 impl<A, I, C, const DEFAULT: usize> ActorOptions<A, DynamicMailbox<DEFAULT>, I, C> {
     /// Overrides this actor's dynamic mailbox capacity.
+    #[must_use]
     pub const fn with_mailbox_capacity(mut self, capacity: NonZeroUsize) -> Self {
         self.mailbox.capacity = Some(capacity);
         self
@@ -61,6 +63,7 @@ impl<A, I, C, const DEFAULT: usize> ActorOptions<A, DynamicMailbox<DEFAULT>, I, 
 
 impl<A, M, I, const DEFAULT: usize> ActorOptions<A, M, I, DynamicChildren<DEFAULT>> {
     /// Overrides this actor's direct-child limit.
+    #[must_use]
     pub const fn with_max_children(mut self, max_children: NonZeroUsize) -> Self {
         self.children.max_children = Some(max_children);
         self
@@ -213,6 +216,7 @@ impl<const DEFAULT: usize> Default for DynamicChildren<DEFAULT> {
 /// Options whose mailbox capacity may change per spawn.
 pub trait DynamicMailboxOptions: Sized {
     /// Overrides the mailbox capacity for one spawn.
+    #[must_use]
     fn with_mailbox_capacity(self, capacity: NonZeroUsize) -> Self;
 }
 
@@ -227,6 +231,7 @@ impl<A, I, C, const DEFAULT: usize> DynamicMailboxOptions
 /// Options whose interleaved-reply limit may change per spawn.
 pub trait DynamicInterleavingOptions: Sized {
     /// Overrides the active interleaved-reply limit for one spawn.
+    #[must_use]
     fn with_max_in_flight(self, max_in_flight: NonZeroUsize) -> Self;
 }
 
@@ -241,6 +246,7 @@ impl<A, M, C, const DEFAULT: usize> DynamicInterleavingOptions
 /// Options whose direct-child limit may change per spawn.
 pub trait DynamicChildrenOptions: Sized {
     /// Overrides the direct-child limit for one spawn.
+    #[must_use]
     fn with_max_children(self, max_children: NonZeroUsize) -> Self;
 }
 

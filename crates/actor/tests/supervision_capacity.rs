@@ -226,7 +226,7 @@ impl Actor for ExitingChild {
     type SpawnArgs = ();
 
     async fn init(_: (), scope: &mut ActorScope<'_, Self>) -> Self {
-        scope.request_shutdown(Shutdown::Stop);
+        let _ = scope.request_shutdown(Shutdown::Stop);
         Self
     }
 }

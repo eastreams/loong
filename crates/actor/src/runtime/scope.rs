@@ -47,6 +47,7 @@ impl<A: Actor> StopScope<'_, A> {
     /// Returns this actor's non-owning address.
     ///
     /// Message admission is already closed during `on_stop`.
+    #[must_use]
     pub const fn myself(&self) -> &ActorRef<A> {
         self.actor_ref
     }
@@ -55,6 +56,7 @@ impl<A: Actor> StopScope<'_, A> {
     ///
     /// Stop or Drain has already committed at this stage.
     /// Kill may still upgrade either mode.
+    #[must_use]
     pub fn request_shutdown(&self, shutdown: Shutdown) -> ShutdownStatus {
         self.actor_ref.request_shutdown(shutdown)
     }
@@ -109,6 +111,7 @@ impl<A: Actor> ActorScope<'_, A> {
     /// [`CallError::Closed`](crate::CallError::Closed) and
     /// [`ActorRef::try_call`] reports
     /// [`TryCallErrorKind::Closed`](crate::TryCallErrorKind::Closed) instead.
+    #[must_use]
     pub const fn myself(&self) -> &ActorRef<A> {
         &self.state.actor_ref
     }
@@ -123,6 +126,7 @@ impl<A: Actor> ActorScope<'_, A> {
     /// Stop and Drain retain already-dispatched replies. Kill and reply
     /// completion instead commit through the same lifecycle gate, so whichever
     /// commits first determines the caller's result.
+    #[must_use]
     pub fn request_shutdown(&self, shutdown: Shutdown) -> ShutdownStatus {
         self.state.actor_ref.request_shutdown(shutdown)
     }

@@ -16,6 +16,7 @@ pub struct MemoryStore {
 
 impl MemoryStore {
     /// Creates an empty in-memory store.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }

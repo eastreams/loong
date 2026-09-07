@@ -132,6 +132,7 @@ impl Capabilities {
         self
     }
 
+    #[must_use]
     pub const fn contains(&self, capability: Capability) -> bool {
         let id = capability.into_id() as usize;
         let byte = id / u8::BITS as usize;
@@ -139,6 +140,7 @@ impl Capabilities {
         self.0[byte] & (1u8 << bit) != 0
     }
 
+    #[must_use]
     pub fn covers(self, other: Self) -> bool {
         for i in 0..CAPABILITY_BYTES {
             if self.0[i] & other.0[i] != other.0[i] {
@@ -148,6 +150,7 @@ impl Capabilities {
         true
     }
 
+    #[must_use]
     pub fn intersection(self, other: Self) -> Self {
         let mut ret = Self::empty();
         for i in 0..CAPABILITY_BYTES {

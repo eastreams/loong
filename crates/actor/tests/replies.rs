@@ -52,7 +52,7 @@ impl DispatchHandler<StopChild> for HookChild {
         _message: StopChild,
         scope: &mut ActorScope<Self>,
     ) -> impl loac::IntoReply<Self, StopChild> + use<> {
-        scope.request_shutdown(Shutdown::Stop);
+        let _ = scope.request_shutdown(Shutdown::Stop);
         ().ready()
     }
 }

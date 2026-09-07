@@ -141,11 +141,13 @@ impl ExitStatus {
     }
 
     /// Returns why this actor terminated.
+    #[must_use]
     pub const fn reason(self) -> ExitReason {
         self.reason
     }
 
     /// Returns the runtime's subtree termination guarantee.
+    #[must_use]
     pub const fn subtree(self) -> SubtreeStatus {
         self.subtree
     }
@@ -204,11 +206,13 @@ impl ChildExit {
     /// Returns the identity assigned by the direct parent.
     ///
     /// Compare it only with children spawned by that parent.
+    #[must_use]
     pub const fn child(&self) -> &ChildId {
         &self.child
     }
 
     /// Returns the child actor's terminal status.
+    #[must_use]
     pub const fn status(&self) -> ExitStatus {
         self.status
     }
@@ -233,17 +237,20 @@ impl<A: Actor> Child<A> {
     /// Returns the identity assigned by the direct parent.
     ///
     /// Compare it only with events observed by that parent.
+    #[must_use]
     pub const fn id(&self) -> &ChildId {
         &self.id
     }
 
     /// Returns the child actor's message address.
+    #[must_use]
     pub const fn actor_ref(&self) -> &ActorRef<A> {
         &self.actor_ref
     }
 
     /// Discards the identity wrapper.
     /// Returns the child actor's message address.
+    #[must_use]
     pub fn into_actor_ref(self) -> ActorRef<A> {
         self.actor_ref
     }

@@ -60,7 +60,7 @@ impl Actor for RegistrationProbe {
     type SpawnArgs = ();
 
     async fn init(_: (), scope: &mut ActorScope<'_, Self>) -> Self {
-        scope.request_shutdown(crate::Shutdown::Stop);
+        let _ = scope.request_shutdown(crate::Shutdown::Stop);
         Self
     }
 }

@@ -30,6 +30,7 @@ where
     Item: Send + 'static,
     Out: loac::Writer<Item> + Send + 'static,
 {
+    #[must_use]
     pub fn new(providers: Vec<Arc<dyn Provider<Req, Item, Out>>>) -> Self {
         Self { providers }
     }
@@ -104,6 +105,7 @@ where
     Item: Send,
     Out: loac::Writer<Item> + Send,
 {
+    #[must_use]
     pub fn new(providers: Vec<Arc<BorrowedProvider<Req, Item, Out>>>) -> Self {
         Self { providers }
     }

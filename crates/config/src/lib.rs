@@ -80,6 +80,7 @@ impl fmt::Debug for ProviderConfig {
 
 impl ProviderConfig {
     /// Resolves this config into a concrete provider.
+    #[must_use]
     pub fn to_provider(&self) -> agent::AgentProvider {
         match self {
             Self::OpenAi(config) => Arc::new(OpenAiProvider::new(config.clone())),
