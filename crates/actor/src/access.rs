@@ -7,9 +7,9 @@
 //! creates one handle per reply and polls that reply only on the actor task,
 //! serially with every other actor-aware future and mailbox dispatch.
 
-use std::{marker::PhantomData, ptr::NonNull};
+use std::{marker::PhantomData, ops::Deref, ptr::NonNull};
 
-use crate::{Actor, ActorScope, runtime::ScopeState};
+use crate::{Actor, ActorRef, ActorScope, runtime::ScopeState};
 
 /// Owned access handle used by [`Handler`](crate::Handler) and
 /// [`StreamHandler`](crate::StreamHandler) futures, and by the explicit
@@ -20,7 +20,8 @@ use crate::{Actor, ActorScope, runtime::ScopeState};
 /// The handle carries a phantom lifetime so safe code cannot store it in a
 /// `'static` location (thread locals, detached tasks, globals). It is `Send`
 /// because the runtime only polls the owning future on the actor task; the raw
-/// pointers are never dereferenced concurrently.
+/// pointers are never dereferenced concurrently. For address-only access, `Cx`
+/// derefs to [`ActorRef`] and exposes [`myself`](Self::myself).
 pub struct Cx<'a, A: Actor + 'a> {
     actor: NonNull<A>,
     scope: NonNull<ScopeState<A>>,
@@ -55,10 +56,36 @@ impl<A: Actor> Cx<'_, A> {
         let mut scope = state.actor_scope();
         f(actor, &mut scope)
     }
+
+    /// Returns this actor's non-owning address.
+    ///
+    /// Unlike [`with`](Self::with), this does not open an actor or scope
+    /// borrow, so it is available whenever the `Cx` handle is. The returned
+    /// address is the same one [`ActorScope::myself`] would return inside
+    /// `with`.
+    #[must_use]
+    pub fn myself(&self) -> &ActorRef<A> {
+        // SAFETY: `scope` points to the actor task's scope state, which the
+        // runtime keeps alive for as long as this `Cx` exists. The address
+        // field is immutable and `ActorRef` is a thread-safe handle, so a
+        // shared borrow of it cannot race with the exclusive actor borrows
+        // created by `with`.
+        let state = unsafe { self.scope.as_ref() };
+        &state.actor_ref
+    }
 }
 
-// SAFETY: the runtime polls the owning future on the actor task, and every
-// dereference happens inside `with` while the actor task has exclusive access.
-// The phantom lifetime does not correspond to an actual borrow that could race
-// with another thread.
+impl<A: Actor> Deref for Cx<'_, A> {
+    type Target = ActorRef<A>;
+
+    fn deref(&self) -> &Self::Target {
+        self.myself()
+    }
+}
+
+// SAFETY: the runtime polls the owning future on the actor task. Actor and
+// scope mutations happen inside `with` while the actor task has exclusive
+// access; `myself` only reads the immutable address field. The phantom
+// lifetime does not correspond to an actual borrow that could race with
+// another thread.
 unsafe impl<A: Actor> Send for Cx<'_, A> {}
