@@ -1,5 +1,0 @@
-error: `dynamic(...)` requires one default interleaved limit
- --> tests/ui/actor/fail/empty_dynamic_interleaving.rs:4:43
-  |
-4 | #[actor_api::actor(mailbox, interleaved = dynamic())]
-  |                                           ^^^^^^^^^

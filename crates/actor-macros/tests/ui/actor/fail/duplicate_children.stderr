@@ -1,5 +1,0 @@
-error: duplicate `children` option
- --> tests/ui/actor/fail/duplicate_children.rs:4:42
-  |
-4 | #[actor_api::actor(children = unbounded, children = 8)]
-  |                                          ^^^^^^^^

@@ -1,11 +1,9 @@
 [workspace]
 members = [
     "apps/loong",
-    "crates/actor",
     "crates/config",
     "crates/tool-host",
     "crates/tools",
-    "crates/actor-macros",
     "crates/agent",
     "crates/context",
     "crates/contracts",
@@ -30,7 +28,7 @@ tool_host = { path = "crates/tool-host", package = "loong-tool-host" }
 tools = { path = "crates/tools", package = "loong-tools" }
 context = { path = "crates/context", package = "loong-context" }
 agent = { path = "crates/agent", package = "loong-agent" }
-loac = { path = "crates/actor" }
+loac = "=0.2.0"
 provider = { path = "crates/provider", package = "loong-provider" }
 provider-openai = { path = "crates/provider-openai", package = "loong-provider-openai" }
 config = { path = "crates/config", package = "loong-config" }

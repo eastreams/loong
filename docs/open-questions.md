@@ -7,7 +7,7 @@ appear resolved.
 
 ## Implemented Actor Runtime, Open Product Ownership
 
-[`loac`](../crates/actor/src/lib.rs) is the source of truth for actor
+[`loac`](https://docs.rs/loac/0.2.0/loac/) is the source of truth for actor
 semantics. It owns actor state, bounded mailbox admission, reply scheduling, and
 subtree lifecycle on Tokio. Those runtime responsibilities do not by themselves
 define a product `Session`, `Turn`, or `Step`.
@@ -75,7 +75,8 @@ introduced to answer these questions.
 subscriber owns a channel receiver and passes the sender as message data; the
 subscribe handler returns a future whose owned task produces items into that
 channel, so the actor stores no subscriber state. The
-[streaming example](../crates/actor/examples/streaming.rs) documents this shape.
+[streaming example](https://github.com/InuDial/loac/blob/loac-v0.2.0/crates/loac/examples/dispatch/streaming.rs)
+documents this shape.
 
 A runtime-driven stream reply — a handler returning a stream that the runtime
 polls per item with actor borrows — is deliberately not implemented. Still

@@ -1,5 +1,0 @@
-error: expected `reply = <type>` or `stream = <type>`
- --> tests/ui/message/fail/empty_message.rs:3:1
-  |
-3 | #[message()]
-  | ^^^^^^^^^^^^

@@ -1,5 +1,0 @@
-error: `interleaved` requires a `mailbox` option
- --> tests/ui/actor/fail/interleaved_without_mailbox.rs:4:20
-  |
-4 | #[actor_api::actor(interleaved = 4)]
-  |                    ^^^^^^^^^^^

@@ -51,7 +51,7 @@ Loong 希望支持两种扩展方式：
 这次重写刻意从小而稳的基础开始。只有当职责与安全边界明晰时，
 新的产品领域才会被加入。这能让 Loong 在成长过程中仍然易于理解。
 
-[Actor 运行时](crates/actor/README.md)及其生命周期模型让组件易于
+[Actor 运行时](https://github.com/InuDial/loac)及其生命周期模型让组件易于
 运行、扩展、停止和重启。
 
 ## 当前状态
@@ -65,9 +65,6 @@ Loong 希望支持两种扩展方式：
 
 架构记录在 [ARCHITECTURE.md](ARCHITECTURE.md)，尚未拍板的设计记录在
 [docs/open-questions.md](docs/open-questions.md)。
-`loac` 与 `loac-macros` 的 crates.io 发布流程见
-[发布指南](docs/development/releasing.md)。
-
 当前的检查命令为：
 
 ```bash

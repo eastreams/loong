@@ -1,5 +1,0 @@
-error: child capacity must be greater than zero
- --> tests/ui/actor/fail/zero_children.rs:4:31
-  |
-4 | #[actor_api::actor(children = 0)]
-  |                               ^

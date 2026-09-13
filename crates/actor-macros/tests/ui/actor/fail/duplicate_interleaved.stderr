@@ -1,5 +1,0 @@
-error: duplicate `interleaved` option
- --> tests/ui/actor/fail/duplicate_interleaved.rs:4:37
-  |
-4 | #[actor_api::actor(interleaved = 8, interleaved = unbounded)]
-  |                                     ^^^^^^^^^^^

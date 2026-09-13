@@ -1,5 +1,0 @@
-error: `dynamic(...)` requires one default child capacity
- --> tests/ui/actor/fail/empty_dynamic_children.rs:4:31
-  |
-4 | #[actor_api::actor(children = dynamic())]
-  |                               ^^^^^^^^^

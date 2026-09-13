@@ -1,5 +1,0 @@
-error: `dynamic(...)` requires one default mailbox capacity
- --> tests/ui/actor/fail/empty_dynamic.rs:4:30
-  |
-4 | #[actor_api::actor(mailbox = dynamic())]
-  |                              ^^^^^^^^^

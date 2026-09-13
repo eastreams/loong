@@ -57,8 +57,8 @@ The rewrite deliberately begins with a small foundation. New product areas will
 be added as their responsibilities and safety boundaries become clear, keeping
 Loong understandable as it grows.
 
-The [Actor runtime](crates/actor/README.md) and its lifetime model make
-components easy to run, extend, stop, and restart.
+The [Actor runtime](https://github.com/InuDial/loac) and its lifetime model
+make components easy to run, extend, stop, and restart.
 
 ## Current Status
 
@@ -71,9 +71,6 @@ they become real rather than presenting planned work as finished.
 The technical design is documented in [ARCHITECTURE.md](ARCHITECTURE.md), and
 unresolved design decisions are tracked in
 [docs/open-questions.md](docs/open-questions.md).
-The [release guide](docs/development/releasing.md) documents the crates.io
-workflow for `loac` and `loac-macros`.
-
 The current checks are:
 
 ```bash

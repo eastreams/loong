@@ -1,5 +1,0 @@
-error: `mailbox_budget` requires `= <const expression>`
- --> tests/ui/actor/fail/key_only_mailbox_budget.rs:4:29
-  |
-4 | #[actor_api::actor(mailbox, mailbox_budget)]
-  |                             ^^^^^^^^^^^^^^

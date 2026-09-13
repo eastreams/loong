@@ -1,7 +1,0 @@
-error[E0599]: no method named `with_max_children` found for struct `ActorOptions<Bare, NoMailbox, NoInterleaving, NoChildren>` in the current scope
-  --> tests/ui/fail/omitted_children_override.rs:15:51
-   |
-15 |     let _ = loac::SpawnOptions::<Bare>::default().with_max_children(NonZeroUsize::MIN);
-   |                                                   ^^^^^^^^^^^^^^^^^ method not found in `ActorOptions<Bare, NoMailbox, NoInterleaving, NoChildren>`
-   |
-   = note: the method was found for `ActorOptions<A, M, I, DynamicChildren<DEFAULT>>`

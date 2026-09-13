@@ -1,9 +1,0 @@
-error[E0119]: conflicting implementations of trait `HasChildren` for type `Supervisor`
-  --> tests/ui/fail/duplicate_has_children.rs:14:1
-   |
-14 | impl HasChildren for Supervisor {}
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
-   = note: conflicting implementation in crate `loac`:
-           - impl<A> HasChildren for A
-             where A: Actor, <A as SupervisionConfig>::Children: ChildSpawner, <A as SupervisionConfig>::Children: ?Sized;

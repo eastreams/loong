@@ -1,7 +1,0 @@
-error[E0599]: no method named `with_max_children` found for struct `ActorOptions<Unbounded, NoMailbox, NoInterleaving, UnboundedChildren>` in the current scope
-  --> tests/ui/fail/unbounded_children_override.rs:15:56
-   |
-15 |     let _ = loac::SpawnOptions::<Unbounded>::default().with_max_children(NonZeroUsize::MIN);
-   |                                                        ^^^^^^^^^^^^^^^^^ method not found in `ActorOptions<Unbounded, NoMailbox, NoInterleaving, UnboundedChildren>`
-   |
-   = note: the method was found for `ActorOptions<A, M, I, DynamicChildren<DEFAULT>>`

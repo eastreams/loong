@@ -1,5 +1,0 @@
-error: expected `impl Actor for Type`
- --> tests/ui/actor/fail/non_actor_impl.rs:5:1
-  |
-5 | impl NotActor {}
-  | ^^^^^^^^^^^^^^^^
