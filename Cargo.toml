@@ -28,7 +28,7 @@ tool_host = { path = "crates/tool-host", package = "loong-tool-host" }
 tools = { path = "crates/tools", package = "loong-tools" }
 context = { path = "crates/context", package = "loong-context" }
 agent = { path = "crates/agent", package = "loong-agent" }
-loac = "=0.2.0"
+loac = "=0.4.0"
 provider = { path = "crates/provider", package = "loong-provider" }
 provider-openai = { path = "crates/provider-openai", package = "loong-provider-openai" }
 config = { path = "crates/config", package = "loong-config" }

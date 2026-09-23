@@ -33,24 +33,21 @@ impl Actor for Kernel {
 }
 
 #[derive(Message)]
-// Policy decisions are computed synchronously during dispatch and returned
-// with `.ready()` by the `#[loac::sync_handler]` macro. `Kernel` deliberately
-// has no interleaving lane, so the cx-style `Handler` surface would require
-// adding interleaving for no scheduling benefit.
+// Policy evaluation never awaits, so the handler future completes on its
+// first poll and `Kernel` needs no `max_in_flight` tuning.
 #[message(reply = Result<Granted<A>, Denied>)]
 pub struct PolicyEvent<A: ActionMeta> {
     action: A,
     capabilities: Capabilities,
 }
 
-#[loac::sync_handler]
-impl<A: ActionMeta> SyncHandler<PolicyEvent<A>> for Kernel {
-    fn handle(
-        &mut self,
-        msg: PolicyEvent<A>,
-        _scope: &mut ActorScope<Self>,
-    ) -> Result<Granted<A>, Denied> {
-        self.policy_engine.grant(msg.capabilities, msg.action)
+impl<A: ActionMeta> Handler<PolicyEvent<A>> for Kernel {
+    async fn handle(message: PolicyEvent<A>, mut cx: Cx<'_, Self>) -> Result<Granted<A>, Denied> {
+        cx.with(|actor, _| {
+            actor
+                .policy_engine
+                .grant(message.capabilities, message.action)
+        })
     }
 }
 

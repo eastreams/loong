@@ -174,7 +174,7 @@ impl WorkflowBuilder {
     }
 }
 
-#[actor(mailbox, interleaved = unbounded, children = unbounded)]
+#[actor(mailbox, max_in_flight = unbounded, children, max_children = unbounded)]
 impl Actor for Workflow {
     type SpawnArgs = WorkflowBuilder;
 

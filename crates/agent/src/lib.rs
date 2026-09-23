@@ -273,7 +273,7 @@ fn split_stream_items(items: Vec<StreamItem>) -> (String, String, Vec<PendingToo
     (reasoning, text, calls)
 }
 
-#[actor(mailbox, interleaved = unbounded, children = unbounded)]
+#[actor(mailbox, max_in_flight = unbounded, children, max_children = unbounded)]
 impl Actor for Agent {
     type SpawnArgs = Self;
 

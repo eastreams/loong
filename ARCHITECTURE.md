@@ -74,11 +74,11 @@ authorize execution, and it is not a second proof.
 
 ## Runtime Actor Model
 
-[`loac`](https://docs.rs/loac/0.2.0/loac/) implements the Tokio actor contract:
+[`loac`](https://docs.rs/loac/0.4.0/loac/) implements the Tokio actor contract:
 bounded mailbox admission, an independent `max_in_flight` limit, separate
-`ActorRef` and `ActorOwner` roles, actor-owned child lifecycles,
-ready/owned/interleaved/exclusive reply scheduling, and Stop/Drain/Kill
-termination. This settles actor-local ownership and scheduling.
+`ActorRef` and `ActorOwner` roles, actor-owned child lifecycles, `Cx` handler
+scheduling with exclusive leases, and Stop/Drain/Kill termination. This settles
+actor-local ownership and scheduling.
 
 [`loong-kernel`](crates/kernel/src/lib.rs) has migrated its policy actor to
 `loac`. The owner of each root actor tree, and how that ownership relates to
