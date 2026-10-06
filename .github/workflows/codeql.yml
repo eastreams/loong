@@ -100,7 +100,7 @@ jobs:
 
       - name: Autobuild
         if: steps.ghas.outputs.enabled == 'true'
-        uses: github/codeql-action/autobuild@e46ed2cbd01164d986452f91f178727624ae40d7
+        uses: github/codeql-action/autobuild@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2
 
       - name: Analyze
         if: steps.ghas.outputs.enabled == 'true'
